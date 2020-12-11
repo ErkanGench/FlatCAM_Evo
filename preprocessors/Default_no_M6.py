@@ -147,7 +147,6 @@ class Default_no_M6(PreProc):
                 gcode = """
 M5
 G00 Z{z_toolchange}
-T{tool}
 G00 X{x_toolchange} Y{y_toolchange}                
 (MSG, Change to Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
 M0
@@ -162,7 +161,6 @@ G00 Z{z_toolchange}
                 gcode = """
 M5       
 G00 Z{z_toolchange}
-T{tool}
 (MSG, Change to Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
 M0
 G00 Z{z_toolchange}
@@ -181,7 +179,6 @@ G00 Z{z_toolchange}
 M5
 G00 Z{z_toolchange}
 G00 X{x_toolchange} Y{y_toolchange}
-T{tool}
 (MSG, Change to Tool Dia = {toolC})
 M0
 G00 Z{z_toolchange}
@@ -195,7 +192,6 @@ G00 Z{z_toolchange}
                 gcode = """
 M5
 G00 Z{z_toolchange}
-T{tool}
 (MSG, Change to Tool Dia = {toolC})
 M0
 G00 Z{z_toolchange}
