@@ -845,7 +845,8 @@ class ToolMilling(AppTool, Excellon):
     def on_exc_rebuild_ui(self):
         # read the table tools uid
         current_uid_list = []
-        for row in range(self.ui.tools_table_mill_exc.rowCount()):
+        # we have (n+2) rows because there are 'n' tools, each a row, plus the last 2 rows for totals.
+        for row in range(self.ui.tools_table_mill_exc.rowCount() - 2):
             uid = int(self.ui.tools_table_mill_exc.item(row, 3).text())
             current_uid_list.append(uid)
 
