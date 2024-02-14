@@ -4599,7 +4599,7 @@ class FCTable(QtWidgets.QTableWidget):
         elif rect.bottom() - pos.y() < margin:
             return True
         # noinspection PyTypeChecker
-        drop_enabled = int(self.model().flags(index)) & Qt.ItemFlag.ItemIsDropEnabled
+        drop_enabled = self.model().flags(index) & Qt.ItemFlag.ItemIsDropEnabled
         return rect.contains(pos, True) and not drop_enabled and pos.y() >= rect.center().y()
 
 
