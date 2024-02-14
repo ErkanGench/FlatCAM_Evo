@@ -1014,12 +1014,14 @@ class ToolMilling(AppTool, Excellon):
 
             # -------------------- ID ------------------------------------------ #
             tool_id = QtWidgets.QTableWidgetItem('%d' % int(row_idx + 1))
-            tool_id.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
+            tool_id.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled |
+                             QtCore.Qt.ItemFlag.ItemIsDragEnabled)
             self.ui.tools_table_mill_geo.setItem(row_idx, 0, tool_id)  # Tool name/id
 
             # -------------------- DIAMETER ------------------------------------- #
             dia_item = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, float(tooluid_value['tooldia'])))
-            dia_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            dia_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled |
+                              QtCore.Qt.ItemFlag.ItemIsDragEnabled)
             self.ui.tools_table_mill_geo.setItem(row_idx, 1, dia_item)  # Diameter
 
             # -------------------- TOOL TYPE ------------------------------------- #
@@ -1055,7 +1057,8 @@ class ToolMilling(AppTool, Excellon):
         for row in range(row_idx):
             self.ui.tools_table_mill_geo.item(row, 1).setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable |
                                                                QtCore.Qt.ItemFlag.ItemIsEditable |
-                                                               QtCore.Qt.ItemFlag.ItemIsEnabled)
+                                                               QtCore.Qt.ItemFlag.ItemIsEnabled |
+                                                               QtCore.Qt.ItemFlag.ItemIsDragEnabled)
 
         # sort the tool diameter column
         # self.ui.tools_table_mill_geo.sortItems(1)
@@ -1173,17 +1176,19 @@ class ToolMilling(AppTool, Excellon):
 
             # Tool name/id
             exc_id_item = QtWidgets.QTableWidgetItem('%d' % int(tool_no))
-            exc_id_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
+            exc_id_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled |
+                                 QtCore.Qt.ItemFlag.ItemIsDragEnabled)
             self.ui.tools_table_mill_exc.setItem(self.tool_row, 0, exc_id_item)
 
             # Tool Diameter
             dia_item = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, self.target_obj.tools[tool_no]['tooldia']))
-            dia_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            dia_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled |
+                              QtCore.Qt.ItemFlag.ItemIsDragEnabled)
             self.ui.tools_table_mill_exc.setItem(self.tool_row, 1, dia_item)
 
             # Number of drills per tool
             drill_count_item = QtWidgets.QTableWidgetItem('%d' % drill_cnt)
-            drill_count_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            drill_count_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsDragEnabled)
             self.ui.tools_table_mill_exc.setItem(self.tool_row, 2, drill_count_item)
 
             # Tool unique ID
@@ -1195,7 +1200,7 @@ class ToolMilling(AppTool, Excellon):
             # if the slot number is zero is better to not clutter the GUI with zero's so, we print a space
             slot_count_str = '%d' % slot_cnt if slot_cnt > 0 else ''
             slot_count_item = QtWidgets.QTableWidgetItem(slot_count_str)
-            slot_count_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            slot_count_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsDragEnabled)
             self.ui.tools_table_mill_exc.setItem(self.tool_row, 4, slot_count_item)
 
             self.tool_row += 1
