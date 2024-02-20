@@ -7,6 +7,11 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+20.02.2024
+
+- Punch Gerber Plugin: fixed issues with iterating ovr a MultiPolygon
+- GerberObject: fixed Gerber merging functionality
+
 11.01.2024
 
 - Paint Plugin: fixed an issue where a Gerber object cannot be painted using the Single Polygon selection correctly because it painted the whole geometry

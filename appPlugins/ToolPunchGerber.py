@@ -929,7 +929,7 @@ class ToolPunchGerber(AppTool, Gerber):
             for elem in val['geometry']:
                 # make it work only for Gerber Flashes who are Points in 'follow'
                 if 'solid' in elem and isinstance(elem['follow'], Point):
-                    for geo in punching_geo:
+                    for geo in punching_geo.geoms:
                         clear_apid_size = punch_size
 
                         # since there may be drills that do not drill into a pad we test only for drills in a pad

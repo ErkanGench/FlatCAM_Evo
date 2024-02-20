@@ -1720,8 +1720,8 @@ class GerberObject(FlatCAMObj, Gerber):
                         for k, v in grb.tools[ap].items():
                             grb_final.tools[max_ap][k] = deepcopy(v)
 
-        grb_final.solid_geometry = MultiPolygon(grb_final.solid_geometry)
-        grb_final.follow_geometry = MultiPolygon(grb_final.follow_geometry)
+        grb_final.solid_geometry = unary_union(flatten_shapely_geometry(grb_final.solid_geometry))
+        grb_final.follow_geometry = unary_union(flatten_shapely_geometry(grb_final.follow_geometry))
 
     def mirror(self, axis, point):
         Gerber.mirror(self, axis=axis, point=point)

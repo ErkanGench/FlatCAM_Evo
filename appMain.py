@@ -279,6 +279,7 @@ class App(QtCore.QObject):
     # post-Edit actions
     post_edit_sig = pyqtSignal()
 
+    # noinspection PyUnresolvedReferences
     def __init__(self, qapp, user_defaults=True):
         """
         Starts the application.
@@ -1616,7 +1617,7 @@ class App(QtCore.QObject):
         """
 
         if init_tcl:
-            # Tcl Shell tool has to be initialized always first because other tools print messages in the Shell Dock
+            # Tcl "Shell" tool has to be initialized always first because other tools print messages in the Shell Dock
             self.shell = FCShell(app=self, version=self.version)
             self.log.debug("TCL was re-instantiated. TCL variables are reset.")
 
@@ -1837,7 +1838,7 @@ class App(QtCore.QObject):
         # first remove all of them
         self.remove_tools()
 
-        # re-add the TCL Shell action to the Tools menu and reconnect it to ist slot function
+        # re-add the TCL "Shell" action to the Tools menu and reconnect it to ist slot function
         self.ui.menu_plugins_shell = self.ui.menu_plugins.addAction(
             QtGui.QIcon(self.resource_location + '/shell16.png'), '&Command Line\tS')
         self.ui.menu_plugins_shell.triggered.connect(self.ui.toggle_shell_ui)
@@ -2939,6 +2940,7 @@ class App(QtCore.QObject):
         beta = self.beta
 
         class AboutDialog(QtWidgets.QDialog):
+            # noinspection PyUnresolvedReferences
             def __init__(self, app, parent):
                 QtWidgets.QDialog.__init__(self, parent=parent)
 
