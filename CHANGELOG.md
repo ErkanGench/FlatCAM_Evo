@@ -11,6 +11,7 @@ CHANGELOG for FlatCAM Evo beta
 
 - Punch Gerber Plugin: fixed issues with iterating ovr a MultiPolygon
 - GerberObject: fixed Gerber merging functionality
+- Film Plugin: fixed error on generation of positive film with punched holes due of the aperture of type "REG" (copper plane / region)
 
 11.01.2024
 

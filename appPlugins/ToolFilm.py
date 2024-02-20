@@ -10,9 +10,12 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCComboBox2, RadioSet, FCDoubleSpinner, FCSpinner, FCFileSaveDialog, OptionalHideInputSection
 
+from camlib import flatten_shapely_geometry
+
 import logging
 from copy import deepcopy
 import math
+import simplejson as json
 
 from shapely import LineString, MultiPolygon, Point, Polygon, LinearRing
 from shapely.affinity import scale, skew
@@ -457,33 +460,39 @@ class Film(AppTool):
 
             punching_geo = []
             for apid in film_obj.tools:
-                if film_obj.tools[apid]['type'] == 'C':
-                    if punch_size >= float(film_obj.tools[apid]['size']):
+                print(film_obj.tools.get(apid, {}))
+                aperture_type = film_obj.tools.get(apid, {}).get('type', '')
+                if aperture_type == 'C':
+                    aperture_size = float(film_obj.tools.get(apid, {}).get('size', 0.0))
+                    if punch_size >= aperture_size:
                         self.app.inform.emit('[ERROR_NOTCL] %s' %
                                              _("Failed. Punch hole size "
                                                "is bigger than some of the apertures in the Gerber object."))
                         return 'fail'
                     else:
-                        for elem in film_obj.tools[apid]['geometry']:
+                        for elem in film_obj.tools.get(apid, {}).get('geometry', []):
                             if 'follow' in elem:
                                 if isinstance(elem['follow'], Point):
                                     punching_geo.append(elem['follow'].buffer(punch_size / 2))
+                elif aperture_type == "REG":
+                    pass
                 else:
-                    if punch_size >= float(film_obj.tools[apid]['width']) or \
-                            punch_size >= float(film_obj.tools[apid]['height']):
+                    aperture_width = float(film_obj.tools.get(apid, {}).get('width', 0.0))
+                    aperture_height = float(film_obj.tools.get(apid, {}).get('height', 0.0))
+                    if punch_size >= aperture_width or punch_size >= aperture_height:
                         self.app.inform.emit('[ERROR_NOTCL] %s' %
                                              _("Failed. Punch hole size "
                                                "is bigger than some of the apertures in the Gerber object."))
                         return 'fail'
                     else:
-                        for elem in film_obj.tools[apid]['geometry']:
+                        for elem in flatten_shapely_geometry(film_obj.tools.get(apid, {}).get('geometry', [])):
                             if 'follow' in elem:
                                 if isinstance(elem['follow'], Point):
                                     punching_geo.append(elem['follow'].buffer(punch_size / 2))
 
             punching_geo = MultiPolygon(punching_geo)
             if not isinstance(film_obj.solid_geometry, Polygon):
-                temp_solid_geometry = MultiPolygon(film_obj.solid_geometry)
+                temp_solid_geometry = MultiPolygon(flatten_shapely_geometry(film_obj.solid_geometry))
             else:
                 temp_solid_geometry = film_obj.solid_geometry
             punched_solid_geometry = temp_solid_geometry.difference(punching_geo)
