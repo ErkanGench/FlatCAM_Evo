@@ -35,7 +35,7 @@ import platform
 import re
 import subprocess
 
-from shapely import Point, MultiPolygon, MultiLineString, Polygon, LinearRing, LineString
+from shapely import Point, MultiPolygon, MultiLineString, Polygon
 from shapely.ops import unary_union
 from io import StringIO
 
@@ -74,7 +74,8 @@ from appCommon.Common import ExclusionAreas
 from appCommon.Common import AppLogging
 from appCommon.RegisterFileKeywords import RegisterFK, Extensions, KeyWords
 
-from appHandlers.AppIO import AppIO
+from appHandlers.appIO import appIO
+from appHandlers.appEdit import appEditor
 
 from Bookmark import BookmarkManager
 from appDatabase import ToolsDB2
@@ -100,10 +101,10 @@ from camlib import to_dict, Geometry, CNCjob
 from appPreProcessor import load_preprocessors
 
 # App appEditors
-from appEditors.AppGeoEditor import AppGeoEditor
-from appEditors.AppExcEditor import AppExcEditor
-from appEditors.AppGerberEditor import AppGerberEditor
-from appEditors.AppTextEditor import AppTextEditor
+from appEditors.appGeoEditor import AppGeoEditor
+from appEditors.appExcEditor import AppExcEditor
+from appEditors.appGerberEditor import AppGerberEditor
+from appEditors.appTextEditor import AppTextEditor
 from appEditors.appGCodeEditor import AppGCodeEditor
 
 # App Workers
@@ -386,7 +387,7 @@ class App(QtCore.QObject):
         # store here the mouse cursor
         self.cursor = None
 
-        # while True no canvas context menu will be showen
+        # while True no canvas context menu will be shown
         self.inhibit_context_menu = False
 
         # Variable to store the GCODE that was edited
@@ -986,8 +987,6 @@ class App(QtCore.QObject):
         # ###########################################################################################################
         # ############################################# Activity Monitor ############################################
         # ###########################################################################################################
-        # self.activity_view = FlatCAMActivityView(app=self)
-        # self.ui.infobar.addWidget(self.activity_view)
         self.proc_container = FCVisibleProcessContainer(self.ui.activity_view)
 
         # ###########################################################################################################
@@ -1080,7 +1079,7 @@ class App(QtCore.QObject):
         # Separate thread (Not worker)
         # Check for updates on startup but only if the user consent and the app is not in Beta version
         if (self.beta is False or self.beta is None) and self.options["global_version_check"] is True:
-            self.log.info("Checking for updates in backgroud (this is version %s)." % str(self.version))
+            self.log.info("Checking for updates in background (this is version %s)." % str(self.version))
 
             # self.thr2 = QtCore.QThread()
             self.worker_task.emit({'fcn': self.version_check, 'params': []})
@@ -1126,7 +1125,8 @@ class App(QtCore.QObject):
         # ###################################### INSTANTIATE CLASSES THAT HOLD THE MENU HANDLERS ####################
         # ###########################################################################################################
         # ###########################################################################################################
-        self.f_handlers = AppIO(app=self)
+        self.f_handlers = appIO(app=self)
+        self.edit_class = appEditor(app=self)
 
         # this is calculated in the class above (somehow?)
         self.options["root_folder_path"] = self.app_home
@@ -1905,25 +1905,25 @@ class App(QtCore.QObject):
         self.ui.menueditedit.triggered.connect(lambda: self.on_editing_start())
         self.ui.menueditok.triggered.connect(lambda: self.on_editing_finished())
 
-        self.ui.menuedit_join2geo.triggered.connect(self.on_edit_join)
-        self.ui.menuedit_join_exc2exc.triggered.connect(self.on_edit_join_exc)
-        self.ui.menuedit_join_grb2grb.triggered.connect(self.on_edit_join_grb)
+        self.ui.menuedit_join2geo.triggered.connect(self.edit_class.on_edit_join)
+        self.ui.menuedit_join_exc2exc.triggered.connect(self.edit_class.on_edit_join_exc)
+        self.ui.menuedit_join_grb2grb.triggered.connect(self.edit_class.on_edit_join_grb)
 
-        self.ui.menuedit_convert_sg2mg.triggered.connect(self.on_convert_singlegeo_to_multigeo)
-        self.ui.menuedit_convert_mg2sg.triggered.connect(self.on_convert_multigeo_to_singlegeo)
+        self.ui.menuedit_convert_sg2mg.triggered.connect(self.edit_class.on_convert_singlegeo_to_multigeo)
+        self.ui.menuedit_convert_mg2sg.triggered.connect(self.edit_class.on_convert_multigeo_to_singlegeo)
 
         self.ui.menueditdelete.triggered.connect(self.on_delete)
 
         self.ui.menueditcopyobject.triggered.connect(self.on_copy_command)
-        self.ui.menueditconvert_any2geo.triggered.connect(lambda: self.convert_any2geo())
-        self.ui.menueditconvert_any2gerber.triggered.connect(lambda: self.convert_any2gerber())
-        self.ui.menueditconvert_any2excellon.triggered.connect(lambda: self.convert_any2excellon())
+        self.ui.menueditconvert_any2geo.triggered.connect(lambda: self.edit_class.convert_any2geo())
+        self.ui.menueditconvert_any2gerber.triggered.connect(lambda: self.edit_class.convert_any2gerber())
+        self.ui.menueditconvert_any2excellon.triggered.connect(lambda: self.edit_class.convert_any2excellon())
 
         self.ui.menuedit_numeric_move.triggered.connect(lambda: self.on_numeric_move())
 
         self.ui.menueditorigin.triggered.connect(self.on_set_origin)
         self.ui.menuedit_move2origin.triggered.connect(self.on_move2origin)
-        self.ui.menuedit_center_in_origin.triggered.connect(self.on_custom_origin)
+        self.ui.menuedit_center_in_origin.triggered.connect(self.edit_class.on_custom_origin)
 
         self.ui.menueditjump.triggered.connect(self.on_jump_to)
         self.ui.menueditlocate.triggered.connect(lambda: self.on_locate(obj=self.collection.get_active()))
@@ -4029,208 +4029,12 @@ class App(QtCore.QObject):
         with open(config_file, 'w') as f:
             f.writelines(data)
 
-    def on_edit_join(self, name=None):
-        """
-        Callback for Edit->Join. Joins the selected geometry objects into
-        a new one.
-
-        :return: None
-        """
-        self.defaults.report_usage("on_edit_join()")
-
-        obj_name_single = str(name) if name else "Combo_SingleGeo"
-        obj_name_multi = str(name) if name else "Combo_MultiGeo"
-
-        geo_type_set = set()
-
-        objs = self.collection.get_selected()
-
-        if len(objs) < 2:
-            self.inform.emit('[ERROR_NOTCL] %s: %d' %
-                             (_("At least two objects are required for join. Objects currently selected"), len(objs)))
-            return 'fail'
-
-        for obj in objs:
-            geo_type_set.add(obj.multigeo)
-
-        # if len(geo_type_list) == 1 means that all list elements are the same
-        if len(geo_type_set) != 1:
-            self.inform.emit('[ERROR] %s' %
-                             _("Failed join. The Geometry objects are of different types.\n"
-                               "At least one is MultiGeo type and the other is SingleGeo type. A possibility is to "
-                               "convert from one to another and retry joining \n"
-                               "but in the case of converting from MultiGeo to SingleGeo, informations may be lost and "
-                               "the result may not be what was expected. \n"
-                               "Check the generated GCODE."))
-            return
-
-        fuse_tools = self.options["geometry_merge_fuse_tools"]
-
-        # if at least one True object is in the list then due of the previous check, all list elements are True objects
-        if True in geo_type_set:
-            def initialize(geo_obj, app):
-                GeometryObject.merge(geo_list=objs, geo_final=geo_obj, multi_geo=True, fuse_tools=fuse_tools,
-                                     log=app.log)
-                app.inform.emit('[success] %s.' % _("Geometry merging finished"))
-
-                # rename all the ['name] key in obj.tools[tooluid]['data'] to the obj_name_multi
-                for v in geo_obj.tools.values():
-                    v['data']['name'] = obj_name_multi
-
-            self.app_obj.new_object("geometry", obj_name_multi, initialize)
-        else:
-            def initialize(geo_obj, app):
-                GeometryObject.merge(geo_list=objs, geo_final=geo_obj, multi_geo=False, fuse_tools=fuse_tools,
-                                     log=app.log)
-                app.inform.emit('[success] %s.' % _("Geometry merging finished"))
-
-                # rename all the ['name] key in obj.tools[tooluid]['data'] to the obj_name_multi
-                for v in geo_obj.tools.values():
-                    v['data']['name'] = obj_name_single
-
-            self.app_obj.new_object("geometry", obj_name_single, initialize)
-
-        self.should_we_save = True
-
-    def on_edit_join_exc(self):
-        """
-        Callback for Edit->Join Excellon. Joins the selected Excellon objects into
-        a new Excellon.
-
-        :return: None
-        """
-        self.defaults.report_usage("on_edit_join_exc()")
-
-        objs = self.collection.get_selected()
-
-        for obj in objs:
-            if not isinstance(obj, ExcellonObject):
-                self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Excellon joining works only on Excellon objects."))
-                return
-
-        if len(objs) < 2:
-            self.inform.emit('[ERROR_NOTCL] %s: %d' %
-                             (_("At least two objects are required for join. Objects currently selected"), len(objs)))
-            return 'fail'
-
-        fuse_tools = self.options["excellon_merge_fuse_tools"]
-
-        def initialize(exc_obj, app):
-            ExcellonObject.merge(exc_list=objs, exc_final=exc_obj, decimals=self.decimals, fuse_tools=fuse_tools,
-                                 log=app.log)
-            app.inform.emit('[success] %s.' % _("Excellon merging finished"))
-
-        self.app_obj.new_object("excellon", 'Combo_Excellon', initialize)
-        self.should_we_save = True
-
-    def on_edit_join_grb(self):
-        """
-        Callback for Edit->Join Gerber. Joins the selected Gerber objects into
-        a new Gerber object.
-
-        :return: None
-        """
-        self.defaults.report_usage("on_edit_join_grb()")
-
-        objs = self.collection.get_selected()
-
-        for obj in objs:
-            if not isinstance(obj, GerberObject):
-                self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Gerber joining works only on Gerber objects."))
-                return
-
-        if len(objs) < 2:
-            self.inform.emit('[ERROR_NOTCL] %s: %d' %
-                             (_("At least two objects are required for join. Objects currently selected"), len(objs)))
-            return 'fail'
-
-        def initialize(grb_obj, app):
-            GerberObject.merge(grb_list=objs, grb_final=grb_obj, app=self)
-            app.inform.emit('[success] %s.' % _("Gerber merging finished"))
-
-        self.app_obj.new_object("gerber", 'Combo_Gerber', initialize)
-        self.should_we_save = True
-
-    def on_convert_singlegeo_to_multigeo(self):
-        """
-        Called for converting a Geometry object from single-geo to multi-geo.
-        Single-geo Geometry objects store their geometry data into self.solid_geometry.
-        Multi-geo Geometry objects store their geometry data into the `self.tools` dictionary, each key
-        (a tool actually) having as a value another dictionary. This value dictionary has
-        one of its keys 'solid_geometry' which holds the solid-geometry of that tool.
-
-        :return: None
-        """
-        self.defaults.report_usage("on_convert_singlegeo_to_multigeo()")
-
-        obj = self.collection.get_active()
-
-        if obj is None:
-            self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Select a Geometry Object and try again."))
-            return
-
-        if not isinstance(obj, GeometryObject):
-            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Expected a GeometryObject, got"), type(obj)))
-            return
-
-        obj.multigeo = True
-        for tooluid, dict_value in obj.tools.items():
-            dict_value['solid_geometry'] = deepcopy(obj.solid_geometry)
-
-        if not isinstance(obj.solid_geometry, list):
-            obj.solid_geometry = [obj.solid_geometry]
-
-        # obj.solid_geometry[:] = []
-        obj.plot()
-
-        self.should_we_save = True
-
-        self.inform.emit('[success] %s' % _("A Geometry object was converted to MultiGeo type."))
-
-    def on_convert_multigeo_to_singlegeo(self):
-        """
-        Called for converting a Geometry object from multi-geo to single-geo.
-        Single-geo Geometry objects store their geometry data into self.solid_geometry.
-        Multi-geo Geometry objects store their geometry data into the self.tools dictionary, each key (a tool actually)
-        having as a value another dictionary. This value dictionary has one of its keys 'solid_geometry' which holds
-        the solid-geometry of that tool.
-
-        :return: None
-        """
-        self.defaults.report_usage("on_convert_multigeo_to_singlegeo()")
-
-        obj = self.collection.get_active()
-
-        if obj is None:
-            self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Select a Geometry Object and try again."))
-            return
-
-        if not isinstance(obj, GeometryObject):
-            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Expected a GeometryObject, got"), type(obj)))
-            return
-
-        obj.multigeo = False
-        total_solid_geometry = []
-        for tooluid, dict_value in obj.tools.items():
-            total_solid_geometry += deepcopy(dict_value['solid_geometry'])
-            # clear the original geometry
-            if isinstance(dict_value['solid_geometry'], list):
-                dict_value['solid_geometry'][:] = []
-            else:
-                dict_value['solid_geometry'] = []
-        obj.solid_geometry = deepcopy(total_solid_geometry)
-        obj.plot()
-
-        self.should_we_save = True
-
-        self.inform.emit('[success] %s' % _("A Geometry object was converted to SingleGeo type."))
-
     def on_defaults_dict_change(self, field):
         """
-        Called whenever a key changed in the self.options dictionary. It will set the required GUI element in the
+        Called whenever a key changed in the "self.options" dictionary. It will set the required GUI element in the
         Edit -> Preferences tab window.
 
-        :param field:   the key of the self.options dictionary that was changed.
+        :param field:   the key of the "self.options" dictionary that was changed.
         :return:        None
         """
         self.preferencesUiManager.defaults_write_form_field(field=field)
@@ -4715,118 +4519,6 @@ class App(QtCore.QObject):
             worker_task()
         self.should_we_save = True
 
-    def on_custom_origin(self, use_thread=True):
-        """
-        Move selected objects to be centered in certain standard locations of the object (corners and center).
-        :param use_thread: Control if to use threaded operation. Boolean.
-        :return:
-        """
-
-        obj_list = self.collection.get_selected()
-
-        if not obj_list:
-            self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. No object(s) selected..."))
-            return
-
-        choices = [
-            {"label": _("Quadrant 2"), "value": "tl"},
-            {"label": _("Quadrant 1"), "value": "tr"},
-            {"label": _("Quadrant 3"), "value": "bl"},
-            {"label": _("Quadrant 4"), "value": "br"},
-            {"label": _("Center"), "value": "c"}
-        ]
-        dia_box = DialogBoxChoice(title='%s:' % _("Custom Origin"),
-                                  icon=QtGui.QIcon(self.resource_location + '/origin3_32.png'),
-                                  choices=choices,
-                                  default_choice='c',
-                                  parent=self.ui)
-        if dia_box.ok is True:
-            try:
-                location_point = dia_box.location_point
-            except Exception:
-                return
-        else:
-            return
-
-        def worker_task():
-            with self.proc_container.new('%s ...' % _("Custom Origin")):
-
-                xminlist = []
-                yminlist = []
-                xmaxlist = []
-                ymaxlist = []
-
-                # first get a bounding box to fit all
-                for obj in obj_list:
-                    xmin, ymin, xmax, ymax = obj.bounds()
-                    xminlist.append(xmin)
-                    yminlist.append(ymin)
-                    xmaxlist.append(xmax)
-                    ymaxlist.append(ymax)
-
-                # get the minimum x,y for all objects selected
-                x0 = min(xminlist)
-                y0 = min(yminlist)
-                x1 = max(xmaxlist)
-                y1 = max(ymaxlist)
-
-                if location_point == 'bl':
-                    location = (x0, y0)
-                elif location_point == 'tl':
-                    location = (x0, y1)
-                elif location_point == 'br':
-                    location = (x1, y0)
-                elif location_point == 'tr':
-                    location = (x1, y1)
-                else:
-                    # center
-                    cx = x0 + abs((x1 - x0) / 2)
-                    cy = y0 + abs((y1 - y0) / 2)
-                    location = (cx, cy)
-
-                for obj in obj_list:
-                    obj.offset((-location[0], -location[1]))
-                    self.app_obj.object_changed.emit(obj)
-
-                    # Update the object bounding box options
-                    a, b, c, d = obj.bounds()
-                    obj.obj_options['xmin'] = a
-                    obj.obj_options['ymin'] = b
-                    obj.obj_options['xmax'] = c
-                    obj.obj_options['ymax'] = d
-
-                    # make sure to update the Offset field in Properties Tab
-                    try:
-                        obj.set_offset_values()
-                    except AttributeError:
-                        # not all objects have this attribute
-                        pass
-
-                for obj in obj_list:
-                    obj.plot()
-                self.plotcanvas.fit_view()
-
-                for obj in obj_list:
-                    out_name = obj.obj_options["name"]
-
-                    if obj.kind == 'gerber':
-                        obj.source_file = self.f_handlers.export_gerber(
-                            obj_name=out_name, filename=None, local_use=obj, use_thread=False)
-                    elif obj.kind == 'excellon':
-                        obj.source_file = self.f_handlers.export_excellon(
-                            obj_name=out_name, filename=None, local_use=obj, use_thread=False)
-                    elif obj.kind == 'geometry':
-                        obj.source_file = self.f_handlers.export_dxf(
-                            obj_name=out_name, filename=None, local_use=obj, use_thread=False)
-
-                self.inform.emit('[success] %s...' % _('Origin set'))
-
-        if use_thread is True:
-            self.worker_task.emit({'fcn': worker_task, 'params': []})
-        else:
-            worker_task()
-        self.should_we_save = True
-
     def on_jump_to(self, custom_location=None, fit_center=True):
         """
         Jump to a location by setting the mouse cursor location.
@@ -5292,379 +4984,6 @@ class App(QtCore.QObject):
                     self.log.error(
                         "App.on_rename_object() --> Could not rename the object in the list. --> %s" % str(e))
 
-    def convert_any2geo(self):
-        """
-        Will convert any object out of Gerber, Excellon, Geometry to Geometry object.
-        :return:
-        """
-        self.defaults.report_usage("convert_any2geo()")
-
-        # store here the default data for Geometry Data
-        default_data = {}
-
-        for opt_key, opt_val in self.options.items():
-            if opt_key.find('geometry' + "_") == 0:
-                oname = opt_key[len('geometry') + 1:]
-                default_data[oname] = self.options[opt_key]
-            else:
-                default_data[opt_key] = self.options[opt_key]
-
-        if isinstance(self.options["tools_mill_tooldia"], float):
-            tools_diameters = [self.options["tools_mill_tooldia"]]
-        else:
-            try:
-                dias = str(self.options["tools_mill_tooldia"]).strip('[').strip(']')
-                tools_string = dias.split(",")
-                tools_diameters = [eval(a) for a in tools_string if a != '']
-            except Exception as e:
-                self.log.error("App.convert_any2geo() --> %s" % str(e))
-                return 'fail'
-
-        tools = {}
-        t_id = 0
-        for tooldia in tools_diameters:
-            t_id += 1
-            new_tool = {
-                'tooldia': tooldia,
-                'offset': 'Path',
-                'offset_value': 0.0,
-                'type': 'Rough',
-                'tool_type': 'C1',
-                'data': deepcopy(default_data),
-                'solid_geometry': []
-            }
-            tools[t_id] = deepcopy(new_tool)
-
-        def initialize_from_gerber(new_obj, app_obj):
-            app_obj.log.debug("Gerber converted to Geometry: %s" % str(obj.obj_options["name"]))
-            new_obj.solid_geometry = deepcopy(obj.solid_geometry)
-            try:
-                new_obj.follow_geometry = obj.follow_geometry
-            except AttributeError:
-                pass
-
-            new_obj.obj_options.update(deepcopy(default_data))
-            new_obj.obj_options["tools_mill_tooldia"] = tools_diameters[0] if tools_diameters else 0.0
-            new_obj.tools = deepcopy(tools)
-            for k in new_obj.tools:
-                new_obj.tools[k]['solid_geometry'] = deepcopy(obj.solid_geometry)
-
-        def initialize_from_excellon(new_obj, app_obj):
-            app_obj.log.debug("Excellon converted to Geometry: %s" % str(obj.obj_options["name"]))
-            solid_geo = []
-            for tool in obj.tools:
-                for geo in obj.tools[tool]['solid_geometry']:
-                    solid_geo.append(geo)
-            new_obj.solid_geometry = deepcopy(solid_geo)
-            if not new_obj.solid_geometry:
-                app_obj.log("convert_any2geo() failed")
-                return 'fail'
-
-            new_obj.obj_options.update(deepcopy(default_data))
-            new_obj.obj_options["tools_mill_tooldia"] = tools_diameters[0] if tools_diameters else 0.0
-            new_obj.tools = deepcopy(tools)
-            for k in new_obj.tools:
-                new_obj.tools[k]['solid_geometry'] = deepcopy(obj.solid_geometry)
-
-        if not self.collection.get_selected():
-            self.log.warning("App.convert_any2geo --> No object selected")
-            self.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-
-        for obj in self.collection.get_selected():
-            outname = '%s_conv' % obj.obj_options["name"]
-
-            try:
-                if obj.kind == 'excellon':
-                    self.app_obj.new_object("geometry", outname, initialize_from_excellon)
-
-                if obj.kind == 'gerber':
-                    self.app_obj.new_object("geometry", outname, initialize_from_gerber)
-            except Exception as e:
-                self.log.error("Convert any2geo operation failed: %s" % str(e))
-
-    def convert_any2gerber(self):
-        """
-        Will convert any object out of Gerber, Excellon, Geometry to Gerber object.
-
-        :return:
-        """
-
-        def initialize_from_geometry(obj_init, app_obj):
-            apertures = {
-                0: {
-                    'size': 0.0,
-                    'type': 'REG',
-                    'geometry': []
-                }
-            }
-
-            for obj_orig in obj.solid_geometry:
-                new_elem = {'solid': obj_orig}
-                try:
-                    new_elem['follow'] = obj_orig.exterior
-                except AttributeError:
-                    pass
-                apertures[0]['geometry'].append(deepcopy(new_elem))
-
-            obj_init.solid_geometry = deepcopy(obj.solid_geometry)
-            obj_init.tools = deepcopy(apertures)
-
-            if not obj_init.tools:
-                app_obj.log("convert_any2gerber() failed")
-                return 'fail'
-
-        def initialize_from_excellon(obj_init, app_obj):
-            apertures = {}
-
-            apid = 10
-            for tool in obj.tools:
-                apertures[apid] = {
-                    'size': float(obj.tools[tool]['tooldia']),
-                    'type': 'C',
-                    'geometry': []
-                }
-
-                for geo in obj.tools[tool]['solid_geometry']:
-                    new_el = {
-                        'solid': geo,
-                        'follow': geo.exterior
-                    }
-                    apertures[apid]['geometry'].append(deepcopy(new_el))
-
-                apid += 1
-
-            # create solid_geometry
-            solid_geometry = []
-            for apid_val in apertures.values():
-                for geo_el in apid_val['geometry']:
-                    solid_geometry.append(geo_el['solid'])  # noqa
-
-            solid_geometry = MultiPolygon(solid_geometry)
-            solid_geometry = solid_geometry.buffer(0.0000001)
-
-            obj_init.solid_geometry = deepcopy(solid_geometry)
-            obj_init.tools = deepcopy(apertures)
-
-            if not obj_init.tools:
-                app_obj.log("convert_any2gerber() failed")
-                return 'fail'
-
-        if not self.collection.get_selected():
-            self.log.warning("App.convert_any2gerber --> No object selected")
-            self.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-
-        for obj in self.collection.get_selected():
-
-            outname = '%s_conv' % obj.obj_options["name"]
-
-            try:
-                if obj.kind == 'excellon':
-                    self.app_obj.new_object("gerber", outname, initialize_from_excellon)
-                elif obj.kind == 'geometry':
-                    self.app_obj.new_object("gerber", outname, initialize_from_geometry)
-                else:
-                    self.log.warning("App.convert_any2gerber --> This is no valid object for conversion.")
-
-            except Exception as e:
-                return "Operation failed: %s" % str(e)
-
-    def convert_any2excellon(self, conv_obj_name=None):
-        """
-        Will convert any object out of Gerber, Excellon, Geometry to an Excellon object.
-
-        :param conv_obj_name:    a FlatCAM object
-        :return:
-        """
-
-        self.log.debug("Running conversion to Excellon object...")
-
-        def initialize_from_geometry(obj_init, app_obj):
-            tools = {}
-            tooluid = 1
-
-            obj_init.solid_geometry = []
-
-            for tool in obj.tools:
-                print(obj.tools[tool])
-
-            for geo in obj.solid_geometry:
-                if not isinstance(geo, (Polygon, MultiPolygon, LinearRing)):
-                    continue
-
-                minx, miny, maxx, maxy = geo.bounds
-                new_dia = min([maxx - minx, maxy - miny])
-
-                new_drill = geo.centroid
-                new_drill_geo = new_drill.buffer(new_dia / 2.0)
-
-                current_tooldias = []
-                if tools:
-                    for tool in tools:
-                        if tools[tool] and 'tooldia' in tools[tool]:
-                            current_tooldias.append(tools[tool]['tooldia'])
-
-                if new_dia in current_tooldias:
-                    digits = app_obj.decimals
-                    for tool in tools:
-                        if app_obj.dec_format(tools[tool]["tooldia"], digits) == app_obj.dec_format(new_dia, digits):
-                            tools[tool]['drills'].append(new_drill)
-                            tools[tool]['solid_geometry'].append(deepcopy(new_drill_geo))
-                else:
-                    tools[tooluid] = {}
-                    tools[tooluid]['tooldia'] = new_dia
-                    tools[tooluid]['drills'] = [new_drill]
-                    tools[tooluid]['slots'] = []
-                    tools[tooluid]['solid_geometry'] = [new_drill_geo]
-                    tooluid += 1
-
-                try:
-                    obj_init.solid_geometry.append(new_drill_geo)
-                except (TypeError, AttributeError):
-                    obj_init.solid_geometry = [new_drill_geo]
-
-            obj_init.tools = deepcopy(tools)
-            obj_init.solid_geometry = unary_union(obj_init.solid_geometry)
-
-            if not obj_init.solid_geometry:
-                return 'fail'
-
-        def initialize_from_gerber(obj_init, app_obj):
-            tools = {}
-            tooluid = 1
-            digits = app_obj.decimals
-
-            obj_init.solid_geometry = []
-
-            for apid in obj.tools:
-                if 'geometry' in obj.tools[apid]:
-                    for geo_dict in obj.tools[apid]['geometry']:
-                        if 'follow' in geo_dict:
-                            if isinstance(geo_dict['follow'], Point):
-                                geo = geo_dict['solid']
-                                minx, miny, maxx, maxy = geo.bounds
-                                new_dia = min([maxx - minx, maxy - miny])
-
-                                new_drill = geo.centroid
-                                new_drill_geo = new_drill.buffer(new_dia / 2.0)
-
-                                current_tooldias = []
-                                if tools:
-                                    for tool in tools:
-                                        if tools[tool] and 'tooldia' in tools[tool]:
-                                            current_tooldias.append(
-                                                app_obj.dec_format(tools[tool]['tooldia'], digits)
-                                            )
-
-                                formatted_new_dia = app_obj.dec_format(new_dia, digits)
-                                if formatted_new_dia in current_tooldias:
-                                    for tool in tools:
-                                        if app_obj.dec_format(tools[tool]["tooldia"], digits) == formatted_new_dia:
-                                            if new_drill not in tools[tool]['drills']:
-                                                tools[tool]['drills'].append(new_drill)
-                                                tools[tool]['solid_geometry'].append(deepcopy(new_drill_geo))
-                                else:
-                                    tools[tooluid] = {
-                                        'tooldia': new_dia,
-                                        'drills': [new_drill],
-                                        'slots': [],
-                                        'solid_geometry': [new_drill_geo]
-                                    }
-                                    tooluid += 1
-
-                                try:
-                                    obj_init.solid_geometry.append(new_drill_geo)
-                                except (TypeError, AttributeError):
-                                    obj_init.solid_geometry = [new_drill_geo]
-                            elif isinstance(geo_dict['follow'], LineString):
-                                geo_coords = list(geo_dict['follow'].coords)
-
-                                # slots can have only a start and stop point and no intermediate points
-                                if len(geo_coords) != 2:
-                                    continue
-
-                                geo = geo_dict['solid']
-                                try:
-                                    new_dia = obj.tools[apid]['size']
-                                except Exception:
-                                    continue
-
-                                new_slot = (Point(geo_coords[0]), Point(geo_coords[1]))
-                                new_slot_geo = geo
-
-                                current_tooldias = []
-                                if tools:
-                                    for tool in tools:
-                                        if tools[tool] and 'tooldia' in tools[tool]:
-                                            current_tooldias.append(
-                                                float('%.*f' % (self.decimals, tools[tool]['tooldia']))
-                                            )
-
-                                if float('%.*f' % (self.decimals, new_dia)) in current_tooldias:
-                                    for tool in tools:
-                                        if float('%.*f' % (self.decimals, tools[tool]["tooldia"])) == float(
-                                                '%.*f' % (self.decimals, new_dia)):
-                                            if new_slot not in tools[tool]['slots']:
-                                                tools[tool]['slots'].append(new_slot)
-                                                tools[tool]['solid_geometry'].append(deepcopy(new_slot_geo))
-                                else:
-                                    tools[tooluid] = {}
-                                    tools[tooluid]['tooldia'] = new_dia
-                                    tools[tooluid]['drills'] = []
-                                    tools[tooluid]['slots'] = [new_slot]
-                                    tools[tooluid]['solid_geometry'] = [new_slot_geo]
-                                    tooluid += 1
-
-                                try:
-                                    obj_init.solid_geometry.append(new_slot_geo)
-                                except (TypeError, AttributeError):
-                                    obj_init.solid_geometry = [new_slot_geo]
-
-            obj_init.tools = deepcopy(tools)
-            obj_init.solid_geometry = unary_union(obj_init.solid_geometry)
-
-            if not obj_init.solid_geometry:
-                return 'fail'
-            obj_init.source_file = app_obj.f_handlers.export_excellon(obj_name=outname, local_use=obj_init,
-                                                                      filename=None, use_thread=False)
-
-        if conv_obj_name is None:
-            if not self.collection.get_selected():
-                self.log.warning("App.convert_any2excellon--> No object selected")
-                self.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-                return
-
-            for obj in self.collection.get_selected():
-
-                obj_name = obj.obj_options["name"]
-                outname = "%s_conv" % str(obj_name)
-                try:
-                    if obj.kind == 'gerber':
-                        self.app_obj.new_object("excellon", outname, initialize_from_gerber)
-                    elif obj.kind == 'geometry':
-                        self.app_obj.new_object("excellon", outname, initialize_from_geometry)
-                    else:
-                        self.log.warning("App.convert_any2excellon --> This is no valid object for conversion.")
-
-                except Exception as e:
-                    return "Operation failed: %s" % str(e)
-        else:
-            outname = conv_obj_name
-            obj = self.collection.get_by_name(outname)
-
-            try:
-                if obj.kind == 'gerber':
-                    self.app_obj.new_object("excellon", outname, initialize_from_gerber)
-                elif obj.kind == 'geometry':
-                    self.app_obj.new_object("excellon", outname, initialize_from_geometry)
-                else:
-                    self.log.warning("App.convert_any2excellon --> This is no valid object for conversion.")
-
-            except Exception as e:
-                self.log.error("App.convert_any2excellon() --> %s" % str(e))
-                return "Operation failed: %s" % str(e)
-
     def abort_all_tasks(self):
         """
         Executed when a certain key combo is pressed (Ctrl+Alt+X). Will abort current task
@@ -6044,7 +5363,7 @@ class App(QtCore.QObject):
         self.ui.toggle_coords(checked=self.options["global_coords_bar_show"])
         self.ui.toggle_delta_coords(checked=self.options["global_delta_coords_bar_show"])
 
-    def on_plot_area_tab_double_clicked(self, index: int):
+    def on_plot_area_tab_double_clicked(self):
         # tab_obj_name = self.ui.plot_tab_area.widget(index).objectName()
         # print(tab_obj_name)
         self.ui.on_toggle_notebook()

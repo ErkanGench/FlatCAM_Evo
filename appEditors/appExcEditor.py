@@ -17,7 +17,7 @@ from appEditors.exc_plugins.ExcResizePlugin import ExcResizeEditorTool
 from appEditors.exc_plugins.ExcCopyPlugin import ExcCopyEditorTool
 
 from appGUI.GUIElements import FCEntry, FCTable, FCDoubleSpinner, FCButton, FCLabel, GLay
-from appEditors.AppGeoEditor import FCShapeTool, DrawTool, DrawToolShape, DrawToolUtilityShape, AppGeoEditor
+from appEditors.appGeoEditor import FCShapeTool, DrawTool, DrawToolShape, DrawToolUtilityShape, AppGeoEditor
 
 from shapely import LineString, LinearRing, MultiLineString, Polygon, MultiPolygon, Point
 from shapely.geometry.base import BaseGeometry

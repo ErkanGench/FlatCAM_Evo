@@ -12,7 +12,7 @@
 
 from PyQt6.QtCore import Qt
 
-from appEditors.AppTextEditor import AppTextEditor
+from appEditors.appTextEditor import AppTextEditor
 from appObjects.AppObjectTemplate import *
 from appGUI.ObjectUI import DocumentObjectUI
 

@@ -10,7 +10,7 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCEntry, FCCheckBox
 from appGUI.VisPyVisuals import ShapeCollection
 from camlib import AppRTreeStorage
-from appEditors.AppGeoEditor import DrawToolShape
+from appEditors.appGeoEditor import DrawToolShape
 
 import math
 import logging

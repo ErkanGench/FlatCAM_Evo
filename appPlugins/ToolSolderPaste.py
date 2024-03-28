@@ -26,7 +26,7 @@ import builtins
 from appCommon.Common import LoudDict
 
 from camlib import distance
-from appEditors.AppTextEditor import AppTextEditor
+from appEditors.appTextEditor import AppTextEditor
 
 from io import StringIO
 
@@ -223,7 +223,7 @@ class SolderPaste(AppTool):
 
         # either originally it was a string or not, xy_end will be made string
         dias_option = self.app.options["tools_solderpaste_tools"]
-        dias_option = re.sub('[()\[\]]', '', str(dias_option)) if dias_option else None
+        dias_option = re.sub(r'[()\[\]]', '', str(dias_option)) if dias_option else None
         try:
             dias = [float(eval(dia)) for dia in dias_option.split(",") if dia != '']
         except Exception as err:

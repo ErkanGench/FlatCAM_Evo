@@ -217,7 +217,9 @@ class AppObject(QtCore.QObject):
         obj.moveToThread(self.app.main_thread)
 
         if return_value == 'drill_gx2':
-            self.object_created.emit(obj, obj_plot, obj_autoselected, self.app.convert_any2excellon, [name])
+            self.object_created.emit(obj, obj_plot, obj_autoselected,
+                                     self.app.edit_class.convert_any2excellon,
+                                     [name])
             self.app.log.warning("Gerber X2 drill file detected. Converted to Excellon object.")
             self.app.inform.emit('[WARNING] %s' % _("Gerber X2 drill file detected. Converted to Excellon object."))
         else:

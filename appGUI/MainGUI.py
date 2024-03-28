@@ -21,7 +21,7 @@ from appGUI.preferences.excellon.ExcellonPreferencesUI import ExcellonPreference
 from appGUI.preferences.general.GeneralPreferencesUI import GeneralPreferencesUI
 from appGUI.preferences.geometry.GeometryPreferencesUI import GeometryPreferencesUI
 from appGUI.preferences.gerber.GerberPreferencesUI import GerberPreferencesUI
-from appEditors.AppGeoEditor import FCShapeTool
+from appEditors.appGeoEditor import FCShapeTool
 
 from matplotlib.backend_bases import KeyEvent as mpl_key_event
 

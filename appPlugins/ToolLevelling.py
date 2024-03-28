@@ -28,7 +28,7 @@ import builtins
 from appObjects.AppObjectTemplate import ObjectDeleted
 from appGUI.VisPyVisuals import *
 from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-from appEditors.AppTextEditor import AppTextEditor
+from appEditors.appTextEditor import AppTextEditor
 
 from camlib import CNCjob
 

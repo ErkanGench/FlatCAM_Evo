@@ -2,9 +2,9 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import Qt
 
-from appEditors.AppExcEditor import AppExcEditor
-from appEditors.AppGeoEditor import AppGeoEditor
-from appEditors.AppGerberEditor import AppGerberEditor
+from appEditors.appExcEditor import AppExcEditor
+from appEditors.appGeoEditor import AppGeoEditor
+from appEditors.appGerberEditor import AppGerberEditor
 
 from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox
 from camlib import to_dict, dict2obj, ET, ParseError
@@ -55,7 +55,7 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
-class AppIO(QtCore.QObject):
+class appIO(QtCore.QObject):
     def __init__(self, app):
         """
         A class that holds all the menu -> file handlers
@@ -1304,7 +1304,7 @@ class AppIO(QtCore.QObject):
             try:
                 root = ET.fromstring(svg_obj)
             except Exception as e:
-                self.log.debug("AppIO.save_pdf() -> Missing root node -> %s" % str(e))
+                self.log.debug("appIO.save_pdf() -> Missing root node -> %s" % str(e))
                 self.app.inform.emit("[ERROR_NOTCL] %s" % _("Failed."))
                 return
 
@@ -1393,7 +1393,7 @@ class AppIO(QtCore.QObject):
                 renderPDF.draw(drawing, my_canvas, 0, 0)
                 my_canvas.save()
         except Exception as e:
-            self.log.error("AppIO.save_pdf() --> PDF output --> %s" % str(e))
+            self.log.error("appIO.save_pdf() --> PDF output --> %s" % str(e))
             return 'fail'
 
         self.inform.emit('[success] %s: %s' % (_("PDF file saved to"), file_name))
@@ -2544,7 +2544,7 @@ class AppIO(QtCore.QObject):
                 for obj in d['objs']:
                     if 'cnc_tools' in obj or 'exc_cnc_tools' in obj or 'apertures' in obj:
                         self.app.log.error(
-                            'AppIO.open_project() --> %s %s. %s' %
+                            'appIO.open_project() --> %s %s. %s' %
                             ("Failed to open the CNCJob file:", str(obj['options']['name']),
                              "Maybe it is an old project."))
                         found_older_project = True
@@ -2645,7 +2645,7 @@ class AppIO(QtCore.QObject):
                         try:
                             new_obj.from_dict(obj)
                         except Exception as except_error:
-                            app_inst.log.error('AppIO.open_project() --> ' + str(except_error))
+                            app_inst.log.error('appIO.open_project() --> ' + str(except_error))
                             return 'fail'
 
                         # make the 'obj_options' dict a LoudDict
@@ -2655,7 +2655,7 @@ class AppIO(QtCore.QObject):
                         except AttributeError:
                             new_obj_options.update(new_obj.options)
                         except Exception as except_error:
-                            app_inst.log.error('AppIO.open_project() make a LoudDict--> ' + str(except_error))
+                            app_inst.log.error('appIO.open_project() make a LoudDict--> ' + str(except_error))
                             return 'fail'
 
                         new_obj.obj_options = new_obj_options
@@ -2692,7 +2692,7 @@ class AppIO(QtCore.QObject):
                                 float(tool): tool_dict for tool, tool_dict in list(new_obj.tools.items())
                             }
                         except Exception as other_error_msg:
-                            app_inst.log.error('AppIO.open_project() keys to int--> ' + str(other_error_msg))
+                            app_inst.log.error('appIO.open_project() keys to int--> ' + str(other_error_msg))
                             return 'fail'
 
                         # #############################################################################################
@@ -2761,7 +2761,7 @@ class AppIO(QtCore.QObject):
         self.app.save_in_progress = True
 
         if from_tcl:
-            self.log.debug("AppIO.save_project() -> Project saved from TCL command.")
+            self.log.debug("appIO.save_project() -> Project saved from TCL command.")
 
         with self.app.proc_container.new(_("Saving Project ...")):
             # Capture the latest changes
