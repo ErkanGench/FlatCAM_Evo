@@ -3021,7 +3021,7 @@ class MainGUI(QtWidgets.QMainWindow):
                 if key == QtCore.Qt.Key.Key_G:
                     widget_name = self.plot_tab_area.currentWidget().objectName()
                     if 'editor' in widget_name.lower():
-                        self.app.goto_text_line()
+                        self.goto_text_line()
                     else:
                         self.app.f_handlers.on_file_open_gerber()
 
@@ -4466,9 +4466,41 @@ class MainGUI(QtWidgets.QMainWindow):
                 if key == QtCore.Qt.Key.Key_G:
                     self.app.ui.grid_snap_btn.trigger()
 
-                # Jump to coords
+                # Jump to coordinates
                 if key == QtCore.Qt.Key.Key_J:
                     self.app.on_jump_to()
+
+    def goto_text_line(self):
+        """
+        Will scroll a text to the specified text line.
+
+        :return: None
+        """
+        editor_widget = self.plot_tab_area.currentWidget()
+        try:
+            c_editor = editor_widget.code_editor  # noqa
+        except AttributeError:
+            return
+
+        dia_box = Dialog_box(title=_("Go to Line ..."),
+                             label='%s:' % _("Line"),
+                             icon=QtGui.QIcon(self.app.resource_location + '/jump_to32.png'),
+                             initial_text='')
+        try:
+            line = int(dia_box.location) - 1
+        except (ValueError, TypeError):
+            line = 0
+
+        if dia_box.ok:
+            # make sure to move first the cursor at the end so after finding the line, the line will be positioned
+            # at the top of the window
+            c_editor.moveCursor(QTextCursor.MoveOperation.End)
+            # get the document() of the AppTextEditor
+            doc = c_editor.document()
+            # create a Text Cursor based on the searched line
+            cursor = QTextCursor(doc.findBlockByLineNumber(line))
+            # set cursor of the code editor with the cursor at the searched line
+            c_editor.setTextCursor(cursor)
 
     def eventFilter(self, obj, event):
         """

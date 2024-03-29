@@ -7,6 +7,10 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+29.03.2024
+
+- continue refactoring methods from the appMain
+
 28.03.2024
 
 - major refactoring: started to move the methods connected to the Edit menu to their own class to clean up the App mega class

@@ -6848,32 +6848,6 @@ class App(QtCore.QObject):
     def on_code_editor_close(self):
         self.toggle_codeeditor = False
 
-    def goto_text_line(self):
-        """
-        Will scroll a text to the specified text line.
-
-        :return: None
-        """
-        dia_box = Dialog_box(title=_("Go to Line ..."),
-                             label='%s:' % _("Line"),
-                             icon=QtGui.QIcon(self.resource_location + '/jump_to32.png'),
-                             initial_text='')
-        try:
-            line = int(dia_box.location) - 1
-        except (ValueError, TypeError):
-            line = 0
-
-        if dia_box.ok:
-            # make sure to move first the cursor at the end so after finding the line, the line will be positioned
-            # at the top of the window
-            self.ui.plot_tab_area.currentWidget().code_editor.moveCursor(QTextCursor.MoveOperation.End)
-            # get the document() of the AppTextEditor
-            doc = self.ui.plot_tab_area.currentWidget().code_editor.document()
-            # create a Text Cursor based on the searched line
-            cursor = QTextCursor(doc.findBlockByLineNumber(line))
-            # set cursor of the code editor with the cursor at the searcehd line
-            self.ui.plot_tab_area.currentWidget().code_editor.setTextCursor(cursor)
-
     def plot_all(self, fit_view=True, muted=False, use_thread=True):
         """
         Re-generates all plots from all objects.
