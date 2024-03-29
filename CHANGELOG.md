@@ -10,6 +10,7 @@ CHANGELOG for FlatCAM Evo beta
 29.03.2024
 
 - continue refactoring methods from the appMain
+- appIO: fixed an encoding error when trying to open a DXF file
 
 28.03.2024
 

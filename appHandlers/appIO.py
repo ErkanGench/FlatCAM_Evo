@@ -1988,7 +1988,7 @@ class appIO(QtCore.QObject):
             else:
                 return "fail"
 
-            with open(filename) as f:
+            with open(filename, 'r', encoding='utf-8') as f:
                 file_content = f.read()
             geo_obj.source_file = file_content
 
