@@ -718,6 +718,8 @@ class AppGeoEditor(QtCore.QObject):
         self.app.ui.popmenu_save.setVisible(False)
 
         self.disconnect_canvas_event_handlers()
+        self.storage = self.make_storage()
+
         self.clear()
         self.app.ui.geo_edit_toolbar.setDisabled(True)
 

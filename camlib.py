@@ -98,7 +98,7 @@ class ApertureMacro:
     """
 
     # ## Regular expressions
-    am1_re = re.compile(r'^%AM([^\*]+)\*(.+)?(%)?$')
+    am1_re = re.compile(r'^%AM([^*]+)\*(.+)?(%)?$')
     am2_re = re.compile(r'(.*)%$')
     am_comm_re = re.compile(r'^0(.*)')
     am_prim_re = re.compile(r'^[1-9].*')
@@ -964,7 +964,7 @@ class Geometry(object):
 
         Results are placed in self.flat_geometry
 
-        :param geometry: Shapely type or list or list of list of such.
+        :param geometry: Shapely type, or list, or a list of lists of such.
         :param reset: Clears the contents of self.flat_geometry.
         :param pathonly: Expands polygons into linear elements.
         """
@@ -1004,7 +1004,7 @@ class Geometry(object):
         Polygons are expanded into its exterior and interiors.
 
 
-        :param geometry: Shapely type or list or list of list of such.
+        :param geometry: Shapely type, or a list, or a list of lists of such.
         """
 
         flat_geo_ext = []
@@ -1063,7 +1063,7 @@ class Geometry(object):
     #     indexes them in rtree.
     #
     #     :param geometry: Iterable geometry
-    #     :param reset: Wether to clear (True) or append (False) to self.flat_geometry
+    #     :param reset: Either to clear (True) or append (False) to self.flat_geometry
     #     :return: self.flat_geometry, self.flat_geometry_rtree
     #     """
     #
@@ -2346,7 +2346,7 @@ class Geometry(object):
                    skew_reference='center', scale_reference='center', mirror_reference='center',
                    mirror=None):
         """
-        Exports the Geometry Object as a SVG Element
+        Exports the Geometry Object as an SVG Element
 
         :return: SVG Element
         """
@@ -2428,7 +2428,7 @@ class Geometry(object):
         if scale_stroke_factor <= 0:
             scale_stroke_factor = 0.01
 
-        # Convert to a SVG
+        # Convert to an SVG element
         svg_elem = geom.svg(scale_factor=scale_stroke_factor)
         return svg_elem
 
@@ -3150,9 +3150,9 @@ class CNCjob(Geometry):
 
         :param points:  List of tuples with x, y coordinates
         :type points:   list
-        :param start:   a tuple with a x,y coordinates of the start point
+        :param start:   a tuple with the x,y coordinates of the start point
         :type start:    tuple
-        :return:        List of points ordered in a optimized way
+        :return:        List of points ordered in an optimized way
         :rtype:         list
         """
 
@@ -3598,7 +3598,7 @@ class CNCjob(Geometry):
 
                 # t_gcode += self.doformat(p.rapid_code, x=locx, y=locy)
 
-                # test if the self.z_cut >= 0, in that case we don not use the up_to_zero feature
+                # test if the self.z_cut >= 0, in that case we do not use the up_to_zero feature
                 cancel_up2zero = False
                 if self.z_cut >= 0:
                     cancel_up2zero = True
@@ -3735,7 +3735,7 @@ class CNCjob(Geometry):
         if not HAS_ORTOOLS:
             opt_type = 'R'
 
-        opt_time = tool_dict['tools_mill_search_time'] if 'tools_mill_search_time' in tool_dict else 'R'
+        opt_time = tool_dict['tools_mill_search_time'] if 'tools_mill_search_time' in tool_dict else 1.0
 
         if opt_type == 'M':
             self.app.log.debug("Using OR-Tools Metaheuristic Guided Local Search path optimization.")
@@ -3840,7 +3840,7 @@ class CNCjob(Geometry):
                                   self.obj_options['name']))
             return 'fail'
 
-        # made sure that depth_per_cut is no more then the z_cut
+        # made sure that depth_per_cut is no more than the z_cut
         if abs(self.z_cut) < self.z_depthpercut:
             self.z_depthpercut = abs(self.z_cut)
 
@@ -3951,6 +3951,7 @@ class CNCjob(Geometry):
             # if there are no locations then go to the next tool
             if not locations:
                 return 'fail'
+
             optimized_locations = self.optimized_ortools_meta(locations=locations, opt_time=opt_time)
             optimized_path = [(locations[loc], geo_storage[locations[loc]]) for loc in optimized_locations]
         elif opt_type == 'B':
@@ -3969,9 +3970,13 @@ class CNCjob(Geometry):
             optimized_path = self.geo_optimized_rtree(temp_solid_geometry)
             if optimized_path == 'fail':
                 return 'fail'
+        elif opt_type == 'N':
+            optimized_path = [(k , v) for k, v in geo_storage.items()]
+            if not optimized_path:
+                return 'fail'
         else:
             # it's actually not optimized path but here we build a list of (x,y) coordinates
-            # out of the tool's drills
+            # out of the tool
             for geo in temp_solid_geometry:
                 optimized_path.append(geo.coords[0])
         # #########################################################################################################
@@ -4144,7 +4149,6 @@ class CNCjob(Geometry):
                             which is the one doing it)
         :type is_first:     bool
         :return:            None
-        :rtype:             None
         """
 
         # #############################################################################################################
@@ -4213,7 +4217,7 @@ class CNCjob(Geometry):
             sorted_tools = all_tools
 
         if tools == "all":
-            selected_tools = [i[0] for i in all_tools]  # we get a array of ordered tools
+            selected_tools = [i[0] for i in all_tools]  # we get an array of ordered tools
         else:
             selected_tools = eval(tools)
             if not isinstance(selected_tools, list):
@@ -5061,7 +5065,7 @@ class CNCjob(Geometry):
                                   self.obj_options['name']))
             return 'fail'
 
-        # made sure that depth_per_cut is no more then the z_cut
+        # made sure that depth_per_cut is no more than the z_cut
         if abs(self.z_cut) < self.z_depthpercut:
             self.z_depthpercut = abs(self.z_cut)
 
@@ -5229,7 +5233,7 @@ class CNCjob(Geometry):
 
     def generate_from_geometry_2(self, geo_obj, append=True, tooldia=None, offset=0.0, tolerance=0, z_cut=None,
                                  z_move=None, feedrate=None, feedrate_z=None, feedrate_rapid=None, spindlespeed=None,
-                                 spindledir='CW', dwell=False, dwelltime=None,
+                                 spindle_dir='CW', dwell=False, dwelltime=None,
                                  laser_min_power=0.0,
                                  laser_on_code="M03",
                                  multidepth=False, depthpercut=None,
@@ -5254,7 +5258,7 @@ class CNCjob(Geometry):
         :param feedrate_z:
         :param feedrate_rapid:
         :param spindlespeed:
-        :param spindledir:
+        :param spindle_dir:
         :param dwell:
         :param dwelltime:
         :param laser_min_power:     Float value. Used when the preprocessor cotanins 'laser' in its name. Control
@@ -5307,7 +5311,7 @@ class CNCjob(Geometry):
                         maxy = max(maxy, maxy_)
                 return minx, miny, maxx, maxy
             else:
-                # it's a Shapely object, return it's bounds
+                # it's a Shapely object, return its bounds
                 return obj.bounds
 
         # #############################################################################################################
@@ -5395,7 +5399,7 @@ class CNCjob(Geometry):
             self.app.options["tools_mill_feedrate_rapid"]
 
         self.spindlespeed = int(spindlespeed) if spindlespeed != 0 and spindlespeed is not None else None
-        self.spindledir = spindledir
+        self.spindledir = spindle_dir
         self.dwell = dwell
         self.dwelltime = float(dwelltime) if dwelltime is not None else self.app.options["tools_mill_dwelltime"]
 
@@ -5497,26 +5501,70 @@ class CNCjob(Geometry):
         except TypeError:
             self.z_depthpercut = abs(self.z_cut)
 
-        # ## Index first and last points in paths
-        # What points to index.
-        def get_pts(o):
-            return [o.coords[0], o.coords[-1]]
+        # #########################################################################################################
+        # ############ Create the data. ###########################################################################
+        # #########################################################################################################
+        opt_type = self.app.options["tools_mill_optimization_type"]
+        if not HAS_ORTOOLS:
+            opt_type = 'R'
 
-        # Create the indexed storage.
-        storage = AppRTreeStorage()
-        storage.get_points = get_pts
+        opt_time = int(self.app.options['tools_mill_search_time'])
 
-        # Store the geometry
-        self.app.log.debug("Indexing geometry before generating G-Code...")
-        self.app.inform.emit(_("Indexing geometry before generating G-Code..."))
+        if opt_type == 'M':
+            self.app.log.debug("Using OR-Tools Metaheuristic Guided Local Search path optimization.")
+        elif opt_type == 'B':
+            self.app.log.debug("Using OR-Tools Basic path optimization.")
+        elif opt_type == 'T':
+            self.app.log.debug("Using Travelling Salesman path optimization.")
+        elif opt_type == 'R':
+            self.app.log.debug("Using RTree path optimization.")
+        else:
+            self.app.log.debug("Using no path optimization.")
 
-        for geo_shape in temp_solid_geometry:
-            if self.app.abort_flag:
-                # graceful abort requested by the user
-                raise grace
+        optimized_path = []
 
-            if geo_shape is not None:
-                storage.insert(geo_shape)
+        geo_storage = {}
+        for geo in temp_solid_geometry:
+            if geo is not None and isinstance(geo, (LineString, LinearRing)):
+                try:
+                    geo_storage[geo.coords[0]] = geo
+                except Exception:
+                    pass
+        locations = list(geo_storage.keys())
+
+        if opt_type == 'M':
+            # if there are no locations then go to the next tool
+            if not locations:
+                return 'fail'
+
+            optimized_locations = self.optimized_ortools_meta(locations=locations, opt_time=opt_time)
+            optimized_path = [(locations[loc], geo_storage[locations[loc]]) for loc in optimized_locations]
+        elif opt_type == 'B':
+            # if there are no locations then go to the next tool
+            if not locations:
+                return 'fail'
+            optimized_locations = self.optimized_ortools_basic(locations=locations)
+            optimized_path = [(locations[loc], geo_storage[locations[loc]]) for loc in optimized_locations]
+        elif opt_type == 'T':
+            # if there are no locations then go to the next tool
+            if not locations:
+                return 'fail'
+            optimized_locations = self.optimized_travelling_salesman(locations)
+            optimized_path = [(loc, geo_storage[loc]) for loc in optimized_locations]
+        elif opt_type == 'R':
+            optimized_path = self.geo_optimized_rtree(temp_solid_geometry)
+            if optimized_path == 'fail':
+                return 'fail'
+        elif opt_type == 'N':
+            optimized_path = [(k, v) for k, v in geo_storage.items()]
+            if not optimized_path:
+                return 'fail'
+        else:
+            # it's actually not optimized path but here we build a list of (x,y) coordinates
+            # out of the tool
+            for geo in temp_solid_geometry:
+                optimized_path.append(geo.coords[0])
+        # #########################################################################################################
 
         if not append:
             self.gcode = ""
@@ -5595,64 +5643,53 @@ class CNCjob(Geometry):
 
         path_count = 0
         current_pt = (0, 0)
-        pt, geo = storage.nearest(current_pt)
 
-        # when nothing is left in the storage a StopIteration exception will be raised therefore stopping
-        # the whole process including the infinite loop while True below.
-        try:
-            while True:
-                if self.app.abort_flag:
-                    # graceful abort requested by the user
-                    raise grace
+        for pt, geo in optimized_path:
+            if self.app.abort_flag:
+                # graceful abort requested by the user
+                raise grace
 
-                path_count += 1
+            path_count += 1
 
-                # Remove before modifying, otherwise deletion will fail.
-                storage.remove(geo)
+            # If last point in geometry is the nearest but prefer the first one if last point == first point
+            # then reverse coordinates.
+            if pt != geo.coords[0] and pt == geo.coords[-1]:
+                # geo.coords = list(geo.coords)[::-1] # Shapely 2.0
+                geo = LineString(list(geo.coords)[::-1])
 
-                # If last point in geometry is the nearest but prefer the first one if last point == first point
-                # then reverse coordinates.
-                if pt != geo.coords[0] and pt == geo.coords[-1]:
-                    # geo.coords = list(geo.coords)[::-1] # Shapely 2.0
-                    geo = LineString(list(geo.coords)[::-1])
+            # ---------- Single depth/pass --------
+            if not multidepth:
+                # calculate the cut distance
+                total_cut += geo.length
+                self.gcode += self.create_gcode_single_pass(geo, current_tooldia, extracut, self.extracut_length,
+                                                            tolerance, z_move=z_move, old_point=current_pt)
 
-                # ---------- Single depth/pass --------
-                if not multidepth:
-                    # calculate the cut distance
-                    total_cut += geo.length
-                    self.gcode += self.create_gcode_single_pass(geo, current_tooldia, extracut, self.extracut_length,
-                                                                tolerance, z_move=z_move, old_point=current_pt)
+            # --------- Multi-pass ---------
+            else:
+                # calculate the cut distance
+                # due of the number of cuts (multi depth) it has to multiplied by the number of cuts
+                nr_cuts = 0
+                depth = abs(self.z_cut)
+                while depth > 0:
+                    nr_cuts += 1
+                    depth -= float(self.z_depthpercut)
 
-                # --------- Multi-pass ---------
-                else:
-                    # calculate the cut distance
-                    # due of the number of cuts (multi depth) it has to multiplied by the number of cuts
-                    nr_cuts = 0
-                    depth = abs(self.z_cut)
-                    while depth > 0:
-                        nr_cuts += 1
-                        depth -= float(self.z_depthpercut)
+                total_cut += (geo.length * nr_cuts)
 
-                    total_cut += (geo.length * nr_cuts)
+                gc, geo = self.create_gcode_multi_pass(geo, current_tooldia, extracut, self.extracut_length,
+                                                       tolerance, z_move=z_move, postproc=p,
+                                                       old_point=current_pt)
+                self.gcode += gc
 
-                    gc, geo = self.create_gcode_multi_pass(geo, current_tooldia, extracut, self.extracut_length,
-                                                           tolerance, z_move=z_move, postproc=p,
-                                                           old_point=current_pt)
-                    self.gcode += gc
+            # calculate the travel distance
+            total_travel += abs(distance(pt1=current_pt, pt2=pt))
+            current_pt = pt
 
-                # calculate the travel distance
-                total_travel += abs(distance(pt1=current_pt, pt2=pt))
-                current_pt = geo.coords[-1]
-
-                pt, geo = storage.nearest(current_pt)  # Next
-
-                # update the activity counter (lower left side of the app, status bar)
-                disp_number = int(np.interp(path_count, [0, geo_len], [0, 100]))
-                if old_disp_number < disp_number <= 100:
-                    self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                    old_disp_number = disp_number
-        except StopIteration:  # Nothing found in storage.
-            pass
+            # update the activity counter (lower left side of the app, status bar)
+            disp_number = int(np.interp(path_count, [0, geo_len], [0, 100]))
+            if old_disp_number < disp_number <= 100:
+                self.app.proc_container.update_view_text(' %d%%' % disp_number)
+                old_disp_number = disp_number
 
         self.app.log.debug("Finishing G-Code... %s paths traced." % path_count)
 
@@ -5926,7 +5963,7 @@ class CNCjob(Geometry):
         :param tolerance:           Tolerance used to simplify the paths (making them mre rough)
         :type tolerance:            float
         :param postproc:            Preprocessor class
-        :type postproc:             class
+        :type postproc:             Callable
         :param z_move:              Travel Z
         :type z_move:               float
         :param old_point:           Previous point
@@ -6275,7 +6312,7 @@ class CNCjob(Geometry):
 
     def excellon_tool_gcode_parse(self, dia, gcode, start_pt=(0, 0), force_parsing=None):
         """
-        G-Code parser (from self.tools['tool_id']['gcode']). For Excellon. Generates dictionary with
+        G-Code parser (from "self.tools['tool_id']['gcode']"). For Excellon. Generates dictionary with
         single-segment LineString's and "kind" indicating cut or travel,
         fast or feedrate speed.
 
@@ -7115,8 +7152,8 @@ class CNCjob(Geometry):
     def point2gcode(self, point, dia, z_move=None, old_point=(0, 0)):
         """
 
-        :param point:               A Shapely Point
-        :type point:                Point
+        :param point:               A Shapely point geometry element
+        :type point:                Shapely Point
         :param dia:                 The tool diameter that is going on the path
         :type dia:                  float
         :param z_move:              Travel Z
@@ -7203,7 +7240,7 @@ class CNCjob(Geometry):
                    mirror=None):
 
         """
-        Exports the CNC Job as a SVG Element
+        Exports the CNC Job as an SVG Element
 
         :param scale_stroke_factor:     A factor to scale the SVG geometry element outline
         :param scale_factor_x:          x factor for scale
@@ -7391,7 +7428,6 @@ class CNCjob(Geometry):
         :param point:   the (x,y) coords for the point of origin of scale
         :type  point:   tuple
         :return:        None
-        :rtype:         None
         """
         self.app.log.debug("camlib.CNCJob.scale()")
 
@@ -7678,7 +7714,7 @@ class CNCjob(Geometry):
 
     def mirror(self, axis, point):
         """
-        Mirror the geometry of an object by an given axis around the coordinates of the 'point'
+        Mirror the geometry of an object by a given axis around the coordinates of the 'point'
 
         :param axis:    Axis for Mirror
         :param point:   tuple of coordinates (x,y). Point of origin for Mirror
@@ -7758,7 +7794,7 @@ class CNCjob(Geometry):
 
     def rotate(self, angle, point):
         """
-        Rotate the geometry of an object by an given angle around the coordinates of the 'point'
+        Rotate the geometry of an object by a given angle around the coordinates of the 'point'
 
         :param angle:   Angle of Rotation
         :param point:   tuple of coordinates (x,y). Origin point for Rotation
@@ -7924,7 +7960,7 @@ def arc_angle(start, stop, direction):
 #             if poly.contains(Point(point)):
 #                 return poly
 #         except AttributeError:
-#             return None
+#             pass
 #
 #     return None
 
@@ -8336,7 +8372,7 @@ def distance_euclidian(x1, y1, x2, y2):
 
 class AppRTree(object):
     """
-    Indexes geometry (Any object with "cooords" property containing
+    Indexes geometry (Any object with "coords" property containing
     a list of tuples with x, y values). Objects are indexed by
     all their points by default. To index by arbitrary points,
     override self.points2obj.
@@ -8428,11 +8464,11 @@ class AppRTreeStorage(AppRTree):
         self.objects.append(obj)
         idx = len(self.objects) - 1
 
-        # Note: Shapely objects are not hashable any more, although
+        # Note: Shapely objects are not hashable anymore, although
         # there seem to be plans to re-introduce the feature in
         # version 2.0. For now, we will index using the object's id,
         # but it's important to remember that shapely geometry is
-        # mutable, ie. it can be modified to a totally different shape
+        # mutable, i.e. it can be modified to a totally different shape
         # and continue to have the same id.
         # self.indexes[obj] = idx
         self.indexes[id(obj)] = idx

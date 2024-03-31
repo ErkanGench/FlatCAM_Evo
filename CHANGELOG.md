@@ -7,6 +7,12 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+31.03.2024 
+
+- added the ability to use no path optimization
+- camblib.generate_from_geometry_2(): added the usage for different kinds of path optimizations set in the Preferences -> Geometry
+- some minor objects name refactoring
+
 29.03.2024
 
 - continue refactoring methods from the appMain

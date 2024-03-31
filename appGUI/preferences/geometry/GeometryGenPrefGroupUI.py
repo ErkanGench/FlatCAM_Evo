@@ -96,7 +96,8 @@ class GeometryGenPrefGroupUI(OptionsGroupUI):
                 {'label': _('Rtree'), 'value': 'R'},
                 {'label': _('MetaHeuristic'), 'value': 'M'},
                 {'label': _('Basic'), 'value': 'B'},
-                {'label': _('TSA'), 'value': 'T'}
+                {'label': _('TSA'), 'value': 'T'},
+                {'label': _('None'), 'value': 'N'}
             ], orientation='vertical', compact=True)
 
         opt_grid.addWidget(self.opt_algorithm_label, 0, 0)
