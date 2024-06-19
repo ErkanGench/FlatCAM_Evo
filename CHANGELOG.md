@@ -7,6 +7,10 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+19.06.2024
+
+- fixed Issues #49. Path mismatch for SVG icons -> missing checkboxes fixed as suggested by Stefan Bruens, by adapting the paths in the stylesheets files (dark and light)
+
 31.03.2024 
 
 - added the ability to use no path optimization

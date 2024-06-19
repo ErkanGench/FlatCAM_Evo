@@ -10,7 +10,7 @@
 from PyQt6 import QtGui, QtWidgets
 from PyQt6.QtCore import QSettings, pyqtSlot
 from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject
-from PyQt6.QtGui import QAction, QTextCursor
+from PyQt6.QtGui import QAction
 
 import os.path
 import sys
@@ -63,7 +63,7 @@ from appGUI.PlotCanvasLegacy import PlotCanvasLegacy
 from appGUI.PlotCanvas3d import PlotCanvas3d
 from appGUI.MainGUI import MainGUI
 from appGUI.VisPyVisuals import ShapeCollection
-from appGUI.GUIElements import FCMessageBox, FCInputSpinner, FCButton, DialogBoxRadio, Dialog_box, FCTree, \
+from appGUI.GUIElements import FCMessageBox, FCInputSpinner, FCButton, DialogBoxRadio, FCTree, \
     FCInputDoubleSpinner, FCFileSaveDialog, message_dialog, AppSystemTray, FCInputDialogSlider, \
     GLay, FCLabel, DialogBoxChoice, VerticalScrollArea
 from appGUI.themes import dark_style_sheet, light_style_sheet
