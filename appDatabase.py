@@ -2505,35 +2505,35 @@ class ToolsDB2(QtWidgets.QWidget):
                 self.db_tool_dict[tool_id]['tools_mill_offset_value'] = val
 
             elif wdg_name == "gdb_cutz":
-                self.db_tool_dict[tool_id]['data']['cutz'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_cutz'] = val
             elif wdg_name == "gdb_multidepth":
-                self.db_tool_dict[tool_id]['data']['multidepth'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_multidepth'] = val
             elif wdg_name == "gdb_multidepth_entry":
-                self.db_tool_dict[tool_id]['data']['depthperpass'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_depthperpass'] = val
 
             elif wdg_name == "gdb_travelz":
-                self.db_tool_dict[tool_id]['data']['travelz'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_travelz'] = val
             elif wdg_name == "gdb_frxy":
-                self.db_tool_dict[tool_id]['data']['feedrate'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_feedrate'] = val
             elif wdg_name == "gdb_frz":
-                self.db_tool_dict[tool_id]['data']['feedrate_z'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_feedrate_z'] = val
             elif wdg_name == "gdb_spindle":
-                self.db_tool_dict[tool_id]['data']['spindlespeed'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_spindlespeed'] = val
             elif wdg_name == "gdb_dwell":
-                self.db_tool_dict[tool_id]['data']['dwell'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_dwell'] = val
             elif wdg_name == "gdb_dwelltime":
-                self.db_tool_dict[tool_id]['data']['dwelltime'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_dwelltime'] = val
 
             elif wdg_name == "gdb_vdia":
-                self.db_tool_dict[tool_id]['data']['vtipdia'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_vtipdia'] = val
             elif wdg_name == "gdb_vangle":
-                self.db_tool_dict[tool_id]['data']['vtipangle'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_vtipangle'] = val
             elif wdg_name == "gdb_frapids":
-                self.db_tool_dict[tool_id]['data']['feedrate_rapid'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_feedrate_rapid'] = val
             elif wdg_name == "gdb_ecut":
-                self.db_tool_dict[tool_id]['data']['extracut'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_extracut'] = val
             elif wdg_name == "gdb_ecut_length":
-                self.db_tool_dict[tool_id]['data']['extracut_length'] = val
+                self.db_tool_dict[tool_id]['data']['tools_mill_extracut_length'] = val
 
             # NCC Tool
             elif wdg_name == "gdb_n_operation":
