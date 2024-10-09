@@ -1432,7 +1432,7 @@ class App(QtCore.QObject):
             from_new_path = os.path.dirname(os.path.realpath(__file__)) + '\\appGUI\\VisPyData\\data'
             shutil.copytree(from_new_path, to_path)
 
-    def custom_signal_connect(self, target, params):
+    def connect_custom_signal(self, target, params):
         try:
             self.custom_signal.disconnect()
         except TypeError:
@@ -2707,6 +2707,7 @@ class App(QtCore.QObject):
             if self.ui.notebook.tabText(idx) == _("Editor"):
                 self.ui.notebook.tabBar.setTabTextColor(idx, self.old_tab_text_color)
                 self.ui.notebook.tabBar.setTabText(idx, _("Properties"))
+                self.ui.app.on_notebook_tab_changed()
 
             # enable the Project Tab
             if self.ui.notebook.tabText(idx) == _("Project"):
@@ -4348,7 +4349,7 @@ class App(QtCore.QObject):
         def plotcanvas_fit_view(_):
             self.plotcanvas.fit_view()
 
-        self.custom_signal_connect(plotcanvas_fit_view, object)
+        self.connect_custom_signal(plotcanvas_fit_view, object)
 
         def origin_replot():
             def worker_task():
