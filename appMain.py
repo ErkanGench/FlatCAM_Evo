@@ -4338,7 +4338,6 @@ class App(QtCore.QObject):
                 with self.proc_container.new('%s...' % _("Plotting")):
                     for obj in self.collection.get_list():
                         obj.plot()
-                    self.plotcanvas.fit_view()
                 if self.use_3d_engine:
                     self.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
                 else:
@@ -4349,12 +4348,16 @@ class App(QtCore.QObject):
 
         self.mp_zc = self.plotcanvas.graph_event_connect('mouse_release', self.on_set_zero_click)
 
+        def plotcanvas_fit_view():
+            self.plotcanvas.fit_view()
+
         # first disconnect it as it may have been used by something else
         try:
             self.replot_signal.disconnect()  # noqa
         except TypeError:
             pass
         self.replot_signal[list].connect(origin_replot)
+        self.replot_signal[list].connect(plotcanvas_fit_view)
 
     def on_set_zero_click(self, event, location=None, noplot=False, use_thread=True):
         """
