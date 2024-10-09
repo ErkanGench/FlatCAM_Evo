@@ -264,6 +264,7 @@ class App(QtCore.QObject):
     args_at_startup = QtCore.pyqtSignal(list)
     # a reusable signal to replot a list of objects
     # should be disconnected after use, so it can be reused
+    plotcanvas_fit_view_signal = pyqtSignal()
     replot_signal = pyqtSignal(list)
     # signal emitted when jumping
     jump_signal = pyqtSignal(tuple)
@@ -4333,11 +4334,21 @@ class App(QtCore.QObject):
         self.inform.emit(_('Click to set the origin ...'))
         self.inhibit_context_menu = True
 
+        def plotcanvas_fit_view():
+            self.plotcanvas.fit_view()
+
+        try:
+            self.plotcanvas_fit_view_signal.disconnect()
+        except TypeError:
+            pass
+        self.plotcanvas_fit_view_signal.connect(plotcanvas_fit_view)
+
         def origin_replot():
             def worker_task():
                 with self.proc_container.new('%s...' % _("Plotting")):
                     for obj in self.collection.get_list():
                         obj.plot()
+                    self.plotcanvas_fit_view_signal.emit()
                 if self.use_3d_engine:
                     self.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
                 else:
@@ -4348,8 +4359,7 @@ class App(QtCore.QObject):
 
         self.mp_zc = self.plotcanvas.graph_event_connect('mouse_release', self.on_set_zero_click)
 
-        def plotcanvas_fit_view():
-            self.plotcanvas.fit_view()
+
 
         # first disconnect it as it may have been used by something else
         try:
@@ -4357,7 +4367,6 @@ class App(QtCore.QObject):
         except TypeError:
             pass
         self.replot_signal[list].connect(origin_replot)
-        self.replot_signal[list].connect(plotcanvas_fit_view)
 
     def on_set_zero_click(self, event, location=None, noplot=False, use_thread=True):
         """
