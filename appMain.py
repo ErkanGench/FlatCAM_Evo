@@ -264,7 +264,6 @@ class App(QtCore.QObject):
     args_at_startup = QtCore.pyqtSignal(list)
     # a reusable signal to replot a list of objects
     # should be disconnected after use, so it can be reused
-    plotcanvas_fit_view_signal = pyqtSignal()
     replot_signal = pyqtSignal(list)
     # signal emitted when jumping
     jump_signal = pyqtSignal(tuple)
@@ -280,6 +279,9 @@ class App(QtCore.QObject):
     restore_project_objects_sig = pyqtSignal(object, str, bool, bool)
     # post-Edit actions
     post_edit_sig = pyqtSignal()
+
+    # any callback can be bound
+    custom_signal = pyqtSignal(object)
 
     # noinspection PyUnresolvedReferences
     def __init__(self, qapp, user_defaults=True):
@@ -1429,6 +1431,15 @@ class App(QtCore.QObject):
         except FileNotFoundError:
             from_new_path = os.path.dirname(os.path.realpath(__file__)) + '\\appGUI\\VisPyData\\data'
             shutil.copytree(from_new_path, to_path)
+
+    def custom_signal_connect(self, target, params):
+        try:
+            self.custom_signal.disconnect()
+        except TypeError:
+            pass
+
+        if target is not None:
+            self.custom_signal[params].connect(target)
 
     def on_startup_args(self, args, silent=False):
         """
@@ -4334,21 +4345,17 @@ class App(QtCore.QObject):
         self.inform.emit(_('Click to set the origin ...'))
         self.inhibit_context_menu = True
 
-        def plotcanvas_fit_view():
+        def plotcanvas_fit_view(_):
             self.plotcanvas.fit_view()
 
-        try:
-            self.plotcanvas_fit_view_signal.disconnect()
-        except TypeError:
-            pass
-        self.plotcanvas_fit_view_signal.connect(plotcanvas_fit_view)
+        self.custom_signal_connect(plotcanvas_fit_view, object)
 
         def origin_replot():
             def worker_task():
                 with self.proc_container.new('%s...' % _("Plotting")):
                     for obj in self.collection.get_list():
                         obj.plot()
-                    self.plotcanvas_fit_view_signal.emit()
+                    self.custom_signal.emit(None) # Calls plotcanvas_fit_view() on UI Thread
                 if self.use_3d_engine:
                     self.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
                 else:
