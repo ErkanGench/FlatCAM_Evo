@@ -4315,6 +4315,7 @@ class AppExcEditor(QtCore.QObject):
 
         self.app.worker_task.emit({'fcn': self.new_edited_excellon,
                                    'params': [self.edited_obj_name, self.new_tools]})
+        self.deactivate()
 
         return self.edited_obj_name
 
@@ -4380,15 +4381,11 @@ class AppExcEditor(QtCore.QObject):
                                                                              filename=None,
                                                                              use_thread=False)
             except Exception as e:
-                self.deactivate()
-
                 # make sure that we do not carry the reference of the edited object further along
                 self.edited_obj = None
 
                 self.app.log.error("Error on Edited object creation: %s" % str(e))
                 return
-
-            self.deactivate()
 
             # make sure that we do not carry the reference of the edited object further along
             self.edited_obj = None
