@@ -280,6 +280,9 @@ class App(QtCore.QObject):
     # post-Edit actions
     post_edit_sig = pyqtSignal()
 
+    # any callback can be bound
+    custom_signal = pyqtSignal(object)
+
     # noinspection PyUnresolvedReferences
     def __init__(self, qapp, user_defaults=True):
         """
@@ -1428,6 +1431,15 @@ class App(QtCore.QObject):
         except FileNotFoundError:
             from_new_path = os.path.dirname(os.path.realpath(__file__)) + '\\appGUI\\VisPyData\\data'
             shutil.copytree(from_new_path, to_path)
+
+    def connect_custom_signal(self, target, params):
+        try:
+            self.custom_signal.disconnect()
+        except TypeError:
+            pass
+
+        if target is not None:
+            self.custom_signal[params].connect(target)
 
     def on_startup_args(self, args, silent=False):
         """
@@ -2695,6 +2707,7 @@ class App(QtCore.QObject):
             if self.ui.notebook.tabText(idx) == _("Editor"):
                 self.ui.notebook.tabBar.setTabTextColor(idx, self.old_tab_text_color)
                 self.ui.notebook.tabBar.setTabText(idx, _("Properties"))
+                self.ui.app.on_notebook_tab_changed()
 
             # enable the Project Tab
             if self.ui.notebook.tabText(idx) == _("Project"):
@@ -4333,12 +4346,17 @@ class App(QtCore.QObject):
         self.inform.emit(_('Click to set the origin ...'))
         self.inhibit_context_menu = True
 
+        def plotcanvas_fit_view(_):
+            self.plotcanvas.fit_view()
+
+        self.connect_custom_signal(plotcanvas_fit_view, object)
+
         def origin_replot():
             def worker_task():
                 with self.proc_container.new('%s...' % _("Plotting")):
                     for obj in self.collection.get_list():
                         obj.plot()
-                    self.plotcanvas.fit_view()
+                    self.custom_signal.emit(None) # Calls plotcanvas_fit_view() on UI Thread
                 if self.use_3d_engine:
                     self.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
                 else:
@@ -4348,6 +4366,8 @@ class App(QtCore.QObject):
             self.worker_task.emit({'fcn': worker_task, 'params': []})
 
         self.mp_zc = self.plotcanvas.graph_event_connect('mouse_release', self.on_set_zero_click)
+
+
 
         # first disconnect it as it may have been used by something else
         try:

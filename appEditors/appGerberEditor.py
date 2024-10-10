@@ -5405,6 +5405,11 @@ class AppGerberEditor(QtCore.QObject):
         else:
             new_grb_name = self.edited_obj_name + "_edit"
 
+        def deactivate_grb_editor_signal_handler():
+            self.deactivate_grb_editor()
+
+        self.app.connect_custom_signal(deactivate_grb_editor_signal_handler, object)
+
         self.app.worker_task.emit({'fcn': self.new_edited_gerber, 'params': [new_grb_name, self.storage_dict]})
         # self.new_edited_gerber(new_grb_name, self.storage_dict)
 
@@ -5533,7 +5538,7 @@ class AppGerberEditor(QtCore.QObject):
 
             # make sure to clean the previous results
             self.results = []
-            self.deactivate_grb_editor()
+            self.app.custom_signal.emit(None)
             self.app.inform.emit('[success] %s' % _("Done."))
 
     def on_tool_select(self, tool):

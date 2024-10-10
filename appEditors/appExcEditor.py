@@ -4313,8 +4313,13 @@ class AppExcEditor(QtCore.QObject):
             else:
                 self.edited_obj_name += "_edit"
 
+        def deactivate_signal_handler(_):
+            self.deactivate()
+
+        self.app.connect_custom_signal(deactivate_signal_handler, object)
         self.app.worker_task.emit({'fcn': self.new_edited_excellon,
                                    'params': [self.edited_obj_name, self.new_tools]})
+
 
         return self.edited_obj_name
 
@@ -4380,7 +4385,7 @@ class AppExcEditor(QtCore.QObject):
                                                                              filename=None,
                                                                              use_thread=False)
             except Exception as e:
-                self.deactivate()
+                self.app.custom_signal.emit(None) # calls deactivate_signal_handler() on UI Thread
 
                 # make sure that we do not carry the reference of the edited object further along
                 self.edited_obj = None
@@ -4388,7 +4393,7 @@ class AppExcEditor(QtCore.QObject):
                 self.app.log.error("Error on Edited object creation: %s" % str(e))
                 return
 
-            self.deactivate()
+            self.app.custom_signal.emit(None)  # calls deactivate_signal_handler() on UI Thread
 
             # make sure that we do not carry the reference of the edited object further along
             self.edited_obj = None
