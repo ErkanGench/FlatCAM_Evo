@@ -1921,6 +1921,11 @@ class AppGeoEditor(QtCore.QObject):
         :return:            None
         """
 
+        def deactivate_signal_handler():
+            self.deactivate()
+
+        self.app.connect_custom_signal(deactivate_signal_handler, object)
+
         def worker_job(editor_obj):
             # Link shapes into editor.
             with editor_obj.app.proc_container.new(_("Working...")):
@@ -1971,7 +1976,7 @@ class AppGeoEditor(QtCore.QObject):
                 except Exception:
                     pass
 
-                self.deactivate()
+                self.app.custom_signal.emit(None)
                 editor_obj.app.inform.emit(_("Editor Exit. Geometry object was updated ..."))
 
         self.app.worker_task.emit({'fcn': worker_job, 'params': [self]})
