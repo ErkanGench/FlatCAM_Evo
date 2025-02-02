@@ -6,7 +6,10 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
 
 import logging
 from copy import deepcopy
-from numpy import Inf
+try:
+    from numpy import Inf
+except ImportError:
+    from numpy import inf as Inf
 
 from shapely import Point
 from shapely.affinity import scale

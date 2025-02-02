@@ -14,11 +14,15 @@ ASSEST_PATH = assets/linux
 INSTALL_PATH = /usr/share/flatcam-beta
 APPS_PATH = /usr/share/applications
 
-MIN_PY3_MINOR_VERSION := 6
-PY3_MINOR_VERSION := $(shell python3 --version | cut -d'.' -f2)
+MIN_PY3_MINOR_VERSION := 8
+# required version
+MIN_PY3_MINOR_VERSION := $(shell python3 -c 'import sys; print($(MIN_PY3_MINOR_VERSION))')
 
-ifneq ($(MIN_PY3_MINOR_VERSION), $(firstword $(sort $(PY3_MINOR_VERSION) $(MIN_PY3_MINOR_VERSION))))
-    $(info Current python version is 3.$(PY3_MINOR_VERSION))
+# current version minimized to required (to allow ifneq test)
+PY3_MIN_MINOR_VERSION := $(shell python3 -c 'import sys; print(min($(MIN_PY3_MINOR_VERSION),sys.version_info.minor))')
+
+ifneq ($(MIN_PY3_MINOR_VERSION), $(PY3_MIN_MINOR_VERSION))
+    $(info Current python version is 3.$(PY3_MIN_MINOR_VERSION))
     $(error You must have at least 3.$(MIN_PY3_MINOR_VERSION) installed)
 endif
 

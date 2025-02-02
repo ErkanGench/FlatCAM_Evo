@@ -7,6 +7,11 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+02.02.2025
+
+- modified the makefile file (contribution from @Paul Munsch on bitbucket)
+- fixed an error from using the latest numpy version regarding missing Inf attribute (now it is inf, lower case)
+
 19.06.2024
 
 - fixed Issues #49. Path mismatch for SVG icons -> missing checkboxes fixed as suggested by Stefan Bruens, by adapting the paths in the stylesheets files (dark and light)

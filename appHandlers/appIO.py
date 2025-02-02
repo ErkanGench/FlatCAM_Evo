@@ -26,7 +26,10 @@ from copy import deepcopy
 import re
 
 import numpy as np
-from numpy import Inf
+try:
+    from numpy import Inf
+except ImportError:
+    from numpy import inf as Inf
 
 from datetime import datetime
 import simplejson as json

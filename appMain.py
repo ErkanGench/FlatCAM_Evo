@@ -114,7 +114,10 @@ from appWorkerStack import WorkerStack
 # App Plugins
 from appPlugins import *
 
-from numpy import Inf
+try:
+    from numpy import Inf
+except ImportError:
+    from numpy import inf as Inf
 
 # App Translation
 import gettext

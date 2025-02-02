@@ -20,7 +20,10 @@ import numpy as np
 import simplejson as json
 import sys
 import traceback
-from numpy import Inf
+try:
+    from numpy import Inf
+except ImportError:
+    from numpy import inf as Inf
 
 from shapely import LineString, Polygon, MultiLineString, MultiPolygon, Point, LinearRing
 from shapely.geometry import base
