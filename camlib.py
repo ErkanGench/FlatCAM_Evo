@@ -774,10 +774,10 @@ class Geometry(object):
 
         def bounds_rec(obj):
             if type(obj) is list:
-                gminx = np.Inf
-                gminy = np.Inf
-                gmaxx = -np.Inf
-                gmaxy = -np.Inf
+                gminx = np.inf
+                gminy = np.inf
+                gmaxx = -np.inf
+                gmaxy = -np.inf
 
                 for k in obj:
                     if type(k) is dict:
@@ -5290,10 +5290,10 @@ class CNCjob(Geometry):
 
         def bounds_rec(obj):
             if type(obj) is list:
-                minx = np.Inf
-                miny = np.Inf
-                maxx = -np.Inf
-                maxy = -np.Inf
+                minx = np.inf
+                miny = np.inf
+                maxx = -np.inf
+                maxy = -np.inf
 
                 for k in obj:
                     if type(k) is dict:
@@ -7328,10 +7328,10 @@ class CNCjob(Geometry):
 
         def bounds_rec(obj):
             if type(obj) is list:
-                cminx = np.Inf
-                cminy = np.Inf
-                cmaxx = -np.Inf
-                cmaxy = -np.Inf
+                cminx = np.inf
+                cminy = np.inf
+                cmaxx = -np.inf
+                cmaxy = -np.inf
 
                 w_geo = obj.geoms if isinstance(obj, (MultiPolygon, MultiLineString)) else obj
                 for oo in w_geo:
@@ -7361,17 +7361,17 @@ class CNCjob(Geometry):
 
             bounds_coords = bounds_rec(self.solid_geometry)
         else:
-            minx = np.Inf
-            miny = np.Inf
-            maxx = -np.Inf
-            maxy = -np.Inf
+            minx = np.inf
+            miny = np.inf
+            maxx = -np.inf
+            maxy = -np.inf
             # for CNCJob objects made from Gerber or Geometry objects
             if self.obj_options['type'].lower() == 'geometry':
                 for k, v in self.tools.items():
-                    minx = np.Inf
-                    miny = np.Inf
-                    maxx = -np.Inf
-                    maxy = -np.Inf
+                    minx = np.inf
+                    miny = np.inf
+                    maxx = -np.inf
+                    maxy = -np.inf
                     try:
                         work_geo = v['solid_geometry']
                         i_wg = work_geo.geoms if isinstance(work_geo, (MultiPolygon, MultiLineString)) else work_geo
@@ -7394,10 +7394,10 @@ class CNCjob(Geometry):
 
             if self.obj_options['type'].lower() == 'excellon':
                 for k, v in self.tools.items():
-                    minx = np.Inf
-                    miny = np.Inf
-                    maxx = -np.Inf
-                    maxy = -np.Inf
+                    minx = np.inf
+                    miny = np.inf
+                    maxx = -np.inf
+                    maxy = -np.inf
                     try:
                         for geo in v['solid_geometry']:
                             minx_, miny_, maxx_, maxy_ = bounds_rec(geo)
@@ -7861,10 +7861,10 @@ def get_bounds(geometry_list: list) -> list:
     :param geometry_list:   List of geometries for which to calculate the bounds limits
     :return:
     """
-    xmin = np.Inf
-    ymin = np.Inf
-    xmax = -np.Inf
-    ymax = -np.Inf
+    xmin = np.inf
+    ymin = np.inf
+    xmax = -np.inf
+    ymax = -np.inf
 
     for gs in geometry_list:
         try:

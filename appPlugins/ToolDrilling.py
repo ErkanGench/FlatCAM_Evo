@@ -2220,7 +2220,7 @@ class ToolDrilling(AppTool, Excellon):
             x_tc, y_tc = [0, 0]
             try:
                 if cnc_job_obj.xy_toolchange != '':
-                    tcxy_temp = re.sub('[()\[\]]', '', str(cnc_job_obj.xy_toolchange))
+                    tcxy_temp = re.sub(r'[()\[\]]', '', str(cnc_job_obj.xy_toolchange))
                     if tcxy_temp:
                         x_tc, y_tc = [float(eval(a)) for a in tcxy_temp.split(",")]
             except Exception:
