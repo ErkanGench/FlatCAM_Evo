@@ -93,7 +93,7 @@ class BufferEditorTool(AppToolEditor):
                 return
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
         # I populated the combobox such that the index coincide with the join styles value (which is really an INT)
-        join_style = self.ui.buffer_corner_cb.currentIndex() + 1
+        join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}[self.ui.buffer_corner_cb.currentIndex() + 1]
         self.buffer(buffer_distance, join_style)
 
     # def on_buffer_int(self):

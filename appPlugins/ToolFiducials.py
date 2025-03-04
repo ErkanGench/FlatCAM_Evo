@@ -323,7 +323,7 @@ class ToolFiducials(AppTool):
         if self.mode_method == 'auto':
             xmin, ymin, xmax, ymax = self.grb_object.bounds()
             bbox = box(xmin, ymin, xmax, ymax)
-            buf_bbox = bbox.buffer(self.margin_val, self.grb_steps_per_circle, join_style=2)
+            buf_bbox = bbox.buffer(self.margin_val, self.grb_steps_per_circle, join_style="mitre")
             x0, y0, x1, y1 = buf_bbox.bounds
 
             self.click_points.append(

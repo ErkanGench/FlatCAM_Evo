@@ -655,7 +655,7 @@ class ToolMarkers(AppTool):
         geo_buff_list = []
         if aperture_found:
             for geo in marker_geometry:
-                geo_buff = geo.buffer(line_thickness / 2.0, resolution=self.grb_steps_per_circle, join_style=2)
+                geo_buff = geo.buffer(line_thickness / 2.0, resolution=self.grb_steps_per_circle, join_style="mitre")
                 geo_buff_list.append(geo_buff)
 
                 dict_el = {'follow': geo, 'solid': geo_buff}
@@ -674,7 +674,7 @@ class ToolMarkers(AppTool):
             }
 
             for geo in marker_geometry:
-                geo_buff = geo.buffer(line_thickness / 2.0, resolution=self.grb_steps_per_circle, join_style=3)
+                geo_buff = geo.buffer(line_thickness / 2.0, resolution=self.grb_steps_per_circle, join_style="bevel")
                 geo_buff_list.append(geo_buff)
 
                 dict_el = {'follow': geo, 'solid': geo_buff}

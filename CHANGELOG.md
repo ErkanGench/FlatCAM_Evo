@@ -1,4 +1,5 @@
 FlatCAM Evo BETA (c) 2019 - by Marius Stanciu
+
 Based on FlatCAM: 
 2D Computer-Aided PCB Manufacturing by (c) 2014-2016 Juan Pablo Caram
 =================================================
@@ -6,6 +7,10 @@ Based on FlatCAM:
 CHANGELOG for FlatCAM Evo beta
 
 =================================================
+
+5.03.2025
+
+- upgrade to use the new notations in the Shapely's buffer method for the cap_style and join_style parameters (used to be integers, now they are strings or defines)
 
 02.02.2025
 

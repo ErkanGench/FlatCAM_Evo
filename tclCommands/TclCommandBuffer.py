@@ -102,21 +102,21 @@ class TclCommandBuffer(TclCommand):
             join = 1
         else:
             if args['join'] in ['square', 'Square', '2', 2]:
-                join = 2
+                join = "square"
             elif args['join'] in ['bevel', 'Bevel', '3', 3]:
-                join = 3
+                join = "bevel"
             else:
-                join = 1
+                join = "round"
         factor = bool(eval(str(args['factor']).capitalize())) if 'factor' in args else None
 
         obj_to_buff.buffer(distance, join, factor, only_exterior=True)
 
         try:
-            xmin, ymin, xmax, ymax = obj_to_buff.bounds()
-            obj_to_buff.obj_options['xmin'] = xmin
-            obj_to_buff.obj_options['ymin'] = ymin
-            obj_to_buff.obj_options['xmax'] = xmax
-            obj_to_buff.obj_options['ymax'] = ymax
+            x_min, y_min, x_max, y_max = obj_to_buff.bounds()
+            obj_to_buff.obj_options['xmin'] = x_min
+            obj_to_buff.obj_options['ymin'] = y_min
+            obj_to_buff.obj_options['xmax'] = x_max
+            obj_to_buff.obj_options['ymax'] = y_max
         except Exception as e:
             self.app.log.error("TclCommandBuffer -> The object has no bounds properties. %s" % str(e))
             return "fail"

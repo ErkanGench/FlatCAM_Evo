@@ -1580,7 +1580,7 @@ class Excellon(Geometry):
         self.create_geometry()
         self.app.proc_container.new_text = ''
 
-    def buffer(self, distance, join, factor, only_exterior=False):
+    def buffer(self, distance, join, factor, only_exterior=False, muted=False):
         """
 
         :param distance:        if 'factor' is True then distance is the factor

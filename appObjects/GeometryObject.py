@@ -44,7 +44,7 @@ class GeometryObject(FlatCAMObj, Geometry):
     format.
     """
     optionChanged = QtCore.pyqtSignal(str)
-    builduiSig = QtCore.pyqtSignal()
+    build_ui_sig = QtCore.pyqtSignal()
     launch_job = QtCore.pyqtSignal()
 
     ui_type = GeometryObjectUI

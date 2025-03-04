@@ -312,7 +312,7 @@ class QRCode(AppTool):
         if self.ui.bb_radio.get_value() == 'r':
             mask_geo = box(a, b, c, d).buffer(buff_val)
         else:
-            mask_geo = box(a, b, c, d).buffer(buff_val, join_style=2)
+            mask_geo = box(a, b, c, d).buffer(buff_val, join_style="mitre")
 
         # update the solid geometry with the cutout (if it is the case)
         new_solid_geometry = []

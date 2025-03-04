@@ -1743,7 +1743,7 @@ class GerberObject(FlatCAMObj, Gerber):
         Gerber.skew(self, angle_x=angle_x, angle_y=angle_y, point=point)
         self.replotApertures.emit()
 
-    def buffer(self, distance, join=2, factor=None, only_exterior=False):
+    def buffer(self, distance, join="mitre", factor=None, only_exterior=False, muted=False):
         Gerber.buffer(self, distance=distance, join=join, factor=factor, only_exterior=only_exterior)
         self.replotApertures.emit()
 

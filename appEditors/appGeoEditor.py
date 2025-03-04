@@ -5497,8 +5497,8 @@ class FCBuffer(FCShapeTool):
                                      _("Buffer distance value is missing or wrong format. Add it and retry."))
                 return
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
-        # I populated the combobox such that the index coincide with the join styles value (whcih is really an INT)
-        join_style = self.buff_tool.ui.buffer_corner_cb.currentIndex() + 1
+        # I populated the combobox such that the index coincide with the join styles value
+        join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}.get(self.buff_tool.ui.buffer_corner_cb.currentIndex() + 1)
         ret_val = self.buff_tool.buffer(buffer_distance, join_style)
 
         self.deactivate()
@@ -5523,8 +5523,8 @@ class FCBuffer(FCShapeTool):
                                      _("Buffer distance value is missing or wrong format. Add it and retry."))
                 return
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
-        # I populated the combobox such that the index coincide with the join styles value (whcih is really an INT)
-        join_style = self.buff_tool.ui.buffer_corner_cb.currentIndex() + 1
+        # I populated the combobox such that the index coincide with the join styles value
+        join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}.get(self.buff_tool.ui.buffer_corner_cb.currentIndex() + 1)
         ret_val = self.buff_tool.buffer_int(buffer_distance, join_style)
 
         self.deactivate()
@@ -5549,8 +5549,8 @@ class FCBuffer(FCShapeTool):
                                               _("Buffer distance value is missing or wrong format. Add it and retry."))
                 return
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
-        # I populated the combobox such that the index coincide with the join styles value (whcih is really an INT)
-        join_style = self.buff_tool.ui.buffer_corner_cb.currentIndex() + 1
+        # I populated the combobox such that the index coincide with the join styles value
+        join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}.get(self.buff_tool.ui.buffer_corner_cb.currentIndex() + 1)
         ret_val = self.buff_tool.buffer_ext(buffer_distance, join_style)
         # self.app.ui.notebook.setTabText(2, _("Tools"))
         # self.draw_app.app.ui.splitter.setSizes([0, 1])

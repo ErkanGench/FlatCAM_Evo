@@ -127,9 +127,9 @@ class ToolInvertGerber(AppTool):
         if round(margin, self.decimals) == 0.0:
             margin = 1E-10
 
-        join_style = {'r': 1, 'b': 3, 's': 2}[self.ui.join_radio.get_value()]
+        join_style = {'r': "round", 'b': "bevel", 's': "mitre"}[self.ui.join_radio.get_value()]
         if join_style is None:
-            join_style = 'r'
+            join_style = 'round'
 
         grb_circle_steps = int(self.app.options["gerber_circle_steps"])
         obj_name = self.ui.gerber_combo.currentText()

@@ -78,7 +78,7 @@ class HybridGeoExc:
 
 
 class ToolMilling(AppTool, Excellon):
-    builduiSig = QtCore.pyqtSignal()
+    build_ui_sig = QtCore.pyqtSignal()
     launch_job = QtCore.pyqtSignal()
 
     def __init__(self, app):
@@ -239,7 +239,7 @@ class ToolMilling(AppTool, Excellon):
         # #############################################################################
         # ############################ SIGNALS ########################################
         # #############################################################################
-        self.builduiSig.connect(self.build_ui)
+        self.build_ui_sig.connect(self.build_ui)
 
         self.ui.level.toggled.connect(self.on_level_changed)
 
@@ -287,7 +287,7 @@ class ToolMilling(AppTool, Excellon):
         # ############################ SIGNALS ########################################
         # #############################################################################
         try:
-            self.builduiSig.disconnect()
+            self.build_ui_sig.disconnect()
         except (TypeError, AttributeError):
             pass
 
@@ -2370,7 +2370,7 @@ class ToolMilling(AppTool, Excellon):
 
         self.app.inform.emit('[success] %s' % _("Tool was edited in Tool Table."))
         self.ui_connect()
-        self.builduiSig.emit()
+        self.build_ui_sig.emit()
         self.target_obj.build_ui()
 
     def on_tool_copy(self, all_tools=None):
@@ -2399,7 +2399,7 @@ class ToolMilling(AppTool, Excellon):
                     except AttributeError:
                         self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed. Select a tool to copy."))
                         self.ui_connect()
-                        self.builduiSig.emit()
+                        self.build_ui_sig.emit()
                         return
                     except Exception as e:
                         self.app.log.error("on_tool_copy() --> " + str(e))
@@ -2408,7 +2408,7 @@ class ToolMilling(AppTool, Excellon):
             else:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed. Select a tool to copy."))
                 self.ui_connect()
-                self.builduiSig.emit()
+                self.build_ui_sig.emit()
                 return
         else:
             # we copy all tools in tools_table_mill_geo
@@ -2429,7 +2429,7 @@ class ToolMilling(AppTool, Excellon):
         self.target_obj.ser_attrs.append('tools')
 
         self.ui_connect()
-        self.builduiSig.emit()
+        self.build_ui_sig.emit()
         self.app.inform.emit('[success] %s' % _("Tool was copied in Tool Table."))
 
     def on_tool_delete(self, all_tools=None):
@@ -2460,7 +2460,7 @@ class ToolMilling(AppTool, Excellon):
                     except AttributeError:
                         self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed. Select a tool to delete."))
                         self.ui_connect()
-                        self.builduiSig.emit()
+                        self.build_ui_sig.emit()
                         return
                     except Exception as e:
                         self.app.log.error("on_tool_delete() --> " + str(e))
@@ -2469,7 +2469,7 @@ class ToolMilling(AppTool, Excellon):
             else:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed. Select a tool to delete."))
                 self.ui_connect()
-                self.builduiSig.emit()
+                self.build_ui_sig.emit()
                 return
         else:
             # we delete all tools in tools_table_mill_geo
@@ -3928,7 +3928,7 @@ class ToolMilling(AppTool, Excellon):
 
         self.app.inform.emit('[success] %s' % _("Value edited in Exclusion Table."))
         self.ui_connect()
-        self.builduiSig.emit()
+        self.build_ui_sig.emit()
 
     def on_exclusion_table_strategy(self):
         cw = self.sender()
@@ -3943,7 +3943,7 @@ class ToolMilling(AppTool, Excellon):
 
         self.app.inform.emit('[success] %s' % _("Value edited in Exclusion Table."))
         self.ui_connect()
-        self.builduiSig.emit()
+        self.build_ui_sig.emit()
 
     def reset_fields(self):
         self.ui.object_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))

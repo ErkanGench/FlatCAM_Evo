@@ -731,7 +731,7 @@ class ExclusionAreas(QtCore.QObject):
 
         for area in self.exclusion_areas_storage:
             new_area = deepcopy(area)
-            new_area['shape'] = area['shape'].buffer(buffered_distance, join_style=2)
+            new_area['shape'] = area['shape'].buffer(buffered_distance, join_style="mitre")
             buffered_storage.append(new_area)
 
         # sort the Exclusion areas from the closest to the start_point to the farthest

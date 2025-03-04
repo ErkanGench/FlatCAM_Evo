@@ -776,7 +776,7 @@ class Film(AppTool):
         svg_footer = '</g> </svg>'
 
         # decide if to round the bounding box for the negative
-        join_s = 1 if r_box else 2
+        join_s = "round" if r_box else "mitre"
 
         if isinstance(box_geo, (LineString, LinearRing)):
             b_geo = Polygon(box_geo).buffer(margin, join_style=join_s)

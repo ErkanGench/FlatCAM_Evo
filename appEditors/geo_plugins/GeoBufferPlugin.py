@@ -93,7 +93,7 @@ class BufferSelectionTool(AppToolEditor):
                 return
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
         # I populated the combobox such that the index coincide with the join styles value (which is really an INT)
-        join_style = self.ui.buffer_corner_cb.currentIndex() + 1
+        join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}.get(self.ui.buffer_corner_cb.currentIndex() + 1)
         self.buffer(buffer_distance, join_style)
 
     def on_buffer_int(self):
@@ -110,7 +110,7 @@ class BufferSelectionTool(AppToolEditor):
                 return
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
         # I populated the combobox such that the index coincide with the join styles value (which is really an INT)
-        join_style = self.ui.buffer_corner_cb.currentIndex() + 1
+        join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}.get(self.ui.buffer_corner_cb.currentIndex() + 1)
         self.buffer_int(buffer_distance, join_style)
 
     def on_buffer_ext(self):
@@ -127,7 +127,7 @@ class BufferSelectionTool(AppToolEditor):
                 return
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
         # I populated the combobox such that the index coincide with the join styles value (which is really an INT)
-        join_style = self.ui.buffer_corner_cb.currentIndex() + 1
+        join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}.get(self.ui.buffer_corner_cb.currentIndex() + 1)
         self.buffer_ext(buffer_distance, join_style)
 
     def buffer(self, buf_distance, join_style):
@@ -158,13 +158,15 @@ class BufferSelectionTool(AppToolEditor):
                     return 'fail'
 
                 results = []
+                usable_resolution = int(int(geo_editor.app.options["geometry_circle_steps"]) / 4)
                 for t in selected:
                     if not t.geo.is_empty and t.geo.is_valid:
                         if t.geo.geom_type == 'Polygon':
-                            results.append(t.geo.exterior.buffer(
-                                buf_distance - 1e-10,
-                                resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
-                                join_style=join_style)
+                            results.append(
+                                t.geo.exterior.buffer(
+                                    buf_distance - 1e-10,
+                                    resolution=usable_resolution,
+                                    join_style=join_style)
                             )
                         elif t.geo.geom_type == 'MultiLineString':
                             for line in t.geo:
@@ -172,25 +174,22 @@ class BufferSelectionTool(AppToolEditor):
                                     b_geo = Polygon(line)
                                 results.append(b_geo.buffer(
                                     buf_distance - 1e-10,
-                                    resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
-                                    join_style=join_style).exterior
-                                               )
+                                    resolution=usable_resolution,
+                                    join_style=join_style).exterior)
                                 results.append(b_geo.buffer(
                                     -buf_distance + 1e-10,
-                                    resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
-                                    join_style=join_style).exterior
-                                               )
+                                    resolution=usable_resolution,
+                                    join_style=join_style).exterior)
                         elif t.geo.geom_type in ['LineString', 'LinearRing']:
                             if t.geo.is_ring:
                                 b_geo = Polygon(t.geo)
                             results.append(b_geo.buffer(
                                 buf_distance - 1e-10,
-                                resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
-                                join_style=join_style).exterior
-                                           )
+                                resolution=usable_resolution,
+                                join_style=join_style).exterior)
                             results.append(b_geo.buffer(
                                 -buf_distance + 1e-10,
-                                resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
+                                resolution=usable_resolution,
                                 join_style=join_style).exterior
                                            )
 
