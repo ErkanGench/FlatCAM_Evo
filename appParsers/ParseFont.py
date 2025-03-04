@@ -70,7 +70,7 @@ class ParseFont:
         executable = '/usr/sbin/chkfontpath'
         if os.path.isfile(executable):
             data = os.popen(executable).readlines()
-            match = re.compile('\d+: (.+)')
+            match = re.compile(r'\d+: (.+)')
             set_lst = []
             for line in data:
                 result = match.match(line)

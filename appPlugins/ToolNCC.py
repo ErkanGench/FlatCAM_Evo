@@ -976,7 +976,7 @@ class NonCopperClear(AppTool, Gerber):
 
         if len(total_geo) in [0, 1]:
             msg = ('[ERROR_NOTCL] %s' % _("Too few polygons in the Gerber object to determine distances."))
-            return msg, np.Inf
+            return msg, np.inf
         min_dict = {}
         idx = 1
         for geo in total_geo:

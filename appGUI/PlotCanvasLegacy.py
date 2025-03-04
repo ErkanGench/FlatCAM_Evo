@@ -1217,7 +1217,7 @@ class PlotCanvasLegacy(QtCore.QObject):
         """
 
         snap_x, snap_y = (x, y)
-        snap_distance = np.Inf
+        snap_distance = np.inf
 
         # ### Grid snap
         if self.app.grid_status():

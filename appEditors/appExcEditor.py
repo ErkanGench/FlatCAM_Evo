@@ -2703,10 +2703,10 @@ class CopyEditorExc(FCShapeTool):
         geo_source = [s.geo for s in self.draw_app.get_selected()]
 
         def geo_bounds(geo: (BaseGeometry, list)):
-            minx = np.Inf
-            miny = np.Inf
-            maxx = -np.Inf
-            maxy = -np.Inf
+            minx = np.inf
+            miny = np.inf
+            maxx = -np.inf
+            maxy = -np.inf
 
             if type(geo) == list:
                 for shp in geo:
@@ -5396,10 +5396,10 @@ class AppExcEditorUI:
 
 
 def get_shapely_list_bounds(geometry_list):
-    xmin = np.Inf
-    ymin = np.Inf
-    xmax = -np.Inf
-    ymax = -np.Inf
+    xmin = np.inf
+    ymin = np.inf
+    xmax = -np.inf
+    ymax = -np.inf
 
     for gs in geometry_list:
         try:

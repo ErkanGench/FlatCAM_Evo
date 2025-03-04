@@ -549,10 +549,10 @@ class ToolTransform(AppTool):
         """
 
         def bounds_rec(lst):
-            minx = np.Inf
-            miny = np.Inf
-            maxx = -np.Inf
-            maxy = -np.Inf
+            minx = np.inf
+            miny = np.inf
+            maxx = -np.inf
+            maxy = -np.inf
 
             try:
                 for obj in lst:

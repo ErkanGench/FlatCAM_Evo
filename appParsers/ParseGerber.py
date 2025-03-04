@@ -194,7 +194,7 @@ class Gerber(Geometry):
         # optional coordinates but at least one in any order.
         self.circ_re = re.compile(
             r'^(?:G0?([23]))?(?=.*X([+-]?\d+))?(?=.*Y([+-]?\d+))' +
-            '?(?=.*I([+-]?\d+))?(?=.*J([+-]?\d+))?[XYIJ][^D]*(?:D0([12]))?\*$'
+            r'?(?=.*I([+-]?\d+))?(?=.*J([+-]?\d+))?[XYIJ][^D]*(?:D0([12]))?\*$'
         )
 
         # G01/2/3 Occurring without coordinates
@@ -1919,10 +1919,10 @@ class Gerber(Geometry):
 
         def bounds_rec(obj):
             if type(obj) is list and type(obj) is not MultiPolygon:
-                minx = np.Inf
-                miny = np.Inf
-                maxx = -np.Inf
-                maxy = -np.Inf
+                minx = np.inf
+                miny = np.inf
+                maxx = -np.inf
+                maxy = -np.inf
 
                 for k in obj:
                     if type(k) is dict:
