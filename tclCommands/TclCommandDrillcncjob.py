@@ -175,6 +175,12 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                                     nr_diameters -= 1
                                     use_tools.append(tool)
 
+                    if not req_tools:
+                        self.raise_tcl_error(
+                            f"No tools selected. drilled_dias was: {args['drilled_dias']}"\
+                            f" diameters are: {diameters}"
+                        )
+
                     if nr_diameters > 0:
                         if muted is False:
                             self.raise_tcl_error("One or more tool diameters of the drills to be drilled passed to the "
