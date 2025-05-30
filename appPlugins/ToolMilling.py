@@ -2673,6 +2673,10 @@ class ToolMilling(AppTool, Excellon):
             return False, "Error: No tools."
 
         for tool in tools:
+            if not self.target_obj.tools[tool]['slots']:
+                # No slots for this tool
+                continue
+
             # I add the 0.0001 value to account for the rounding error in converting from IN to MM and reverse
             adj_toolstable_tooldia = float('%.*f' % (self.decimals, float(tooldia)))
             adj_file_tooldia = float('%.*f' % (self.decimals, float(self.target_obj.tools[tool]["tooldia"])))

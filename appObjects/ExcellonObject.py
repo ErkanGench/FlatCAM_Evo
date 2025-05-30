@@ -1099,13 +1099,18 @@ class ExcellonObject(FlatCAMObj, Excellon):
 
         if tools == "all":
             tools = [i[0] for i in sorted_tools]  # List if ordered tool names.
-            self.app.log.debug("Tools 'all' and sorted are: %s" % str(tools))
+            self.app.log.debug("Tools to consider for slot milling: %s" % str(tools))
 
         if len(tools) == 0:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Please select one or more tools from the list and try again."))
             return False, "Error: No tools."
 
+        use_tools = []
         for tool in tools:
+            if not self.tools[tool]['slots']:
+                # No slots for this tool
+                continue
+
             # I add the 0.0001 value to account for the rounding error in converting from IN to MM and reverse
             adj_toolstable_tooldia = float('%.*f' % (self.decimals, float(tooldia)))
             adj_file_tooldia = float('%.*f' % (self.decimals, float(self.tools[tool]["tooldia"])))
@@ -1113,6 +1118,8 @@ class ExcellonObject(FlatCAMObj, Excellon):
                 self.app.inform.emit('[ERROR_NOTCL] %s' %
                                      _("Milling tool for SLOTS is larger than hole size. Cancelled."))
                 return False, "Error: Milling tool is larger than hole."
+            use_tools.append(tool)
+        self.app.log.debug("Milling slots using tools: %s" % use_tools)
 
         def geo_init(geo_obj, app_obj):
             assert geo_obj.kind == 'geometry', "Initializer expected a GeometryObject, got %s" % type(geo_obj)
@@ -1127,7 +1134,7 @@ class ExcellonObject(FlatCAMObj, Excellon):
             # in case that the tool used has the same diameter with the hole, and since the maximum resolution
             # for FlatCAM is 6 decimals,
             # we add a tenth of the minimum value, meaning 0.0000001, which from our point of view is "almost zero"
-            for m_tool in tools:
+            for m_tool in use_tools:
                 for slot in self.tools[m_tool]['slots']:
                     toolstable_tool = float('%.*f' % (self.decimals, float(tooldia)))
                     file_tool = float('%.*f' % (self.decimals, float(self.tools[m_tool]["tooldia"])))
@@ -1150,6 +1157,7 @@ class ExcellonObject(FlatCAMObj, Excellon):
                         poly = lines_string.buffer(buffer_value, int(self.geo_steps_per_circle)).exterior
                         geo_obj.solid_geometry.append(poly)
             if not geo_obj.solid_geometry:
+                self.app.log.debug("FAIL: No geometry generated.")
                 return "fail"
 
         if use_thread:
