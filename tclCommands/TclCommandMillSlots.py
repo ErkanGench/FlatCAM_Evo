@@ -93,9 +93,6 @@ class TclCommandMillSlots(TclCommandSignaled):
         else:
             args['use_thread'] = False
 
-        if not obj.slots:
-            self.raise_tcl_error("The Excellon object has no slots: %s" % name)
-
         # units = self.app.app_units.upper()
         try:
             if 'milled_dias' in args and args['milled_dias'] != 'all':
@@ -148,12 +145,15 @@ class TclCommandMillSlots(TclCommandSignaled):
             args.pop('name', None)
 
             # This runs in the background... Is blocking handled?
+            self.app.log.debug(f"Generating milling slots with {args}")
             success, msg = obj.generate_milling_slots(plot=False, **args)
 
         except Exception as e:
             success = None
             msg = None
             self.raise_tcl_error("Operation failed: %s" % str(e))
+            return "fail"
 
         if not success:
             self.raise_tcl_error(msg)
+            return "fail"

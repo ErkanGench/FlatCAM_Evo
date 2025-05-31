@@ -4220,11 +4220,16 @@ class CNCjob(Geometry):
             selected_tools = [i[0] for i in all_tools]  # we get an array of ordered tools
         else:
             selected_tools = eval(tools)
-            if not isinstance(selected_tools, list):
+            if not isinstance(selected_tools, (list, tuple)):
                 selected_tools = [selected_tools]
 
         # Create a sorted list of selected tools from the sorted_tools list
-        tools = [i for i, j in sorted_tools for k in selected_tools if i == k]
+        tools = [
+            i
+            for i, j in sorted_tools
+            for k in selected_tools
+            if i == k
+        ]
 
         self.app.log.debug("Tools sorted are: %s" % str(tools))
 

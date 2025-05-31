@@ -514,7 +514,7 @@ class FCShell(TermWidget):
         else:
             raise unknownException
 
-    def display_tcl_error(self, error, error_info=None):
+    def display_tcl_error(self, error: str | Exception | None, error_info=None):
         """
         Escape bracket [ with '\' otherwise there is error
         "ERROR: missing close-bracket" instead of real error
@@ -523,6 +523,8 @@ class FCShell(TermWidget):
         :param error_info: Some informations about the error
         :return: None
         """
+        if error is None:
+            error = "no error provided"
 
         if isinstance(error, Exception):
             exc_type, exc_value, exc_traceback = error_info
