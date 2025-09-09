@@ -8,6 +8,10 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+9.09.2025
+
+- in MainGui fixed the auto-repeat when using the key shortcuts which led to issues with repeating the same command multiple times
+
 5.03.2025
 
 - upgrade to use the new notations in the Shapely's buffer method for the cap_style and join_style parameters (used to be integers, now they are strings or defines)

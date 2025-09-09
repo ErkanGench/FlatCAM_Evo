@@ -517,30 +517,34 @@ class appEditor(QtCore.QObject):
 
         fuse_tools = self.options["geometry_merge_fuse_tools"]
 
-        # if at least one True object is in the list then due of the previous check, all list elements are True objects
-        if True in geo_type_set:
-            def initialize(geo_obj, app):
-                GeometryObject.merge(geo_list=objs, geo_final=geo_obj, multi_geo=True, fuse_tools=fuse_tools,
-                                     log=app.log)
-                app.inform.emit('[success] %s.' % _("Geometry merging finished"))
+        # Determine parameters based on the check
+        # Since len(geo_type_set) == 1, we just need to check which value is in the set
+        is_multi_geo = True in geo_type_set  # True if all are multigeo, False if all are singlegeo
+        obj_name = obj_name_multi if is_multi_geo else obj_name_single
 
-                # rename all the ['name] key in obj.tools[tool_uid]['data'] to the obj_name_multi
-                for v in geo_obj.tools.values():
-                    v['data']['name'] = obj_name_multi
+        # Define initialize function once
+        def initialize(geo_obj, app):
+            GeometryObject.merge(
+                geo_list=objs,
+                geo_final=geo_obj,
+                multi_geo=is_multi_geo,  # Use the determined flag
+                fuse_tools=fuse_tools,
+                log=app.log
+            )
+            app.inform.emit('[success] %s.' % _("Geometry merging finished"))
 
-            self.app_obj.new_object("geometry", obj_name_multi, initialize)
-        else:
-            def initialize(geo_obj, app):
-                GeometryObject.merge(geo_list=objs, geo_final=geo_obj, multi_geo=False, fuse_tools=fuse_tools,
-                                     log=app.log)
-                app.inform.emit('[success] %s.' % _("Geometry merging finished"))
+            # Update tool names using the determined name
+            # Ensure tools and data exist before modification
+            if hasattr(geo_obj, 'tools') and geo_obj.tools:
+                for tool_data in geo_obj.tools.values():
+                    if isinstance(tool_data, dict) and 'data' in tool_data and isinstance(tool_data['data'], dict):
+                        tool_data['data']['name'] = obj_name
+                    else:
+                        # Log or handle unexpected tool structure if necessary
+                        app.log.warning(f"Unexpected tool data structure found when setting name: {tool_data}")
 
-                # rename all the ['name] key in obj.tools[tooluid]['data'] to the obj_name_multi
-                for v in geo_obj.tools.values():
-                    v['data']['name'] = obj_name_single
-
-            self.app_obj.new_object("geometry", obj_name_single, initialize)
-
+        # Create the new object
+        self.app_obj.new_object("geometry", obj_name, initialize)  # Use the determined name
         self.app.should_we_save = True
 
     def on_edit_join_exc(self):

@@ -2944,6 +2944,9 @@ class MainGUI(QtWidgets.QMainWindow):
         :param event: QT event
         :return:
         """
+        if event.isAutoRepeat():
+            return
+
         modifiers = QtWidgets.QApplication.keyboardModifiers()
         active = self.app.collection.get_active()
         selected = self.app.collection.get_selected()
