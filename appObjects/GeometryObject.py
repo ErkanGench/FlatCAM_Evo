@@ -49,13 +49,14 @@ class GeometryObject(FlatCAMObj, Geometry):
 
     ui_type = GeometryObjectUI
 
-    def __init__(self, name):
+    def __init__(self, name, app):
+        self.app = app
         self.decimals = self.app.decimals
 
         self.circle_steps = int(self.app.options["geometry_circle_steps"])
 
-        FlatCAMObj.__init__(self, name)
-        Geometry.__init__(self, geo_steps_per_circle=self.circle_steps)
+        FlatCAMObj.__init__(self, name, app=app)
+        Geometry.__init__(self, geo_steps_per_circle=self.circle_steps, app=app)
 
         self.kind = "geometry"
 

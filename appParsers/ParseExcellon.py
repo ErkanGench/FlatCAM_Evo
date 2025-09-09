@@ -59,7 +59,7 @@ class Excellon(Geometry):
         "excellon_circle_steps": '16'
     }
 
-    def __init__(self, zeros=None, excellon_format_upper_mm=None, excellon_format_lower_mm=None,
+    def __init__(self, app, zeros=None, excellon_format_upper_mm=None, excellon_format_lower_mm=None,
                  excellon_format_upper_in=None, excellon_format_lower_in=None, excellon_units=None,
                  excellon_circle_steps=None):
         """
@@ -68,6 +68,7 @@ class Excellon(Geometry):
         :return: Excellon object.
         :rtype: Excellon
         """
+        self.app = app
 
         self.decimals = self.app.decimals
 
@@ -75,7 +76,7 @@ class Excellon(Geometry):
             excellon_circle_steps = int(Excellon.defaults['excellon_circle_steps'])
         self.excellon_circle_steps = int(excellon_circle_steps)
 
-        Geometry.__init__(self, geo_steps_per_circle=int(excellon_circle_steps))
+        Geometry.__init__(self, geo_steps_per_circle=int(excellon_circle_steps), app=app)
 
         # dictionary to store tools, see above for description
         self.tools = {}

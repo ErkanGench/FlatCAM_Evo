@@ -226,8 +226,8 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
             _("Enable display of the splash screen at application startup.")
         )
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.value("splash_screen"):
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.value("splash_screen"):
             self.splash_cb.set_value(True)
         else:
             self.splash_cb.set_value(False)
@@ -439,8 +439,8 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
 
     @staticmethod
     def on_splash_changed(state):
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        qsettings.setValue('splash_screen', 1) if state else qsettings.setValue('splash_screen', 0)
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        q_settings.setValue('splash_screen', 1) if state else q_settings.setValue('splash_screen', 0)
 
         # This will write the setting to the platform specific storage.
-        del qsettings
+        del q_settings

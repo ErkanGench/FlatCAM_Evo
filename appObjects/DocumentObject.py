@@ -32,11 +32,12 @@ class DocumentObject(FlatCAMObj):
     optionChanged = QtCore.pyqtSignal(str)
     ui_type = DocumentObjectUI
 
-    def __init__(self, name):
+    def __init__(self, name, app):
+        self.app = app
         self.decimals = self.app.decimals
 
         self.app.log.debug("Creating a Document object...")
-        FlatCAMObj.__init__(self, name)
+        FlatCAMObj.__init__(self, name, app)
 
         self.kind = "document"
         self.units = ''

@@ -106,9 +106,9 @@ class TextAreaOptionUI(OptionUI):
         textarea = FCTextArea()
         textarea.setPlaceholderText(_(self.label_tooltip))
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("textbox_font_size"):
-            tb_fsize = qsettings.value('textbox_font_size', type=int)
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("textbox_font_size"):
+            tb_fsize = q_settings.value('textbox_font_size', type=int)
         else:
             tb_fsize = 10
         font = QtGui.QFont()

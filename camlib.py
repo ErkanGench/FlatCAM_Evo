@@ -47,7 +47,7 @@ from shapely import union, difference
 # ---------------------------------------
 # NEEDED for Legacy mode
 # Used for solid polygons in Matplotlib
-from descartes.patch import PolygonPatch    # noqa
+# from descartes.patch import PolygonPatch
 # ---------------------------------------
 
 import logging
@@ -539,8 +539,9 @@ class Geometry(object):
         # "geo_steps_per_circle": 128
     }
 
-    def __init__(self, geo_steps_per_circle=None):
+    def __init__(self, app, geo_steps_per_circle=None):
         # Units (in or mm)
+        self.app = app
         self.units = self.app.app_units
         self.decimals = self.app.decimals
 
@@ -2740,7 +2741,7 @@ class CNCjob(Geometry):
         "excellon_optimization_type": "B",
     }
 
-    def __init__(self,
+    def __init__(self, app,
                  units="in", kind="generic", tooldia=0.0,
                  z_cut=-0.002, z_move=0.1,
                  feedrate=3.0, feedrate_z=3.0, feedrate_rapid=3.0, feedrate_probe=3.0,
@@ -2753,13 +2754,14 @@ class CNCjob(Geometry):
                  seg_y=None,
                  steps_per_circle=None):
 
+        self.app = app
         self.decimals = self.app.decimals
 
         # Used when parsing G-code arcs
         self.steps_per_circle = steps_per_circle if steps_per_circle is not None else \
             int(self.app.options['cncjob_steps_per_circle'])
 
-        Geometry.__init__(self, geo_steps_per_circle=self.steps_per_circle)
+        Geometry.__init__(self, geo_steps_per_circle=self.steps_per_circle, app=app)
 
         self.kind = kind
         self.units = units

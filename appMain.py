@@ -59,7 +59,6 @@ from typing import Union
 
 # App appGUI
 from appGUI.PlotCanvas import PlotCanvas
-from appGUI.PlotCanvasLegacy import PlotCanvasLegacy
 from appGUI.PlotCanvas3d import PlotCanvas3d
 from appGUI.MainGUI import MainGUI
 from appGUI.VisPyVisuals import ShapeCollection
@@ -233,7 +232,7 @@ class App(QtCore.QObject):
     # Handled by:
     #  * register_folder()
     #  * register_recent()
-    # Note: Setting the parameters to unicode does not seem
+    # Note: Setting the parameters to Unicode does not seem
     #       to have an effect. Then are received as Qstring
     #       anyway.
 
@@ -670,11 +669,11 @@ class App(QtCore.QObject):
         # ###########################################################################################################
         if self.options["first_run"] is True:
             # on first run clear the previous QSettings, therefore clearing the GUI settings
-            qsettings = QSettings("Open Source", "FlatCAM_EVO")
-            for key in qsettings.allKeys():
-                qsettings.remove(key)
+            q_settings = QSettings("Open Source", "FlatCAM_EVO")
+            for key in q_settings.allKeys():
+                q_settings.remove(key)
             # This will write the setting to the platform specific storage.
-            del qsettings
+            del q_settings
 
         # ###########################################################################################################
         # ###################################### Setting the Splash Screen ##########################################
@@ -993,7 +992,7 @@ class App(QtCore.QObject):
         # ###########################################################################################################
         # ############################################# Activity Monitor ############################################
         # ###########################################################################################################
-        self.proc_container = FCVisibleProcessContainer(self.ui.activity_view)
+        self.proc_container = FCVisibleProcessContainer(self.ui.activity_view, app=self)
 
         # ###########################################################################################################
         # ########################################## Other setups ###################################################
@@ -1249,7 +1248,7 @@ class App(QtCore.QObject):
 
         # self.ui.notebook.callback_on_close = self.on_close_notebook_tab
 
-        # Plot Area double clicking
+        # Plot Area double-clicking
         self.ui.plot_tab_area.tabBarDoubleClicked.connect(self.on_plot_area_tab_double_clicked)
 
         # ###########################################################################################################
@@ -7203,14 +7202,14 @@ class App(QtCore.QObject):
 
         :return: None
         """
-        FlatCAMObj.app = self
-        ObjectCollection.app = self
-        Gerber.app = self
-        Excellon.app = self
-        Geometry.app = self
-        CNCjob.app = self
-        FCProcess.app = self
-        FCProcessContainer.app = self
+        # FlatCAMObj.app = self
+        # ObjectCollection.app = self
+        # Gerber.app = self
+        # Excellon.app = self
+        # Geometry.app = self
+        # CNCjob.app = self
+        # FCProcess.app = self
+        # FCProcessContainer.app = self
         OptionsGroupUI.app = self
 
     def version_check(self):
@@ -7308,6 +7307,7 @@ class App(QtCore.QObject):
                 self.inform.emit(msg)
                 return 'fail'
         else:
+            from appGUI.PlotCanvasLegacy import PlotCanvasLegacy
             plotcanvas = PlotCanvasLegacy(self)
             if plotcanvas.status != 'ok':
                 return 'fail'
@@ -7873,7 +7873,8 @@ class App(QtCore.QObject):
             else:
                 self.shell.append_output(msg + end)
         except AttributeError:
-            self.log.debug("shell_message() is called before Shell Class is instantiated. The message is: %s", str(msg))
+            self.log.debug(
+                "shell_message() is called before Shell Class is instantiated. The message is: %s" % str(msg))
 
     def script_processing(self, script_code):
         # trying to run a Tcl command without having the Shell open will create some warnings because the Tcl Shell

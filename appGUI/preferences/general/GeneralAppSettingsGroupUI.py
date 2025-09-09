@@ -75,23 +75,23 @@ class GeneralAppSettingsGroupUI(OptionsGroupUI2):
 
         self.setTitle(str(_("App Settings")))
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
 
         self.notebook_font_size_field = self.option_dict()["notebook_font_size"].get_field()
-        if qsettings.contains("notebook_font_size"):
-            self.notebook_font_size_field.set_value(qsettings.value('notebook_font_size', type=int))
+        if q_settings.contains("notebook_font_size"):
+            self.notebook_font_size_field.set_value(q_settings.value('notebook_font_size', type=int))
         else:
             self.notebook_font_size_field.set_value(12)
 
         self.axis_font_size_field = self.option_dict()["axis_font_size"].get_field()
-        if qsettings.contains("axis_font_size"):
-            self.axis_font_size_field.set_value(qsettings.value('axis_font_size', type=int))
+        if q_settings.contains("axis_font_size"):
+            self.axis_font_size_field.set_value(q_settings.value('axis_font_size', type=int))
         else:
             self.axis_font_size_field.set_value(8)
 
         self.textbox_font_size_field = self.option_dict()["textbox_font_size"].get_field()
-        if qsettings.contains("textbox_font_size"):
-            self.textbox_font_size_field.set_value(qsettings.value('textbox_font_size', type=int))
+        if q_settings.contains("textbox_font_size"):
+            self.textbox_font_size_field.set_value(q_settings.value('textbox_font_size', type=int))
         else:
             self.textbox_font_size_field.set_value(10)
 

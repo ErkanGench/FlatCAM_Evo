@@ -77,7 +77,7 @@ class HybridGeoExc:
         self.multitool = True
 
 
-class ToolMilling(AppTool, Excellon):
+class ToolMilling(Excellon, AppTool):
     build_ui_sig = QtCore.pyqtSignal()
     launch_job = QtCore.pyqtSignal()
 
@@ -86,7 +86,7 @@ class ToolMilling(AppTool, Excellon):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Excellon.__init__(self, excellon_circle_steps=self.app.options["excellon_circle_steps"])
+        Excellon.__init__(self, excellon_circle_steps=self.app.options["excellon_circle_steps"], app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################

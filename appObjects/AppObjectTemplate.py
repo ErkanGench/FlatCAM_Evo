@@ -14,7 +14,6 @@ from PyQt6 import QtCore, QtGui
 
 from appGUI.ObjectUI import ObjectUI
 from appCommon.Common import LoudDict
-from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
 from appGUI.VisPyVisuals import ShapeCollection
 
 from shapely.ops import unary_union
@@ -63,15 +62,18 @@ class FlatCAMObj(QtCore.QObject):
     # signal for Properties
     calculations_finished = QtCore.pyqtSignal(float, float, float, float, float, object)
 
-    def __init__(self, name):
+    def __init__(self, name, app):
         """
         Constructor.
 
         :param name: Name of the object given by the user.
+        :param app: The application instance.
         :return: FlatCAMObj
         """
 
-        QtCore.QObject.__init__(self)
+        super().__init__(app=app)
+
+        self.app = app
 
         # View
         self.ui = None
@@ -97,6 +99,7 @@ class FlatCAMObj(QtCore.QObject):
             self.mark_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool,
                                                fcoptions=self.app.options)
         else:
+            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
             self.shapes = ShapeCollectionLegacy(obj=self, app=self.app, name=name)
             self.mark_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name=name + "_mark_shapes")
 

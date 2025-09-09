@@ -111,7 +111,7 @@ class AppObject(QtCore.QObject):
         self.app.log.debug("Calling object constructor...")
 
         # Object creation/instantiation
-        obj = classdict[kind](name)
+        obj = classdict[kind](name, app=self.app)
 
         # ############################################################################################################
         # adding object PROPERTIES

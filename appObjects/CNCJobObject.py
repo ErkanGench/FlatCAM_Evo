@@ -45,19 +45,20 @@ class CNCJobObject(FlatCAMObj, CNCjob):
 
     ui_type = CNCObjectUI
 
-    def __init__(self, name, units="in", kind="generic", z_move=0.1,
+    def __init__(self, name, app, units="in", kind="generic", z_move=0.1,
                  feedrate=3.0, feedrate_rapid=3.0, z_cut=-0.002, tooldia=0.0,
                  spindlespeed=None):
 
+        self.app = app
         self.app.log.debug("Creating CNCJob object...")
 
         self.decimals = self.app.decimals
 
-        CNCjob.__init__(self, units=units, kind=kind, z_move=z_move,
+        CNCjob.__init__(self, app=app, units=units, kind=kind, z_move=z_move,
                         feedrate=feedrate, feedrate_rapid=feedrate_rapid, z_cut=z_cut, tooldia=tooldia,
                         spindlespeed=spindlespeed, steps_per_circle=int(self.app.options["cncjob_steps_per_circle"]))
 
-        FlatCAMObj.__init__(self, name)
+        FlatCAMObj.__init__(self, name, app)
 
         self.kind = "cncjob"
 

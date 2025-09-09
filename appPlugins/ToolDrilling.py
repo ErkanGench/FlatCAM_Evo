@@ -35,7 +35,7 @@ if '_' not in builtins.__dict__:
 log = logging.getLogger('base')
 
 
-class ToolDrilling(AppTool, Excellon):
+class ToolDrilling(Excellon, AppTool):
     build_ui_sig = QtCore.pyqtSignal()
 
     def __init__(self, app):
@@ -43,7 +43,7 @@ class ToolDrilling(AppTool, Excellon):
         self.dec_format = self.app.dec_format
 
         AppTool.__init__(self, app)
-        Excellon.__init__(self, excellon_circle_steps=self.app.options["excellon_circle_steps"])
+        Excellon.__init__(self, excellon_circle_steps=self.app.options["excellon_circle_steps"], app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################

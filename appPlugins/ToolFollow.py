@@ -32,7 +32,7 @@ if '_' not in builtins.__dict__:
 log = logging.getLogger('base')
 
 
-class ToolFollow(AppTool, Gerber):
+class ToolFollow(Gerber, AppTool):
 
     optimal_found_sig = QtCore.pyqtSignal(float)
 
@@ -41,7 +41,7 @@ class ToolFollow(AppTool, Gerber):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Gerber.__init__(self, steps_per_circle=self.app.options["gerber_circle_steps"])
+        Gerber.__init__(self, steps_per_circle=self.app.options["gerber_circle_steps"], app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################

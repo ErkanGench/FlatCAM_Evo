@@ -27,7 +27,6 @@ import builtins
 
 from appObjects.AppObjectTemplate import ObjectDeleted
 from appGUI.VisPyVisuals import *
-from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
 from appEditors.appTextEditor import AppTextEditor
 
 from camlib import CNCjob
@@ -65,7 +64,7 @@ if '_' not in builtins.__dict__:
 log = logging.getLogger('base')
 
 
-class ToolLevelling(AppTool, CNCjob):
+class ToolLevelling(CNCjob, AppTool):
     build_al_table_sig = QtCore.pyqtSignal()
 
     def __init__(self, app):
@@ -73,7 +72,7 @@ class ToolLevelling(AppTool, CNCjob):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        CNCjob.__init__(self, steps_per_circle=self.app.options["cncjob_steps_per_circle"])
+        CNCjob.__init__(self, steps_per_circle=self.app.options["cncjob_steps_per_circle"], app=app)
 
         # updated in the self.set_tool_ui()
         self.form_fields = {}
@@ -272,6 +271,7 @@ class ToolLevelling(AppTool, CNCjob):
         if self.app.use_3d_engine:
             self.probing_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool)
         else:
+            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
             self.probing_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name=name + "_probing_shapes")
 
         self.form_fields.update({

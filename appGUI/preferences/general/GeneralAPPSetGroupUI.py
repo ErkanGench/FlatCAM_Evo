@@ -213,9 +213,9 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         self.notebook_font_size_spinner.set_range(8, 40)
         self.notebook_font_size_spinner.setWrapping(True)
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("notebook_font_size"):
-            self.notebook_font_size_spinner.set_value(qsettings.value('notebook_font_size', type=int))
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("notebook_font_size"):
+            self.notebook_font_size_spinner.set_value(q_settings.value('notebook_font_size', type=int))
         else:
             self.notebook_font_size_spinner.set_value(12)
 
@@ -232,9 +232,9 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         self.axis_font_size_spinner.set_range(0, 40)
         self.axis_font_size_spinner.setWrapping(True)
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("axis_font_size"):
-            self.axis_font_size_spinner.set_value(qsettings.value('axis_font_size', type=int))
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("axis_font_size"):
+            self.axis_font_size_spinner.set_value(q_settings.value('axis_font_size', type=int))
         else:
             self.axis_font_size_spinner.set_value(8)
 
@@ -252,9 +252,9 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         self.textbox_font_size_spinner.set_range(8, 40)
         self.textbox_font_size_spinner.setWrapping(True)
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("textbox_font_size"):
-            self.textbox_font_size_spinner.set_value(qsettings.value('textbox_font_size', type=int))
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("textbox_font_size"):
+            self.textbox_font_size_spinner.set_value(q_settings.value('textbox_font_size', type=int))
         else:
             self.textbox_font_size_spinner.set_value(10)
 
@@ -271,9 +271,9 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         self.hud_font_size_spinner.set_range(8, 40)
         self.hud_font_size_spinner.setWrapping(True)
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            self.hud_font_size_spinner.set_value(qsettings.value('hud_font_size', type=int))
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            self.hud_font_size_spinner.set_value(q_settings.value('hud_font_size', type=int))
         else:
             self.hud_font_size_spinner.set_value(8)
 

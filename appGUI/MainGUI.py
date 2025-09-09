@@ -23,8 +23,6 @@ from appGUI.preferences.geometry.GeometryPreferencesUI import GeometryPreference
 from appGUI.preferences.gerber.GerberPreferencesUI import GerberPreferencesUI
 from appEditors.appGeoEditor import FCShapeTool
 
-from matplotlib.backend_bases import KeyEvent as mpl_key_event
-
 import webbrowser
 
 from appGUI.preferences.tools.PluginsPreferencesUI import PluginsPreferencesUI
@@ -40,6 +38,7 @@ import sys
 import gettext
 import appTranslation as fcTranslate
 import builtins
+import traceback
 
 import darkdetect
 
@@ -2069,16 +2068,16 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################################################################
         # ################## RESTORE UI from QSettings #################
         # ########################################################################
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("saved_gui_state"):
-            self.restoreState(qsettings.value('saved_gui_state'), 0)
-        tb_lock_state = qsettings.value('toolbar_lock', "true")
-        show_text_state = qsettings.value('menu_show_text', "true")
-        win_geo = qsettings.value('window_geometry', (100, 100, 800, 400))
-        splitter_left = int(qsettings.value('splitter_left', 1))
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("saved_gui_state"):
+            self.restoreState(q_settings.value('saved_gui_state'), 0)
+        tb_lock_state = q_settings.value('toolbar_lock', "true")
+        show_text_state = q_settings.value('menu_show_text', "true")
+        win_geo = q_settings.value('window_geometry', (100, 100, 800, 400))
+        splitter_left = int(q_settings.value('splitter_left', 1))
 
-        if qsettings.contains("layout"):
-            layout = qsettings.value('layout', type=str)
+        if q_settings.contains("layout"):
+            layout = q_settings.value('layout', type=str)
             self.exc_edit_toolbar.setDisabled(True)
             self.geo_edit_toolbar.setDisabled(True)
             self.grb_edit_toolbar.setDisabled(True)
@@ -2089,9 +2088,9 @@ class MainGUI(QtWidgets.QMainWindow):
             self.geo_edit_toolbar.setDisabled(True)
             self.grb_edit_toolbar.setDisabled(True)
 
-            qsettings.setValue('layout', "standard")
+            q_settings.setValue('layout', "standard")
             # This will write the setting to the platform specific storage.
-            del qsettings
+            del q_settings
             self.app.log.debug("MainGUI.__init__() --> UI layout restored from options. QSettings set to 'standard'")
 
         self.lock_action.setChecked(True if tb_lock_state == 'true' else False)
@@ -2369,11 +2368,11 @@ class MainGUI(QtWidgets.QMainWindow):
             response = msgbox.clickedButton()
 
         if forced_clear is True or response == bt_yes:
-            qsettings = QSettings("Open Source", "FlatCAM_EVO")
-            for key in qsettings.allKeys():
-                qsettings.remove(key)
+            q_settings = QSettings("Open Source", "FlatCAM_EVO")
+            for key in q_settings.allKeys():
+                q_settings.remove(key)
             # This will write the setting to the platform specific storage.
-            del qsettings
+            del q_settings
 
     def populate_toolbars(self):
         """
@@ -2687,9 +2686,9 @@ class MainGUI(QtWidgets.QMainWindow):
         self.snap_magnet.setVisible(False)
         self.editor_exit_btn_ret_action.setVisible(False)
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("layout"):
-            layout = qsettings.value('layout', type=str)
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("layout"):
+            layout = q_settings.value('layout', type=str)
 
             # on 'minimal' layout only some toolbars are active
             if layout != 'minimal':
@@ -2755,10 +2754,10 @@ class MainGUI(QtWidgets.QMainWindow):
                 if isinstance(widget, QtWidgets.QToolBar):
                     widget.setMovable(True)
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        qsettings.setValue('toolbar_lock', lock)
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        q_settings.setValue('toolbar_lock', lock)
         # This will write the setting to the platform specific storage.
-        del qsettings
+        del q_settings
 
     def show_text_under_action(self, show_text=True):
         if show_text:
@@ -2770,10 +2769,10 @@ class MainGUI(QtWidgets.QMainWindow):
                 if isinstance(widget, QtWidgets.QToolBar):
                     widget.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
 
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        qsettings.setValue('menu_show_text', show_text)
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        q_settings.setValue('menu_show_text', show_text)
         # This will write the setting to the platform specific storage.
-        del qsettings
+        del q_settings
 
     # def on_full_screen_toggled(self, disable=False):
     #     """
@@ -2944,8 +2943,6 @@ class MainGUI(QtWidgets.QMainWindow):
         :param event: QT event
         :return:
         """
-        if event.isAutoRepeat():
-            return
 
         modifiers = QtWidgets.QApplication.keyboardModifiers()
         active = self.app.collection.get_active()
@@ -2959,30 +2956,48 @@ class MainGUI(QtWidgets.QMainWindow):
             key = event
         # events from the GUI are of type QKeyEvent
         elif type(event) == QtGui.QKeyEvent:
-            key = event.key()
-        elif isinstance(event, mpl_key_event):  # MatPlotLib key events are trickier to interpret than the rest
-            matplotlib_key_flag = True
-
-            key = event.key
-            key = QtGui.QKeySequence(key)
-
-            # check for modifiers
-            key_string = key.toString().lower()
-            if '+' in key_string:
-                mod, __, key_text = key_string.rpartition('+')
-                if mod.lower() == 'ctrl':
-                    modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
-                elif mod.lower() == 'alt':
-                    modifiers = QtCore.Qt.KeyboardModifier.AltModifier
-                elif mod.lower() == 'shift':
-                    modifiers = QtCore.Qt.KeyboardModifier.ShiftModifier
-                else:
-                    modifiers = QtCore.Qt.KeyboardModifier.NoModifier
-                key = QtGui.QKeySequence(key_text)
-
-        # events from Vispy are of type KeyEvent
+            #     key = event.key()     # commented due changes started in VisPy 0.15 in regards of Qt events handling
+            return
         else:
-            key = event.key
+
+            # MatPlotLib key events are trickier to interpret than the rest
+            if not self.app.use_3d_engine:
+                matplotlib_key_flag = True
+
+                key = event.key
+                key = QtGui.QKeySequence(key)
+
+                # check for modifiers
+                key_string = key.toString().lower()
+                if '+' in key_string:
+                    mod, __, key_text = key_string.rpartition('+')
+                    if mod.lower() == 'ctrl':
+                        modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
+                    elif mod.lower() == 'alt':
+                        modifiers = QtCore.Qt.KeyboardModifier.AltModifier
+                    elif mod.lower() == 'shift':
+                        modifiers = QtCore.Qt.KeyboardModifier.ShiftModifier
+                    else:
+                        modifiers = QtCore.Qt.KeyboardModifier.NoModifier
+                    key = QtGui.QKeySequence(key_text)
+            else:
+                # The native object is the QKeyEvent from PyQt/PySide
+                native_event = event.native
+
+                # Check if the method exists and if it returns True
+                # The hasattr check adds a bit of safety
+                if hasattr(native_event, 'isAutoRepeat') and native_event.isAutoRepeat():
+                    # print(f"Key repeat detected for: {event.key}")
+                    return  # Ignore the repeat event
+
+                # VISPY events
+                key = event.key
+
+        try:
+            if event.isAutoRepeat():
+                return
+        except AttributeError:
+            pass
 
         if self.app.call_source == 'app':
             # CTRL + ALT
@@ -4595,15 +4610,15 @@ class MainGUI(QtWidgets.QMainWindow):
         else:
             g_rect = self.geometry()
 
-            qsettings = QSettings("Open Source", "FlatCAM_EVO")
-            qsettings.setValue('saved_gui_state', self.saveState(0))
-            qsettings.setValue('toolbar_lock', self.lock_action.isChecked())
-            qsettings.setValue('menu_show_text', self.show_text_action.isChecked())
+            q_settings = QSettings("Open Source", "FlatCAM_EVO")
+            q_settings.setValue('saved_gui_state', self.saveState(0))
+            q_settings.setValue('toolbar_lock', self.lock_action.isChecked())
+            q_settings.setValue('menu_show_text', self.show_text_action.isChecked())
             if not self.isMaximized():
-                qsettings.setValue('window_geometry', (g_rect.x(), g_rect.y(), g_rect.width(), g_rect.height()))
-            qsettings.setValue('splitter_left', self.splitter.sizes()[0])
+                q_settings.setValue('window_geometry', (g_rect.x(), g_rect.y(), g_rect.width(), g_rect.height()))
+            q_settings.setValue('splitter_left', self.splitter.sizes()[0])
             # This will write the setting to the platform specific storage.
-            del qsettings
+            del q_settings
             try:
                 self.final_save.emit()
             except SystemError:

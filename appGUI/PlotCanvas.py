@@ -337,9 +337,9 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         hud_text = '%s\n%s\n\n%s\n%s' % (l1_hud_text, l2_hud_text, l3_hud_text, l4_hud_text)
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 

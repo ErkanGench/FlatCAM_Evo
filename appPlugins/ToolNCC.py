@@ -37,7 +37,7 @@ if '_' not in builtins.__dict__:
 log = logging.getLogger('base')
 
 
-class NonCopperClear(AppTool, Gerber):
+class NonCopperClear(Gerber, AppTool):
 
     optimal_found_sig = QtCore.pyqtSignal(float)
 
@@ -46,7 +46,7 @@ class NonCopperClear(AppTool, Gerber):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Gerber.__init__(self, steps_per_circle=self.app.options["gerber_circle_steps"])
+        Gerber.__init__(self, steps_per_circle=self.app.options["gerber_circle_steps"], app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################

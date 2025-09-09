@@ -44,13 +44,14 @@ class GerberObject(FlatCAMObj, Gerber):
 
     ui_type = GerberObjectUI
 
-    def __init__(self, name):
+    def __init__(self, name, app):
+        self.app = app
         self.decimals = self.app.decimals
 
         self.circle_steps = int(self.app.options["gerber_circle_steps"])
 
-        Gerber.__init__(self, steps_per_circle=self.circle_steps)
-        FlatCAMObj.__init__(self, name)
+        Gerber.__init__(self, steps_per_circle=self.circle_steps, app=app)
+        FlatCAMObj.__init__(self, name, app=app)
 
         self.kind = "gerber"
 

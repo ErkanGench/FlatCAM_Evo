@@ -3133,9 +3133,9 @@ class FCCircle(FCShapeTool):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
@@ -3676,9 +3676,9 @@ class FCRectangle(FCShapeTool):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
@@ -3894,9 +3894,9 @@ class FCPolygon(FCShapeTool):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
@@ -4182,9 +4182,9 @@ class FCPath(FCShapeTool):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
@@ -4744,9 +4744,9 @@ class FCMove(FCShapeTool):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
@@ -5269,9 +5269,9 @@ class FCCopy(FCShapeTool):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 

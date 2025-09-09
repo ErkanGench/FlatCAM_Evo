@@ -463,11 +463,11 @@ class PlotCanvasLegacy(QtCore.QObject):
             self.on_update_text_hud()
 
             # set font size
-            qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-            if qsettings.contains("hud_font_size"):
+            q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+            if q_settings.contains("hud_font_size"):
                 # I multiply with 2.5 because this seems to be the difference between the value taken by the VisPy (3D)
                 # and Matplotlib (Legacy2D FlatCAM graphic engine)
-                fsize = int(qsettings.value('hud_font_size', type=int) * 2.5)
+                fsize = int(q_settings.value('hud_font_size', type=int) * 2.5)
             else:
                 fsize = 20
 

@@ -32,9 +32,8 @@ if '_' not in builtins.__dict__:
 
 class FCProcess(object):
 
-    app = None
-
-    def __init__(self, descr):
+    def __init__(self, descr, app):
+        self.app = app
         self.callbacks = {
             "done": []
         }
@@ -87,18 +86,17 @@ class FCProcessContainer(object):
     looses track of their reference.
     """
 
-    app = None
-
-    def __init__(self):
+    def __init__(self, app):
 
         self.procs = []
+        self.app = app
 
     def add(self, proc):
 
         self.procs.append(weakref.ref(proc))
 
     def new(self, descr):
-        proc = FCProcess(descr)
+        proc = FCProcess(descr, app=self.app)
 
         proc.connect(self.on_done, event="done")
 
@@ -126,17 +124,17 @@ class FCProcessContainer(object):
             self.procs.remove(pref)
 
 
-class FCVisibleProcessContainer(QtCore.QObject, FCProcessContainer):
+class FCVisibleProcessContainer(FCProcessContainer, QtCore.QObject):
     something_changed = QtCore.pyqtSignal()
     # this will signal that the application is IDLE
     idle_flag = QtCore.pyqtSignal()
 
-    def __init__(self, view):
+    def __init__(self, view, app):
         assert isinstance(view, FlatCAMActivityView), \
             "Expected a FlatCAMActivityView, got %s" % type(view)
 
-        FCProcessContainer.__init__(self)
         QtCore.QObject.__init__(self)
+        FCProcessContainer.__init__(self, app=app)
 
         self.view = view
 

@@ -11,6 +11,8 @@ CHANGELOG for FlatCAM Evo beta
 9.09.2025
 
 - in MainGui fixed the auto-repeat when using the key shortcuts which led to issues with repeating the same command multiple times
+- actually fixed the above (the issue was created by updates in VisPy v0.15)
+- fixed a number of issues with loading/creating objects by removing as much as possible creation of the app instance by injecting the attribute in the object classes
 
 5.03.2025
 

@@ -43,14 +43,14 @@ if '_' not in builtins.__dict__:
 log = logging.getLogger('base')
 
 
-class ToolPaint(AppTool, Gerber):
+class ToolPaint(Gerber, AppTool):
 
     def __init__(self, app):
         self.app = app
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Geometry.__init__(self, geo_steps_per_circle=self.app.options["geometry_circle_steps"])
+        Geometry.__init__(self, geo_steps_per_circle=self.app.options["geometry_circle_steps"], app=app)
         
         # #############################################################################
         # ######################### Tool GUI ##########################################

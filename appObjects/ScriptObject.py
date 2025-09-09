@@ -32,11 +32,12 @@ class ScriptObject(FlatCAMObj):
     optionChanged = QtCore.pyqtSignal(str)
     ui_type = ScriptObjectUI
 
-    def __init__(self, name):
+    def __init__(self, name, app):
+        self.app = app
         self.decimals = self.app.decimals
 
         self.app.log.debug("Creating a ScriptObject object...")
-        FlatCAMObj.__init__(self, name)
+        FlatCAMObj.__init__(self, name, app=app)
 
         self.kind = "script"
 

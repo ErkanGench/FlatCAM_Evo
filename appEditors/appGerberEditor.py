@@ -306,8 +306,8 @@ class PadEditorGrb(ShapeToolEditorGrb):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        fsize = qsettings.value('hud_font_size', type=int, defaultValue=8)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        fsize = q_settings.value('hud_font_size', type=int, defaultValue=8)
 
         old_x = self.ui.x_entry.get_value()
         old_y = self.ui.y_entry.get_value()
@@ -905,9 +905,9 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
             self.points = self.draw_app.snap_x, self.draw_app.snap_y
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
@@ -1437,9 +1437,9 @@ class RegionEditorGrb(ShapeToolEditorGrb):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
@@ -1851,9 +1851,9 @@ class TrackEditorGrb(ShapeToolEditorGrb):
             return
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 

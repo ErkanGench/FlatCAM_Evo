@@ -22,7 +22,6 @@ import logging
 import html
 import sys
 import inspect
-from typing import Callable
 
 import gettext
 import appTranslation as fcTranslate
@@ -202,7 +201,6 @@ class RadioSetCross(QtWidgets.QWidget):
 
         :param choices: List of 5 choices. See description.
                         The list of choices is in this order: [top-left, top-right, bottom-left, bottom-right, center]
-        :param orientation: 'horizontal' (default) of 'vertical'.
         :param parent: Qt parent widget.
         :type choices: list
         """
@@ -3260,9 +3258,9 @@ class FCButton(QtWidgets.QPushButton):
 
 
 class FCLabel(QtWidgets.QLabel):
-    clicked = QtCore.Signal(bool)
-    right_clicked = QtCore.Signal(bool)
-    middle_clicked = QtCore.Signal(bool)
+    clicked = QtCore.pyqtSignal(bool)
+    right_clicked = QtCore.pyqtSignal(bool)
+    middle_clicked = QtCore.pyqtSignal(bool)
 
     def __init__(self, title=None, color=None, b_color=None, bold=None, size=None, parent=None):
         """

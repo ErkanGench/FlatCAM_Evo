@@ -74,15 +74,14 @@ class Gerber(Geometry):
     #     "use_buffer_for_union": True
     # }
 
-    app = None
-
-    def __init__(self, steps_per_circle=None):
+    def __init__(self, app, steps_per_circle=None):
         """
         Use ``gerber.parse_files()`` or ``gerber.parse_lines()`` to populate the object from Gerber source.
 
         :return: Gerber object
         :rtype: Gerber
         """
+        self.app = app
 
         # How to approximate a circle with lines.
         if steps_per_circle is None:
@@ -92,7 +91,7 @@ class Gerber(Geometry):
         self.decimals = self.app.decimals
 
         # Initialize parent
-        Geometry.__init__(self, geo_steps_per_circle=self.steps_per_circle)
+        Geometry.__init__(self, geo_steps_per_circle=self.steps_per_circle, app=self.app)
 
         # Number format
         self.int_digits = 3

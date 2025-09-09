@@ -41,13 +41,14 @@ class ExcellonObject(FlatCAMObj, Excellon):
     optionChanged = QtCore.pyqtSignal(str)
     multicolored_build_sig = QtCore.pyqtSignal()
 
-    def __init__(self, name):
+    def __init__(self, name, app):
+        self.app = app
         self.decimals = self.app.decimals
 
         self.circle_steps = int(self.app.options["excellon_circle_steps"])
 
-        Excellon.__init__(self, excellon_circle_steps=self.circle_steps)
-        FlatCAMObj.__init__(self, name)
+        Excellon.__init__(self, excellon_circle_steps=self.circle_steps, app=app)
+        FlatCAMObj.__init__(self, name, app)
 
         self.kind = "excellon"
 

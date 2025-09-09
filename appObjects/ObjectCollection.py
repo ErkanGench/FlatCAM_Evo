@@ -984,7 +984,10 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # log.debug("Current: %s, Previous %s" % (str(current), str(previous)))
 
         try:
-            obj = current.indexes()[0].internalPointer().obj
+            indexes = current.indexes()
+            if not indexes:
+                return
+            obj = indexes[0].internalPointer().obj
             self.item_selected.emit(obj.obj_options['name'])
 
             if obj.kind == 'gerber':

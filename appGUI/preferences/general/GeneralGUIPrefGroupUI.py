@@ -97,9 +97,9 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         grid0.addWidget(self.layout_combo, 6, 1)
 
         # Set the current index for layout_combo
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("layout"):
-            layout = qsettings.value('layout', type=str)
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("layout"):
+            layout = q_settings.value('layout', type=str)
             idx = self.layout_combo.findText(layout.capitalize())
             self.layout_combo.setCurrentIndex(idx)
 
@@ -414,9 +414,9 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
             lambda: self.handle_font_size(self.app, self.app_font_size_entry.get_value()))
 
         # Set UI
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("font_size"):
-            font_size = int(qsettings.value("font_size", type=str))  # noqa
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("font_size"):
+            font_size = int(q_settings.value("font_size", type=str))  # noqa
             self.app_font_size_entry.set_value(font_size)
 
     @staticmethod
@@ -431,14 +431,14 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
     @staticmethod
     def handle_style(style):
         # set current style
-        qsettings = QSettings("Open Source", "FlatCAM_EVO")
-        qsettings.setValue('style', str(style))
+        q_settings = QSettings("Open Source", "FlatCAM_EVO")
+        q_settings.setValue('style', str(style))
 
         new_style = QtWidgets.QStyleFactory.keys()[int(style)]
         QtWidgets.QApplication.setStyle(new_style)
 
         # This will write the setting to the platform specific storage.
-        del qsettings
+        del q_settings
 
     # Setting selection colors (left - right) handlers
     def on_sf_color_entry(self):

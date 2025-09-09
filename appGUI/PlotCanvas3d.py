@@ -162,9 +162,9 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
             c_color = self.line_color
 
         # font size
-        qsettings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if qsettings.contains("hud_font_size"):
-            fsize = qsettings.value('hud_font_size', type=int)
+        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
+        if q_settings.contains("hud_font_size"):
+            fsize = q_settings.value('hud_font_size', type=int)
         else:
             fsize = 8
 
