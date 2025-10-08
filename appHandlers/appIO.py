@@ -24,6 +24,7 @@ import sys
 import os
 from copy import deepcopy
 import re
+import math
 
 import numpy as np
 try:
@@ -2785,13 +2786,41 @@ class appIO(QtCore.QObject):
 
             if self.options["global_save_compressed"] is True:
                 try:
-                    project_as_json = json.dumps(d, default=to_dict, indent=2, sort_keys=True).encode('utf-8')
-                except Exception as e:
-                    self.log.error(
-                        "Failed to serialize file before compression: %s because: %s" % (str(filename), str(e)))
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    self.app.save_in_progress = False
-                    return
+                    # This is the correct way to handle inf/nan
+                    project_as_json = json.dumps(
+                        d,
+                        default=to_dict,
+                        indent=2,
+                        sort_keys=True,
+                        allow_nan=False  # This will raise a ValueError if there are any NaN/Inf values
+                    ).encode('utf-8')
+                except (ValueError, TypeError):
+                    # If we get here, we need to clean the data first
+                    try:
+                        # Clean the data by converting inf/nan to None
+                        def clean_data(obj):
+                            if isinstance(obj, float):
+                                if math.isinf(obj) or math.isnan(obj):
+                                    return None
+                            elif isinstance(obj, dict):
+                                return {k: clean_data(v) for k, v in obj.items()}
+                            elif isinstance(obj, (list, tuple)):
+                                return [clean_data(x) for x in obj]
+                            return obj
+
+                        cleaned_d = clean_data(d)
+                        project_as_json = json.dumps(
+                            cleaned_d,
+                            default=to_dict,
+                            indent=2,
+                            sort_keys=True
+                        ).encode('utf-8')
+                    except Exception as e:
+                        self.log.error(
+                            "Failed to serialize file before compression: %s because: %s" % (str(filename), str(e)))
+                        self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                        self.app.save_in_progress = False
+                        return
 
                 try:
                     # with lzma.open(filename, "w", preset=int(self.options['global_compression_level'])) as f:

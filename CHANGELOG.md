@@ -11,6 +11,7 @@ CHANGELOG for FlatCAM Evo beta
 8.10.2025
 
 - added some changes suggested by Matthew Kaprocki on bitbucket regarding new Gerber extensions 
+- fixed saving a project if the project has math.inf or math.nan values; this does not address the issue of why those values are there but it cleans the project before saving it
 
 9.09.2025
 
