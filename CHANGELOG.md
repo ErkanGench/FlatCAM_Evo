@@ -8,6 +8,10 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+8.10.2025
+
+- added some changes suggested by Matthew Kaprocki on bitbucket regarding new Gerber extensions 
+
 9.09.2025
 
 - in MainGui fixed the auto-repeat when using the key shortcuts which led to issues with repeating the same command multiple times

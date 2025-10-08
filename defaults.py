@@ -180,25 +180,26 @@ class AppDefaults:
 
         "gerber_def_units": 'IN',
         "gerber_def_zeros": 'L',
-        "gerber_save_filters": "Gerber File .gbr (*.gbr);;Gerber File .bot (*.bot);;Gerber File .bsm (*.bsm);;"
-                               "Gerber File .cmp (*.cmp);;Gerber File .crc (*.crc);;Gerber File .crs (*.crs);;"
-                               "Gerber File .gb0 (*.gb0);;Gerber File .gb1 (*.gb1);;Gerber File .gb2 (*.gb2);;"
-                               "Gerber File .gb3 (*.gb3);;Gerber File .gb4 (*.gb4);;Gerber File .gb5 (*.gb5);;"
-                               "Gerber File .gb6 (*.gb6);;Gerber File .gb7 (*.gb7);;Gerber File .gb8 (*.gb8);;"
-                               "Gerber File .gb9 (*.gb9);;Gerber File .gbd (*.gbd);;Gerber File .gbl (*.gbl);;"
-                               "Gerber File .gbo (*.gbo);;Gerber File .gbp (*.gbp);;Gerber File .gbs (*.gbs);;"
-                               "Gerber File .gdo (*.gdo);;Gerber File .ger (*.ger);;Gerber File .gko (*.gko);;"
-                               "Gerber File .gm1 (*.gm1);;Gerber File .gm2 (*.gm2);;Gerber File .gm3 (*.gm3);;"
-                               "Gerber File .grb (*.grb);;Gerber File .gtl (*.gtl);;Gerber File .gto (*.gto);;"
-                               "Gerber File .gtp (*.gtp);;Gerber File .gts (*.gts);;Gerber File .ly15 (*.ly15);;"
-                               "Gerber File .ly2 (*.ly2);;Gerber File .mil (*.mil);;"
-                               "Gerber File .outline (*.outline);;Gerber File .pho (*.pho);;"
-                               "Gerber File .plc (*.plc);;Gerber File .pls (*.pls);;Gerber File .smb (*.smb);;"
-                               "Gerber File .smt (*.smt);;Gerber File .sol (*.sol);;Gerber File .spb (*.spb);;"
-                               "Gerber File .spt (*.spt);;Gerber File .ssb (*.ssb);;Gerber File .sst (*.sst);;"
-                               "Gerber File .stc (*.stc);;Gerber File .sts (*.sts);;Gerber File .top (*.top);;"
-                               "Gerber File .tsm (*.tsm);;Gerber File .art (*.art)"
-                               "All Files (*.*)",
+        "gerber_save_filters": "Gerber File .gbr (.gbr);;Gerber File .bot (.bot);;Gerber File .bsm (.bsm);;"
+                               "Gerber File .cmp (.cmp);;Gerber File .crc (.crc);;Gerber File .crs (.crs);;"
+                               "Gerber File .gb0 (.gb0);;Gerber File .gb1 (.gb1);;Gerber File .gb2 (.gb2);;"
+                               "Gerber File .gb3 (.gb3);;Gerber File .gb4 (.gb4);;Gerber File .gb5 (.gb5);;"
+                               "Gerber File .gb6 (.gb6);;Gerber File .gb7 (.gb7);;Gerber File .gb8 (.gb8);;"
+                               "Gerber File .gb9 (.gb9);;Gerber File .gbd (.gbd);;Gerber File .gbl (.gbl);;"
+                               "Gerber File .gbo (.gbo);;Gerber File .gbp (.gbp);;Gerber File .gbs (.gbs);;"
+                               "Gerber File .gdl (.gdl);;Gerber File .gdo (.gdo);;Gerber File .ger (.ger);;"
+                               "Gerber File .gko (.gko);;Gerber File .gm1 (.gm1);;Gerber File .gm2 (.gm2);;"
+                               "Gerber File .gm3 (.gm3);;Gerber File .gme (.gme);;Gerber File .grb (.grb);;"
+                               "Gerber File .gtl (.gtl);;Gerber File .gto (.gto);;Gerber File .gtp (.gtp);;"
+                               "Gerber File .gts (.gts);;Gerber File .ly15 (.ly15);;Gerber File .ly2 (.ly2);;"
+                               "Gerber File .mil (.mil);;"
+                               "Gerber File .outline (.outline);;Gerber File .pho (.pho);;"
+                               "Gerber File .plc (.plc);;Gerber File .pls (.pls);;Gerber File .smb (.smb);;"
+                               "Gerber File .smt (.smt);;Gerber File .sol (.sol);;Gerber File .spb (.spb);;"
+                               "Gerber File .spt (.spt);;Gerber File .ssb (.ssb);;Gerber File .sst (.sst);;"
+                               "Gerber File .stc (.stc);;Gerber File .sts (.sts);;Gerber File .top (.top);;"
+                               "Gerber File .tsm (.tsm);;Gerber File .art (.art)"
+                               "All Files (.*)",
 
         # Gerber Options
         "gerber_noncoppermargin": 0.1,
