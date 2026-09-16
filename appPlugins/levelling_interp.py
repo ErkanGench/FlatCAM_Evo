@@ -9,6 +9,7 @@
 
 import bisect
 import math
+import re
 
 
 def build_bilinear_grid(points, tol=1e-6):
@@ -171,3 +172,280 @@ def nearest_offset(points, x, y):
             best_dist = d
             best_z = pz
     return best_z
+
+
+def parse_height_map_line(line):
+    """
+    Parse 1 row of a probe file written by a CNC controller.
+
+    MACH3/MACH4 write comma-separated ``X,Y,Z[,A,B,C]`` rows; LinuxCNC's
+    PROBEOPEN log writes space-separated ``X Y Z A B C U V W`` rows. Extra
+    columns beyond X, Y, Z are ignored.
+
+    :param line: 1 line of text (no trailing newline required).
+    :return: (x, y, z) tuple of floats, or None if the line is blank or
+        cannot be parsed.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+
+    tokens = [t for t in re.split(r'[,\s]+', stripped) if t != '']
+    if len(tokens) < 3:
+        return None
+
+    try:
+        x = float(tokens[0])
+        y = float(tokens[1])
+        z = float(tokens[2])
+    except ValueError:
+        return None
+
+    return x, y, z
+
+
+_PRB_RE = re.compile(r'\[PRB:\s*([^\]:]+):\s*([01])\s*\]')
+
+
+def parse_grbl_probe_output(text):
+    """
+    Parse GRBL 1.1 probe results out of the raw serial answer stream.
+
+    Every ``G38.2`` probe move is answered by GRBL with a line such as
+    ``[PRB:10.000,5.000,-1.234:1]``. Other lines (``ok``, status reports
+    ``<Idle|...>``, ``[MSG:...]``, blank lines, ...) are ignored. A PRB
+    line can carry more than 3 axis values; only the first 3 (X, Y, Z)
+    are kept.
+
+    :param text: raw text captured from the controller.
+    :return: list of (x, y, z) tuples, in the order the probes occurred.
+    :raises ValueError: if a probe line reports flag ``:0`` (the probe
+        did not touch the surface).
+    """
+    results = []
+    for line in text.splitlines():
+        m = _PRB_RE.search(line)
+        if not m:
+            continue
+
+        coords_str, flag = m.group(1), m.group(2)
+        parts = [p.strip() for p in coords_str.split(',') if p.strip() != '']
+        if len(parts) < 3:
+            continue
+
+        x = float(parts[0])
+        y = float(parts[1])
+        z = float(parts[2])
+
+        if flag == '0':
+            raise ValueError(
+                "Probe did not touch the surface at X={0} Y={1}".format(x, y)
+            )
+
+        results.append((x, y, z))
+
+    return results
+
+
+_OFFSET_RE = re.compile(r'\[(G54|G92|TLO):\s*([^\]]+)\]')
+
+
+def parse_grbl_work_offset(text):
+    """
+    Parse the work-coordinate offset to SUBTRACT from a GRBL machine
+    position, out of the raw ``$#`` command answer.
+
+    GRBL reports probe/machine positions in MACHINE coordinates, but
+    FlatCAM's probed height-map points are in WORK coordinates (the
+    coordinate system the G-code itself is written in). The ``$#``
+    command answer holds lines like::
+
+        [G54:-100.000,-50.000,-20.000]
+        [G55:0.000,0.000,0.000]
+        [G92:0.000,0.000,0.000]
+        [TLO:0.000]
+        [PRB:0.000,0.000,0.000:0]
+
+    Only G54 is read (FlatCAM G-code always targets the default G54
+    work coordinate system); the ``[PRB:...]`` line in this output is
+    not a probe result and is ignored.
+
+    :param text: raw text captured from the controller after ``$#``.
+    :return: (x, y, z) offset, computed as G54 + G92 per axis, with TLO
+        added to Z. Missing G92 or TLO count as 0.
+    :raises ValueError: if the G54 line is missing.
+    """
+    g54 = None
+    g92 = (0.0, 0.0, 0.0)
+    tlo = 0.0
+
+    for line in text.splitlines():
+        m = _OFFSET_RE.search(line)
+        if not m:
+            continue
+
+        key, val = m.group(1), m.group(2)
+        parts = [p.strip() for p in val.split(',') if p.strip() != '']
+
+        if key == 'G54':
+            g54 = tuple(float(p) for p in parts[:3])
+        elif key == 'G92':
+            g92 = tuple(float(p) for p in parts[:3])
+        elif key == 'TLO':
+            tlo = float(parts[0])
+
+    if g54 is None:
+        raise ValueError("G54 work offset not found in $# output")
+
+    x = g54[0] + g92[0]
+    y = g54[1] + g92[1]
+    z = g54[2] + g92[2] + tlo
+    return x, y, z
+
+
+def match_nearest_point(points, x, y, tol):
+    """
+    Find the key of the point in `points` nearest to (x, y), within a
+    tolerance.
+
+    :param points: dict of {key: (px, py)}.
+    :param x: query X coordinate.
+    :param y: query Y coordinate.
+    :param tol: maximum Euclidean distance to accept a match.
+    :return: the key of the nearest point if its distance is <= tol,
+        else None. Ties resolve to whichever key comes first in
+        `points`'s iteration order.
+    """
+    best_key = None
+    best_dist = None
+    for key, (px, py) in points.items():
+        d = math.hypot(px - x, py - y)
+        if d <= tol and (best_dist is None or d < best_dist):
+            best_dist = d
+            best_key = key
+    return best_key
+
+
+_MOTION_G_CODES = (0.0, 1.0, 2.0, 3.0)
+_WORD_RE = re.compile(r'([A-Z])\s*([+\-]?\d*\.?\d+)')
+
+
+def new_levelling_state():
+    """
+    Create a fresh modal G-code state for use with level_gcode_line.
+
+    :return: dict with modal X/Y/Z position, modal motion G code, and an
+        `arcs` counter (arc moves are never height-compensated, so the
+        caller can warn/report on them).
+    """
+    return {'X': 0.0, 'Y': 0.0, 'Z': 0.0, 'G': 0, 'arcs': 0}
+
+
+def _mask_comments(line):
+    """
+    Replace comment text with spaces of the same length, so word
+    positions in the masked string still line up with the original
+    line (needed to locate/replace the Z word's number in-place).
+
+    :param line: raw G-code line.
+    :return: line with `(...)` and trailing `;...` comments blanked out.
+    """
+    masked = re.sub(r'\([^)]*\)', lambda m: ' ' * len(m.group(0)), line)
+    idx = masked.find(';')
+    if idx != -1:
+        masked = masked[:idx] + ' ' * (len(masked) - idx)
+    return masked
+
+
+def level_gcode_line(line, state, offset_fn, decimals=4):
+    """
+    Apply height-map compensation to 1 line of G-code, modally tracking
+    X/Y/Z/G state across calls.
+
+    Only linear cutting moves (modal G1, at or below Z0) get their Z
+    height-compensated; rapids (G0), arcs (G2/G3, counted in
+    `state['arcs']` but left untouched), non-motion G codes (G4, G20,
+    G38.2, ...) and comment-only/blank lines pass through unchanged.
+
+    :param line: 1 line of G-code text, no trailing newline.
+    :param state: modal state dict, as created by new_levelling_state();
+        mutated in place.
+    :param offset_fn: callable (x, y) -> height offset (float) to add
+        to Z.
+    :param decimals: number of decimals used to format the new Z value.
+    :return: the (possibly modified) line, without a trailing newline.
+    """
+    stripped = line.strip()
+    if not stripped or stripped.startswith('(') or stripped.startswith(';'):
+        return line
+
+    masked = _mask_comments(line)
+
+    x_val = y_val = z_val = None
+    z_match = None
+    g_words = []
+
+    for m in _WORD_RE.finditer(masked):
+        letter, num = m.group(1), m.group(2)
+        if letter == 'X':
+            x_val = float(num)
+        elif letter == 'Y':
+            y_val = float(num)
+        elif letter == 'Z':
+            z_val = float(num)
+            z_match = m
+        elif letter == 'G':
+            g_words.append(float(num))
+
+    has_xyz = x_val is not None or y_val is not None or z_val is not None
+
+    motion_gs = [g for g in g_words if g in _MOTION_G_CODES]
+    other_gs = [g for g in g_words if g not in _MOTION_G_CODES]
+
+    if motion_gs:
+        state['G'] = int(motion_gs[-1])
+        is_non_motion_cmd = False
+    else:
+        is_non_motion_cmd = bool(other_gs)
+
+    if x_val is not None:
+        state['X'] = x_val
+    if y_val is not None:
+        state['Y'] = y_val
+    if z_val is not None:
+        state['Z'] = z_val
+
+    if not has_xyz:
+        return line
+
+    if is_non_motion_cmd:
+        return line
+
+    if state['G'] in (2, 3):
+        state['arcs'] += 1
+        return line
+
+    if state['G'] != 1:
+        return line
+
+    if state['Z'] > 0:
+        return line
+
+    new_z = state['Z'] + offset_fn(state['X'], state['Y'])
+    new_z_str = "{0:.{1}f}".format(new_z, decimals)
+
+    if z_match is not None:
+        start, end = z_match.span(2)
+        return line[:start] + new_z_str + line[end:]
+
+    paren_idx = line.find('(')
+    semi_idx = line.find(';')
+    candidates = [i for i in (paren_idx, semi_idx) if i != -1]
+    comment_idx = min(candidates) if candidates else None
+
+    if comment_idx is not None:
+        prefix = line[:comment_idx].rstrip()
+        suffix = line[comment_idx:]
+        return prefix + " Z" + new_z_str + " " + suffix
+
+    return line.rstrip() + " Z" + new_z_str

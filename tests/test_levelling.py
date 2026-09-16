@@ -15,6 +15,12 @@ from appPlugins.levelling_interp import (
     bilinear_offset,
     nearest_offset,
     _group_values,
+    parse_height_map_line,
+    parse_grbl_probe_output,
+    parse_grbl_work_offset,
+    match_nearest_point,
+    new_levelling_state,
+    level_gcode_line,
 )
 
 
@@ -166,6 +172,261 @@ class TestNearest(unittest.TestCase):
     def test_empty_raises(self):
         with self.assertRaises(ValueError):
             nearest_offset([], 0, 0)
+
+
+class TestParseHeightMapLine(unittest.TestCase):
+    def test_mach_comma(self):
+        self.assertEqual(parse_height_map_line("1.0,2.0,-0.05"), (1.0, 2.0, -0.05))
+
+    def test_mach_comma_extra_columns(self):
+        self.assertEqual(
+            parse_height_map_line("1.0,2.0,-0.05,0,0,0"), (1.0, 2.0, -0.05)
+        )
+
+    def test_mach_comma_with_spaces(self):
+        self.assertEqual(
+            parse_height_map_line("1.0, 2.0, -0.05"), (1.0, 2.0, -0.05)
+        )
+
+    def test_linuxcnc_space_separated(self):
+        self.assertEqual(
+            parse_height_map_line("1.0 2.0 -0.05 0 0 0 0 0 0"),
+            (1.0, 2.0, -0.05),
+        )
+
+    def test_tabs(self):
+        self.assertEqual(
+            parse_height_map_line("1.0\t2.0\t-0.05"), (1.0, 2.0, -0.05)
+        )
+
+    def test_empty_string(self):
+        self.assertIsNone(parse_height_map_line(""))
+
+    def test_newline_only(self):
+        self.assertIsNone(parse_height_map_line("\n"))
+
+    def test_non_numeric_tokens(self):
+        self.assertIsNone(parse_height_map_line("abc,def,ghi"))
+
+    def test_too_few_tokens(self):
+        self.assertIsNone(parse_height_map_line("1.0,2.0"))
+
+
+class TestParseGrbl(unittest.TestCase):
+    def test_probe_output_in_order(self):
+        text = (
+            "ok\n"
+            "<Idle|MPos:0.000,0.000,0.000|FS:0,0>\n"
+            "[PRB:1.000,2.000,-0.100:1]\n"
+            "ok\n"
+            "[PRB:3.000,4.000,-0.200:1]\n"
+            "[MSG:Probe complete]\n"
+            "[PRB:5.000,6.000,-0.300:1]\n"
+            "ok\n"
+        )
+        result = parse_grbl_probe_output(text)
+        self.assertEqual(
+            result,
+            [
+                (1.0, 2.0, -0.1),
+                (3.0, 4.0, -0.2),
+                (5.0, 6.0, -0.3),
+            ],
+        )
+
+    def test_probe_output_four_axis(self):
+        text = "[PRB:1.000,2.000,3.000,4.000:1]\n"
+        result = parse_grbl_probe_output(text)
+        self.assertEqual(result, [(1.0, 2.0, 3.0)])
+
+    def test_probe_output_flag_zero_raises(self):
+        text = "[PRB:1.000,2.000,-0.100:0]\n"
+        with self.assertRaises(ValueError) as ctx:
+            parse_grbl_probe_output(text)
+        msg = str(ctx.exception)
+        self.assertIn("1.0", msg)
+        self.assertIn("2.0", msg)
+
+    def test_probe_output_empty(self):
+        self.assertEqual(parse_grbl_probe_output(""), [])
+
+    def test_work_offset_full_sample(self):
+        text = (
+            "[G54:-100.000,-50.000,-20.000]\n"
+            "[G55:0.000,0.000,0.000]\n"
+            "[G92:1.000,2.000,3.000]\n"
+            "[TLO:0.500]\n"
+            "[PRB:0.000,0.000,0.000:0]\n"
+            "ok\n"
+        )
+        result = parse_grbl_work_offset(text)
+        self.assertAlmostEqual(result[0], -99.0)
+        self.assertAlmostEqual(result[1], -48.0)
+        self.assertAlmostEqual(result[2], -20.0 + 3.0 + 0.5)
+
+    def test_work_offset_missing_g92_and_tlo(self):
+        text = "[G54:-100.000,-50.000,-20.000]\nok\n"
+        result = parse_grbl_work_offset(text)
+        self.assertEqual(result, (-100.0, -50.0, -20.0))
+
+    def test_work_offset_missing_g54_raises(self):
+        text = "[G55:0.000,0.000,0.000]\nok\n"
+        with self.assertRaises(ValueError):
+            parse_grbl_work_offset(text)
+
+
+class TestMatchNearestPoint(unittest.TestCase):
+    def setUp(self):
+        self.points = {
+            'a': (0, 0),
+            'b': (10, 0),
+            'c': (0, 10),
+        }
+
+    def test_within_tolerance(self):
+        self.assertEqual(match_nearest_point(self.points, 0.5, 0.5, 1.0), 'a')
+
+    def test_outside_tolerance(self):
+        self.assertIsNone(match_nearest_point(self.points, 5, 5, 1.0))
+
+    def test_tie_returns_first(self):
+        points = {
+            'first': (0, 0),
+            'second': (10, 0),
+        }
+        self.assertEqual(match_nearest_point(points, 5, 0, 100), 'first')
+
+
+class TestLevelGcodeLine(unittest.TestCase):
+    @staticmethod
+    def offset_fn(x, y):
+        return 0.01 * x + 0.1
+
+    def test_basic_linear_move(self):
+        state = new_levelling_state()
+        line = "G01 X10.0 Y5.0 Z-0.1"
+        result = level_gcode_line(line, state, self.offset_fn)
+        expected_z = -0.1 + self.offset_fn(10.0, 5.0)
+        self.assertEqual(result, "G01 X10.0 Y5.0 Z{0:.4f}".format(expected_z))
+
+    def test_modal_z_appended_on_next_line(self):
+        state = new_levelling_state()
+        level_gcode_line("G01 Z-0.1", state, self.offset_fn)
+        self.assertEqual(state['Z'], -0.1)
+        result = level_gcode_line("X10.0 Y5.0", state, self.offset_fn)
+        expected_z = -0.1 + self.offset_fn(10.0, 5.0)
+        self.assertEqual(result, "X10.0 Y5.0 Z{0:.4f}".format(expected_z))
+        self.assertEqual(state['Z'], -0.1)
+
+    def test_spaced_words(self):
+        state = new_levelling_state()
+        line = "G 01 X 10.0 Y 5.0 Z -0.1"
+        result = level_gcode_line(line, state, self.offset_fn)
+        expected_z = -0.1 + self.offset_fn(10.0, 5.0)
+        self.assertEqual(
+            result, "G 01 X 10.0 Y 5.0 Z {0:.4f}".format(expected_z)
+        )
+
+    def test_no_spaces(self):
+        state = new_levelling_state()
+        state['G'] = 1
+        line = "X10.0000Y5.0000Z-0.1000"
+        result = level_gcode_line(line, state, self.offset_fn)
+        expected_z = -0.1 + self.offset_fn(10.0, 5.0)
+        self.assertEqual(
+            result, "X10.0000Y5.0000Z{0:.4f}".format(expected_z)
+        )
+
+    def test_rapid_move_unchanged(self):
+        state = new_levelling_state()
+        line = "G00 X10 Y5 Z-0.1"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+
+    def test_rapid_then_positive_z_unchanged(self):
+        state = new_levelling_state()
+        level_gcode_line("G00 Z2.0", state, self.offset_fn)
+        line = "G01 X1 Y1"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+
+    def test_arc_move_unchanged_and_counted(self):
+        state = new_levelling_state()
+        state['G'] = 1
+        state['Z'] = -0.1
+        line = "G02 X10 Y5 I1 J0"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+        self.assertEqual(state['arcs'], 1)
+
+    def test_comment_line_unchanged(self):
+        state = new_levelling_state()
+        line = "(this is a comment)"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+
+    def test_semicolon_comment_line_unchanged(self):
+        state = new_levelling_state()
+        line = "; this is a comment"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+
+    def test_blank_line_unchanged(self):
+        state = new_levelling_state()
+        result = level_gcode_line("", state, self.offset_fn)
+        self.assertEqual(result, "")
+
+    def test_inline_comment_preserved(self):
+        state = new_levelling_state()
+        state['G'] = 1
+        line = "G01 X1 Y1 (cut)"
+        result = level_gcode_line(line, state, self.offset_fn)
+        expected_z = 0.0 + self.offset_fn(1.0, 1.0)
+        self.assertEqual(
+            result, "G01 X1 Y1 Z{0:.4f} (cut)".format(expected_z)
+        )
+
+    def test_non_motion_g_words_no_state_change(self):
+        state = new_levelling_state()
+        result = level_gcode_line("G21 G90 G17 G94", state, self.offset_fn)
+        self.assertEqual(result, "G21 G90 G17 G94")
+        self.assertEqual(state['G'], 0)
+
+        result = level_gcode_line("G01 X1 Y1 Z-0.1", state, self.offset_fn)
+        self.assertEqual(state['G'], 1)
+        expected_z = -0.1 + self.offset_fn(1.0, 1.0)
+        self.assertEqual(result, "G01 X1 Y1 Z{0:.4f}".format(expected_z))
+
+    def test_g38_2_not_levelled(self):
+        state = new_levelling_state()
+        state['G'] = 1
+        state['Z'] = -0.1
+        result = level_gcode_line("G38.2 Z-2 F50", state, self.offset_fn)
+        self.assertEqual(result, "G38.2 Z-2 F50")
+        self.assertEqual(state['G'], 1)
+
+    def test_m_code_only_unchanged(self):
+        state = new_levelling_state()
+        self.assertEqual(
+            level_gcode_line("M3 S1000", state, self.offset_fn), "M3 S1000"
+        )
+
+    def test_tool_change_unchanged(self):
+        state = new_levelling_state()
+        self.assertEqual(level_gcode_line("T1", state, self.offset_fn), "T1")
+
+    def test_feed_only_unchanged(self):
+        state = new_levelling_state()
+        self.assertEqual(
+            level_gcode_line("F100", state, self.offset_fn), "F100"
+        )
+
+    def test_decimals_param(self):
+        state = new_levelling_state()
+        line = "G01 X10.0 Y5.0 Z-0.1"
+        result = level_gcode_line(line, state, self.offset_fn, decimals=2)
+        expected_z = -0.1 + self.offset_fn(10.0, 5.0)
+        self.assertEqual(result, "G01 X10.0 Y5.0 Z{0:.2f}".format(expected_z))
 
 
 if __name__ == '__main__':
