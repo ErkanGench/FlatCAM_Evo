@@ -34,6 +34,7 @@ def make_tool(units='MM', storage=None, heights_valid=True):
     tool.app.inform = MagicMock()
     tool.app.log = MagicMock()
     tool.app.proc_container = MagicMock()
+    tool.app.app_units = units
     tool.ui = MagicMock()
     tool.units = units
     tool.al_voronoi_geo_storage = storage if storage is not None else {}
@@ -47,6 +48,22 @@ def make_tool(units='MM', storage=None, heights_valid=True):
     tool.app.app_obj = MagicMock()
     tool.app.worker_task = MagicMock()
     return tool
+
+
+def make_tool_target(tools_gcode_by_key, **overrides):
+    """A minimal SimpleNamespace target for autolevell_gcode() (the
+    per-tool API): tools_gcode_by_key maps tooluid -> raw gcode text."""
+    kwargs = dict(
+        is_segmented_gcode=True,
+        coords_decimals=4,
+        units='MM',
+        tools={
+            key: {'gcode': text, 'data': {}}
+            for key, text in tools_gcode_by_key.items()
+        },
+    )
+    kwargs.update(overrides)
+    return SimpleNamespace(**kwargs)
 
 
 def make_storage_grid(xs, ys):
@@ -79,17 +96,12 @@ class TestAutolevellGcodeBilinear(unittest.TestCase):
     def setUp(self):
         self.storage = make_storage_grid([0, 10, 20], [0, 5, 10])
         self.tool = make_tool(storage=self.storage)
-        self.target = SimpleNamespace(
-            source_file=GCODE_SAMPLE,
-            is_segmented_gcode=True,
-            coords_decimals=4,
-            units='MM',
-        )
+        self.target = make_tool_target({1: GCODE_SAMPLE})
 
     def test_g1_lines_get_height_compensated(self):
         result = self.tool.autolevell_gcode(self.target, 'b')
         self.assertIsNotNone(result)
-        lines = result.splitlines()
+        lines = result[1].splitlines()
 
         # G0 lines are untouched
         self.assertEqual(lines[2], "G0 Z2.0000")
@@ -107,15 +119,15 @@ class TestAutolevellGcodeBilinear(unittest.TestCase):
         expected_z2 = -0.1 + plane(20.0, 10.0)
         self.assertEqual(lines[6], "G1 X20.0000 Y10.0000 Z{0:.4f}".format(expected_z2))
 
-    def test_source_file_not_mutated(self):
-        original = self.target.source_file
+    def test_source_tool_gcode_not_mutated(self):
+        original = self.target.tools[1]['gcode']
         self.tool.autolevell_gcode(self.target, 'b')
-        self.assertEqual(self.target.source_file, original)
+        self.assertEqual(self.target.tools[1]['gcode'], original)
 
     def test_trailing_newline_preserved(self):
         result = self.tool.autolevell_gcode(self.target, 'b')
-        self.assertTrue(self.target.source_file.endswith('\n'))
-        self.assertTrue(result.endswith('\n'))
+        self.assertTrue(self.target.tools[1]['gcode'].endswith('\n'))
+        self.assertTrue(result[1].endswith('\n'))
 
     def test_does_not_read_ui_widgets(self):
         # al_method is now passed in explicitly; autolevell_gcode() and the
@@ -133,12 +145,7 @@ class TestAutolevellGcodeIrregularGrid(unittest.TestCase):
             2: {'point': Point(5, 10), 'geo': None, 'height': 3.0},
         }
         tool = make_tool(storage=storage)
-        target = SimpleNamespace(
-            source_file="G1 X0 Y0 Z-0.1\n",
-            is_segmented_gcode=True,
-            coords_decimals=4,
-            units='MM',
-        )
+        target = make_tool_target({1: "G1 X0 Y0 Z-0.1\n"})
         result = tool.autolevell_gcode(target, 'b')
         self.assertIsNotNone(result)
 
@@ -149,7 +156,7 @@ class TestAutolevellGcodeIrregularGrid(unittest.TestCase):
         self.assertEqual(len(warning_calls), 1)
 
         expected_z = -0.1 + 1.0  # nearest to (0, 0) is height 1.0
-        self.assertEqual(result.strip(), "G1 X0 Y0 Z{0:.4f}".format(expected_z))
+        self.assertEqual(result[1].strip(), "G1 X0 Y0 Z{0:.4f}".format(expected_z))
 
 
 class TestAutolevellGcodeVoronoi(unittest.TestCase):
@@ -159,15 +166,10 @@ class TestAutolevellGcodeVoronoi(unittest.TestCase):
             1: {'point': Point(20, 0), 'geo': None, 'height': 5.0},
         }
         tool = make_tool(storage=storage)
-        target = SimpleNamespace(
-            source_file="G1 X1 Y0 Z-0.2\n",
-            is_segmented_gcode=True,
-            coords_decimals=4,
-            units='MM',
-        )
+        target = make_tool_target({1: "G1 X1 Y0 Z-0.2\n"})
         result = tool.autolevell_gcode(target, 'v')
         expected_z = -0.2 + 1.0
-        self.assertEqual(result.strip(), "G1 X1 Y0 Z{0:.4f}".format(expected_z))
+        self.assertEqual(result[1].strip(), "G1 X1 Y0 Z{0:.4f}".format(expected_z))
 
 
 class TestAutolevellGcodeErrors(unittest.TestCase):
@@ -176,10 +178,7 @@ class TestAutolevellGcodeErrors(unittest.TestCase):
 
     def test_not_segmented_returns_none_and_errors(self):
         tool = make_tool(storage=self.storage)
-        target = SimpleNamespace(
-            source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=False,
-            coords_decimals=4, units='MM',
-        )
+        target = make_tool_target({1: "G1 X0 Y0 Z0\n"}, is_segmented_gcode=False)
         result = tool.autolevell_gcode(target, 'b')
         self.assertIsNone(result)
         tool.app.inform.emit.assert_called()
@@ -191,38 +190,26 @@ class TestAutolevellGcodeErrors(unittest.TestCase):
 
     def test_empty_storage_returns_none(self):
         tool = make_tool(storage={}, heights_valid=False)
-        target = SimpleNamespace(
-            source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
-            coords_decimals=4, units='MM',
-        )
+        target = make_tool_target({1: "G1 X0 Y0 Z0\n"})
         self.assertIsNone(tool.autolevell_gcode(target, 'b'))
 
     def test_heights_not_valid_returns_none(self):
         # storage has entries (with placeholder 'height': 0.0, as created
         # when probe points are added) but they were never actually probed
         tool = make_tool(storage=self.storage, heights_valid=False)
-        target = SimpleNamespace(
-            source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
-            coords_decimals=4, units='MM',
-        )
+        target = make_tool_target({1: "G1 X0 Y0 Z0\n"})
         result = tool.autolevell_gcode(target, 'b')
         self.assertIsNone(result)
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
 
     def test_heights_valid_allows_run(self):
         tool = make_tool(storage=self.storage, heights_valid=True)
-        target = SimpleNamespace(
-            source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
-            coords_decimals=4, units='MM',
-        )
+        target = make_tool_target({1: "G1 X0 Y0 Z0\n"})
         self.assertIsNotNone(tool.autolevell_gcode(target, 'b'))
 
     def test_units_mismatch_returns_none(self):
         tool = make_tool(units='MM', storage=self.storage)
-        target = SimpleNamespace(
-            source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
-            coords_decimals=4, units='IN',
-        )
+        target = make_tool_target({1: "G1 X0 Y0 Z0\n"}, units='IN')
         self.assertIsNone(tool.autolevell_gcode(target, 'b'))
 
 
@@ -230,12 +217,7 @@ class TestAutolevellGcodeArcWarning(unittest.TestCase):
     def test_arc_move_triggers_warning(self):
         storage = make_storage_grid([0, 10], [0, 10])
         tool = make_tool(storage=storage)
-        target = SimpleNamespace(
-            source_file="G1 X0 Y0 Z-0.1\nG2 X5 Y5 I2.5 J0 Z-0.1\n",
-            is_segmented_gcode=True,
-            coords_decimals=4,
-            units='MM',
-        )
+        target = make_tool_target({1: "G1 X0 Y0 Z-0.1\nG2 X5 Y5 I2.5 J0 Z-0.1\n"})
         result = tool.autolevell_gcode(target, 'b')
         self.assertIsNotNone(result)
         warning_calls = [
@@ -333,6 +315,19 @@ class TestImportHeightMap(unittest.TestCase):
         with open(path, 'w') as f:
             f.write(content)
         return path
+
+    def test_refreshes_self_units_from_app_units(self):
+        # self.units is only (re)set in set_ui() and can be stale; the
+        # unit-aware match tolerance (_al_match_tolerance) and the later
+        # units check (_al_prepare_interp, via apply_autolevel_sig) must use
+        # the app's *current* units, not whatever was active when this tool
+        # was last opened.
+        path = self._write('units.txt', "0.0,0.0,-0.01\n10.0,0.0,-0.02\n")
+        tool = make_tool(units='IN', storage={}, heights_valid=False)
+        tool.app.app_units = 'MM'
+        tool.import_height_map(path)
+
+        self.assertEqual(tool.units, 'MM')
 
     def test_mach3_comma_format_empty_storage_creates_points(self):
         path = self._write('mach3.txt', "0.0,0.0,-0.010\n10.0,0.0,-0.020\n")
@@ -515,6 +510,39 @@ class TestApplyAutolevel(unittest.TestCase):
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
         tool.app.worker_task.emit.assert_not_called()
 
+    def test_refreshes_self_units_from_app_units(self):
+        # self.units is only (re)set in set_ui() and can be stale; apply_autolevel()
+        # must read self.app.app_units itself before validating anything
+        tool = make_tool(units='IN', storage=self.storage)
+        tool.app.app_units = 'MM'
+        tool.app.collection.get_by_name.return_value = SimpleNamespace(kind='geometry')
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+
+        tool.apply_autolevel()
+
+        self.assertEqual(tool.units, 'MM')
+
+    def test_units_mismatch_against_fresh_app_units_errors_and_creates_nothing(self):
+        # target and self.units (stale) both say 'MM', but the app's *current*
+        # units are 'IN'; AppObject.new_object() converts the new object's
+        # units right after obj_init() runs (and CNCJobObject.convert_units()
+        # does not scale G-code), so validating against a stale self.units
+        # would let a units-mismatched height map through silently
+        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
+        target.units = 'MM'
+        tool = make_tool(units='MM', storage=self.storage)
+        tool.app.app_units = 'IN'
+        tool.app.collection.get_by_name.return_value = target
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+
+        tool.apply_autolevel()
+        worker_dict = tool.app.worker_task.emit.call_args.args[0]
+        worker_dict['fcn']()
+
+        tool.app.app_obj.new_object.assert_not_called()
+        self.assertTrue(any('[ERROR_NOTCL]' in c.args[0] for c in tool.app.inform.emit.call_args_list))
+        self.assertFalse(tool._al_apply_running)
+
     def _run_worker(self, tool, target, new_obj_factory=FakeNewCNCJob):
         """Trigger apply_autolevel(), capture the emitted worker_task, run
         it synchronously against a fake new object, and return that
@@ -604,7 +632,7 @@ class TestApplyAutolevel(unittest.TestCase):
         tool = make_tool(storage=self.storage)
         tool.app.collection.get_by_name.return_value = target
         tool.ui.al_method_radio.get_value.return_value = 'b'
-        tool.autolevell_gcode_tools = MagicMock(side_effect=RuntimeError('boom'))
+        tool.autolevell_gcode = MagicMock(side_effect=RuntimeError('boom'))
 
         tool.apply_autolevel()
         worker_dict = tool.app.worker_task.emit.call_args.args[0]
@@ -687,7 +715,7 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         )
         tool = make_tool(storage=self.flat_storage)
 
-        result = tool.autolevell_gcode_tools(target, 'b')
+        result = tool.autolevell_gcode(target, 'b')
 
         self.assertIsNotNone(result)
         # if tool 3 had run first (sorted order), its Z would be 0.0000
@@ -701,7 +729,7 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         )
         tool = make_tool(storage=self.flat_storage)
 
-        result = tool.autolevell_gcode_tools(target, 'b')
+        result = tool.autolevell_gcode(target, 'b')
 
         self.assertIsNone(result)
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
@@ -715,7 +743,7 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         )
         tool = make_tool(storage=self.flat_storage)
 
-        result = tool.autolevell_gcode_tools(target, 'b')
+        result = tool.autolevell_gcode(target, 'b')
 
         self.assertIsNone(result)
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
@@ -728,7 +756,7 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         )
         tool = make_tool(storage=self.flat_storage)
 
-        result = tool.autolevell_gcode_tools(target, 'b')
+        result = tool.autolevell_gcode(target, 'b')
 
         self.assertIsNone(result)
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
@@ -741,7 +769,7 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         )
         tool = make_tool(storage=self.flat_storage)
 
-        result = tool.autolevell_gcode_tools(target, 'b')
+        result = tool.autolevell_gcode(target, 'b')
 
         self.assertIsNone(result)
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
@@ -755,7 +783,7 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         )
         tool = make_tool(storage=self.flat_storage)
 
-        result = tool.autolevell_gcode_tools(target, 'b')
+        result = tool.autolevell_gcode(target, 'b')
 
         self.assertIsNotNone(result)
 
@@ -768,7 +796,7 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         )
         tool = make_tool(storage=self.flat_storage)
 
-        result = tool.autolevell_gcode_tools(target, 'b')
+        result = tool.autolevell_gcode(target, 'b')
 
         self.assertIsNotNone(result)
 

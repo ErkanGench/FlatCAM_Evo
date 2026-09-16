@@ -1158,53 +1158,6 @@ class ToolLevelling(CNCjob, AppTool):
         cap = 0.5 if self.units == 'MM' else 0.02
         return match_tolerance(points_xy, cap)
 
-    def autolevell_gcode(self, target_obj, al_method):
-        """
-        Apply the probed height map (self.al_voronoi_geo_storage) to a
-        CNCJob object's segmented G-code.
-
-        Not reentrant: it stores per-call interpolation state on `self`
-        (`self._al_points`, `self._al_grid`, `self._al_offset_fn`,
-        `self._al_decimals`). The caller must not start a 2nd call before
-        the 1st one returns (e.g. from another thread).
-
-        :param target_obj:  the CNCJobObject whose G-code (target_obj.source_file)
-                             is to be height-compensated. Not modified.
-        :param al_method:   'v' (Voronoi/nearest-point) or 'b' (bilinear).
-        :return:             the height-compensated G-code text, or None on error.
-        :rtype:              str | None
-        """
-        if not self._al_prepare_interp(target_obj, al_method):
-            return None
-
-        source_lines = target_obj.source_file.splitlines()
-        trailing_newline = target_obj.source_file.endswith('\n')
-        total = len(source_lines)
-        report_every = max(1, total // 20)
-
-        state = new_levelling_state()
-        new_lines = []
-        for idx, line in enumerate(source_lines):
-            new_lines.append(self.autolevell_gcode_line(line, state))
-            if idx % report_every == 0:
-                try:
-                    pct = int((idx + 1) * 100 / total) if total else 100
-                    self.app.proc_container.update_view_text(' %d%%' % pct)
-                except Exception as e:
-                    # proc_container may not be available (or active) in
-                    # every call context; progress reporting is best-effort
-                    self.app.log.debug("ToolLevelling.autolevell_gcode() progress report --> %s" % str(e))
-
-        if state['arcs'] > 0:
-            self.app.inform.emit(
-                '[WARNING_NOTCL] %s: %d' % (_("Arc moves were not height-compensated"), state['arcs'])
-            )
-
-        result = '\n'.join(new_lines)
-        if trailing_newline:
-            result += '\n'
-        return result
-
     def autolevell_gcode_line(self, gcode_line, state):
         return level_gcode_line(gcode_line, state, self._al_offset_fn, self._al_decimals)
 
@@ -1216,9 +1169,9 @@ class ToolLevelling(CNCjob, AppTool):
         autolevell_gcode_line(). Emits the app-level error/warning
         messages on failure or on grid fallback.
 
-        Shared by autolevell_gcode() (levels target_obj.source_file as a
-        whole) and autolevell_gcode_tools() (levels each tool's G-code
-        separately, with a shared modal state across tools).
+        Shared setup used by autolevell_gcode() to level each of a
+        CNCJob object's tools' G-code, with a shared modal state across
+        tools.
 
         :param target_obj:  the CNCJobObject to be height-compensated.
         :param al_method:   'v' (Voronoi/nearest-point) or 'b' (bilinear).
@@ -1291,18 +1244,21 @@ class ToolLevelling(CNCjob, AppTool):
 
         return True
 
-    def autolevell_gcode_tools(self, target_obj, al_method):
+    def autolevell_gcode(self, target_obj, al_method):
         """
-        Apply the probed height map to each of a CNCJob object's
-        per-tool G-code texts (`target_obj.tools[k]['gcode']`) instead of
-        its assembled `source_file`. A single modal G-code state is
+        Apply the probed height map (self.al_voronoi_geo_storage) to each
+        of a CNCJob object's per-tool G-code texts
+        (`target_obj.tools[k]['gcode']`). A single modal G-code state is
         shared across all tools, processed in `target_obj.tools`'s
         (dict/insertion) order - the same order export_gcode() uses to
         concatenate them into source_file - so a Z/G-mode set by 1
         tool's trailing lines carries into the next tool's leading
         lines exactly as it would in the assembled G-code.
 
-        Not reentrant, same caveat as autolevell_gcode().
+        Not reentrant: it stores per-call interpolation state on `self`
+        (`self._al_points`, `self._al_grid`, `self._al_offset_fn`,
+        `self._al_decimals`). The caller must not start a 2nd call before
+        the 1st one returns (e.g. from another thread).
 
         :param target_obj:  the CNCJobObject whose tools' G-code is to be
                              height-compensated. Not modified.
@@ -2012,6 +1968,11 @@ class ToolLevelling(CNCjob, AppTool):
         :return:
         :rtype:
         """
+        # self.units is only ever (re)set in set_ui(); refresh it here (same
+        # reasoning as apply_autolevel()) so _al_match_tolerance()'s unit-aware
+        # cap and the later units check in _al_prepare_interp() use the app's
+        # current units, not a stale value.
+        self.units = self.app.app_units.upper()
 
         try:
             if filename:
@@ -2184,6 +2145,15 @@ class ToolLevelling(CNCjob, AppTool):
             )
             return
 
+        # self.units is only ever (re)set in set_ui(); refresh it here so the
+        # units check in _al_prepare_interp() compares against the app's
+        # *current* units rather than whatever was active when this tool was
+        # last opened. This matters because AppObject.new_object() converts
+        # the new object's units to the app's units right after obj_init()
+        # runs (and CNCJobObject.convert_units() does not scale G-code), so a
+        # stale self.units here could silently pass a mismatched height map.
+        self.units = self.app.app_units.upper()
+
         target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
         al_method = self.ui.al_method_radio.get_value()
 
@@ -2198,7 +2168,7 @@ class ToolLevelling(CNCjob, AppTool):
         def worker_task():
             try:
                 with self.app.proc_container.new('%s...' % _("Autolevelling")):
-                    tools_gcode = self.autolevell_gcode_tools(target_obj, al_method)
+                    tools_gcode = self.autolevell_gcode(target_obj, al_method)
                     if tools_gcode is None:
                         return
 
@@ -2230,6 +2200,15 @@ class ToolLevelling(CNCjob, AppTool):
                         new_obj.pp_excellon_name = getattr(target_obj, 'pp_excellon_name', 'default')
                         new_obj.pp_solderpaste_name = getattr(target_obj, 'pp_solderpaste_name', None)
                         new_obj.exc_tools = deepcopy(getattr(target_obj, 'exc_tools', {}))
+                        # deepcopy(target_obj.tools) also carries over each tool's
+                        # 'solid_geometry' unchanged, on purpose: levelling only ever
+                        # rewrites the Z word of cutting moves, never X/Y, so the XY
+                        # footprint stays identical to the source object's.
+                        #
+                        # 'multigeo' is intentionally NOT copied here: it is a
+                        # GeometryObject-only flag (single vs. multi-tool *Geometry*
+                        # source). CNCJob objects track multi-tool-ness with
+                        # 'multitool' instead, which is copied above.
                         new_obj.tools = deepcopy(target_obj.tools)
 
                         # accumulate the object-level gcode / gcode_parsed across all tools,
