@@ -42,7 +42,7 @@ import shapely.affinity as affinity
 from shapely.affinity import scale, translate
 from shapely.wkt import loads as sloads
 from shapely.wkt import dumps as sdumps
-from shapely.geometry.base import BaseGeometry, GeometrySequence
+from shapely.geometry.base import BaseGeometry, BaseMultipartGeometry, GeometrySequence
 from shapely import union, difference
 
 # ---------------------------------------
@@ -524,7 +524,14 @@ class ApertureMacro:
                 if self.geometry.is_empty:
                     self.geometry = prim_geo['geometry']
                     continue
-                self.geometry = union(self.geometry, prim_geo['geometry'])
+                ugeo = union(self.geometry, prim_geo['geometry'])
+                # The union function can produce a GeometryCollection when the two polygons share a vertex like this |><|
+                # See https://bitbucket.org/marius_stanciu/flatcam_beta/issues/59.
+                if not isinstance(ugeo, Polygon):
+                    log.debug("Translating geometry primitive %s to avoid GeometryCollection.", prim_geo["geometry"])
+                    prim_geo["geometry"] = affinity.translate(prim_geo["geometry"], xoff=0.0001)
+                    ugeo = union(self.geometry, prim_geo['geometry'])
+                self.geometry = ugeo
                 continue
             if prim_geo['pol'] == 0:
                 self.geometry = difference(self.geometry, prim_geo['geometry'])
@@ -8035,9 +8042,9 @@ def translate_geometry(obj, dx, dy):
 
 
 def flatten_shapely_geometry(
-        geometry: BaseGeometry | list[BaseGeometry] | GeometrySequence,
+        geometry: BaseGeometry | BaseMultipartGeometry | Iterable[BaseGeometry] | GeometrySequence,
         simplify_tolerance: float = 0.0,
-) -> list:
+) -> list[BaseGeometry]:
     """
 
     :param geometry:
@@ -8047,18 +8054,24 @@ def flatten_shapely_geometry(
     :return:
     :rtype:
     """
-    flat_list = []
-    try:
-        work_geo = geometry.geoms if isinstance(geometry, (MultiLineString, MultiPolygon, MultiPoint)) else geometry
-        for geo in work_geo:
-            flat_list += flatten_shapely_geometry(geo)
-    except TypeError:
-        if geometry and not geometry.is_empty:
+    flat_list: list[BaseGeometry] = []
+
+    if isinstance(geometry, BaseMultipartGeometry):
+        for geo in geometry.geoms:
+            assert isinstance(geo, BaseGeometry)
+            flat_list.append(geo)
+    elif hasattr(geometry, "__iter__"):
+        for geo in geometry:
+            assert isinstance(geo, BaseGeometry)
+            flat_list.append(geo)
+    elif isinstance(geometry, BaseGeometry):
+        if not geometry.is_empty:
             if simplify_tolerance > 0.0:
                 flat_list.append(geometry.simplify(simplify_tolerance))
             else:
                 flat_list.append(geometry)
-
+    else:
+        raise NotImplementedError(f"No implementation for flattening {type(geometry)}")
     return flat_list
 
 
