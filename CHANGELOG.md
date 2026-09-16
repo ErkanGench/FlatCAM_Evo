@@ -74,6 +74,26 @@ camlib.py:
 
 - updated entries for __pycache__, .venv, *.pyc.*
 
+appPlugins/ToolLevelling.py:
+
+- implemented the G-code height compensation (autolevelling): the height map is applied to each tool G-code of the selected CNCJob object and the result is a new '<name>_levelled' CNCJob object; the source object is not changed
+- the bilinear method falls back to nearest-point levelling (with a warning) when the probe points do not form a regular grid
+- only G1 cut moves at Z <= 0 are levelled; G0 moves, arcs, probing moves (G31, G38.x) and offset/home moves (G10, G28, G30, G53, G92) are not changed
+- autolevelling is refused for the Roland, HPGL, laser and solder paste preprocessors
+- GRBL: the work offset is read with '$#' before probing and the probe results are converted from machine to work coordinates and matched to the nearest probe point
+- MACH3, MACH4, LinuxCNC: the height map import now accepts comma or space separated rows with extra axis columns, skips blank and invalid rows, matches the rows to the nearest probe point and applies the autolevelling automatically
+- fixed send_grbl_command() raising TypeError on the controller answer (bytes vs str); it now returns the decoded answer as text
+- the autolevelling is refused when there is no probed or imported height map, or when the units of the object and of the application do not match
+- the autolevelling runs in a worker thread and a second run is blocked while one is in progress
+
+appPlugins/levelling_interp.py:
+
+- new module with pure (no Qt) helpers for autolevelling: bilinear grid and interpolation, nearest-point offset, match tolerance, height map row parser, GRBL probe and work offset parsers and a modal G-code line leveller
+
+tests:
+
+- added test_levelling.py, test_levelling_tool.py and test_levelling_journey.py; the journey tests generate G-code from the Gerber test files, apply height maps from MACH3/MACH4/LinuxCNC files and GRBL probe output and check every levelled Z value
+
 22.03.2026
 
 appMain.py:
