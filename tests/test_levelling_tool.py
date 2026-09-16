@@ -9,6 +9,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -40,6 +41,11 @@ def make_tool(units='MM', storage=None, heights_valid=True):
     tool.grbl_probe_result = ''
     tool.grbl_work_offset = (0.0, 0.0, 0.0)
     tool.build_al_table_sig = MagicMock()
+    tool.apply_autolevel_sig = MagicMock()
+    tool._al_apply_running = False
+    tool.app.collection = MagicMock()
+    tool.app.app_obj = MagicMock()
+    tool.app.worker_task = MagicMock()
     return tool
 
 
@@ -315,6 +321,290 @@ class TestSendGrblCommand(unittest.TestCase):
         self.assertIsInstance(result, str)
         self.assertIn('PRB:1.000,2.000,-0.500:1', result)
         self.assertIn('ok', result.lower())
+
+
+class TestImportHeightMap(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def _write(self, name, content):
+        path = os.path.join(self.tmpdir.name, name)
+        with open(path, 'w') as f:
+            f.write(content)
+        return path
+
+    def test_mach3_comma_format_empty_storage_creates_points(self):
+        path = self._write('mach3.txt', "0.0,0.0,-0.010\n10.0,0.0,-0.020\n")
+        tool = make_tool(storage={}, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertTrue(tool.al_heights_valid)
+        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
+        self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['point'].x, 0.0)
+        self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['height'], -0.010)
+        self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['point'].x, 10.0)
+        tool.build_al_table_sig.emit.assert_called_once()
+        tool.apply_autolevel_sig.emit.assert_called_once()
+
+    def test_mach4_same_comma_format(self):
+        path = self._write('mach4.txt', "1.0, 2.0, -0.05\n2.0, 2.0, -0.03\n")
+        tool = make_tool(storage={}, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertTrue(tool.al_heights_valid)
+        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
+        self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['height'], -0.05)
+        self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['height'], -0.03)
+
+    def test_linuxcnc_space_9_columns(self):
+        path = self._write(
+            'linuxcnc.txt',
+            "0.0 0.0 -0.010 0 0 0 0 0 0\n10.0 0.0 -0.020 0 0 0 0 0 0\n"
+        )
+        tool = make_tool(storage={}, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertTrue(tool.al_heights_valid)
+        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
+        self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['point'].y, 0.0)
+        self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['point'].x, 10.0)
+
+    def test_blank_lines_and_bare_newline_are_skipped(self):
+        path = self._write('blank.txt', "0.0,0.0,-0.01\n\n\n10.0,0.0,-0.02\n")
+        tool = make_tool(storage={}, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertTrue(tool.al_heights_valid)
+        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
+
+    def test_one_invalid_row_is_skipped_and_logged(self):
+        path = self._write('invalid.txt', "0.0,0.0,-0.01\nnot,a,row\n10.0,0.0,-0.02\n")
+        tool = make_tool(storage={}, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertTrue(tool.al_heights_valid)
+        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
+        tool.app.log.debug.assert_called()
+
+    def test_rows_out_of_order_match_correct_storage_points(self):
+        storage = {
+            'a': {'point': Point(0.0, 0.0), 'geo': None, 'height': None},
+            'b': {'point': Point(10.0, 0.0), 'geo': None, 'height': None},
+        }
+        # rows given in reverse order relative to storage keys
+        path = self._write('reorder.txt', "10.0,0.0,-0.02\n0.0,0.0,-0.01\n")
+        tool = make_tool(storage=storage, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertTrue(tool.al_heights_valid)
+        self.assertAlmostEqual(storage['a']['height'], -0.01)
+        self.assertAlmostEqual(storage['b']['height'], -0.02)
+
+    def test_zero_valid_rows_errors_and_does_not_apply(self):
+        path = self._write('empty.txt', "\n\n   \n")
+        tool = make_tool(storage={}, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertFalse(tool.al_heights_valid)
+        tool.apply_autolevel_sig.emit.assert_not_called()
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+
+    def test_storage_point_without_matching_row_errors_and_does_not_apply(self):
+        storage = {
+            'a': {'point': Point(0.0, 0.0), 'geo': None, 'height': None},
+            'b': {'point': Point(10.0, 0.0), 'geo': None, 'height': None},
+        }
+        # only 1 row: point 'b' has no match
+        path = self._write('missing.txt', "0.0,0.0,-0.01\n")
+        tool = make_tool(storage=storage, heights_valid=False)
+        tool.import_height_map(path)
+
+        self.assertFalse(tool.al_heights_valid)
+        tool.apply_autolevel_sig.emit.assert_not_called()
+        error_calls = [
+            c for c in tool.app.inform.emit.call_args_list
+            if '[ERROR_NOTCL]' in c.args[0]
+        ]
+        self.assertTrue(error_calls)
+
+
+class FakeNewCNCJob:
+    """Minimal stand-in for a newly created CNCJobObject, enough for
+    apply_autolevel()'s obj_init callback to run against."""
+
+    def __init__(self):
+        self.obj_options = {}
+        self.tools = {}
+        self.units = None
+        self.multitool = None
+        self.used_tools = None
+        self.gc_start = None
+        self.prepend_snippet = None
+        self.append_snippet = None
+        self.is_segmented_gcode = None
+        self.gcode = ''
+        self.gcode_parsed = None
+        self.geometry_created = False
+
+    def gcode_parse(self, tool_data=None):
+        self.gcode_parsed = list(self.gcode.splitlines())
+        return self.gcode_parsed
+
+    def create_geometry(self):
+        self.geometry_created = True
+
+
+def make_apply_target(tools_gcode_by_key):
+    return SimpleNamespace(
+        kind='cncjob',
+        obj_options={'name': 'job1', 'type': 'Geometry'},
+        units='MM',
+        multitool=True,
+        used_tools=list(tools_gcode_by_key.keys()),
+        gc_start='G21\nG90\n',
+        prepend_snippet='',
+        append_snippet='',
+        is_segmented_gcode=True,
+        coords_decimals=4,
+        tools={
+            key: {'gcode': text, 'gcode_parsed': [], 'data': {}, 'tooldia': 1.0}
+            for key, text in tools_gcode_by_key.items()
+        },
+    )
+
+
+class TestApplyAutolevel(unittest.TestCase):
+    def setUp(self):
+        self.storage = make_storage_grid([0, 10, 20], [0, 5, 10])
+
+    def test_busy_guard(self):
+        tool = make_tool(storage=self.storage)
+        tool._al_apply_running = True
+        tool.apply_autolevel()
+
+        tool.app.inform.emit.assert_called()
+        self.assertIn('[WARNING_NOTCL]', tool.app.inform.emit.call_args.args[0])
+        tool.app.worker_task.emit.assert_not_called()
+
+    def test_non_cncjob_target_errors(self):
+        tool = make_tool(storage=self.storage)
+        tool.app.collection.get_by_name.return_value = SimpleNamespace(kind='geometry')
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+
+        tool.apply_autolevel()
+
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+        tool.app.worker_task.emit.assert_not_called()
+
+    def test_none_target_errors(self):
+        tool = make_tool(storage=self.storage)
+        tool.app.collection.get_by_name.return_value = None
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+
+        tool.apply_autolevel()
+
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+        tool.app.worker_task.emit.assert_not_called()
+
+    def _run_worker(self, tool, target, new_obj_factory=FakeNewCNCJob):
+        """Trigger apply_autolevel(), capture the emitted worker_task, run
+        it synchronously against a fake new object, and return that
+        object (or None if new_object was never called)."""
+        tool.app.collection.get_by_name.return_value = target
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+
+        captured = {}
+
+        def fake_new_object(kind, name, obj_init, *args, **kwargs):
+            captured['kind'] = kind
+            captured['name'] = name
+            new_obj = new_obj_factory()
+            obj_init(new_obj, tool.app)
+            captured['new_obj'] = new_obj
+            return 'success'
+
+        tool.app.app_obj.new_object.side_effect = fake_new_object
+
+        tool.apply_autolevel()
+        self.assertTrue(tool._al_apply_running)
+
+        worker_dict = tool.app.worker_task.emit.call_args.args[0]
+        worker_dict['fcn']()
+
+        return captured
+
+    def test_new_object_called_with_levelled_name_and_levels_gcode(self):
+        original_gcode = "G0 Z2.0000\nG0 X0.0000 Y0.0000\nG1 Z-0.1000 F100\n"
+        target = make_apply_target({1: original_gcode})
+        tool = make_tool(storage=self.storage)
+
+        captured = self._run_worker(tool, target)
+
+        self.assertEqual(captured['kind'], 'cncjob')
+        self.assertEqual(captured['name'], 'job1_levelled')
+
+        new_obj = captured['new_obj']
+        levelled_lines = new_obj.tools[1]['gcode'].splitlines()
+        # G0 lines are untouched
+        self.assertEqual(levelled_lines[0], "G0 Z2.0000")
+        self.assertEqual(levelled_lines[1], "G0 X0.0000 Y0.0000")
+        # G1 line got height-compensated (no longer the flat -0.1000)
+        self.assertNotEqual(levelled_lines[2], "G1 Z-0.1000 F100")
+        self.assertTrue(new_obj.geometry_created)
+
+        self.assertFalse(tool._al_apply_running)
+        self.assertIn('[success]', tool.app.inform.emit.call_args.args[0])
+
+    def test_source_object_gcode_unchanged(self):
+        original_gcode = "G0 Z2.0000\nG1 X0 Y0 Z-0.1\n"
+        target = make_apply_target({1: original_gcode})
+        tool = make_tool(storage=self.storage)
+
+        self._run_worker(tool, target)
+
+        self.assertEqual(target.tools[1]['gcode'], original_gcode)
+
+    def test_success_message_only_after_object_created(self):
+        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
+        tool = make_tool(storage=self.storage)
+
+        self._run_worker(tool, target)
+
+        success_calls = [
+            c for c in tool.app.inform.emit.call_args_list if '[success]' in c.args[0]
+        ]
+        self.assertEqual(len(success_calls), 1)
+
+    def test_new_object_fail_emits_error_not_success(self):
+        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
+        tool = make_tool(storage=self.storage)
+        tool.app.collection.get_by_name.return_value = target
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+        tool.app.app_obj.new_object.return_value = 'fail'
+
+        tool.apply_autolevel()
+        worker_dict = tool.app.worker_task.emit.call_args.args[0]
+        worker_dict['fcn']()
+
+        self.assertFalse(any('[success]' in c.args[0] for c in tool.app.inform.emit.call_args_list))
+        self.assertTrue(any('[ERROR_NOTCL]' in c.args[0] for c in tool.app.inform.emit.call_args_list))
+        self.assertFalse(tool._al_apply_running)
+
+    def test_busy_flag_cleared_after_exception_in_worker(self):
+        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
+        tool = make_tool(storage=self.storage)
+        tool.app.collection.get_by_name.return_value = target
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+        tool.autolevell_gcode_tools = MagicMock(side_effect=RuntimeError('boom'))
+
+        tool.apply_autolevel()
+        worker_dict = tool.app.worker_task.emit.call_args.args[0]
+
+        with self.assertRaises(RuntimeError):
+            worker_dict['fcn']()
+
+        self.assertFalse(tool._al_apply_running)
 
 
 if __name__ == '__main__':

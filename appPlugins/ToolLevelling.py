@@ -34,7 +34,7 @@ from camlib import CNCjob
 from appPlugins.levelling_interp import (
     build_bilinear_grid, bilinear_offset, nearest_offset,
     parse_grbl_probe_output, parse_grbl_work_offset, match_nearest_point,
-    match_tolerance, new_levelling_state, level_gcode_line,
+    match_tolerance, new_levelling_state, level_gcode_line, parse_height_map_line,
 )
 
 import time
@@ -72,6 +72,7 @@ log = logging.getLogger('base')
 
 class ToolLevelling(CNCjob, AppTool):
     build_al_table_sig = QtCore.pyqtSignal()
+    apply_autolevel_sig = QtCore.pyqtSignal()
 
     def __init__(self, app):
         self.app = app
@@ -105,6 +106,9 @@ class ToolLevelling(CNCjob, AppTool):
         # or a successful height-map import; False whenever probe points are
         # (re)created or cleared, since their 'height' is then just a placeholder.
         self.al_heights_valid = False
+
+        # busy guard for apply_autolevel() (creates the new '_levelled' CNCJob object)
+        self._al_apply_running = False
 
         '''
         dictionary of dictionaries to store the information's for the autolevelling
@@ -214,6 +218,7 @@ class ToolLevelling(CNCjob, AppTool):
 
     def connect_signals_at_init(self):
         self.build_al_table_sig.connect(self.build_al_table)
+        self.apply_autolevel_sig.connect(self.apply_autolevel)
         self.ui.level.toggled.connect(self.on_level_changed)
 
         self.ui.avoid_exc_holes_cb.toggled.connect(self.on_avoid_exc_holes)
@@ -1169,44 +1174,8 @@ class ToolLevelling(CNCjob, AppTool):
         :return:             the height-compensated G-code text, or None on error.
         :rtype:              str | None
         """
-        if target_obj is None or target_obj.is_segmented_gcode is not True:
-            self.app.inform.emit(
-                '[ERROR_NOTCL] %s' % _("The CNCJob object must be made from segmented G-code.")
-            )
+        if not self._al_prepare_interp(target_obj, al_method):
             return None
-
-        storage = self.al_voronoi_geo_storage
-        if not storage or not self.al_heights_valid:
-            self.app.inform.emit(
-                '[ERROR_NOTCL] %s' %
-                _("No height map. Probe the points or import a height map first.")
-            )
-            return None
-
-        if str(target_obj.units).upper() != self.units:
-            self.app.inform.emit(
-                '[ERROR_NOTCL] %s' % _("The units of the CNCJob object and of the height map do not match.")
-            )
-            return None
-
-        points = [(v['point'].x, v['point'].y, v['height']) for v in storage.values()]
-        self._al_points = points
-        self._al_decimals = target_obj.coords_decimals
-
-        tol = self._al_grid_tolerance()
-
-        if al_method == 'b':
-            self._al_grid = build_bilinear_grid(points, tol)
-            if self._al_grid is None:
-                self.app.inform.emit(
-                    '[WARNING_NOTCL] %s' %
-                    _("Probe points do not form a regular grid. Using nearest-point levelling.")
-                )
-                self._al_offset_fn = self.autolevell_voronoi
-            else:
-                self._al_offset_fn = self.autolevell_bilinear
-        else:
-            self._al_offset_fn = self.autolevell_voronoi
 
         source_lines = target_obj.source_file.splitlines()
         trailing_newline = target_obj.source_file.endswith('\n')
@@ -1238,6 +1207,107 @@ class ToolLevelling(CNCjob, AppTool):
 
     def autolevell_gcode_line(self, gcode_line, state):
         return level_gcode_line(gcode_line, state, self._al_offset_fn, self._al_decimals)
+
+    def _al_prepare_interp(self, target_obj, al_method):
+        """
+        Validate `target_obj` / the height map and set up the per-call
+        interpolation state (`self._al_points`, `self._al_grid`,
+        `self._al_offset_fn`, `self._al_decimals`) used by
+        autolevell_gcode_line(). Emits the app-level error/warning
+        messages on failure or on grid fallback.
+
+        Shared by autolevell_gcode() (levels target_obj.source_file as a
+        whole) and autolevell_gcode_tools() (levels each tool's G-code
+        separately, with a shared modal state across tools).
+
+        :param target_obj:  the CNCJobObject to be height-compensated.
+        :param al_method:   'v' (Voronoi/nearest-point) or 'b' (bilinear).
+        :return:            True on success, False on error (message already emitted).
+        :rtype:             bool
+        """
+        if target_obj is None or target_obj.is_segmented_gcode is not True:
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' % _("The CNCJob object must be made from segmented G-code.")
+            )
+            return False
+
+        storage = self.al_voronoi_geo_storage
+        if not storage or not self.al_heights_valid:
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' %
+                _("No height map. Probe the points or import a height map first.")
+            )
+            return False
+
+        if str(target_obj.units).upper() != self.units:
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' % _("The units of the CNCJob object and of the height map do not match.")
+            )
+            return False
+
+        points = [(v['point'].x, v['point'].y, v['height']) for v in storage.values()]
+        self._al_points = points
+        self._al_decimals = target_obj.coords_decimals
+
+        tol = self._al_grid_tolerance()
+
+        if al_method == 'b':
+            self._al_grid = build_bilinear_grid(points, tol)
+            if self._al_grid is None:
+                self.app.inform.emit(
+                    '[WARNING_NOTCL] %s' %
+                    _("Probe points do not form a regular grid. Using nearest-point levelling.")
+                )
+                self._al_offset_fn = self.autolevell_voronoi
+            else:
+                self._al_offset_fn = self.autolevell_bilinear
+        else:
+            self._al_offset_fn = self.autolevell_voronoi
+
+        return True
+
+    def autolevell_gcode_tools(self, target_obj, al_method):
+        """
+        Apply the probed height map to each of a CNCJob object's
+        per-tool G-code texts (`target_obj.tools[k]['gcode']`) instead of
+        its assembled `source_file`. A single modal G-code state is
+        shared across all tools, processed in ascending tool-id order,
+        so a Z/G-mode set by 1 tool's trailing lines carries into the
+        next tool's leading lines exactly as it would in the assembled
+        G-code.
+
+        Not reentrant, same caveat as autolevell_gcode().
+
+        :param target_obj:  the CNCJobObject whose tools' G-code is to be
+                             height-compensated. Not modified.
+        :param al_method:   'v' (Voronoi/nearest-point) or 'b' (bilinear).
+        :return:             {tooluid: levelled G-code text} for every tool
+                              in target_obj.tools, or None on error.
+        :rtype:              dict | None
+        """
+        if not self._al_prepare_interp(target_obj, al_method):
+            return None
+
+        state = new_levelling_state()
+        result = {}
+        for tooluid in sorted(target_obj.tools.keys()):
+            tool_gcode = target_obj.tools[tooluid].get('gcode') or ''
+            source_lines = tool_gcode.splitlines()
+            trailing_newline = tool_gcode.endswith('\n')
+
+            new_lines = [self.autolevell_gcode_line(line, state) for line in source_lines]
+
+            text = '\n'.join(new_lines)
+            if trailing_newline:
+                text += '\n'
+            result[tooluid] = text
+
+        if state['arcs'] > 0:
+            self.app.inform.emit(
+                '[WARNING_NOTCL] %s: %d' % (_("Arc moves were not height-compensated"), state['arcs'])
+            )
+
+        return result
 
     def autolevell_bilinear(self, x, y):
         return bilinear_offset(self._al_grid, x, y)
@@ -1928,21 +1998,58 @@ class ToolLevelling(CNCjob, AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open height map file"), filename))
             return
 
-        idx = 0
-        if stream is not None and stream != '':
-            for line in stream:
-                if line != '':
-                    idx += 1
-                    line = line.replace(' ', ',').replace('\n', '').split(',')
-                    if idx not in self.al_voronoi_geo_storage:
-                        self.al_voronoi_geo_storage[idx] = {}
-                    self.al_voronoi_geo_storage[idx]['height'] = float(line[2])
-                    if 'point' not in self.al_voronoi_geo_storage[idx]:
-                        x = float(line[0])
-                        y = float(line[1])
-                        self.al_voronoi_geo_storage[idx]['point'] = Point((x, y))
+        rows = []
+        for line_no, line in enumerate(stream, start=1):
+            parsed = parse_height_map_line(line)
+            if parsed is None:
+                if line.strip() != '':
+                    self.app.log.debug(
+                        "ToolLevelling.import_height_map() -> could not parse line %d: %r" % (line_no, line)
+                    )
+                continue
+            rows.append(parsed)
 
-            self.build_al_table_sig.emit()
+        if not rows:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The height map file has no valid rows."))
+            self.al_heights_valid = False
+            return
+
+        storage = self.al_voronoi_geo_storage
+        if storage:
+            points_xy = {key: (v['point'].x, v['point'].y) for key, v in storage.items()}
+            tol = self._al_match_tolerance(list(points_xy.values()))
+
+            matched_keys = set()
+            unmatched_rows = 0
+            for x, y, z in rows:
+                key = match_nearest_point(points_xy, x, y, tol)
+                if key is None:
+                    unmatched_rows += 1
+                    continue
+                storage[key]['height'] = z
+                matched_keys.add(key)
+
+            if unmatched_rows:
+                self.app.inform.emit(
+                    '[WARNING_NOTCL] %s: %d' %
+                    (_("Height map rows could not be matched to a probe point"), unmatched_rows)
+                )
+
+            missing = set(storage.keys()) - matched_keys
+            if missing:
+                self.app.inform.emit(
+                    '[ERROR_NOTCL] %s' %
+                    _("Some probe points have no matching row in the height map file.")
+                )
+                self.al_heights_valid = False
+                return
+        else:
+            for idx, (x, y, z) in enumerate(rows, start=1):
+                storage[idx] = {'point': Point((x, y)), 'geo': None, 'height': z}
+
+        self.al_heights_valid = True
+        self.build_al_table_sig.emit()
+        self.apply_autolevel_sig.emit()
 
     def on_grbl_autolevel(self):
         # show the Shell Dock
@@ -1987,7 +2094,7 @@ class ToolLevelling(CNCjob, AppTool):
                 self.app.inform.emit('%s' % _("Finished probing. Doing the autolevelling."))
 
                 if self.parse_grbl_probe_result():
-                    self.on_grbl_apply_autolevel()
+                    self.apply_autolevel_sig.emit()
 
         self.app.inform.emit('%s' % _("Sending probing GCode to the GRBL controller."))
         self.app.worker_task.emit({'fcn': worker_task, 'params': []})
@@ -2034,9 +2141,85 @@ class ToolLevelling(CNCjob, AppTool):
         else:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Empty GRBL heightmap."))
 
-    def on_grbl_apply_autolevel(self):
-        # TODO here we call the autolevell method
-        self.app.inform.emit('%s' % _("Finished autolevelling."))
+    def apply_autolevel(self):
+        """
+        Apply the probed/imported height map to the currently selected
+        CNCJob object's G-code and create a new '<name>_levelled' CNCJob
+        object holding the result. The source object is left unchanged.
+
+        Runs on the GUI thread (connected to apply_autolevel_sig, emitted
+        from worker threads after a successful probe or height-map
+        import), reads the widgets it needs here, then hands the actual
+        levelling + object creation off to a worker thread.
+        """
+        if self._al_apply_running:
+            self.app.inform.emit(
+                '[WARNING_NOTCL] %s' % _("Autolevelling apply is already running.")
+            )
+            return
+
+        target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
+        al_method = self.ui.al_method_radio.get_value()
+
+        if target_obj is None or target_obj.kind != 'cncjob':
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' % _("No CNCJob object selected for autolevelling.")
+            )
+            return
+
+        self._al_apply_running = True
+
+        def worker_task():
+            try:
+                with self.app.proc_container.new('%s...' % _("Autolevelling")):
+                    tools_gcode = self.autolevell_gcode_tools(target_obj, al_method)
+                    if tools_gcode is None:
+                        return
+
+                    outname = target_obj.obj_options['name'] + '_levelled'
+
+                    def obj_init(new_obj, app_obj):
+                        # copy over the tools/options needed to reconstruct the source_file,
+                        # gcode_parsed (plot) and solid_geometry from the levelled per-tool
+                        # G-code, exactly as export_gcode()/plot() rebuild them for any other
+                        # CNCJob object
+                        new_obj.obj_options.update(
+                            {k: v for k, v in target_obj.obj_options.items() if k != 'name'}
+                        )
+                        new_obj.units = target_obj.units
+                        new_obj.multitool = target_obj.multitool
+                        new_obj.used_tools = list(target_obj.used_tools)
+                        new_obj.gc_start = target_obj.gc_start
+                        new_obj.prepend_snippet = target_obj.prepend_snippet
+                        new_obj.append_snippet = target_obj.append_snippet
+                        new_obj.is_segmented_gcode = target_obj.is_segmented_gcode
+                        new_obj.tools = deepcopy(target_obj.tools)
+
+                        for tooluid, levelled_text in tools_gcode.items():
+                            if tooluid not in new_obj.tools:
+                                continue
+                            # gcode_parse() parses self.gcode (not the per-tool dict), so it
+                            # has to be set as the "current" gcode for the duration of the call
+                            new_obj.gcode = levelled_text
+                            new_obj.tools[tooluid]['gcode_parsed'] = new_obj.gcode_parse(
+                                tool_data=new_obj.tools[tooluid].get('data', {})
+                            )
+                            new_obj.tools[tooluid]['gcode'] = levelled_text
+
+                        new_obj.create_geometry()
+
+                    ret = self.app.app_obj.new_object('cncjob', outname, obj_init)
+                    if ret == 'fail':
+                        self.app.inform.emit(
+                            '[ERROR_NOTCL] %s' % _("Failed to create the levelled CNCJob object.")
+                        )
+                        return
+
+                    self.app.inform.emit('[success] %s' % _("Finished autolevelling."))
+            finally:
+                self._al_apply_running = False
+
+        self.app.worker_task.emit({'fcn': worker_task, 'params': []})
 
     def ui_connect(self):
         self.ui.al_add_button.clicked.connect(self.on_add_al_probepoints)
