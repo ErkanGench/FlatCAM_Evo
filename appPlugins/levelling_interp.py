@@ -72,7 +72,7 @@ def _group_values(sorted_unique_values, tol):
     groups = []
     current = []
     for v in sorted_unique_values:
-        if current and (v - current[-1]) > tol:
+        if current and (v - current[0]) > tol:
             groups.append(sum(current) / len(current))
             current = []
         current.append(v)

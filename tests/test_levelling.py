@@ -14,6 +14,7 @@ from appPlugins.levelling_interp import (
     build_bilinear_grid,
     bilinear_offset,
     nearest_offset,
+    _group_values,
 )
 
 
@@ -109,6 +110,29 @@ class TestGridDetection(unittest.TestCase):
         points = [(x, 0, plane(x, 0)) for x in self.xs]
         result = build_bilinear_grid(points)
         self.assertIsNone(result)
+
+    def test_single_column_returns_none(self):
+        points = [(0, y, plane(0, y)) for y in self.ys]
+        result = build_bilinear_grid(points)
+        self.assertIsNone(result)
+
+    def test_duplicate_cell_returns_none(self):
+        points = self._points()
+        # add an extra point that snaps to an already-filled cell
+        points.append((points[0][0], points[0][1], points[0][2]))
+        result = build_bilinear_grid(points)
+        self.assertIsNone(result)
+
+
+class TestGroupValues(unittest.TestCase):
+    def test_no_chaining_across_tol_span(self):
+        # 0, 0.4e-6, 0.8e-6, 1.2e-6 with tol=1e-6: each consecutive pair
+        # is within tol of its neighbor, but the span from 0 to 1.2e-6
+        # exceeds tol, so this must NOT collapse into a single group.
+        # Anchoring to the first value of the group (not the previous
+        # value) gives 2 groups: {0, 0.4e-6, 0.8e-6} and {1.2e-6}.
+        groups = _group_values([0, 0.4e-6, 0.8e-6, 1.2e-6], 1e-6)
+        self.assertEqual(len(groups), 2)
 
 
 class TestNearest(unittest.TestCase):
