@@ -26,6 +26,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from appParsers.ParseExcellon import Excellon
+from appDatabase import load_tools_database
 from matplotlib.backend_bases import KeyEvent as mpl_key_event
 from camlib import grace
 
@@ -2096,24 +2097,12 @@ class ToolMilling(Excellon, AppTool):
             return
         truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
 
-        # load the database tools from the file
         try:
-            with open(filename) as f:
-                tools = f.read()
-        except IOError:
+            tools_db_dict = load_tools_database(filename, self.app.options)
+        except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
+            self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
-            self.ui_connect()
-            self.on_tool_default_add(dia=tool_dia)
-            return
-
-        try:
-            # store here the tools from Tools Database when searching in Tools Database
-            tools_db_dict = json.loads(tools)
-        except Exception:
-            e = sys.exc_info()[0]
-            self.app.log.error(str(e))
-            self.app.inform.emit('[ERROR] %s' % _("Failed to parse Tools DB file."))
             self.ui_connect()
             self.on_tool_default_add(dia=tool_dia)
             return

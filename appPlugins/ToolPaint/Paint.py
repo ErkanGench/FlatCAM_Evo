@@ -39,6 +39,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from appParsers.ParseGerber import Gerber
+from appDatabase import load_tools_database
 from camlib import (
     Geometry,
     flatten_shapely_geometry,
@@ -941,24 +942,12 @@ class ToolPaint(Gerber, AppTool):
             self.blockSignals(False)
             return
 
-        # load the database tools from the file
         try:
-            with open(filename) as f:
-                tools = f.read()
-        except IOError:
+            tools_db_dict = load_tools_database(filename, self.app.options)
+        except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
+            self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % _("Could not load the file."))
-            self.blockSignals(False)
-            self.on_tool_default_add(dia=tool_dia)
-            return
-
-        try:
-            # store here the tools from Tools Database when searching in Tools Database
-            tools_db_dict = json.loads(tools)
-        except Exception:
-            e = sys.exc_info()[0]
-            self.app.log.error(str(e))
-            self.app.inform.emit('[ERROR] %s' % _("Failed to parse Tools DB file."))
             self.blockSignals(False)
             self.on_tool_default_add(dia=tool_dia)
             return
@@ -971,40 +960,31 @@ class ToolPaint(Gerber, AppTool):
         # look in database tools
         if tools_db_dict:
             for db_tool, db_tool_val in tools_db_dict.items():
-                offset = db_tool_val['data']['tools_mill_offset_type']
-                offset_val = db_tool_val['data']['tools_mill_offset_value']
-
                 db_tooldia = db_tool_val['tooldia']
                 low_limit = float(db_tool_val['data']['tol_min'])
                 high_limit = float(db_tool_val['data']['tol_max'])
 
                 # we need only tool marked for Paint Tool
-                if db_tool_val['data']['tool_target'] != _('Paint'):
+                if db_tool_val['data']['tool_target'] != 4:
                     continue
 
                 # if we find a tool with the same diameter in the Tools DB just update its data
                 if truncated_tooldia == db_tooldia:
                     tool_found += 1
+                    offset = deepcopy(db_tool_val['data']['tools_mill_offset_type'])
+                    offset_val = deepcopy(db_tool_val['data']['tools_mill_offset_value'])
                     for d in db_tool_val['data']:
-                        if d.find('tools_paint_') == 0:
-                            new_tools_dict[d] = db_tool_val['data'][d]
-                        elif d.find('tools_') == 0:
-                            # don't need data for other App Tools; this tests after 'tools_paint_'
-                            continue
-                        else:
-                            new_tools_dict[d] = db_tool_val['data'][d]
+                        if not d.startswith('tools_') or d.startswith(('tools_paint_', 'tools_mill_')):
+                            new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
                 # search for a tool that has a tolerance that the tool fits in
                 elif high_limit >= truncated_tooldia >= low_limit:
                     tool_found += 1
                     updated_tooldia = db_tooldia
+                    offset = deepcopy(db_tool_val['data']['tools_mill_offset_type'])
+                    offset_val = deepcopy(db_tool_val['data']['tools_mill_offset_value'])
                     for d in db_tool_val['data']:
-                        if d.find('tools_paint_') == 0:
-                            new_tools_dict[d] = db_tool_val['data'][d]
-                        elif d.find('tools_') == 0:
-                            # don't need data for other App Tools; this tests after 'tools_paint_'
-                            continue
-                        else:
-                            new_tools_dict[d] = db_tool_val['data'][d]
+                        if not d.startswith('tools_') or d.startswith(('tools_paint_', 'tools_mill_')):
+                            new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
 
         # test we found a suitable tool in Tools Database or if multiple ones
         if tool_found == 0:
@@ -1729,24 +1709,13 @@ class ToolPaint(Gerber, AppTool):
         tool_from_db = deepcopy(tool)
 
         if tool['data']['tool_target'] not in [0, 4]:   # [General, Paint]
-            for idx in range(self.app.ui.plot_tab_area.count()):
-                if self.app.ui.plot_tab_area.tabText(idx) == _("Tools Database"):
-                    wdg = self.app.ui.plot_tab_area.widget(idx)
-                    wdg.deleteLater()
-                    self.app.ui.plot_tab_area.removeTab(idx)
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Selected tool can't be used here. Pick another."))
-            return
+            return 'fail'
 
         res = self.on_paint_tool_from_db_inserted(tool=tool_from_db)
 
-        for idx in range(self.app.ui.plot_tab_area.count()):
-            if self.app.ui.plot_tab_area.tabText(idx) == _("Tools Database"):
-                wdg = self.app.ui.plot_tab_area.widget(idx)
-                wdg.deleteLater()
-                self.app.ui.plot_tab_area.removeTab(idx)
-
         if res == 'fail':
-            return
+            return 'fail'
         self.app.inform.emit('[success] %s' % _("Tool from DB added in Tool Table."))
 
         # select last tool added
@@ -1755,6 +1724,7 @@ class ToolPaint(Gerber, AppTool):
             if int(self.ui.tools_table.item(row, 3).text()) == toolid:
                 self.ui.tools_table.selectRow(row)
         self.on_row_selection_change()
+        return res
 
     def on_paint_tool_from_db_inserted(self, tool):
         """

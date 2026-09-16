@@ -8,6 +8,72 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+16.09.2026
+
+appMain.py:
+
+- massive refactoring: extracted signal connections, menu handlers, layout, lifecycle, canvas events, object operations and UI actions into 5 new handler modules (appSignalConnector, appLifecycle, appCanvasEvents, appObjectOps, appUIActions)
+- removed unused imports (urllib, shapely ops, subprocess, webbrowser, platform, numpy inf, etc.)
+- fixed tools_db.FlatDB creation race condition with open('x') + FileExistsError guard
+- added graceful ToolImage plugin fallback when rasterio is not installed
+- delegated on_options_value_changed and on_app_restart to AppLifecycle
+
+appDatabase.py:
+
+- added load_tools_database() with validation and normalization of tools DB records
+- fixed tool ID management: sort/add/copy/delete now preserve actual IDs instead of re-indexing
+- added deepcopy for tool data to prevent shared-state mutations
+- changed mill shape/job/offset combos to FCComboBox2
+- added close confirmation support (confirm_close callback on tabs)
+- improved error handling on DB load/save with proper exception types
+
+appPlugins/ToolCutOut.py, ToolDrilling.py, ToolIsolation.py, ToolMilling.py, ToolNCC/Ncc.py, ToolPaint/Paint.py:
+
+- replaced duplicated file-read + json-parse blocks with load_tools_database()
+- fixed tool_target comparisons to use integer constants instead of translated strings
+- added deepcopy for tool data copied from DB
+- removed redundant Tools Database tab-closing loops
+
+flatcam.py:
+
+- added Qt message handler to suppress noisy QThreadStorage warnings during shutdown
+
+appWorkerStack.py:
+
+- improved worker thread shutdown with shared timeout, requestInterruption() and forced terminate fallback
+
+appGUI/GUIElements.py:
+
+- added confirm_close callback support for detachable tabs
+- fixed missing event.accept() in drop handling
+- fixed systray Run Script to call the renamed on_file_run_script method
+
+appGUI/MainGUI.py:
+
+- removed redundant tools_db_changed_flag
+- fixed method name typo: on_file_run_cript -> on_file_run_script
+
+appHandlers/appIO.py:
+
+- renamed on_file_run_cript to on_file_run_script
+- added handling for tabs that refuse to close during New Project (retained tabs warning)
+
+appCommon/Common.py:
+
+- fixed property setter: _log -> _log_level
+
+appPlugins/__init__.py:
+
+- added logging warning when ToolImage plugin fails to load instead of silent pass
+
+camlib.py:
+
+- reformatted clear_polygon_shrink() signature for readability
+
+.gitignore:
+
+- updated entries for __pycache__, .venv, *.pyc.*
+
 22.03.2026
 
 appMain.py:

@@ -10,6 +10,7 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, RadioSet, \
     FCDoubleSpinner, FCComboBox2, OptionalInputSection, FCCheckBox
 from camlib import flatten_shapely_geometry
+from appDatabase import load_tools_database
 
 import math
 import logging
@@ -453,24 +454,12 @@ class CutOut(AppTool):
 
         truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
 
-        # load the database tools from the file
         try:
-            with open(filename) as f:
-                tools = f.read()
-        except IOError:
+            tools_db_dict = load_tools_database(filename, self.app.options)
+        except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
+            self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
-            self.blockSignals(False)
-            self.on_tool_default_add(dia=tool_dia)
-            return
-
-        try:
-            # store here the tools from Tools Database when searching in Tools Database
-            tools_db_dict = json.loads(tools)
-        except Exception:
-            e = sys.exc_info()[0]
-            self.app.log.error(str(e))
-            self.app.inform.emit('[ERROR] %s' % _("Failed to parse Tools DB file."))
             self.blockSignals(False)
             self.on_tool_default_add(dia=tool_dia)
             return
@@ -484,37 +473,27 @@ class CutOut(AppTool):
             high_limit = float(db_tool_val['data']['tol_max'])
 
             # we need only tool marked for Cutout Tool
-            if db_tool_val['data']['tool_target'] != _('Cutout'):
+            if db_tool_val['data']['tool_target'] != 6:
                 continue
 
             # if we find a tool with the same diameter in the Tools DB just update it's data
             if truncated_tooldia == db_tooldia:
                 tool_found += 1
                 for d in db_tool_val['data']:
-                    if d.find('tools_cutout_') == 0:
-                        new_tools_dict[d] = db_tool_val['data'][d]
-                    elif d.find('tools_') == 0:
-                        # don't need data for other App Tools; this tests after 'tools_cutout_'
-                        continue
-                    else:
-                        new_tools_dict[d] = db_tool_val['data'][d]
+                    if not d.startswith('tools_') or d.startswith(('tools_cutout_', 'tools_mill_')):
+                        new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
             # search for a tool that has a tolerance that the tool fits in
             elif high_limit >= truncated_tooldia >= low_limit:
                 tool_found += 1
                 updated_tooldia = db_tooldia
                 for d in db_tool_val['data']:
-                    if d.find('tools_cutout_') == 0:
-                        new_tools_dict[d] = db_tool_val['data'][d]
-                    elif d.find('tools_') == 0:
-                        # don't need data for other App Tools; this tests after 'tools_cutout_'
-                        continue
-                    else:
-                        new_tools_dict[d] = db_tool_val['data'][d]
+                    if not d.startswith('tools_') or d.startswith(('tools_cutout_', 'tools_mill_')):
+                        new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
 
         # test we found a suitable tool in Tools Database or if multiple ones
         if tool_found == 0:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Tool not in Tools Database. Adding a default tool."))
-            self.on_tool_default_add()
+            self.on_tool_default_add(dia=tool_dia)
             self.blockSignals(False)
             return
 
@@ -574,15 +553,12 @@ class CutOut(AppTool):
         """
 
         if tool['data']['tool_target'] not in [0, 6]:   # [General, Cutout Tool]
-            for idx in range(self.app.ui.plot_tab_area.count()):
-                if self.app.ui.plot_tab_area.tabText(idx) == _("Tools Database"):
-                    wdg = self.app.ui.plot_tab_area.widget(idx)
-                    wdg.deleteLater()
-                    self.app.ui.plot_tab_area.removeTab(idx)
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Selected tool can't be used here. Pick another."))
-            return
-        tool_from_db = deepcopy(self.default_data)
-        tool_from_db.update(tool)
+            return 'fail'
+        tool_from_db = deepcopy(tool)
+        data = deepcopy(self.default_data)
+        data.update(deepcopy(tool['data']))
+        tool_from_db['data'] = data
 
         tool_from_db['data']["tools_cutout_tooldia"] = deepcopy(tool["tooldia"])
         tool_from_db['data']["tools_cutout_z"] = deepcopy(tool_from_db['data']["tools_mill_cutz"])
@@ -595,13 +571,8 @@ class CutOut(AppTool):
         self.update_ui(tool_from_db['data'])
         self.ui.dia.set_value(float(tool_from_db['data']["tools_cutout_tooldia"]))
 
-        for idx in range(self.app.ui.plot_tab_area.count()):
-            if self.app.ui.plot_tab_area.tabText(idx) == _("Tools Database"):
-                wdg = self.app.ui.plot_tab_area.widget(idx)
-                wdg.deleteLater()
-                self.app.ui.plot_tab_area.removeTab(idx)
-
         self.app.inform.emit('[success] %s' % _("Tool updated from Tools Database."))
+        return True
 
     def on_tool_from_db_inserted(self, tool):
         """

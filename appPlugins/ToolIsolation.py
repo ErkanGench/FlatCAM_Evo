@@ -28,6 +28,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from appParsers.ParseGerber import Gerber
+from appDatabase import load_tools_database
 from matplotlib.backend_bases import KeyEvent as mpl_key_event
 from camlib import grace, flatten_shapely_geometry
 
@@ -1387,23 +1388,13 @@ class ToolIsolation(Gerber, AppTool):
         #     self.blockSignals(False)
         #     return
 
-        # load the database tools from the file
         try:
-            with open(filename) as f:
-                tools = f.read()
-        except IOError:
+            tools_db_dict = load_tools_database(filename, self.app.options)
+        except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
+            self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
-            self.on_tool_default_add(dia=tool_dia)
-            return
-
-        try:
-            # store here the tools from Tools Database when searching in Tools Database
-            tools_db_dict = json.loads(tools)
-        except Exception:
-            e = sys.exc_info()[0]
-            self.app.log.error(str(e))
-            self.app.inform.emit('[ERROR] %s' % _("Failed to parse Tools DB file."))
+            self.ui_connect()
             self.on_tool_default_add(dia=tool_dia)
             return
 
@@ -1423,25 +1414,15 @@ class ToolIsolation(Gerber, AppTool):
             if truncated_tooldia == db_tooldia:
                 tool_found += 1
                 for d in db_tool_val['data']:
-                    if d.find('tools_iso_') == 0:
-                        new_tools_dict[d] = db_tool_val['data'][d]
-                    elif d.find('tools_') == 0:
-                        # don't need data for other App Tools; this tests after 'tools_iso_'
-                        continue
-                    else:
-                        new_tools_dict[d] = db_tool_val['data'][d]
+                        if not d.startswith('tools_') or d.startswith(('tools_iso_', 'tools_mill_')):
+                            new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
             # search for a tool that has a tolerance that the tool fits in
             elif high_limit >= truncated_tooldia >= low_limit:
                 tool_found += 1
                 updated_tooldia = db_tooldia
                 for d in db_tool_val['data']:
-                    if d.find('tools_iso_') == 0:
-                        new_tools_dict[d] = db_tool_val['data'][d]
-                    elif d.find('tools_') == 0:
-                        # don't need data for other App Tools; this tests after 'tools_iso_'
-                        continue
-                    else:
-                        new_tools_dict[d] = db_tool_val['data'][d]
+                        if not d.startswith('tools_') or d.startswith(('tools_iso_', 'tools_mill_')):
+                            new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
 
         # test we found a suitable tool in Tools Database or if multiple ones
         if tool_found == 0:
@@ -2950,24 +2931,13 @@ class ToolIsolation(Gerber, AppTool):
         tool_from_db = deepcopy(tool)
 
         if tool['data']['tool_target'] not in [0, 3]:  # [General, Isolation]
-            for idx in range(self.app.ui.plot_tab_area.count()):
-                if self.app.ui.plot_tab_area.tabText(idx) == _("Tools Database"):
-                    wdg = self.app.ui.plot_tab_area.widget(idx)
-                    wdg.deleteLater()
-                    self.app.ui.plot_tab_area.removeTab(idx)
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Selected tool can't be used here. Pick another."))
-            return
+            return 'fail'
 
         res = self.on_tool_from_db_inserted(tool=tool_from_db)
 
-        for idx in range(self.app.ui.plot_tab_area.count()):
-            if self.app.ui.plot_tab_area.tabText(idx) == _("Tools Database"):
-                wdg = self.app.ui.plot_tab_area.widget(idx)
-                wdg.deleteLater()
-                self.app.ui.plot_tab_area.removeTab(idx)
-
         if res == 'fail':
-            return
+            return 'fail'
         self.app.inform.emit('[success] %s' % _("Tool from DB added in Tool Table."))
 
         # select last tool added
@@ -2976,6 +2946,7 @@ class ToolIsolation(Gerber, AppTool):
             if int(self.ui.tools_table.item(row, 3).text()) == toolid:
                 self.ui.tools_table.selectRow(row)
         self.on_row_selection_change()
+        return res
 
     def on_tool_from_db_inserted(self, tool):
         """

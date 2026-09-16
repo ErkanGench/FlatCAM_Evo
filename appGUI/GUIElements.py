@@ -3846,6 +3846,7 @@ class FCDetachableTab(QtWidgets.QTabWidget):
             :return:
             """
             self.onCloseSignal.emit(self.contentWidget, self.objectName(), self.windowIcon())
+            event.accept()
 
         class WindowDropFilter(QtCore.QObject):
             """
@@ -4130,12 +4131,16 @@ class FCDetachableTab2(FCDetachableTab):
         :param currentIndex:
         :return:
         """
-        # idx = self.currentIndex()
-        tab_name = self.widget(currentIndex).objectName()
+        widget = self.widget(currentIndex)
+        confirm_close = getattr(widget, 'confirm_close', None)
+        if callable(confirm_close) and not confirm_close():
+            return False
+        tab_name = widget.objectName()
         self.tab_closed_signal.emit(tab_name, currentIndex)
 
         if self._auto_remove_closed_tab:
             super().removeTab(currentIndex)
+        return True
 
 
 class VerticalScrollArea(QtWidgets.QScrollArea):
@@ -6127,8 +6132,11 @@ class AppSystemTray(QtWidgets.QSystemTrayIcon):
 
         menu_toggle_gui.triggered.connect(self.app.ui.on_toggle_gui)
 
-        menu_runscript.triggered.connect(lambda: self.app.on_file_run_cript(
-            silent=True if self.app.cmd_line_headless == 1 else False))
+        menu_runscript.triggered.connect(
+            lambda: self.app.f_handlers.on_file_run_script(
+                silent=True if self.app.cmd_line_headless == 1 else False
+            )
+        )
 
         exitAction.triggered.connect(self.app.final_save)
 

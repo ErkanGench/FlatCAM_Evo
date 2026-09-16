@@ -4,7 +4,7 @@ import os
 import traceback
 from datetime import datetime
 
-from PyQt6 import QtWidgets, QtGui
+from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import QSettings, QTimer
 from appMain import App
 from appGUI import VisPyPatches
@@ -26,6 +26,25 @@ def debug_trace():
     # from pdb import set_trace
     pyqtRemoveInputHook()
     # set_trace()
+
+
+def _shutdown_message_handler(message_type, context, message):
+    if message.startswith('QThreadStorage: entry ') and ' destroyed before end of thread ' in message:
+        return
+
+    prefixes = {
+        QtCore.QtMsgType.QtDebugMsg: 'DEBUG',
+        QtCore.QtMsgType.QtInfoMsg: 'INFO',
+        QtCore.QtMsgType.QtWarningMsg: 'WARNING',
+        QtCore.QtMsgType.QtCriticalMsg: 'CRITICAL',
+        QtCore.QtMsgType.QtFatalMsg: 'FATAL'
+    }
+    prefix = prefixes.get(message_type, 'WARNING')
+    sys.stderr.write('%s: %s\n' % (prefix, message))
+
+
+def _install_shutdown_message_handler():
+    QtCore.qInstallMessageHandler(_shutdown_message_handler)
 
 
 if __name__ == '__main__':
@@ -151,6 +170,7 @@ if __name__ == '__main__':
     sys.excepthook = excepthook
 
     app = QtWidgets.QApplication(sys.argv)
+    app.aboutToQuit.connect(_install_shutdown_message_handler)
 
     # apply style
     settings = QSettings("Open Source", "FlatCAM_EVO")

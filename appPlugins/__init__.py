@@ -2,8 +2,9 @@
 try:
     from appPlugins.ToolImage import ToolImage
 except ImportError as err:
-    # print(str(err))
-    pass
+    import logging
+    logging.getLogger('base').warning("ToolImage plugin could not be loaded: %s", err)
+    # ToolImage will be unavailable but app continues
 
 from appPlugins.ToolCalculators import ToolCalculator
 

@@ -1,7 +1,7 @@
 
 from PyQt6 import QtGui, QtCore, QtWidgets
 from appGUI.GUIElements import FCEntry, FCButton, FCDoubleSpinner, FCComboBox, FCCheckBox, FCSpinner, \
-    FCTree, RadioSet, FCFileSaveDialog, FCLabel, FCComboBox2, GLay
+    FCTree, RadioSet, FCFileSaveDialog, FCLabel, FCComboBox2, FCMessageBox, GLay
 from camlib import to_dict
 
 import sys
@@ -14,10 +14,172 @@ import math
 import gettext
 import appTranslation as fcTranslate
 import builtins
+import logging
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
+
+log = logging.getLogger('base')
+
+
+def _database_enum(value, labels, field):
+    if type(value) is int and 0 <= value < len(labels):
+        return value
+    if isinstance(value, str):
+        for index, label in enumerate(labels):
+            if value in (label, _(label), str(index)):
+                return index
+    raise ValueError('%s: unsupported value %r' % (field, value))
+
+
+def _finite_database_number(value, field):
+    if isinstance(value, bool):
+        raise ValueError('%s: boolean is not a number' % field)
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError('%s: expected a number' % field) from error
+    if not math.isfinite(number):
+        raise ValueError('%s: expected a finite number' % field)
+    return number
+
+
+def _database_option_items(defaults):
+    try:
+        return defaults.items()
+    except AttributeError:
+        return defaults.options.items()
+
+
+def _validate_database_option(value, default, field):
+    if value is None:
+        if default is None:
+            return value
+        raise ValueError('%s: None is not allowed' % field)
+
+    if isinstance(default, bool):
+        if not isinstance(value, bool):
+            raise ValueError('%s: expected a boolean' % field)
+    elif isinstance(default, (int, float)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError('%s: expected a number' % field)
+        _finite_database_number(value, field)
+    elif isinstance(default, str):
+        if not isinstance(value, str):
+            raise ValueError('%s: expected a string' % field)
+    elif isinstance(default, list):
+        if not isinstance(value, list):
+            raise ValueError('%s: expected a list' % field)
+    elif default is None:
+        if isinstance(value, bool):
+            raise ValueError('%s: expected a string, number, or None' % field)
+        if isinstance(value, (int, float)):
+            _finite_database_number(value, field)
+        elif not isinstance(value, str):
+            raise ValueError('%s: expected a string, number, or None' % field)
+    elif not isinstance(value, type(default)):
+        raise ValueError('%s: unexpected value type' % field)
+    return value
+
+
+def normalize_tools_database(records, defaults):
+    if not isinstance(records, dict):
+        raise ValueError('Tools DB root: expected a dictionary')
+
+    default_values = dict(_database_option_items(defaults))
+    normalized = deepcopy(records)
+    target_labels = ['General', 'Milling', 'Drilling', 'Isolation', 'Paint', 'NCC', 'Cutout']
+    shape_labels = ['C1', 'C2', 'C3', 'C4', 'B', 'V', 'L']
+    job_labels = ['Roughing', 'Finishing', 'Isolation', 'Polishing']
+    offset_labels = ['Path', 'In', 'Out', 'Custom']
+    gap_labels = ['Bridge', 'Thin', 'M-Bites']
+
+    for tool_id, tool in normalized.items():
+        if (type(tool_id) is not str or not tool_id.isdecimal() or
+                str(int(tool_id)) != tool_id or int(tool_id) <= 0):
+            raise ValueError('record ID %r: expected a positive canonical decimal string' % tool_id)
+
+        try:
+            if not isinstance(tool, dict):
+                raise ValueError('expected a record dictionary')
+            if not isinstance(tool.get('name'), str):
+                raise ValueError('name: expected a string')
+            tool['tooldia'] = _finite_database_number(tool.get('tooldia'), 'tooldia')
+            if not isinstance(tool.get('data'), dict):
+                raise ValueError('data: expected a dictionary')
+
+            data = tool['data']
+            data['tool_target'] = _database_enum(data.get('tool_target'), target_labels, 'data.tool_target')
+
+            if 'job' in data:
+                data['tools_mill_job_type'] = _database_enum(data['job'], job_labels, 'data.job')
+                del data['job']
+                log.warning('Tools DB record %s: migrated data.job to data.tools_mill_job_type', tool_id)
+            if 'tools_mill_offset_value' in tool:
+                data['tools_mill_offset_value'] = _finite_database_number(
+                    tool['tools_mill_offset_value'], 'tools_mill_offset_value')
+                del tool['tools_mill_offset_value']
+                log.warning('Tools DB record %s: migrated record tools_mill_offset_value to data', tool_id)
+
+            for option, default in default_values.items():
+                if option.startswith('tools_'):
+                    data.setdefault(option, deepcopy(default))
+
+            data['tools_mill_tool_shape'] = _database_enum(
+                data['tools_mill_tool_shape'], shape_labels, 'tools_mill_tool_shape')
+            data['tools_mill_job_type'] = _database_enum(
+                data['tools_mill_job_type'], job_labels, 'tools_mill_job_type')
+            data['tools_mill_offset_type'] = _database_enum(
+                data['tools_mill_offset_type'], offset_labels, 'tools_mill_offset_type')
+            data['tools_mill_offset_value'] = _finite_database_number(
+                data['tools_mill_offset_value'], 'tools_mill_offset_value')
+
+            gap_value = data['tools_cutout_gap_type']
+            if gap_value in ('b', 'bt', 'mb'):
+                gap_value = {'b': 0, 'bt': 1, 'mb': 2}[gap_value]
+            data['tools_cutout_gap_type'] = _database_enum(gap_value, gap_labels, 'tools_cutout_gap_type')
+
+            for bound in ('tol_min', 'tol_max'):
+                value = data.get(bound, 0.0)
+                data[bound] = _finite_database_number(value, bound)
+            if data['tol_min'] < 0 or data['tol_min'] > data['tol_max']:
+                raise ValueError('tol_min/tol_max: expected 0 <= min <= max')
+
+            enum_options = {
+                'tools_mill_tool_shape', 'tools_mill_job_type',
+                'tools_mill_offset_type', 'tools_cutout_gap_type'
+            }
+            for option, value in data.items():
+                if option in enum_options or option in ('tool_target', 'tol_min', 'tol_max'):
+                    continue
+                if option in default_values:
+                    _validate_database_option(value, default_values[option], option)
+        except (TypeError, ValueError) as error:
+            raise ValueError('record %s: %s' % (tool_id, error)) from error
+
+    return normalized
+
+
+def load_tools_database(filename, defaults):
+    with open(filename, encoding='utf-8-sig') as stream:
+        return normalize_tools_database(json.load(stream), defaults)
+
+
+def write_tools_database(filename, records):
+    payload = json.dumps(records, default=to_dict, indent=2, ensure_ascii=False).encode('utf-8')
+    output = QtCore.QSaveFile(str(filename))
+    output.setDirectWriteFallback(False)
+    if not output.open(QtCore.QIODevice.OpenModeFlag.WriteOnly):
+        raise OSError(output.errorString())
+    try:
+        if output.write(payload) != len(payload):
+            raise OSError(output.errorString())
+        if not output.commit():
+            raise OSError(output.errorString())
+    except Exception:
+        output.cancelWriting()
+        raise
 
 
 class ToolsDB2UI:
@@ -293,7 +455,7 @@ class ToolsDB2UI:
               "L = laser")
         )
 
-        self.mill_shape_combo = FCComboBox()
+        self.mill_shape_combo = FCComboBox2()
         self.mill_shape_combo.addItems(self.tool_job_options)
         self.mill_shape_combo.setObjectName('gdb_shape')
 
@@ -344,7 +506,7 @@ class ToolsDB2UI:
             )
         )
 
-        self.job_type_combo = FCComboBox()
+        self.job_type_combo = FCComboBox2()
         self.job_type_combo.addItems(self.job_item_options)
         self.job_type_combo.setObjectName('gdb_job')
 
@@ -361,7 +523,7 @@ class ToolsDB2UI:
               "Out = offset outside by half of tool diameter\n"
               "Custom = custom offset using the Custom Offset value"))
 
-        self.mill_tooloffset_type_combo = FCComboBox()
+        self.mill_tooloffset_type_combo = FCComboBox2()
         self.mill_tooloffset_type_combo.addItems(self.offset_item_options)
         self.mill_tooloffset_type_combo.setObjectName('gdb_tool_offset_type')
 
@@ -1151,9 +1313,9 @@ class ToolsDB2UI:
 
         self.cutout_gaptype_radio = RadioSet(
             [
-                {'label': _('Bridge'), 'value': 'b'},
-                {'label': _('Thin'), 'value': 'bt'},
-                {'label': "M-Bites", 'value': 'mb'}
+                {'label': _('Bridge'), 'value': 0},
+                {'label': _('Thin'), 'value': 1},
+                {'label': "M-Bites", 'value': 2}
             ],
             compact=True
         )
@@ -1585,6 +1747,9 @@ class ToolsDB2(QtWidgets.QWidget):
 
         self.ui.tool_op_combo.currentIndexChanged.connect(self.on_tool_target_changed)
 
+        self._db_load_valid = False
+        self._close_preapproved = False
+        self._close_decision = None
         self.setup_db_ui()
 
     def on_menu_request(self, pos):
@@ -1618,11 +1783,7 @@ class ToolsDB2(QtWidgets.QWidget):
         menu.exec(self.ui.tree_widget.viewport().mapToGlobal(pos))
 
     def on_save_changes(self):
-        widget_name = self.app_ui.plot_tab_area.currentWidget().objectName()
-        if widget_name == 'database_tab':
-            # Tools DB saved, update flag
-            self.app.tools_db_changed_flag = False
-            self.app.tools_db_tab.on_save_tools_db()
+        return self.on_save_tools_db()
 
     def on_item_double_clicked(self, item, column):
         if column == 0 and self.ok_to_add is True:
@@ -1630,42 +1791,43 @@ class ToolsDB2(QtWidgets.QWidget):
             self.on_tool_requested_from_app()
 
     def on_list_selection_change(self, current, previous):
+        if current is None:
+            return
+        tool_id = current.text(0)
+        if tool_id not in self.db_tool_dict:
+            return
         self.ui_disconnect()
-        self.current_toolid = int(current.text(0))
-        self.storage_to_form(self.db_tool_dict[current.text(0)])
+        self.current_toolid = int(tool_id)
+        self.storage_to_form(self.db_tool_dict[tool_id])
         self.ui_connect()
 
     def on_list_item_edited(self, item, column):
         if column == 0:
             return
         elif column == 1:
-            self.ui.name_entry.set_value(item.text(1))
+            tool_id = item.text(0)
+            if tool_id not in self.db_tool_dict:
+                return
+            tool = self.db_tool_dict[tool_id]
+            value = item.text(1)
+            if tool['name'] == value:
+                return
+            tool['name'] = value
+            self.current_toolid = int(tool_id)
+            with QtCore.QSignalBlocker(self.ui.tree_widget):
+                self.ui.tree_widget.setCurrentItem(item)
+            self.storage_to_form(tool)
+            self.on_tools_db_edited()
 
     def on_sort_target(self):
         ordered_by_target = sorted(self.db_tool_dict.items(), key=lambda x: x[1]['data']['tool_target'])
-        new_dict = {}
-        t_id = 0
-        for __, old_dict in ordered_by_target:
-            t_id += 1
-            new_dict[str(t_id)] = old_dict
-
-        self.db_tool_dict = deepcopy(new_dict)
+        self.db_tool_dict = deepcopy(dict(ordered_by_target))
         self.build_db_ui()
         self.on_tools_db_edited()
 
     def on_sort_dia(self):
-        dias = [tool['tooldia'] for tool in self.db_tool_dict.values()]
-        if dias:
-            dias.sort()
-
         ordered_by_dia = sorted(self.db_tool_dict.items(), key=lambda x: x[1]['tooldia'])
-        new_dict = {}
-        t_id = 0
-        for __, old_dict in ordered_by_dia:
-            t_id += 1
-            new_dict[str(t_id)] = old_dict
-
-        self.db_tool_dict = deepcopy(new_dict)
+        self.db_tool_dict = deepcopy(dict(ordered_by_dia))
         self.build_db_ui()
         self.on_tools_db_edited()
 
@@ -1711,6 +1873,11 @@ class ToolsDB2(QtWidgets.QWidget):
                     tooluid_val['data'][option_changed] = new_option_value
         self.ui_connect()
 
+    def _set_db_load_controls(self, enabled):
+        for widget in (self.ui.save_db_btn, self.ui.export_db_btn, self.ui.add_tool_from_db):
+            widget.setEnabled(enabled)
+        self.ui.import_db_btn.setEnabled(True)
+
     def setup_db_ui(self):
 
         # set the old color for the Tools Database Tab
@@ -1720,22 +1887,18 @@ class ToolsDB2(QtWidgets.QWidget):
 
         filename = self.app.tools_database_path()
 
-        # load the database tools from the file
         try:
-            with open(filename) as f:
-                tools = f.read()
-        except IOError:
+            candidate = load_tools_database(filename, self.app.options)
+        except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
+            self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % _("Could not load the file."))
+            self._set_db_load_controls(False)
             return
 
-        try:
-            self.db_tool_dict = json.loads(tools)
-        except Exception:
-            e = sys.exc_info()[0]
-            self.app.log.error(str(e))
-            self.app.inform.emit('[ERROR] %s' % _("Failed to parse Tools DB file."))
-            return
+        self.db_tool_dict = candidate
+        self._db_load_valid = True
+        self._set_db_load_controls(True)
 
         self.app.inform.emit('[success] %s: %s' % (_("Loaded Tools DB from"), filename))
 
@@ -1743,86 +1906,58 @@ class ToolsDB2(QtWidgets.QWidget):
 
     def build_db_ui(self):
         self.ui_disconnect()
-        nr_crt = 0
+        selected_id = str(self.current_toolid) if self.current_toolid is not None else None
+        if selected_id not in self.db_tool_dict:
+            selected_id = next(iter(self.db_tool_dict), None)
+        self.current_toolid = int(selected_id) if selected_id is not None else None
 
         parent = self.ui.tree_widget
-        self.ui.tree_widget.blockSignals(True)
-        self.ui.tree_widget.clear()
-        self.ui.tree_widget.blockSignals(False)
+        try:
+            parent.blockSignals(True)
+            parent.clear()
 
-        for toolid, dict_val in self.db_tool_dict.items():
-            row = nr_crt
-            nr_crt += 1
+            for toolid, dict_val in self.db_tool_dict.items():
+                op_name = {
+                    0: _("General"),
+                    1: _("Milling"),
+                    2: _("Drilling"),
+                    3: _('Isolation'),
+                    4: _('Paint'),
+                    5: _('NCC'),
+                    6: _('Cutout')
+                }[dict_val['data']['tool_target']]
+                item = parent.addParentEditable(
+                    parent=parent,
+                    title=[str(toolid), dict_val['name'], op_name, str(dict_val['tooldia'])],
+                    editable=True)
+                item.setData(1, QtCore.Qt.ItemDataRole.ToolTipRole, dict_val['name'])
+                item.setData(2, QtCore.Qt.ItemDataRole.ToolTipRole, op_name)
+                item.setData(3, QtCore.Qt.ItemDataRole.ToolTipRole, str(dict_val['tooldia']))
 
-            t_name = dict_val['name']
-            op_name = {
-                0: _("General"),
-                1: _("Milling"),
-                2: _("Drilling"),
-                3: _('Isolation'),
-                4: _('Paint'),
-                5: _('NCC'),
-                6: _('Cutout')
-            }[dict_val['data']['tool_target']]
+            if selected_id is not None:
+                for row in range(parent.topLevelItemCount()):
+                    item = parent.topLevelItem(row)
+                    if item.text(0) == selected_id:
+                        parent.setCurrentItem(item)
+                        item.setSelected(True)
+                        break
 
-            dia = dict_val['tooldia']
+            header = parent.header()
+            header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
 
-            try:
-                # self.add_plugin_table_line(row, name=t_name, tooldict=dict_val)
-                self.ui.tree_widget.blockSignals(True)
-                try:
-                    item = self.ui.tree_widget.addParentEditable(
-                        parent=parent, title=[str(row+1), t_name, op_name, str(dia)], editable=True)
-                    item.setData(1, QtCore.Qt.ItemDataRole.ToolTipRole, t_name)
-                    item.setData(2, QtCore.Qt.ItemDataRole.ToolTipRole, op_name)
-                    item.setData(3, QtCore.Qt.ItemDataRole.ToolTipRole, str(dia))
-                except Exception as e:
-                    self.app.log.error('FlatCAMCoomn.ToolDB2.build_db_ui() -> ', str(e))
-
-                self.ui.tree_widget.blockSignals(False)
-            except Exception as e:
-                self.ui.tree_widget.blockSignals(False)
-                self.app.log.error("ToolDB.build_db_ui.add_plugin_table_line() --> %s" % str(e))
-
-        header = self.ui.tree_widget.header()
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-
-        if self.current_toolid is None or self.current_toolid < 1:
-            if self.db_tool_dict:
-                self.storage_to_form(self.db_tool_dict['1'])
-
-                # Enable appGUI
-                try:
-                    self.on_tool_target_changed(val=self.db_tool_dict['1']['data']['tool_target'])
-                except KeyError:
-                    self.on_tool_target_changed(val=_("General"))
-
-                self.ui.tree_widget.setCurrentItem(self.ui.tree_widget.topLevelItem(0))
-                # self.ui.tree_widget.setFocus()
-
+            if selected_id is not None:
+                self.storage_to_form(self.db_tool_dict[selected_id])
+                self.on_tool_target_changed(val=self.db_tool_dict[selected_id]['data']['tool_target'])
             else:
-                # Disable appGUI
-                self.ui.tool_description_box.show()
-                self.ui.milling_box.show()
-                self.ui.ncc_box.show()
-                self.ui.paint_box.show()
-                self.ui.iso_box.show()
-                self.ui.drill_box.show()
-                self.ui.cutout_box.show()
-
-                self.ui.tool_description_box.setEnabled(False)
-                self.ui.milling_box.setEnabled(False)
-                self.ui.ncc_box.setEnabled(False)
-                self.ui.paint_box.setEnabled(False)
-                self.ui.iso_box.setEnabled(False)
-                self.ui.drill_box.setEnabled(False)
-                self.ui.cutout_box.setEnabled(False)
-        else:
-            self.storage_to_form(self.db_tool_dict[str(self.current_toolid)])
-
-        self.ui_connect()
+                for widget in (self.ui.tool_description_box, self.ui.milling_box, self.ui.ncc_box,
+                               self.ui.paint_box, self.ui.iso_box, self.ui.drill_box, self.ui.cutout_box):
+                    widget.show()
+                    widget.setEnabled(False)
+        finally:
+            parent.blockSignals(False)
+            self.ui_connect()
 
     def on_tool_target_changed(self, index=None, val=None):
         self.update_tree_target()
@@ -1981,6 +2116,7 @@ class ToolsDB2(QtWidgets.QWidget):
             "tools_drill_feedrate_rapid":   float(self.app.options["tools_drill_feedrate_rapid"]),
             "tools_drill_spindlespeed":     float(self.app.options["tools_drill_spindlespeed"]),
             "tools_drill_dwell":            self.app.options["tools_drill_dwell"],
+            "tools_drill_dwelltime":        float(self.app.options["tools_drill_dwelltime"]),
 
             "tools_drill_offset":           float(self.app.options["tools_drill_offset"]),
             "tools_drill_drill_slots":      self.app.options["tools_drill_drill_slots"],
@@ -2001,8 +2137,12 @@ class ToolsDB2(QtWidgets.QWidget):
 
         temp = []
         for k, v in self.db_tool_dict.items():
-            if "new_tool_" in v['name']:
-                temp.append(float(v['name'].rpartition('_')[2]))
+            name = v.get('name', '')
+            if name.startswith('new_tool_'):
+                try:
+                    temp.append(int(name[len('new_tool_'):]))
+                except ValueError:
+                    pass
 
         if temp:
             new_name = "new_tool_%d" % int(max(temp) + 1)
@@ -2023,11 +2163,11 @@ class ToolsDB2(QtWidgets.QWidget):
 
         dict_elem['data'] = default_data
 
-        new_toolid = len(self.db_tool_dict) + 1
+        new_toolid = max((int(key) for key in self.db_tool_dict), default=0) + 1
         self.db_tool_dict[str(new_toolid)] = deepcopy(dict_elem)
+        self.current_toolid = new_toolid
 
         # add the new entry to the Tools DB table
-        self.update_storage()
         self.build_db_ui()
 
         # select the last Tree item just added
@@ -2038,6 +2178,7 @@ class ToolsDB2(QtWidgets.QWidget):
             last_item.setSelected(True)
 
         self.on_tool_target_changed(val=dict_elem['data']['tool_target'])
+        self.on_tools_db_edited()
         self.app.inform.emit('[success] %s' % _("Tool added to DB."))
 
     def on_tool_copy(self):
@@ -2045,31 +2186,28 @@ class ToolsDB2(QtWidgets.QWidget):
         Copy a selection of Tools in the Tools DB table
         :return:
         """
-        new_tool_id = len(self.db_tool_dict)
-        for item in self.ui.tree_widget.selectedItems():
+        selected_items = self.ui.tree_widget.selectedItems()
+        if not selected_items:
+            return
+
+        new_tool_id = max((int(key) for key in self.db_tool_dict), default=0)
+        copied = False
+        for item in selected_items:
             old_tool_id = item.data(0, QtCore.Qt.ItemDataRole.DisplayRole)
 
-            for toolid, dict_val in list(self.db_tool_dict.items()):
-                if int(old_tool_id) == int(toolid):
-                    new_tool_id += 1
-                    new_key = str(new_tool_id)
+            old_tool_id = str(old_tool_id)
+            if old_tool_id not in self.db_tool_dict:
+                continue
+            new_tool_id += 1
+            self.db_tool_dict[str(new_tool_id)] = deepcopy(self.db_tool_dict[old_tool_id])
+            copied = True
 
-                    self.db_tool_dict.update({
-                        new_key: deepcopy(dict_val)
-                    })
+        if not copied:
+            return
 
         self.current_toolid = new_tool_id
 
-        self.update_storage()
         self.build_db_ui()
-
-        # select the last Tree item just added
-        nr_items = self.ui.tree_widget.topLevelItemCount()
-        if nr_items:
-            last_item = self.ui.tree_widget.topLevelItem(nr_items - 1)
-            self.ui.tree_widget.setCurrentItem(last_item)
-            last_item.setSelected(True)
-
         self.on_tools_db_edited()
         self.app.inform.emit('[success] %s' % _("Tool copied from Tools DB."))
 
@@ -2078,33 +2216,25 @@ class ToolsDB2(QtWidgets.QWidget):
         Delete a selection of Tools in the Tools DB table
         :return:
         """
-        for item in self.ui.tree_widget.selectedItems():
-            pluginName_to_remove = item.data(0, QtCore.Qt.ItemDataRole.DisplayRole)
+        selected_items = self.ui.tree_widget.selectedItems()
+        if not selected_items:
+            return
 
-            for toolid, dict_val in list(self.db_tool_dict.items()):
-                if int(pluginName_to_remove) == int(toolid):
-                    # remove from the storage
-                    self.db_tool_dict.pop(toolid, None)
+        removed = False
+        for item in selected_items:
+            tool_id = str(item.data(0, QtCore.Qt.ItemDataRole.DisplayRole))
+            if tool_id in self.db_tool_dict:
+                self.db_tool_dict.pop(tool_id)
+                removed = True
 
-        self.current_toolid = 0
-        new_tool_dict = {}
+        if not removed:
+            return
+        if str(self.current_toolid) not in self.db_tool_dict:
+            self.current_toolid = None
 
-        for dict_val in self.db_tool_dict.values():
-            self.current_toolid += 1
-            new_tool_dict[str(self.current_toolid)] = dict_val
-
-        self.db_tool_dict = deepcopy(new_tool_dict)
-
-        self.update_storage()
         self.build_db_ui()
 
-        # select the first Tree item
-        nr_items = self.ui.tree_widget.topLevelItemCount()
-        if nr_items:
-            first_item = self.ui.tree_widget.topLevelItem(0)
-            self.ui.tree_widget.setCurrentItem(first_item)
-            first_item.setSelected(True)
-
+        self.on_tools_db_edited()
         self.app.inform.emit('[success] %s' % _("Tool removed from Tools DB."))
 
     def on_export_tools_db_file(self):
@@ -2128,42 +2258,21 @@ class ToolsDB2(QtWidgets.QWidget):
 
         if filename == "":
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
-            return
-        else:
-            try:
-                f = open(filename, 'w')
-                f.close()
-            except PermissionError:
-                self.app.inform.emit('[WARNING] %s' %
-                                     _("Permission denied, saving not possible.\n"
-                                       "Most likely another app is holding the file open and not accessible."))
-                return
-            except IOError:
-                self.app.log.debug('Creating a new Tools DB file ...')
-                f = open(filename, 'w')
-                f.close()
-            except Exception:
-                e = sys.exc_info()[0]
-                self.app.log.error("Could not load Tools DB file.")
-                self.app.log.error(str(e))
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Could not load the file."))
-                return
+            return False
+        if not self._db_load_valid:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Tools DB is not valid."))
+            return False
 
-            # Save update options
-            try:
-                # Save Tools DB in a file
-                try:
-                    with open(filename, "w") as f:
-                        json.dump(self.db_tool_dict, f, default=to_dict, indent=2)
-                except Exception as e:
-                    self.app.log.error("App.on_save_tools_db() --> %s" % str(e))
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed to write Tools DB to file."))
-                    return
-            except Exception:
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed to write Tools DB to file."))
-                return
+        try:
+            candidate = normalize_tools_database(self.db_tool_dict, self.app.options)
+            write_tools_database(filename, candidate)
+        except Exception as error:
+            self.app.log.error("App.on_export_tools_db_file() --> %s" % str(error))
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed to write Tools DB to file."))
+            return False
 
         self.app.inform.emit('[success] %s: %s' % (_("Exported Tools DB to"), filename))
+        return True
 
     def on_import_tools_db_file(self):
         self.app.defaults.report_usage("on_import_tools_db_file")
@@ -2174,107 +2283,57 @@ class ToolsDB2(QtWidgets.QWidget):
 
         if filename == "":
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
-        else:
-            try:
-                with open(filename) as f:
-                    tools_in_db = f.read()
-            except IOError:
-                self.app.log.error("Could not load Tools DB file.")
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Could not load the file."))
-                return
+            return False
 
-            try:
-                self.db_tool_dict = json.loads(tools_in_db)
-            except Exception:
-                e = sys.exc_info()[0]
-                self.app.log.error(str(e))
-                self.app.inform.emit('[ERROR] %s' % _("Failed to parse Tools DB file."))
-                return
+        try:
+            candidate = load_tools_database(filename, self.app.options)
+        except (OSError, TypeError, ValueError) as error:
+            self.app.log.error("Could not load Tools DB file.")
+            self.app.log.error(str(error))
+            self.app.inform.emit('[ERROR] %s' % _("Failed to load Tools DB file."))
+            return False
 
-            self.app.inform.emit('[success] %s: %s' % (_("Loaded Tools DB from"), filename))
-            self.build_db_ui()
-            self.update_storage()
+        self.db_tool_dict = candidate
+        self.current_toolid = None
+        self._db_load_valid = True
+        self._set_db_load_controls(True)
+        self.build_db_ui()
+        self.on_tools_db_edited()
+        self.app.inform.emit('[success] %s: %s' % (_("Loaded Tools DB from"), filename))
+        return True
 
     def on_save_tools_db(self, silent=False):
         self.app.log.debug("ToolsDB.on_save_button() --> Saving Tools Database to file.")
 
         filename = self.app.tools_database_path()
+        if not self._db_load_valid:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Tools DB is not valid."))
+            return False
 
-        # Preferences save, update the color of the Tools DB Tab text
+        try:
+            candidate = normalize_tools_database(self.db_tool_dict, self.app.options)
+            write_tools_database(filename, candidate)
+        except Exception as error:
+            self.app.log.error("ToolsDB.on_save_tools_db() --> %s" % str(error))
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed to write Tools DB to file."))
+            return False
+
+        self.db_tool_dict = candidate
+        self.app.tools_db_changed_flag = False
+        self.ui.save_db_btn.restore_stylesheet()
         for idx in range(self.app_ui.plot_tab_area.count()):
             if self.app_ui.plot_tab_area.tabText(idx) == _("Tools Database"):
                 self.app_ui.plot_tab_area.tabBar.setTabTextColor(idx, self.old_color)
-                self.ui.save_db_btn.setStyleSheet("")
 
-                # clean the dictionary and leave only keys of interest
-                for tool_id in self.db_tool_dict.keys():
-                    if self.db_tool_dict[tool_id]['data']['tool_target'] != _('General'):
-                        continue
-
-                    if self.db_tool_dict[tool_id]['data']['tool_target'] == _('Milling'):
-                        for k in list(self.db_tool_dict[tool_id]['data'].keys()):
-                            if str(k).startswith('tools_'):
-                                self.db_tool_dict[tool_id]['data'].pop(k, None)
-
-                    if self.db_tool_dict[tool_id]['data']['tool_target'] == _('Drilling'):
-                        for k in list(self.db_tool_dict[tool_id]['data'].keys()):
-                            if str(k).startswith('tools_'):
-                                if str(k).startswith('tools_drill') or str(k).startswith('tools_mill'):
-                                    pass
-                                else:
-                                    self.db_tool_dict[tool_id]['data'].pop(k, None)
-
-                    if self.db_tool_dict[tool_id]['data']['tool_target'] == _('Isolation'):
-                        for k in list(self.db_tool_dict[tool_id]['data'].keys()):
-                            if str(k).startswith('tools_'):
-                                if str(k).startswith('tools_iso') or str(k).startswith('tools_mill'):
-                                    pass
-                                else:
-                                    self.db_tool_dict[tool_id]['data'].pop(k, None)
-
-                    if self.db_tool_dict[tool_id]['data']['tool_target'] == _('Paint'):
-                        for k in list(self.db_tool_dict[tool_id]['data'].keys()):
-                            if str(k).startswith('tools_'):
-                                if str(k).startswith('tools_paint') or str(k).startswith('tools_mill'):
-                                    pass
-                                else:
-                                    self.db_tool_dict[tool_id]['data'].pop(k, None)
-                                    
-                    if self.db_tool_dict[tool_id]['data']['tool_target'] == _('NCC'):
-                        for k in list(self.db_tool_dict[tool_id]['data'].keys()):
-                            if str(k).startswith('tools_'):
-                                if str(k).startswith('tools_ncc') or str(k).startswith('tools_mill'):
-                                    pass
-                                else:
-                                    self.db_tool_dict[tool_id]['data'].pop(k, None)
-
-                    if self.db_tool_dict[tool_id]['data']['tool_target'] == _('Cutout'):
-                        for k in list(self.db_tool_dict[tool_id]['data'].keys()):
-                            if str(k).startswith('tools_'):
-                                if str(k).startswith('tools_cutout') or str(k).startswith('tools_mill'):
-                                    pass
-                                else:
-                                    self.db_tool_dict[tool_id]['data'].pop(k, None)
-
-                # Save Tools DB in a file
-                try:
-                    f = open(filename, "w")
-                    json.dump(self.db_tool_dict, f, default=to_dict, indent=2)
-                    f.close()
-                except Exception as e:
-                    self.app.log.error("ToolsDB.on_save_tools_db() --> %s" % str(e))
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed to write Tools DB to file."))
-                    return
-
-                if not silent:
-                    self.app.inform.emit('[success] %s' % _("Saved Tools DB."))
+        if not silent:
+            self.app.inform.emit('[success] %s' % _("Saved Tools DB."))
+        return True
 
     def on_save_db_btn_click(self):
-        self.app.tools_db_changed_flag = False
-        self.on_save_tools_db()
+        return self.on_save_tools_db()
 
     def on_calculate_tooldia(self):
-        if self.ui.mill_shape_combo.get_value() == 'V':
+        if self.ui.mill_shape_combo.get_value() == 5:
             tip_dia = float(self.ui.mill_vdia_entry.get_value())
             half_tip_angle = float(self.ui.mill_vangle_entry.get_value()) / 2.0
             cut_z = float(self.ui.mill_cutz_entry.get_value())
@@ -2438,212 +2497,141 @@ class ToolsDB2(QtWidgets.QWidget):
         Update the dictionary that is the storage of the tools 'database'
         :return:
         """
+        wdg = self.sender()
+        if wdg is None:
+            return
+        if isinstance(wdg, FCButton) or isinstance(wdg, QtGui.QAction):
+            self.on_tools_db_edited()
+            return
+        if not isinstance(wdg, QtWidgets.QWidget):
+            return
 
+        option = self.name2option.get(wdg.objectName())
         tool_id = str(self.current_toolid)
+        if option is None or tool_id not in self.db_tool_dict:
+            return
+
+        tool = self.db_tool_dict[tool_id]
+        storage = tool if option in ('name', 'tooldia') else tool['data']
+        selected_items = self.ui.tree_widget.selectedItems()
+        if len(selected_items) != 1:
+            with QtCore.QSignalBlocker(wdg):
+                wdg.set_value(storage[option])
+            wdg.clearFocus()
+            if len(selected_items) > 1:
+                msg = '[ERROR_NOTCL] %s: %s' % \
+                      (_("To change tool properties select only one tool. Tools currently selected"),
+                       str(len(selected_items)))
+                self.app.inform.emit(msg)
+            return
+
+        value = wdg.get_value()
+        if storage.get(option) != value:
+            storage[option] = value
+            self.on_tools_db_edited()
+
+    def _close_database_container(self):
+        try:
+            plot_area = self.app_ui.plot_tab_area
+        except (AttributeError, RuntimeError):
+            return False
 
         try:
-            wdg = self.sender()
+            for idx in range(plot_area.count()):
+                try:
+                    if plot_area.widget(idx) is self and plot_area.tabText(idx) == _("Tools Database"):
+                        close_tab = getattr(plot_area, 'closeTab', None)
+                        return callable(close_tab) and close_tab(idx) is not False
+                except (AttributeError, RuntimeError):
+                    continue
+        except (AttributeError, RuntimeError):
+            pass
 
-            assert isinstance(wdg, QtWidgets.QWidget) or isinstance(wdg, QtGui.QAction), \
-                "Expected a QWidget got %s" % type(wdg)
+        try:
+            detached_tabs = plot_area.detachedTabs
+        except (AttributeError, RuntimeError):
+            return False
 
-            if wdg is None:
-                return
-            if isinstance(wdg, FCButton) or isinstance(wdg, QtGui.QAction):
-                # this is called when adding a new tool; no need to run the update below since that section is for
-                # when editing a tool
-                self.on_tools_db_edited()
-                return
+        for name, detached_window in list(detached_tabs.items()):
+            try:
+                if detached_window.contentWidget is not self:
+                    continue
+                if not self.confirm_close():
+                    return False
+                if detached_window.close() is False:
+                    return False
 
-            wdg_name = wdg.objectName()
-            val = wdg.get_value()
-        except AttributeError as err:
-            self.app.log.debug("ToolsDB2.update_storage() -> %s" % str(err))
-            return
-
-        # #############################################################################################################
-        # #############################################################################################################
-        # ################ EDITING PARAMETERS IN A TOOL SECTION
-        # #############################################################################################################
-        # #############################################################################################################
-
-        sel_rows = []
-        for item in self.ui.tree_widget.selectedItems():
-            sel_rows.append(item.data(0, QtCore.Qt.ItemDataRole.DisplayRole))
-
-        len_sel_rows = len(sel_rows)
-        if len_sel_rows > 1:
-            msg = '[ERROR_NOTCL] %s: %s' % \
-                  (_("To change tool properties select only one tool. Tools currently selected"), str(len_sel_rows))
-            self.app.inform.emit(msg)
-            old_value = self.db_tool_dict[tool_id]['data'][self.name2option[wdg_name]]
-            wdg.set_value(old_value)
-            wdg.clearFocus()
-            return
-        # #############################################################################################################
-
-        if wdg_name == "gdb_name":
-            self.db_tool_dict[tool_id]['name'] = val
-        elif wdg_name == "gdb_dia":
-            self.db_tool_dict[tool_id]['tooldia'] = val
-        elif wdg_name == "gdb_job":
-            self.db_tool_dict[tool_id]['data']['job'] = val
-        elif wdg_name == "gdb_shape":
-            self.db_tool_dict[tool_id]['data']['tools_mill_tool_shape'] = val
-        else:
-            # Milling Tool
-            if wdg_name == "gdb_tool_target":
-                self.db_tool_dict[tool_id]['data']['tool_target'] = val
-            elif wdg_name == "gdb_tol_min":
-                self.db_tool_dict[tool_id]['data']['tol_min'] = val
-            elif wdg_name == "gdb_tol_max":
-                self.db_tool_dict[tool_id]['data']['tol_max'] = val
-
-            elif wdg_name == "gdb_tool_offset_type":
-                self.db_tool_dict[tool_id]['data']['tools_mill_offset_type'] = val
-            elif wdg_name == "gdb_custom_offset":
-                self.db_tool_dict[tool_id]['tools_mill_offset_value'] = val
-
-            elif wdg_name == "gdb_cutz":
-                self.db_tool_dict[tool_id]['data']['tools_mill_cutz'] = val
-            elif wdg_name == "gdb_multidepth":
-                self.db_tool_dict[tool_id]['data']['tools_mill_multidepth'] = val
-            elif wdg_name == "gdb_multidepth_entry":
-                self.db_tool_dict[tool_id]['data']['tools_mill_depthperpass'] = val
-
-            elif wdg_name == "gdb_travelz":
-                self.db_tool_dict[tool_id]['data']['tools_mill_travelz'] = val
-            elif wdg_name == "gdb_frxy":
-                self.db_tool_dict[tool_id]['data']['tools_mill_feedrate'] = val
-            elif wdg_name == "gdb_frz":
-                self.db_tool_dict[tool_id]['data']['tools_mill_feedrate_z'] = val
-            elif wdg_name == "gdb_spindle":
-                self.db_tool_dict[tool_id]['data']['tools_mill_spindlespeed'] = val
-            elif wdg_name == "gdb_dwell":
-                self.db_tool_dict[tool_id]['data']['tools_mill_dwell'] = val
-            elif wdg_name == "gdb_dwelltime":
-                self.db_tool_dict[tool_id]['data']['tools_mill_dwelltime'] = val
-
-            elif wdg_name == "gdb_vdia":
-                self.db_tool_dict[tool_id]['data']['tools_mill_vtipdia'] = val
-            elif wdg_name == "gdb_vangle":
-                self.db_tool_dict[tool_id]['data']['tools_mill_vtipangle'] = val
-            elif wdg_name == "gdb_frapids":
-                self.db_tool_dict[tool_id]['data']['tools_mill_feedrate_rapid'] = val
-            elif wdg_name == "gdb_ecut":
-                self.db_tool_dict[tool_id]['data']['tools_mill_extracut'] = val
-            elif wdg_name == "gdb_ecut_length":
-                self.db_tool_dict[tool_id]['data']['tools_mill_extracut_length'] = val
-
-            # NCC Tool
-            elif wdg_name == "gdb_n_operation":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_operation'] = val
-            elif wdg_name == "gdb_n_overlap":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_overlap'] = val
-            elif wdg_name == "gdb_n_margin":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_margin'] = val
-            elif wdg_name == "gdb_n_method":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_method'] = val
-            elif wdg_name == "gdb_n_connect":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_connect'] = val
-            elif wdg_name == "gdb_n_contour":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_contour'] = val
-            elif wdg_name == "gdb_n_offset":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_offset_choice'] = val
-            elif wdg_name == "gdb_n_offset_value":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_offset_value'] = val
-            elif wdg_name == "gdb_n_milling_type":
-                self.db_tool_dict[tool_id]['data']['tools_ncc_milling_type'] = val
-
-            # Paint Tool
-            elif wdg_name == "gdb_p_overlap":
-                self.db_tool_dict[tool_id]['data']['tools_paint_overlap'] = val
-            elif wdg_name == "gdb_p_offset":
-                self.db_tool_dict[tool_id]['data']['tools_paint_offset'] = val
-            elif wdg_name == "gdb_p_method":
-                self.db_tool_dict[tool_id]['data']['tools_paint_method'] = val
-            elif wdg_name == "gdb_p_connect":
-                self.db_tool_dict[tool_id]['data']['tools_paint_connect'] = val
-            elif wdg_name == "gdb_p_contour":
-                self.db_tool_dict[tool_id]['data']['tools_paint_contour'] = val
-
-            # Isolation Tool
-            elif wdg_name == "gdb_i_passes":
-                self.db_tool_dict[tool_id]['data']['tools_iso_passes'] = val
-            elif wdg_name == "gdb_i_overlap":
-                self.db_tool_dict[tool_id]['data']['tools_iso_overlap'] = val
-            elif wdg_name == "gdb_i_milling_type":
-                self.db_tool_dict[tool_id]['data']['tools_iso_milling_type'] = val
-            elif wdg_name == "gdb_i_iso_type":
-                self.db_tool_dict[tool_id]['data']['tools_iso_isotype'] = val
-
-            # Drilling Tool
-            elif wdg_name == "gdb_e_cutz":
-                self.db_tool_dict[tool_id]['data']['tools_drill_cutz'] = val
-            elif wdg_name == "gdb_e_multidepth":
-                self.db_tool_dict[tool_id]['data']['tools_drill_multidepth'] = val
-            elif wdg_name == "gdb_e_depthperpass":
-                self.db_tool_dict[tool_id]['data']['tools_drill_depthperpass'] = val
-            elif wdg_name == "gdb_e_travelz":
-                self.db_tool_dict[tool_id]['data']['tools_drill_travelz'] = val
-
-            elif wdg_name == "gdb_e_feedratez":
-                self.db_tool_dict[tool_id]['data']['tools_drill_feedrate_z'] = val
-            elif wdg_name == "gdb_e_fr_rapid":
-                self.db_tool_dict[tool_id]['data']['tools_drill_feedrate_rapid'] = val
-            elif wdg_name == "gdb_e_spindlespeed":
-                self.db_tool_dict[tool_id]['data']['tools_drill_spindlespeed'] = val
-            elif wdg_name == "gdb_e_dwell":
-                self.db_tool_dict[tool_id]['data']['tools_drill_dwell'] = val
-            elif wdg_name == "gdb_e_dwelltime":
-                self.db_tool_dict[tool_id]['data']['tools_drill_dwelltime'] = val
-
-            elif wdg_name == "gdb_e_offset":
-                self.db_tool_dict[tool_id]['data']['tools_drill_offset'] = val
-            elif wdg_name == "gdb_e_drill_slots":
-                self.db_tool_dict[tool_id]['data']['tools_drill_drill_slots'] = val
-            elif wdg_name == "gdb_e_drill_slots_over":
-                self.db_tool_dict[tool_id]['data']['tools_drill_drill_overlap'] = val
-            elif wdg_name == "gdb_e_drill_last_drill":
-                self.db_tool_dict[tool_id]['data']['tools_drill_last_drill'] = val
-
-            # Cutout Tool
-            elif wdg_name == "gdb_ct_margin":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_margin'] = val
-            elif wdg_name == "gdb_ct_gapsize":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_gapsize'] = val
-            elif wdg_name == "gdb_ct_gaps":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_gaps_ff'] = val
-            elif wdg_name == "gdb_ct_convex":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_convexshape'] = val
-
-            elif wdg_name == "gdb_ct_gap_type":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_gap_type'] = val
-            elif wdg_name == "gdb_ct_gap_depth":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_gap_depth'] = val
-            elif wdg_name == "gdb_ct_mb_dia":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_mb_dia'] = val
-            elif wdg_name == "gdb_ct_mb_spacing":
-                self.db_tool_dict[tool_id]['data']['tools_cutout_mb_spacing'] = val
-
-        self.on_tools_db_edited()
+                self._close_preapproved = True
+                try:
+                    for idx in range(plot_area.count()):
+                        if plot_area.widget(idx) is self and plot_area.tabText(idx) == _("Tools Database"):
+                            close_tab = getattr(plot_area, 'closeTab', None)
+                            return callable(close_tab) and close_tab(idx) is not False
+                finally:
+                    self._close_preapproved = False
+                return False
+            except (AttributeError, RuntimeError):
+                try:
+                    del detached_tabs[name]
+                except (KeyError, RuntimeError):
+                    pass
+        return False
 
     def on_tool_requested_from_app(self):
+        if not self._db_load_valid:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Tools DB is not valid."))
+            return False
         if not self.ui.tree_widget.selectedItems():
             self.app.inform.emit('[WARNING_NOTCL] %s...' % _("No Tool/row selected in the Tools Database table"))
-            return
+            return False
 
         if not self.db_tool_dict:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Tools DB empty."))
-            return
+            return False
 
+        selected_tools = []
         for item in self.ui.tree_widget.selectedItems():
-            tool_uid = item.data(0, QtCore.Qt.ItemDataRole.DisplayRole)
+            tool_uid = str(item.data(0, QtCore.Qt.ItemDataRole.DisplayRole))
+            if tool_uid in self.db_tool_dict:
+                selected_tools.append(deepcopy(self.db_tool_dict[tool_uid]))
 
-            for key in self.db_tool_dict.keys():
-                if str(key) == str(tool_uid):
-                    selected_tool = self.db_tool_dict[key]
-                    self.on_tool_request(tool=selected_tool)
+        if not selected_tools:
+            return False
+
+        dirty_before_request = bool(self.app.tools_db_changed_flag)
+        close_decision = None
+        if dirty_before_request:
+            if not self.confirm_close():
+                return False
+            close_decision = self._close_decision
+
+        try:
+            for index, selected_tool in enumerate(selected_tools):
+                try:
+                    result = self.on_tool_request(tool=selected_tool)
+                except Exception as error:
+                    self.app.log.error("ToolsDB2.on_tool_requested_from_app() --> %s" % str(error))
+                    result = 'fail'
+                if result in ('fail', False):
+                    if close_decision == 'discarded' and dirty_before_request:
+                        self.app.tools_db_changed_flag = True
+                    if index:
+                        self.app.inform.emit('[ERROR_NOTCL] %s' %
+                                             _("Tool request partially completed; the database remains open."))
+                    return False
+
+            self._close_preapproved = True
+            try:
+                closed = self._close_database_container()
+            except Exception as error:
+                self.app.log.error("ToolsDB2.on_tool_requested_from_app() --> %s" % str(error))
+                closed = False
+            if not closed and close_decision == 'discarded' and dirty_before_request:
+                self.app.tools_db_changed_flag = True
+            return closed
+        finally:
+            self._close_preapproved = False
+            self._close_decision = None
 
     def on_tools_db_edited(self, silent=None):
         """
@@ -2664,13 +2652,49 @@ class ToolsDB2(QtWidgets.QWidget):
             msg = '[WARNING_NOTCL] %s' % _("Tools in Tools Database edited but not saved.")
             self.app.inform[str, bool].emit(msg, False)
 
+    def confirm_close(self):
+        if self._close_preapproved:
+            self._close_preapproved = False
+            return True
+        self._close_decision = None
+        if not self.app.tools_db_changed_flag:
+            self._close_decision = 'clean'
+            return True
+
+        msgbox = FCMessageBox(parent=self.app_ui)
+        title = _("Save Tools Database")
+        msgbox.setWindowTitle(title)
+        msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
+        msgbox.setText('<b>%s</b>' % title)
+        msgbox.setInformativeText(_("One or more Tools are edited.\nDo you want to save?"))
+        msgbox.setIconPixmap(QtGui.QPixmap(self.app.resource_location + '/save_as.png'))
+
+        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+        bt_cancel = msgbox.addButton(_('Cancel'), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        msgbox.setDefaultButton(bt_yes)
+        msgbox.exec()
+        response = msgbox.clickedButton()
+
+        if response == bt_yes:
+            saved = self.on_save_tools_db()
+            self._close_decision = 'saved' if saved else 'save_failed'
+            return saved
+        if response == bt_no:
+            self.app.tools_db_changed_flag = False
+            self._close_decision = 'discarded'
+            return True
+        if response == bt_cancel:
+            self._close_decision = 'cancelled'
+            return False
+        self._close_decision = 'cancelled'
+        return False
+
     def on_cancel_tool(self):
-        for idx in range(self.app_ui.plot_tab_area.count()):
-            if self.app_ui.plot_tab_area.tabText(idx) == _("Tools Database"):
-                wdg = self.app_ui.plot_tab_area.widget(idx)
-                wdg.deleteLater()
-                self.app_ui.plot_tab_area.removeTab(idx)
-        self.app.inform.emit('%s' % _("Cancelled adding tool from DB."))
+        if self._close_database_container():
+            self.app.inform.emit('%s' % _("Cancelled adding tool from DB."))
+            return True
+        return False
 
     # def resize_new_plugin_table_widget(self, min_size, max_size):
     #     """

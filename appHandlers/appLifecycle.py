@@ -1,0 +1,788 @@
+# FlatCAM: 2D Post-processing for Manufacturing
+# http://flatcam.org
+# Author: Juan Pablo Caram (c)
+# Date: 2/5/2014
+# MIT Licence
+# Modified by Marius Stanciu (2019)
+
+import sys
+import os
+import json
+import traceback
+
+import builtins
+import gettext
+
+if '_' not in builtins.__dict__:
+    _ = gettext.gettext
+
+from PyQt6 import QtCore
+from appGUI.GUIElements import FCMessageBox
+
+
+class AppLifecycle(QtCore.QObject):
+    """Handler for app lifecycle methods: startup, shutdown, autosave, version check."""
+
+    def __init__(self, app):
+        """Cache only dependencies available during early construction.
+
+        App creates this handler before UI, collection, and plotcanvas setup.
+        Don't access those attributes here; lifecycle methods may use self.app after setup.
+        """
+        super().__init__()
+        self.app = app
+        self.log = app.log
+        self.inform = app.inform
+        self.defaults = app.defaults
+        self.options = app.options
+
+    # --------------------------------------------------------------------------
+    # Method 1: on_options_value_changed
+    # --------------------------------------------------------------------------
+    def on_options_value_changed(self, key_changed):
+        # when changing those properties the associated keys change, so we get an updated Properties default Tab
+        if key_changed in [
+            "global_grid_lines", "global_grid_snap", "global_axis", "global_workspace", "global_workspaceT",
+            "global_workspace_orientation", "global_hud"
+        ]:
+            self.app.on_properties_tab_click()
+
+        # TODO handle changing the units in the Preferences
+        # if key_changed == "units":
+        #     self.on_toggle_units(no_pref=False)
+
+    # --------------------------------------------------------------------------
+    # Method 2: on_app_restart
+    # --------------------------------------------------------------------------
+    def on_app_restart(self):
+        # make sure that the Sys Tray icon is hidden before restart otherwise it will
+        # be left in the SySTray
+        try:
+            self.app.trayIcon.hide()
+        except Exception:
+            pass
+
+        import appTranslation as fcTranslate
+        fcTranslate.restart_program(app=self.app)
+
+    # --------------------------------------------------------------------------
+    # Method 3: on_layout
+    # --------------------------------------------------------------------------
+    def on_layout(self, lay=None, connect_signals=True):
+        """
+        Set the toolbars layout (location).
+
+        :param connect_signals: Useful when used in the App.__init__(); bool
+        :param lay:             Type of layout to be set on the toolbar
+        :return:                None
+        """
+        from PyQt6.QtCore import QSettings
+        from PyQt6 import QtWidgets
+        from PyQt6.QtCore import Qt
+
+        self.defaults.report_usage("on_layout()")
+        self.log.debug(" ---> New Layout")
+
+        if lay:
+            current_layout = lay
+        else:
+            current_layout = self.app.ui.general_pref_form.general_gui_group.layout_combo.get_value()
+
+        lay_settings = QSettings("Open Source", "FlatCAM_EVO")
+        lay_settings.setValue('layout', current_layout)
+
+        # This will write the setting to the platform specific storage.
+        del lay_settings
+
+        # first remove the toolbars:
+        self.log.debug(" -> Remove Toolbars")
+        try:
+            self.app.ui.removeToolBar(self.app.ui.toolbarfile)
+            self.app.ui.removeToolBar(self.app.ui.toolbaredit)
+            self.app.ui.removeToolBar(self.app.ui.toolbarview)
+            self.app.ui.removeToolBar(self.app.ui.toolbarshell)
+            self.app.ui.removeToolBar(self.app.ui.toolbarplugins)
+            self.app.ui.removeToolBar(self.app.ui.exc_edit_toolbar)
+            self.app.ui.removeToolBar(self.app.ui.geo_edit_toolbar)
+            self.app.ui.removeToolBar(self.app.ui.grb_edit_toolbar)
+            self.app.ui.removeToolBar(self.app.ui.toolbarshell)
+        except Exception:
+            pass
+
+        self.log.debug(" -> Add New Toolbars")
+        if current_layout == 'compact':
+            # ## TOOLBAR INSTALLATION # ##
+            self.app.ui.toolbarfile = QtWidgets.QToolBar('File Toolbar')
+            self.app.ui.toolbarfile.setObjectName('File_TB')
+            self.app.ui.toolbarfile.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbarfile)
+
+            self.app.ui.toolbaredit = QtWidgets.QToolBar('Edit Toolbar')
+            self.app.ui.toolbaredit.setObjectName('Edit_TB')
+            self.app.ui.toolbaredit.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbaredit)
+
+            self.app.ui.toolbarshell = QtWidgets.QToolBar('Shell Toolbar')
+            self.app.ui.toolbarshell.setObjectName('Shell_TB')
+            self.app.ui.toolbarshell.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbarshell)
+
+            self.app.ui.toolbarplugins = QtWidgets.QToolBar('Plugin Toolbar')
+            self.app.ui.toolbarplugins.setObjectName('Plugins_TB')
+            self.app.ui.toolbarplugins.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbarplugins)
+
+            self.app.ui.geo_edit_toolbar = QtWidgets.QToolBar('Geometry Editor Toolbar')
+            self.app.ui.geo_edit_toolbar.setObjectName('GeoEditor_TB')
+            self.app.ui.geo_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.geo_edit_toolbar)
+
+            self.app.ui.toolbarview = QtWidgets.QToolBar('View Toolbar')
+            self.app.ui.toolbarview.setObjectName('View_TB')
+            self.app.ui.toolbarview.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.toolbarview)
+
+            self.app.ui.addToolBarBreak(area=Qt.ToolBarArea.RightToolBarArea)
+
+            self.app.ui.grb_edit_toolbar = QtWidgets.QToolBar('Gerber Editor Toolbar')
+            self.app.ui.grb_edit_toolbar.setObjectName('GrbEditor_TB')
+            self.app.ui.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.grb_edit_toolbar)
+
+            self.app.ui.exc_edit_toolbar = QtWidgets.QToolBar('Excellon Editor Toolbar')
+            self.app.ui.exc_edit_toolbar.setObjectName('ExcEditor_TB')
+            self.app.ui.exc_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.exc_edit_toolbar)
+        else:
+            # ## TOOLBAR INSTALLATION # ##
+            self.app.ui.toolbarfile = QtWidgets.QToolBar('File Toolbar')
+            self.app.ui.toolbarfile.setObjectName('File_TB')
+            self.app.ui.toolbarfile.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.toolbarfile)
+
+            self.app.ui.toolbaredit = QtWidgets.QToolBar('Edit Toolbar')
+            self.app.ui.toolbaredit.setObjectName('Edit_TB')
+            self.app.ui.toolbaredit.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.toolbaredit)
+
+            self.app.ui.toolbarview = QtWidgets.QToolBar('View Toolbar')
+            self.app.ui.toolbarview.setObjectName('View_TB')
+            self.app.ui.toolbarview.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.toolbarview)
+
+            self.app.ui.toolbarshell = QtWidgets.QToolBar('Shell Toolbar')
+            self.app.ui.toolbarshell.setObjectName('Shell_TB')
+            self.app.ui.toolbarshell.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.toolbarshell)
+
+            self.app.ui.toolbarplugins = QtWidgets.QToolBar('Plugin Toolbar')
+            self.app.ui.toolbarplugins.setObjectName('Plugins_TB')
+            self.app.ui.toolbarplugins.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.toolbarplugins)
+
+            self.app.ui.exc_edit_toolbar = QtWidgets.QToolBar('Excellon Editor Toolbar')
+            # self.ui.exc_edit_toolbar.setVisible(False)
+            self.app.ui.exc_edit_toolbar.setObjectName('ExcEditor_TB')
+            self.app.ui.exc_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.exc_edit_toolbar)
+
+            self.app.ui.addToolBarBreak()
+
+            self.app.ui.geo_edit_toolbar = QtWidgets.QToolBar('Geometry Editor Toolbar')
+            # self.ui.geo_edit_toolbar.setVisible(False)
+            self.app.ui.geo_edit_toolbar.setObjectName('GeoEditor_TB')
+            self.app.ui.geo_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.geo_edit_toolbar)
+
+            self.app.ui.grb_edit_toolbar = QtWidgets.QToolBar('Gerber Editor Toolbar')
+            # self.ui.grb_edit_toolbar.setVisible(False)
+            self.app.ui.grb_edit_toolbar.setObjectName('GrbEditor_TB')
+            self.app.ui.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.addToolBar(self.app.ui.grb_edit_toolbar)
+
+        if current_layout == 'minimal':
+            self.app.ui.toolbarview.setVisible(False)
+            self.app.ui.toolbarshell.setVisible(False)
+            self.app.ui.geo_edit_toolbar.setVisible(False)
+            self.app.ui.grb_edit_toolbar.setVisible(False)
+            self.app.ui.exc_edit_toolbar.setVisible(False)
+            self.app.ui.lock_toolbar(lock=True)
+
+        # add all the actions to the toolbars
+        self.app.ui.populate_toolbars()
+
+        try:
+            # reconnect all the signals to the toolbar actions
+            if connect_signals is True:
+                self.app.connect_toolbar_signals()
+        except Exception as e:
+            self.log.error(
+                "App.on_layout() - connect toolbar signals -> %s" % str(e))
+
+        # Editor Toolbars Signals
+        try:
+            self.app.connect_editors_toolbar_signals()
+        except Exception as m_err:
+            self.log.error("App.on_layout() - connect editor signals -> %s" % str(m_err))
+
+        self.app.ui.grid_snap_btn.setChecked(True)
+
+        self.app.ui.corner_snap_btn.setVisible(False)
+        self.app.ui.snap_magnet.setVisible(False)
+
+        self.app.ui.grid_gap_x_entry.setText(str(self.options["global_gridx"]))
+        self.app.ui.grid_gap_y_entry.setText(str(self.options["global_gridy"]))
+        self.app.ui.snap_max_dist_entry.setText(str(self.options["global_snap_max"]))
+        self.app.ui.grid_gap_link_cb.setChecked(True)
+
+    # --------------------------------------------------------------------------
+    # Method 4: final_save
+    # --------------------------------------------------------------------------
+    def final_save(self):
+        """
+        Callback for doing a preferences save to file whenever the application is about to quit.
+        If the project has changes, it will ask the user to save the project.
+
+        :return: None
+        """
+        from PyQt6 import QtGui, QtWidgets
+
+        if self.app.save_in_progress:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
+            return
+
+        if self.app.should_we_save and self.app.collection.get_list():
+            msgbox = FCMessageBox(parent=self.app.ui)
+            title = _("Save changes")
+            txt = _("There are files/objects modified.\n"
+                    "Do you want to Save the project?")
+            msgbox.setWindowTitle(title)  # taskbar still shows it
+            msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
+            msgbox.setText('<b>%s</b>' % title)
+            msgbox.setInformativeText(txt)
+            msgbox.setIconPixmap(QtGui.QPixmap(self.app.resource_location + '/save_as.png'))
+
+            bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+            bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+            bt_cancel = msgbox.addButton(_('Cancel'), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+
+            msgbox.setDefaultButton(bt_yes)
+            msgbox.exec()
+            response = msgbox.clickedButton()
+
+            if response == bt_yes:
+                try:
+                    self.app.trayIcon.hide()
+                except Exception:
+                    pass
+                self.app.f_handlers.on_file_save_project_as(use_thread=True, quit_action=True)
+            elif response == bt_no:
+                try:
+                    self.app.trayIcon.hide()
+                except Exception:
+                    pass
+                self.quit_application()
+            elif response == bt_cancel:
+                return
+        else:
+            try:
+                self.app.trayIcon.hide()
+            except Exception:
+                pass
+            self.quit_application()
+
+    # --------------------------------------------------------------------------
+    # Method 5: quit_application
+    # --------------------------------------------------------------------------
+    def _confirm_tools_database(self):
+        try:
+            database = self.app.tools_db_tab
+        except (AttributeError, RuntimeError):
+            return True
+
+        if database is None:
+            return True
+
+        try:
+            confirm_close = getattr(database, 'confirm_close', None)
+            if not callable(confirm_close) or not confirm_close():
+                return False
+            database._close_preapproved = True
+        except RuntimeError:
+            return True
+        except Exception as error:
+            self.log.error("AppLifecycle._confirm_tools_database() --> %s" % str(error))
+            return False
+        return True
+
+    def quit_application(self, silent=False):
+        """
+        Called (as a pyslot or not) when the application is quit.
+        Direct implementation - does NOT delegate back to App to avoid circular call.
+
+        :return: bool
+        """
+        from PyQt6.QtCore import QSettings
+        from PyQt6 import QtWidgets
+
+        if not self._confirm_tools_database():
+            return False
+
+        # make sure that any change we made while working in the app is saved to the defaults
+        # WARNING !!! Do not hide UI before saving the state of the UI in the defaults file !!!
+        # TODO in the future we need to make a difference between settings that need to be persistent all the time
+        self.defaults.update(self.options)
+        self.app.preferencesUiManager.save_defaults(silent=True)
+
+        if silent is False:
+            self.log.debug("AppLifecycle.quit_application() --> App Defaults saved.")
+
+        # hide the UI so the user experiences a faster shutdown
+        self.app.ui.hide()
+
+        # stop autosave timer to prevent it from firing during shutdown
+        self.app.autosave_timer.stop()
+
+        if sys.platform == 'win32':
+            # Set thread_exit directly - safe from main thread (GIL protects bool assignment)
+            self.app.new_launch.thread_exit = True
+            # Unblock listener.accept() by connecting to the pipe and sending 'close'
+            # serve() checks for msg == 'close' to break its loop
+            try:
+                from multiprocessing.connection import Client as MpClient
+                _conn = MpClient(*self.app.new_launch.address)
+                _conn.send('close')
+                _conn.close()
+                self.log.debug("ArgThread pipe close sent OK")
+            except Exception as e:
+                self.log.debug("ArgThread pipe close FAILED: %s" % str(e))
+            if self.app.listen_th.isRunning():
+                self.app.listen_th.requestInterruption()
+                self.log.debug("ArgThread QThread requested an interruption.")
+
+        # close editors before quitting the app, if they are open
+        if self.app.geo_editor is not None:
+            self.app.geo_editor.deactivate()
+            try:
+                self.app.geo_editor.disconnect()
+            except TypeError:
+                pass
+            if silent is False:
+                self.log.debug("App.quit_application() --> Geo Editor deactivated.")
+
+        if self.app.exc_editor is not None:
+            self.app.exc_editor.deactivate()
+            try:
+                self.app.exc_editor.disconnect()
+            except TypeError:
+                pass
+            if silent is False:
+                self.log.debug("App.quit_application() --> Excellon Editor deactivated.")
+
+        if self.app.grb_editor is not None:
+            self.app.grb_editor.deactivate_grb_editor()
+            try:
+                self.app.grb_editor.disconnect()
+            except TypeError:
+                pass
+            if silent is False:
+                self.log.debug("App.quit_application() --> Gerber Editor deactivated.")
+
+        if self.app.gcode_editor is not None:
+            self.app.gcode_editor.deactivate()
+            try:
+                self.app.gcode_editor.disconnect()
+            except TypeError:
+                pass
+            if silent is False:
+                self.log.debug("App.quit_application() --> GCode Editor deactivated.")
+
+        # disconnect the mouse events
+        if self.app.use_3d_engine:
+            self.app.mm = self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.mp = self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.mr = self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
+            self.app.mdc = self.app.plotcanvas.graph_event_disconnect('mouse_double_click',
+                                                                      self.app.on_mouse_double_click_over_plot)
+            self.app.kp = self.app.plotcanvas.graph_event_disconnect('key_press', self.app.ui.keyPressEvent)
+        else:
+            self.app.plotcanvas.graph_event_disconnect(self.app.mm)
+            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
+            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+            self.app.plotcanvas.graph_event_disconnect(self.app.mdc)
+            self.app.plotcanvas.graph_event_disconnect(self.app.kp)
+
+        # Release VisPy OpenGL resources early so the GL thread has time to
+        # fully exit before QApplication.quit() processes the quit event
+        try:
+            self.app.plotcanvas.close()
+        except Exception:
+            pass
+
+        if self.app.cmd_line_headless != 1:
+            # save app state to file
+            stgs = QSettings("Open Source", "FlatCAM_EVO")
+            stgs.setValue('saved_gui_state', self.app.ui.saveState())
+            stgs.setValue('maximized_gui', self.app.ui.isMaximized())
+            stgs.setValue(
+                'language',
+                self.app.ui.general_pref_form.general_app_group.language_combo.get_value()
+            )
+            stgs.setValue(
+                'notebook_font_size',
+                self.app.ui.general_pref_form.general_app_set_group.notebook_font_size_spinner.get_value()
+            )
+            stgs.setValue(
+                'axis_font_size',
+                self.app.ui.general_pref_form.general_app_set_group.axis_font_size_spinner.get_value()
+            )
+            stgs.setValue(
+                'textbox_font_size',
+                self.app.ui.general_pref_form.general_app_set_group.textbox_font_size_spinner.get_value()
+            )
+            stgs.setValue(
+                'hud_font_size',
+                self.app.ui.general_pref_form.general_app_set_group.hud_font_size_spinner.get_value()
+            )
+            # This will write the setting to the platform specific storage.
+            del stgs
+
+        if silent is False:
+            self.log.debug("AppLifecycle.quit_application() --> App UI state saved.")
+
+        # try to quit the QThread that run ArgsThread class
+        try:
+            # del self.new_launch
+            if sys.platform == 'win32':
+                self.app.listen_th.quit()
+                self.app.listen_th.wait(3000)
+                if self.app.listen_th.isRunning():
+                    self.log.warning("ArgsThread still running after wait, terminating.")
+                    self.app.listen_th.terminate()
+                    self.app.listen_th.wait(1000)
+        except Exception as e:
+            if silent is False:
+                self.log.error("AppLifecycle.quit_application() --> %s" % str(e))
+
+        # terminate workers
+        # self.workers.__del__()
+        try:
+            self.app.pool.terminate()
+            self.app.pool.join()
+        except (ValueError, AttributeError):
+            pass
+
+        self.app.workers.quit()
+
+        # quit app directly - do NOT call back to App
+        QtWidgets.QApplication.quit()
+        return True
+
+    # --------------------------------------------------------------------------
+    # Method 6: kill_app
+    # --------------------------------------------------------------------------
+    @staticmethod
+    def kill_app():
+        from PyQt6.QtCore import QCoreApplication
+        QCoreApplication.instance().quit()
+        # When the main event loop is not started yet in which case the qApp.quit() will do nothing
+        # we use the following command
+        sys.exit(0)
+        # raise SystemExit
+
+    # --------------------------------------------------------------------------
+    # Method 7: on_portable_checked
+    # --------------------------------------------------------------------------
+    def on_portable_checked(self, state):
+        """
+        Callback called when the checkbox in Preferences GUI is checked.
+        It will set the application as portable by creating the preferences and recent files in the
+        'config' folder found in the FlatCAM installation folder.
+
+        :param state: boolean, the state of the checkbox when clicked/checked
+        :return:
+        """
+        from PyQt6.QtCore import Qt
+
+        line_no = 0
+        data = None
+
+        if sys.platform != 'win32':
+            # this won't work in Linux or macOS
+            return
+
+        app_root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        if getattr(sys, 'frozen', False) is True:
+            app_root = os.path.dirname(app_root)
+        current_data_path = os.path.join(app_root, 'config')
+        config_file = os.path.join(current_data_path, 'configuration.txt')
+        try:
+            with open(config_file, 'r') as f:
+                try:
+                    data = f.readlines()
+                except Exception as e:
+                    self.log.error('App.__init__() -->%s' % str(e))
+                    return
+        except FileNotFoundError:
+            pass
+
+        if data is None:
+            return
+
+        for line in data:
+            line = line.strip('\n')
+            param = str(line).rpartition('=')
+            if param[0] == 'portable':
+                break
+            line_no += 1
+
+        if state == Qt.CheckState.Checked:
+            if line_no >= len(data):
+                data.append('portable=True\n')
+            else:
+                data[line_no] = 'portable=True\n'
+            # create the new defaults files
+            # create current_defaults.FlatConfig file if there is none
+            try:
+                with open(current_data_path + '/current_defaults.FlatConfig'):
+                    pass
+            except IOError:
+                self.log.debug('Creating empty current_defaults.FlatConfig')
+                with open(current_data_path + '/current_defaults.FlatConfig', 'w') as f:
+                    json.dump({}, f)
+
+            # create factory_defaults.FlatConfig file if there is none
+            try:
+                with open(current_data_path + '/factory_defaults.FlatConfig'):
+                    pass
+            except IOError:
+                self.log.debug('Creating empty factory_defaults.FlatConfig')
+                with open(current_data_path + '/factory_defaults.FlatConfig', 'w') as f:
+                    json.dump({}, f)
+
+            try:
+                with open(current_data_path + '/recent.json'):
+                    pass
+            except IOError:
+                self.log.debug('Creating empty recent.json')
+                with open(current_data_path + '/recent.json', 'w') as f:
+                    json.dump([], f)
+
+            try:
+                with open(current_data_path + '/recent_projects.json'):
+                    pass
+            except IOError:
+                self.log.debug('Creating empty recent_projects.json')
+                with open(current_data_path + '/recent_projects.json', 'w') as fp:
+                    json.dump([], fp)
+
+            # save the current defaults to the new defaults file
+            self.app.preferencesUiManager.save_defaults(silent=True, data_path=current_data_path)
+
+        else:
+            if line_no >= len(data):
+                data.append('portable=False\n')
+            else:
+                data[line_no] = 'portable=False\n'
+
+        with open(config_file, 'w') as f:
+            f.writelines(data)
+
+    # --------------------------------------------------------------------------
+    # Method 8: on_defaults_dict_change
+    # --------------------------------------------------------------------------
+    def on_defaults_dict_change(self, field):
+        """
+        Called whenever a key changed in the "self.options" dictionary. It will set the required GUI element in the
+        Edit -> Preferences tab window.
+
+        :param field:   the key of the "self.options" dictionary that was changed.
+        :return:        None
+        """
+        self.app.preferencesUiManager.defaults_write_form_field(field=field)
+
+    # --------------------------------------------------------------------------
+    # Method 9: on_defaults2options
+    # --------------------------------------------------------------------------
+    def on_defaults2options(self):
+        """
+        Callback for Options->Transfer Options->App=>Project. Copy options
+        from application defaults to project options.
+
+        :return:    None
+        """
+
+        self.app.preferencesUiManager.defaults_read_form()
+        self.options.update(self.defaults)
+
+    # --------------------------------------------------------------------------
+    # Method 10: setup_obj_classes
+    # --------------------------------------------------------------------------
+    def setup_obj_classes(self):
+        """
+        Sets up application specifics on the FlatCAMObj class. This way the object.app attribute will point to the App
+        class.
+
+        :return: None
+        """
+        # FlatCAMObj.app = self
+        # ObjectCollection.app = self
+        # Gerber.app = self
+        # Excellon.app = self
+        # Geometry.app = self
+        # CNCjob.app = self
+        # FCProcess.app = self
+        # FCProcessContainer.app = self
+        from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+        OptionsGroupUI.app = self.app
+
+    # --------------------------------------------------------------------------
+    # Method 11: version_check
+    # --------------------------------------------------------------------------
+    def version_check(self):
+        """
+        Checks for the latest version of the program. Alerts the
+        user if theirs is outdated. This method is meant to be run
+        in a separate thread.
+
+        :return: None
+        """
+        import urllib.request
+        import urllib.parse
+
+        self.log.debug("version_check()")
+
+        if self.app.ui.general_pref_form.general_app_group.send_stats_cb.get_value() is True:
+            full_url = "%s?s=%s&v=%s&os=%s&%s" % (
+                self.app.version_url,
+                str(self.options['global_serial']),
+                str(self.app.version),
+                str(self.app.os),
+                urllib.parse.urlencode(self.options["global_stats"])
+            )
+        else:
+            # no_stats dict; just so it won't break things on website
+            no_ststs_dict = {"global_ststs": {}}
+            full_url = self.app.version_url + "?s=" + str(self.options['global_serial']) + "&v=" + str(self.app.version)
+            full_url += "&os=" + str(self.app.os) + "&" + urllib.parse.urlencode(no_ststs_dict["global_ststs"])
+
+        self.log.debug("Checking for updates @ %s" % full_url)
+        # ## Get the data
+        try:
+            f = urllib.request.urlopen(full_url, timeout=10)
+        except Exception:
+            self.log.warning("Failed checking for latest version. Could not connect.")
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Failed checking for latest version. Could not connect."))
+            return
+
+        try:
+            data = json.load(f)
+        except Exception as e:
+            self.log.error("Could not parse information about latest version.")
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Could not parse information about latest version."))
+            self.log.error("json.load(): %s" % str(e))
+            f.close()
+            return
+
+        f.close()
+
+        # ## Latest version?
+        if "version" not in data:
+            self.log.warning("Version check response missing 'version' key.")
+            return
+        try:
+            data_version = int(data["version"])
+        except (ValueError, TypeError):
+            self.log.warning("Version check response has invalid 'version' value.")
+            return
+
+        if not isinstance(self.app.version, (int, float)):
+            return
+        if self.app.version >= data_version:
+            self.log.debug("The application is up to date!")
+            self.inform.emit('[success] %s' % _("The application is up to date!"))
+            return
+
+        self.log.debug("Newer version available.")
+        title = _("Newer Version Available")
+        name = data.get("name", "")
+        message = data.get("message", "")
+        msg = '%s<br><br>><b>%s</b><br>%s' % (
+            _("There is a newer version available for download:"),
+            str(name),
+            str(message)
+        )
+        self.app.message.emit(title, msg, "info")
+
+    # --------------------------------------------------------------------------
+    # Method 12: start_delayed_quit
+    # --------------------------------------------------------------------------
+    def start_delayed_quit(self, delay, filename, should_quit=None):
+        """
+
+        :param delay:           period of checking if project file size is more than zero; in seconds
+        :param filename:        the name of the project file to be checked periodically for size more than zero
+        :param should_quit:     if the task finished will be followed by an app quit; boolean
+        :return:
+        """
+        from PyQt6.QtCore import QTimer
+
+        to_quit = should_quit
+        self.app.save_timer = QTimer()
+        self.app.save_timer.setInterval(delay)
+        self.app.save_timer.timeout.connect(lambda: self.check_project_file_size(filename=filename, should_quit=to_quit))
+        self.app.save_timer.start()
+
+    # --------------------------------------------------------------------------
+    # Method 13: check_project_file_size
+    # --------------------------------------------------------------------------
+    def check_project_file_size(self, filename, should_quit=None):
+        """
+
+        :param filename:        the name of the project file to be checked periodically for size more than zero
+        :param should_quit:     will quit the app if True; boolean
+        :return:
+        """
+
+        try:
+            if os.stat(filename).st_size > 0:
+                self.app.save_in_progress = False
+                self.app.save_timer.stop()
+                if should_quit:
+                    self.app.app_quit.emit()
+        except Exception:
+            traceback.print_exc()
+
+    # --------------------------------------------------------------------------
+    # Method 14: save_project_auto
+    # --------------------------------------------------------------------------
+    def save_project_auto(self):
+        """
+        Called periodically to save the project.
+        It will save if there is no block on the save, if the project was saved at least once and if there is no save in
+        # progress.
+
+        :return:
+        """
+
+        if self.app.block_autosave is False and self.app.should_we_save is True and self.app.save_in_progress is False:
+            self.app.f_handlers.on_file_save_project()
+
+    # --------------------------------------------------------------------------
+    # Method 15: save_project_auto_update
+    # --------------------------------------------------------------------------
+    def save_project_auto_update(self):
+        """
+        Update the auto save time interval value.
+        :return:
+        """
+        self.log.debug("App.save_project_auto_update() --> updated the interval timeout.")
+        try:
+            if self.app.autosave_timer.isActive():
+                self.app.autosave_timer.stop()
+        except Exception:
+            pass
+
+        if self.options['global_autosave'] is True:
+            self.app.autosave_timer.setInterval(int(self.options['global_autosave_timeout']))
+            self.app.autosave_timer.start()

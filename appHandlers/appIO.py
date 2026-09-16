@@ -929,11 +929,22 @@ class appIO(QtCore.QObject):
             # meaning that removing the first tab (idx = 0) then the tab at former idx = 1 will assume idx = 0
             # and so on. Therefore, the deletion should be done in reverse
             wdg_count = self.app.ui.plot_tab_area.tabBar.count() - 1
+            retained_tabs = []
             for index in range(wdg_count, -1, -1):
                 try:
-                    self.app.ui.plot_tab_area.closeTab(index)
+                    close_result = self.app.ui.plot_tab_area.closeTab(index)
+                    if close_result is False:
+                        tab_name = self.app.ui.plot_tab_area.tabText(index) or _("A tab")
+                        retained_tabs.append(tab_name)
                 except Exception as e:
                     self.log.error("App.on_file_new_project() --> %s" % str(e))
+
+            if retained_tabs:
+                if len(retained_tabs) == 1:
+                    retained_message = _("%s remains open because its closure was canceled.") % retained_tabs[0]
+                else:
+                    retained_message = _("%d tabs remain open because their closure was canceled.") % len(retained_tabs)
+                self.inform.emit('[WARNING_NOTCL] %s' % retained_message)
 
             # # And then add again the Plot Area
             self.app.ui.plot_tab_area.insertTab(0, self.app.ui.plot_tab, _("Plot Area"))
@@ -1051,7 +1062,7 @@ class appIO(QtCore.QObject):
                 if filename != '':
                     self.worker_task.emit({'fcn': self.open_script, 'params': [filename]})
 
-    def on_file_run_cript(self, name=None, silent=False):
+    def on_file_run_script(self, name=None, silent=False):
         """
         File menu callback for loading and running a TCL script.
 
@@ -1105,7 +1116,7 @@ class appIO(QtCore.QObject):
                 if silent is False:
                     self.inform.emit('[success] %s' % _("TCL script file opened in Code Editor and executed."))
             except Exception as e:
-                self.app.error("App.on_file_run_cript() -> %s" % str(e))
+                self.app.log.error("App.on_file_run_cript() -> %s" % str(e))
                 sys.exit(2)
 
     def on_file_save_project(self, silent=False):

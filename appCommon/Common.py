@@ -909,7 +909,7 @@ class AppLogging:
 
     @log_level.setter
     def log_level(self, val):
-        self._log = val if val in [0, 1, 2] else 0
+        self._log_level = val if val in [0, 1, 2] else 0
 
     def info(self, msg):
         if self._log_level == 0:

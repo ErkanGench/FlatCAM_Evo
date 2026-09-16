@@ -1428,8 +1428,16 @@ class Geometry(object):
             boundary = self.solid_geometry.envelope
         return boundary.difference(self.solid_geometry)
 
-    def clear_polygon_shrink(self, polygon, tooldia, steps_per_circle, overlap=0.15, connect=True, contour=True,
-                             prog_plot=False):
+    def clear_polygon_shrink(
+            self,
+            polygon,
+            tooldia,
+            steps_per_circle,
+            overlap=0.15,
+            connect=True,
+            contour=True,
+            prog_plot=False
+    ):
         """
         Creates geometry inside a polygon for a tool to cover
         the whole area.

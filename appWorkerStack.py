@@ -1,4 +1,7 @@
 
+import logging
+import time
+
 from PyQt6 import QtCore
 from appWorker import Worker
 
@@ -131,8 +134,19 @@ class WorkerStack(QtCore.QObject):
     def __del__(self):
         self.quit()
 
-    def quit(self):
-        """Gracefully stop all worker threads."""
+    def quit(self, timeout_ms=3000):
+        """Stop all worker threads within a shared timeout."""
         for thread in self.threads:
+            thread.requestInterruption()
             thread.quit()
-            thread.wait()
+
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000
+        for thread in self.threads:
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if thread.wait(remaining_ms) or not thread.isRunning():
+                continue
+
+            logging.getLogger('base').warning("Forcing worker thread shutdown after timeout.")
+            thread.terminate()
+            if not thread.wait(1000):
+                logging.getLogger('base').error("Worker thread did not terminate after forced shutdown.")

@@ -3076,8 +3076,6 @@ class MainGUI(QtWidgets.QMainWindow):
                         return
 
                     if widget_name == 'database_tab':
-                        # Tools DB saved, update flag
-                        self.app.tools_db_changed_flag = False
                         self.app.tools_db_tab.on_save_tools_db()
                         return
 
@@ -3132,7 +3130,7 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 # Run a Script
                 if key == QtCore.Qt.Key.Key_S:
-                    self.app.f_handlers.on_file_run_cript()
+                    self.app.f_handlers.on_file_run_script()
                     return
 
                 # Toggle Workspace

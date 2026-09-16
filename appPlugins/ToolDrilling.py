@@ -11,6 +11,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     FCComboBox2, RadioSet, FCDoubleSpinner, FCSpinner, NumericalEvalTupleEntry, NumericalEvalEntry, FCTable, \
     OptionalInputSection, OptionalHideInputSection
 from appParsers.ParseExcellon import Excellon
+from appDatabase import load_tools_database
 
 from matplotlib.backend_bases import KeyEvent as mpl_key_event
 
@@ -1169,21 +1170,12 @@ class ToolDrilling(Excellon, AppTool):
 
         filename = self.app.tools_database_path()
 
-        # load the database tools from the file
         try:
-            with open(filename) as f:
-                tools = f.read()
-        except IOError:
+            self.tools_db_dict = load_tools_database(filename, self.app.options)
+        except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
+            self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
-            return
-
-        try:
-            self.tools_db_dict = json.loads(tools)
-        except Exception:
-            e = sys.exc_info()[0]
-            self.app.log.error(str(e))
-            self.app.inform.emit('[ERROR] %s' % _("Failed to parse Tools DB file."))
             return
 
         if not self.tools_db_dict:
@@ -1211,7 +1203,7 @@ class ToolDrilling(Excellon, AppTool):
 
                     # test if the targeted tool is Drilling Tool, if not, skip to next tool
                     targeted_tool = db_tool_val['data']['tool_target']
-                    if targeted_tool != _("Drilling"):
+                    if targeted_tool != 2:
                         continue
 
                     # if we find a tool with the same diameter in the Tools DB just update it's data
@@ -1219,24 +1211,24 @@ class ToolDrilling(Excellon, AppTool):
                         tool_found += 1
                         for d in db_tool_val['data']:
                             if d.find('tools_drill_') == 0:
-                                new_tools_dict[orig_tool]['data'][d] = db_tool_val['data'][d]
+                                new_tools_dict[orig_tool]['data'][d] = deepcopy(db_tool_val['data'][d])
                             elif d.find('tools_') == 0:
                                 # don't need data for other App Tools; this tests after 'tools_drill_'
                                 continue
                             else:
-                                new_tools_dict[orig_tool]['data'][d] = db_tool_val['data'][d]
+                                new_tools_dict[orig_tool]['data'][d] = deepcopy(db_tool_val['data'][d])
                     # search for a tool that has a tolerance that the tool fits in
                     elif high_limit >= orig_tooldia >= low_limit:
                         tool_found += 1
                         new_tools_dict[orig_tool]['tooldia'] = db_tooldia
                         for d in db_tool_val['data']:
                             if d.find('tools_drill_') == 0:
-                                new_tools_dict[orig_tool]['data'][d] = db_tool_val['data'][d]
+                                new_tools_dict[orig_tool]['data'][d] = deepcopy(db_tool_val['data'][d])
                             elif d.find('tools_') == 0:
                                 # don't need data for other App Tools; this tests after 'tools_drill_'
                                 continue
                             else:
-                                new_tools_dict[orig_tool]['data'][d] = db_tool_val['data'][d]
+                                new_tools_dict[orig_tool]['data'][d] = deepcopy(db_tool_val['data'][d])
 
                 if tool_found > 1:
                     self.app.inform.emit(

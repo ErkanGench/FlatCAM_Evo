@@ -14,11 +14,18 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 APPMMAIN_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'appMain.py')
+APPLIFECYCLE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'appHandlers', 'appLifecycle.py')
 
 
 def read_appmain():
     """Read appMain.py source."""
     with open(APPMMAIN_PATH, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+def read_lifecycle():
+    """Read appLifecycle.py source."""
+    with open(APPLIFECYCLE_PATH, 'r', encoding='utf-8') as f:
         return f.read()
 
 
@@ -175,9 +182,9 @@ class TestEditorCleanup(unittest.TestCase):
         RED: quit_application() only deactivates the editor matching self.call_source.
         If another editor is open (but call_source doesn't match), it stays active.
         """
-        source = read_appmain()
+        source = read_lifecycle()
         method = extract_method(source, 'quit_application')
-        self.assertIsNotNone(method, "quit_application method not found")
+        self.assertIsNotNone(method, "quit_application method not found in appLifecycle.py")
 
         # The BUG: editors are deactivated ONLY if call_source matches
         # This means if geo_editor is open but call_source is 'gcode_editor',
@@ -200,10 +207,10 @@ class TestEditorCleanup(unittest.TestCase):
             f"All editors should be deactivated unconditionally when not None.")
 
         # After fix: check for unconditional deactivation pattern
-        unconditional_geo = 'self.geo_editor is not None' in method
-        unconditional_exc = 'self.exc_editor is not None' in method
-        unconditional_grb = 'self.grb_editor is not None' in method
-        unconditional_gcode = 'self.gcode_editor is not None' in method
+        unconditional_geo = 'self.app.geo_editor is not None' in method
+        unconditional_exc = 'self.app.exc_editor is not None' in method
+        unconditional_grb = 'self.app.grb_editor is not None' in method
+        unconditional_gcode = 'self.app.gcode_editor is not None' in method
 
         all_unconditional = (unconditional_geo and unconditional_exc and
                             unconditional_grb and unconditional_gcode)
@@ -320,9 +327,9 @@ class TestVersionCheck(unittest.TestCase):
         RED: data["version"], data["name"], data["message"] are accessed
         without checking if keys exist. Malformed server response causes KeyError.
         """
-        source = read_appmain()
+        source = read_lifecycle()
         method = extract_method(source, 'version_check')
-        self.assertIsNotNone(method, "version_check method not found")
+        self.assertIsNotNone(method, "version_check method not found in appLifecycle.py")
 
         # After fix: should use .get() method for name and message
         uses_get_for_name = (
@@ -348,9 +355,9 @@ class TestVersionCheck(unittest.TestCase):
         RED: The 'version' key is accessed without validation.
         Should check if key exists before comparing.
         """
-        source = read_appmain()
+        source = read_lifecycle()
         method = extract_method(source, 'version_check')
-        self.assertIsNotNone(method, "version_check method not found")
+        self.assertIsNotNone(method, "version_check method not found in appLifecycle.py")
 
         # After fix: should use 'version' in data check before accessing
         uses_version_in_check = (
@@ -393,9 +400,9 @@ class TestAutosaveTimer(unittest.TestCase):
         RED: self.autosave_timer is started during init but never stopped
         in quit_application(). Timer can fire after shutdown begins.
         """
-        source = read_appmain()
+        source = read_lifecycle()
         method = extract_method(source, 'quit_application')
-        self.assertIsNotNone(method, "quit_application method not found")
+        self.assertIsNotNone(method, "quit_application method not found in appLifecycle.py")
 
         # After fix: should call autosave_timer.stop()
         self.assertIn('autosave_timer.stop', method,
@@ -408,7 +415,8 @@ class TestAutosaveTimer(unittest.TestCase):
         This confirms the timer needs to be stopped on quit.
         """
         source = read_appmain()
-        method = extract_method(source, '__init__')
+        method = extract_method(source, '_setup_gui')
+        self.assertIsNotNone(method, "_setup_gui method not found in appMain.py")
 
         # The timer setup includes autosave_timer creation
         self.assertIn('autosave_timer', method,

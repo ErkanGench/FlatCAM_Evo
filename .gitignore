@@ -1,9 +1,12 @@
 *.pyc
+*.pyc.*
+__pycache__/
 .idea/
 tests/tmp/
 build/
 /venv/
-/venv/
+/.venv/
+nul
 
 # General for macOS
 .DS_Store
@@ -16,4 +19,3 @@ build/
 
 # Git worktrees
 .worktrees/
-
