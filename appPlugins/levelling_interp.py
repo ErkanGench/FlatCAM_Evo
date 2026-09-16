@@ -327,6 +327,17 @@ def match_nearest_point(points, x, y, tol):
 
 
 _MOTION_G_CODES = (0.0, 1.0, 2.0, 3.0)
+# Other members of the motion modal group: probing (G38.2/.3/.4/.5,
+# G31 - MACH3/MACH4) and G80 (cancel motion). Selecting 1 of these puts
+# the motion modal group in a state that is not G0/G1/G2/G3, so a
+# following bare "X.. Y.." line must NOT be treated as a levelled G1
+# move until a real G0/G1/G2/G3 is seen again.
+_MOTION_NO_LEVEL_G_CODES = (31.0, 38.2, 38.3, 38.4, 38.5, 80.0)
+# Non-modal (one-shot) codes: their X/Y/Z words are not moves to work
+# coordinates (machine-coordinate move, coordinate-system offset, ...),
+# so they must not update the modal X/Y/Z state, and the line itself is
+# never height-compensated.
+_NON_MODAL_G_CODES = (10.0, 28.0, 30.0, 53.0, 92.0)
 _WORD_RE = re.compile(r'([A-Z])\s*([+\-]?\d*\.?\d+)')
 
 
@@ -357,15 +368,58 @@ def _mask_comments(line):
     return masked
 
 
+def _insert_z_word(line, new_z_str, z_match):
+    """
+    Write `new_z_str` into `line`: replace the existing Z word's number
+    if there is one, else append a new " Z<value>" word before any
+    inline comment, or at the end of the line if there is none.
+
+    :param line: original line text (with its original comment, if
+        any, untouched).
+    :param new_z_str: formatted new Z value.
+    :param z_match: the `_WORD_RE` match object for the line's Z word
+        (matched against the comment-masked line, so its span lines up
+        with `line`), or None if the line has no Z word.
+    :return: the line with the Z value inserted/replaced.
+    """
+    if z_match is not None:
+        start, end = z_match.span(2)
+        return line[:start] + new_z_str + line[end:]
+
+    paren_idx = line.find('(')
+    semi_idx = line.find(';')
+    candidates = [i for i in (paren_idx, semi_idx) if i != -1]
+    comment_idx = min(candidates) if candidates else None
+
+    if comment_idx is not None:
+        prefix = line[:comment_idx].rstrip()
+        suffix = line[comment_idx:]
+        return prefix + " Z" + new_z_str + " " + suffix
+
+    return line.rstrip() + " Z" + new_z_str
+
+
 def level_gcode_line(line, state, offset_fn, decimals=4):
     """
     Apply height-map compensation to 1 line of G-code, modally tracking
     X/Y/Z/G state across calls.
 
     Only linear cutting moves (modal G1, at or below Z0) get their Z
-    height-compensated; rapids (G0), arcs (G2/G3, counted in
-    `state['arcs']` but left untouched), non-motion G codes (G4, G20,
-    G38.2, ...) and comment-only/blank lines pass through unchanged.
+    height-compensated. Left untouched: rapids (G0); arcs (G2/G3,
+    counted in `state['arcs']`); other members of the motion modal
+    group that are never cutting moves (G31, G38.2/.3/.4/.5, G80) -
+    selecting 1 of these sets `state['G']` to None so a following bare
+    "X.. Y.." line is not mistaken for a continuing G1 move until a
+    real G0/G1/G2/G3 reappears; non-modal one-shot codes (G10, G28,
+    G30, G53, G92) whose X/Y/Z words are not work-coordinate moves, so
+    they also leave `state['X']`/`['Y']`/`['Z']`/`['G']` untouched;
+    non-motion modal codes (G4, G17, G20, G21, G90, G94, ...); and
+    comment-only/blank lines.
+
+    Words are matched with upper-case letters only (`[A-Z]`), matching
+    what FlatCAM's preprocessors emit; a line using lower-case letters
+    (e.g. `g01 x10 y5 z-0.1`) has no recognized words and passes
+    through unchanged.
 
     :param line: 1 line of G-code text, no trailing newline.
     :param state: modal state dict, as created by new_levelling_state();
@@ -399,14 +453,28 @@ def level_gcode_line(line, state, offset_fn, decimals=4):
 
     has_xyz = x_val is not None or y_val is not None or z_val is not None
 
-    motion_gs = [g for g in g_words if g in _MOTION_G_CODES]
-    other_gs = [g for g in g_words if g not in _MOTION_G_CODES]
+    non_modal_gs = [g for g in g_words if g in _NON_MODAL_G_CODES]
+    if non_modal_gs:
+        # One-shot code: X/Y/Z here are not work-coordinate moves.
+        # Leave all modal state untouched.
+        return line
 
+    motion_gs = [g for g in g_words if g in _MOTION_G_CODES]
+    no_level_gs = [g for g in g_words if g in _MOTION_NO_LEVEL_G_CODES]
+    other_gs = [
+        g for g in g_words
+        if g not in _MOTION_G_CODES and g not in _MOTION_NO_LEVEL_G_CODES
+    ]
+
+    is_non_motion_cmd = False
     if motion_gs:
         state['G'] = int(motion_gs[-1])
-        is_non_motion_cmd = False
-    else:
-        is_non_motion_cmd = bool(other_gs)
+    elif no_level_gs:
+        state['G'] = None
+        is_non_motion_cmd = True
+    elif other_gs:
+        is_non_motion_cmd = True
+    # else: no G word at all - keep the previous modal G unchanged.
 
     if x_val is not None:
         state['X'] = x_val
@@ -434,18 +502,4 @@ def level_gcode_line(line, state, offset_fn, decimals=4):
     new_z = state['Z'] + offset_fn(state['X'], state['Y'])
     new_z_str = "{0:.{1}f}".format(new_z, decimals)
 
-    if z_match is not None:
-        start, end = z_match.span(2)
-        return line[:start] + new_z_str + line[end:]
-
-    paren_idx = line.find('(')
-    semi_idx = line.find(';')
-    candidates = [i for i in (paren_idx, semi_idx) if i != -1]
-    comment_idx = min(candidates) if candidates else None
-
-    if comment_idx is not None:
-        prefix = line[:comment_idx].rstrip()
-        suffix = line[comment_idx:]
-        return prefix + " Z" + new_z_str + " " + suffix
-
-    return line.rstrip() + " Z" + new_z_str
+    return _insert_z_word(line, new_z_str, z_match)

@@ -403,7 +403,88 @@ class TestLevelGcodeLine(unittest.TestCase):
         state['Z'] = -0.1
         result = level_gcode_line("G38.2 Z-2 F50", state, self.offset_fn)
         self.assertEqual(result, "G38.2 Z-2 F50")
-        self.assertEqual(state['G'], 1)
+        self.assertIsNone(state['G'])
+
+    def test_g38_2_then_bare_move_not_levelled(self):
+        state = new_levelling_state()
+        level_gcode_line("G01 Z-0.1", state, self.offset_fn)
+        level_gcode_line("G38.2 Z-2 F50", state, self.offset_fn)
+        self.assertIsNone(state['G'])
+        line = "X1 Y1"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+        self.assertIsNone(state['G'])
+
+    def test_g31_then_bare_move_not_levelled(self):
+        state = new_levelling_state()
+        level_gcode_line("G01 Z-0.1", state, self.offset_fn)
+        level_gcode_line("G31 Z-2 F50", state, self.offset_fn)
+        self.assertIsNone(state['G'])
+        line = "X1 Y1"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+        self.assertIsNone(state['G'])
+
+    def test_g80_cancels_motion_modal(self):
+        state = new_levelling_state()
+        level_gcode_line("G01 Z-0.1", state, self.offset_fn)
+        level_gcode_line("G80", state, self.offset_fn)
+        self.assertIsNone(state['G'])
+
+    def test_toolchange_probe_mach3_sequence(self):
+        # mirrors preprocessors/Toolchange_Probe_MACH3.py's toolchange
+        # G-code: probe (G31), zero the probed axis (G92), rapid clear
+        # (G00), then a real cut move (G01) that must still be levelled
+        # from its own original Z, not from anything G92 wrote.
+        state = new_levelling_state()
+
+        r1 = level_gcode_line("G01 Z-0.1", state, self.offset_fn)
+        expected_z1 = -0.1 + self.offset_fn(0.0, 0.0)
+        self.assertEqual(r1, "G01 Z{0:.4f}".format(expected_z1))
+
+        r2 = level_gcode_line("G01 X1 Y1", state, self.offset_fn)
+        expected_z2 = -0.1 + self.offset_fn(1.0, 1.0)
+        self.assertEqual(r2, "G01 X1 Y1 Z{0:.4f}".format(expected_z2))
+
+        r3 = level_gcode_line("G31 Z-5 F50", state, self.offset_fn)
+        self.assertEqual(r3, "G31 Z-5 F50")
+        self.assertIsNone(state['G'])
+
+        r4 = level_gcode_line("G92 Z0", state, self.offset_fn)
+        self.assertEqual(r4, "G92 Z0")
+        # G92 does not touch modal state at all
+        self.assertIsNone(state['G'])
+        self.assertEqual(state['Z'], -5.0)
+
+        r5 = level_gcode_line("G00 Z2", state, self.offset_fn)
+        self.assertEqual(r5, "G00 Z2")
+        self.assertEqual(state['G'], 0)
+
+        r6 = level_gcode_line("G01 Z-0.1", state, self.offset_fn)
+        expected_z6 = -0.1 + self.offset_fn(1.0, 1.0)
+        self.assertEqual(r6, "G01 Z{0:.4f}".format(expected_z6))
+        self.assertEqual(state['Z'], -0.1)
+
+        r7 = level_gcode_line("G01 X2 Y2", state, self.offset_fn)
+        expected_z7 = -0.1 + self.offset_fn(2.0, 2.0)
+        self.assertEqual(r7, "G01 X2 Y2 Z{0:.4f}".format(expected_z7))
+        self.assertEqual(state['Z'], -0.1)
+
+    def test_g28_does_not_change_state_xy(self):
+        state = new_levelling_state()
+        state['X'] = 1.0
+        state['Y'] = 1.0
+        result = level_gcode_line("G28 X0 Y0", state, self.offset_fn)
+        self.assertEqual(result, "G28 X0 Y0")
+        self.assertEqual(state['X'], 1.0)
+        self.assertEqual(state['Y'], 1.0)
+
+    def test_lowercase_line_unchanged(self):
+        state = new_levelling_state()
+        state['G'] = 1
+        line = "g01 x10.0 y5.0 z-0.1"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
 
     def test_m_code_only_unchanged(self):
         state = new_levelling_state()
