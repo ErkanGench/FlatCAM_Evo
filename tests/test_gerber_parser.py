@@ -14,6 +14,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from appParsers.ParseGerber import Gerber
+from camlib import ApertureMacro, flatten_shapely_geometry
+from shapely import GeometryCollection, MultiPolygon, Polygon
 
 
 class MockLog:
@@ -199,6 +201,59 @@ class TestGerberParserEdgeCases:
             assert isinstance(p, Polygon)
         assert count == 2
         print("[PASS] MultiPolygon iteration test passed")
+
+    def test_aperture_macro_without_modifiers(self):
+        gbr = get_gerber_parser()
+        macro = ApertureMacro('NO_MODIFIERS')
+        macro.raw = '1,1,1,0,0*'
+        gbr.aperture_macros['NO_MODIFIERS'] = macro
+
+        gbr.aperture_parse('10', 'NO_MODIFIERS', None)
+
+        assert gbr.tools[10]['modifiers'] == []
+        assert not macro.make_geometry(gbr.tools[10]['modifiers']).is_empty
+
+    def test_disjoint_aperture_macro_primitives_are_not_shifted(self):
+        macro = ApertureMacro('DISJOINT')
+        macro.raw = '1,1,1,0,0*1,1,1,10,0*'
+
+        result = macro.make_geometry([])
+
+        assert isinstance(result, MultiPolygon)
+        assert result.bounds == (-0.5, -0.5, 10.5, 0.5)
+
+    def test_flatten_shapely_geometry_is_recursive_and_ordered(self):
+        poly1 = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+        poly2 = Polygon([(2, 0), (3, 0), (3, 1), (2, 1)])
+        poly3 = Polygon([(4, 0), (5, 0), (5, 1), (4, 1)])
+        multi = MultiPolygon([poly2, poly3])
+
+        result = flatten_shapely_geometry([[[poly1]], [multi]])
+
+        assert [geo.bounds for geo in result] == [
+            poly1.bounds, poly2.bounds, poly3.bounds
+        ]
+
+    def test_flatten_shapely_geometry_omits_empty_and_simplified_empty(self):
+        from unittest.mock import patch
+
+        poly = Polygon([(2, 0), (3, 0), (3, 1), (2, 1)])
+        empty = Polygon()
+        nested = GeometryCollection([empty, poly])
+
+        result = flatten_shapely_geometry([empty, [nested]])
+        assert [geo.bounds for geo in result] == [poly.bounds]
+
+        with patch('shapely.geometry.base.BaseGeometry.simplify', return_value=Polygon()):
+            assert flatten_shapely_geometry([poly], simplify_tolerance=1.0) == []
+
+    def test_flatten_shapely_geometry_rejects_strings(self):
+        try:
+            flatten_shapely_geometry('not geometry')
+        except NotImplementedError:
+            pass
+        else:
+            assert False, 'strings must not be recursively flattened'
 
 
 class TestGerberParserUnits:

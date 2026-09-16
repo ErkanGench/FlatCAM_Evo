@@ -8,15 +8,34 @@
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt
 from appTool import AppTool
-from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
-    FCJog, RadioSet, FCDoubleSpinner, FCSpinner, FCFileSaveDialog, FCDetachableTab, FCTable, \
-    FCZeroAxes, FCSliderWithDoubleSpinner, FCEntry, RotatedToolButton
+from appGUI.GUIElements import (
+    VerticalScrollArea,
+    FCLabel,
+    FCButton,
+    FCFrame,
+    GLay,
+    FCComboBox,
+    FCCheckBox,
+    FCJog,
+    RadioSet,
+    FCDoubleSpinner,
+    FCSpinner,
+    FCFileSaveDialog,
+    FCDetachableTab,
+    FCTable,
+    FCZeroAxes,
+    FCSliderWithDoubleSpinner,
+    FCEntry,
+    RotatedToolButton,
+)
 
 import logging
+import math
 from copy import deepcopy
 import sys
 
 from shapely import Point, MultiPoint, MultiPolygon, box
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.affinity import translate
 from datetime import datetime as dt
@@ -26,15 +45,26 @@ import appTranslation as fcTranslate
 import builtins
 
 from appObjects.AppObjectTemplate import ObjectDeleted
+
 from appGUI.VisPyVisuals import *
+from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
+
 from appEditors.appTextEditor import AppTextEditor
 
 from camlib import CNCjob
 
 from appPlugins.levelling_interp import (
-    build_bilinear_grid, bilinear_offset, nearest_offset,
-    parse_grbl_probe_output, parse_grbl_work_offset, match_nearest_point,
-    match_tolerance, new_levelling_state, level_gcode_line, parse_height_map_line,
+    build_bilinear_grid,
+    bilinear_offset,
+    nearest_offset,
+    parse_grbl_probe_output,
+    parse_grbl_active_wcs,
+    parse_grbl_work_offset,
+    match_nearest_point,
+    match_tolerance,
+    new_levelling_state,
+    level_gcode_line,
+    parse_height_map_line,
 )
 
 import time
@@ -73,6 +103,7 @@ log = logging.getLogger('base')
 class ToolLevelling(CNCjob, AppTool):
     build_al_table_sig = QtCore.pyqtSignal()
     apply_autolevel_sig = QtCore.pyqtSignal()
+    show_probing_geo_sig = QtCore.pyqtSignal(bool, bool)
 
     def __init__(self, app):
         self.app = app
@@ -219,6 +250,7 @@ class ToolLevelling(CNCjob, AppTool):
     def connect_signals_at_init(self):
         self.build_al_table_sig.connect(self.build_al_table)
         self.apply_autolevel_sig.connect(self.apply_autolevel)
+        self.show_probing_geo_sig.connect(self.show_probing_geo)
         self.ui.level.toggled.connect(self.on_level_changed)
 
         self.ui.avoid_exc_holes_cb.toggled.connect(self.on_avoid_exc_holes)
@@ -273,7 +305,7 @@ class ToolLevelling(CNCjob, AppTool):
 
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
-        self.al_heights_valid = False
+        self.al_heights_valid = self._height_map_is_complete()
 
         self.clear_ui(self.layout)
         self.ui = LevelUI(layout=self.layout, app=self.app)
@@ -297,10 +329,17 @@ class ToolLevelling(CNCjob, AppTool):
 
         # Shapes container for the Voronoi cells in Autolevelling
         if self.app.use_3d_engine:
-            self.probing_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool)
+            self.probing_shapes = ShapeCollection(
+                parent=self.app.plotcanvas.view.scene,
+                layers=1,
+                pool=self.app.pool
+            )
         else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.probing_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name=name + "_probing_shapes")
+            self.probing_shapes = ShapeCollectionLegacy(
+                obj=self,
+                app=self.app,
+                name=name + "_probing_shapes"
+            )
 
         self.form_fields.update({
             "tools_al_probe_tip_dia":           self.ui.probe_tip_dia_entry,
@@ -363,15 +402,25 @@ class ToolLevelling(CNCjob, AppTool):
 
         self.build_tool_ui()
 
-        if loaded_obj and loaded_obj.is_segmented_gcode is True and loaded_obj.obj_options["type"] == 'Geometry':
+        if self._is_supported_al_target(loaded_obj):
             self.ui.al_frame.setDisabled(False)
+            # block signals so set_value() cannot trigger the signal-connected
+            # on_mode_radio() handler, which would clear a retained height map
+            self.ui.al_mode_radio.blockSignals(True)
             self.ui.al_mode_radio.set_value(loaded_obj.obj_options['tools_al_mode'])
+            self.ui.al_mode_radio.blockSignals(False)
             self.on_controller_change()
 
-            self.on_mode_radio(val=loaded_obj.obj_options['tools_al_mode'])
+            self._update_mode_radio_ui(val=loaded_obj.obj_options['tools_al_mode'])
             self.on_method_radio(val=loaded_obj.obj_options['tools_al_method'])
         else:
             self.ui.al_frame.setDisabled(True)
+
+        # a retained (probed/imported) height map was preserved above (its
+        # validity was already computed at the top of this method); rebuild
+        # the table so the kept points show up again
+        if self.al_heights_valid:
+            self.build_al_table()
 
         self.on_avoid_exc_holes(self.app.options["tools_al_avoid_exc_holes"])
 
@@ -387,19 +436,38 @@ class ToolLevelling(CNCjob, AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(obj_name)))
             return
 
-        if target_obj is not None and target_obj.is_segmented_gcode is True and \
-                target_obj.obj_options["type"] == 'Geometry':
+        if self._is_supported_al_target(target_obj):
 
             self.ui.al_frame.setDisabled(False)
 
             # Shapes container for the Voronoi cells in Autolevelling
             if self.app.use_3d_engine:
-                self.probing_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1,
-                                                      pool=self.app.pool)
+                self.probing_shapes = ShapeCollection(
+                    parent=self.app.plotcanvas.view.scene,
+                    layers=1,
+                    pool=self.app.pool
+                )
             else:
-                self.probing_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name=obj_name + "_probing_shapes")
+                self.probing_shapes = ShapeCollectionLegacy(
+                    obj=self,
+                    app=self.app,
+                    name=obj_name + "_probing_shapes"
+                )
         else:
             self.ui.al_frame.setDisabled(True)
+
+    @staticmethod
+    def _is_supported_al_target(target_obj):
+        return (
+                target_obj is not None and
+                target_obj.is_segmented_gcode and
+                target_obj.obj_options["type"] in ('Geometry', 'Excellon')
+        )
+
+    def _height_map_is_complete(self):
+        return bool(self.al_voronoi_geo_storage) and all(
+            value.get('height') is not None for value in self.al_voronoi_geo_storage.values()
+        )
 
     def on_object_selection_changed(self, current, previous):
         found_idx = None
@@ -435,7 +503,7 @@ class ToolLevelling(CNCjob, AppTool):
 
     def on_level_changed(self, checked):
 
-        target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
+        # target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
 
         # if 'Roland' in target_obj.pp_excellon_name or 'Roland' in target_obj.pp_geometry_name or 'hpgl' in \
         #         target_obj.pp_geometry_name:
@@ -571,11 +639,11 @@ class ToolLevelling(CNCjob, AppTool):
         else:
             self.on_add_manual_points()
 
-    def check_point_over_excellon(self, pol: Polygon, check: bool) -> MultiPolygon:
+    def check_point_over_excellon(self, pol: Polygon, check: bool) -> BaseGeometry:
         if not check:
             return MultiPolygon()
 
-        fused_geometries = [
+        fused_geometries: list[Polygon] = [
             exc_geo
             for obj_in_collection in self.app.collection.get_list()
             if obj_in_collection.kind == 'excellon' and obj_in_collection.obj_options['plot']
@@ -740,8 +808,10 @@ class ToolLevelling(CNCjob, AppTool):
 
     def show_probing_geo(self, state, reset=False):
         self.app.log.debug("ToolLevelling.show_probing_geo() -> %s" % ('cleared' if state is False else 'displayed'))
-        if reset:
+        if reset or not state:
             self.probing_shapes.clear(update=True)
+        if not state:
+            return
 
         points_geo = []
         poly_geo = []
@@ -769,7 +839,14 @@ class ToolLevelling(CNCjob, AppTool):
             self.plot_probing_geo(geometry=poly_geo, visibility=state)
         # bilinear interpolation
         elif al_method == 'b':
-            for pt in self.al_bilinear_geo_storage:
+            bilinear_points = self.al_bilinear_geo_storage
+            if not bilinear_points:
+                bilinear_points = [
+                    (value['point'].x, value['point'].y)
+                    for value in self.al_voronoi_geo_storage.values()
+                ]
+
+            for pt in bilinear_points:
 
                 x_pt = pt[0]
                 y_pt = pt[1]
@@ -781,7 +858,96 @@ class ToolLevelling(CNCjob, AppTool):
             if not points_geo:
                 return
 
+            # the area allocated to each probe point (grid cell); drawn with a
+            # filled random color while no heights exist, and as an outline
+            # only once the heatmap carries the height information
+            heatmap = self._generate_bilinear_heatmap()
+            for value in self.al_voronoi_geo_storage.values():
+                cell_geo = value.get('geo')
+                if cell_geo is None or cell_geo.is_empty:
+                    continue
+                poly_geo.append(cell_geo.buffer(0.0000001))
+
+            if poly_geo:
+                if heatmap:
+                    for cell_geo in poly_geo:
+                        self.add_probing_shape(
+                            shape=cell_geo, color='#000000FF', face_color='#00000000', visible=True
+                        )
+                else:
+                    self.plot_probing_geo(geometry=poly_geo, visibility=state)
+
+            for heatmap_geo, color in heatmap:
+                self.add_probing_shape(
+                    shape=heatmap_geo, color=color, face_color=color, visible=True
+                )
+
             self.plot_probing_geo(geometry=points_geo, visibility=state, custom_color='#000000FF')
+
+    def _generate_bilinear_heatmap(self):
+        if not self.al_heights_valid or not self.al_voronoi_geo_storage:
+            return []
+
+        points = [
+            (value['point'].x, value['point'].y, value.get('height'))
+            for value in self.al_voronoi_geo_storage.values()
+        ]
+        if any(
+                value is None or not math.isfinite(value)
+                for point in points for value in point
+        ):
+            return []
+
+        grid_data = build_bilinear_grid(points, self._al_grid_tolerance())
+        if grid_data is None:
+            return []
+
+        xs, ys, _grid = grid_data
+        z_min = min(point[2] for point in points)
+        z_max = max(point[2] for point in points)
+        band_colors = (
+            '#2146A659', '#167CBE59', '#00A6B259', '#31B87959',
+            '#A7C63659', '#F4D44D59', '#F28E2B59', '#D7302759',
+        )
+
+        def sample_axis(values):
+            interval_count = len(values) - 1
+            sample_count = min(40, interval_count * 4)
+            if sample_count >= interval_count:
+                subdivisions = max(1, min(4, sample_count // interval_count))
+                axis = [values[0]]
+                for start, end in zip(values, values[1:]):
+                    for subdivision in range(1, subdivisions + 1):
+                        axis.append(start + (end - start) * subdivision / subdivisions)
+                return axis
+
+            span = values[-1] - values[0]
+            axis = [values[0] + span * index / sample_count for index in range(sample_count + 1)]
+            axis[-1] = values[-1]
+            return axis
+
+        sampled_xs = sample_axis(xs)
+        sampled_ys = sample_axis(ys)
+        band_tiles = {}
+        for x0, x1 in zip(sampled_xs, sampled_xs[1:]):
+            for y0, y1 in zip(sampled_ys, sampled_ys[1:]):
+                tile = box(x0, y0, x1, y1)
+                if tile.is_empty:
+                    continue
+                height = bilinear_offset(grid_data, (x0 + x1) / 2, (y0 + y1) / 2)
+                if z_max == z_min:
+                    band = len(band_colors) // 2
+                else:
+                    band = int((height - z_min) / (z_max - z_min) * len(band_colors))
+                    band = min(max(band, 0), len(band_colors) - 1)
+                band_tiles.setdefault(band, []).append(tile)
+
+        result = []
+        for band, tiles in sorted(band_tiles.items()):
+            geometry = unary_union(tiles)
+            if not geometry.is_empty:
+                result.append((geometry, band_colors[band]))
+        return result
 
     def plot_probing_geo(self, geometry, visibility, custom_color=None):
         if visibility:
@@ -819,11 +985,19 @@ class ToolLevelling(CNCjob, AppTool):
                 try:
                     for sh in geometry:
                         if custom_color is None:
-                            k = self.add_probing_shape(shape=sh, color=edge_color, face_color=random_color(),
-                                                       visible=True)
+                            k = self.add_probing_shape(
+                                shape=sh,
+                                color=edge_color,
+                                face_color=random_color(),
+                                visible=True
+                            )
                         else:
-                            k = self.add_probing_shape(shape=sh, color=custom_color, face_color=custom_color,
-                                                       visible=True)
+                            k = self.add_probing_shape(
+                                shape=sh,
+                                color=custom_color,
+                                face_color=custom_color,
+                                visible=True
+                            )
                 except TypeError:
                     if custom_color is None:
                         self.add_probing_shape(
@@ -927,6 +1101,12 @@ class ToolLevelling(CNCjob, AppTool):
 
     def generate_bilinear_geometry(self, pts):
         self.al_bilinear_geo_storage = pts
+
+        # allocate an area (cell) to each probe point so it can be plotted;
+        # for a regular grid the Voronoi cells are the rectangles halfway
+        # between neighbouring probe points
+        if VORONOI_ENABLED is True:
+            self.generate_voronoi_geometry(pts=[Point((pt[0], pt[1])) for pt in pts])
 
     def on_mouse_move(self, event):
         """
@@ -1348,6 +1528,8 @@ class ToolLevelling(CNCjob, AppTool):
 
         self.al_heights_valid = True
         self.build_al_table_sig.emit()
+        if self.ui.plot_probing_pts_cb.get_value():
+            self.show_probing_geo_sig.emit(True, True)
         return True
 
     def on_show_al_table(self, state):
@@ -1367,6 +1549,15 @@ class ToolLevelling(CNCjob, AppTool):
         # build AL table
         self.build_al_table()
 
+        self._update_mode_radio_ui(val)
+
+    def _update_mode_radio_ui(self, val):
+        # enable/disable the widgets relevant to the selected AL mode, without
+        # touching the al_voronoi_geo_storage / al_heights_valid / probing_shapes
+        # state - that reset must only happen when the user changes the mode
+        # radio through the UI (see on_mode_radio(), the signal-connected
+        # handler); set_tool_ui() calls this helper directly so that a
+        # retained (probed/imported) height map survives re-opening the tool.
         if val == "manual":
             self.ui.al_method_radio.set_value('v')
             self.ui.al_rows_entry.setDisabled(True)
@@ -1540,7 +1731,7 @@ class ToolLevelling(CNCjob, AppTool):
 
     def on_grbl_add_baudrate(self):
         new_bd = str(self.ui.new_baudrate_entry.get_value())
-        if int(new_bd) >= 40 and new_bd not in self.ui.baudrates_list_combo.model().stringList():
+        if int(new_bd) >= 40 and self.ui.baudrates_list_combo.findText(new_bd) == -1:
             self.ui.baudrates_list_combo.addItem(new_bd)
             self.ui.baudrates_list_combo.setCurrentText(new_bd)
 
@@ -1604,6 +1795,43 @@ class ToolLevelling(CNCjob, AppTool):
                     self.app.log.error("CNCJobObject.send_grbl_command() --> %s" % str(e))
 
         return '\n'.join(decoded_lines)
+
+    def _send_grbl_probe_command(self, command, echo=True):
+        cmd = command.strip()
+        if echo:
+            self.app.inform_shell[str, bool].emit(cmd, False)
+
+        self.grbl_ser_port.write((cmd + '\n').encode('utf-8'))
+        decoded_lines = []
+        buffer = b''
+        deadline = time.monotonic() + 10.0
+
+        while time.monotonic() < deadline:
+            chunk = self.grbl_ser_port.readline()
+            if not chunk:
+                continue
+
+            # readline() with the serial port timeout can hand back a partial
+            # line (no trailing '\n' yet); buffer chunks and only process
+            # complete lines, so a '[PRB:' split across reads is still found
+            buffer += chunk
+            while b'\n' in buffer:
+                raw_line, buffer = buffer.split(b'\n', 1)
+                decoded_line = raw_line.decode('utf-8', errors='replace').strip()
+                decoded_lines.append(decoded_line)
+                if echo:
+                    try:
+                        self.app.inform_shell.emit('\t\t\t: ' + decoded_line.upper())
+                    except Exception as e:
+                        self.app.log.error("CNCJobObject.send_grbl_command() --> %s" % str(e))
+
+                if '[PRB:' in decoded_line:
+                    return '\n'.join(decoded_lines)
+
+        self.app.inform.emit(
+            '[ERROR_NOTCL] %s' % _("GRBL probe timed out waiting for a probe result.")
+        )
+        return None
 
     def send_grbl_block(self, command, echo=True):
         stripped_cmd = command.strip()
@@ -2036,7 +2264,8 @@ class ToolLevelling(CNCjob, AppTool):
 
         self.al_heights_valid = True
         self.build_al_table_sig.emit()
-        self.apply_autolevel_sig.emit()
+        if self.ui.plot_probing_pts_cb.get_value():
+            self.show_probing_geo_sig.emit(True, True)
 
     def on_grbl_autolevel(self):
         # show the Shell Dock
@@ -2054,9 +2283,11 @@ class ToolLevelling(CNCjob, AppTool):
                 cmd = 'G90\n'
                 self.send_grbl_command(command=cmd)
 
-                offset_output = self.send_grbl_command(command='$#\n')
                 try:
-                    self.grbl_work_offset = parse_grbl_work_offset(offset_output)
+                    wcs_output = self.send_grbl_command(command='$G\n')
+                    active_wcs = parse_grbl_active_wcs(wcs_output)
+                    offset_output = self.send_grbl_command(command='$#\n')
+                    self.grbl_work_offset = parse_grbl_work_offset(offset_output, active_wcs)
                 except ValueError as e:
                     self.app.inform.emit(
                         '[ERROR_NOTCL] %s: %s' % (_("Could not read the GRBL work offset"), str(e))
@@ -2072,7 +2303,9 @@ class ToolLevelling(CNCjob, AppTool):
                     cmd = 'G0 X%s Y%s\n' % (x, y)
                     self.send_grbl_command(command=cmd)
                     cmd = 'G38.2 Z%s F%s' % (pr_depth, probe_fr)
-                    output = self.send_grbl_command(command=cmd)
+                    output = self._send_grbl_probe_command(command=cmd)
+                    if output is None:
+                        return
 
                     self.grbl_probe_result += output + '\n'
 
@@ -2087,46 +2320,43 @@ class ToolLevelling(CNCjob, AppTool):
         self.app.worker_task.emit({'fcn': worker_task, 'params': []})
 
     def on_grbl_heightmap_save(self):
-        if self.grbl_probe_result != '':
-            _filter_ = "Text File .txt (*.txt);;All Files (*.*)"
-            name = "probing_gcode"
-            try:
-                dir_file_to_save = self.app.get_last_save_folder() + '/' + str(name)
-                filename, _f = FCFileSaveDialog.get_saved_filename(
-                    caption=_("Export Code ..."),
-                    directory=dir_file_to_save,
-                    ext_filter=_filter_
-                )
-            except TypeError:
-                filename, _f = FCFileSaveDialog.get_saved_filename(
-                    caption=_("Export Code ..."),
-                    ext_filter=_filter_)
-
-            if filename == '':
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Export cancelled ..."))
-                return
-            else:
-                try:
-                    force_windows_line_endings = self.app.options['cncjob_line_ending']
-                    if force_windows_line_endings and sys.platform != 'win32':
-                        with open(filename, 'w', newline='\r\n') as f:
-                            for line in self.grbl_probe_result:
-                                f.write(line)
-                    else:
-                        with open(filename, 'w') as f:
-                            for line in self.grbl_probe_result:
-                                f.write(line)
-                except FileNotFoundError:
-                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("No such file or directory"))
-                    return
-                except PermissionError:
-                    self.app.inform.emit(
-                        '[WARNING] %s' % _("Permission denied, saving not possible.\n"
-                                           "Most likely another app is holding the file open and not accessible.")
-                    )
-                    return 'fail'
-        else:
+        if not self.al_heights_valid or not self._height_map_is_complete():
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Empty GRBL heightmap."))
+            return
+
+        _filter_ = "Text File .txt (*.txt);;All Files (*.*)"
+        name = "probing_gcode"
+        try:
+            dir_file_to_save = self.app.get_last_save_folder() + '/' + str(name)
+            filename, _f = FCFileSaveDialog.get_saved_filename(
+                caption=_("Export Code ..."),
+                directory=dir_file_to_save,
+                ext_filter=_filter_
+            )
+        except TypeError:
+            filename, _f = FCFileSaveDialog.get_saved_filename(
+                caption=_("Export Code ..."),
+                ext_filter=_filter_)
+
+        if filename == '':
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Export cancelled ..."))
+            return
+        else:
+            try:
+                force_windows_line_endings = self.app.options['cncjob_line_ending']
+                open_kwargs = {'newline': '\r\n'} if force_windows_line_endings and sys.platform != 'win32' else {}
+                with open(filename, 'w', **open_kwargs) as f:
+                    for value in self.al_voronoi_geo_storage.values():
+                        f.write('%s,%s,%s\n' % (value['point'].x, value['point'].y, value['height']))
+            except FileNotFoundError:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("No such file or directory"))
+                return
+            except PermissionError:
+                self.app.inform.emit(
+                    '[WARNING] %s' % _("Permission denied, saving not possible.\n"
+                                       "Most likely another app is holding the file open and not accessible.")
+                )
+                return 'fail'
 
     def apply_autolevel(self):
         """

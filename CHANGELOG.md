@@ -66,9 +66,15 @@ appPlugins/__init__.py:
 
 - added logging warning when ToolImage plugin fails to load instead of silent pass
 
+appParsers/ParseGerber.py:
+
+- fixed aperture parameter parsing to handle None or empty apParameters without raising AttributeError
+
 camlib.py:
 
 - reformatted clear_polygon_shrink() signature for readability
+- fixed ApertureMacro union logic: now detects GeometryCollection results instead of rejecting non-Polygon geometry
+- refactored flatten_shapely_geometry() to recursively flatten nested multipart and iterable geometries
 
 .gitignore:
 
@@ -85,14 +91,27 @@ appPlugins/ToolLevelling.py:
 - fixed send_grbl_command() raising TypeError on the controller answer (bytes vs str); it now returns the decoded answer as text
 - the autolevelling is refused when there is no probed or imported height map, or when the units of the object and of the application do not match
 - the autolevelling runs in a worker thread and a second run is blocked while one is in progress
+- added Excellon object support as autolevelling target alongside Geometry (CNCJob) objects
+- added bilinear heatmap visualization: probe point cells are colored by interpolated height bands once the height map is complete
+- GRBL: added dedicated probe command handler (_send_grbl_probe_command) with 10s timeout and line-buffered reading for reliable [PRB:] detection
+- GRBL: now reads the active work coordinate system (G54-G59) via $G before querying work offsets with $#, so probing works in any WCS
+- height map (probed or imported) is now preserved when re-opening the tool; the mode radio UI is updated without resetting the stored geometry
+- export of probe data now writes CSV (X,Y,Z per probe point) from the voronoi storage instead of the raw GRBL output string
+- fixed baudrate combo duplicate check to use findText() instead of model().stringList()
+- added show_probing_geo_sig signal and plot_probing_pts checkbox to control probing point visibility after probing/import
 
 appPlugins/levelling_interp.py:
 
 - new module with pure (no Qt) helpers for autolevelling: bilinear grid and interpolation, nearest-point offset, match tolerance, height map row parser, GRBL probe and work offset parsers and a modal G-code line leveller
+- added parse_grbl_active_wcs() to extract the active G54-G59 work coordinate system from $G output
+- parse_grbl_work_offset() now accepts an active_wcs parameter (default G54) and reads the matching G5x offset line
+- offset regex extended to match G54 through G59
+- parse_height_map_line() and parse_grbl_probe_output() now reject non-finite coordinate values
 
 tests:
 
 - added test_levelling.py, test_levelling_tool.py and test_levelling_journey.py; the journey tests generate G-code from the Gerber test files, apply height maps from MACH3/MACH4/LinuxCNC files and GRBL probe output and check every levelled Z value
+- added tests for Excellon autolevelling support, bilinear heatmap generation, GRBL active WCS parsing, probe command timeout, height map persistence, non-finite value rejection and CSV export
 
 22.03.2026
 

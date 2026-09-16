@@ -10,17 +10,20 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import tempfile
+import re
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, mock_open, patch
 
 from PyQt6 import QtWidgets
 
 _qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-from shapely import Point
+from shapely import Point, box
+from shapely.ops import unary_union
 
 from appPlugins.ToolLevelling import ToolLevelling
+from appPlugins.levelling_interp import parse_grbl_probe_output, parse_height_map_line
 
 
 def plane(x, y):
@@ -36,6 +39,7 @@ def make_tool(units='MM', storage=None, heights_valid=True):
     tool.app.proc_container = MagicMock()
     tool.app.app_units = units
     tool.ui = MagicMock()
+    tool.ui.plot_probing_pts_cb.get_value.return_value = False
     tool.units = units
     tool.al_voronoi_geo_storage = storage if storage is not None else {}
     tool.al_heights_valid = heights_valid
@@ -43,6 +47,7 @@ def make_tool(units='MM', storage=None, heights_valid=True):
     tool.grbl_work_offset = (0.0, 0.0, 0.0)
     tool.build_al_table_sig = MagicMock()
     tool.apply_autolevel_sig = MagicMock()
+    tool.show_probing_geo_sig = MagicMock()
     tool._al_apply_running = False
     tool.app.collection = MagicMock()
     tool.app.app_obj = MagicMock()
@@ -78,6 +83,251 @@ def make_storage_grid(xs, ys):
             }
             idx += 1
     return storage
+
+
+class RecordingShapeCollection:
+    def __init__(self):
+        self.shapes = []
+        self.redraw_count = 0
+        self.clear_count = 0
+
+    def add(self, **kwargs):
+        self.shapes.append(kwargs)
+        return len(self.shapes)
+
+    def redraw(self):
+        self.redraw_count += 1
+
+    def clear(self, update=False):
+        self.clear_count += 1
+        self.shapes.clear()
+
+
+def make_overlay_tool(heights_valid=True):
+    storage = {
+        0: {'point': Point(0.0, 0.0), 'geo': None, 'height': 0.0},
+        1: {'point': Point(10.0, 0.0), 'geo': None, 'height': 1.0},
+        2: {'point': Point(0.0, 10.0), 'geo': None, 'height': 2.0},
+        3: {'point': Point(10.0, 10.0), 'geo': None, 'height': 3.0},
+    }
+    tool = make_tool(storage=storage, heights_valid=heights_valid)
+    tool.app.use_3d_engine = False
+    tool.al_bilinear_geo_storage = [
+        (0.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (0.0, 10.0, 0.0),
+        (10.0, 10.0, 0.0),
+    ]
+    tool.ui.al_method_radio.get_value.return_value = 'b'
+    tool.ui.plot_probing_pts_cb.get_value.return_value = True
+    tool.ui.probe_tip_dia_entry.get_value.return_value = 0.2
+    tool.probing_shapes = RecordingShapeCollection()
+    tool.drawing_tolerance = 0.01
+    return tool
+
+
+class TestBilinearOverlay(unittest.TestCase):
+    def test_generates_bounded_transparent_bands(self):
+        tool = make_overlay_tool()
+
+        tool.show_probing_geo(state=True, reset=True)
+        bands = [
+            (item['shape'], item['color'])
+            for item in tool.probing_shapes.shapes
+            if item['color'] != '#000000FF'
+        ]
+
+        self.assertGreater(len(bands), 1)
+        self.assertLessEqual(len(bands), 8)
+        bounds = box(0.0, 0.0, 10.0, 10.0)
+        union = unary_union([geometry for geometry, _color in bands])
+        for geometry, color in bands:
+            self.assertFalse(geometry.is_empty)
+            self.assertTrue(bounds.buffer(1e-9).covers(geometry))
+            self.assertRegex(color, r'^#[0-9A-Fa-f]{8}$')
+            self.assertNotIn(color[-2:].upper(), ('00', 'FF'))
+        self.assertTrue(union.buffer(1e-9).covers(bounds))
+
+    def test_flat_heights_use_one_bounded_transparent_band(self):
+        tool = make_overlay_tool()
+        for value in tool.al_voronoi_geo_storage.values():
+            value['height'] = 0.25
+
+        tool.show_probing_geo(state=True, reset=True)
+        bands = [
+            (item['shape'], item['color'])
+            for item in tool.probing_shapes.shapes
+            if item['color'] != '#000000FF'
+        ]
+
+        self.assertEqual(len(bands), 1)
+        geometry, color = bands[0]
+        self.assertFalse(geometry.is_empty)
+        self.assertTrue(box(0.0, 0.0, 10.0, 10.0).buffer(1e-9).covers(geometry))
+        self.assertRegex(color, r'^#[0-9A-Fa-f]{8}$')
+        self.assertNotIn(color[-2:].upper(), ('00', 'FF'))
+
+    def test_bilinear_render_is_engine_neutral_and_uses_collection(self):
+        rendered = []
+        for use_3d_engine in (False, True):
+            tool = make_overlay_tool()
+            tool.app.use_3d_engine = use_3d_engine
+
+            tool.show_probing_geo(state=True, reset=True)
+            heatmap_items = [
+                item for item in tool.probing_shapes.shapes
+                if item['color'] != '#000000FF'
+            ]
+            heatmap = [
+                (item['shape'], item['color'])
+                for item in heatmap_items
+            ]
+            self.assertTrue(heatmap)
+            self.assertTrue(all(hasattr(shape, 'bounds') for shape, _color in heatmap))
+            self.assertTrue(all(re.match(r'^#[0-9A-Fa-f]{8}$', color) for _shape, color in heatmap))
+            self.assertTrue(all(item['face_color'] == item['color'] for item in heatmap_items))
+            rendered.append(heatmap)
+
+        self.assertEqual(
+            [(shape.wkb, color) for shape, color in rendered[0]],
+            [(shape.wkb, color) for shape, color in rendered[1]],
+        )
+
+    def test_invalid_heights_show_only_probe_markers(self):
+        tool = make_overlay_tool(heights_valid=False)
+
+        tool.show_probing_geo(state=True, reset=True)
+
+        self.assertTrue(tool.probing_shapes.shapes)
+        self.assertTrue(all(item['color'] == '#000000FF' for item in tool.probing_shapes.shapes))
+
+    def test_invalid_heights_draw_cell_areas_when_present(self):
+        tool = make_overlay_tool(heights_valid=False)
+        cells = {
+            0: box(-1.0, -1.0, 5.0, 5.0),
+            1: box(5.0, -1.0, 11.0, 5.0),
+            2: box(-1.0, 5.0, 5.0, 11.0),
+            3: box(5.0, 5.0, 11.0, 11.0),
+        }
+        for key, cell in cells.items():
+            tool.al_voronoi_geo_storage[key]['geo'] = cell
+
+        tool.show_probing_geo(state=True, reset=True)
+
+        cell_items = [
+            item for item in tool.probing_shapes.shapes
+            if item['face_color'] != '#000000FF'
+        ]
+        self.assertEqual(len(cell_items), 4)
+        for cell in cells.values():
+            self.assertTrue(any(
+                item['shape'].symmetric_difference(cell).area < 1e-4
+                for item in cell_items
+            ))
+        self.assertTrue(all(item['color'] == '#000000FF' for item in cell_items))
+        self.assertTrue(all(item['face_color'] != '#00000000' for item in cell_items))
+
+    def test_valid_heights_draw_cell_outlines_under_heatmap(self):
+        tool = make_overlay_tool()
+        for key, value in tool.al_voronoi_geo_storage.items():
+            point = value['point']
+            value['geo'] = box(point.x - 5.0, point.y - 5.0, point.x + 5.0, point.y + 5.0)
+
+        tool.show_probing_geo(state=True, reset=True)
+
+        outline_items = [
+            item for item in tool.probing_shapes.shapes
+            if item['face_color'] == '#00000000'
+        ]
+        self.assertEqual(len(outline_items), 4)
+        self.assertTrue(all(item['color'] == '#000000FF' for item in outline_items))
+
+    def test_generate_bilinear_geometry_assigns_a_cell_to_every_point(self):
+        tool = make_overlay_tool(heights_valid=False)
+        tool.solid_geo = box(0.0, 0.0, 10.0, 10.0)
+        pts = [
+            (value['point'].x, value['point'].y, 0.0)
+            for value in tool.al_voronoi_geo_storage.values()
+        ]
+
+        tool.generate_bilinear_geometry(pts=pts)
+
+        self.assertEqual(tool.al_bilinear_geo_storage, pts)
+        cells = []
+        for value in tool.al_voronoi_geo_storage.values():
+            self.assertIsNotNone(value['geo'])
+            self.assertTrue(value['geo'].covers(value['point']))
+            cells.append(value['geo'])
+        for idx, cell in enumerate(cells):
+            for other in cells[idx + 1:]:
+                self.assertLess(cell.intersection(other).area, 1e-9)
+        envelope = tool.solid_geo.envelope.buffer(1)
+        self.assertAlmostEqual(unary_union(cells).area, envelope.area, places=6)
+
+    def test_non_finite_heights_show_only_probe_markers(self):
+        for invalid_height in (float('nan'), float('inf'), float('-inf')):
+            with self.subTest(invalid_height=invalid_height):
+                tool = make_overlay_tool()
+                tool.al_voronoi_geo_storage[1]['height'] = invalid_height
+
+                tool.show_probing_geo(state=True, reset=True)
+
+                self.assertTrue(tool.probing_shapes.shapes)
+                self.assertTrue(all(
+                    item['color'] == '#000000FF'
+                    for item in tool.probing_shapes.shapes
+                ))
+
+    def test_successful_probe_refreshes_bilinear_overlay_when_enabled(self):
+        tool = make_overlay_tool(heights_valid=False)
+        tool.show_probing_geo = MagicMock()
+        tool.grbl_probe_result = (
+            '[PRB:0.000,0.000,0.000:1]\n'
+            '[PRB:10.000,0.000,1.000:1]\n'
+            '[PRB:0.000,10.000,2.000:1]\n'
+            '[PRB:10.000,10.000,3.000:1]\n'
+        )
+
+        self.assertTrue(tool.parse_grbl_probe_result())
+        tool.show_probing_geo_sig.emit.assert_called_once_with(True, True)
+        tool.show_probing_geo.assert_not_called()
+
+    def test_successful_import_refreshes_bilinear_overlay_when_enabled(self):
+        tool = make_tool(storage={}, heights_valid=False)
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+        tool.ui.plot_probing_pts_cb.get_value.return_value = True
+        tool.show_probing_geo = MagicMock()
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as height_map:
+            height_map.write(
+                '0.0,0.0,0.0\n'
+                '10.0,0.0,1.0\n'
+                '0.0,10.0,2.0\n'
+                '10.0,10.0,3.0\n'
+            )
+            filename = height_map.name
+        self.addCleanup(lambda: os.unlink(filename))
+
+        tool.import_height_map(filename)
+
+        tool.show_probing_geo_sig.emit.assert_called_once_with(True, True)
+        tool.show_probing_geo.assert_not_called()
+
+
+class TestFiniteLevellingInput(unittest.TestCase):
+    def test_non_finite_height_map_rows_are_invalid(self):
+        for row in ('0.0,0.0,nan', '0.0,0.0,inf', '0.0,0.0,-inf'):
+            with self.subTest(row=row):
+                self.assertIsNone(parse_height_map_line(row))
+
+    def test_non_finite_grbl_probe_values_are_rejected(self):
+        for row in (
+                '[PRB:nan,0.0,0.0:1]',
+                '[PRB:0.0,inf,0.0:1]',
+                '[PRB:0.0,0.0,-inf:1]'
+        ):
+            with self.subTest(row=row):
+                with self.assertRaises(ValueError):
+                    parse_grbl_probe_output(row)
 
 
 GCODE_SAMPLE = (
@@ -304,6 +554,275 @@ class TestSendGrblCommand(unittest.TestCase):
         self.assertIn('PRB:1.000,2.000,-0.500:1', result)
         self.assertIn('ok', result.lower())
 
+    def test_probe_command_waits_for_probe_result(self):
+        tool = make_tool()
+        tool.app.inform_shell = MagicMock()
+        tool.grbl_ser_port = MagicMock()
+        tool.grbl_ser_port.readline.side_effect = [
+            b'',
+            b'[PRB:1.000,2.000,-0.100:1]\r\n',
+        ]
+
+        with patch(
+                'appPlugins.ToolLevelling.time.monotonic',
+                side_effect=[0.0, 0.1, 0.2]
+        ):
+            result = tool._send_grbl_probe_command('G38.2 Z-1 F50')
+
+        self.assertEqual(result, '[PRB:1.000,2.000,-0.100:1]')
+        self.assertEqual(tool.grbl_ser_port.readline.call_count, 2)
+        tool.grbl_ser_port.write.assert_called_once_with(b'G38.2 Z-1 F50\n')
+
+    def test_probe_command_times_out_without_probe_result(self):
+        tool = make_tool()
+        tool.app.inform_shell = MagicMock()
+        tool.grbl_ser_port = MagicMock()
+        tool.grbl_ser_port.readline.return_value = b''
+
+        with patch(
+                'appPlugins.ToolLevelling.time.monotonic',
+                side_effect=[0.0, 0.1, 10.0]
+        ):
+            result = tool._send_grbl_probe_command('G38.2 Z-1 F50')
+
+        self.assertIsNone(result)
+        self.assertTrue(any(
+            '[ERROR_NOTCL]' in call.args[0] and 'probe' in call.args[0].lower()
+            for call in tool.app.inform.emit.call_args_list
+        ))
+
+    def test_probe_command_handles_prb_line_split_across_reads(self):
+        # regression: readline() with the port timeout can hand back a
+        # partial line (e.g. b'[PR' then b'B:...\n'); neither chunk alone
+        # contains '[PRB:', so the old per-chunk check ran to the 10s
+        # deadline and reported a false timeout.
+        tool = make_tool()
+        tool.app.inform_shell = MagicMock()
+        tool.grbl_ser_port = MagicMock()
+        tool.grbl_ser_port.readline.side_effect = [
+            b'',
+            b'[PR',
+            b'B:1.000,2.000,-0.500:1]\r\n',
+        ]
+
+        with patch(
+                'appPlugins.ToolLevelling.time.monotonic',
+                side_effect=[0.0, 0.1, 0.2, 0.3]
+        ):
+            result = tool._send_grbl_probe_command('G38.2 Z-1 F50')
+
+        self.assertEqual(result, '[PRB:1.000,2.000,-0.500:1]')
+        self.assertFalse(any(
+            '[ERROR_NOTCL]' in call.args[0]
+            for call in tool.app.inform.emit.call_args_list
+        ))
+
+
+class TestGrblAutolevelProbeTimeout(unittest.TestCase):
+    def test_probe_timeout_stops_remaining_points_and_apply(self):
+        storage = {
+            0: {'point': Point(0.0, 0.0), 'geo': None, 'height': None},
+            1: {'point': Point(10.0, 0.0), 'geo': None, 'height': None},
+        }
+        tool = make_tool(storage=storage, heights_valid=False)
+        tool.ui.ptravelz_entry.get_value.return_value = 2.0
+        tool.ui.feedrate_probe_entry.get_value.return_value = 50.0
+        tool.ui.pdepth_entry.get_value.return_value = -1.0
+
+        def command_output(command):
+            if command.strip() == '$G':
+                return '[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]'
+            if command.strip() == '$#':
+                return '[G54:0.000,0.000,0.000]'
+            return ''
+
+        tool.send_grbl_command = MagicMock(side_effect=command_output)
+        tool._send_grbl_probe_command = MagicMock(return_value=None)
+        tool.parse_grbl_probe_result = MagicMock()
+
+        tool.on_grbl_autolevel()
+        worker_task = tool.app.worker_task.emit.call_args.args[0]['fcn']
+        worker_task()
+
+        tool._send_grbl_probe_command.assert_called_once()
+        self.assertFalse(any(
+            'X10.0' in call.kwargs['command'] or call.kwargs['command'].strip() == 'M2'
+            for call in tool.send_grbl_command.call_args_list
+        ))
+        tool.parse_grbl_probe_result.assert_not_called()
+        tool.apply_autolevel_sig.emit.assert_not_called()
+        self.assertFalse(any(
+            'Finished probing' in call.args[0]
+            for call in tool.app.inform.emit.call_args_list
+        ))
+
+
+class TestToolUiState(unittest.TestCase):
+    @staticmethod
+    def _run_set_tool_ui(storage, loaded_obj=None):
+        tool = ToolLevelling.__new__(ToolLevelling)
+        tool.app = MagicMock()
+        tool.app.app_units = 'MM'
+        tool.app.use_3d_engine = True
+        tool.app.options = {
+            'global_app_level': 'a',
+            'tools_al_plot_points': False,
+            'tools_al_avoid_exc_holes': False,
+            'tools_al_method': 'v',
+        }
+        tool.app.collection.get_active.return_value = None
+        tool.app.collection.get_by_name.return_value = loaded_obj
+        tool.app.plotcanvas.view.scene = MagicMock()
+        tool.app.pool = MagicMock()
+        tool.layout = MagicMock()
+        tool.form_fields = {}
+        tool.al_voronoi_geo_storage = storage
+        tool.al_bilinear_geo_storage = {}
+        tool.al_heights_valid = True
+        tool.probing_gcode_text = ''
+        tool.probing_gcode = MagicMock(return_value='')
+        tool.clear_ui = MagicMock()
+        tool.connect_signals_at_init = MagicMock()
+        tool.to_form = MagicMock()
+        tool.on_controller_change_alter_ui = MagicMock()
+        tool.change_level = MagicMock()
+        tool.build_tool_ui = MagicMock()
+        tool.on_avoid_exc_holes = MagicMock()
+
+        with patch('appPlugins.ToolLevelling.LevelUI', return_value=MagicMock()), \
+                patch('appPlugins.ToolLevelling.ShapeCollection'):
+            tool.set_tool_ui()
+        return tool
+
+    def test_complete_retained_storage_remains_valid(self):
+        storage = {
+            'a': {'point': Point(0.0, 0.0), 'height': 0.1},
+            'b': {'point': Point(1.0, 0.0), 'height': -0.2},
+        }
+        tool = self._run_set_tool_ui(storage)
+        self.assertTrue(tool.al_heights_valid)
+        self.assertIs(tool.al_voronoi_geo_storage, storage)
+
+    def test_empty_or_partial_retained_storage_is_invalid(self):
+        for storage in (
+                {},
+                {'a': {'point': Point(0.0, 0.0), 'height': None}},
+                {'a': {'point': Point(0.0, 0.0)}}
+        ):
+            with self.subTest(storage=storage):
+                self.assertFalse(self._run_set_tool_ui(storage).al_heights_valid)
+
+    def test_selecting_supported_target_preserves_retained_storage(self):
+        # regression: set_tool_ui() used to call on_mode_radio() (directly,
+        # and indirectly via al_mode_radio.set_value() -> toggled ->
+        # activated_custom) when a supported CNCJob target is selected in
+        # object_combo, which unconditionally wiped al_voronoi_geo_storage
+        # and al_heights_valid - destroying a probed/imported height map
+        # just from re-opening the tool.
+        storage = {
+            'a': {'point': Point(0.0, 0.0), 'height': 0.1},
+            'b': {'point': Point(1.0, 0.0), 'height': -0.2},
+        }
+        loaded_obj = SimpleNamespace(
+            kind='geometry',
+            is_segmented_gcode=True,
+            obj_options={
+                'type': 'Geometry',
+                'tools_al_mode': 'grid',
+                'tools_al_method': 'v',
+            },
+        )
+        tool = self._run_set_tool_ui(storage, loaded_obj=loaded_obj)
+
+        self.assertIs(tool.al_voronoi_geo_storage, storage)
+        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
+        self.assertTrue(tool.al_heights_valid)
+        # al_mode_radio.set_value() must not be left with signals blocked
+        tool.ui.al_mode_radio.blockSignals.assert_any_call(True)
+        tool.ui.al_mode_radio.blockSignals.assert_any_call(False)
+        self.assertEqual(tool.ui.al_mode_radio.blockSignals.call_args_list[-1].args, (False,))
+
+    def test_on_mode_radio_from_ui_still_clears_storage(self):
+        # the signal-connected handler (user changing the mode radio through
+        # the UI) must still reset the stale height map
+        storage = {'a': {'point': Point(0.0, 0.0), 'height': 0.1}}
+        tool = make_tool(storage=storage, heights_valid=True)
+        tool.probing_shapes = MagicMock()
+        tool.build_al_table = MagicMock()
+
+        tool.on_mode_radio(val='grid')
+
+        self.assertEqual(tool.al_voronoi_geo_storage, {})
+        self.assertFalse(tool.al_heights_valid)
+        tool.build_al_table.assert_called_once()
+        tool.probing_shapes.clear.assert_called_once_with(update=True)
+
+
+class TestLevellingTargetSelection(unittest.TestCase):
+    def test_segmented_geometry_and_excellon_are_enabled(self):
+        for target_type in ('Geometry', 'Excellon'):
+            with self.subTest(target_type=target_type):
+                tool = make_tool()
+                tool.ui.object_combo.currentText.return_value = 'job'
+                tool.app.collection.get_by_name.return_value = SimpleNamespace(
+                    is_segmented_gcode=True,
+                    obj_options={'type': target_type},
+                )
+                with patch('appPlugins.ToolLevelling.ShapeCollection'):
+                    tool.on_object_changed()
+                tool.ui.al_frame.setDisabled.assert_called_once_with(False)
+
+    def test_non_segmented_remains_disabled(self):
+        tool = make_tool()
+        tool.ui.object_combo.currentText.return_value = 'job'
+        tool.app.collection.get_by_name.return_value = SimpleNamespace(
+            is_segmented_gcode=False,
+            obj_options={'type': 'Excellon'},
+        )
+        tool.on_object_changed()
+        tool.ui.al_frame.setDisabled.assert_called_once_with(True)
+
+
+class TestHeightmapSave(unittest.TestCase):
+    def _save(self, storage, heights_valid=True):
+        tool = make_tool(storage=storage, heights_valid=heights_valid)
+        tool.grbl_probe_result = 'ok\n[PRB:raw protocol]\n'
+        tool.app.options = {'cncjob_line_ending': False}
+        tool.app.get_last_save_folder.return_value = 'C:/tmp'
+        output_file = mock_open()
+        with patch(
+                'appPlugins.ToolLevelling.FCFileSaveDialog.get_saved_filename',
+                return_value=('C:/tmp/map.txt', '')
+        ) as dialog, patch('builtins.open', output_file):
+            tool.on_grbl_heightmap_save()
+        return tool, dialog, output_file
+
+    def test_saves_normalized_rows_in_storage_order(self):
+        storage = {
+            'first': {'point': Point(1.0, 2.0), 'height': -0.1},
+            'second': {'point': Point(3.5, 4.25), 'height': 0.2},
+        }
+        _, _, output_file = self._save(storage)
+        written = ''.join(call.args[0] for call in output_file().write.call_args_list)
+        self.assertEqual(written, '1.0,2.0,-0.1\n3.5,4.25,0.2\n')
+        self.assertNotIn('[PRB:', written)
+        self.assertNotIn('ok', written)
+
+    def test_incomplete_map_does_not_open_save_dialog_or_file(self):
+        for storage, heights_valid in (
+                ({}, True),
+                ({'a': {'point': Point(0.0, 0.0), 'height': 0.1}}, False),
+                ({'a': {'point': Point(0.0, 0.0), 'height': None}}, True),
+        ):
+            with self.subTest(storage=storage, heights_valid=heights_valid):
+                tool, dialog, output_file = self._save(storage, heights_valid)
+                dialog.assert_not_called()
+                output_file.assert_not_called()
+                self.assertTrue(any(
+                    '[ERROR_NOTCL]' in call.args[0]
+                    for call in tool.app.inform.emit.call_args_list
+                ))
+
 
 class TestImportHeightMap(unittest.TestCase):
     def setUp(self):
@@ -340,7 +859,7 @@ class TestImportHeightMap(unittest.TestCase):
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['height'], -0.010)
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['point'].x, 10.0)
         tool.build_al_table_sig.emit.assert_called_once()
-        tool.apply_autolevel_sig.emit.assert_called_once()
+        tool.apply_autolevel_sig.emit.assert_not_called()
 
     def test_mach4_same_comma_format(self):
         path = self._write('mach4.txt', "1.0, 2.0, -0.05\n2.0, 2.0, -0.03\n")

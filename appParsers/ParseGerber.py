@@ -312,7 +312,7 @@ class Gerber(Geometry):
         apid = int(apertureId)
 
         # Could be empty for aperture macros
-        paramList = (apParameters or "").split('X')
+        paramList = [] if apParameters is None or apParameters == "" else apParameters.split('X')
 
         if apertureType == "C":  # Circle, example: %ADD11C,0.1*%
             self.tools[apid] = {

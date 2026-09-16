@@ -201,6 +201,9 @@ def parse_height_map_line(line):
     except ValueError:
         return None
 
+    if not all(math.isfinite(value) for value in (x, y, z)):
+        return None
+
     return x, y, z
 
 
@@ -237,6 +240,9 @@ def parse_grbl_probe_output(text):
         y = float(parts[1])
         z = float(parts[2])
 
+        if not all(math.isfinite(value) for value in (x, y, z)):
+            raise ValueError("Probe result contains non-finite coordinates")
+
         if flag == '0':
             raise ValueError(
                 "Probe did not touch the surface at X={0} Y={1}".format(x, y)
@@ -247,10 +253,19 @@ def parse_grbl_probe_output(text):
     return results
 
 
-_OFFSET_RE = re.compile(r'\[(G54|G92|TLO):\s*([^\]]+)\]')
+_ACTIVE_WCS_RE = re.compile(r'(?<![A-Z0-9.])G(5[4-9])(?![A-Z0-9.])')
+_OFFSET_RE = re.compile(r'\[(G5[4-9]|G92|TLO):\s*([^\]]+)\]')
 
 
-def parse_grbl_work_offset(text):
+def parse_grbl_active_wcs(text):
+    """Parse the active G54-G59 work coordinate system from ``$G`` output."""
+    match = _ACTIVE_WCS_RE.search(text)
+    if not match:
+        raise ValueError("Active G54-G59 work offset not found in $G output")
+    return 'G' + match.group(1)
+
+
+def parse_grbl_work_offset(text, active_wcs='G54'):
     """
     Parse the work-coordinate offset to SUBTRACT from a GRBL machine
     position, out of the raw ``$#`` command answer.
@@ -266,16 +281,17 @@ def parse_grbl_work_offset(text):
         [TLO:0.000]
         [PRB:0.000,0.000,0.000:0]
 
-    Only G54 is read (FlatCAM G-code always targets the default G54
-    work coordinate system); the ``[PRB:...]`` line in this output is
-    not a probe result and is ignored.
+    The selected G54-G59 work coordinate system is read; the
+    ``[PRB:...]`` line in this output is not a probe result and is
+    ignored.
 
     :param text: raw text captured from the controller after ``$#``.
-    :return: (x, y, z) offset, computed as G54 + G92 per axis, with TLO
-        added to Z. Missing G92 or TLO count as 0.
-    :raises ValueError: if the G54 line is missing.
+    :param active_wcs: selected work coordinate system, defaulting to G54.
+    :return: (x, y, z) offset, computed as selected WCS + G92 per axis,
+        with TLO added to Z. Missing G92 or TLO count as 0.
+    :raises ValueError: if the selected WCS line is missing.
     """
-    g54 = None
+    work_offset = None
     g92 = (0.0, 0.0, 0.0)
     tlo = 0.0
 
@@ -287,19 +303,19 @@ def parse_grbl_work_offset(text):
         key, val = m.group(1), m.group(2)
         parts = [p.strip() for p in val.split(',') if p.strip() != '']
 
-        if key == 'G54':
-            g54 = tuple(float(p) for p in parts[:3])
+        if key == active_wcs:
+            work_offset = tuple(float(p) for p in parts[:3])
         elif key == 'G92':
             g92 = tuple(float(p) for p in parts[:3])
         elif key == 'TLO':
             tlo = float(parts[0])
 
-    if g54 is None:
-        raise ValueError("G54 work offset not found in $# output")
+    if work_offset is None:
+        raise ValueError("%s work offset not found in $# output" % active_wcs)
 
-    x = g54[0] + g92[0]
-    y = g54[1] + g92[1]
-    z = g54[2] + g92[2] + tlo
+    x = work_offset[0] + g92[0]
+    y = work_offset[1] + g92[1]
+    z = work_offset[2] + g92[2] + tlo
     return x, y, z
 
 

@@ -34,7 +34,16 @@ from ezdxf import recover
 import math
 
 # See: http://toblerity.org/shapely/manual.html
-from shapely import Polygon, Point, LinearRing, MultiPoint, MultiLineString, MultiPolygon, LineString
+from shapely import (
+    Polygon,
+    Point,
+    LinearRing,
+    MultiPoint,
+    MultiLineString,
+    MultiPolygon,
+    LineString,
+    GeometryCollection,
+)
 
 from shapely import box as shply_box
 from shapely.ops import unary_union, substring, linemerge
@@ -527,7 +536,7 @@ class ApertureMacro:
                 ugeo = union(self.geometry, prim_geo['geometry'])
                 # The union function can produce a GeometryCollection when the two polygons share a vertex like this |><|
                 # See https://bitbucket.org/marius_stanciu/flatcam_beta/issues/59.
-                if not isinstance(ugeo, Polygon):
+                if isinstance(ugeo, GeometryCollection):
                     log.debug("Translating geometry primitive %s to avoid GeometryCollection.", prim_geo["geometry"])
                     prim_geo["geometry"] = affinity.translate(prim_geo["geometry"], xoff=0.0001)
                     ugeo = union(self.geometry, prim_geo['geometry'])
@@ -8056,22 +8065,29 @@ def flatten_shapely_geometry(
     """
     flat_list: list[BaseGeometry] = []
 
-    if isinstance(geometry, BaseMultipartGeometry):
-        for geo in geometry.geoms:
-            assert isinstance(geo, BaseGeometry)
+    def add_geometry(geo):
+        if isinstance(geo, BaseMultipartGeometry):
+            for child in geo.geoms:
+                add_geometry(child)
+        elif isinstance(geo, BaseGeometry) and not geo.is_empty:
             flat_list.append(geo)
-    elif hasattr(geometry, "__iter__"):
-        for geo in geometry:
-            assert isinstance(geo, BaseGeometry)
-            flat_list.append(geo)
-    elif isinstance(geometry, BaseGeometry):
-        if not geometry.is_empty:
-            if simplify_tolerance > 0.0:
-                flat_list.append(geometry.simplify(simplify_tolerance))
-            else:
-                flat_list.append(geometry)
-    else:
-        raise NotImplementedError(f"No implementation for flattening {type(geometry)}")
+
+    def flatten(geo):
+        if isinstance(geo, BaseMultipartGeometry):
+            for child in geo.geoms:
+                flatten(child)
+        elif isinstance(geo, BaseGeometry):
+            if not geo.is_empty:
+                simplified = geo.simplify(simplify_tolerance) if simplify_tolerance > 0.0 else geo
+                if not simplified.is_empty:
+                    add_geometry(simplified)
+        elif isinstance(geo, Iterable) and not isinstance(geo, (str, bytes)):
+            for child in geo:
+                flatten(child)
+        else:
+            raise NotImplementedError(f"No implementation for flattening {type(geo)}")
+
+    flatten(geometry)
     return flat_list
 
 

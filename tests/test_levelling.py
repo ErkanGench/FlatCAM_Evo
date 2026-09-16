@@ -17,6 +17,7 @@ from appPlugins.levelling_interp import (
     _group_values,
     parse_height_map_line,
     parse_grbl_probe_output,
+    parse_grbl_active_wcs,
     parse_grbl_work_offset,
     match_nearest_point,
     match_tolerance,
@@ -251,6 +252,10 @@ class TestParseGrbl(unittest.TestCase):
     def test_probe_output_empty(self):
         self.assertEqual(parse_grbl_probe_output(""), [])
 
+    def test_active_wcs_from_modal_response(self):
+        text = "[GC:G0 G55 G17 G21 G90 G94 M5 M9 T0 F0 S0]\nok\n"
+        self.assertEqual(parse_grbl_active_wcs(text), 'G55')
+
     def test_work_offset_full_sample(self):
         text = (
             "[G54:-100.000,-50.000,-20.000]\n"
@@ -274,6 +279,22 @@ class TestParseGrbl(unittest.TestCase):
         text = "[G55:0.000,0.000,0.000]\nok\n"
         with self.assertRaises(ValueError):
             parse_grbl_work_offset(text)
+
+    def test_work_offset_uses_selected_g55(self):
+        text = (
+            "[G54:-100.000,-50.000,-20.000]\n"
+            "[G55:10.000,20.000,30.000]\n"
+            "[G92:1.000,2.000,3.000]\n"
+            "[TLO:0.500]\n"
+        )
+        result = parse_grbl_work_offset(text, active_wcs='G55')
+        self.assertEqual(result, (11.0, 22.0, 33.5))
+
+    def test_work_offset_missing_selected_g55_names_g55(self):
+        text = "[G54:0.000,0.000,0.000]\n"
+        with self.assertRaises(ValueError) as ctx:
+            parse_grbl_work_offset(text, active_wcs='G55')
+        self.assertIn('G55', str(ctx.exception))
 
 
 class TestMatchNearestPoint(unittest.TestCase):
