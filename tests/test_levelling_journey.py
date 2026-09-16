@@ -20,6 +20,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import math
+import random
 import re
 import tempfile
 import unittest
@@ -30,15 +31,33 @@ from PyQt6 import QtWidgets
 
 _qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-from shapely import Point
-from shapely.ops import unary_union
+# appParsers.ParseGerber (transitively) imports appMain, whose module-level
+# code parses sys.argv with getopt; running this file as
+# `python tests/test_levelling_journey.py -v` would otherwise blow up with a
+# GetoptError on our own `-v` flag. Neutralize sys.argv for the duration of
+# these FlatCAM imports only.
+_saved_argv = sys.argv
+sys.argv = [sys.argv[0]]
+try:
+    from shapely import Point
+    from shapely.ops import unary_union
 
-from appParsers.ParseGerber import Gerber
-from appPlugins.ToolLevelling import ToolLevelling
-from appPlugins.levelling_interp import parse_grbl_work_offset
-import camlib
+    from appParsers.ParseGerber import Gerber
+    from appPlugins.ToolLevelling import ToolLevelling
+    from appPlugins.levelling_interp import parse_grbl_work_offset
+    import camlib
 
-from test_levelling_tool import make_tool, make_tool_target  # noqa: E402  (sys.path set up above)
+    # appParsers.ParseGerber.Gerber.__init__() itself does a *lazy*
+    # `from appMain import App` the first time a Gerber() is constructed
+    # (not at module import time), which would otherwise re-trigger the
+    # sys.argv parsing later, well after this block has restored argv.
+    # Force that import to happen now, once, while argv is still patched,
+    # so it's cached in sys.modules for every Gerber() built by the tests.
+    import appMain  # noqa: F401
+
+    from test_levelling_tool import make_tool, make_tool_target  # noqa: E402
+finally:
+    sys.argv = _saved_argv
 
 
 TEST_FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'test_files')
@@ -214,6 +233,13 @@ def make_gcode(paths, cut_z=-0.1, travel_z=2.0, feed=300.0, segment_len=5.0,
         x2, y2 = last_x + 2.0, last_y
         lines.append("G02 X" + f(x2) + " Y" + f(y2) + " I1.0 J0.0 (return arc)")
 
+    # A rapid at or below Z0: rapids are never height-compensated regardless
+    # of their Z value, only cutting (G1) moves are. Without at least 1 rapid
+    # sitting at Z<=0 a mutant that also levels G0 moves would go unnoticed
+    # (every other G0 in this file is at the travel height, which is > 0).
+    lines.append("G00 Z-0.0500 (rapid at Z<=0 - must never be levelled)")
+    lines.append("G00 X0.0000 Y0.0000")
+
     lines += ["M05", "G00 X0.0000 Y0.0000", "M2"]
 
     return "\n".join(lines) + "\n"
@@ -258,22 +284,43 @@ def nearest_height_bruteforce(points, x, y):
 # Height-map file writers (real files consumed by the real import_height_map)
 # ---------------------------------------------------------------------------
 
-def write_mach3(path, points):
+def write_mach3(path, points, decimals=5):
     with open(path, 'w') as f:
         for x, y, z in points:
-            f.write("%.5f,%.5f,%.5f\n" % (x, y, z))
+            f.write(("%.{0}f,%.{0}f,%.{0}f\n".format(decimals)) % (x, y, z))
 
 
-def write_mach4_extra_columns(path, points):
+def write_mach4_extra_columns(path, points, decimals=5):
     with open(path, 'w') as f:
         for x, y, z in points:
-            f.write("%.5f, %.5f, %.5f, 0.0, 0.0, 0.0\n" % (x, y, z))
+            f.write(("%.{0}f, %.{0}f, %.{0}f, 0.0, 0.0, 0.0\n".format(decimals)) % (x, y, z))
 
 
-def write_linuxcnc(path, points):
+def write_linuxcnc(path, points, decimals=5):
     with open(path, 'w') as f:
         for x, y, z in points:
-            f.write("%.5f %.5f %.5f 0 0 0 0 0 0\n" % (x, y, z))
+            f.write(("%.{0}f %.{0}f %.{0}f 0 0 0 0 0 0\n".format(decimals)) % (x, y, z))
+
+
+def prefill_storage(grid_points):
+    """Mimic on_add_grid_points(): storage pre-filled with the probe grid
+    points (height 0.0, not yet probed) before the height-map file/probe
+    result comes back. Used so import_height_map() must go through its
+    "match existing storage points by nearest coordinate" branch instead of
+    the "storage is empty, create points from file rows" branch."""
+    return {
+        i: {'point': Point(x, y), 'geo': None, 'height': 0.0}
+        for i, (x, y, _z) in enumerate(grid_points)
+    }
+
+
+def shuffled_rows(points, seed=1234):
+    """Return `points` in a different order than the canonical grid order,
+    as a real probe-log file would not necessarily be written back in the
+    same order the storage dict was built in."""
+    rows = list(points)
+    random.Random(seed).shuffle(rows)
+    return rows
 
 
 def make_grbl_offset_text(g54=(-100.0, -50.0, -20.0), g92=(0.0, 0.0, 0.0), tlo=0.0):
@@ -309,7 +356,7 @@ def _line_words(line):
     return {m.group(1): float(m.group(2)) for m in _WORD_RE.finditer(code)}
 
 
-def verify_levelling(tc, original_text, levelled_text, decimals, offset_fn):
+def verify_levelling(tc, original_text, levelled_text, decimals, offset_fn, tol=None):
     """Walk `original_text` and `levelled_text` line-by-line with an
     independent modal-state tracker and check:
       - same number of lines
@@ -321,7 +368,8 @@ def verify_levelling(tc, original_text, levelled_text, decimals, offset_fn):
     Returns (max_abs_dz, cut_points) where cut_points is the list of
     (x, y) at every cut line encountered (for range/sanity checks).
     """
-    tol = 2 * 10 ** (-decimals)
+    if tol is None:
+        tol = 2 * 10 ** (-decimals)
     orig_lines = original_text.splitlines()
     lev_lines = levelled_text.splitlines()
     tc.assertEqual(len(orig_lines), len(lev_lines), "levelled line count differs from source")
@@ -352,7 +400,13 @@ def verify_levelling(tc, original_text, levelled_text, decimals, offset_fn):
         tc.assertEqual(ow.get('X'), lw.get('X'), "line %d: X changed (%r vs %r)" % (lineno, orig_line, lev_line))
         tc.assertEqual(ow.get('Y'), lw.get('Y'), "line %d: Y changed (%r vs %r)" % (lineno, orig_line, lev_line))
 
-        is_cut_line = has_xyz and modal_g == 1.0 and modal_z <= 0.0
+        # A G0 word on this exact line always means "rapid, never a cutting
+        # move" regardless of Z, even if a bug elsewhere left modal_g stale;
+        # checked explicitly (not just via modal_g == 1.0) so a mutant that
+        # widens the cutting-move check to include G0 is caught even at a
+        # rapid whose Z happens to be <= 0.
+        is_g0_line = 'G' in ow and ow['G'] == 0.0
+        is_cut_line = has_xyz and modal_g == 1.0 and modal_z <= 0.0 and not is_g0_line
 
         if not is_cut_line:
             tc.assertEqual(orig_line, lev_line, "line %d should be untouched: %r vs %r" % (lineno, orig_line, lev_line))
@@ -373,7 +427,7 @@ def verify_levelling(tc, original_text, levelled_text, decimals, offset_fn):
 class LevellingJourneyTestCase(unittest.TestCase):
     """Common assertions shared by every journey test."""
 
-    def assert_journey(self, tool, target, tooluid, al_method, offset_fn, expect_warning=None):
+    def assert_journey(self, tool, target, tooluid, al_method, offset_fn, expect_warning=None, tol=None):
         original = target.tools[tooluid]['gcode']
         result = tool.autolevell_gcode(target, al_method)
         self.assertIsNotNone(result, "autolevell_gcode() returned None")
@@ -381,12 +435,15 @@ class LevellingJourneyTestCase(unittest.TestCase):
         # source untouched
         self.assertEqual(target.tools[tooluid]['gcode'], original)
 
-        max_abs_dz, cut_points = verify_levelling(self, original, result[tooluid], target.coords_decimals, offset_fn)
+        max_abs_dz, cut_points = verify_levelling(
+            self, original, result[tooluid], target.coords_decimals, offset_fn, tol=tol
+        )
 
         # sanity check: levelling really happened (not a no-op)
         self.assertGreater(len(cut_points), 0, "no cut lines found to verify")
         expected_max_abs = max(abs(offset_fn(x, y)) for x, y in cut_points)
-        self.assertAlmostEqual(max_abs_dz, expected_max_abs, delta=2 * 10 ** (-target.coords_decimals))
+        range_tol = tol if tol is not None else 2 * 10 ** (-target.coords_decimals)
+        self.assertAlmostEqual(max_abs_dz, expected_max_abs, delta=range_tol)
         self.assertGreater(max_abs_dz, 1e-6, "levelling produced no change at all")
 
         if expect_warning is not None:
@@ -405,7 +462,14 @@ class LevellingJourneyTestCase(unittest.TestCase):
 
 class TestJourneyPlaneAllSources(LevellingJourneyTestCase):
     def test_plane_bilinear_all_gerbers_all_sources(self):
-        sources = ['mach3', 'mach4', 'linuxcnc', 'grbl']
+        # 'mach3_empty_storage' keeps import_height_map()'s "storage is empty,
+        # create points straight from the file rows" branch covered. The
+        # other 3 file-based sources pre-fill storage (as on_add_grid_points()
+        # does before a real probe/import) and write rows out of order and
+        # rounded to 3 decimals (as a controller log would), so
+        # import_height_map() is forced through its "match an existing
+        # storage point by nearest coordinate" branch instead.
+        sources = ['mach3', 'mach3_empty_storage', 'mach4', 'linuxcnc', 'grbl']
         for gerber_path in ALL_GERBERS:
             paths = gerber_toolpaths(gerber_path)
             gcode_text = make_gcode(paths)
@@ -414,31 +478,46 @@ class TestJourneyPlaneAllSources(LevellingJourneyTestCase):
             plane_fn = make_plane(0.0003, -0.0002, 0.05)
             grid_points = [(x, y, plane_fn(x, y)) for x in xs for y in ys]
 
+            # Rows written with only 3 decimals of height precision (as a
+            # controller log would) can be off from the exact plane value by
+            # up to half a thousandth of a mm; the verifier's tolerance is
+            # widened accordingly for those 3 sources.
+            rounded_height_tol = 6e-4
+
             for source in sources:
                 with self.subTest(gerber=os.path.basename(gerber_path), source=source):
                     with tempfile.TemporaryDirectory() as tmpdir:
                         target = make_tool_target({1: gcode_text}, units='MM')
+                        tol = None
 
                         if source == 'mach3':
+                            storage = prefill_storage(grid_points)
+                            tool = make_tool(units='MM', storage=storage, heights_valid=False)
+                            path = os.path.join(tmpdir, 'hm.txt')
+                            write_mach3(path, shuffled_rows(grid_points), decimals=3)
+                            tool.import_height_map(path)
+                            tol = rounded_height_tol
+                        elif source == 'mach3_empty_storage':
                             tool = make_tool(units='MM', storage={}, heights_valid=False)
                             path = os.path.join(tmpdir, 'hm.txt')
                             write_mach3(path, grid_points)
                             tool.import_height_map(path)
                         elif source == 'mach4':
-                            tool = make_tool(units='MM', storage={}, heights_valid=False)
+                            storage = prefill_storage(grid_points)
+                            tool = make_tool(units='MM', storage=storage, heights_valid=False)
                             path = os.path.join(tmpdir, 'hm.txt')
-                            write_mach4_extra_columns(path, grid_points)
+                            write_mach4_extra_columns(path, shuffled_rows(grid_points, seed=42), decimals=3)
                             tool.import_height_map(path)
+                            tol = rounded_height_tol
                         elif source == 'linuxcnc':
-                            tool = make_tool(units='MM', storage={}, heights_valid=False)
+                            storage = prefill_storage(grid_points)
+                            tool = make_tool(units='MM', storage=storage, heights_valid=False)
                             path = os.path.join(tmpdir, 'hm.txt')
-                            write_linuxcnc(path, grid_points)
+                            write_linuxcnc(path, shuffled_rows(grid_points, seed=99), decimals=3)
                             tool.import_height_map(path)
+                            tol = rounded_height_tol
                         else:  # grbl
-                            storage = {
-                                i: {'point': Point(x, y), 'geo': None, 'height': None}
-                                for i, (x, y, _z) in enumerate(grid_points)
-                            }
+                            storage = prefill_storage(grid_points)
                             tool = make_tool(units='MM', storage=storage, heights_valid=False)
                             offset_text = make_grbl_offset_text()
                             tool.grbl_work_offset = parse_grbl_work_offset(offset_text)
@@ -447,7 +526,7 @@ class TestJourneyPlaneAllSources(LevellingJourneyTestCase):
                             self.assertTrue(ok, "GRBL probe parsing failed")
 
                         self.assertTrue(tool.al_heights_valid)
-                        self.assert_journey(tool, target, 1, 'b', plane_fn)
+                        self.assert_journey(tool, target, 1, 'b', plane_fn, tol=tol)
 
 
 # ---------------------------------------------------------------------------
