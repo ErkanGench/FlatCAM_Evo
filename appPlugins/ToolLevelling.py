@@ -34,7 +34,7 @@ from camlib import CNCjob
 from appPlugins.levelling_interp import (
     build_bilinear_grid, bilinear_offset, nearest_offset,
     parse_grbl_probe_output, parse_grbl_work_offset, match_nearest_point,
-    new_levelling_state, level_gcode_line,
+    match_tolerance, new_levelling_state, level_gcode_line,
 )
 
 import time
@@ -100,6 +100,11 @@ class ToolLevelling(CNCjob, AppTool):
         self.probing_gcode_text = ''
         self.grbl_probe_result = ''
         self.grbl_work_offset = (0.0, 0.0, 0.0)
+
+        # True only right after a successful probing pass (parse_grbl_probe_result())
+        # or a successful height-map import; False whenever probe points are
+        # (re)created or cleared, since their 'height' is then just a placeholder.
+        self.al_heights_valid = False
 
         '''
         dictionary of dictionaries to store the information's for the autolevelling
@@ -263,6 +268,7 @@ class ToolLevelling(CNCjob, AppTool):
 
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
+        self.al_heights_valid = False
 
         self.clear_ui(self.layout)
         self.ui = LevelUI(layout=self.layout, app=self.app)
@@ -553,6 +559,7 @@ class ToolLevelling(CNCjob, AppTool):
 
         # reset the al dict
         self.al_voronoi_geo_storage.clear()
+        self.al_heights_valid = False
 
         if self.ui.al_mode_radio.get_value() == 'grid':
             self.on_add_grid_points()
@@ -573,6 +580,8 @@ class ToolLevelling(CNCjob, AppTool):
         return unary_union(fused_geometries)
 
     def on_add_grid_points(self):
+        self.al_heights_valid = False
+
         check_overlap = self.ui.avoid_exc_holes_cb.get_value()
         avoid_step = self.ui.avoid_exc_holes_size_entry.get_value()
         radius = self.ui.probe_tip_dia_entry.get_value() / 2
@@ -681,6 +690,8 @@ class ToolLevelling(CNCjob, AppTool):
             self.plot_probing_geo(None, False)
 
     def on_add_manual_points(self):
+        self.al_heights_valid = False
+
         xmin, ymin, xmax, ymax = self.solid_geo.bounds
         f_probe_pt = Point([xmin, xmin])
         int_keys = [int(k) for k in self.al_voronoi_geo_storage.keys()]
@@ -986,6 +997,7 @@ class ToolLevelling(CNCjob, AppTool):
                 'height': 0.0
             }
             self.al_voronoi_geo_storage[new_id] = deepcopy(new_dict)
+            self.al_heights_valid = False
 
             # rebuild the al table
             self.build_al_table_sig.emit()
@@ -1102,30 +1114,58 @@ class ToolLevelling(CNCjob, AppTool):
         if key == QtCore.Qt.Key.Key_J or key == 'J':
             self.app.on_jump_to()
 
-    def _al_probe_tolerance(self):
+    def _al_grid_tolerance(self):
         """
-        Tolerance used both to snap probe X/Y values into a bilinear grid
-        (build_bilinear_grid()) and to match a GRBL probe result back to
-        the storage point it was probed for (parse_grbl_probe_result()).
+        Tolerance used to snap probe X/Y values into a bilinear grid
+        (build_bilinear_grid()), i.e. to decide which probe points share
+        an X column / Y row.
 
-        Probed coordinates can carry a bit of floating point/echo noise
-        around the exact value FlatCAM generated the probing G-code with,
-        but 2 distinct probe points are never closer than the app's
-        display resolution (`self.app.decimals`). 10x the smallest
-        displayed unit absorbs that noise while staying far below the
-        minimum real spacing between 2 probe points, in either MM or IN.
+        This is based on `self.app.decimals` (not `target_obj.coords_decimals`,
+        which is only used later to format the levelled Z output) because
+        the probe point coordinates stored in `self.al_voronoi_geo_storage`
+        were themselves generated/rounded with `self.app.dec_format(...,
+        self.app.decimals)` (see on_add_grid_points()); 10x the smallest
+        unit at that resolution absorbs the resulting float noise without
+        risking merging 2 genuinely different grid rows/columns.
 
         :return: tolerance (float), in the units of `self.units`.
         """
         return 10 ** -self.app.decimals * 10
 
-    def autolevell_gcode(self, target_obj):
+    def _al_match_tolerance(self, points_xy):
+        """
+        Tolerance used to match a GRBL probe result back to the storage
+        point it was probed for (parse_grbl_probe_result()).
+
+        Unlike the grid tolerance above, a probe result's X/Y is echoed
+        back by the controller itself and can carry real-world noise
+        (step quantization, backlash, ...), so the tolerance is derived
+        from the actual point layout: half of the minimum distance
+        between any 2 distinct stored points (so 2 different points can
+        never both match the same probe result), capped at a fixed
+        absolute distance appropriate for the machine's units so that a
+        sparse point layout doesn't produce an overly generous tolerance.
+
+        :param points_xy: iterable of (x, y) tuples - the stored probe
+            point coordinates.
+        :return: tolerance (float), in the units of `self.units`.
+        """
+        cap = 0.5 if self.units == 'MM' else 0.02
+        return match_tolerance(points_xy, cap)
+
+    def autolevell_gcode(self, target_obj, al_method):
         """
         Apply the probed height map (self.al_voronoi_geo_storage) to a
         CNCJob object's segmented G-code.
 
+        Not reentrant: it stores per-call interpolation state on `self`
+        (`self._al_points`, `self._al_grid`, `self._al_offset_fn`,
+        `self._al_decimals`). The caller must not start a 2nd call before
+        the 1st one returns (e.g. from another thread).
+
         :param target_obj:  the CNCJobObject whose G-code (target_obj.source_file)
                              is to be height-compensated. Not modified.
+        :param al_method:   'v' (Voronoi/nearest-point) or 'b' (bilinear).
         :return:             the height-compensated G-code text, or None on error.
         :rtype:              str | None
         """
@@ -1136,9 +1176,10 @@ class ToolLevelling(CNCjob, AppTool):
             return None
 
         storage = self.al_voronoi_geo_storage
-        if not storage or not all('height' in v for v in storage.values()):
+        if not storage or not self.al_heights_valid:
             self.app.inform.emit(
-                '[ERROR_NOTCL] %s' % _("No height map available. Probe the PCB before applying autolevelling.")
+                '[ERROR_NOTCL] %s' %
+                _("No height map. Probe the points or import a height map first.")
             )
             return None
 
@@ -1152,9 +1193,8 @@ class ToolLevelling(CNCjob, AppTool):
         self._al_points = points
         self._al_decimals = target_obj.coords_decimals
 
-        tol = self._al_probe_tolerance()
+        tol = self._al_grid_tolerance()
 
-        al_method = self.ui.al_method_radio.get_value()
         if al_method == 'b':
             self._al_grid = build_bilinear_grid(points, tol)
             if self._al_grid is None:
@@ -1181,10 +1221,10 @@ class ToolLevelling(CNCjob, AppTool):
                 try:
                     pct = int((idx + 1) * 100 / total) if total else 100
                     self.app.proc_container.update_view_text(' %d%%' % pct)
-                except Exception:
+                except Exception as e:
                     # proc_container may not be available (or active) in
                     # every call context; progress reporting is best-effort
-                    pass
+                    self.app.log.debug("ToolLevelling.autolevell_gcode() progress report --> %s" % str(e))
 
         if state['arcs'] > 0:
             self.app.inform.emit(
@@ -1224,12 +1264,12 @@ class ToolLevelling(CNCjob, AppTool):
             return False
 
         ox, oy, oz = self.grbl_work_offset
-        tol = self._al_probe_tolerance()
 
         points = {
             key: (value['point'].x, value['point'].y)
             for key, value in self.al_voronoi_geo_storage.items()
         }
+        tol = self._al_match_tolerance(points.values())
 
         matched_keys = set()
         for mx, my, mz in results:
@@ -1254,6 +1294,7 @@ class ToolLevelling(CNCjob, AppTool):
             )
             return False
 
+        self.al_heights_valid = True
         self.build_al_table_sig.emit()
         return True
 
@@ -1266,6 +1307,7 @@ class ToolLevelling(CNCjob, AppTool):
 
         # reset the al dict
         self.al_voronoi_geo_storage.clear()
+        self.al_heights_valid = False
 
         # reset Voronoi Shapes
         self.probing_shapes.clear(update=True)
@@ -2012,6 +2054,7 @@ class ToolLevelling(CNCjob, AppTool):
             pass
 
     def reset_fields(self):
+        self.al_heights_valid = False
         self.ui.object_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
 
 

@@ -19,6 +19,7 @@ from appPlugins.levelling_interp import (
     parse_grbl_probe_output,
     parse_grbl_work_offset,
     match_nearest_point,
+    match_tolerance,
     new_levelling_state,
     level_gcode_line,
 )
@@ -295,6 +296,28 @@ class TestMatchNearestPoint(unittest.TestCase):
             'second': (10, 0),
         }
         self.assertEqual(match_nearest_point(points, 5, 0, 100), 'first')
+
+
+class TestMatchTolerance(unittest.TestCase):
+    def test_half_min_distance_below_cap(self):
+        # closest pair is 1.0 apart -> half = 0.5, capped at 5.0 -> 0.5
+        points = [(0, 0), (1, 0), (10, 10)]
+        self.assertAlmostEqual(match_tolerance(points, cap=5.0), 0.5)
+
+    def test_capped_when_points_far_apart(self):
+        # closest pair is 10 apart -> half = 5.0, but cap is 0.5
+        points = [(0, 0), (10, 0)]
+        self.assertAlmostEqual(match_tolerance(points, cap=0.5), 0.5)
+
+    def test_single_point_uses_cap(self):
+        self.assertEqual(match_tolerance([(0, 0)], cap=0.02), 0.02)
+
+    def test_no_points_uses_cap(self):
+        self.assertEqual(match_tolerance([], cap=0.5), 0.5)
+
+    def test_duplicate_points_yield_zero(self):
+        points = [(1, 1), (1, 1), (5, 5)]
+        self.assertEqual(match_tolerance(points, cap=0.5), 0.0)
 
 
 class TestLevelGcodeLine(unittest.TestCase):

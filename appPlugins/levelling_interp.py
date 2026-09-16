@@ -326,6 +326,35 @@ def match_nearest_point(points, x, y, tol):
     return best_key
 
 
+def match_tolerance(points_xy, cap):
+    """
+    Compute a tolerance suitable for matching a probed point back to the
+    nearest point in `points_xy` (see match_nearest_point()): half of the
+    minimum Euclidean distance between any 2 distinct points, capped at
+    `cap` so that widely spaced probe points don't produce an overly
+    generous tolerance.
+
+    With fewer than 2 points there is no pairwise distance to measure, so
+    `cap` is returned directly.
+
+    :param points_xy: iterable of (x, y) tuples.
+    :param cap: maximum tolerance to return.
+    :return: tolerance (float), always <= cap.
+    """
+    pts = list(points_xy)
+    if len(pts) < 2:
+        return cap
+
+    min_dist = None
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            d = math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1])
+            if min_dist is None or d < min_dist:
+                min_dist = d
+
+    return min(min_dist / 2, cap)
+
+
 _MOTION_G_CODES = (0.0, 1.0, 2.0, 3.0)
 # Other members of the motion modal group: probing (G38.2/.3/.4/.5,
 # G31 - MACH3/MACH4) and G80 (cancel motion). Selecting 1 of these puts

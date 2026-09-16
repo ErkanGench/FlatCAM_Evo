@@ -26,7 +26,7 @@ def plane(x, y):
     return 0.01 * x - 0.02 * y + 0.1
 
 
-def make_tool(method='b', units='MM', storage=None):
+def make_tool(units='MM', storage=None, heights_valid=True):
     tool = ToolLevelling.__new__(ToolLevelling)
     tool.app = MagicMock()
     tool.app.decimals = 4
@@ -34,9 +34,9 @@ def make_tool(method='b', units='MM', storage=None):
     tool.app.log = MagicMock()
     tool.app.proc_container = MagicMock()
     tool.ui = MagicMock()
-    tool.ui.al_method_radio.get_value.return_value = method
     tool.units = units
     tool.al_voronoi_geo_storage = storage if storage is not None else {}
+    tool.al_heights_valid = heights_valid
     tool.grbl_probe_result = ''
     tool.grbl_work_offset = (0.0, 0.0, 0.0)
     tool.build_al_table_sig = MagicMock()
@@ -72,7 +72,7 @@ GCODE_SAMPLE = (
 class TestAutolevellGcodeBilinear(unittest.TestCase):
     def setUp(self):
         self.storage = make_storage_grid([0, 10, 20], [0, 5, 10])
-        self.tool = make_tool(method='b', storage=self.storage)
+        self.tool = make_tool(storage=self.storage)
         self.target = SimpleNamespace(
             source_file=GCODE_SAMPLE,
             is_segmented_gcode=True,
@@ -81,7 +81,7 @@ class TestAutolevellGcodeBilinear(unittest.TestCase):
         )
 
     def test_g1_lines_get_height_compensated(self):
-        result = self.tool.autolevell_gcode(self.target)
+        result = self.tool.autolevell_gcode(self.target, 'b')
         self.assertIsNotNone(result)
         lines = result.splitlines()
 
@@ -103,13 +103,20 @@ class TestAutolevellGcodeBilinear(unittest.TestCase):
 
     def test_source_file_not_mutated(self):
         original = self.target.source_file
-        self.tool.autolevell_gcode(self.target)
+        self.tool.autolevell_gcode(self.target, 'b')
         self.assertEqual(self.target.source_file, original)
 
     def test_trailing_newline_preserved(self):
-        result = self.tool.autolevell_gcode(self.target)
+        result = self.tool.autolevell_gcode(self.target, 'b')
         self.assertTrue(self.target.source_file.endswith('\n'))
         self.assertTrue(result.endswith('\n'))
+
+    def test_does_not_read_ui_widgets(self):
+        # al_method is now passed in explicitly; autolevell_gcode() and the
+        # methods it calls must not read self.ui at all.
+        self.tool.ui = None
+        result = self.tool.autolevell_gcode(self.target, 'b')
+        self.assertIsNotNone(result)
 
 
 class TestAutolevellGcodeIrregularGrid(unittest.TestCase):
@@ -119,14 +126,14 @@ class TestAutolevellGcodeIrregularGrid(unittest.TestCase):
             1: {'point': Point(10, 0), 'geo': None, 'height': 2.0},
             2: {'point': Point(5, 10), 'geo': None, 'height': 3.0},
         }
-        tool = make_tool(method='b', storage=storage)
+        tool = make_tool(storage=storage)
         target = SimpleNamespace(
             source_file="G1 X0 Y0 Z-0.1\n",
             is_segmented_gcode=True,
             coords_decimals=4,
             units='MM',
         )
-        result = tool.autolevell_gcode(target)
+        result = tool.autolevell_gcode(target, 'b')
         self.assertIsNotNone(result)
 
         warning_calls = [
@@ -145,14 +152,14 @@ class TestAutolevellGcodeVoronoi(unittest.TestCase):
             0: {'point': Point(0, 0), 'geo': None, 'height': 1.0},
             1: {'point': Point(20, 0), 'geo': None, 'height': 5.0},
         }
-        tool = make_tool(method='v', storage=storage)
+        tool = make_tool(storage=storage)
         target = SimpleNamespace(
             source_file="G1 X1 Y0 Z-0.2\n",
             is_segmented_gcode=True,
             coords_decimals=4,
             units='MM',
         )
-        result = tool.autolevell_gcode(target)
+        result = tool.autolevell_gcode(target, 'v')
         expected_z = -0.2 + 1.0
         self.assertEqual(result.strip(), "G1 X1 Y0 Z{0:.4f}".format(expected_z))
 
@@ -167,31 +174,42 @@ class TestAutolevellGcodeErrors(unittest.TestCase):
             source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=False,
             coords_decimals=4, units='MM',
         )
-        result = tool.autolevell_gcode(target)
+        result = tool.autolevell_gcode(target, 'b')
         self.assertIsNone(result)
         tool.app.inform.emit.assert_called()
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
 
     def test_none_target_returns_none(self):
         tool = make_tool(storage=self.storage)
-        self.assertIsNone(tool.autolevell_gcode(None))
+        self.assertIsNone(tool.autolevell_gcode(None, 'b'))
 
     def test_empty_storage_returns_none(self):
-        tool = make_tool(storage={})
+        tool = make_tool(storage={}, heights_valid=False)
         target = SimpleNamespace(
             source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
             coords_decimals=4, units='MM',
         )
-        self.assertIsNone(tool.autolevell_gcode(target))
+        self.assertIsNone(tool.autolevell_gcode(target, 'b'))
 
-    def test_missing_height_returns_none(self):
-        storage = {0: {'point': Point(0, 0), 'geo': None}}
-        tool = make_tool(storage=storage)
+    def test_heights_not_valid_returns_none(self):
+        # storage has entries (with placeholder 'height': 0.0, as created
+        # when probe points are added) but they were never actually probed
+        tool = make_tool(storage=self.storage, heights_valid=False)
         target = SimpleNamespace(
             source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
             coords_decimals=4, units='MM',
         )
-        self.assertIsNone(tool.autolevell_gcode(target))
+        result = tool.autolevell_gcode(target, 'b')
+        self.assertIsNone(result)
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+
+    def test_heights_valid_allows_run(self):
+        tool = make_tool(storage=self.storage, heights_valid=True)
+        target = SimpleNamespace(
+            source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
+            coords_decimals=4, units='MM',
+        )
+        self.assertIsNotNone(tool.autolevell_gcode(target, 'b'))
 
     def test_units_mismatch_returns_none(self):
         tool = make_tool(units='MM', storage=self.storage)
@@ -199,7 +217,7 @@ class TestAutolevellGcodeErrors(unittest.TestCase):
             source_file="G1 X0 Y0 Z0\n", is_segmented_gcode=True,
             coords_decimals=4, units='IN',
         )
-        self.assertIsNone(tool.autolevell_gcode(target))
+        self.assertIsNone(tool.autolevell_gcode(target, 'b'))
 
 
 class TestAutolevellGcodeArcWarning(unittest.TestCase):
@@ -212,7 +230,7 @@ class TestAutolevellGcodeArcWarning(unittest.TestCase):
             coords_decimals=4,
             units='MM',
         )
-        result = tool.autolevell_gcode(target)
+        result = tool.autolevell_gcode(target, 'b')
         self.assertIsNotNone(result)
         warning_calls = [
             c for c in tool.app.inform.emit.call_args_list
@@ -227,7 +245,7 @@ class TestParseGrblProbeResult(unittest.TestCase):
             'a': {'point': Point(0.0, 0.0), 'geo': None, 'height': None},
             'b': {'point': Point(10.0, 0.0), 'geo': None, 'height': None},
         }
-        tool = make_tool(storage=storage)
+        tool = make_tool(storage=storage, heights_valid=False)
         tool.grbl_work_offset = (-100.0, -50.0, -20.0)
         # machine coords = work coords + offset
         tool.grbl_probe_result = (
@@ -241,25 +259,47 @@ class TestParseGrblProbeResult(unittest.TestCase):
         self.assertAlmostEqual(storage['a']['height'], -0.5)
         self.assertAlmostEqual(storage['b']['height'], -0.7)
         tool.build_al_table_sig.emit.assert_called_once()
+        self.assertTrue(tool.al_heights_valid)
+
+    def test_step_quantization_still_matches(self):
+        # probe echoes X/Y with a 0.0125mm step-quantization offset from
+        # the exact storage coordinate; must still match given the 10mm
+        # spacing between the 2 stored points (tolerance = 0.5mm cap).
+        storage = {
+            'a': {'point': Point(0.0, 0.0), 'geo': None, 'height': None},
+            'b': {'point': Point(10.0, 0.0), 'geo': None, 'height': None},
+        }
+        tool = make_tool(storage=storage, heights_valid=False)
+        tool.grbl_work_offset = (0.0, 0.0, 0.0)
+        tool.grbl_probe_result = (
+            "[PRB:0.0125,0.0000,-0.500:1]\n"
+            "[PRB:9.9875,0.0000,-0.700:1]\n"
+        )
+        ok = tool.parse_grbl_probe_result()
+        self.assertTrue(ok)
+        self.assertAlmostEqual(storage['a']['height'], -0.5)
+        self.assertAlmostEqual(storage['b']['height'], -0.7)
 
     def test_failed_probe_returns_false(self):
         storage = {
             'a': {'point': Point(0.0, 0.0), 'geo': None, 'height': None},
         }
-        tool = make_tool(storage=storage)
+        tool = make_tool(storage=storage, heights_valid=False)
         tool.grbl_probe_result = "[PRB:-100.000,-50.000,-20.500:0]\n"
         self.assertFalse(tool.parse_grbl_probe_result())
         tool.app.inform.emit.assert_called()
+        self.assertFalse(tool.al_heights_valid)
 
     def test_unmatched_point_returns_false(self):
         storage = {
             'a': {'point': Point(0.0, 0.0), 'geo': None, 'height': None},
         }
-        tool = make_tool(storage=storage)
+        tool = make_tool(storage=storage, heights_valid=False)
         tool.grbl_work_offset = (0.0, 0.0, 0.0)
         # far away from any storage point
         tool.grbl_probe_result = "[PRB:500.000,500.000,-20.500:1]\n"
         self.assertFalse(tool.parse_grbl_probe_result())
+        self.assertFalse(tool.al_heights_valid)
 
 
 class TestSendGrblCommand(unittest.TestCase):
