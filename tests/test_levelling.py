@@ -470,6 +470,20 @@ class TestLevelGcodeLine(unittest.TestCase):
         self.assertEqual(r7, "G01 X2 Y2 Z{0:.4f}".format(expected_z7))
         self.assertEqual(state['Z'], -0.1)
 
+    def test_g92_1_does_not_change_state(self):
+        state = new_levelling_state()
+        state['X'] = 1.0
+        state['Y'] = 1.0
+        state['Z'] = -0.1
+        state['G'] = 1
+        line = "G92.1 X0 Y0 Z0"
+        result = level_gcode_line(line, state, self.offset_fn)
+        self.assertEqual(result, line)
+        self.assertEqual(state['X'], 1.0)
+        self.assertEqual(state['Y'], 1.0)
+        self.assertEqual(state['Z'], -0.1)
+        self.assertEqual(state['G'], 1)
+
     def test_g28_does_not_change_state_xy(self):
         state = new_levelling_state()
         state['X'] = 1.0

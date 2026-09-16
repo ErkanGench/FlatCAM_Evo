@@ -31,6 +31,12 @@ from appEditors.appTextEditor import AppTextEditor
 
 from camlib import CNCjob
 
+from appPlugins.levelling_interp import (
+    build_bilinear_grid, bilinear_offset, nearest_offset,
+    parse_grbl_probe_output, parse_grbl_work_offset, match_nearest_point,
+    new_levelling_state, level_gcode_line,
+)
+
 import time
 import serial
 import glob
@@ -93,6 +99,7 @@ class ToolLevelling(CNCjob, AppTool):
 
         self.probing_gcode_text = ''
         self.grbl_probe_result = ''
+        self.grbl_work_offset = (0.0, 0.0, 0.0)
 
         '''
         dictionary of dictionaries to store the information's for the autolevelling
@@ -113,6 +120,16 @@ class ToolLevelling(CNCjob, AppTool):
         [(x0, y0, z0), (x1, y1, z1), ...]
         '''
         self.al_bilinear_geo_storage = []
+
+        # working state used by autolevell_gcode() / autolevell_gcode_line()
+        # while levelling a CNCJob's G-code: the (x, y, height) points used
+        # for interpolation, the bilinear grid built out of them (if any),
+        # the offset function currently selected, and the coordinate
+        # decimals used to format the new Z values
+        self._al_points = []
+        self._al_grid = None
+        self._al_offset_fn = None
+        self._al_decimals = 4
 
         self.solid_geo = None
         self.grbl_ser_port = None
@@ -1085,24 +1102,160 @@ class ToolLevelling(CNCjob, AppTool):
         if key == QtCore.Qt.Key.Key_J or key == 'J':
             self.app.on_jump_to()
 
-    def autolevell_gcode(self):
-        pass
+    def _al_probe_tolerance(self):
+        """
+        Tolerance used both to snap probe X/Y values into a bilinear grid
+        (build_bilinear_grid()) and to match a GRBL probe result back to
+        the storage point it was probed for (parse_grbl_probe_result()).
 
-    def autolevell_gcode_line(self, gcode_line):
+        Probed coordinates can carry a bit of floating point/echo noise
+        around the exact value FlatCAM generated the probing G-code with,
+        but 2 distinct probe points are never closer than the app's
+        display resolution (`self.app.decimals`). 10x the smallest
+        displayed unit absorbs that noise while staying far below the
+        minimum real spacing between 2 probe points, in either MM or IN.
+
+        :return: tolerance (float), in the units of `self.units`.
+        """
+        return 10 ** -self.app.decimals * 10
+
+    def autolevell_gcode(self, target_obj):
+        """
+        Apply the probed height map (self.al_voronoi_geo_storage) to a
+        CNCJob object's segmented G-code.
+
+        :param target_obj:  the CNCJobObject whose G-code (target_obj.source_file)
+                             is to be height-compensated. Not modified.
+        :return:             the height-compensated G-code text, or None on error.
+        :rtype:              str | None
+        """
+        if target_obj is None or target_obj.is_segmented_gcode is not True:
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' % _("The CNCJob object must be made from segmented G-code.")
+            )
+            return None
+
+        storage = self.al_voronoi_geo_storage
+        if not storage or not all('height' in v for v in storage.values()):
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' % _("No height map available. Probe the PCB before applying autolevelling.")
+            )
+            return None
+
+        if str(target_obj.units).upper() != self.units:
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' % _("The units of the CNCJob object and of the height map do not match.")
+            )
+            return None
+
+        points = [(v['point'].x, v['point'].y, v['height']) for v in storage.values()]
+        self._al_points = points
+        self._al_decimals = target_obj.coords_decimals
+
+        tol = self._al_probe_tolerance()
+
         al_method = self.ui.al_method_radio.get_value()
+        if al_method == 'b':
+            self._al_grid = build_bilinear_grid(points, tol)
+            if self._al_grid is None:
+                self.app.inform.emit(
+                    '[WARNING_NOTCL] %s' %
+                    _("Probe points do not form a regular grid. Using nearest-point levelling.")
+                )
+                self._al_offset_fn = self.autolevell_voronoi
+            else:
+                self._al_offset_fn = self.autolevell_bilinear
+        else:
+            self._al_offset_fn = self.autolevell_voronoi
 
-        coords = ()
+        source_lines = target_obj.source_file.splitlines()
+        trailing_newline = target_obj.source_file.endswith('\n')
+        total = len(source_lines)
+        report_every = max(1, total // 20)
 
-        if al_method == 'v':
-            self.autolevell_voronoi(gcode_line, coords)
-        elif al_method == 'b':
-            self.autolevell_bilinear(gcode_line, coords)
+        state = new_levelling_state()
+        new_lines = []
+        for idx, line in enumerate(source_lines):
+            new_lines.append(self.autolevell_gcode_line(line, state))
+            if idx % report_every == 0:
+                try:
+                    pct = int((idx + 1) * 100 / total) if total else 100
+                    self.app.proc_container.update_view_text(' %d%%' % pct)
+                except Exception:
+                    # proc_container may not be available (or active) in
+                    # every call context; progress reporting is best-effort
+                    pass
 
-    def autolevell_bilinear(self, gcode_line, coords):
-        pass
+        if state['arcs'] > 0:
+            self.app.inform.emit(
+                '[WARNING_NOTCL] %s: %d' % (_("Arc moves were not height-compensated"), state['arcs'])
+            )
 
-    def autolevell_voronoi(self, gcode_line, coords):
-        pass
+        result = '\n'.join(new_lines)
+        if trailing_newline:
+            result += '\n'
+        return result
+
+    def autolevell_gcode_line(self, gcode_line, state):
+        return level_gcode_line(gcode_line, state, self._al_offset_fn, self._al_decimals)
+
+    def autolevell_bilinear(self, x, y):
+        return bilinear_offset(self._al_grid, x, y)
+
+    def autolevell_voronoi(self, x, y):
+        return nearest_offset(self._al_points, x, y)
+
+    def parse_grbl_probe_result(self):
+        """
+        Parse self.grbl_probe_result (the raw serial answer stream
+        accumulated while probing) and write the resulting heights into
+        self.al_voronoi_geo_storage.
+
+        :return: True on success; False if a probe did not touch the
+                 surface, or a probed point could not be matched to a
+                 stored probe location, or a stored probe location did
+                 not receive any result.
+        :rtype:  bool
+        """
+        try:
+            results = parse_grbl_probe_output(self.grbl_probe_result)
+        except ValueError as e:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Probing failed"), str(e)))
+            return False
+
+        ox, oy, oz = self.grbl_work_offset
+        tol = self._al_probe_tolerance()
+
+        points = {
+            key: (value['point'].x, value['point'].y)
+            for key, value in self.al_voronoi_geo_storage.items()
+        }
+
+        matched_keys = set()
+        for mx, my, mz in results:
+            x = mx - ox
+            y = my - oy
+            z = mz - oz
+
+            key = match_nearest_point(points, x, y, tol)
+            if key is None:
+                self.app.inform.emit(
+                    '[ERROR_NOTCL] %s' %
+                    _("A probed point could not be matched to any stored probe location.")
+                )
+                return False
+
+            self.al_voronoi_geo_storage[key]['height'] = z
+            matched_keys.add(key)
+
+        if matched_keys != set(self.al_voronoi_geo_storage.keys()):
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s' % _("Some probe points did not receive a height value.")
+            )
+            return False
+
+        self.build_al_table_sig.emit()
+        return True
 
     def on_show_al_table(self, state):
         self.ui.al_probe_points_table.show() if state else self.ui.al_probe_points_table.hide()
@@ -1344,18 +1497,19 @@ class ToolLevelling(CNCjob, AppTool):
         grbl_out = self.grbl_ser_port.readlines()
         if not grbl_out:
             self.app.inform_shell[str, bool].emit('\t\t\t: No answer\n', False)
+            return ''
 
-        result = ''
+        decoded_lines = []
         for line in grbl_out:
+            decoded_line = line.decode('utf-8', errors='replace').strip()
+            decoded_lines.append(decoded_line)
             if echo:
                 try:
-                    self.app.inform_shell.emit('\t\t\t: ' + line.decode('utf-8').strip().upper())
+                    self.app.inform_shell.emit('\t\t\t: ' + decoded_line.upper())
                 except Exception as e:
                     self.app.log.error("CNCJobObject.send_grbl_command() --> %s" % str(e))
-            if 'ok' in line:
-                result = grbl_out
 
-        return result
+        return '\n'.join(decoded_lines)
 
     def send_grbl_block(self, command, echo=True):
         stripped_cmd = command.strip()
@@ -1764,6 +1918,15 @@ class ToolLevelling(CNCjob, AppTool):
                 cmd = 'G90\n'
                 self.send_grbl_command(command=cmd)
 
+                offset_output = self.send_grbl_command(command='$#\n')
+                try:
+                    self.grbl_work_offset = parse_grbl_work_offset(offset_output)
+                except ValueError as e:
+                    self.app.inform.emit(
+                        '[ERROR_NOTCL] %s: %s' % (_("Could not read the GRBL work offset"), str(e))
+                    )
+                    return
+
                 for pt_key in self.al_voronoi_geo_storage:
                     x = str(self.al_voronoi_geo_storage[pt_key]['point'].x)
                     y = str(self.al_voronoi_geo_storage[pt_key]['point'].y)
@@ -1781,8 +1944,8 @@ class ToolLevelling(CNCjob, AppTool):
                 self.send_grbl_command(command=cmd)
                 self.app.inform.emit('%s' % _("Finished probing. Doing the autolevelling."))
 
-                # apply autolevelling here
-                self.on_grbl_apply_autolevel()
+                if self.parse_grbl_probe_result():
+                    self.on_grbl_apply_autolevel()
 
         self.app.inform.emit('%s' % _("Sending probing GCode to the GRBL controller."))
         self.app.worker_task.emit({'fcn': worker_task, 'params': []})
