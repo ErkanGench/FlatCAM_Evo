@@ -1231,6 +1231,31 @@ class ToolLevelling(CNCjob, AppTool):
             )
             return False
 
+        # level_gcode_line() only understands standard G-code motion; Roland,
+        # HPGL and laser preprocessors emit a completely different dialect
+        # (see camlib.CNCjob.codes_split()), and solder-paste jobs are XY-only
+        # dispense moves, not height-compensable milling. Refuse rather than
+        # silently mis-level.
+        pp_geometry_name = str(getattr(target_obj, 'pp_geometry_name', '') or '')
+        pp_excellon_name = str(getattr(target_obj, 'pp_excellon_name', '') or '')
+        pp_solderpaste_name = getattr(target_obj, 'pp_solderpaste_name', None)
+
+        unsupported_markers = ('roland', 'hpgl', 'laser')
+        bad_pp_name = None
+        if pp_solderpaste_name is not None:
+            bad_pp_name = pp_solderpaste_name
+        elif any(marker in pp_geometry_name.lower() for marker in unsupported_markers):
+            bad_pp_name = pp_geometry_name
+        elif any(marker in pp_excellon_name.lower() for marker in unsupported_markers):
+            bad_pp_name = pp_excellon_name
+
+        if bad_pp_name is not None:
+            self.app.inform.emit(
+                '[ERROR_NOTCL] %s: %s.' %
+                (_("Autolevelling is not supported for this preprocessor"), bad_pp_name)
+            )
+            return False
+
         storage = self.al_voronoi_geo_storage
         if not storage or not self.al_heights_valid:
             self.app.inform.emit(
@@ -1271,10 +1296,11 @@ class ToolLevelling(CNCjob, AppTool):
         Apply the probed height map to each of a CNCJob object's
         per-tool G-code texts (`target_obj.tools[k]['gcode']`) instead of
         its assembled `source_file`. A single modal G-code state is
-        shared across all tools, processed in ascending tool-id order,
-        so a Z/G-mode set by 1 tool's trailing lines carries into the
-        next tool's leading lines exactly as it would in the assembled
-        G-code.
+        shared across all tools, processed in `target_obj.tools`'s
+        (dict/insertion) order - the same order export_gcode() uses to
+        concatenate them into source_file - so a Z/G-mode set by 1
+        tool's trailing lines carries into the next tool's leading
+        lines exactly as it would in the assembled G-code.
 
         Not reentrant, same caveat as autolevell_gcode().
 
@@ -1290,7 +1316,7 @@ class ToolLevelling(CNCjob, AppTool):
 
         state = new_levelling_state()
         result = {}
-        for tooluid in sorted(target_obj.tools.keys()):
+        for tooluid in target_obj.tools.keys():
             tool_gcode = target_obj.tools[tooluid].get('gcode') or ''
             source_lines = tool_gcode.splitlines()
             trailing_newline = tool_gcode.endswith('\n')
@@ -2182,7 +2208,14 @@ class ToolLevelling(CNCjob, AppTool):
                         # copy over the tools/options needed to reconstruct the source_file,
                         # gcode_parsed (plot) and solid_geometry from the levelled per-tool
                         # G-code, exactly as export_gcode()/plot() rebuild them for any other
-                        # CNCJob object
+                        # CNCJob object.
+                        #
+                        # CNCJobObject.ser_attrs (appObjects/CNCJobObject.py) is the list used
+                        # to save/load a project, but it does not cover everything gcode_parse()
+                        # / codes_split() need (pp_geometry_name, pp_excellon_name,
+                        # pp_solderpaste_name, exc_tools aren't in it - project load rebuilds
+                        # those separately), so it isn't a drop-in replacement here; the explicit
+                        # list below is extended instead of switching to ser_attrs.
                         new_obj.obj_options.update(
                             {k: v for k, v in target_obj.obj_options.items() if k != 'name'}
                         )
@@ -2193,19 +2226,36 @@ class ToolLevelling(CNCjob, AppTool):
                         new_obj.prepend_snippet = target_obj.prepend_snippet
                         new_obj.append_snippet = target_obj.append_snippet
                         new_obj.is_segmented_gcode = target_obj.is_segmented_gcode
+                        new_obj.pp_geometry_name = getattr(target_obj, 'pp_geometry_name', 'default')
+                        new_obj.pp_excellon_name = getattr(target_obj, 'pp_excellon_name', 'default')
+                        new_obj.pp_solderpaste_name = getattr(target_obj, 'pp_solderpaste_name', None)
+                        new_obj.exc_tools = deepcopy(getattr(target_obj, 'exc_tools', {}))
                         new_obj.tools = deepcopy(target_obj.tools)
 
+                        # accumulate the object-level gcode / gcode_parsed across all tools,
+                        # in target_obj.tools order (the same order export_gcode() concatenates
+                        # them into source_file); gcode_parse() only ever sets self.gcode_parsed
+                        # from self.gcode, so calling it once per tool and keeping only the last
+                        # result would silently drop every other tool's geometry
+                        total_gcode = ''
+                        total_gcode_parsed = []
                         for tooluid, levelled_text in tools_gcode.items():
                             if tooluid not in new_obj.tools:
                                 continue
                             # gcode_parse() parses self.gcode (not the per-tool dict), so it
                             # has to be set as the "current" gcode for the duration of the call
                             new_obj.gcode = levelled_text
-                            new_obj.tools[tooluid]['gcode_parsed'] = new_obj.gcode_parse(
+                            tool_gcode_parsed = new_obj.gcode_parse(
                                 tool_data=new_obj.tools[tooluid].get('data', {})
                             )
+                            new_obj.tools[tooluid]['gcode_parsed'] = tool_gcode_parsed
                             new_obj.tools[tooluid]['gcode'] = levelled_text
 
+                            total_gcode += levelled_text
+                            total_gcode_parsed += tool_gcode_parsed
+
+                        new_obj.gcode = total_gcode
+                        new_obj.gcode_parsed = total_gcode_parsed
                         new_obj.create_geometry()
 
                     ret = self.app.app_obj.new_object('cncjob', outname, obj_init)

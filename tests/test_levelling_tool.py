@@ -446,13 +446,21 @@ class FakeNewCNCJob:
         self.gcode = ''
         self.gcode_parsed = None
         self.geometry_created = False
+        self.solid_geometry = None
+        self.pp_geometry_name = None
+        self.pp_excellon_name = None
+        self.pp_solderpaste_name = None
+        self.exc_tools = None
 
     def gcode_parse(self, tool_data=None):
-        self.gcode_parsed = list(self.gcode.splitlines())
-        return self.gcode_parsed
+        return list(self.gcode.splitlines())
 
     def create_geometry(self):
+        # mirrors camlib.CNCjob.create_geometry(): builds solid_geometry
+        # from self.gcode_parsed (must already hold every tool's geometry,
+        # not just the last tool processed)
         self.geometry_created = True
+        self.solid_geometry = list(self.gcode_parsed) if self.gcode_parsed else []
 
 
 def make_apply_target(tools_gcode_by_key):
@@ -605,6 +613,164 @@ class TestApplyAutolevel(unittest.TestCase):
             worker_dict['fcn']()
 
         self.assertFalse(tool._al_apply_running)
+
+    def test_gcode_parsed_and_solid_geometry_include_all_tools(self):
+        # regression: gcode_parse() only ever sets self.gcode_parsed from
+        # self.gcode, so calling it once per tool and keeping only the
+        # last call's result would silently drop every tool but the last
+        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n", 2: "G1 X5 Y5 Z-0.2\n"})
+        tool = make_tool(storage=self.storage)
+
+        captured = self._run_worker(tool, target)
+        new_obj = captured['new_obj']
+
+        self.assertEqual(len(new_obj.gcode_parsed), 2)
+        self.assertEqual(len(new_obj.solid_geometry), 2)
+        self.assertIn(new_obj.tools[1]['gcode'], new_obj.gcode)
+        self.assertIn(new_obj.tools[2]['gcode'], new_obj.gcode)
+
+    def test_pp_names_and_exc_tools_are_copied(self):
+        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
+        target.pp_geometry_name = 'default'
+        target.pp_excellon_name = 'default'
+        target.pp_solderpaste_name = None
+        target.exc_tools = {1: {'tooldia': 1.0, 'drills': []}}
+        tool = make_tool(storage=self.storage)
+
+        captured = self._run_worker(tool, target)
+        new_obj = captured['new_obj']
+
+        self.assertEqual(new_obj.pp_geometry_name, 'default')
+        self.assertEqual(new_obj.pp_excellon_name, 'default')
+        self.assertIsNone(new_obj.pp_solderpaste_name)
+        self.assertEqual(new_obj.exc_tools, {1: {'tooldia': 1.0, 'drills': []}})
+        self.assertIsNot(new_obj.exc_tools, target.exc_tools)
+
+    def test_apply_stops_for_unsupported_preprocessor(self):
+        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
+        target.pp_geometry_name = 'Roland_test'
+        tool = make_tool(storage=self.storage)
+        tool.app.collection.get_by_name.return_value = target
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+
+        tool.apply_autolevel()
+        worker_dict = tool.app.worker_task.emit.call_args.args[0]
+        worker_dict['fcn']()
+
+        tool.app.app_obj.new_object.assert_not_called()
+        self.assertFalse(tool._al_apply_running)
+
+
+class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
+    def setUp(self):
+        # 4-point flat (height 0 everywhere) bilinear grid: offset_fn is
+        # always exactly 0, so a levelled line's Z is exactly the modal Z
+        # tracked in `state` - which makes it easy to tell which tool ran
+        # first.
+        self.flat_storage = {
+            0: {'point': Point(0, 0), 'geo': None, 'height': 0.0},
+            1: {'point': Point(10, 0), 'geo': None, 'height': 0.0},
+            2: {'point': Point(0, 10), 'geo': None, 'height': 0.0},
+            3: {'point': Point(10, 10), 'geo': None, 'height': 0.0},
+        }
+
+    def test_tools_are_processed_in_dict_order_not_sorted(self):
+        # tool 9 sets modal Z to -0.3; tool 3 (numerically smaller key,
+        # but inserted 2nd) has no Z word of its own, so its levelled Z
+        # depends on whichever tool ran right before it
+        target = SimpleNamespace(
+            is_segmented_gcode=True, coords_decimals=4, units='MM',
+            tools={
+                9: {'gcode': "G1 Z-0.3000 F100\n", 'data': {}},
+                3: {'gcode': "G1 X0 Y0\n", 'data': {}},
+            },
+        )
+        tool = make_tool(storage=self.flat_storage)
+
+        result = tool.autolevell_gcode_tools(target, 'b')
+
+        self.assertIsNotNone(result)
+        # if tool 3 had run first (sorted order), its Z would be 0.0000
+        self.assertIn("Z-0.3000", result[3])
+
+    def test_roland_preprocessor_rejected(self):
+        target = SimpleNamespace(
+            is_segmented_gcode=True, coords_decimals=4, units='MM',
+            pp_geometry_name='Roland_GRBL', pp_excellon_name='default', pp_solderpaste_name=None,
+            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
+        )
+        tool = make_tool(storage=self.flat_storage)
+
+        result = tool.autolevell_gcode_tools(target, 'b')
+
+        self.assertIsNone(result)
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+        self.assertIn('Roland_GRBL', tool.app.inform.emit.call_args.args[0])
+
+    def test_hpgl_preprocessor_rejected_case_insensitive(self):
+        target = SimpleNamespace(
+            is_segmented_gcode=True, coords_decimals=4, units='MM',
+            pp_geometry_name='default', pp_excellon_name='HPGL2', pp_solderpaste_name=None,
+            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
+        )
+        tool = make_tool(storage=self.flat_storage)
+
+        result = tool.autolevell_gcode_tools(target, 'b')
+
+        self.assertIsNone(result)
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+
+    def test_laser_preprocessor_rejected_case_insensitive(self):
+        target = SimpleNamespace(
+            is_segmented_gcode=True, coords_decimals=4, units='MM',
+            pp_geometry_name='Laser_1', pp_excellon_name='default', pp_solderpaste_name=None,
+            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
+        )
+        tool = make_tool(storage=self.flat_storage)
+
+        result = tool.autolevell_gcode_tools(target, 'b')
+
+        self.assertIsNone(result)
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+
+    def test_solderpaste_preprocessor_rejected(self):
+        target = SimpleNamespace(
+            is_segmented_gcode=True, coords_decimals=4, units='MM',
+            pp_geometry_name='default', pp_excellon_name='default', pp_solderpaste_name='Paste_1',
+            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
+        )
+        tool = make_tool(storage=self.flat_storage)
+
+        result = tool.autolevell_gcode_tools(target, 'b')
+
+        self.assertIsNone(result)
+        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
+        self.assertIn('Paste_1', tool.app.inform.emit.call_args.args[0])
+
+    def test_default_preprocessor_names_are_allowed(self):
+        target = SimpleNamespace(
+            is_segmented_gcode=True, coords_decimals=4, units='MM',
+            pp_geometry_name='default', pp_excellon_name='default', pp_solderpaste_name=None,
+            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
+        )
+        tool = make_tool(storage=self.flat_storage)
+
+        result = tool.autolevell_gcode_tools(target, 'b')
+
+        self.assertIsNotNone(result)
+
+    def test_missing_pp_attributes_are_allowed(self):
+        # existing callers (SimpleNamespace test doubles without pp_*
+        # attributes at all) must not be rejected
+        target = SimpleNamespace(
+            is_segmented_gcode=True, coords_decimals=4, units='MM',
+            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
+        )
+        tool = make_tool(storage=self.flat_storage)
+
+        result = tool.autolevell_gcode_tools(target, 'b')
+
+        self.assertIsNotNone(result)
 
 
 if __name__ == '__main__':
