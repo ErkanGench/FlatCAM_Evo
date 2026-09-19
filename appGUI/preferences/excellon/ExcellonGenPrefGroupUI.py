@@ -6,6 +6,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from appGUI.GUIElements import FCCheckBox, FCSpinner, RadioSet, FCSliderWithSpinner, FCColorEntry, FCLabel, \
     GLay, FCFrame, FCButton
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appDatabase import _database_option
 
 import gettext
 import appTranslation as fcTranslate
@@ -368,7 +369,7 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
         self.update_excellon_cb.stateChanged.connect(self.on_update_exc_export)
 
         # call it once to make sure it is updated at startup
-        self.on_update_exc_export(state=self.app.options["excellon_update"])
+        self.on_update_exc_export(state=_database_option(app, "excellon_update"))
 
         self.excellon_optimization_radio.activated_custom.connect(self.optimization_selection)
 
@@ -391,18 +392,18 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
     # Setting plot colors handlers
     def on_fill_color_entry(self):
         self.app.options['excellon_plot_fill'] = self.fill_color_entry.get_value()[:7] + \
-            self.app.options['excellon_plot_fill'][7:9]
+            _database_option(self.app, 'excellon_plot_fill')[7:9]
 
     def on_line_color_entry(self):
         self.app.options['excellon_plot_line'] = self.line_color_entry.get_value()[:7] + \
-                                                self.app.options['excellon_plot_line'][7:9]
+                                                _database_option(self.app, 'excellon_plot_line')[7:9]
 
     def on_excellon_alpha_changed(self, spinner_value):
         self.app.options['excellon_plot_fill'] = \
-            self.app.options['excellon_plot_fill'][:7] + \
+            _database_option(self.app, 'excellon_plot_fill')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
         self.app.options['excellon_plot_line'] = \
-            self.app.options['excellon_plot_line'][:7] + \
+            _database_option(self.app, 'excellon_plot_line')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
 
     def on_excellon_defaults_button(self):

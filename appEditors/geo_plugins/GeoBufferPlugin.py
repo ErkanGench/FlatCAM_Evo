@@ -158,7 +158,13 @@ class BufferSelectionTool(AppToolEditor):
                     return 'fail'
 
                 results = []
-                usable_resolution = int(int(geo_editor.app.options["geometry_circle_steps"]) / 4)
+                usable_resolution = int(int(geo_editor.app.options.get(
+                    "geometry_circle_steps",
+                    geo_editor.app.defaults.get(
+                        "geometry_circle_steps",
+                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                    )
+                )) / 4)
                 for t in selected:
                     if not t.geo.is_empty and t.geo.is_valid:
                         if t.geo.geom_type == 'Polygon':
@@ -238,7 +244,13 @@ class BufferSelectionTool(AppToolEditor):
                         if t.geo.geom_type == 'Polygon':
                             results.append(t.geo.exterior.buffer(
                                 -buf_distance + 1e-10,
-                                resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
+                                resolution=int(int(geo_editor.app.options.get(
+                                    "geometry_circle_steps",
+                                    geo_editor.app.defaults.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                    )
+                                )) / 4),
                                 join_style=join_style).exterior
                                            )
                         elif t.geo.geom_type == 'MultiLineString':
@@ -249,7 +261,13 @@ class BufferSelectionTool(AppToolEditor):
                                     b_geo = line
                                 results.append(b_geo.buffer(
                                     -buf_distance + 1e-10,
-                                    resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
+                                    resolution=int(int(geo_editor.app.options.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.get(
+                                            "geometry_circle_steps",
+                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                        )
+                                    )) / 4),
                                     join_style=join_style).exterior
                                                )
                         elif t.geo.geom_type in ['LineString', 'LinearRing']:
@@ -259,7 +277,13 @@ class BufferSelectionTool(AppToolEditor):
                                 b_geo = t.geo
                             results.append(b_geo.buffer(
                                 -buf_distance + 1e-10,
-                                resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
+                                resolution=int(int(geo_editor.app.options.get(
+                                    "geometry_circle_steps",
+                                    geo_editor.app.defaults.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                    )
+                                )) / 4),
                                 join_style=join_style).exterior
                                            )
 
@@ -310,7 +334,13 @@ class BufferSelectionTool(AppToolEditor):
                         if t.geo.geom_type == 'Polygon':
                             results.append(t.geo.exterior.buffer(
                                 buf_distance - 1e-10,
-                                resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
+                                resolution=int(int(geo_editor.app.options.get(
+                                    "geometry_circle_steps",
+                                    geo_editor.app.defaults.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                    )
+                                )) / 4),
                                 join_style=join_style).exterior
                                            )
                         elif t.geo.geom_type == 'MultiLineString':
@@ -321,7 +351,13 @@ class BufferSelectionTool(AppToolEditor):
                                     b_geo = line
                                 results.append(b_geo.buffer(
                                     buf_distance - 1e-10,
-                                    resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
+                                    resolution=int(int(geo_editor.app.options.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.get(
+                                            "geometry_circle_steps",
+                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                        )
+                                    )) / 4),
                                     join_style=join_style).exterior
                                                )
                         elif t.geo.geom_type in ['LineString', 'LinearRing']:
@@ -331,7 +367,13 @@ class BufferSelectionTool(AppToolEditor):
                                 b_geo = t.geo
                             results.append(b_geo.buffer(
                                 buf_distance - 1e-10,
-                                resolution=int(int(geo_editor.app.options["geometry_circle_steps"]) / 4),
+                                resolution=int(int(geo_editor.app.options.get(
+                                    "geometry_circle_steps",
+                                    geo_editor.app.defaults.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                    )
+                                )) / 4),
                                 join_style=join_style).exterior
                                            )
 

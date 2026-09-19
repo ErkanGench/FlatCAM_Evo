@@ -8,6 +8,7 @@
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt
 from appTool import AppTool
+from defaults import AppDefaults
 from appGUI.GUIElements import (
     VerticalScrollArea,
     FCLabel,
@@ -110,7 +111,14 @@ class ToolLevelling(CNCjob, AppTool):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        CNCjob.__init__(self, steps_per_circle=self.app.options["cncjob_steps_per_circle"], app=app)
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        CNCjob.__init__(
+            self,
+            steps_per_circle=self.app.options.get(
+                "cncjob_steps_per_circle",
+                app_defaults.get("cncjob_steps_per_circle", AppDefaults.factory_defaults.get("cncjob_steps_per_circle"))),
+            app=app
+        )
 
         # updated in the self.set_tool_ui()
         self.form_fields = {}
@@ -179,7 +187,10 @@ class ToolLevelling(CNCjob, AppTool):
         self.gcode_viewer_tab = None
 
         # store the current selection shape status to be restored after manual adding test points
-        self.old_selection_state = self.app.options['global_selection_shape']
+        self.old_selection_state = self.app.options.get(
+            'global_selection_shape',
+            app_defaults.get('global_selection_shape', AppDefaults.factory_defaults.get('global_selection_shape'))
+        )
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -306,6 +317,7 @@ class ToolLevelling(CNCjob, AppTool):
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
         self.al_heights_valid = self._height_map_is_complete()
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         self.clear_ui(self.layout)
         self.ui = LevelUI(layout=self.layout, app=self.app)
@@ -360,8 +372,16 @@ class ToolLevelling(CNCjob, AppTool):
         self.to_form()
         self.on_controller_change_alter_ui()
 
-        self.ui.plot_probing_pts_cb.set_value(self.app.options["tools_al_plot_points"])
-        self.ui.avoid_exc_holes_cb.set_value(self.app.options["tools_al_avoid_exc_holes"])
+        self.ui.plot_probing_pts_cb.set_value(
+            self.app.options.get(
+                "tools_al_plot_points",
+                app_defaults.get("tools_al_plot_points", AppDefaults.factory_defaults.get("tools_al_plot_points")))
+        )
+        self.ui.avoid_exc_holes_cb.set_value(
+            self.app.options.get(
+                "tools_al_avoid_exc_holes",
+                app_defaults.get("tools_al_avoid_exc_holes", AppDefaults.factory_defaults.get("tools_al_avoid_exc_holes")))
+        )
 
         self.ui.al_probe_points_table.setRowCount(0)
         self.ui.al_probe_points_table.resizeColumnsToContents()
@@ -391,7 +411,9 @@ class ToolLevelling(CNCjob, AppTool):
         self.ui.al_method_radio.setDisabled(True)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level",
+            app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
         try:
@@ -422,7 +444,11 @@ class ToolLevelling(CNCjob, AppTool):
         if self.al_heights_valid:
             self.build_al_table()
 
-        self.on_avoid_exc_holes(self.app.options["tools_al_avoid_exc_holes"])
+        self.on_avoid_exc_holes(
+            self.app.options.get(
+                "tools_al_avoid_exc_holes",
+                app_defaults.get("tools_al_avoid_exc_holes", AppDefaults.factory_defaults.get("tools_al_avoid_exc_holes")))
+        )
 
     def on_object_changed(self):
 
@@ -1558,6 +1584,8 @@ class ToolLevelling(CNCjob, AppTool):
         # radio through the UI (see on_mode_radio(), the signal-connected
         # handler); set_tool_ui() calls this helper directly so that a
         # retained (probed/imported) height map survives re-opening the tool.
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+
         if val == "manual":
             self.ui.al_method_radio.set_value('v')
             self.ui.al_rows_entry.setDisabled(True)
@@ -1574,7 +1602,11 @@ class ToolLevelling(CNCjob, AppTool):
             self.ui.al_columns_label.setDisabled(False)
             self.ui.al_method_lbl.setDisabled(False)
             self.ui.al_method_radio.setDisabled(False)
-            self.ui.al_method_radio.set_value(self.app.options['tools_al_method'])
+            self.ui.al_method_radio.set_value(
+                self.app.options.get(
+                    'tools_al_method',
+                    app_defaults.get('tools_al_method', AppDefaults.factory_defaults.get('tools_al_method')))
+            )
             # self.ui.avoid_exc_holes_cb.setDisabled(True)
 
     def on_avoid_exc_holes(self, state):
@@ -1874,7 +1906,12 @@ class ToolLevelling(CNCjob, AppTool):
 
         step = self.ui.jog_step_entry.get_value(),
         feedrate = self.ui.jog_fr_entry.get_value()
-        travelz = float(self.app.options["tools_al_grbl_travelz"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        travelz = float(
+            self.app.options.get(
+                "tools_al_grbl_travelz",
+                app_defaults.get("tools_al_grbl_travelz", AppDefaults.factory_defaults.get("tools_al_grbl_travelz")))
+        )
 
         if direction == 'xplus':
             cmd = "$J=G91 %s X%s F%s" % ({'IN': 'G20', 'MM': 'G21'}[self.units], str(step), str(feedrate))
@@ -2072,8 +2109,12 @@ class ToolLevelling(CNCjob, AppTool):
 
     def on_save_probing_gcode(self):
         lines = StringIO(self.probing_gcode_text)
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
-        _filter_ = self.app.options['cncjob_save_filters']
+        _filter_ = self.app.options.get(
+            'cncjob_save_filters',
+            app_defaults.get('cncjob_save_filters', AppDefaults.factory_defaults.get('cncjob_save_filters'))
+        )
         name = "probing_gcode"
         try:
             dir_file_to_save = self.app.get_last_save_folder() + '/' + str(name)
@@ -2092,7 +2133,10 @@ class ToolLevelling(CNCjob, AppTool):
             return
         else:
             try:
-                force_windows_line_endings = self.app.options['cncjob_line_ending']
+                force_windows_line_endings = self.app.options.get(
+                    'cncjob_line_ending',
+                    app_defaults.get('cncjob_line_ending', AppDefaults.factory_defaults.get('cncjob_line_ending'))
+                )
                 if force_windows_line_endings and sys.platform != 'win32':
                     with open(filename, 'w', newline='\r\n') as f:
                         for line in lines:
@@ -2343,7 +2387,11 @@ class ToolLevelling(CNCjob, AppTool):
             return
         else:
             try:
-                force_windows_line_endings = self.app.options['cncjob_line_ending']
+                app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+                force_windows_line_endings = self.app.options.get(
+                    'cncjob_line_ending',
+                    app_defaults.get('cncjob_line_ending', AppDefaults.factory_defaults.get('cncjob_line_ending'))
+                )
                 open_kwargs = {'newline': '\r\n'} if force_windows_line_endings and sys.platform != 'win32' else {}
                 with open(filename, 'w', **open_kwargs) as f:
                     for value in self.al_voronoi_geo_storage.values():

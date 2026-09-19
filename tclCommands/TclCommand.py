@@ -60,6 +60,14 @@ class TclCommand(object):
         self.error_info = None
         self.error = None
 
+    def _app_option(self, key, fallback=None):
+        defaults = getattr(self.app, "defaults", None)
+        if defaults is None:
+            return self.app.options.get(key, fallback)
+
+        factory_defaults = getattr(defaults, "factory_defaults", {})
+        return self.app.options.get(key, defaults.get(key, factory_defaults.get(key, fallback)))
+
     def raise_tcl_error(self, text):
         """
         This method pass exception from python into TCL as error
@@ -409,7 +417,7 @@ class TclCommandSignaled(TclCommand):
                 passed_timeout = args['timeout']
                 args.pop('timeout', None)
             else:
-                passed_timeout = self.app.options['global_background_timeout']
+                passed_timeout = self._app_option('global_background_timeout')
 
             # set detail for processing, it will be there until next open or close
             self.app.shell.open_processing(self.get_current_command())

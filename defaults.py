@@ -1,6 +1,7 @@
 import os
 import stat
 import sys
+import tempfile
 from copy import deepcopy
 from appCommon.Common import LoudDict
 from camlib import to_dict, Geometry
@@ -18,13 +19,13 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 # log = logging.getLogger('AppDefaults')
 log = logging.getLogger('base')
+_MISSING = object()
 
 
 class AppDefaults:
 
     factory_defaults = {
         # Global
-        "version": 8.992,  # defaults format version, not necessarily equal to app version
         "first_run": True,
         "root_folder_path": '',
 
@@ -90,6 +91,7 @@ class AppDefaults:
         "global_shell_at_startup": False,  # Show the shell at startup.
         "global_project_at_startup": False,
         "global_version_check": True,
+        "global_update_url": "https://s.go.ro/zihniipc",
         "global_send_stats": True,
         "global_worker_number": min(4, max(2, int((os.cpu_count()) / 2))) if os.cpu_count() else 2,
         "global_process_number": int((os.cpu_count()) / 4) if os.cpu_count() > 4 else 1,
@@ -868,36 +870,61 @@ class AppDefaults:
 
     @classmethod
     def save_factory_defaults(cls, file_path: str, version: (float, str)):
-        """Writes the factory defaults to a file at the given path, overwriting any existing file."""
-        # If the file exists
+        """Writes the factory defaults to a file at the given path, ensuring it's up-to-date."""
+        # ponytail: version param is ignored. File is written if missing or different.
+        needs_write = True
         if os.path.isfile(file_path):
-            # tst if it is empty
-            with open(file_path, "r") as file:
-                f_defaults = simplejson.loads(file.read())
+            try:
+                with open(file_path, "r") as file:
+                    f_defaults = simplejson.loads(file.read())
+                if f_defaults == cls.factory_defaults:
+                    needs_write = False
+            except Exception:
+                pass
 
-            # if the file is not empty
-            if f_defaults:
-                # if it has the same version do nothing
-                if str(f_defaults['version']) == str(version):
-                    return
-                # if the versions differ then remove the file
-                os.chmod(file_path, stat.S_IRWXO | stat.S_IWRITE | stat.S_IWGRP)
-                os.remove(file_path)
+        if not needs_write:
+            return
 
-        cls.factory_defaults['version'] = version
-
+        # ponytail: transactional write — serialize to temp in same dir, then
+        # os.replace. Existing file bytes survive serialization or replacement
+        # failure. (Post-replace chmod failure already changes bytes.)
+        dest_dir = os.path.dirname(file_path) or '.'
+        temp_path = None
+        original_mode = None
         try:
-            # recreate a new factory defaults file and save the factory defaults data into it
-            f_f_def_s = open(file_path, "w")
-            simplejson.dump(cls.factory_defaults, f_f_def_s, default=to_dict, indent=2, sort_keys=True)
-            f_f_def_s.close()
+            with tempfile.NamedTemporaryFile(mode='w', dir=dest_dir,
+                                             prefix='.factory_tmp_',
+                                             delete=False) as tmp_f:
+                temp_path = tmp_f.name
+                simplejson.dump(cls.factory_defaults, tmp_f,
+                                default=to_dict, indent=2, sort_keys=True)
 
-            # and then make the factory_defaults.FlatConfig file read_only
-            # so it can't be modified after creation.
+            # Make destination writable for os.replace (Windows read-only guard)
+            if os.path.isfile(file_path):
+                original_mode = os.stat(file_path).st_mode
+                try:
+                    os.chmod(file_path, stat.S_IRWXO | stat.S_IWRITE | stat.S_IWGRP)
+                except OSError:
+                    pass
+
+            os.replace(temp_path, file_path)
+            temp_path = None  # replace consumed the temp file
+
             os.chmod(file_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
             log.debug("FlatCAM factory defaults written to: %s" % file_path)
         except Exception as e:
             log.error("save_factory_defaults() -> %s" % str(e))
+            if original_mode is not None:
+                try:
+                    os.chmod(file_path, original_mode)
+                except OSError:
+                    pass
+        finally:
+            if temp_path is not None:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def __init__(self, callback=lambda x: None, beta=True, version=8.9):
         """
@@ -909,11 +936,9 @@ class AppDefaults:
 
         self.beta = beta
         self.version = version
-        self.factory_defaults['version'] = self.version
 
-        self.defaults.update(self.factory_defaults)
-        self.current_defaults = {}  # copy used for restoring after cancelled prefs changes
-        self.current_defaults.update(self.factory_defaults)
+        self.defaults.update(deepcopy(self.factory_defaults))
+        self.current_defaults = deepcopy(self.factory_defaults)  # copy used for restoring after cancelled prefs changes
         self.old_defaults_found = False
 
         self.defaults.set_change_callback(callback)
@@ -938,15 +963,84 @@ class AppDefaults:
         # Unfortunately this method alone is not enough to pass through the other magic methods above.
         return self.defaults.__getattribute__(item)
 
+    def get(self, key, default=_MISSING):
+        """Return an application preference with its factory-default baseline."""
+        if key in self.defaults:
+            return self.defaults[key]
+        if default is not _MISSING:
+            return default
+        return deepcopy(self.factory_defaults.get(key))
+
     # #### Additional Methods #####
     def write(self, filename: str):
         """Saves the defaults to a file on disk"""
+        # ponytail: strip obsolete 'version' field before saving
+        data = dict(self.defaults)
+        data.pop('version', None)
         with open(filename, "w") as file:
-            simplejson.dump(self.defaults, file, default=to_dict, indent=2, sort_keys=True)
+            simplejson.dump(data, file, default=to_dict, indent=2, sort_keys=True)
+
+    @staticmethod
+    def find_legacy_defaults_file(data_path: str, current_version: str) -> str:
+        """
+        Find a legacy versioned defaults file for migration.
+        
+        Priority:
+        1. Exact current version file (e.g., current_defaults_1.0.FlatConfig)
+        2. Most recently modified file (by mtime), with filename as tiebreaker
+        
+        :param data_path: Directory containing defaults files
+        :param current_version: Current app version string
+        :return: Path to legacy file or None
+        """
+        import glob
+        import re
+        
+        # Pattern: current_defaults_{version}.FlatConfig
+        pattern = os.path.join(data_path, 'current_defaults_*.FlatConfig')
+        legacy_files = glob.glob(pattern)
+        
+        if not legacy_files:
+            return None
+        
+        # Filter out non-versioned files and extract versions
+        version_pattern = re.compile(r'current_defaults_(.+)\.FlatConfig$')
+        versioned_files = []
+        for f in legacy_files:
+            match = version_pattern.search(f)
+            if match:
+                version = match.group(1)
+                versioned_files.append((version, f))
+        
+        if not versioned_files:
+            return None
+        
+        # Priority 1: exact current version
+        for version, path in versioned_files:
+            if version == current_version:
+                return path
+        
+        # Priority 2: most recently modified file, with filename as tiebreaker
+        # Use mtime to determine which file was saved most recently
+        versioned_files_with_mtime = []
+        for version, path in versioned_files:
+            try:
+                mtime = os.path.getmtime(path)
+                versioned_files_with_mtime.append((mtime, path, version))
+            except OSError:
+                # If we can't get mtime, skip this file
+                pass
+        
+        if not versioned_files_with_mtime:
+            return None
+        
+        # Sort by mtime descending, then by filename descending as tiebreaker
+        versioned_files_with_mtime.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return versioned_files_with_mtime[0][1]
 
     def load(self, filename: str, inform):
         """
-        Loads the defaults from a file on disk, performing migration if required.
+        Loads the defaults from a file on disk, merging with factory defaults.
 
         :param filename:    a path to the file that is to be loaded
         :param inform:      a pyqtSignal used to display information's in the StatusBar of the GUI
@@ -972,60 +1066,23 @@ class AppDefaults:
         if defaults is None:
             return
 
-        # Perform migration if necessary but only if the defaults dict is not empty
-        if self.__is_old_defaults(defaults) and defaults:
-            self.old_defaults_found = True
-
-            # while the app is in Beta status, delete the older Preferences files
-            if self.beta is False:
-                log.debug("Found old preferences files. Migrating.")
-                defaults = self.__migrate_old_defaults(defaults=defaults)
-                # Save the resulting defaults
-                self.defaults.update(defaults)
-                self.current_defaults.update(self.defaults)
-            else:
-                log.debug("Found old preferences files. Resetting the files.")
-                # wipeout the old defaults
-                self.reset_to_factory_defaults()
-        else:
-            self.old_defaults_found = False
-
-            # Save the resulting defaults
-            self.defaults.update(defaults)
-            self.current_defaults.update(self.defaults)
+        # ponytail: strip obsolete 'version' field from loaded data
+        defaults.pop('version', None)
+        
+        # ponytail: merge saved data over factory defaults. Missing keys get factory values,
+        # user overrides (including falsy values) are preserved. No version gating.
+        self.old_defaults_found = False
+        self.defaults.clear()
+        self.defaults.update(deepcopy(self.factory_defaults))
+        self.defaults.update(defaults)
+        self.current_defaults = deepcopy(dict(self.defaults))
 
         # log.debug("App defaults loaded from: %s" % filename)
 
-    def __is_old_defaults(self, defaults: dict) -> bool:
-        """Takes a defaults dict and determines whether migration is necessary."""
-        return 'version' not in defaults or defaults['version'] != self.factory_defaults['version']
-
-    def __migrate_old_defaults(self, defaults: dict) -> dict:
-        """Performs migration on the passed-in defaults dictionary, and returns the migrated dict"""
-        migrated = {}
-        for k, v in defaults.items():
-            if k in self.factory_defaults and k != 'version':
-                # check if the types are the same. Because some types (tuple, float, int etc.)
-                # may be stored as strings we check their types.
-                try:
-                    target = eval(self.defaults[k])
-                except (NameError, TypeError, SyntaxError):
-                    # it's an unknown string leave it as it is
-                    target = deepcopy(self.factory_defaults[k])
-
-                try:
-                    source = eval(v)
-                except (NameError, TypeError, SyntaxError):
-                    # it's an unknown string leave it as it is
-                    source = deepcopy(v)
-
-                if type(target) == type(source):
-                    migrated[k] = v
-        return migrated
-
     def reset_to_factory_defaults(self):
-        self.defaults.update(self.factory_defaults)
-        self.current_defaults.update(self.factory_defaults)
+        self.defaults.clear()
+        self.defaults.update(deepcopy(self.factory_defaults))
+        self.current_defaults = deepcopy(self.factory_defaults)
         self.old_defaults_found = False
 
     def propagate_defaults(self):
@@ -1049,9 +1106,12 @@ class AppDefaults:
         }
 
         for param in routes:
+            if param not in self.defaults and param not in self.factory_defaults:
+                continue
+
             if param in routes[param].defaults:
                 try:
-                    routes[param].defaults[param] = self.defaults[param]
+                    routes[param].defaults[param] = self.get(param)
                 except KeyError:
                     # log.error("AppDefaults.propagate_defaults() --> ERROR: " + param + " not in defaults.")
                     pass
@@ -1061,7 +1121,7 @@ class AppDefaults:
                 if param.find(routes[param].__name__.lower() + "_") == 0:
                     p = param[len(routes[param].__name__) + 1:]
                     if p in routes[param].defaults:
-                        routes[param].defaults[p] = self.defaults[param]
+                        routes[param].defaults[p] = self.get(param)
 
     def report_usage(self, resource):
         """
@@ -1072,14 +1132,16 @@ class AppDefaults:
         :return: None
         """
 
-        if resource in self.defaults['global_stats']:
-            self.defaults['global_stats'][resource] += 1
+        stats = deepcopy(self.defaults.get('global_stats', self.factory_defaults.get('global_stats', {})))
+        if resource in stats:
+            stats[resource] += 1
         else:
-            self.defaults['global_stats'][resource] = 1
+            stats[resource] = 1
+        self.defaults['global_stats'] = stats
 
 
 class AppOptions:
-    def __init__(self, version, callback=lambda x: None):
+    def __init__(self, version, callback=lambda x: None, baseline=None):
         """
         Class that holds the options parameters used throughout the app.
 
@@ -1088,7 +1150,11 @@ class AppOptions:
         self.options = LoudDict()
         self.current_options = {}  # copy used for restoring after cancelled prefs changes
         self.version = version
+        self.baseline = deepcopy(dict(baseline)) if baseline is not None else deepcopy(AppDefaults.factory_defaults)
         self.options.set_change_callback(callback)
+        if baseline is not None:
+            self.options.update(deepcopy(self.baseline))
+            self.current_options = deepcopy(self.baseline)
 
     # #### Pass-through to the defaults LoudDict #####
     def __len__(self):
@@ -1110,7 +1176,15 @@ class AppOptions:
         # Unfortunately this method alone is not enough to pass through the other magic methods above.
         return self.options.__getattribute__(item)
 
-    def load(self, filename: str, inform):
+    def get(self, key, default=_MISSING):
+        """Return an option or its copied baseline when the option is missing."""
+        if key in self.options:
+            return self.options[key]
+        if default is not _MISSING:
+            return default
+        return deepcopy(self.baseline.get(key))
+
+    def load(self, filename: str, inform, baseline=None):
         """
         Loads the options from a file on disk, performing migration if required.
 
@@ -1139,6 +1213,11 @@ class AppOptions:
         if options is None:
             return
 
+        if baseline is not None:
+            self.baseline = deepcopy(dict(baseline))
+
         # Save the resulting defaults
+        self.options.clear()
+        self.options.update(deepcopy(self.baseline))
         self.options.update(options)
-        self.current_options.update(self.options)
+        self.current_options = deepcopy(dict(self.options))

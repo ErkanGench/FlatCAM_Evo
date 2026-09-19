@@ -65,7 +65,13 @@ class ToolPDF(AppTool):
         self.parsing_promises = []
 
         self.parser = PdfParser(units=self.app.app_units,
-                                resolution=self.app.options["gerber_circle_steps"],
+                                resolution=self.app.options.get(
+                                    "gerber_circle_steps",
+                                    self.app.defaults.get(
+                                        "gerber_circle_steps",
+                                        self.app.defaults.factory_defaults.get("gerber_circle_steps")
+                                    )
+                                ),
                                 abort=self.app.abort_flag,
                                 hole_detection_mode='both')  # Default: detect on both stroke and fill
 

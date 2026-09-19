@@ -7,16 +7,19 @@
 # Modified by Marius Stanciu (2019)                         #
 # ###########################################################
 
-from PyQt6 import QtGui, QtWidgets  # noqa
+from PyQt6 import QtCore, QtGui, QtWidgets  # noqa
 from PyQt6.QtCore import QSettings, pyqtSlot  # noqa
 from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject  # noqa
 
 import logging
+import hashlib
 import os.path
 import sys
+import threading
 
 from datetime import datetime as dt
 from copy import deepcopy
+from pathlib import Path
 
 import getopt
 import random
@@ -54,6 +57,7 @@ from appGUI.GUIElements import (
     message_dialog,
     AppSystemTray,
 )
+from appGUI.UpdateDialog import UpdateDialog
 from appGUI.themes import dark_style_sheet, light_style_sheet
 
 # Various
@@ -69,6 +73,12 @@ from appHandlers.appObjectOps import AppObjectOps
 from appHandlers.appSignalConnector import AppSignalConnector
 from appHandlers.appUIActions import AppUIActions
 from appHandlers.appLifecycle import AppLifecycle
+
+from services.updater.checker import UpdateChecker
+from services.updater.launcher import launch_rollback, launch_update
+from services.updater.recovery import load_restore_point, restore_dir_for_install
+from services.updater.release import prepare_releases, validate_release_roots
+from services.updater.transport import DigiPublicShareTransport, DownloadCancelled
 
 from Bookmark import BookmarkManager
 # from appDatabase import ToolsDB2
@@ -125,6 +135,39 @@ import darkdetect
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
+
+
+def _stage_update_archive(payload, data_path, transport, *, cancel_cb=None, progress_cb=None):
+    """Download one verified full archive into a stable, disposable staging area."""
+    manifest = payload["manifest"]
+    install_key = hashlib.sha1(str(Path(sys.executable).resolve().parent).encode()).hexdigest()[:8]
+    staging_root = Path(data_path) / "update" / f"staging_{install_key}"
+    archive_path = staging_root / manifest.archive.filename
+    shutil.rmtree(staging_root, ignore_errors=True)
+    try:
+        return transport.download_archive(
+            payload["channel"],
+            manifest.archive.filename,
+            archive_path,
+            expected_size=manifest.archive.size,
+            expected_sha256=manifest.archive.sha256,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+        )
+    except Exception:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        raise
+
+
+def _release_build_identity(app, fallback=""):
+    for name in ("build_string", "build", "version_date"):
+        try:
+            value = getattr(app, name, None)
+        except RuntimeError:
+            value = None
+        if value:
+            return str(value)
+    return str(fallback or "")
 
 
 class App(QtCore.QObject):
@@ -184,7 +227,7 @@ class App(QtCore.QObject):
     date = date.replace(' ', '_')
 
     # ############################################ URLS's ###########################################################
-    # URL for update checks and statistics
+    # Retained for compatibility with older integrations; updater checks use the Digi share.
     version_url = "http://flatcam.org/version"
 
     # App URL
@@ -205,6 +248,7 @@ class App(QtCore.QObject):
 
     # flag is True if saving action has been triggered
     save_in_progress = False
+    _release_preparation_in_progress = False
 
     # #######################################    APP Signals   ######################################################
 
@@ -246,6 +290,13 @@ class App(QtCore.QObject):
     object_status_changed = QtCore.pyqtSignal(object, str, str)
 
     message = QtCore.pyqtSignal(str, str, str)
+
+    update_available = QtCore.pyqtSignal(object)
+    update_check_result = QtCore.pyqtSignal(object)
+    update_staged = QtCore.pyqtSignal(object)
+    update_progress = QtCore.pyqtSignal(int, str)
+    rollback_ready = QtCore.pyqtSignal(object)
+    release_prepared = QtCore.pyqtSignal(object)
 
     # Emitted when a shell command is finished(one command only)
     shell_command_finished = QtCore.pyqtSignal(object)
@@ -490,6 +541,17 @@ class App(QtCore.QObject):
         # System
         self.trayIcon = None
         self.parent_w = None
+
+        # Update state
+        self.update_checker = None
+        self._check_in_progress = False
+        self._check_queued = False
+        self._manual_update_requested = False
+        self._update_dialog = None
+        self._update_progress_dialog = None
+        self._update_in_progress = False
+        self._rollback_in_progress = False
+        self._release_preparation_in_progress = False
 
         # =========================================================================
         # CALL SETUP METHODS
@@ -790,11 +852,19 @@ class App(QtCore.QObject):
 
         # current_defaults_path = os.path.join(self.data_path, "current_defaults.FlatConfig")
         current_defaults_path = self.defaults_path()
+        
+        # ponytail: legacy compatibility - discover versioned files if stable file doesn't exist
+        if user_defaults and not os.path.isfile(current_defaults_path):
+            legacy_path = AppDefaults.find_legacy_defaults_file(self.data_path, str(self.version))
+            if legacy_path:
+                self.log.debug(f'Found legacy defaults file: {legacy_path}')
+                current_defaults_path = legacy_path
+        
         if user_defaults:
             self.defaults.load(filename=current_defaults_path, inform=self.inform)
 
         # ######################################## UPDATE THE OPTIONS ###############################################
-        self.options = AppOptions(version=self.version)
+        self.options = AppOptions(version=self.version, baseline=self.defaults)
         # -----------------------------------------------------------------------------------------------------------
         #   Update the self.options from the self.defaults
         #   The self.options holds the application defaults while the self.options holds the object defaults
@@ -804,15 +874,16 @@ class App(QtCore.QObject):
             self.options[def_key] = deepcopy(def_val)
 
         # Set global_theme based on appearance
-        if self.options["global_appearance"] == 'auto':
+        appearance = self.options.get("global_appearance", self.defaults.get("global_appearance"))
+        if appearance == 'auto':
             if darkdetect.isDark():
                 theme = 'dark'
             else:
                 theme = 'light'
         else:
-            if self.options["global_appearance"] == 'default':
+            if appearance == 'default':
                 theme = 'default'
-            elif self.options["global_appearance"] == 'dark':
+            elif appearance == 'dark':
                 theme = 'dark'
             else:
                 theme = 'light'
@@ -822,13 +893,13 @@ class App(QtCore.QObject):
         # Cache theme for use in _setup_gui (avoids passing theme as parameter)
         self._current_theme = theme
 
-        self.app_units = self.options["units"]
-        self.default_units = self.defaults["units"]
-        self.decimals = int(self.options['units_precision'])
+        self.app_units = self.options.get("units", self.defaults.get("units"))
+        self.default_units = self.defaults.get("units")
+        self.decimals = int(self.options.get('units_precision', self.defaults.get('units_precision')))
 
-        if self.options["global_theme"] == 'default':
+        if self.options.get("global_theme", self.defaults.get("global_theme")) == 'default':
             self.resource_location = 'assets/resources'
-        elif self.options["global_theme"] == 'light':
+        elif self.options.get("global_theme", self.defaults.get("global_theme")) == 'light':
             self.resource_location = 'assets/resources'
             qlightsheet.STYLE_SHEET = light_style_sheet.L_STYLE_SHEET
             self.qapp.setStyleSheet(libs.qdarktheme.load_stylesheet('light'))
@@ -838,25 +909,29 @@ class App(QtCore.QObject):
             self.qapp.setStyleSheet(libs.qdarktheme.load_stylesheet())
 
         # ################################### Set LOG verbosity ######################################################
-        if self.options["global_log_verbose"] == 2:
+        if self.options.get("global_log_verbose", self.defaults.get("global_log_verbose")) == 2:
             if self.log.handlers:
                 self.log.handlers.pop()
             self.log = AppLogging(app=self, log_level=2)
-        elif self.options["global_log_verbose"] == 0:
+        elif self.options.get("global_log_verbose", self.defaults.get("global_log_verbose")) == 0:
             if self.log.handlers:
                 self.log.handlers.pop()
             self.log = AppLogging(app=self, log_level=0)
 
         # #################################### SETUP OBJECT CLASSES #################################################
-        # Need lifecycle initialized before setup_obj_classes
+        # Need lifecycle initialized before setup_objclasses
         self.lifecycle = AppLifecycle(app=self)
+        self.update_checker = UpdateChecker(
+            app=self,
+            share_url=self.options.get("global_update_url", self.defaults.get("global_update_url")),
+        )
         self.setup_obj_classes()
 
         # ###################################### CREATE MULTIPROCESSING POOL #######################################
-        self.pool = Pool(processes=self.options.get("global_process_number", 2))
+        self.pool = Pool(processes=self.options.get("global_process_number", self.defaults.get("global_process_number")))
 
         # ###################################### Clear GUI Settings - once at first start ###########################
-        if self.options["first_run"] is True:
+        if self.options.get("first_run", self.defaults.get("first_run")) is True:
             # on first run clear the previous QSettings, therefore clearing the GUI settings
             q_settings = QSettings("Open Source", "FlatCAM_EVO")
             for key in q_settings.allKeys():
@@ -952,22 +1027,25 @@ class App(QtCore.QObject):
             self.preprocessors = new_ppp_dict
 
         # populate the Plugins Preprocessors
-        self.options["tools_drill_preprocessor_list"] = []
-        self.options["tools_mill_preprocessor_list"] = []
-        self.options["tools_solderpaste_preprocessor_list"] = []
+        drill_preprocessors = []
+        mill_preprocessors = []
+        solderpaste_preprocessors = []
+        self.options["tools_drill_preprocessor_list"] = drill_preprocessors
+        self.options["tools_mill_preprocessor_list"] = mill_preprocessors
+        self.options["tools_solderpaste_preprocessor_list"] = solderpaste_preprocessors
         for name in list(self.preprocessors.keys()):
             lowered_name = name.lower()
 
             # 'Paste' preprocessors are to be used only in the Solder Paste Dispensing Plugin
             if 'paste' in lowered_name:
-                self.options["tools_solderpaste_preprocessor_list"].append(name)
+                solderpaste_preprocessors.append(name)
                 continue
 
-            self.options["tools_mill_preprocessor_list"].append(name)
+            mill_preprocessors.append(name)
 
             # HPGL preprocessor is only for Geometry objects therefore it should not be in the Excellon Preferences
             if 'hpgl' not in lowered_name:
-                self.options["tools_drill_preprocessor_list"].append(name)
+                drill_preprocessors.append(name)
 
         # ######################################### Initialize GUI ##################################################
         # FlatCAM colors used in plotting
@@ -977,29 +1055,30 @@ class App(QtCore.QObject):
         self.FC_dark_blue = '#0000ffbf'
 
         theme_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        theme_settings.setValue("appearance", self.options["global_appearance"])
-        theme_settings.setValue("theme", self.options["global_theme"])
-        theme_settings.setValue("dark_canvas", self.options["global_dark_canvas"])
+        theme_settings.setValue("appearance", self.options.get("global_appearance", self.defaults.get("global_appearance")))
+        theme_settings.setValue("theme", self.options.get("global_theme", self.defaults.get("global_theme")))
+        theme_settings.setValue("dark_canvas", self.options.get("global_dark_canvas", self.defaults.get("global_dark_canvas")))
 
-        if self.options.get("global_cursor_color_enabled", False):
-            self.cursor_color_3D = self.options.get("global_cursor_color", "black")
+        if self.options.get("global_cursor_color_enabled", self.defaults.get("global_cursor_color_enabled")):
+            self.cursor_color_3D = self.options.get("global_cursor_color", self.defaults.get("global_cursor_color"))
         else:
             self.cursor_color_3D = (
                 'black'
                 if self._current_theme in ('light', 'default')
-                   and not self.options["global_dark_canvas"]
+                   and not self.options.get("global_dark_canvas", self.defaults.get("global_dark_canvas"))
                 else 'gray'
             )
 
         # update the 'options' dict with the setting in QSetting
-        self.options['global_theme'] = self.options["global_theme"]
+        # ponytail: this is a no-op, keeping for compatibility
+        self.options['global_theme'] = self.options.get("global_theme", self.defaults.get("global_theme"))
 
         # ########################
         self.ui = MainGUI(self)
         # ########################
 
         # decide if to show or hide the Notebook side of the screen at startup
-        split_sizes = [1, 1] if self.options.get("global_project_at_startup", False) else [0, 1]
+        split_sizes = [1, 1] if self.options.get("global_project_at_startup", self.defaults.get("global_project_at_startup")) else [0, 1]
         self.ui.splitter.setSizes(split_sizes)
 
         # ########################################### Initialize Tcl Shell ##########################################
@@ -1042,7 +1121,8 @@ class App(QtCore.QObject):
 
         # ###################################### CREATE UNIQUE SERIAL NUMBER ########################################
         chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
-        if self.options['global_serial'] == 0 or len(str(self.options['global_serial'])) < 10:
+        serial = self.options.get('global_serial', self.defaults.get('global_serial'))
+        if serial == 0 or len(str(serial)) < 10:
             self.options['global_serial'] = ''.join([random.choice(chars) for __ in range(20)])
             self.preferencesUiManager.save_defaults(silent=True, first_time=True)
 
@@ -1066,7 +1146,7 @@ class App(QtCore.QObject):
         # ######################################## SETUP Plot Area ##################################################
         self.use_3d_engine = True
         # determine if the Legacy Graphic Engine is to be used or the OpenGL one
-        if self.options["global_graphic_engine"] == '2D':
+        if self.options.get("global_graphic_engine", self.defaults.get("global_graphic_engine")) == '2D':
             self.use_3d_engine = False
 
         # PlotCanvas Event signals disconnect id holders
@@ -1154,7 +1234,7 @@ class App(QtCore.QObject):
     def _setup_workers_crew(self):
         """Phase 1: Setup workers crew for background tasks."""
         # ############################################### Worker SETUP ##############################################
-        w_number = int(self.options.get("global_worker_number", 2))
+        w_number = int(self.options.get("global_worker_number", self.defaults.get("global_worker_number")))
         self.workers = WorkerStack(workers_number=w_number)
 
         self.worker_task.connect(self.workers.add_task)
@@ -1176,7 +1256,7 @@ class App(QtCore.QObject):
         # ######################################### BookMarks Manager ###############################################
         # install Bookmark Manager and populate bookmarks in the Help -> Bookmarks
         self.install_bookmarks()
-        self.book_dialog_tab = BookmarkManager(app=self, storage=self.options["global_bookmarks"])
+        self.book_dialog_tab = BookmarkManager(app=self, storage=self.options.get("global_bookmarks", self.defaults.get("global_bookmarks")))
 
         # ########################################### Tools Database ################################################
         self.tools_db_tab = None
@@ -1187,14 +1267,7 @@ class App(QtCore.QObject):
 
         # ############################################## Shell SETUP ################################################
         # show TCL shell at start-up based on the Menu -? Edit -> Preferences setting.
-        self.ui.shell_dock.setVisible(bool(self.options.get("global_shell_at_startup", False)))
-
-        # ######################################### Check for updates ###############################################
-        # Separate thread (Not worker)
-        # Check for updates on startup but only if the user consent and the app is not in Beta version
-        if not self.beta and self.options.get("global_version_check", False):
-            self.log.info(f"Checking for updates in background (this is version {self.version}).")
-            self.worker_task.emit({'fcn': self.version_check, 'params': []})
+        self.ui.shell_dock.setVisible(bool(self.options.get("global_shell_at_startup", self.defaults.get("global_shell_at_startup"))))
 
         # ################################## ADDING FlatCAM EDITORS section #########################################
         # watch out for the position of the editor instantiation ... if it is done before a save of the default values
@@ -1247,7 +1320,7 @@ class App(QtCore.QObject):
         """Phase 1: Setup first-run section (must run after _setup_canvas_and_plotting for editors)."""
         # ##################################### FIRST RUN SECTION ###################################################
         # ################################ It's done only once after install   #####################################
-        if self.options["first_run"] is True:
+        if self.options.get("first_run", self.defaults.get("first_run")) is True:
             # ONLY AT FIRST STARTUP INIT THE GUI LAYOUT TO 'minimal'
             self.log.debug("-> First Run: Setting up the first Layout")
             initial_lay = 'minimal'
@@ -1275,7 +1348,7 @@ class App(QtCore.QObject):
                                           headless=True,
                                           parent=self.parent_w)
         else:
-            if self.options["global_systray_icon"]:
+            if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")):
                 self.trayIcon = AppSystemTray(app=self,
                                               icon=QtGui.QIcon(self.resource_location + '/app32.png'),
                                               parent=self.parent_w)
@@ -1301,6 +1374,12 @@ class App(QtCore.QObject):
         self.app_quit.connect(self.quit_application, type=Qt.ConnectionType.QueuedConnection)
         self.message.connect(
             lambda title, msg, kind: message_dialog(title=title, message=msg, kind=kind, parent=self.ui))
+        self.update_available.connect(self.on_update_available)
+        self.update_check_result.connect(self.on_update_check_result)
+        self.update_staged.connect(self.on_update_staged)
+        self.update_progress.connect(self._on_update_progress)
+        self.rollback_ready.connect(self.on_rollback_ready)
+        self.release_prepared.connect(self.on_release_prepared)
         # self.progress.connect(self.set_progress_bar)
 
         # signals emitted when file state change
@@ -1424,7 +1503,7 @@ class App(QtCore.QObject):
             else:
                 self.ui.show()
 
-            if self.options["global_systray_icon"] and self.trayIcon is not None:
+            if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")) and self.trayIcon is not None:
                 self.trayIcon.show()
         else:
             try:
@@ -1432,6 +1511,11 @@ class App(QtCore.QObject):
             except Exception as t_err:
                 self.log.error("App.__init__() Running headless and trying to show the systray got: %s" % str(t_err))
             self.log.warning("*******************  RUNNING HEADLESS  *******************")
+
+        self.refresh_rollback_action()
+        if not self.beta and self.options.get("global_version_check", self.defaults.get("global_version_check")):
+            self.log.info(f"Checking for updates in background (this is version {self.version}).")
+            self._queue_version_check()
 
         # ######################################## START-UP ARGUMENTS ###############################################
         # test if the program was started with a script as parameter
@@ -1651,10 +1735,10 @@ class App(QtCore.QObject):
         return os.path.join(self.data_path, 'tools_db_%s.FlatDB' % str(self.version))
 
     def defaults_path(self):
-        return os.path.join(self.data_path, 'current_defaults_%s.FlatConfig' % str(self.version))
+        return os.path.join(self.data_path, 'current_defaults.FlatConfig')
 
     def factory_defaults_path(self):
-        return os.path.join(self.data_path, 'factory_defaults_%s.FlatConfig' % str(self.version))
+        return os.path.join(self.data_path, 'factory_defaults.FlatConfig')
 
     def recent_files_path(self):
         return os.path.join(self.data_path, 'recent.json')
@@ -1686,7 +1770,7 @@ class App(QtCore.QObject):
         except (ValueError, AttributeError):
             pass
 
-        self.pool = Pool(processes=self.options["global_process_number"])
+        self.pool = Pool(processes=self.options.get("global_process_number", self.defaults.get("global_process_number")))
         self.pool_recreated.emit(self.pool)
 
         gc.collect()
@@ -2415,16 +2499,16 @@ class App(QtCore.QObject):
         Get the folder path from where the last file was opened.
         :return: String, last opened folder path
         """
-        return self.options["global_last_folder"]
+        return self.options.get("global_last_folder", self.defaults.get("global_last_folder"))
 
     def get_last_save_folder(self):
         """
         Get the folder path from where the last file was saved.
         :return: String, last saved folder path
         """
-        loc = self.options["global_last_save_folder"]
+        loc = self.options.get("global_last_save_folder", self.defaults.get("global_last_save_folder"))
         if loc is None:
-            loc = self.options["global_last_folder"]
+            loc = self.options.get("global_last_folder", self.defaults.get("global_last_folder"))
         if loc is None:
             loc = os.path.dirname(__file__)
         return loc
@@ -2512,8 +2596,8 @@ class App(QtCore.QObject):
         date = date.replace(' ', '_')
 
         filter__ = "HTML File .html (*.html);;TXT File .txt (*.txt);;All Files (*.*)"
-        path_to_save = self.options["global_last_save_folder"] if \
-            self.options["global_last_save_folder"] is not None else self.data_path
+        last_save_folder = self.options.get("global_last_save_folder", self.defaults.get("global_last_save_folder"))
+        path_to_save = last_save_folder if last_save_folder is not None else self.data_path
         final_path = os.path.join(path_to_save, 'file_%s' % str(date))
 
         try:
@@ -2579,10 +2663,10 @@ class App(QtCore.QObject):
         else:
             self.recent.insert(0, record)
 
-        if len(self.recent) > self.options['global_recent_limit']:  # Limit reached
+        if len(self.recent) > self.options.get('global_recent_limit', self.defaults.get('global_recent_limit')):  # Limit reached
             self.recent.pop()
 
-        if len(self.recent_projects) > self.options['global_recent_limit']:  # Limit reached
+        if len(self.recent_projects) > self.options.get('global_recent_limit', self.defaults.get('global_recent_limit')):  # Limit reached
             self.recent_projects.pop()
 
         try:
@@ -2621,6 +2705,402 @@ class App(QtCore.QObject):
     def on_backup_site(self):
         self.ui_actions.on_backup_site()
 
+    def on_check_for_updates(self):
+        """Start a user-requested update check without changing preferences."""
+        self._queue_version_check(forced=True)
+
+    def _run_queued_version_check(self, forced=False):
+        self._check_queued = False
+        self.version_check(forced=forced)
+
+    def _queue_version_check(self, forced=False):
+        if self._check_queued or self._check_in_progress:
+            return
+        self._check_queued = True
+        try:
+            self.worker_task.emit({
+                'fcn': self._run_queued_version_check,
+                'params': [forced],
+            })
+        except Exception as exc:
+            self._check_queued = False
+            self.log.error("Could not queue update check: %s" % str(exc))
+
+    def _update_operation_active(self):
+        if (
+            getattr(self, "_update_in_progress", False)
+            or getattr(self, "_rollback_in_progress", False)
+            or getattr(self, "_release_preparation_in_progress", False)
+        ):
+            return True
+        for name in ("_update_progress_dialog", "_update_dialog"):
+            dialog = getattr(self, name, None)
+            if dialog is None:
+                continue
+            try:
+                if dialog.isVisible():
+                    return True
+            except (AttributeError, RuntimeError):
+                continue
+        return False
+
+    def _updater_shutdown_preflight(self):
+        """Confirm data safety before an external updater is allowed to start."""
+        lifecycle = getattr(self, "lifecycle", None)
+        confirm_database = getattr(lifecycle, "_confirm_tools_database", None)
+        if callable(confirm_database) and not confirm_database():
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Update canceled while closing the tools database."))
+            return False
+        if getattr(self, "save_in_progress", False):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Please wait for the project save to finish before updating."))
+            return False
+        if getattr(self, "should_we_save", False):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Save the current project before updating."))
+            return False
+        return True
+
+    def _close_update_progress(self):
+        dialog = getattr(self, "_update_progress_dialog", None)
+        if dialog is not None:
+            try:
+                dialog.close()
+            except (AttributeError, RuntimeError):
+                pass
+        self._update_progress_dialog = None
+
+    def _on_update_progress(self, value, text):
+        dialog = getattr(self, "_update_progress_dialog", None)
+        if dialog is None:
+            return
+        try:
+            dialog.setLabelText(text)
+            dialog.setValue(value)
+        except (AttributeError, RuntimeError):
+            pass
+
+    def prepare_update_files(self):
+        """Collect local release inputs on the GUI thread and queue preparation."""
+        if self._update_operation_active():
+            return
+
+        windows_root = QtWidgets.QFileDialog.getExistingDirectory(
+            self.ui,
+            _("Select completed Windows build"),
+        )
+        if not windows_root:
+            return
+
+        output_dir = QtWidgets.QFileDialog.getExistingDirectory(
+            self.ui,
+            _("Select update output directory"),
+        )
+        if not output_dir:
+            return
+
+        release_notes, accepted = QtWidgets.QInputDialog.getMultiLineText(
+            self.ui,
+            _("Release notes"),
+            _("Enter release notes:"),
+        )
+        if not accepted:
+            return
+
+        source_root = Path(getattr(self, "app_home", Path(__file__).resolve().parent))
+        version = str(getattr(self, "version", ""))
+        version_date = str(getattr(self, "version_date", ""))
+        build_string = _release_build_identity(self, version_date)
+        confirmation = QtWidgets.QMessageBox.question(
+            self.ui,
+            _("Prepare update files"),
+            _("Version: %s\nBuild: %s\nDate: %s\nSource root: %s\n\n"
+              "Create local Digi upload files now?")
+            % (version, build_string, version_date, source_root),
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if confirmation != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            validate_release_roots(Path(windows_root), source_root)
+        except Exception as exc:
+            self.log.error("Release input validation failed:\n%s" % traceback.format_exc())
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Release inputs are incomplete: %s") % str(exc))
+            return
+
+        self._release_preparation_in_progress = True
+        progress = QtWidgets.QProgressDialog(
+            _("Preparing update files..."), "", 0, 100, self.ui
+        )
+        progress.setWindowTitle(_("Preparing update files"))
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setCancelButton(None)
+        self._update_progress_dialog = progress
+        progress.show()
+
+        try:
+            self.worker_task.emit({
+                'fcn': self._prepare_releases_worker,
+                'params': [Path(windows_root), source_root, Path(output_dir), str(release_notes)],
+            })
+        except Exception as exc:
+            self._release_preparation_in_progress = False
+            self._close_update_progress()
+            self.log.error("Could not queue release preparation:\n%s" % traceback.format_exc())
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Release preparation could not be started."))
+
+    def _prepare_releases_worker(self, windows_root, source_root, output_dir, release_notes):
+        """Prepare both local release pairs off the GUI thread."""
+        try:
+            build_string = _release_build_identity(self, getattr(self, "version_date", ""))
+
+            def progress(value, text):
+                self.update_progress.emit(value, text)
+
+            preparation = prepare_releases(
+                {"windows": Path(windows_root), "linux": Path(source_root)},
+                Path(output_dir),
+                version=getattr(self, "version", ""),
+                build_string=build_string,
+                version_date=str(getattr(self, "version_date", "")),
+                minimum_required_version="0",
+                release_notes=release_notes,
+                progress_cb=progress,
+            )
+            self.release_prepared.emit({
+                "success": True,
+                "output_dir": str(output_dir),
+                "upload_paths": [str(path) for path in preparation.upload_paths],
+            })
+        except Exception as exc:
+            self.log.error("Release preparation failed:\n%s" % traceback.format_exc())
+            self.release_prepared.emit({
+                "success": False,
+                "output_dir": str(output_dir),
+                "error": str(exc),
+            })
+
+    def on_release_prepared(self, data):
+        """Finish local release preparation on the GUI thread."""
+        self._release_preparation_in_progress = False
+        self._close_update_progress()
+        if not data.get("success"):
+            self.log.error("Release preparation failed: %s" % data.get("error", "unknown error"))
+            self.inform.emit(
+                '[ERROR_NOTCL] %s' % _("Release preparation failed: %s") % data.get("error", "unknown error")
+            )
+            return
+
+        paths = tuple(data.get("upload_paths", ()))
+        self.inform.emit('[success] %s\n%s' % (_("Local Digi upload files are ready:"), "\n".join(paths)))
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(data["output_dir"])))
+
+    def on_update_check_result(self, payload):
+        self._check_in_progress = False
+        if payload.get("status") == "up_to_date" and self._manual_update_requested:
+            self.inform.emit('[success] %s' % _("The application is up to date!"))
+        self._manual_update_requested = False
+
+    def on_update_available(self, payload):
+        if self._update_operation_active():
+            self.log.info("Ignoring duplicate update offer while an update operation is active.")
+            return
+
+        dialog = UpdateDialog(parent=self.ui, payload=payload)
+        self._update_dialog = dialog
+
+        def finished(_result):
+            self._update_dialog = None
+            if dialog.choice == "later":
+                return
+            if dialog.choice == "exit":
+                if self._updater_shutdown_preflight():
+                    self.quit_application()
+                return
+
+            self._start_update_download(payload)
+
+        dialog.finished.connect(finished)
+        dialog.open()
+
+    def _start_update_download(self, payload):
+        if self._update_operation_active():
+            return
+        self._update_in_progress = True
+        cancel_event = threading.Event()
+        progress = QtWidgets.QProgressDialog(
+            _("Downloading update..."), _("Cancel"), 0, 100, self.ui
+        )
+        progress.setWindowTitle(_("Downloading update"))
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.canceled.connect(cancel_event.set)
+        self._update_progress_dialog = progress
+        progress.show()
+
+        try:
+            self.worker_task.emit({
+                'fcn': self._download_update_worker,
+                'params': [payload, cancel_event],
+            })
+        except Exception as exc:
+            self.log.error("Could not queue update download: %s" % str(exc))
+            self._update_in_progress = False
+            self._close_update_progress()
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Update download could not be started."))
+
+    def _download_update_worker(self, payload, cancel_event):
+        checker = getattr(self, "update_checker", None)
+        if checker is None:
+            checker = UpdateChecker(app=self)
+            self.update_checker = checker
+        options = self.options
+        defaults = self.defaults
+        share_url = options.get(
+            "global_update_url",
+            defaults.get(
+                "global_update_url",
+                AppDefaults.factory_defaults.get("global_update_url"),
+            ),
+        )
+
+        def progress(written, total):
+            total = total or payload["manifest"].archive.size or 0
+            value = 100 if total and written >= total else int((written * 100) / total) if total else 0
+            self.update_progress.emit(min(value, 100), _("Downloading update: %s%%") % value)
+
+        try:
+            transport = checker.create_transport(
+                self,
+                share_url=share_url,
+            )
+            archive_path = _stage_update_archive(
+                payload,
+                self.data_path,
+                transport,
+                cancel_cb=cancel_event.is_set,
+                progress_cb=progress,
+            )
+            self.update_staged.emit({
+                "archive_path": str(archive_path),
+                "staging_dir": str(archive_path.parent),
+                "canceled": False,
+                "payload": payload,
+            })
+        except DownloadCancelled:
+            self.update_staged.emit({"canceled": True, "payload": payload})
+        except Exception as exc:
+            self.log.error("Update download failed: %s" % str(exc))
+            self.update_staged.emit({"canceled": False, "payload": payload, "error": str(exc)})
+
+    def on_update_staged(self, data):
+        self._close_update_progress()
+        self._update_in_progress = False
+        staging_dir = data.get("staging_dir")
+        if data.get("canceled"):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Update download canceled."))
+            return
+
+        archive_path = data.get("archive_path")
+        payload = data.get("payload", {})
+        if not archive_path or not payload.get("manifest"):
+            if staging_dir:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Update download failed; the installation was not changed."))
+            return
+        if not self._updater_shutdown_preflight():
+            if staging_dir:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            return
+
+        success = launch_update(self, payload["manifest"], archive_path)
+        if not success:
+            if staging_dir:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            self.inform.emit('[WARNING_NOTCL] %s' % _("The updater could not be started."))
+            return
+        self.quit_application(mode="updater")
+
+    def _load_rollback_restore_point(self):
+        install_dir = (
+            Path(sys.executable).resolve().parent
+            if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parent
+        )
+        restore_dir = restore_dir_for_install(self.data_path, install_dir)
+        metadata = load_restore_point(restore_dir, install_dir, verify_files=True)
+        return restore_dir, metadata
+
+    def refresh_rollback_action(self):
+        action = getattr(getattr(self, "ui", None), "menuhelp_revert_update", None)
+        if action is None:
+            return
+        if self._update_operation_active():
+            action.setEnabled(False)
+            return
+        try:
+            _restore, metadata = self._load_rollback_restore_point()
+        except (OSError, TypeError, ValueError):
+            action.setEnabled(False)
+            return
+        action.setEnabled(True)
+        action.setToolTip(
+            _("Revert to %s (%s)") %
+            (metadata["previous_version"], metadata["previous_build_string"])
+        )
+
+    def on_revert_update(self):
+        if self._update_operation_active():
+            return
+        try:
+            _restore, metadata = self._load_rollback_restore_point()
+        except (OSError, TypeError, ValueError):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("No usable previous version is available."))
+            return
+
+        answer = QtWidgets.QMessageBox.question(
+            self.ui,
+            _("Revert application update"),
+            _("Revert from %s (%s) to %s (%s)?") % (
+                metadata["version"], metadata["build_string"],
+                metadata["previous_version"], metadata["previous_build_string"],
+            ),
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes or not self._updater_shutdown_preflight():
+            return
+
+        self._rollback_in_progress = True
+
+        def rollback_worker():
+            try:
+                success = launch_rollback(self)
+                error = ""
+            except Exception as exc:
+                success = False
+                error = str(exc)
+            self.rollback_ready.emit({"success": success, "error": error})
+
+        try:
+            self.worker_task.emit({'fcn': rollback_worker, 'params': []})
+        except Exception as exc:
+            self._rollback_in_progress = False
+            self.log.error("Could not queue rollback: %s" % str(exc))
+
+    def on_rollback_ready(self, result):
+        if not self._rollback_in_progress:
+            return
+        self._rollback_in_progress = False
+        if not result.get("success", False):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("The previous version could not be started."))
+            self.refresh_rollback_action()
+            return
+        self.quit_application(mode="updater")
+
     def final_save(self):
         """
         Callback for doing a preferences save to file whenever the application is about to quit.
@@ -2629,8 +3109,11 @@ class App(QtCore.QObject):
         """
         self.lifecycle.final_save()
 
-    def quit_application(self, silent=False):
-        self.lifecycle.quit_application(silent=silent)
+    def quit_application(self, silent=False, mode=None):
+        if mode is None:
+            self.lifecycle.quit_application(silent=silent)
+        else:
+            self.lifecycle.quit_application(silent=silent, mode=mode)
 
     @staticmethod
     def kill_app():
@@ -2900,7 +3383,8 @@ class App(QtCore.QObject):
 
             if len_objects == cnt:
                 # all selected objects are of type CNCJOB therefore we issue a multiple save
-                _filter_ = self.options['cncjob_save_filters'] + \
+                cncjob_filters = self.options.get('cncjob_save_filters', self.defaults.get('cncjob_save_filters'))
+                _filter_ = cncjob_filters + \
                            ";;RML1 Files .rol (*.rol);;HPGL Files .plt (*.plt);;KNC Files .knc (*.knc)"
 
                 dir_file_to_save = self.get_last_save_folder() + '/multi_save'
@@ -3330,8 +3814,29 @@ class App(QtCore.QObject):
     def setup_obj_classes(self):
         self.lifecycle.setup_obj_classes()
 
-    def version_check(self):
-        self.lifecycle.version_check()
+    def version_check(self, forced=False):
+        if not hasattr(self, "_check_in_progress"):
+            if forced:
+                self.lifecycle.version_check(forced=True)
+            else:
+                self.lifecycle.version_check()
+            return None
+        if self._check_in_progress:
+            return None
+        self._check_in_progress = True
+        self._manual_update_requested = bool(forced)
+        try:
+            if forced:
+                self.lifecycle.version_check(forced=True)
+            else:
+                self.lifecycle.version_check()
+            return None
+        except Exception as exc:
+            self._check_in_progress = False
+            self._manual_update_requested = False
+            self.log.error("Update check failed safely: %s" % str(exc))
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Failed checking for the latest version."))
+            return None
 
     def on_plotcanvas_setup(self):
         """
@@ -3344,7 +3849,7 @@ class App(QtCore.QObject):
         if modifier == QtCore.Qt.KeyboardModifier.ControlModifier:
             self.options["global_graphic_engine"] = "2D"
 
-        self.log.debug("Setting up canvas: %s" % str(self.options["global_graphic_engine"]))
+        self.log.debug("Setting up canvas: %s" % str(self.options.get("global_graphic_engine", self.defaults.get("global_graphic_engine"))))
 
         if modifier == QtCore.Qt.KeyboardModifier.ControlModifier:
             self.use_3d_engine = False
@@ -3373,7 +3878,7 @@ class App(QtCore.QObject):
         plotcanvas.native.setFocus()
 
         if self.use_3d_engine:
-            pan_button = 2 if self.options["global_pan_button"] == '2' else 3
+            pan_button = 2 if self.options.get("global_pan_button", self.defaults.get("global_pan_button")) == '2' else 3
             # Set the mouse button for panning
             plotcanvas.view.camera.pan_button_setting = pan_button
 
@@ -3385,7 +3890,7 @@ class App(QtCore.QObject):
         # Keys over plot enabled
         self.kp = plotcanvas.graph_event_connect('key_press', self.ui.keyPressEvent)
 
-        if self.options['global_cursor_type'] == 'small':
+        if self.options.get('global_cursor_type', self.defaults.get('global_cursor_type')) == 'small':
             self.app_cursor = plotcanvas.new_cursor()
         else:
             self.app_cursor = plotcanvas.new_cursor(big=True)
@@ -3435,7 +3940,7 @@ class App(QtCore.QObject):
         Callback for zoom-in request.
         :return:
         """
-        self.plotcanvas.zoom(1 / float(self.options['global_zoom_ratio']))
+        self.plotcanvas.zoom(1 / float(self.options.get('global_zoom_ratio', self.defaults.get('global_zoom_ratio'))))
 
     def on_zoom_out(self):
         """
@@ -3443,7 +3948,7 @@ class App(QtCore.QObject):
 
         :return:
         """
-        self.plotcanvas.zoom(float(self.options['global_zoom_ratio']))
+        self.plotcanvas.zoom(float(self.options.get('global_zoom_ratio', self.defaults.get('global_zoom_ratio'))))
 
     def disable_all_plots(self):
         """Facade: delegate to plot_manager."""

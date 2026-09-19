@@ -9,6 +9,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCEntry, FCTextArea, FCSpinner, OptionalHideInputSection
+from defaults import AppDefaults
 from camlib import grace, flatten_shapely_geometry
 
 import logging
@@ -184,7 +185,11 @@ class ToolOptimal(AppTool):
         self.ui.result_entry.set_value(0.0)
         self.ui.freq_entry.set_value(0)
 
-        self.ui.precision_spinner.set_value(int(self.app.options["tools_opt_precision"]))
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.precision_spinner.set_value(int(self.app.options.get(
+            "tools_opt_precision",
+            app_defaults.get("tools_opt_precision", AppDefaults.factory_defaults.get("tools_opt_precision"))
+        )))
         self.ui.locations_textb.clear()
         # new cursor - select all document
         cursor = self.ui.locations_textb.textCursor()

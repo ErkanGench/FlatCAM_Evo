@@ -27,6 +27,7 @@ import builtins
 
 from appParsers.ParseExcellon import Excellon
 from appDatabase import load_tools_database
+from defaults import AppDefaults
 from matplotlib.backend_bases import KeyEvent as mpl_key_event
 from camlib import grace
 
@@ -57,17 +58,21 @@ class HybridGeoExc:
         self.tools = {}
         self.solid_geometry = []
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         kind = 'geometry'
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                self.obj_options[oname] = self.app.options[option]
+                self.obj_options[oname] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
         for option in self.app.options:
             if option.find('tools_mill_') == 0:
-                self.obj_options[option] = self.app.options[option]
+                self.obj_options[option] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
         for option in self.app.options:
             if option.find('tools_') == 0:
-                self.obj_options[option] = self.app.options[option]
+                self.obj_options[option] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
         self.obj_options['xmin'] = 0
         self.obj_options['ymin'] = 0
@@ -87,7 +92,13 @@ class ToolMilling(Excellon, AppTool):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Excellon.__init__(self, excellon_circle_steps=self.app.options["excellon_circle_steps"], app=app)
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        Excellon.__init__(
+            self,
+            excellon_circle_steps=self.app.options.get(
+                "excellon_circle_steps",
+                app_defaults.get("excellon_circle_steps", AppDefaults.factory_defaults.get("excellon_circle_steps"))),
+            app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -149,7 +160,9 @@ class ToolMilling(Excellon, AppTool):
         # store here solid_geometry when there are tool with isolation job
         self.solid_geometry = []
 
-        self.circle_steps = int(self.app.options["geometry_circle_steps"])
+        self.circle_steps = int(self.app.options.get(
+            "geometry_circle_steps",
+            app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get("geometry_circle_steps"))))
 
         self.tooldia = None
 
@@ -445,7 +458,9 @@ class ToolMilling(Excellon, AppTool):
 
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
-        self.old_tool_dia = self.app.options["tools_iso_newdia"]
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.old_tool_dia = self.app.options.get(
+            "tools_iso_newdia", app_defaults.get("tools_iso_newdia", AppDefaults.factory_defaults.get("tools_iso_newdia")))
 
         self.obj_name = ""
         self.target_obj = None
@@ -618,8 +633,12 @@ class ToolMilling(Excellon, AppTool):
 
         self.ui.tools_frame.show()
 
-        self.ui.order_combo.set_value(self.app.options["tools_drill_tool_order"])
-        self.ui.milling_type_radio.set_value(self.app.options["tools_mill_milling_type"])
+        self.ui.order_combo.set_value(self.app.options.get(
+            "tools_drill_tool_order",
+            app_defaults.get("tools_drill_tool_order", AppDefaults.factory_defaults.get("tools_drill_tool_order"))))
+        self.ui.milling_type_radio.set_value(self.app.options.get(
+            "tools_mill_milling_type",
+            app_defaults.get("tools_mill_milling_type", AppDefaults.factory_defaults.get("tools_mill_milling_type"))))
 
         # init the working variables
         self.default_data.clear()
@@ -627,10 +646,12 @@ class ToolMilling(Excellon, AppTool):
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                self.default_data[oname] = self.app.options[option]
+                self.default_data[oname] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
             if option.find('tools_') == 0:
-                self.default_data[option] = self.app.options[option]
+                self.default_data[option] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
         # fill in self.default_data values from self.options
         for opt_key, opt_val in self.app.options.items():
@@ -648,7 +669,9 @@ class ToolMilling(Excellon, AppTool):
         try:
             self.ui.addtool_entry.set_value(selected_obj.obj_options["tools_mill_tooldia"])
         except AttributeError:
-            self.ui.addtool_entry.set_value(self.app.options["tools_mill_tooldia"])
+            self.ui.addtool_entry.set_value(self.app.options.get(
+                "tools_mill_tooldia",
+                app_defaults.get("tools_mill_tooldia", AppDefaults.factory_defaults.get("tools_mill_tooldia"))))
 
         self.on_object_changed()
         if self.target_obj:
@@ -666,7 +689,8 @@ class ToolMilling(Excellon, AppTool):
         self.plot_cb_handler()
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
         self.ui.tools_table_mill_geo.drag_drop = True
@@ -712,6 +736,7 @@ class ToolMilling(Excellon, AppTool):
     def on_level_changed(self, checked):
 
         self.target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         if not checked:
             self.ui.level.setText('%s' % _('Beginner'))
@@ -739,8 +764,12 @@ class ToolMilling(Excellon, AppTool):
                         # some will disable some of the hidden features but other are set by
                         # other plugins so, we hide them, but we do not disable (like the `multidepth`)
                         # tool_data['tools_mill_multidepth'] = False
-                        tool_data['tools_mill_extracut'] = self.app.options["tools_mill_extracut"]
-                        tool_data['tools_mill_dwell'] = self.app.options["tools_mill_dwell"]
+                        tool_data['tools_mill_extracut'] = self.app.options.get(
+                            "tools_mill_extracut",
+                            app_defaults.get("tools_mill_extracut", AppDefaults.factory_defaults.get("tools_mill_extracut")))
+                        tool_data['tools_mill_dwell'] = self.app.options.get(
+                            "tools_mill_dwell",
+                            app_defaults.get("tools_mill_dwell", AppDefaults.factory_defaults.get("tools_mill_dwell")))
                         tool_data['tools_mill_area_exclusion'] = False
 
                 self.ui.offset_type_lbl.hide()
@@ -1959,10 +1988,13 @@ class ToolMilling(Excellon, AppTool):
         self.form_to_storage()
 
     def ui_update_l_shape(self, t_type):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         if t_type.upper() == 'L':
             self.ui.pp_geo_name_cb.set_value('default_laser')
         else:
-            self.ui.pp_geo_name_cb.set_value(self.app.options['tools_mill_ppname_g'])
+            self.ui.pp_geo_name_cb.set_value(self.app.options.get(
+                'tools_mill_ppname_g',
+                app_defaults.get('tools_mill_ppname_g', AppDefaults.factory_defaults.get('tools_mill_ppname_g'))))
         self.on_pp_changed()
 
     def ui_update_v_shape(self, tool_type_txt):
@@ -2580,7 +2612,10 @@ class ToolMilling(Excellon, AppTool):
 
             geo_obj.obj_options['type'] = 'Excellon Geometry'
             geo_obj.obj_options["tools_mill_tooldia"] = str(tooldia)
-            geo_obj.obj_options["multidepth"] = app_obj.options["tools_mill_multidepth"]
+            app_defaults = getattr(app_obj, "defaults", None) or AppDefaults.factory_defaults
+            geo_obj.obj_options["multidepth"] = app_obj.options.get(
+                "tools_mill_multidepth",
+                app_defaults.get("tools_mill_multidepth", AppDefaults.factory_defaults.get("tools_mill_multidepth")))
             geo_obj.solid_geometry = []
 
             # in case that the tool used has the same diameter with the hole, and since the maximum resolution
@@ -2681,7 +2716,10 @@ class ToolMilling(Excellon, AppTool):
 
             geo_obj.obj_options['type'] = 'Excellon Geometry'
             geo_obj.obj_options["tools_mill_tooldia"] = str(tooldia)
-            geo_obj.obj_options["tools_mill_multidepth"] = app_obj.options["tools_mill_multidepth"]
+            app_defaults = getattr(app_obj, "defaults", None) or AppDefaults.factory_defaults
+            geo_obj.obj_options["tools_mill_multidepth"] = app_obj.options.get(
+                "tools_mill_multidepth",
+                app_defaults.get("tools_mill_multidepth", AppDefaults.factory_defaults.get("tools_mill_multidepth")))
             geo_obj.solid_geometry = []
 
             # in case that the tool used has the same diameter with the hole, and since the maximum resolution
@@ -2805,6 +2843,7 @@ class ToolMilling(Excellon, AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed. No tool selected in the tool table ..."))
 
     def paint_excellon_cncjpb(self):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         outname = "%s_%s" % (self.target_obj.obj_options["name"], 'exc_cnc')
         tools_dict = self.sel_tools
 
@@ -2813,12 +2852,14 @@ class ToolMilling(Excellon, AppTool):
         for opt, val in self.target_obj.obj_options.items():
             new_obj.obj_options[opt] = val
         new_obj.obj_options['name'] = outname
-        new_obj.units = self.app.options["units"]
+        new_obj.units = self.app.options.get(
+            "units", app_defaults.get("units", AppDefaults.factory_defaults.get("units")))
         kind = 'geometry'
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                new_obj.obj_options[oname] = self.app.options[option]
+                new_obj.obj_options[oname] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
         for tool in tools_dict:
             old_disp_number = 0
@@ -2876,7 +2917,10 @@ class ToolMilling(Excellon, AppTool):
                     # graceful abort requested by the user
                     raise grace
                 geo_res = self.clear_polygon_seed(pp, seedpoint=pp.centroid, tooldia=mill_dia, overlap=over,
-                                                  steps_per_circle=self.app.options['geometry_circle_steps'],
+                                                  steps_per_circle=self.app.options.get(
+                                                      'geometry_circle_steps',
+                                                      app_defaults.get('geometry_circle_steps',
+                                                                       AppDefaults.factory_defaults.get('geometry_circle_steps'))),
                                                   connect=conn, contour=cont, prog_plot=False)
                 if geo_res:
                     cp.append(geo_res)
@@ -2908,8 +2952,10 @@ class ToolMilling(Excellon, AppTool):
                 'solid_geometry':   deepcopy(total_geometry)
             }
             new_obj.tools[tool]['data']['tools_mill_tooldia'] = mill_dia
-            new_obj.tools[tool]['data']['seg_x'] = self.app.options['geometry_seg_x']
-            new_obj.tools[tool]['data']['seg_y'] = self.app.options['geometry_seg_y']
+            new_obj.tools[tool]['data']['seg_x'] = self.app.options.get(
+                'geometry_seg_x', app_defaults.get('geometry_seg_x', AppDefaults.factory_defaults.get('geometry_seg_x')))
+            new_obj.tools[tool]['data']['seg_y'] = self.app.options.get(
+                'geometry_seg_y', app_defaults.get('geometry_seg_y', AppDefaults.factory_defaults.get('geometry_seg_y')))
 
         # if not total_tool_geo:
         #     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Nothing to mill ..."))
@@ -3010,6 +3056,7 @@ class ToolMilling(Excellon, AppTool):
         """
 
         self.app.log.debug("ToolMilling.generate_cnc_job_handler()")
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         geo_obj = geo_obj if geo_obj is not None else self.target_obj
 
@@ -3035,7 +3082,9 @@ class ToolMilling(Excellon, AppTool):
                     try:
                         seg_x = geo_obj.obj_options['seg_x']
                     except KeyError:
-                        seg_x = self.app.options['geometry_seg_x']
+                        seg_x = self.app.options.get(
+                            'geometry_seg_x',
+                            app_defaults.get('geometry_seg_x', AppDefaults.factory_defaults.get('geometry_seg_x')))
             try:
                 seg_y = data_dict['seg_y']
             except KeyError:
@@ -3045,7 +3094,9 @@ class ToolMilling(Excellon, AppTool):
                     try:
                         seg_y = geo_obj.obj_options['seg_y']
                     except KeyError:
-                        seg_y = self.app.options['geometry_seg_y']
+                        seg_y = self.app.options.get(
+                            'geometry_seg_y',
+                            app_defaults.get('geometry_seg_y', AppDefaults.factory_defaults.get('geometry_seg_y')))
 
         try:
             xmin = geo_obj.obj_options['xmin']
@@ -3161,11 +3212,17 @@ class ToolMilling(Excellon, AppTool):
                 laser_on_code = tools_dict[tool_uid_key]['data']["tools_mill_laser_on"]
                 pp_geometry_name = tools_dict[tool_uid_key]['data']["tools_mill_ppname_g"]
 
-                spindle_dir = self.app.options['tools_mill_spindledir']
+                spindle_dir = self.app.options.get(
+                    'tools_mill_spindledir',
+                    app_defaults.get('tools_mill_spindledir', AppDefaults.factory_defaults.get('tools_mill_spindledir')))
                 tool_solid_geometry = geo_obj.solid_geometry
 
-                new_cncjob_obj.coords_decimals = self.app.options["cncjob_coords_decimals"]
-                new_cncjob_obj.fr_decimals = self.app.options["cncjob_fr_decimals"]
+                new_cncjob_obj.coords_decimals = self.app.options.get(
+                    "cncjob_coords_decimals",
+                    app_defaults.get("cncjob_coords_decimals", AppDefaults.factory_defaults.get("cncjob_coords_decimals")))
+                new_cncjob_obj.fr_decimals = self.app.options.get(
+                    "cncjob_fr_decimals",
+                    app_defaults.get("cncjob_fr_decimals", AppDefaults.factory_defaults.get("cncjob_fr_decimals")))
 
                 # Propagate options
                 new_cncjob_obj.obj_options["tooldia"] = tooldia_val
@@ -3177,7 +3234,9 @@ class ToolMilling(Excellon, AppTool):
 
                 # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
                 # to a value of 0.0005 which is 20 times less than 0.01
-                glob_tol = float(self.app.options['global_tolerance'])
+                glob_tol = float(self.app.options.get(
+                    'global_tolerance',
+                    app_defaults.get('global_tolerance', AppDefaults.factory_defaults.get('global_tolerance'))))
                 tol = glob_tol / 20 if self.units.lower() == 'in' else glob_tol
 
                 res, start_gcode = new_cncjob_obj.generate_from_geometry_2(
@@ -3357,7 +3416,10 @@ class ToolMilling(Excellon, AppTool):
                             self.ui.toolchangez_entry.get_value()
                 except AttributeError:
                     tools_dict[tool_uid_key]['data']['tools_mill_toolchangez'] = \
-                        self.app.options['tools_mill_toolchangez']
+                        self.app.options.get(
+                            'tools_mill_toolchangez',
+                            app_defaults.get('tools_mill_toolchangez',
+                                             AppDefaults.factory_defaults.get('tools_mill_toolchangez')))
                 # Toolchange X-Y
                 try:
                     if not from_tcl:
@@ -3365,25 +3427,34 @@ class ToolMilling(Excellon, AppTool):
                             self.ui.toolchangexy_entry.get_value()
                 except AttributeError:
                     tools_dict[tool_uid_key]['data']['tools_mill_toolchangexy'] = \
-                        self.app.options['tools_mill_toolchangexy']
+                        self.app.options.get(
+                            'tools_mill_toolchangexy',
+                            app_defaults.get('tools_mill_toolchangexy',
+                                             AppDefaults.factory_defaults.get('tools_mill_toolchangexy')))
                 # End Move Z
                 try:
                     if not from_tcl:
                         tools_dict[tool_uid_key]['data']['tools_mill_endz'] = self.ui.endz_entry.get_value()
                 except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_endz'] = self.app.options['tools_mill_endz']
+                    tools_dict[tool_uid_key]['data']['tools_mill_endz'] = self.app.options.get(
+                        'tools_mill_endz',
+                        app_defaults.get('tools_mill_endz', AppDefaults.factory_defaults.get('tools_mill_endz')))
                 # End Move XY
                 try:
                     if not from_tcl:
                         tools_dict[tool_uid_key]['data']['tools_mill_endxy'] = self.ui.endxy_entry.get_value()
                 except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_endxy'] = self.app.options['tools_mill_endxy']
+                    tools_dict[tool_uid_key]['data']['tools_mill_endxy'] = self.app.options.get(
+                        'tools_mill_endxy',
+                        app_defaults.get('tools_mill_endxy', AppDefaults.factory_defaults.get('tools_mill_endxy')))
                 # Probe Z
                 try:
                     if not from_tcl:
                         tools_dict[tool_uid_key]['data']['tools_mill_z_p_depth'] = self.ui.pdepth_entry.get_value()
                 except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_z_p_depth'] = self.app.options['tools_mill_z_p_depth']
+                    tools_dict[tool_uid_key]['data']['tools_mill_z_p_depth'] = self.app.options.get(
+                        'tools_mill_z_p_depth',
+                        app_defaults.get('tools_mill_z_p_depth', AppDefaults.factory_defaults.get('tools_mill_z_p_depth')))
                 # Probe FR
                 try:
                     if not from_tcl:
@@ -3391,7 +3462,10 @@ class ToolMilling(Excellon, AppTool):
                             self.ui.feedrate_probe_entry.get_value()
                 except AttributeError:
                     tools_dict[tool_uid_key]['data'][
-                        'tools_mill_feedrate_probe'] = self.app.options['tools_mill_feedrate_probe']
+                        'tools_mill_feedrate_probe'] = self.app.options.get(
+                            'tools_mill_feedrate_probe',
+                            app_defaults.get('tools_mill_feedrate_probe',
+                                             AppDefaults.factory_defaults.get('tools_mill_feedrate_probe')))
 
                 # Exclusion Areas Enable
                 try:
@@ -3405,28 +3479,39 @@ class ToolMilling(Excellon, AppTool):
                         tools_dict[tool_uid_key]['data']['tools_mill_area_shape'] = self.ui.area_shape_radio.get_value()
                 except AttributeError:
                     tools_dict[tool_uid_key]['data']['tools_mill_area_shape'] = \
-                        self.app.options['tools_mill_area_shape']
+                        self.app.options.get(
+                            'tools_mill_area_shape',
+                            app_defaults.get('tools_mill_area_shape',
+                                             AppDefaults.factory_defaults.get('tools_mill_area_shape')))
                 # Exclusion Areas Strategy
                 try:
                     if not from_tcl:
                         tools_dict[tool_uid_key]['data']['tools_mill_area_strategy'] = self.ui.strategy_radio.get_value()
                 except AttributeError:
                     tools_dict[tool_uid_key]['data']['tools_mill_area_strategy'] = \
-                        self.app.options['tools_mill_area_strategy']
+                        self.app.options.get(
+                            'tools_mill_area_strategy',
+                            app_defaults.get('tools_mill_area_strategy',
+                                             AppDefaults.factory_defaults.get('tools_mill_area_strategy')))
                 # Exclusion Areas Overz
                 try:
                     if not from_tcl:
                         tools_dict[tool_uid_key]['data']['tools_mill_area_overz'] = self.ui.over_z_entry.get_value()
                 except AttributeError:
                     tools_dict[tool_uid_key]['data']['tools_mill_area_overz'] = \
-                        self.app.options['tools_mill_area_overz']
+                        self.app.options.get(
+                            'tools_mill_area_overz',
+                            app_defaults.get('tools_mill_area_overz',
+                                             AppDefaults.factory_defaults.get('tools_mill_area_overz')))
 
                 # Preprocessor
                 try:
                     if not from_tcl:
                         tools_dict[tool_uid_key]['data']['tools_mill_ppname_g'] = self.ui.pp_geo_name_cb.get_value()
                 except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_ppname_g'] = self.app.options['tools_mill_ppname_g']
+                    tools_dict[tool_uid_key]['data']['tools_mill_ppname_g'] = self.app.options.get(
+                        'tools_mill_ppname_g',
+                        app_defaults.get('tools_mill_ppname_g', AppDefaults.factory_defaults.get('tools_mill_ppname_g')))
 
                 # Offset calculation
                 offset_type = dia_cnc_dict['data']['tools_mill_offset_type']
@@ -3441,7 +3526,10 @@ class ToolMilling(Excellon, AppTool):
                         else:
                             offset_value = tools_dict[tool_uid_key]['data']['tools_mill_offset_value']
                     except AttributeError:
-                        offset_value = self.app.options['tools_mill_offset_value']
+                        offset_value = self.app.options.get(
+                            'tools_mill_offset_value',
+                            app_defaults.get('tools_mill_offset_value',
+                                             AppDefaults.factory_defaults.get('tools_mill_offset_value')))
                     if offset_value:
                         tool_offset = float(offset_value)
                     else:
@@ -3463,8 +3551,12 @@ class ToolMilling(Excellon, AppTool):
                 tool_solid_geometry = geo_obj.tools[tool_uid_key]['solid_geometry']
 
                 # Coordinates
-                new_cncjob_obj.coords_decimals = self.app.options["cncjob_coords_decimals"]
-                new_cncjob_obj.fr_decimals = self.app.options["cncjob_fr_decimals"]
+                new_cncjob_obj.coords_decimals = self.app.options.get(
+                    "cncjob_coords_decimals",
+                    app_defaults.get("cncjob_coords_decimals", AppDefaults.factory_defaults.get("cncjob_coords_decimals")))
+                new_cncjob_obj.fr_decimals = self.app.options.get(
+                    "cncjob_fr_decimals",
+                    app_defaults.get("cncjob_fr_decimals", AppDefaults.factory_defaults.get("cncjob_fr_decimals")))
 
                 # Propagate options
                 new_cncjob_obj.obj_options["tooldia"] = tooldia_val
@@ -3473,7 +3565,9 @@ class ToolMilling(Excellon, AppTool):
 
                 # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
                 # to a value of 0.0005 which is 20 times less than 0.01
-                glob_tol = float(self.app.options['global_tolerance'])
+                glob_tol = float(self.app.options.get(
+                    'global_tolerance',
+                    app_defaults.get('global_tolerance', AppDefaults.factory_defaults.get('global_tolerance'))))
                 tol = glob_tol / 20 if self.units.lower() == 'in' else glob_tol
 
                 tool_lst = list(tools_dict.keys())
@@ -3839,13 +3933,22 @@ class ToolMilling(Excellon, AppTool):
             sel_rows.add(idx.row())
 
         self.delete_sel_shape()
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         if self.app.use_3d_engine:
-            face = self.app.options['global_sel_fill'][:-2] + str(hex(int(0.2 * 255)))[2:]
-            outline = self.app.options['global_sel_line'][:-2] + str(hex(int(0.8 * 255)))[2:]
+            face = self.app.options.get(
+                'global_sel_fill', app_defaults.get('global_sel_fill', AppDefaults.factory_defaults.get('global_sel_fill')))[:-2] \
+                + str(hex(int(0.2 * 255)))[2:]
+            outline = self.app.options.get(
+                'global_sel_line', app_defaults.get('global_sel_line', AppDefaults.factory_defaults.get('global_sel_line')))[:-2] \
+                + str(hex(int(0.8 * 255)))[2:]
         else:
-            face = self.app.options['global_sel_fill'][:-2] + str(hex(int(0.4 * 255)))[2:]
-            outline = self.app.options['global_sel_line'][:-2] + str(hex(int(1.0 * 255)))[2:]
+            face = self.app.options.get(
+                'global_sel_fill', app_defaults.get('global_sel_fill', AppDefaults.factory_defaults.get('global_sel_fill')))[:-2] \
+                + str(hex(int(0.4 * 255)))[2:]
+            outline = self.app.options.get(
+                'global_sel_line', app_defaults.get('global_sel_line', AppDefaults.factory_defaults.get('global_sel_line')))[:-2] \
+                + str(hex(int(1.0 * 255)))[2:]
 
         for row in sel_rows:
             sel_rect = self.app.exc_areas.exclusion_areas_storage[row]['shape']
@@ -3949,6 +4052,7 @@ class MillingUI:
     def __init__(self, layout, app, name):
         self.app = app
         self.decimals = self.app.decimals
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         self.layout = layout
 
         self.title_box = QtWidgets.QHBoxLayout()
@@ -4460,7 +4564,9 @@ class MillingUI:
         self.tool_shape_combo.setObjectName('mill_tool_shape')
         self.tool_shape_combo.addItems(["C1", "C2", "C3", "C4", "B", "V", "L"])
 
-        idx = int(self.app.options['tools_mill_tool_shape'])
+        idx = int(self.app.options.get(
+            'tools_mill_tool_shape',
+            app_defaults.get('tools_mill_tool_shape', AppDefaults.factory_defaults.get('tools_mill_tool_shape'))))
         # protection against having this translated or loading a project with translated values
         if idx == -1:
             self.tool_shape_combo.setCurrentIndex(0)

@@ -22,6 +22,7 @@ import builtins
 
 from appCommon.Common import LoudDict
 from camlib import flatten_shapely_geometry
+from defaults import AppDefaults
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -37,10 +38,13 @@ class ToolMarkers(AppTool):
 
         self.app = app
         self.canvas = self.app.plotcanvas
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         self.cursor_color_memory = None
         # store the current cursor type to be restored after manual geo
-        self.old_cursor_type = self.app.options["global_cursor_type"]
+        self.old_cursor_type = self.app.options.get(
+            "global_cursor_type",
+            app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
 
         self.decimals = self.app.decimals
         self.units = ''
@@ -66,7 +70,9 @@ class ToolMarkers(AppTool):
         # Tool properties
         self.fid_dia = None
 
-        self.grb_steps_per_circle = self.app.options["gerber_circle_steps"]
+        self.grb_steps_per_circle = self.app.options.get(
+            "gerber_circle_steps",
+            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps")))
 
         self.handlers_connected = False
 
@@ -184,23 +190,44 @@ class ToolMarkers(AppTool):
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
-        self.ui.thick_entry.set_value(self.app.options["tools_markers_thickness"])
-        self.ui.l_entry.set_value(float(self.app.options["tools_markers_length"]))
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.thick_entry.set_value(self.app.options.get(
+            "tools_markers_thickness",
+            app_defaults.get("tools_markers_thickness", AppDefaults.factory_defaults.get("tools_markers_thickness"))))
+        self.ui.l_entry.set_value(float(self.app.options.get(
+            "tools_markers_length",
+            app_defaults.get("tools_markers_length", AppDefaults.factory_defaults.get("tools_markers_length")))))
 
-        self.ui.ref_radio.set_value(self.app.options["tools_markers_reference"])
-        self.ui.offset_x_entry.set_value(float(self.app.options["tools_markers_offset_x"]))
-        self.ui.offset_y_entry.set_value(float(self.app.options["tools_markers_offset_y"]))
+        self.ui.ref_radio.set_value(self.app.options.get(
+            "tools_markers_reference",
+            app_defaults.get("tools_markers_reference", AppDefaults.factory_defaults.get("tools_markers_reference"))))
+        self.ui.offset_x_entry.set_value(float(self.app.options.get(
+            "tools_markers_offset_x",
+            app_defaults.get("tools_markers_offset_x", AppDefaults.factory_defaults.get("tools_markers_offset_x")))))
+        self.ui.offset_y_entry.set_value(float(self.app.options.get(
+            "tools_markers_offset_y",
+            app_defaults.get("tools_markers_offset_y", AppDefaults.factory_defaults.get("tools_markers_offset_y")))))
         self.ui.offset_link_button.setChecked(True)
         self.ui.on_link_checked(True)
 
         self.ui.toggle_all_cb.set_value(False)
-        self.ui.type_radio.set_value(self.app.options["tools_markers_type"])
-        self.ui.drill_dia_entry.set_value(self.app.options["tools_markers_drill_dia"])
-        self.ui.mode_combo.set_value(self.app.options["tools_markers_mode"])
-        self.on_selection_changed(self.app.options["tools_markers_mode"])
+        self.ui.type_radio.set_value(self.app.options.get(
+            "tools_markers_type",
+            app_defaults.get("tools_markers_type", AppDefaults.factory_defaults.get("tools_markers_type"))))
+        self.ui.drill_dia_entry.set_value(self.app.options.get(
+            "tools_markers_drill_dia",
+            app_defaults.get("tools_markers_drill_dia", AppDefaults.factory_defaults.get("tools_markers_drill_dia"))))
+        self.ui.mode_combo.set_value(self.app.options.get(
+            "tools_markers_mode",
+            app_defaults.get("tools_markers_mode", AppDefaults.factory_defaults.get("tools_markers_mode"))))
+        self.on_selection_changed(self.app.options.get(
+            "tools_markers_mode",
+            app_defaults.get("tools_markers_mode", AppDefaults.factory_defaults.get("tools_markers_mode"))))
         self.ui.insert_type_radio.set_value(val="grb")
 
-        self.ui.big_cursor_cb.set_value(self.app.options["tools_markers_big_cursor"])
+        self.ui.big_cursor_cb.set_value(self.app.options.get(
+            "tools_markers_big_cursor",
+            app_defaults.get("tools_markers_big_cursor", AppDefaults.factory_defaults.get("tools_markers_big_cursor"))))
 
         self.points.clear()
         self.on_points_changed(None)
@@ -215,11 +242,15 @@ class ToolMarkers(AppTool):
             self.ui.object_combo.setCurrentIndex(0)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level",
+            app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
         # set cursor
-        self.old_cursor_type = self.app.options["global_cursor_type"]
+        self.old_cursor_type = self.app.options.get(
+            "global_cursor_type",
+            app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
 
     def change_level(self, level):
         """
@@ -735,6 +766,7 @@ class ToolMarkers(AppTool):
         :rtype:
         """
         tooldia = self.ui.thick_entry.get_value()
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         new_tools = deepcopy(new_geo_obj.tools)
         tool_found = None
@@ -759,10 +791,12 @@ class ToolMarkers(AppTool):
             for opt_key in self.app.options:
                 if opt_key.find('geometry' + "_") == 0:
                     oname = opt_key[len('geometry') + 1:]
-                    new_data[oname] = self.app.options[opt_key]
+                    new_data[oname] = self.app.options.get(
+                        opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
             for opt_key in self.app.options:
                 if opt_key.find('tools_') == 0:
-                    new_data[opt_key] = self.app.options[opt_key]
+                    new_data[opt_key] = self.app.options.get(
+                        opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
 
             new_tools.update(
                 {
@@ -796,7 +830,10 @@ class ToolMarkers(AppTool):
             geo_obj.obj_options['name'] = outname
 
             # Propagate options
-            geo_obj.obj_options["tools_mill_tooldia"] = app_obj.defaults["tools_mill_tooldia"]
+            geo_obj.obj_options["tools_mill_tooldia"] = app_obj.options.get(
+                "tools_mill_tooldia",
+                app_obj.defaults.get("tools_mill_tooldia",
+                                     app_obj.defaults.factory_defaults.get("tools_mill_tooldia")))
             geo_obj.solid_geometry = flatten_shapely_geometry(s_list)
 
             geo_obj.multitool = True

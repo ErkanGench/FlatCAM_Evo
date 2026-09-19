@@ -18,6 +18,7 @@ from vispy.util import keys
 from vispy.color import Color
 from appGUI.VisPyVisuals import ShapeGroup, ShapeCollection, TextCollection, TextGroup, Cursor
 from vispy.scene.visuals import InfiniteLine, Line, Rectangle, Text, XYZAxis
+from appDatabase import _database_option
 
 import gettext
 import appTranslation as fcTranslate
@@ -156,8 +157,8 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         self.container.addWidget(self.native)
 
         self.line_parent = None
-        if self.fcapp.options["global_cursor_color_enabled"]:
-            c_color = Color(self.fcapp.options["global_cursor_color"]).rgba
+        if _database_option(self.fcapp, "global_cursor_color_enabled"):
+            c_color = Color(_database_option(self.fcapp, "global_cursor_color")).rgba
         else:
             c_color = self.line_color
 
@@ -258,8 +259,8 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         # key modifiers
         modifiers = event.modifiers
 
-        pan_delta_x = self.fcapp.options["global_gridx"]
-        pan_delta_y = self.fcapp.options["global_gridy"]
+        pan_delta_x = _database_option(self.fcapp, "global_gridx")
+        pan_delta_y = _database_option(self.fcapp, "global_gridy")
         curr_pos = event.pos
 
         # Controlled pan by mouse wheel

@@ -9,6 +9,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import (VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, RadioSet,
                                 FCDoubleSpinner, FCCheckBox, OptionalInputSection)
+from defaults import AppDefaults
 
 import logging
 from copy import deepcopy
@@ -41,7 +42,13 @@ class ToolFollow(Gerber, AppTool):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Gerber.__init__(self, steps_per_circle=self.app.options["gerber_circle_steps"], app=app)
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        Gerber.__init__(
+            self,
+            steps_per_circle=self.app.options.get(
+                "gerber_circle_steps",
+                app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
+            app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -156,12 +163,21 @@ class ToolFollow(Gerber, AppTool):
             self.ui.object_combo.set_value(obj_name)
 
         # Set UI
-        self.ui.simplify_cb.set_value(self.app.options["tools_follow_simplification"])
-        self.ui.tol_entry.set_value(self.app.options["tools_follow_tolerance"])
-        self.ui.union_cb.set_value(self.app.options["tools_follow_union"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.simplify_cb.set_value(self.app.options.get(
+            "tools_follow_simplification",
+            app_defaults.get("tools_follow_simplification",
+                            AppDefaults.factory_defaults.get("tools_follow_simplification"))))
+        self.ui.tol_entry.set_value(self.app.options.get(
+            "tools_follow_tolerance",
+            app_defaults.get("tools_follow_tolerance", AppDefaults.factory_defaults.get("tools_follow_tolerance"))))
+        self.ui.union_cb.set_value(self.app.options.get(
+            "tools_follow_union",
+            app_defaults.get("tools_follow_union", AppDefaults.factory_defaults.get("tools_follow_union"))))
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
         # SIGNALS
@@ -308,11 +324,14 @@ class ToolFollow(Gerber, AppTool):
         simplify_tol = self.ui.tol_entry.get_value()
 
         def follow_init(new_obj, app_obj):
-            if type(app_obj.defaults["tools_mill_tooldia"]) == float:
-                tools_list = [app_obj.defaults["tools_mill_tooldia"]]
+            app_defaults = getattr(app_obj, "defaults", None) or AppDefaults.factory_defaults
+            tool_dia = app_defaults.get(
+                "tools_mill_tooldia", AppDefaults.factory_defaults.get("tools_mill_tooldia"))
+            if type(tool_dia) == float:
+                tools_list = [tool_dia]
             else:
                 try:
-                    temp_tools = app_obj.defaults["tools_mill_tooldia"].split(",")
+                    temp_tools = tool_dia.split(",")
                     tools_list = [
                         float(eval(dia)) for dia in temp_tools if dia != ''
                     ]
@@ -326,9 +345,11 @@ class ToolFollow(Gerber, AppTool):
             for opt_key in app_obj.options:
                 if opt_key.find('geometry' + "_") == 0:
                     oname = opt_key[len('geometry') + 1:]
-                    new_data[oname] = app_obj.options[opt_key]
+                    new_data[oname] = app_obj.options.get(
+                        opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
                 if opt_key.find('tools_') == 0:
-                    new_data[opt_key] = app_obj.options[opt_key]
+                    new_data[opt_key] = app_obj.options.get(
+                        opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
 
             flattened_follow_geometry = flatten_shapely_geometry(followed_obj.follow_geometry)
             cleaned_flat_follow_geometry = [
@@ -359,7 +380,7 @@ class ToolFollow(Gerber, AppTool):
             new_obj.multigeo = True
 
             # Propagate options
-            new_obj.obj_options["tools_mill_tooldia"] = app_obj.defaults["tools_mill_tooldia"]
+            new_obj.obj_options["tools_mill_tooldia"] = tool_dia
             new_obj.solid_geometry = follow_geo
             new_obj.tools = {
                 1: {
@@ -392,11 +413,14 @@ class ToolFollow(Gerber, AppTool):
         def follow_init(new_obj, app_obj):
             new_obj.multigeo = True
 
-            if type(app_obj.defaults["tools_mill_tooldia"]) == float:
-                tools_list = [app_obj.defaults["tools_mill_tooldia"]]
+            app_defaults = getattr(app_obj, "defaults", None) or AppDefaults.factory_defaults
+            tool_dia = app_defaults.get(
+                "tools_mill_tooldia", AppDefaults.factory_defaults.get("tools_mill_tooldia"))
+            if type(tool_dia) == float:
+                tools_list = [tool_dia]
             else:
                 try:
-                    temp_tools = app_obj.defaults["tools_mill_tooldia"].split(",")
+                    temp_tools = tool_dia.split(",")
                     tools_list = [
                         float(eval(dia)) for dia in temp_tools if dia != ''
                     ]
@@ -410,13 +434,15 @@ class ToolFollow(Gerber, AppTool):
             for opt_key, opt_val in app_obj.options.items():
                 if opt_key.find('geometry' + "_") == 0:
                     oname = opt_key[len('geometry') + 1:]
-                    new_data[oname] = app_obj.options[opt_key]
+                    new_data[oname] = app_obj.options.get(
+                        opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
                 if opt_key.find('tools_') == 0:
-                    new_data[opt_key] = app_obj.options[opt_key]
+                    new_data[opt_key] = app_obj.options.get(
+                        opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
 
             # Propagate options
-            new_obj.obj_options["tools_mill_tooldia"] = app_obj.defaults["tools_mill_tooldia"]
-            new_data["tools_mill_tooldia"] = app_obj.defaults["tools_mill_tooldia"]
+            new_obj.obj_options["tools_mill_tooldia"] = tool_dia
+            new_data["tools_mill_tooldia"] = tool_dia
 
             target_geo = unary_union(followed_obj.follow_geometry)
             area_follow = target_geo.intersection(deepcopy(unary_union(self.sel_rect)))
@@ -611,11 +637,18 @@ class ToolFollow(Gerber, AppTool):
         if self.app.grid_status():
             # Update cursor
             curr_pos = self.app.geo_editor.snap(curr_pos[0], curr_pos[1])
+            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
             self.app.app_cursor.set_data(np.asarray([(curr_pos[0], curr_pos[1])]),
                                          symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options["global_cursor_width"],
-                                         size=self.app.options["global_cursor_size"])
+                                         edge_width=self.app.options.get(
+                                             "global_cursor_width",
+                                             app_defaults.get("global_cursor_width",
+                                                              AppDefaults.factory_defaults.get("global_cursor_width"))),
+                                         size=self.app.options.get(
+                                             "global_cursor_size",
+                                             app_defaults.get("global_cursor_size",
+                                                              AppDefaults.factory_defaults.get("global_cursor_size"))))
 
         if self.cursor_pos is None:
             self.cursor_pos = (0, 0)

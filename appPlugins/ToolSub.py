@@ -8,6 +8,7 @@
 from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox
+from defaults import AppDefaults
 
 import logging
 from copy import deepcopy
@@ -210,8 +211,11 @@ class ToolSub(AppTool):
         self.connect_signals_at_init()
 
         self.ui.tools_frame.show()
-        self.ui.close_paths_cb.setChecked(self.app.options["tools_sub_close_paths"])
-        self.ui.delete_sources_cb.setChecked(self.app.options["tools_sub_delete_sources"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.close_paths_cb.setChecked(self.app.options.get(
+            "tools_sub_close_paths", app_defaults.get("tools_sub_close_paths", AppDefaults.factory_defaults.get("tools_sub_close_paths"))))
+        self.ui.delete_sources_cb.setChecked(self.app.options.get(
+            "tools_sub_delete_sources", app_defaults.get("tools_sub_delete_sources", AppDefaults.factory_defaults.get("tools_sub_delete_sources"))))
 
         # SELECT THE CURRENT OBJECT
         obj = self.app.collection.get_active()
@@ -220,7 +224,8 @@ class ToolSub(AppTool):
             self.ui.target_gerber_combo.set_value(obj_name)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
     def change_level(self, level):

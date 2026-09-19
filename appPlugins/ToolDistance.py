@@ -11,6 +11,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
 from appGUI.VisPyVisuals import ShapeCollection
 from camlib import AppRTreeStorage
 from appEditors.appGeoEditor import DrawToolShape
+from defaults import AppDefaults
 
 import math
 import logging
@@ -80,7 +81,10 @@ class Distance(AppTool):
         # store here the cursor color
         self.cursor_color_memory = None
         # store the current cursor type to be restored after manual geo
-        self.old_cursor_type = self.app.options["global_cursor_type"]
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.old_cursor_type = self.app.options.get(
+            "global_cursor_type",
+            app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
 
         # VisPy visuals
         if self.app.use_3d_engine:
@@ -152,7 +156,10 @@ class Distance(AppTool):
             if self.app.ui.splitter.sizes()[0] == 0:
                 self.app.ui.splitter.setSizes([1, 1])
 
-        self.old_cursor_type = self.app.options["global_cursor_type"]
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.old_cursor_type = self.app.options.get(
+            "global_cursor_type",
+            app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
 
         self.on_start_measuring() if self.active is False else self.on_exit()
 
@@ -208,10 +215,17 @@ class Distance(AppTool):
         self.tool_done = False
         self.grid_status_memory = True if self.app.ui.grid_snap_btn.isChecked() else False
 
-        self.ui.snap_center_cb.set_value(self.app.options['tools_dist_snap_center'])
-        self.ui.big_cursor_cb.set_value(self.app.options['tools_dist_big_cursor'])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.snap_center_cb.set_value(self.app.options.get(
+            'tools_dist_snap_center',
+            app_defaults.get('tools_dist_snap_center', AppDefaults.factory_defaults.get('tools_dist_snap_center'))))
+        self.ui.big_cursor_cb.set_value(self.app.options.get(
+            'tools_dist_big_cursor',
+            app_defaults.get('tools_dist_big_cursor', AppDefaults.factory_defaults.get('tools_dist_big_cursor'))))
 
-        snap_center = self.app.options['tools_dist_snap_center']
+        snap_center = self.app.options.get(
+            'tools_dist_snap_center',
+            app_defaults.get('tools_dist_snap_center', AppDefaults.factory_defaults.get('tools_dist_snap_center')))
         self.on_snap_toggled(snap_center)
 
         try:
@@ -232,7 +246,10 @@ class Distance(AppTool):
             self.app.on_cursor_type(val="big", control_cursor=True)
             self.cursor_color_memory = self.app.plotcanvas.cursor_color
 
-            if self.app.options["global_theme"] in ['default', 'light']:
+            if self.app.options.get(
+                    "global_theme",
+                    app_defaults.get("global_theme", AppDefaults.factory_defaults.get("global_theme"))) in [
+                'default', 'light']:
                 if self.app.use_3d_engine is True:
                     self.app.plotcanvas.cursor_color = '#000000FF'
                 else:
@@ -534,10 +551,17 @@ class Distance(AppTool):
             else:
                 self.app.plotcanvas.cursor_color = '#000000'
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         self.app.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
                                      symbol='++', edge_color='#000000',
-                                     edge_width=self.app.options["global_cursor_width"],
-                                     size=self.app.options["global_cursor_size"])
+                                     edge_width=self.app.options.get(
+                                         "global_cursor_width",
+                                         app_defaults.get("global_cursor_width",
+                                                          AppDefaults.factory_defaults.get("global_cursor_width"))),
+                                     size=self.app.options.get(
+                                         "global_cursor_size",
+                                         app_defaults.get("global_cursor_size",
+                                                          AppDefaults.factory_defaults.get("global_cursor_size"))))
         return pos
 
     def on_multipoint_measurement_changed(self, val):
@@ -571,6 +595,7 @@ class Distance(AppTool):
     def update_position_info(self, pos_canvas):
         big_cursor_state = self.ui.big_cursor_cb.get_value()
         grid_snap_state = self.app.grid_status()
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         if big_cursor_state is False:
             if grid_snap_state:
@@ -578,8 +603,14 @@ class Distance(AppTool):
                 # Update cursor
                 self.app.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
                                              symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                             edge_width=self.app.options["global_cursor_width"],
-                                             size=self.app.options["global_cursor_size"])
+                                             edge_width=self.app.options.get(
+                                                 "global_cursor_width",
+                                                 app_defaults.get("global_cursor_width",
+                                                                  AppDefaults.factory_defaults.get("global_cursor_width"))),
+                                             size=self.app.options.get(
+                                                 "global_cursor_size",
+                                                 app_defaults.get("global_cursor_size",
+                                                                  AppDefaults.factory_defaults.get("global_cursor_size"))))
             else:
                 pos = (pos_canvas[0], pos_canvas[1])
         else:
@@ -592,8 +623,14 @@ class Distance(AppTool):
             # Update cursor
             self.app.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
                                          symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options["global_cursor_width"],
-                                         size=self.app.options["global_cursor_size"])
+                                         edge_width=self.app.options.get(
+                                             "global_cursor_width",
+                                             app_defaults.get("global_cursor_width",
+                                                              AppDefaults.factory_defaults.get("global_cursor_width"))),
+                                         size=self.app.options.get(
+                                             "global_cursor_size",
+                                             app_defaults.get("global_cursor_size",
+                                                              AppDefaults.factory_defaults.get("global_cursor_size"))))
 
         return pos
 

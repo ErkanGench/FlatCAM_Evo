@@ -13,6 +13,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
 from appCommon.Common import LoudDict
 from appCommon.Common import GracefulException as grace
 from camlib import flatten_shapely_geometry
+from defaults import AppDefaults
 
 import logging
 from copy import deepcopy
@@ -162,32 +163,53 @@ class ToolCopperThieving(AppTool):
 
     def set_tool_ui(self):
         self.units = self.app.app_units
-        self.geo_steps_per_circle = int(self.app.options["tools_copper_thieving_circle_steps"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.geo_steps_per_circle = int(self.app.options.get(
+            "tools_copper_thieving_circle_steps",
+            app_defaults.get("tools_copper_thieving_circle_steps", AppDefaults.factory_defaults.get("tools_copper_thieving_circle_steps"))
+        ))
 
         self.clear_ui(self.layout)
         self.ui = ThievingUI(layout=self.layout, app=self.app)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
-        self.ui.clearance_entry.set_value(float(self.app.options["tools_copper_thieving_clearance"]))
-        self.ui.margin_entry.set_value(float(self.app.options["tools_copper_thieving_margin"]))
-        self.ui.reference_combo.set_value(self.app.options["tools_copper_thieving_reference"])
-        self.ui.bbox_type_radio.set_value(self.app.options["tools_copper_thieving_box_type"])
-        self.ui.fill_type_combo.set_value(self.app.options["tools_copper_thieving_fill_type"])
+        self.ui.clearance_entry.set_value(float(self.app.options.get(
+            "tools_copper_thieving_clearance", app_defaults.get("tools_copper_thieving_clearance", AppDefaults.factory_defaults.get("tools_copper_thieving_clearance")))))
+        self.ui.margin_entry.set_value(float(self.app.options.get(
+            "tools_copper_thieving_margin", app_defaults.get("tools_copper_thieving_margin", AppDefaults.factory_defaults.get("tools_copper_thieving_margin")))))
+        self.ui.reference_combo.set_value(self.app.options.get(
+            "tools_copper_thieving_reference", app_defaults.get("tools_copper_thieving_reference", AppDefaults.factory_defaults.get("tools_copper_thieving_reference"))))
+        self.ui.bbox_type_radio.set_value(self.app.options.get(
+            "tools_copper_thieving_box_type", app_defaults.get("tools_copper_thieving_box_type", AppDefaults.factory_defaults.get("tools_copper_thieving_box_type"))))
+        self.ui.fill_type_combo.set_value(self.app.options.get(
+            "tools_copper_thieving_fill_type", app_defaults.get("tools_copper_thieving_fill_type", AppDefaults.factory_defaults.get("tools_copper_thieving_fill_type"))))
 
-        self.ui.area_entry.set_value(self.app.options["tools_copper_thieving_area"])
-        self.ui.dot_dia_entry.set_value(self.app.options["tools_copper_thieving_dots_dia"])
-        self.ui.dot_spacing_entry.set_value(self.app.options["tools_copper_thieving_dots_spacing"])
-        self.ui.square_size_entry.set_value(self.app.options["tools_copper_thieving_squares_size"])
-        self.ui.squares_spacing_entry.set_value(self.app.options["tools_copper_thieving_squares_spacing"])
-        self.ui.line_size_entry.set_value(self.app.options["tools_copper_thieving_lines_size"])
-        self.ui.lines_spacing_entry.set_value(self.app.options["tools_copper_thieving_lines_spacing"])
+        self.ui.area_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_area", app_defaults.get("tools_copper_thieving_area", AppDefaults.factory_defaults.get("tools_copper_thieving_area"))))
+        self.ui.dot_dia_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_dots_dia", app_defaults.get("tools_copper_thieving_dots_dia", AppDefaults.factory_defaults.get("tools_copper_thieving_dots_dia"))))
+        self.ui.dot_spacing_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_dots_spacing", app_defaults.get("tools_copper_thieving_dots_spacing", AppDefaults.factory_defaults.get("tools_copper_thieving_dots_spacing"))))
+        self.ui.square_size_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_squares_size", app_defaults.get("tools_copper_thieving_squares_size", AppDefaults.factory_defaults.get("tools_copper_thieving_squares_size"))))
+        self.ui.squares_spacing_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_squares_spacing", app_defaults.get("tools_copper_thieving_squares_spacing", AppDefaults.factory_defaults.get("tools_copper_thieving_squares_spacing"))))
+        self.ui.line_size_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_lines_size", app_defaults.get("tools_copper_thieving_lines_size", AppDefaults.factory_defaults.get("tools_copper_thieving_lines_size"))))
+        self.ui.lines_spacing_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_lines_spacing", app_defaults.get("tools_copper_thieving_lines_spacing", AppDefaults.factory_defaults.get("tools_copper_thieving_lines_spacing"))))
 
-        self.ui.rb_margin_entry.set_value(self.app.options["tools_copper_thieving_rb_margin"])
-        self.ui.rb_thickness_entry.set_value(self.app.options["tools_copper_thieving_rb_thickness"])
-        self.ui.only_pads_cb.set_value(self.app.options["tools_copper_thieving_only_apds"])
-        self.ui.clearance_ppm_entry.set_value(self.app.options["tools_copper_thieving_mask_clearance"])
-        self.ui.ppm_choice_combo.set_value(self.app.options["tools_copper_thieving_geo_choice"])
+        self.ui.rb_margin_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_rb_margin", app_defaults.get("tools_copper_thieving_rb_margin", AppDefaults.factory_defaults.get("tools_copper_thieving_rb_margin"))))
+        self.ui.rb_thickness_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_rb_thickness", app_defaults.get("tools_copper_thieving_rb_thickness", AppDefaults.factory_defaults.get("tools_copper_thieving_rb_thickness"))))
+        self.ui.only_pads_cb.set_value(self.app.options.get(
+            "tools_copper_thieving_only_apds", app_defaults.get("tools_copper_thieving_only_apds", AppDefaults.factory_defaults.get("tools_copper_thieving_only_apds"))))
+        self.ui.clearance_ppm_entry.set_value(self.app.options.get(
+            "tools_copper_thieving_mask_clearance", app_defaults.get("tools_copper_thieving_mask_clearance", AppDefaults.factory_defaults.get("tools_copper_thieving_mask_clearance"))))
+        self.ui.ppm_choice_combo.set_value(self.app.options.get(
+            "tools_copper_thieving_geo_choice", app_defaults.get("tools_copper_thieving_geo_choice", AppDefaults.factory_defaults.get("tools_copper_thieving_geo_choice"))))
 
         # INIT SECTION
         self.handlers_connected = False
@@ -504,10 +526,13 @@ class ToolCopperThieving(AppTool):
             # Update cursor
             curr_pos = self.app.geo_editor.snap(curr_pos[0], curr_pos[1])
 
+            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
             self.app.app_cursor.set_data(np.asarray([(curr_pos[0], curr_pos[1])]),
                                          symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options["global_cursor_width"],
-                                         size=self.app.options["global_cursor_size"])
+                                         edge_width=self.app.options.get(
+                                             "global_cursor_width", app_defaults.get("global_cursor_width", AppDefaults.factory_defaults.get("global_cursor_width"))),
+                                         size=self.app.options.get(
+                                             "global_cursor_size", app_defaults.get("global_cursor_size", AppDefaults.factory_defaults.get("global_cursor_size"))))
 
         if self.cursor_pos is None:
             self.cursor_pos = (0, 0)
@@ -558,12 +583,15 @@ class ToolCopperThieving(AppTool):
 
         self.app.log.debug("Copper Thieving Tool started. Reading parameters.")
         self.app.inform.emit(_("Copper Thieving Tool started. Reading parameters."))
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         ref_selected = self.ui.reference_combo.get_value()
         if c_val is None:
-            c_val = float(self.app.options["tools_copper_thieving_clearance"])
+            c_val = float(self.app.options.get(
+                "tools_copper_thieving_clearance", app_defaults.get("tools_copper_thieving_clearance", AppDefaults.factory_defaults.get("tools_copper_thieving_clearance"))))
         if margin is None:
-            margin = float(self.app.options["tools_copper_thieving_margin"])
+            margin = float(self.app.options.get(
+                "tools_copper_thieving_margin", app_defaults.get("tools_copper_thieving_margin", AppDefaults.factory_defaults.get("tools_copper_thieving_margin"))))
         min_area = self.ui.area_entry.get_value()
 
         fill_type = self.ui.fill_type_combo.get_value()

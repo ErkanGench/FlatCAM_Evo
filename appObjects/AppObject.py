@@ -57,6 +57,14 @@ class AppObject(QtCore.QObject):
         self.object_plotted.connect(self.on_object_plotted)
         self.plots_updated.connect(self.app.on_plots_updated)
 
+    def _app_option(self, key, fallback=None):
+        defaults = getattr(self.app, "defaults", None)
+        if defaults is None:
+            return self.app.options.get(key, fallback)
+
+        factory_defaults = getattr(defaults, "factory_defaults", {})
+        return self.app.options.get(key, defaults.get(key, factory_defaults.get(key, fallback)))
+
     def new_object(self, kind, name, initialize, plot=True, autoselected=True, callback=None,
                    callback_params=None):
         """
@@ -116,7 +124,7 @@ class AppObject(QtCore.QObject):
         # ############################################################################################################
         # adding object PROPERTIES
         # ############################################################################################################
-        obj.units = self.app.options["units"]
+        obj.units = self._app_option("units")
         obj.isHovering = False
         obj.notHovering = True
 
@@ -135,27 +143,27 @@ class AppObject(QtCore.QObject):
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                obj.obj_options[oname] = self.app.options[option]
+                obj.obj_options[oname] = self._app_option(option)
 
         # add some of the FlatCAM Tools related properties
         # it is done like this to preserve some kind of order in the keys
         if kind == 'excellon':
             for option in self.app.options:
                 if option.find('tools_drill_') == 0:
-                    obj.obj_options[option] = self.app.options[option]
+                    obj.obj_options[option] = self._app_option(option)
         if kind == 'gerber':
             for option in self.app.options:
                 if option.find('tools_iso_') == 0:
-                    obj.obj_options[option] = self.app.options[option]
+                    obj.obj_options[option] = self._app_option(option)
 
         # the milling options should be inherited by all manufacturing objects
         if kind in ['excellon', 'gerber', 'geometry', 'cncjob']:
             for option in self.app.options:
                 if option.find('tools_mill_') == 0:
-                    obj.obj_options[option] = self.app.options[option]
+                    obj.obj_options[option] = self._app_option(option)
             for option in self.app.options:
                 if option.find('tools_') == 0:
-                    obj.obj_options[option] = self.app.options[option]
+                    obj.obj_options[option] = self._app_option(option)
         # ############################################################################################################
         # ############################################################################################################
 
@@ -188,9 +196,9 @@ class AppObject(QtCore.QObject):
         # Check units and convert if necessary
         # This condition CAN be true because initialize() can change obj.units
         # ############################################################################################################
-        if self.app.options["units"].upper() != obj.units.upper():
-            self.app.inform.emit('%s: %s' % (_("Converting units to "), self.app.options["units"]))
-            obj.convert_units(self.app.options["units"])
+        if self._app_option("units").upper() != obj.units.upper():
+            self.app.inform.emit('%s: %s' % (_("Converting units to "), self._app_option("units")))
+            obj.convert_units(self._app_option("units"))
             t3 = time.time()
             self.app.log.debug("%f seconds converting units." % (t3 - t2))
 
@@ -306,29 +314,33 @@ class AppObject(QtCore.QObject):
         # ############################################################################################################
         if obj.kind in ['excellon', 'gerber']:
             try:
+                if obj.kind == 'gerber' and "gerber_color_list" not in self.app.options:
+                    self.app.options["gerber_color_list"] = deepcopy(self._app_option("gerber_color_list", []))
+                gerber_color_list = self._app_option("gerber_color_list", [])
+
                 if obj.kind == 'excellon':
-                    if self.app.options["excellon_color"]:
-                        obj.fill_color = self.app.options["excellon_color"][0]
-                        obj.outline_color = self.app.options["excellon_color"][1]
+                    if self._app_option("excellon_color"):
+                        obj.fill_color = self._app_option("excellon_color")[0]
+                        obj.outline_color = self._app_option("excellon_color")[1]
                     else:
-                        obj.fill_color = self.app.options["excellon_plot_fill"]
-                        obj.outline_color = self.app.options["excellon_plot_line"]
+                        obj.fill_color = self._app_option("excellon_plot_fill")
+                        obj.outline_color = self._app_option("excellon_plot_line")
 
                 if obj.kind == 'gerber':
-                    if self.app.options["gerber_store_color_list"] is True:
+                    if self._app_option("gerber_store_color_list") is True:
                         group = self.app.collection.group_items["gerber"]
                         index = group.child_count() - 1
 
                         # when loading a Gerber object always create a color tuple (line color, fill_color, layer_name)
                         # and add it to the self.app.options["gerber_color_list"] from where it will be picked and used
                         try:
-                            colors = self.app.options["gerber_color_list"][index]
+                            colors = gerber_color_list[index]
                         except IndexError:
-                            obj.outline_color = self.app.options["gerber_plot_line"]
-                            obj.fill_color = self.app.options["gerber_plot_fill"]
+                            obj.outline_color = self._app_option("gerber_plot_line")
+                            obj.fill_color = self._app_option("gerber_plot_fill")
                             obj.alpha_level = str(hex(int(obj.fill_color[7:9], 16))[2:])
                             colors = (obj.outline_color, obj.fill_color, '%s_%d' % (_("Layer"), int(index)))
-                            self.app.options["gerber_color_list"].append(colors)
+                            gerber_color_list.append(colors)
 
                         new_line_color = colors[0]
                         new_fill = colors[1]
@@ -337,9 +349,9 @@ class AppObject(QtCore.QObject):
                         obj.fill_color = new_fill
                         obj.alpha_level = new_alpha
                     else:
-                        obj.outline_color = self.app.options["gerber_plot_line"]
-                        obj.fill_color = self.app.options["gerber_plot_fill"]
-                        obj.alpha_level = str(hex(int(self.app.options['gerber_plot_fill'][7:9], 16))[2:])
+                        obj.outline_color = self._app_option("gerber_plot_line")
+                        obj.fill_color = self._app_option("gerber_plot_fill")
+                        obj.alpha_level = str(hex(int(self._app_option('gerber_plot_fill')[7:9], 16))[2:])
             except Exception as e:
                 self.app.log.error("AppObject.new_object() -> setting colors error. %s" % str(e))
 
@@ -360,7 +372,7 @@ class AppObject(QtCore.QObject):
         def plotting_task(t_obj):
             with self.app.proc_container.new('%s ...' % _("Plotting")):
                 if t_obj.kind == 'cncjob':
-                    t_obj.plot(kind=self.app.options["cncjob_plot_kind"])
+                    t_obj.plot(kind=self._app_option("cncjob_plot_kind"))
                 elif t_obj.kind == 'gerber':
                     t_obj.plot(color=t_obj.outline_color, face_color=t_obj.fill_color)
                 else:
@@ -371,8 +383,8 @@ class AppObject(QtCore.QObject):
                 self.app.log.debug(msg)
                 self.object_plotted.emit(t_obj)
 
-                if t_obj.kind == 'gerber' and self.app.options["gerber_buffering"] != 'full' and \
-                        self.app.options["gerber_delayed_buffering"]:
+                if t_obj.kind == 'gerber' and self._app_option("gerber_buffering") != 'full' and \
+                        self._app_option("gerber_delayed_buffering"):
                     t_obj.do_buffer_signal.emit()
 
         # Send to worker
@@ -454,13 +466,13 @@ class AppObject(QtCore.QObject):
             for opt_key, opt_val in app.options.items():
                 if opt_key.find('geometry' + "_") == 0:
                     oname = opt_key[len('geometry') + 1:]
-                    default_data[oname] = app.options[opt_key]
+                    default_data[oname] = self._app_option(opt_key)
                 if opt_key.find('tools_') == 0:
-                    default_data[opt_key] = app.options[opt_key]
+                    default_data[opt_key] = self._app_option(opt_key)
 
             new_obj.tools = {
                 1: {
-                    'tooldia':          float(app.options["tools_mill_tooldia"]),
+                    'tooldia':          float(self._app_option("tools_mill_tooldia")),
                     'offset':           'Path',
                     'offset_value':     0.0,
                     'type':             'Rough',

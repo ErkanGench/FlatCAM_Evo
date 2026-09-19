@@ -37,6 +37,7 @@ from camlib import (
     grace,
     flatten_shapely_geometry,
 )
+from defaults import AppDefaults
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -120,20 +121,30 @@ class PaintGen:
         """
 
         self.app.defaults.report_usage("on_paint_button_click")
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         self.first_click = False
         self.cursor_pos = None
         self.mouse_is_dragging = False
 
-        prog_plot = True if self.app.options.get("tools_paint_plotting") == 'progressive' else False
+        prog_plot = True if self.app.options.get(
+            "tools_paint_plotting",
+            app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
+        ) == 'progressive' else False
         if prog_plot:
             self.temp_shapes.clear(update=True)
 
         self.parent_tool.area_to_paint_list = []
 
         obj_type = self.ui.type_obj_radio.get_value()
-        gerber_circle_steps = int(self.app.options.get("gerber_circle_steps"))
-        geometry_circle_steps = int(self.app.options.get("geometry_circle_steps"))
+        gerber_circle_steps = int(self.app.options.get(
+            "gerber_circle_steps",
+            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))
+        ))
+        geometry_circle_steps = int(self.app.options.get(
+            "geometry_circle_steps",
+            app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get("geometry_circle_steps"))
+        ))
         self.circle_steps = gerber_circle_steps if obj_type == 'gerber' else geometry_circle_steps
         self.obj_name = self.ui.obj_combo.currentText()
 
@@ -219,6 +230,7 @@ class PaintGen:
     ):
 
         p_poly: AppRTreeStorage | None = None
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         if paint_method == 0:   # _("Standard")
             try:
@@ -342,7 +354,13 @@ class PaintGen:
                                 f_o = self.parent_tool.clear_polygon_seed(
                                     elem['solid'],
                                     tooldia=tool_diameter,
-                                    steps_per_circle=self.app.options.get("geometry_circle_steps", 64),
+                                    steps_per_circle=self.app.options.get(
+                                        "geometry_circle_steps",
+                                        app_defaults.get(
+                                            "geometry_circle_steps",
+                                            AppDefaults.factory_defaults.get("geometry_circle_steps", 64)
+                                        )
+                                    ),
                                     overlap=over,
                                     contour=True,
                                     connect=conn,
@@ -354,7 +372,13 @@ class PaintGen:
                                 f_o = self.parent_tool.clear_polygon_lines(
                                     elem['solid'],
                                     tooldia=tool_diameter,
-                                    steps_per_circle=self.app.options.get("geometry_circle_steps", 64),
+                                    steps_per_circle=self.app.options.get(
+                                        "geometry_circle_steps",
+                                        app_defaults.get(
+                                            "geometry_circle_steps",
+                                            AppDefaults.factory_defaults.get("geometry_circle_steps", 64)
+                                        )
+                                    ),
                                     overlap=over,
                                     contour=True,
                                     connect=conn,
@@ -389,7 +413,13 @@ class PaintGen:
                                 line,
                                 aperture_size,
                                 tooldia=tool_diameter,
-                                steps_per_circle=self.app.options.get("geometry_circle_steps", 64),
+                                steps_per_circle=self.app.options.get(
+                                    "geometry_circle_steps",
+                                    app_defaults.get(
+                                        "geometry_circle_steps",
+                                        AppDefaults.factory_defaults.get("geometry_circle_steps", 64)
+                                    )
+                                ),
                                 overlap=over,
                                 contour=cont,
                                 connect=conn,
@@ -563,13 +593,17 @@ class PaintGen:
             job_thread(app_instance=self.app, proc=proc)
 
     def _create_params(self, order, method, rest, outname, tools_storage, run_threaded):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         return Params(
             units=self.app.units,
             tool_ordering=order if order is not None else self.ui.order_combo.get_value(),
             paint_method=method if method is not None else self.ui.method_combo.get_value(),
             rest_machining_choice=rest if rest is not None else self.ui.rest_cb.get_value(),
             simplification_value=0.01,
-            prog_plot=self.app.options.get("tools_paint_plotting") == 'progressive',
+            prog_plot=self.app.options.get(
+                "tools_paint_plotting",
+                app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
+            ) == 'progressive',
             tools_storage=self.paint_tools if tools_storage is None else tools_storage,
             output_object_name=outname if outname is not None else self.obj_name + "_paint",
             run_threaded=run_threaded
@@ -650,7 +684,11 @@ class PaintGen:
         return old_disp_number
 
     def _cleanup_progressive_plotting(self):
-        if self.app.options["tools_paint_plotting"] == 'progressive':
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        if self.app.options.get(
+            "tools_paint_plotting",
+            app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
+        ) == 'progressive':
             self.temp_shapes.clear(update=True)
 
     def _remove_empty_tools(self, tools_storage):
@@ -943,9 +981,13 @@ class PaintGen:
         :return: None
         """
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         if obj.kind == 'gerber':
             # I don't do anything here, like buffering when the Gerber is loaded without buffering????!!!!
-            if self.app.options["gerber_buffering"] == 'no':
+            if self.app.options.get(
+                "gerber_buffering",
+                app_defaults.get("gerber_buffering", AppDefaults.factory_defaults.get("gerber_buffering"))
+            ) == 'no':
                 msg = '%s %s %s' % (_("Paint Plugin."),
                                     _("Normal painting polygon task started."),
                                     _("Buffering geometry..."))
@@ -953,7 +995,10 @@ class PaintGen:
             else:
                 self.app.inform.emit('%s %s' % (_("Paint Plugin."), _("Normal painting polygon task started.")))
 
-            if self.app.options["tools_paint_plotting"] == 'progressive':
+            if self.app.options.get(
+                "tools_paint_plotting",
+                app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
+            ) == 'progressive':
                 if isinstance(obj.solid_geometry, list):
                     obj.solid_geometry = MultiPolygon(obj.solid_geometry).buffer(0)
                 else:
@@ -1048,16 +1093,23 @@ class PaintGen:
 
             return self.flat_geometry
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         if obj.kind == 'gerber':
             # I don't do anything here, like buffering when the Gerber is loaded without buffering????!!!!
-            if self.app.options["gerber_buffering"] == 'no':
+            if self.app.options.get(
+                "gerber_buffering",
+                app_defaults.get("gerber_buffering", AppDefaults.factory_defaults.get("gerber_buffering"))
+            ) == 'no':
                 msg = '%s %s %s' % (_("Paint Plugin."), _("Paint all polygons task started."),
                                     _("Buffering geometry..."))
                 self.app.inform.emit(msg)
             else:
                 self.app.inform.emit('%s %s' % (_("Paint Plugin."), _("Paint all polygons task started.")))
 
-            if self.app.options["tools_paint_plotting"] == 'progressive':
+            if self.app.options.get(
+                "tools_paint_plotting",
+                app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
+            ) == 'progressive':
                 if isinstance(obj.solid_geometry, list):
                     obj.solid_geometry = MultiPolygon(obj.solid_geometry).buffer(0)
                 else:
@@ -1294,13 +1346,18 @@ class PaintGen:
 
             return self.flat_geometry
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+
         # this is where heavy lifting is done and creating the geometry to be painted
         target_geo = unary_union(painted_object.solid_geometry)
 
         p_msg = f'{_("Paint Plugin.")} {_("Painting area task started.")}'
         if painted_object.kind == 'gerber':
             # I don't do anything here, like buffering when the Gerber is loaded without buffering????!!!!
-            if self.app.options["gerber_buffering"] == 'no':
+            if self.app.options.get(
+                "gerber_buffering",
+                app_defaults.get("gerber_buffering", AppDefaults.factory_defaults.get("gerber_buffering"))
+            ) == 'no':
                 msg = '%s %s %s' % (_("Paint Plugin."),
                                     _("Painting area task started."),
                                     _("Buffering geometry..."))
@@ -1309,7 +1366,10 @@ class PaintGen:
                 self.app.inform.emit(p_msg)
 
             if painted_object.kind == 'gerber':
-                if self.app.options.get("tools_paint_plotting") == 'progressive':
+                if self.app.options.get(
+                    "tools_paint_plotting",
+                    app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
+                ) == 'progressive':
                     target_geo = target_geo.buffer(0)
         else:
             self.app.inform.emit(p_msg)

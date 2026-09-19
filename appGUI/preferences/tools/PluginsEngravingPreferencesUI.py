@@ -1,5 +1,6 @@
 
 from PyQt6 import QtWidgets
+from appDatabase import _database_option
 
 from appGUI.preferences.tools.Tools2sidedPrefGroupUI import Tools2sidedPrefGroupUI
 from appGUI.preferences.tools.ToolsLevelPrefGroupUI import ToolsLevelPrefGroupUI
@@ -23,7 +24,7 @@ class PluginsEngravingPreferencesUI(QtWidgets.QWidget):
 
     def __init__(self, app, parent=None):
         QtWidgets.QWidget.__init__(self, parent=parent)
-        if app.defaults['global_gui_layout'] == 0:
+        if _database_option(app, 'global_gui_layout') == 0:
             self.layout = QtWidgets.QHBoxLayout()
         else:
             self.layout = ColumnarFlowLayout()

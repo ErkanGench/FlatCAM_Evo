@@ -73,7 +73,13 @@ class BufferEditorTool(AppToolEditor):
 
     def set_tool_ui(self):
         # Init appGUI
-        self.ui.buffer_distance_entry.set_value(self.draw_app.app.options['gerber_editor_buff_f'])
+        self.ui.buffer_distance_entry.set_value(self.draw_app.app.options.get(
+            'gerber_editor_buff_f',
+            self.draw_app.app.defaults.get(
+                'gerber_editor_buff_f',
+                self.draw_app.app.defaults.factory_defaults.get('gerber_editor_buff_f')
+            )
+        ))
 
     def on_tab_close(self):
         self.draw_app.select_tool("select")

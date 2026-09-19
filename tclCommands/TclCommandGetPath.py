@@ -61,5 +61,5 @@ class TclCommandGetPath(TclCommand):
         """
 
         self.app.shell.append_output("Current default Tcl Shell path is: ")
-        path = self.app.options["global_tcl_path"]
+        path = self._app_option("global_tcl_path")
         return path

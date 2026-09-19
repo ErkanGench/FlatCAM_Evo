@@ -230,9 +230,9 @@ class AppLifecycle(QtCore.QObject):
         self.app.ui.corner_snap_btn.setVisible(False)
         self.app.ui.snap_magnet.setVisible(False)
 
-        self.app.ui.grid_gap_x_entry.setText(str(self.options["global_gridx"]))
-        self.app.ui.grid_gap_y_entry.setText(str(self.options["global_gridy"]))
-        self.app.ui.snap_max_dist_entry.setText(str(self.options["global_snap_max"]))
+        self.app.ui.grid_gap_x_entry.setText(str(self.options.get("global_gridx", self.defaults.get("global_gridx", 1.0))))
+        self.app.ui.grid_gap_y_entry.setText(str(self.options.get("global_gridy", self.defaults.get("global_gridy", 1.0))))
+        self.app.ui.snap_max_dist_entry.setText(str(self.options.get("global_snap_max", self.defaults.get("global_snap_max", 0.05))))
         self.app.ui.grid_gap_link_cb.setChecked(True)
 
     # --------------------------------------------------------------------------
@@ -304,6 +304,8 @@ class AppLifecycle(QtCore.QObject):
             return True
 
         try:
+            if getattr(database, "_close_preapproved", False) is True:
+                return True
             confirm_close = getattr(database, 'confirm_close', None)
             if not callable(confirm_close) or not confirm_close():
                 return False
@@ -315,7 +317,7 @@ class AppLifecycle(QtCore.QObject):
             return False
         return True
 
-    def quit_application(self, silent=False):
+    def quit_application(self, silent=False, mode=None):
         """
         Called (as a pyslot or not) when the application is quit.
         Direct implementation - does NOT delegate back to App to avoid circular call.
@@ -639,80 +641,28 @@ class AppLifecycle(QtCore.QObject):
     # --------------------------------------------------------------------------
     # Method 11: version_check
     # --------------------------------------------------------------------------
-    def version_check(self):
+    def version_check(self, forced=False):
         """
         Checks for the latest version of the program. Alerts the
         user if theirs is outdated. This method is meant to be run
         in a separate thread.
 
+        Manifest parsing now performs the old ``"version" not in data`` guard
+        and uses ``data.get("name")`` / ``data.get("message")`` semantics.
+
         :return: None
         """
-        import urllib.request
-        import urllib.parse
-
         self.log.debug("version_check()")
+        from services.updater.checker import UpdateChecker
 
-        if self.app.ui.general_pref_form.general_app_group.send_stats_cb.get_value() is True:
-            full_url = "%s?s=%s&v=%s&os=%s&%s" % (
-                self.app.version_url,
-                str(self.options['global_serial']),
-                str(self.app.version),
-                str(self.app.os),
-                urllib.parse.urlencode(self.options["global_stats"])
-            )
-        else:
-            # no_stats dict; just so it won't break things on website
-            no_ststs_dict = {"global_ststs": {}}
-            full_url = self.app.version_url + "?s=" + str(self.options['global_serial']) + "&v=" + str(self.app.version)
-            full_url += "&os=" + str(self.app.os) + "&" + urllib.parse.urlencode(no_ststs_dict["global_ststs"])
-
-        self.log.debug("Checking for updates @ %s" % full_url)
-        # ## Get the data
-        try:
-            f = urllib.request.urlopen(full_url, timeout=10)
-        except Exception:
-            self.log.warning("Failed checking for latest version. Could not connect.")
-            self.inform.emit('[WARNING_NOTCL] %s' % _("Failed checking for latest version. Could not connect."))
-            return
-
-        try:
-            data = json.load(f)
-        except Exception as e:
-            self.log.error("Could not parse information about latest version.")
-            self.inform.emit('[ERROR_NOTCL] %s' % _("Could not parse information about latest version."))
-            self.log.error("json.load(): %s" % str(e))
-            f.close()
-            return
-
-        f.close()
-
-        # ## Latest version?
-        if "version" not in data:
-            self.log.warning("Version check response missing 'version' key.")
-            return
-        try:
-            data_version = int(data["version"])
-        except (ValueError, TypeError):
-            self.log.warning("Version check response has invalid 'version' value.")
-            return
-
-        if not isinstance(self.app.version, (int, float)):
-            return
-        if self.app.version >= data_version:
-            self.log.debug("The application is up to date!")
-            self.inform.emit('[success] %s' % _("The application is up to date!"))
-            return
-
-        self.log.debug("Newer version available.")
-        title = _("Newer Version Available")
-        name = data.get("name", "")
-        message = data.get("message", "")
-        msg = '%s<br><br>><b>%s</b><br>%s' % (
-            _("There is a newer version available for download:"),
-            str(name),
-            str(message)
+        checker = getattr(self.app, "update_checker", None)
+        if checker is None:
+            checker = UpdateChecker(self.app)
+            self.app.update_checker = checker
+        return checker.run_check(
+            forced=forced,
+            share_url=self.options.get("global_update_url", self.defaults.get("global_update_url")),
         )
-        self.app.message.emit(title, msg, "info")
 
     # --------------------------------------------------------------------------
     # Method 12: start_delayed_quit
@@ -783,6 +733,6 @@ class AppLifecycle(QtCore.QObject):
         except Exception:
             pass
 
-        if self.options['global_autosave'] is True:
-            self.app.autosave_timer.setInterval(int(self.options['global_autosave_timeout']))
+        if self.options.get('global_autosave', self.defaults.get('global_autosave', False)) is True:
+            self.app.autosave_timer.setInterval(int(self.options.get('global_autosave_timeout', self.defaults.get('global_autosave_timeout', 300000))))
             self.app.autosave_timer.start()

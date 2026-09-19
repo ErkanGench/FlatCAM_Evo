@@ -748,6 +748,11 @@ class PreferencesUIManager(QtCore.QObject):
         # set the colors of the tab text's to default and the color of the first tab is 'green'
         self.ui.on_pref_tabbar_clicked(0)
 
+    def _pref(self, key, source=None):
+        """Safe preference read with factory-default fallback."""
+        storage = self.defaults if source is None else source
+        return storage.get(key, self.defaults.factory_defaults.get(key))
+
     def defaults_read_form(self):
         """
         Will read all the values in the Preferences GUI and update the defaults dictionary.
@@ -793,7 +798,7 @@ class PreferencesUIManager(QtCore.QObject):
         def_dict = self.defaults if defaults_dict is None else defaults_dict
 
         try:
-            value = def_dict[field]
+            value = self._pref(field, def_dict)
             # log.debug("value is " + str(value) + " and factor is "+str(factor))
             if factor is not None and not isinstance(value, str):
                 value *= factor
@@ -852,6 +857,11 @@ class PreferencesUIManager(QtCore.QObject):
         self.ui.pref_apply_button.clicked.connect(lambda: self.on_save_button(save_to_file=False))
         self.ui.pref_close_button.clicked.connect(self.on_pref_close_button)
         self.ui.pref_defaults_button.clicked.connect(self.on_restore_defaults_preferences)
+        prepare_update_files = getattr(self.ui.app, "prepare_update_files", None)
+        if callable(prepare_update_files):
+            self.ui.general_pref_form.general_app_group.prepare_update_files_btn.clicked.connect(
+                prepare_update_files
+            )
 
     def pref_disconnect(self):
         try:
@@ -877,6 +887,11 @@ class PreferencesUIManager(QtCore.QObject):
 
         try:
             self.ui.pref_defaults_button.clicked.disconnect()
+        except Exception:
+            pass
+
+        try:
+            self.ui.general_pref_form.general_app_group.prepare_update_files_btn.clicked.disconnect()
         except Exception:
             pass
 
@@ -1020,98 +1035,98 @@ class PreferencesUIManager(QtCore.QObject):
 
     def __init_color_pickers(self):
         # Init Gerber Plot Colors
-        self.ui.gerber_pref_form.gerber_gen_group.fill_color_entry.set_value(self.defaults['gerber_plot_fill'])
-        self.ui.gerber_pref_form.gerber_gen_group.line_color_entry.set_value(self.defaults['gerber_plot_line'])
+        self.ui.gerber_pref_form.gerber_gen_group.fill_color_entry.set_value(self._pref('gerber_plot_fill'))
+        self.ui.gerber_pref_form.gerber_gen_group.line_color_entry.set_value(self._pref('gerber_plot_line'))
 
         self.ui.gerber_pref_form.gerber_gen_group.gerber_alpha_entry.set_value(
-            int(self.defaults['gerber_plot_fill'][7:9], 16))    # alpha
+            int(self._pref('gerber_plot_fill')[7:9], 16))    # alpha
 
         # Init Excellon Plot Colors
         self.ui.excellon_pref_form.excellon_gen_group.fill_color_entry.set_value(
-            self.defaults['excellon_plot_fill'])
+            self._pref('excellon_plot_fill'))
         self.ui.excellon_pref_form.excellon_gen_group.line_color_entry.set_value(
-            self.defaults['excellon_plot_line'])
+            self._pref('excellon_plot_line'))
 
         self.ui.excellon_pref_form.excellon_gen_group.excellon_alpha_entry.set_value(
-            int(self.defaults['excellon_plot_fill'][7:9], 16))
+            int(self._pref('excellon_plot_fill')[7:9], 16))
 
         # Init Geometry Plot Colors
         self.ui.geo_pref_form.geometry_gen_group.line_color_entry.set_value(
-            self.defaults['geometry_plot_line'])
+            self._pref('geometry_plot_line'))
 
         # Init CNCJob Travel Line Colors
         self.ui.cncjob_pref_form.cncjob_gen_group.tfill_color_entry.set_value(
-            self.defaults['cncjob_travel_fill'])
+            self._pref('cncjob_travel_fill'))
         self.ui.cncjob_pref_form.cncjob_gen_group.tline_color_entry.set_value(
-            self.defaults['cncjob_travel_line'])
+            self._pref('cncjob_travel_line'))
 
         self.ui.cncjob_pref_form.cncjob_gen_group.cncjob_alpha_entry.set_value(
-            int(self.defaults['cncjob_travel_fill'][7:9], 16))      # alpha
+            int(self._pref('cncjob_travel_fill')[7:9], 16))      # alpha
 
         # Init CNCJob Plot Colors
         self.ui.cncjob_pref_form.cncjob_gen_group.fill_color_entry.set_value(
-            self.defaults['cncjob_plot_fill'])
+            self._pref('cncjob_plot_fill'))
 
         self.ui.cncjob_pref_form.cncjob_gen_group.line_color_entry.set_value(
-            self.defaults['cncjob_plot_line'])
+            self._pref('cncjob_plot_line'))
 
         # Init Left-Right Selection colors
-        self.ui.general_pref_form.general_gui_group.sf_color_entry.set_value(self.defaults['global_sel_fill'])
-        self.ui.general_pref_form.general_gui_group.sl_color_entry.set_value(self.defaults['global_sel_line'])
+        self.ui.general_pref_form.general_gui_group.sf_color_entry.set_value(self._pref('global_sel_fill'))
+        self.ui.general_pref_form.general_gui_group.sl_color_entry.set_value(self._pref('global_sel_line'))
 
         self.ui.general_pref_form.general_gui_group.left_right_alpha_entry.set_value(
-            int(self.defaults['global_sel_fill'][7:9], 16))
+            int(self._pref('global_sel_fill')[7:9], 16))
 
         # Init Right-Left Selection colors
         self.ui.general_pref_form.general_gui_group.alt_sf_color_entry.set_value(
-            self.defaults['global_alt_sel_fill'])
+            self._pref('global_alt_sel_fill'))
         self.ui.general_pref_form.general_gui_group.alt_sl_color_entry.set_value(
-            self.defaults['global_alt_sel_line'])
+            self._pref('global_alt_sel_line'))
 
         self.ui.general_pref_form.general_gui_group.right_left_alpha_entry.set_value(
-            int(self.defaults['global_sel_fill'][7:9], 16))
+            int(self._pref('global_sel_fill')[7:9], 16))
 
         # Init Draw color and Selection Draw Color
         self.ui.general_pref_form.general_gui_group.draw_color_entry.set_value(
-            self.defaults['global_draw_color'])
+            self._pref('global_draw_color'))
 
         self.ui.general_pref_form.general_gui_group.sel_draw_color_entry.set_value(
-            self.defaults['global_sel_draw_color'])
+            self._pref('global_sel_draw_color'))
 
         # Init Project Items color - Light Theme
         self.ui.general_pref_form.general_gui_group.proj_color_light_entry.set_value(
-            self.defaults['global_proj_item_color_light'])
+            self._pref('global_proj_item_color_light'))
 
         # Init Project Disabled Items color - Light Theme
         self.ui.general_pref_form.general_gui_group.proj_color_dis_light_entry.set_value(
-            self.defaults['global_proj_item_dis_color_light'])
+            self._pref('global_proj_item_dis_color_light'))
 
         # Init Project Items color - Dark Theme
         self.ui.general_pref_form.general_gui_group.proj_color_dark_entry.set_value(
-            self.defaults['global_proj_item_color_dark'])
+            self._pref('global_proj_item_color_dark'))
 
         # Init Project Disabled Items color - Dark Theme
         self.ui.general_pref_form.general_gui_group.proj_color_dis_dark_entry.set_value(
-            self.defaults['global_proj_item_dis_color_dark'])
+            self._pref('global_proj_item_dis_color_dark'))
 
         # Init Mouse Cursor color
         self.ui.general_pref_form.general_app_set_group.mouse_cursor_entry.set_value(
-            self.defaults['global_cursor_color'])
+            self._pref('global_cursor_color'))
 
         # Init the Annotation CNC Job color
         self.ui.cncjob_pref_form.cncjob_adv_opt_group.annotation_fontcolor_entry.set_value(
-            self.defaults['cncjob_annotation_fontcolor'])
+            self._pref('cncjob_annotation_fontcolor'))
 
         # Init the Tool Film color
         self.ui.plugin_pref_form.tools_film_group.film_color_entry.set_value(
-            self.defaults['tools_film_color'])
+            self._pref('tools_film_color'))
 
         # Init the Tool QRCode colors
         self.ui.plugin2_pref_form.tools2_qrcode_group.fill_color_entry.set_value(
-            self.defaults['tools_qrcode_fill_color'])
+            self._pref('tools_qrcode_fill_color'))
 
         self.ui.plugin2_pref_form.tools2_qrcode_group.back_color_entry.set_value(
-            self.defaults['tools_qrcode_back_color'])
+            self._pref('tools_qrcode_back_color'))
 
     def on_save_button(self, save_to_file=True):
         self.ui.app.log.debug("on_save_button() --> Applying preferences to file.")
@@ -1149,7 +1164,7 @@ class PreferencesUIManager(QtCore.QObject):
         appearance_new_val = self.ui.general_pref_form.general_gui_group.appearance_radio.get_value()
         dark_canvas_new_val = self.ui.general_pref_form.general_gui_group.dark_canvas_cb.get_value()
 
-        ge = self.defaults["global_graphic_engine"]
+        ge = self._pref("global_graphic_engine")
         ge_val = self.ui.general_pref_form.general_app_group.ge_radio.get_value()
 
         if appearance_new_val != appearance or ge != ge_val or dark_canvas_new_val != dark_canvas:
@@ -1205,7 +1220,7 @@ class PreferencesUIManager(QtCore.QObject):
         if save_to_file or should_restart is True:
             self.save_defaults(silent=False)
             # load the defaults so they are updated into the app
-            saved_filename_path = os.path.join(self.data_path, 'current_defaults_%s.FlatConfig' % self.defaults.version)
+            saved_filename_path = os.path.join(self.data_path, 'current_defaults.FlatConfig')
             self.defaults.load(filename=saved_filename_path, inform=self.inform)
 
         settgs = QSettings("Open Source", "FlatCAM_EVO")
@@ -1274,7 +1289,7 @@ class PreferencesUIManager(QtCore.QObject):
         self.defaults.propagate_defaults()
 
         # Save the options to disk
-        filename = os.path.join(data_path, "current_defaults_%s.FlatConfig" % self.defaults.version)
+        filename = os.path.join(data_path, "current_defaults.FlatConfig")
 
         try:
             self.defaults.write(filename=filename)

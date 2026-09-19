@@ -45,7 +45,7 @@ class ExcellonObject(FlatCAMObj, Excellon):
         self.app = app
         self.decimals = self.app.decimals
 
-        self.circle_steps = int(self.app.options["excellon_circle_steps"])
+        self.circle_steps = int(self._app_option("excellon_circle_steps"))
 
         Excellon.__init__(self, excellon_circle_steps=self.circle_steps, app=app)
         FlatCAMObj.__init__(self, name, app)
@@ -101,8 +101,8 @@ class ExcellonObject(FlatCAMObj, Excellon):
         self.multigeo = False
         self.units_found = self.app.app_units
 
-        self.fill_color = self.app.options['excellon_plot_fill']
-        self.outline_color = self.app.options['excellon_plot_line']
+        self.fill_color = self._app_option('excellon_plot_fill')
+        self.outline_color = self._app_option('excellon_plot_line')
         self.alpha_level = 'bf'
 
         # the key is the tool id and the value is a list of shapes keys (indexes)
@@ -194,7 +194,7 @@ class ExcellonObject(FlatCAMObj, Excellon):
         self.init_context_menu()
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self._app_option("global_app_level")
         self.change_level(app_mode)
 
     def set_offset_values(self):
@@ -249,8 +249,8 @@ class ExcellonObject(FlatCAMObj, Excellon):
             self.ui.tools_table.setColumnHidden(4, False)
             self.ui.tools_table.setColumnHidden(5, False)
             self.ui.table_visibility_cb.show()
-            self.ui.table_visibility_cb.set_value(self.app.options["excellon_tools_table_display"])
-            self.on_table_visibility_toggle(state=self.app.options["excellon_tools_table_display"])
+            self.ui.table_visibility_cb.set_value(self._app_option("excellon_tools_table_display"))
+            self.on_table_visibility_toggle(state=self._app_option("excellon_tools_table_display"))
             self.ui.autoload_db_cb.show()
 
             # Context Menu section
@@ -361,8 +361,8 @@ class ExcellonObject(FlatCAMObj, Excellon):
                 h_color = QtGui.QColor(red, green, blue, alpha)
                 self.ui.tools_table.item(self.tool_row, 4).setBackground(h_color)
             else:
-                h1 = self.app.options["excellon_plot_fill"][1:7]
-                h2 = self.app.options["excellon_plot_fill"][7:9]
+                h1 = self._app_option("excellon_plot_fill")[1:7]
+                h2 = self._app_option("excellon_plot_fill")[7:9]
                 h_color = QtGui.QColor('#' + h2 + h1)
                 self.ui.tools_table.item(self.tool_row, 4).setBackground(h_color)
 
@@ -1025,7 +1025,11 @@ class ExcellonObject(FlatCAMObj, Excellon):
 
             geo_obj.obj_options['type'] = 'Excellon Geometry'
             geo_obj.obj_options["tools_mill_tooldia"] = str(tooldia)
-            geo_obj.obj_options["multidepth"] = app_obj.options["tools_mill_multidepth"]
+            geo_obj.obj_options["multidepth"] = app_obj.options.get(
+                "tools_mill_multidepth",
+                app_obj.defaults.get("tools_mill_multidepth",
+                                     app_obj.defaults.factory_defaults.get("tools_mill_multidepth"))
+            )
             geo_obj.solid_geometry = []
 
             # in case that the tool used has the same diameter with the hole, and since the maximum resolution
@@ -1129,7 +1133,11 @@ class ExcellonObject(FlatCAMObj, Excellon):
 
             geo_obj.obj_options['type'] = 'Excellon Geometry'
             geo_obj.obj_options["tools_mill_tooldia"] = str(tooldia)
-            geo_obj.obj_options["tools_mill_multidepth"] = app_obj.options["tools_mill_multidepth"]
+            geo_obj.obj_options["tools_mill_multidepth"] = app_obj.options.get(
+                "tools_mill_multidepth",
+                app_obj.defaults.get("tools_mill_multidepth",
+                                     app_obj.defaults.factory_defaults.get("tools_mill_multidepth"))
+            )
             geo_obj.solid_geometry = []
 
             # in case that the tool used has the same diameter with the hole, and since the maximum resolution

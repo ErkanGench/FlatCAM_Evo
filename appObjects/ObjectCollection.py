@@ -344,7 +344,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.view.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
 
-        if self.app.options["global_allow_edit_in_project_tab"] is True:
+        if self.app.options.get("global_allow_edit_in_project_tab",
+                                self.app.defaults.get("global_allow_edit_in_project_tab",
+                                                      self.app.defaults.factory_defaults.get("global_allow_edit_in_project_tab"))) is True:
             self.view.setEditTriggers(QtWidgets.QTreeView.EditTrigger.SelectedClicked)  # allow Edit on Tree
         else:
             self.view.setEditTriggers(QtWidgets.QTreeView.EditTrigger.NoEditTriggers)
@@ -511,11 +513,27 @@ class ObjectCollection(QtCore.QAbstractItemModel):
             theme = theme_settings.value('theme', type=str)
 
             if theme == 'dark':
-                color = QColor(self.app.options['global_proj_item_color_dark'][:-2])
-                color_disabled = QColor(self.app.options['global_proj_item_dis_color_dark'][:-2])
+                color = QColor(self.app.options.get(
+                    'global_proj_item_color_dark',
+                    self.app.defaults.get('global_proj_item_color_dark',
+                                          self.app.defaults.factory_defaults.get('global_proj_item_color_dark'))
+                )[:-2])
+                color_disabled = QColor(self.app.options.get(
+                    'global_proj_item_dis_color_dark',
+                    self.app.defaults.get('global_proj_item_dis_color_dark',
+                                          self.app.defaults.factory_defaults.get('global_proj_item_dis_color_dark'))
+                )[:-2])
             else:
-                color = QColor(self.app.options['global_proj_item_color_light'][:-2])
-                color_disabled = QColor(self.app.options['global_proj_item_dis_color_light'][:-2])
+                color = QColor(self.app.options.get(
+                    'global_proj_item_color_light',
+                    self.app.defaults.get('global_proj_item_color_light',
+                                          self.app.defaults.factory_defaults.get('global_proj_item_color_light'))
+                )[:-2])
+                color_disabled = QColor(self.app.options.get(
+                    'global_proj_item_dis_color_light',
+                    self.app.defaults.get('global_proj_item_dis_color_light',
+                                          self.app.defaults.factory_defaults.get('global_proj_item_dis_color_light'))
+                )[:-2])
 
             obj = index.internalPointer().obj
             if obj:
@@ -660,7 +678,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.app.object_status_changed.emit(obj, 'append', name)
 
         # decide if to show or hide the Notebook side of the screen
-        if self.app.options["global_project_autohide"] is True:
+        if self.app.options.get("global_project_autohide",
+                                self.app.defaults.get("global_project_autohide",
+                                                      self.app.defaults.factory_defaults.get("global_project_autohide"))) is True:
             # always open the notebook on object added to collection
             self.app.ui.splitter.setSizes([1, 1])
 
@@ -775,7 +795,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.app.should_we_save = True
 
         # decide if to show or hide the Notebook side of the screen
-        if self.app.options["global_project_autohide"] is True:
+        if self.app.options.get("global_project_autohide",
+                                self.app.defaults.get("global_project_autohide",
+                                                      self.app.defaults.factory_defaults.get("global_project_autohide"))) is True:
             # hide the notebook if there are no objects in the collection
             if not self.get_list():
                 self.app.ui.splitter.setSizes([0, 1])
@@ -829,7 +851,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.app.should_we_save = True
 
         # decide if to show or hide the Notebook side of the screen
-        if self.app.options["global_project_autohide"] is True:
+        if self.app.options.get("global_project_autohide",
+                                self.app.defaults.get("global_project_autohide",
+                                                      self.app.defaults.factory_defaults.get("global_project_autohide"))) is True:
             # hide the notebook if there are no objects in the collection
             if not self.get_list():
                 self.app.ui.splitter.setSizes([0, 1])
@@ -1050,7 +1074,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # works only for mouse button 1 (left click)
         if button == Qt.MouseButton.LeftButton:
             # on Gerber object selection it will redrawn on top of the other Gerber objects
-            if self.app.options["gerber_plot_on_select"] is True:
+            if self.app.options.get("gerber_plot_on_select",
+                                    self.app.defaults.get("gerber_plot_on_select",
+                                                          self.app.defaults.factory_defaults.get("gerber_plot_on_select"))) is True:
                 self.app.gerber_redraw()
 
     def on_item_activated(self, index):

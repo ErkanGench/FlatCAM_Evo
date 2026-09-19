@@ -62,6 +62,14 @@ class FlatCAMObj(QtCore.QObject):
     # signal for Properties
     calculations_finished = QtCore.pyqtSignal(float, float, float, float, float, object)
 
+    def _app_option(self, key, fallback=None):
+        defaults = getattr(self.app, "defaults", None)
+        if defaults is None:
+            return self.app.options.get(key, fallback)
+
+        factory_defaults = getattr(defaults, "factory_defaults", {})
+        return self.app.options.get(key, defaults.get(key, factory_defaults.get(key, fallback)))
+
     def __init__(self, name, app):
         """
         Constructor.
@@ -109,8 +117,8 @@ class FlatCAMObj(QtCore.QObject):
         self.deleted = False
 
         try:
-            self._drawing_tolerance = float(self.app.options["global_tolerance"]) if \
-                self.app.options["global_tolerance"] else 0.001
+            self._drawing_tolerance = float(self._app_option("global_tolerance")) if \
+                self._app_option("global_tolerance") else 0.001
         except ValueError:
             self._drawing_tolerance = 0.001
 
@@ -517,7 +525,7 @@ class FlatCAMObj(QtCore.QObject):
         :return:                None
         """
 
-        filters = copy(self.app.options[filter_string])
+        filters = copy(self._app_option(filter_string))
         filter_list = filters.split(';;')
         filter_list_enum_1 = enumerate(filter_list)
 
@@ -555,7 +563,7 @@ class FlatCAMObj(QtCore.QObject):
         font = QtGui.QFont()
         font.setBold(True)
 
-        p_color = QtGui.QColor("#000000") if self.app.options['global_theme'] in ['default', 'light'] \
+        p_color = QtGui.QColor("#000000") if self._app_option('global_theme') in ['default', 'light'] \
             else QtGui.QColor("#FFFFFF")
 
         # main Items categories

@@ -12,6 +12,7 @@ from PyQt6.QtGui import QTextCursor, QPixmap
 from PyQt6.QtWidgets import QVBoxLayout, QWidget, QHBoxLayout
 
 from appGUI.GUIElements import _BrowserTextEdit, _ExpandableTextEdit, FCLabel
+from defaults import AppDefaults
 
 import html
 import sys
@@ -321,7 +322,10 @@ class FCShell(TermWidget):
 
         self.setWindowIcon(app_icon)
         self.setWindowTitle(_("FlatCAM Evo Shell"))
-        self.resize(*self.app.options["global_shell_shape"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.resize(*self.app.options.get(
+            "global_shell_shape", app_defaults.get("global_shell_shape", AppDefaults.factory_defaults.get("global_shell_shape"))
+        ))
         self._append_to_browser('in', "FlatCAM Evo %s - " % version)
         self.append_output('%s\n\n' % _("Type >help< to get started"))
 
@@ -531,7 +535,11 @@ class FCShell(TermWidget):
             if not isinstance(error, self.TclErrorException):
                 show_trace = 1
             else:
-                show_trace = int(self.app.options['global_verbose_error_level'])
+                app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+                show_trace = int(self.app.options.get(
+                    'global_verbose_error_level',
+                    app_defaults.get('global_verbose_error_level', AppDefaults.factory_defaults.get('global_verbose_error_level'))
+                ))
 
             if show_trace > 0:
                 trc = traceback.format_list(traceback.extract_tb(exc_traceback))

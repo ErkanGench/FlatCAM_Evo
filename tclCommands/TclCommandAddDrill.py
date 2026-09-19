@@ -85,10 +85,10 @@ class TclCommandAddDrill(TclCommandSignaled):
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                new_data[oname] = self.app.options[option]
+                new_data[oname] = self._app_option(option)
 
             if option.find('tools_drill_') == 0:
-                new_data[option] = self.app.options[option]
+                new_data[option] = self._app_option(option)
 
         drill_point = Point((drill_x, drill_y))
 

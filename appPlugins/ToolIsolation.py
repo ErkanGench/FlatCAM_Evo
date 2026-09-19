@@ -7,6 +7,7 @@
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
+from defaults import AppDefaults
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCComboBox2, RadioSet, FCDoubleSpinner, FCSpinner, FCInputDialogSpinnerButton, FCTable, \
     OptionalInputSection
@@ -47,7 +48,13 @@ class ToolIsolation(Gerber, AppTool):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Gerber.__init__(self, steps_per_circle=self.app.options["gerber_circle_steps"], app=app)
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        Gerber.__init__(
+            self,
+            steps_per_circle=self.app.options.get(
+                "gerber_circle_steps",
+                app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
+            app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -95,14 +102,18 @@ class ToolIsolation(Gerber, AppTool):
 
         # store here the state of the combine_cb GUI element
         # used when the rest machining is toggled
-        self.old_combine_state = self.app.options["tools_iso_combine_passes"]
+        self.old_combine_state = self.app.options.get(
+            "tools_iso_combine_passes",
+            app_defaults.get("tools_iso_combine_passes", AppDefaults.factory_defaults.get("tools_iso_combine_passes")))
 
         # store here solid_geometry when there are tool with isolation job
         self.solid_geometry = []
 
         self.tool_type_item_options = []
 
-        self.grb_circle_steps = int(self.app.options["gerber_circle_steps"])
+        self.grb_circle_steps = int(self.app.options.get(
+            "gerber_circle_steps",
+            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))))
 
         self.tooldia = None
         # store here the tool diameter that is guaranteed to isolate the object
@@ -278,6 +289,7 @@ class ToolIsolation(Gerber, AppTool):
 
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         self.clear_ui(self.layout)
         self.ui = IsoUI(layout=self.layout, app=self.app)
@@ -315,10 +327,12 @@ class ToolIsolation(Gerber, AppTool):
             self.app.log.debug("ToolIsolation.set_tool_ui() Select Gerber object -> %s" % str(ee))
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
-        if self.app.options["gerber_buffering"] == 'no':
+        if self.app.options.get(
+                "gerber_buffering", app_defaults.get("gerber_buffering", AppDefaults.factory_defaults.get("gerber_buffering"))) == 'no':
             self.ui.create_buffer_button.show()
             try:
                 self.ui.create_buffer_button.clicked.disconnect(self.on_generate_buffer)
@@ -337,27 +351,45 @@ class ToolIsolation(Gerber, AppTool):
         self.on_type_excobj_index_changed(val="gerber")
         self.on_reference_combo_changed()
 
-        self.ui.iso_order_combo.set_value(self.app.options["tools_iso_order"])
-        self.ui.tool_shape_combo.set_value(self.app.options["tools_iso_tool_shape"])
+        self.ui.iso_order_combo.set_value(self.app.options.get(
+            "tools_iso_order", app_defaults.get("tools_iso_order", AppDefaults.factory_defaults.get("tools_iso_order"))))
+        self.ui.tool_shape_combo.set_value(self.app.options.get(
+            "tools_iso_tool_shape", app_defaults.get("tools_iso_tool_shape", AppDefaults.factory_defaults.get("tools_iso_tool_shape"))))
 
-        self.ui.tipdia_entry.set_value(self.app.options["tools_iso_vtipdia"])
-        self.ui.tipangle_entry.set_value(self.app.options["tools_iso_vtipangle"])
-        self.ui.cutz_entry.set_value(self.app.options["tools_iso_cutz"])
+        self.ui.tipdia_entry.set_value(self.app.options.get(
+            "tools_iso_vtipdia", app_defaults.get("tools_iso_vtipdia", AppDefaults.factory_defaults.get("tools_iso_vtipdia"))))
+        self.ui.tipangle_entry.set_value(self.app.options.get(
+            "tools_iso_vtipangle", app_defaults.get("tools_iso_vtipangle", AppDefaults.factory_defaults.get("tools_iso_vtipangle"))))
+        self.ui.cutz_entry.set_value(self.app.options.get(
+            "tools_iso_cutz", app_defaults.get("tools_iso_cutz", AppDefaults.factory_defaults.get("tools_iso_cutz"))))
 
-        self.ui.passes_entry.set_value(self.app.options["tools_iso_passes"])
-        self.ui.pad_passes_entry.set_value(self.app.options["tools_iso_pad_passes"])
-        self.ui.iso_overlap_entry.set_value(self.app.options["tools_iso_overlap"])
-        self.ui.milling_type_radio.set_value(self.app.options["tools_iso_milling_type"])
-        self.ui.combine_passes_cb.set_value(self.app.options["tools_iso_combine_passes"])
-        self.ui.valid_cb.set_value(self.app.options["tools_iso_check_valid"])
-        self.ui.simplify_cb.set_value(self.app.options["tools_iso_simplification"])
-        self.ui.sim_tol_entry.set_value(self.app.options["tools_iso_simplification_tol"])
+        self.ui.passes_entry.set_value(self.app.options.get(
+            "tools_iso_passes", app_defaults.get("tools_iso_passes", AppDefaults.factory_defaults.get("tools_iso_passes"))))
+        self.ui.pad_passes_entry.set_value(self.app.options.get(
+            "tools_iso_pad_passes", app_defaults.get("tools_iso_pad_passes", AppDefaults.factory_defaults.get("tools_iso_pad_passes"))))
+        self.ui.iso_overlap_entry.set_value(self.app.options.get(
+            "tools_iso_overlap", app_defaults.get("tools_iso_overlap", AppDefaults.factory_defaults.get("tools_iso_overlap"))))
+        self.ui.milling_type_radio.set_value(self.app.options.get(
+            "tools_iso_milling_type", app_defaults.get("tools_iso_milling_type", AppDefaults.factory_defaults.get("tools_iso_milling_type"))))
+        self.ui.combine_passes_cb.set_value(self.app.options.get(
+            "tools_iso_combine_passes", app_defaults.get("tools_iso_combine_passes", AppDefaults.factory_defaults.get("tools_iso_combine_passes"))))
+        self.ui.valid_cb.set_value(self.app.options.get(
+            "tools_iso_check_valid", app_defaults.get("tools_iso_check_valid", AppDefaults.factory_defaults.get("tools_iso_check_valid"))))
+        self.ui.simplify_cb.set_value(self.app.options.get(
+            "tools_iso_simplification", app_defaults.get("tools_iso_simplification", AppDefaults.factory_defaults.get("tools_iso_simplification"))))
+        self.ui.sim_tol_entry.set_value(self.app.options.get(
+            "tools_iso_simplification_tol",
+            app_defaults.get("tools_iso_simplification_tol", AppDefaults.factory_defaults.get("tools_iso_simplification_tol"))))
 
-        self.ui.area_shape_radio.set_value(self.app.options["tools_iso_area_shape"])
-        self.ui.poly_int_cb.set_value(self.app.options["tools_iso_poly_ints"])
-        self.ui.forced_rest_iso_cb.set_value(self.app.options["tools_iso_force"])
+        self.ui.area_shape_radio.set_value(self.app.options.get(
+            "tools_iso_area_shape", app_defaults.get("tools_iso_area_shape", AppDefaults.factory_defaults.get("tools_iso_area_shape"))))
+        self.ui.poly_int_cb.set_value(self.app.options.get(
+            "tools_iso_poly_ints", app_defaults.get("tools_iso_poly_ints", AppDefaults.factory_defaults.get("tools_iso_poly_ints"))))
+        self.ui.forced_rest_iso_cb.set_value(self.app.options.get(
+            "tools_iso_force", app_defaults.get("tools_iso_force", AppDefaults.factory_defaults.get("tools_iso_force"))))
 
-        self.ui.new_tooldia_entry.set_value(self.app.options["tools_iso_newdia"])
+        self.ui.new_tooldia_entry.set_value(self.app.options.get(
+            "tools_iso_newdia", app_defaults.get("tools_iso_newdia", AppDefaults.factory_defaults.get("tools_iso_newdia"))))
 
         # loaded_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
         # if loaded_obj:
@@ -371,10 +403,12 @@ class ToolIsolation(Gerber, AppTool):
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                self.default_data[oname] = self.app.options[option]
+                self.default_data[oname] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
             if option.find('tools_') == 0:
-                self.default_data[option] = self.app.options[option]
+                self.default_data[option] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
         # transfer some Isolation Plugin values to the Milling Plugin; that works only for adding a default tool
         self.default_data['tools_mill_cutz'] = deepcopy(self.default_data['tools_iso_cutz'])
@@ -419,12 +453,15 @@ class ToolIsolation(Gerber, AppTool):
         # })
 
         try:
-            dias = [float(self.app.options["tools_iso_tooldia"])]
+            dias = [float(self.app.options.get(
+                "tools_iso_tooldia", app_defaults.get("tools_iso_tooldia", AppDefaults.factory_defaults.get("tools_iso_tooldia"))))]
         except (ValueError, TypeError):
-            if isinstance(self.app.options["tools_iso_tooldia"], str):
-                dias = [float(eval(dia)) for dia in self.app.options["tools_iso_tooldia"].split(",") if dia != '']
+            tool_dia_option = self.app.options.get(
+                "tools_iso_tooldia", app_defaults.get("tools_iso_tooldia", AppDefaults.factory_defaults.get("tools_iso_tooldia")))
+            if isinstance(tool_dia_option, str):
+                dias = [float(eval(dia)) for dia in tool_dia_option.split(",") if dia != '']
             else:
-                dias = self.app.options["tools_iso_tooldia"]
+                dias = tool_dia_option
 
         if not dias:
             self.app.log.error(
@@ -444,7 +481,8 @@ class ToolIsolation(Gerber, AppTool):
         self.cursor_pos = None
         self.mouse_is_dragging = False
 
-        prog_plot = True if self.app.options["tools_iso_plotting"] == 'progressive' else False
+        prog_plot = True if self.app.options.get(
+            "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting"))) == 'progressive' else False
         if prog_plot:
             self.temp_shapes.clear(update=True)
 
@@ -452,7 +490,8 @@ class ToolIsolation(Gerber, AppTool):
 
         self.tool_type_item_options = ["C1", "C2", "C3", "C4", "B", "V", "L"]
 
-        self.on_rest_machining_check(state=self.app.options["tools_iso_rest"])
+        self.on_rest_machining_check(state=self.app.options.get(
+            "tools_iso_rest", app_defaults.get("tools_iso_rest", AppDefaults.factory_defaults.get("tools_iso_rest"))))
 
         self.ui.tools_table.drag_drop_sig.connect(self.rebuild_ui)
 
@@ -471,6 +510,8 @@ class ToolIsolation(Gerber, AppTool):
         self.on_level_changed(self.ui.level.isChecked())
 
     def on_level_changed(self, checked):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+
         if not checked:
             self.ui.level.setText('%s' % _('Beginner'))
             self.ui.level.setStyleSheet("""
@@ -541,30 +582,35 @@ class ToolIsolation(Gerber, AppTool):
             self.ui.add_tool_frame.show()
 
             # Tool parameters section
-            app_defaults = self.app.options
             if self.iso_tools:
                 for tool in self.iso_tools:
                     tool_data = self.iso_tools[tool]['data']
-                    tool_data['tools_iso_isotype'] = app_defaults['tools_iso_isotype']
-                    tool_data['tools_iso_rest'] = app_defaults['tools_iso_rest']
-                    tool_data['tools_iso_isoexcept'] = app_defaults['tools_iso_isoexcept']
+                    tool_data['tools_iso_isotype'] = self.app.options.get(
+                        "tools_iso_isotype", app_defaults.get("tools_iso_isotype", AppDefaults.factory_defaults.get("tools_iso_isotype")))
+                    tool_data['tools_iso_rest'] = self.app.options.get(
+                        "tools_iso_rest", app_defaults.get("tools_iso_rest", AppDefaults.factory_defaults.get("tools_iso_rest")))
+                    tool_data['tools_iso_isoexcept'] = self.app.options.get(
+                        "tools_iso_isoexcept", app_defaults.get("tools_iso_isoexcept", AppDefaults.factory_defaults.get("tools_iso_isoexcept")))
 
             self.ui.milling_type_label.show()
             self.ui.milling_type_radio.show()
 
             self.ui.iso_type_label.show()
-            self.ui.iso_type_radio.set_value(app_defaults['tools_iso_isotype'])
+            self.ui.iso_type_radio.set_value(self.app.options.get(
+                "tools_iso_isotype", app_defaults.get("tools_iso_isotype", AppDefaults.factory_defaults.get("tools_iso_isotype"))))
             self.ui.iso_type_radio.show()
 
             # All param section
             self.ui.apply_param_to_all.show()
 
             # Common Parameters
-            self.ui.rest_cb.set_value(app_defaults['tools_iso_rest'])
+            self.ui.rest_cb.set_value(self.app.options.get(
+                "tools_iso_rest", app_defaults.get("tools_iso_rest", AppDefaults.factory_defaults.get("tools_iso_rest"))))
             self.ui.rest_cb.show()
             self.ui.forced_rest_iso_cb.show()
 
-            self.ui.except_cb.set_value(app_defaults['tools_iso_isoexcept'])
+            self.ui.except_cb.set_value(self.app.options.get(
+                "tools_iso_isoexcept", app_defaults.get("tools_iso_isoexcept", AppDefaults.factory_defaults.get("tools_iso_isoexcept"))))
             self.ui.except_cb.show()
 
             self.ui.type_excobj_radio.show()
@@ -1753,6 +1799,7 @@ class ToolIsolation(Gerber, AppTool):
         :type plot:             bool
         :return: None
         """
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         # use_combine: True/False
         use_combine = args['combine'] if 'combine' in args else self.ui.combine_passes_cb.get_value()
@@ -1802,7 +1849,8 @@ class ToolIsolation(Gerber, AppTool):
                                      simp_en=use_simplification, simp_tol=simplification_tol, plot=plot)
 
         else:
-            prog_plot = self.app.options["tools_iso_plotting"]
+            prog_plot = self.app.options.get(
+                "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting")))
 
             for tool in sel_tools:
                 tool_data = tools_storage[tool]['data']
@@ -1873,7 +1921,10 @@ class ToolIsolation(Gerber, AppTool):
                                 if negative_dia:
                                     iso_offset = -iso_offset
                                 pad_pass_geo.append(
-                                    geo.buffer(iso_offset, int(self.app.options["gerber_circle_steps"])))
+                                    geo.buffer(iso_offset, int(self.app.options.get(
+                                        "gerber_circle_steps",
+                                        app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps")))))
+                                    )
                             pad_geo.append(unary_union(pad_pass_geo).difference(solid_geo_union))
 
                     total_geo = []
@@ -1986,6 +2037,7 @@ class ToolIsolation(Gerber, AppTool):
         """
 
         self.app.log.debug("ToolIsolation.combine_rest()")
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         total_solid_geometry = []
 
@@ -2024,7 +2076,8 @@ class ToolIsolation(Gerber, AppTool):
             pass
 
         # decide to use "progressive" or "normal" plotting
-        prog_plot = self.app.options["tools_iso_plotting"]
+        prog_plot = self.app.options.get(
+            "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting")))
 
         for sorted_tool in sorted_tools:
             for tool in tools_storage:
@@ -2102,7 +2155,8 @@ class ToolIsolation(Gerber, AppTool):
             total_solid_geometry = flatten_shapely_geometry(total_solid_geometry)
 
         # clean the progressive plotted shapes if it was used
-        if plot and self.app.options["tools_iso_plotting"] == 'progressive':
+        if plot and self.app.options.get(
+                "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting"))) == 'progressive':
             self.temp_shapes.clear(update=True)
 
         # remove tools without geometry
@@ -2208,13 +2262,15 @@ class ToolIsolation(Gerber, AppTool):
         :rtype:
         """
         self.app.log.debug("ToolIsolation.combined_normal()")
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         total_solid_geometry = []
 
         iso_name = iso_obj.obj_options["name"] + '_iso_combined'
         geometry = iso2geo
         if prog_plot is None:
-            prog_plot = self.app.options["tools_iso_plotting"]
+            prog_plot = self.app.options.get(
+                "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting")))
 
         for tool in sel_tools:
             tool_dia = tools_storage[tool]['tooldia']
@@ -2289,7 +2345,10 @@ class ToolIsolation(Gerber, AppTool):
                         iso_offset = tool_dia * ((2 * nr_pass + 1) / 2.0000001) - (nr_pass * overlap * tool_dia)
                         if negative_dia:
                             iso_offset = -iso_offset
-                        pad_pass_geo.append(geo.buffer(iso_offset, int(self.app.options["gerber_circle_steps"])))
+                        pad_pass_geo.append(geo.buffer(iso_offset, int(self.app.options.get(
+                            "gerber_circle_steps",
+                            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps")))))
+                        )
                     pad_geo.append(unary_union(pad_pass_geo).difference(solid_geo_union))
 
             solid_geo += pad_geo
@@ -2446,6 +2505,8 @@ class ToolIsolation(Gerber, AppTool):
         return new_geometry
 
     def on_poly_mouse_click_release(self, event):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+
         if self.app.use_3d_engine:
             event_pos = event.pos
             right_button = 2
@@ -2484,8 +2545,12 @@ class ToolIsolation(Gerber, AppTool):
             elif clicked_poly:
                 if clicked_poly not in self.poly_dict.values():
                     shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0, shape=clicked_poly,
-                                                        color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                        face_color=self.app.options['global_sel_draw_color'] + 'AF',
+                                                        color=self.app.options.get(
+                                                            'global_sel_draw_color',
+                                                            app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                        face_color=self.app.options.get(
+                                                            'global_sel_draw_color',
+                                                            app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                         visible=True)
                     self.poly_dict[shape_id] = clicked_poly
                     self.app.inform.emit(
@@ -2555,6 +2620,7 @@ class ToolIsolation(Gerber, AppTool):
 
     def on_select_all_polygons(self):
         self.app.log.debug("ToolIsolation.on_select_all_polygons()")
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         self.obj_name = self.ui.object_combo.currentText()
 
@@ -2572,15 +2638,23 @@ class ToolIsolation(Gerber, AppTool):
         try:
             for poly in self.grb_obj.solid_geometry:
                 shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0, shape=poly,
-                                                    color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                    face_color=self.app.options['global_sel_draw_color'] + 'AF',
+                                                    color=self.app.options.get(
+                                                        'global_sel_draw_color',
+                                                        app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                    face_color=self.app.options.get(
+                                                        'global_sel_draw_color',
+                                                        app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                     visible=True)
                 self.poly_dict[shape_id] = poly
         except TypeError:
             poly = self.grb_obj.solid_geometry
             shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0, shape=poly,
-                                                color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                face_color=self.app.options['global_sel_draw_color'] + 'AF',
+                                                color=self.app.options.get(
+                                                    'global_sel_draw_color',
+                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                face_color=self.app.options.get(
+                                                    'global_sel_draw_color',
+                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                 visible=True)
             self.poly_dict[shape_id] = poly
 
@@ -2599,6 +2673,7 @@ class ToolIsolation(Gerber, AppTool):
         :param sel_type: if True it's a left to right selection (enclosure), if False it's a 'touch' selection
         :return:
         """
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         poly_selection = Polygon([start_pos, (end_pos[0], start_pos[1]), end_pos, (start_pos[0], end_pos[1])])
 
         # delete previous selection shape
@@ -2612,9 +2687,12 @@ class ToolIsolation(Gerber, AppTool):
                         if geo.within(poly_selection):
                             shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
                                                                 shape=geo,
-                                                                color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                                face_color=self.app.options[
-                                                                               'global_sel_draw_color'] + 'AF',
+                                                                color=self.app.options.get(
+                                                                    'global_sel_draw_color',
+                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                                face_color=self.app.options.get(
+                                                                    'global_sel_draw_color',
+                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                                 visible=True)
                             self.poly_dict[shape_id] = geo
                             added_poly_count += 1
@@ -2622,9 +2700,12 @@ class ToolIsolation(Gerber, AppTool):
                         if poly_selection.intersects(geo):
                             shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
                                                                 shape=geo,
-                                                                color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                                face_color=self.app.options[
-                                                                               'global_sel_draw_color'] + 'AF',
+                                                                color=self.app.options.get(
+                                                                    'global_sel_draw_color',
+                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                                face_color=self.app.options.get(
+                                                                    'global_sel_draw_color',
+                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                                 visible=True)
                             self.poly_dict[shape_id] = geo
                             added_poly_count += 1
@@ -2634,9 +2715,12 @@ class ToolIsolation(Gerber, AppTool):
                     if poly_selection.contains(self.solid_geometry):
                         shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
                                                             shape=self.solid_geometry,
-                                                            color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                            face_color=self.app.options[
-                                                                           'global_sel_draw_color'] + 'AF',
+                                                            color=self.app.options.get(
+                                                                'global_sel_draw_color',
+                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                            face_color=self.app.options.get(
+                                                                'global_sel_draw_color',
+                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                             visible=True)
                         self.poly_dict[shape_id] = self.solid_geometry
                         added_poly_count += 1
@@ -2644,9 +2728,12 @@ class ToolIsolation(Gerber, AppTool):
                     if poly_selection.intersects(self.solid_geometry):
                         shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
                                                             shape=self.solid_geometry,
-                                                            color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                            face_color=self.app.options[
-                                                                           'global_sel_draw_color'] + 'AF',
+                                                            color=self.app.options.get(
+                                                                'global_sel_draw_color',
+                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                            face_color=self.app.options.get(
+                                                                'global_sel_draw_color',
+                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                             visible=True)
                         self.poly_dict[shape_id] = self.solid_geometry
                         added_poly_count += 1
@@ -2791,6 +2878,7 @@ class ToolIsolation(Gerber, AppTool):
     # called on mouse move
     def on_mouse_move(self, event):
         shape_type = self.ui.area_shape_radio.get_value()
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         if self.app.use_3d_engine:
             event_pos = event.pos
@@ -2814,8 +2902,12 @@ class ToolIsolation(Gerber, AppTool):
 
             self.app.app_cursor.set_data(np.asarray([(curr_pos[0], curr_pos[1])]),
                                          symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options["global_cursor_width"],
-                                         size=self.app.options["global_cursor_size"])
+                                         edge_width=self.app.options.get(
+                                             "global_cursor_width",
+                                             app_defaults.get("global_cursor_width", AppDefaults.factory_defaults.get("global_cursor_width"))),
+                                         size=self.app.options.get(
+                                             "global_cursor_size",
+                                             app_defaults.get("global_cursor_size", AppDefaults.factory_defaults.get("global_cursor_size"))))
 
         if self.cursor_pos is None:
             self.cursor_pos = (0, 0)
@@ -3532,7 +3624,10 @@ class IsoUI:
         self.tool_shape_combo.setObjectName('i_tool_shape')
         self.tool_shape_combo.addItems(["C1", "C2", "C3", "C4", "B", "V", "L"])
 
-        idx = int(self.app.options['tools_iso_tool_shape'])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        idx = int(self.app.options.get(
+            'tools_iso_tool_shape',
+            app_defaults.get('tools_iso_tool_shape', AppDefaults.factory_defaults.get('tools_iso_tool_shape'))))
         # protection against having this translated or loading a project with translated values
         if idx == -1:
             self.tool_shape_combo.setCurrentIndex(0)

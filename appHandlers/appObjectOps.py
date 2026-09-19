@@ -149,7 +149,7 @@ class AppObjectOps(QtCore.QObject):
                 from appGUI.GUIElements import FCInputDoubleSpinner
                 rotatebox = FCInputDoubleSpinner(title=_("Transform"), text=_("Enter the Angle value:"),
                                                  min=-360, max=360, decimals=4,
-                                                 init_val=float(self.options['tools_transform_rotate']),
+                                                 init_val=float(self.options.get('tools_transform_rotate', self.defaults.get('tools_transform_rotate', 90))),
                                                  parent=self.ui)
                 rotatebox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/rotate.png'))
                 num, ok = rotatebox.get_value()
@@ -202,7 +202,7 @@ class AppObjectOps(QtCore.QObject):
             from appGUI.GUIElements import FCInputDoubleSpinner
             skewxbox = FCInputDoubleSpinner(title=_("Transform"), text=_("Enter the Angle value:"),
                                             min=-360, max=360, decimals=4,
-                                            init_val=float(self.options['tools_transform_skew_x']),
+                                            init_val=float(self.options.get('tools_transform_skew_x', self.defaults.get('tools_transform_skew_x', 0.0))),
                                             parent=self.ui)
             skewxbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/skewX.png'))
             num, ok = skewxbox.get_value()
@@ -248,7 +248,7 @@ class AppObjectOps(QtCore.QObject):
             from appGUI.GUIElements import FCInputDoubleSpinner
             skewybox = FCInputDoubleSpinner(title=_("Transform"), text=_("Enter the Angle value:"),
                                             min=-360, max=360, decimals=4,
-                                            init_val=float(self.options['tools_transform_skew_y']),
+                                            init_val=float(self.options.get('tools_transform_skew_y', self.defaults.get('tools_transform_skew_y', 0.0))),
                                             parent=self.ui)
             skewybox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/skewY.png'))
             num, ok = skewybox.get_value()
@@ -512,7 +512,7 @@ class AppObjectOps(QtCore.QObject):
                                      label=_("Enter the coordinates in format X,Y:"),
                                      icon=QtGui.QIcon(self.app.resource_location + '/jump_to32.png'),
                                      initial_text=dia_box_location,
-                                     reference=self.options['global_jump_ref'],
+                                     reference=self.options.get('global_jump_ref', self.defaults.get('global_jump_ref', 'abs')),
                                      parent=self.ui)
 
             if dia_box.ok is True:
@@ -566,7 +566,7 @@ class AppObjectOps(QtCore.QObject):
             )
             cursor.setPos(j_pos[0], j_pos[1])
             self.app.plotcanvas.mouse = [location[0], location[1]]
-            if self.options["global_cursor_color_enabled"] is True:
+            if self.options.get("global_cursor_color_enabled", self.defaults.get("global_cursor_color_enabled", True)) is True:
                 self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1], color=self.app.cursor_color_3D)
             else:
                 self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1])
@@ -575,8 +575,8 @@ class AppObjectOps(QtCore.QObject):
             # Update cursor
             self.app.app_cursor.set_data(np.asarray([(location[0], location[1])]),
                                      symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                     edge_width=self.options["global_cursor_width"],
-                                     size=self.options["global_cursor_size"])
+                                     edge_width=self.options.get("global_cursor_width", self.defaults.get("global_cursor_width", 2)),
+                                     size=self.options.get("global_cursor_size", self.defaults.get("global_cursor_size", 20)))
 
         # Set the relative position label
         self.app.dx = location[0] - float(self.app.rel_point1[0])
@@ -614,7 +614,7 @@ class AppObjectOps(QtCore.QObject):
         dia_box = DialogBoxChoice(title=_("Locate ..."),
                                   icon=QtGui.QIcon(self.app.resource_location + '/locate16.png'),
                                   choices=choices,
-                                  default_choice=self.options['global_locate_pt'],
+                                  default_choice=self.options.get('global_locate_pt', self.defaults.get('global_locate_pt', 'bl')),
                                   parent=self.ui)
 
         if dia_box.ok is True:
@@ -672,7 +672,7 @@ class AppObjectOps(QtCore.QObject):
             )
             cursor.setPos(j_pos[0], j_pos[1])
             self.app.plotcanvas.mouse = [location[0], location[1]]
-            if self.options["global_cursor_color_enabled"] is True:
+            if self.options.get("global_cursor_color_enabled", self.defaults.get("global_cursor_color_enabled", True)) is True:
                 self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1], color=self.app.cursor_color_3D)
             else:
                 self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1])
@@ -681,8 +681,8 @@ class AppObjectOps(QtCore.QObject):
             # Update cursor
             self.app.app_cursor.set_data(np.asarray([(location[0], location[1])]),
                                      symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                     edge_width=self.options["global_cursor_width"],
-                                     size=self.options["global_cursor_size"])
+                                     edge_width=self.options.get("global_cursor_width", self.defaults.get("global_cursor_width", 2)),
+                                     size=self.options.get("global_cursor_size", self.defaults.get("global_cursor_size", 20)))
 
         # Set the relative position label
         self.app.dx = location[0] - float(self.app.rel_point1[0])
@@ -745,7 +745,7 @@ class AppObjectOps(QtCore.QObject):
                                      label=_("Enter the coordinates in format X,Y:"),
                                      icon=QtGui.QIcon(self.app.resource_location + '/move32_bis.png'),
                                      initial_text=dia_box_location,
-                                     reference=self.options['global_move_ref'],
+                                     reference=self.options.get('global_move_ref', self.defaults.get('global_move_ref', 'abs')),
                                      parent=self.ui)
 
             if dia_box.ok is True:
@@ -941,7 +941,7 @@ class AppObjectOps(QtCore.QObject):
         bt_ok = None
 
         if self.app.call_source == 'app':
-            if self.options["global_delete_confirmation"] is True and force_deletion is False:
+            if self.options.get("global_delete_confirmation", self.defaults.get("global_delete_confirmation", True)) is True and force_deletion is False:
                 from appGUI.GUIElements import FCMessageBox
                 msgbox = FCMessageBox(parent=self.ui)
                 title = _("Delete objects")
@@ -960,7 +960,7 @@ class AppObjectOps(QtCore.QObject):
                 msgbox.exec()
                 response = msgbox.clickedButton()
 
-            if self.options["global_delete_confirmation"] is False or force_deletion is True:
+            if self.options.get("global_delete_confirmation", self.defaults.get("global_delete_confirmation", True)) is False or force_deletion is True:
                 response = bt_ok
 
             if response == bt_ok:
@@ -1047,7 +1047,7 @@ class AppObjectOps(QtCore.QObject):
             self.app.collection.set_active(name)
             curr_sel_obj = self.app.collection.get_by_name(name)
             # create the selection box around the selected object
-            if self.options['global_selection_shape'] is True:
+            if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)) is True:
                 try:
                     self.app.draw_selection_shape(curr_sel_obj)
                 except Exception as gerr:

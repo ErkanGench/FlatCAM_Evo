@@ -3,6 +3,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from appObjects.ObjectCollection import CNCJobObject
 from appGUI.GUIElements import FCInputDialogSlider
 from appCommon.Common import color_variant
+from copy import deepcopy
 import builtins
 import gettext
 
@@ -29,6 +30,16 @@ class AppPlotManager(QtCore.QObject):
         self.defaults = app.defaults
         self.proc_container = app.proc_container
         self.use_3d_engine = app.use_3d_engine
+
+    def _get_gerber_color_list(self):
+        color_list = self.options.get(
+            "gerber_color_list",
+            self.defaults.get("gerber_color_list")
+        )
+        if "gerber_color_list" not in self.options:
+            color_list = deepcopy(color_list)
+            self.options["gerber_color_list"] = color_list
+        return color_list
 
     def on_plots_updated(self):
         """
@@ -142,7 +153,7 @@ class AppPlotManager(QtCore.QObject):
                 for plot_obj in objs:
                     # obj.obj_options['plot'] = True
                     if isinstance(plot_obj, CNCJobObject):
-                        plot_obj.plot(visible=True, kind=self.options["cncjob_plot_kind"])
+                        plot_obj.plot(visible=True, kind=self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind")))
                     else:
                         plot_obj.plot(visible=True)
 
@@ -197,7 +208,7 @@ class AppPlotManager(QtCore.QObject):
                 for plot_obj in objs:
                     # obj.obj_options['plot'] = True
                     if isinstance(plot_obj, CNCJobObject):
-                        plot_obj.plot(visible=False, kind=self.options["cncjob_plot_kind"])
+                        plot_obj.plot(visible=False, kind=self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind")))
                     else:
                         plot_obj.plot(visible=False)
 
@@ -286,8 +297,8 @@ class AppPlotManager(QtCore.QObject):
                         try:
                             dia = obj.ui.tooldia_entry.get_value()
                         except AttributeError:
-                            dia = self.options["cncjob_tooldia"]
-                        obj.plot(kind=self.options["cncjob_plot_kind"], dia=dia)
+                            dia = self.options.get("cncjob_tooldia", self.defaults.get("cncjob_tooldia"))
+                        obj.plot(kind=self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind")), dia=dia)
                     else:
                         obj.plot()
                     if fit_view is True:
@@ -306,8 +317,8 @@ class AppPlotManager(QtCore.QObject):
         :return:
         """
 
-        new_color = self.options['gerber_plot_fill']
-        new_line_color = self.options['gerber_plot_line']
+        new_color = self.options.get('gerber_plot_fill', self.defaults.get('gerber_plot_fill'))
+        new_line_color = self.options.get('gerber_plot_line', self.defaults.get('gerber_plot_line'))
 
         clicked_action = self.sender()
 
@@ -325,9 +336,9 @@ class AppPlotManager(QtCore.QObject):
                 alpha_level = sel_obj.alpha_level
             else:
                 if sel_obj.kind == 'excellon':
-                    alpha_level = str(hex(int(self.options['excellon_plot_fill'][7:9], 16))[2:])
+                    alpha_level = str(hex(int(self.options.get('excellon_plot_fill', self.defaults.get('excellon_plot_fill'))[7:9], 16))[2:])
                 elif sel_obj.kind == 'gerber':
-                    alpha_level = str(hex(int(self.options['gerber_plot_fill'][7:9], 16))[2:])
+                    alpha_level = str(hex(int(self.options.get('gerber_plot_fill', self.defaults.get('gerber_plot_fill'))[7:9], 16))[2:])
                 elif sel_obj.kind == 'geometry':
                     alpha_level = 'FF'
                 else:
@@ -359,7 +370,7 @@ class AppPlotManager(QtCore.QObject):
 
         # selection of a custom color will open a QColor dialog
         if act_name == _('Custom'):
-            new_color = QtGui.QColor(self.options['gerber_plot_fill'][:7])
+            new_color = QtGui.QColor(self.options.get('gerber_plot_fill', self.defaults.get('gerber_plot_fill'))[:7])
             c_dialog = QtWidgets.QColorDialog()
             plot_fill_color = c_dialog.getColor(initial=new_color)
 
@@ -372,14 +383,14 @@ class AppPlotManager(QtCore.QObject):
         if act_name == _("Default"):
             for sel_obj in sel_obj_list:
                 if sel_obj.kind == 'excellon':
-                    new_color = self.options['excellon_plot_fill']
-                    new_line_color = self.options['excellon_plot_line']
+                    new_color = self.options.get('excellon_plot_fill', self.defaults.get('excellon_plot_fill'))
+                    new_line_color = self.options.get('excellon_plot_line', self.defaults.get('excellon_plot_line'))
                 elif sel_obj.kind == 'gerber':
-                    new_color = self.options['gerber_plot_fill']
-                    new_line_color = self.options['gerber_plot_line']
+                    new_color = self.options.get('gerber_plot_fill', self.defaults.get('gerber_plot_fill'))
+                    new_line_color = self.options.get('gerber_plot_line', self.defaults.get('gerber_plot_line'))
                 elif sel_obj.kind == 'geometry':
-                    new_color = self.options['geometry_plot_line']
-                    new_line_color = self.options['geometry_plot_line']
+                    new_color = self.options.get('geometry_plot_line', self.defaults.get('geometry_plot_line'))
+                    new_line_color = self.options.get('geometry_plot_line', self.defaults.get('geometry_plot_line'))
                 else:
                     self.log.debug(
                         "App.on_set_color_action_triggered() --> Default color for this object type not supported yet")
@@ -423,7 +434,7 @@ class AppPlotManager(QtCore.QObject):
                         idx = item_index.row()
                         new_c = (new_line_color, new_color, '%s_%d' % (_("Layer"), int(idx + 1)))
                         try:
-                            self.options["gerber_color_list"][idx] = new_c
+                            self._get_gerber_color_list()[idx] = new_c
                         except Exception as err_msg:
                             self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
                             self.log.error(str(err_msg))
@@ -471,17 +482,18 @@ class AppPlotManager(QtCore.QObject):
                 item_index = self.collection.index(item.row(), 0, group_gerber_index)
                 idx = item_index.row()
                 new_c = (outline_color, fill_color, '%s_%d' % (_("Layer"), int(idx + 1)))
+                gerber_color_list = self._get_gerber_color_list()
                 try:
-                    self.options["gerber_color_list"][idx] = new_c
+                    gerber_color_list[idx] = new_c
                 except IndexError:
-                    for x in range(len(self.options["gerber_color_list"]), len(all_gerber_list)):
-                        self.options["gerber_color_list"].append(
+                    for x in range(len(gerber_color_list), len(all_gerber_list)):
+                        gerber_color_list.append(
                             (
-                                self.options["gerber_plot_fill"],  # content color
-                                self.options["gerber_plot_line"],  # outline color
+                                self.options.get('gerber_plot_fill', self.defaults.get('gerber_plot_fill')),  # content color
+                                self.options.get('gerber_plot_line', self.defaults.get('gerber_plot_line')),  # outline color
                                 '%s_%d' % (_("Layer"), int(idx + 1)))  # layer name
                         )
-                    self.options["gerber_color_list"][idx] = new_c
+                    gerber_color_list[idx] = new_c
             elif sel_obj.kind == 'excellon':
                 new_c = (outline_color, fill_color)
                 self.options["excellon_color"] = new_c

@@ -40,6 +40,7 @@ import builtins
 
 from appParsers.ParseGerber import Gerber
 from appDatabase import load_tools_database
+from defaults import AppDefaults
 from camlib import (
     Geometry,
     flatten_shapely_geometry,
@@ -57,7 +58,10 @@ class ToolPaint(Gerber, AppTool):
     def __init__(self, app):
         self.app = app
         self.decimals = self.app.decimals
-        self.circle_steps = int(self.app.options.get("geometry_circle_steps", 64))
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.circle_steps = int(self.app.options.get(
+            "geometry_circle_steps",
+            app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get("geometry_circle_steps"))))
 
         AppTool.__init__(self, app)
         Geometry.__init__(self, geo_steps_per_circle=self.circle_steps, app=app)
@@ -333,6 +337,7 @@ class ToolPaint(Gerber, AppTool):
         self.app.cleanup.connect(self.set_tool_ui)
 
     def set_tool_ui(self):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         self.clear_ui(self.layout)
         self.ui = PaintUI(layout=self.layout, app=self.app)
         self.pluginName = self.ui.pluginName
@@ -364,10 +369,12 @@ class ToolPaint(Gerber, AppTool):
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                self.default_data[oname] = self.app.options[option]
+                self.default_data[oname] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
             if option.find('tools_') == 0:
-                self.default_data[option] = self.app.options[option]
+                self.default_data[option] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
         # self.default_data.clear()
         # self.default_data.update({
@@ -413,17 +420,29 @@ class ToolPaint(Gerber, AppTool):
         # })
 
         # ## Init the GUI interface
-        self.ui.order_combo.set_value(self.app.options["tools_paint_order"])
-        self.ui.offset_entry.set_value(self.app.options["tools_paint_offset"])
-        self.ui.method_combo.set_value(self.app.options["tools_paint_method"])
-        self.ui.select_method_combo.set_value(self.app.options["tools_paint_selectmethod"])
-        self.ui.area_shape_radio.set_value(self.app.options["tools_paint_area_shape"])
-        self.ui.connect_cb.set_value(self.app.options["tools_paint_connect"])
-        self.ui.contour_cb.set_value(self.app.options["tools_paint_contour"])
-        self.ui.overlap_entry.set_value(self.app.options["tools_paint_overlap"])
+        self.ui.order_combo.set_value(self.app.options.get(
+            "tools_paint_order", app_defaults.get("tools_paint_order", AppDefaults.factory_defaults.get("tools_paint_order"))))
+        self.ui.offset_entry.set_value(self.app.options.get(
+            "tools_paint_offset", app_defaults.get("tools_paint_offset", AppDefaults.factory_defaults.get("tools_paint_offset"))))
+        self.ui.method_combo.set_value(self.app.options.get(
+            "tools_paint_method", app_defaults.get("tools_paint_method", AppDefaults.factory_defaults.get("tools_paint_method"))))
+        self.ui.select_method_combo.set_value(self.app.options.get(
+            "tools_paint_selectmethod",
+            app_defaults.get("tools_paint_selectmethod", AppDefaults.factory_defaults.get("tools_paint_selectmethod"))))
+        self.ui.area_shape_radio.set_value(self.app.options.get(
+            "tools_paint_area_shape",
+            app_defaults.get("tools_paint_area_shape", AppDefaults.factory_defaults.get("tools_paint_area_shape"))))
+        self.ui.connect_cb.set_value(self.app.options.get(
+            "tools_paint_connect", app_defaults.get("tools_paint_connect", AppDefaults.factory_defaults.get("tools_paint_connect"))))
+        self.ui.contour_cb.set_value(self.app.options.get(
+            "tools_paint_contour", app_defaults.get("tools_paint_contour", AppDefaults.factory_defaults.get("tools_paint_contour"))))
+        self.ui.overlap_entry.set_value(self.app.options.get(
+            "tools_paint_overlap", app_defaults.get("tools_paint_overlap", AppDefaults.factory_defaults.get("tools_paint_overlap"))))
 
-        self.ui.new_tooldia_entry.set_value(self.app.options["tools_paint_newdia"])
-        self.ui.rest_cb.set_value(self.app.options["tools_paint_rest"])
+        self.ui.new_tooldia_entry.set_value(self.app.options.get(
+            "tools_paint_newdia", app_defaults.get("tools_paint_newdia", AppDefaults.factory_defaults.get("tools_paint_newdia"))))
+        self.ui.rest_cb.set_value(self.app.options.get(
+            "tools_paint_rest", app_defaults.get("tools_paint_rest", AppDefaults.factory_defaults.get("tools_paint_rest"))))
 
         # # make the default object type, "Geometry"
         # self.type_obj_radio.set_value("geometry")
@@ -454,13 +473,15 @@ class ToolPaint(Gerber, AppTool):
             self.on_type_obj_changed(val=kind)
             self.on_reference_combo_changed()
 
+        tool_dia = self.app.options.get(
+            "tools_paint_tooldia", app_defaults.get("tools_paint_tooldia", AppDefaults.factory_defaults.get("tools_paint_tooldia")))
         try:
-            diameters = [float(self.app.options.get("tools_paint_tooldia"))]
+            diameters = [float(tool_dia)]
         except (ValueError, TypeError):
-            if isinstance(self.app.options.get("tools_paint_tooldia"), str):
-                diameters = [eval(x) for x in self.app.options["tools_paint_tooldia"].split(",") if x != '']
+            if isinstance(tool_dia, str):
+                diameters = [eval(x) for x in tool_dia.split(",") if x != '']
             else:
-                diameters = self.app.options["tools_paint_tooldia"]
+                diameters = tool_dia
 
         if not diameters:
             self.app.log.error(
@@ -475,7 +496,8 @@ class ToolPaint(Gerber, AppTool):
         for dia in diameters:
             self.on_tool_add(custom_dia=dia)
 
-        self.ui.on_rest_machining_check(state=self.app.options.get("tools_paint_rest", False))
+        self.ui.on_rest_machining_check(state=self.app.options.get(
+            "tools_paint_rest", app_defaults.get("tools_paint_rest", AppDefaults.factory_defaults.get("tools_paint_rest"))))
 
         # if the Paint Method is "Polygon Selection" disable the tool table context menu
         if self.default_data.get("tools_paint_selectmethod") == 1:
@@ -492,7 +514,8 @@ class ToolPaint(Gerber, AppTool):
                 self.ui.method_combo.set_value(idx + 1)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
         self.ui.tools_table.drag_drop_sig.connect(self.rebuild_ui)
@@ -1188,6 +1211,7 @@ class ToolPaint(Gerber, AppTool):
 
     # To be called after clicking on the plot.
     def on_single_poly_mouse_release(self, event):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         if self.app.use_3d_engine:
             event_pos = event.pos
             right_button = 2
@@ -1222,8 +1246,14 @@ class ToolPaint(Gerber, AppTool):
                     shape_id = self.app.tool_shapes.add(tolerance=self.paint_obj.drawing_tolerance,
                                                         layer=0,
                                                         shape=clicked_poly,
-                                                        color=self.app.options['global_sel_draw_color'] + 'AF',
-                                                        face_color=self.app.options['global_sel_draw_color'] + 'AF',
+                                                        color=self.app.options.get(
+                                                            'global_sel_draw_color',
+                                                            app_defaults.get('global_sel_draw_color',
+                                                                             AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
+                                                        face_color=self.app.options.get(
+                                                            'global_sel_draw_color',
+                                                            app_defaults.get('global_sel_draw_color',
+                                                                             AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
                                                         visible=True)
                     self.poly_dict[shape_id] = clicked_poly
                     self.app.inform.emit(
@@ -1406,6 +1436,7 @@ class ToolPaint(Gerber, AppTool):
 
     # called on mouse move
     def on_mouse_move(self, event):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         shape_type = self.ui.area_shape_radio.get_value()
 
         if self.app.use_3d_engine:
@@ -1438,8 +1469,14 @@ class ToolPaint(Gerber, AppTool):
 
             self.app.app_cursor.set_data(np.asarray([(curr_pos[0], curr_pos[1])]),
                                          symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options["global_cursor_width"],
-                                         size=self.app.options["global_cursor_size"])
+                                         edge_width=self.app.options.get(
+                                             "global_cursor_width",
+                                             app_defaults.get("global_cursor_width",
+                                                              AppDefaults.factory_defaults.get("global_cursor_width"))),
+                                         size=self.app.options.get(
+                                             "global_cursor_size",
+                                             app_defaults.get("global_cursor_size",
+                                                              AppDefaults.factory_defaults.get("global_cursor_size"))))
 
         if self.cursor_pos is None:
             self.cursor_pos = (0, 0)

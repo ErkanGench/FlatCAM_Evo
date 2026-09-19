@@ -7,6 +7,7 @@
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
+from defaults import AppDefaults
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCComboBox2, RadioSet, FCDoubleSpinner, FCSpinner, FCFileSaveDialog, OptionalHideInputSection
 
@@ -189,41 +190,45 @@ class Film(AppTool):
 
         self.reset_fields()
 
-        f_type = self.app.options["tools_film_polarity"] if self.app.options["tools_film_polarity"] else 'neg'
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+        )
+
+        f_type = app_option("tools_film_polarity") or 'neg'
         self.ui.film_type.set_value(str(f_type))
         self.ui.on_film_type(val=f_type)
 
-        b_entry = self.app.options["tools_film_boundary"] if self.app.options["tools_film_boundary"] else 0.0
+        b_entry = app_option("tools_film_boundary") or 0.0
         self.ui.boundary_entry.set_value(float(b_entry))
 
-        scale_stroke_width = self.app.options["tools_film_scale_stroke"] if \
-            self.app.options["tools_film_scale_stroke"] else 0.0
+        scale_stroke_width = app_option("tools_film_scale_stroke") or 0.0
         self.ui.film_scale_stroke_entry.set_value(float(scale_stroke_width))
 
         self.ui.punch_cb.set_value(False)
         self.ui.source_punch.set_value('exc')
 
-        self.ui.film_scale_cb.set_value(self.app.options["tools_film_scale_cb"])
-        self.ui.film_scalex_entry.set_value(float(self.app.options["tools_film_scale_x_entry"]))
-        self.ui.film_scaley_entry.set_value(float(self.app.options["tools_film_scale_y_entry"]))
-        self.ui.scale_ref_combo.set_value(self.app.options["tools_film_scale_ref"])
+        self.ui.film_scale_cb.set_value(app_option("tools_film_scale_cb"))
+        self.ui.film_scalex_entry.set_value(float(app_option("tools_film_scale_x_entry")))
+        self.ui.film_scaley_entry.set_value(float(app_option("tools_film_scale_y_entry")))
+        self.ui.scale_ref_combo.set_value(app_option("tools_film_scale_ref"))
 
-        self.ui.film_skew_cb.set_value(self.app.options["tools_film_skew_cb"])
-        self.ui.film_skew_type_combo.set_value(self.app.options["tools_film_skew_type"])
-        self.ui.film_skewx_entry.set_value(float(self.app.options["tools_film_skew_x_entry"]))
-        self.ui.film_skewy_entry.set_value(float(self.app.options["tools_film_skew_y_entry"]))
-        self.ui.skew_ref_combo.set_value(self.app.options["tools_film_skew_ref"])
+        self.ui.film_skew_cb.set_value(app_option("tools_film_skew_cb"))
+        self.ui.film_skew_type_combo.set_value(app_option("tools_film_skew_type"))
+        self.ui.film_skewx_entry.set_value(float(app_option("tools_film_skew_x_entry")))
+        self.ui.film_skewy_entry.set_value(float(app_option("tools_film_skew_y_entry")))
+        self.ui.skew_ref_combo.set_value(app_option("tools_film_skew_ref"))
 
-        self.ui.film_mirror_cb.set_value(self.app.options["tools_film_mirror_cb"])
-        self.ui.film_mirror_axis.set_value(self.app.options["tools_film_mirror_axis_radio"])
-        self.ui.file_type_radio.set_value(self.app.options["tools_film_file_type_radio"])
-        self.ui.orientation_radio.set_value(self.app.options["tools_film_orientation"])
-        self.ui.pagesize_combo.set_value(self.app.options["tools_film_pagesize"])
+        self.ui.film_mirror_cb.set_value(app_option("tools_film_mirror_cb"))
+        self.ui.film_mirror_axis.set_value(app_option("tools_film_mirror_axis_radio"))
+        self.ui.file_type_radio.set_value(app_option("tools_film_file_type_radio"))
+        self.ui.orientation_radio.set_value(app_option("tools_film_orientation"))
+        self.ui.pagesize_combo.set_value(app_option("tools_film_pagesize"))
 
-        self.ui.png_dpi_spinner.set_value(self.app.options["tools_film_png_dpi"])
+        self.ui.png_dpi_spinner.set_value(app_option("tools_film_png_dpi"))
 
-        self.ui.convex_box_cb.set_value(self.app.options["tools_film_shape"])
-        self.ui.rounded_cb.set_value(self.app.options["tools_film_rounded"])
+        self.ui.convex_box_cb.set_value(app_option("tools_film_shape"))
+        self.ui.rounded_cb.set_value(app_option("tools_film_rounded"))
 
         obj = self.app.collection.get_active()
         if obj:
@@ -255,7 +260,7 @@ class Film(AppTool):
             self.on_type_box_index_changed(val='grb')
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = app_option("global_app_level")
         self.change_level(app_mode)
 
     def change_level(self, level):
@@ -302,12 +307,16 @@ class Film(AppTool):
             self.ui.film_adj_label.show()
             self.ui.adj_frame.show()
 
-            self.ui.film_scale_cb.set_value(self.app.options["tools_film_scale_cb"])
-            self.ui.film_skew_cb.set_value(self.app.options["tools_film_skew_cb"])
-            self.ui.film_mirror_cb.set_value(self.app.options["tools_film_mirror_cb"])
+            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+            app_option = lambda key: self.app.options.get(
+                key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+            )
 
-            scale_stroke_width = self.app.options["tools_film_scale_stroke"] if \
-                self.app.options["tools_film_scale_stroke"] else 0.0
+            self.ui.film_scale_cb.set_value(app_option("tools_film_scale_cb"))
+            self.ui.film_skew_cb.set_value(app_option("tools_film_skew_cb"))
+            self.ui.film_mirror_cb.set_value(app_option("tools_film_mirror_cb"))
+
+            scale_stroke_width = app_option("tools_film_scale_stroke") or 0.0
             self.ui.film_scale_stroke_entry.set_value(float(scale_stroke_width))
 
     def on_film_creation(self):
@@ -637,8 +646,13 @@ class Film(AppTool):
         """
         self.app.defaults.report_usage("export_negative_handler()")
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+        )
+
         if filename is None:
-            filename = self.app.options["global_last_save_folder"]
+            filename = app_option("global_last_save_folder")
 
         self.app.log.debug("Film.export_svg() negative")
 
@@ -714,7 +728,7 @@ class Film(AppTool):
             if ret == 'fail':
                 return 'fail'
 
-            if self.app.options["global_open_style"] is False:
+            if app_option("global_open_style") is False:
                 self.app.file_opened.emit("SVG", filename)
             self.app.file_saved.emit("SVG", filename)
             self.app.inform.emit('[success] %s: %s' % (_("Film file exported to"), filename))
@@ -873,8 +887,13 @@ class Film(AppTool):
         """
         self.app.defaults.report_usage("export_positive_handler()")
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+        )
+
         if filename is None:
-            filename = self.app.options["global_last_save_folder"]
+            filename = app_option("global_last_save_folder")
 
         self.app.log.debug("Film.export_positive_handler() black")
 
@@ -949,7 +968,7 @@ class Film(AppTool):
             if ret == 'fail':
                 return 'fail'
 
-            if self.app.options["global_open_style"] is False:
+            if app_option("global_open_style") is False:
                 self.app.file_opened.emit("SVG", filename)
             self.app.file_saved.emit("SVG", filename)
             self.app.inform.emit('[success] %s: %s' % (_("Film file exported to"), filename))

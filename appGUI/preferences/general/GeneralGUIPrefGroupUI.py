@@ -6,6 +6,7 @@ from appGUI.GUIElements import RadioSet, FCCheckBox, FCComboBox, FCSliderWithSpi
     GLay, FCFrame, FCComboBox2, FCButton, FCSpinner
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 from appTranslation import restart_program
+from appDatabase import _database_option
 
 import gettext
 import appTranslation as fcTranslate
@@ -442,11 +443,11 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
 
     # Setting selection colors (left - right) handlers
     def on_sf_color_entry(self):
-        self.app.options['global_sel_fill'] = self.app.options['global_sel_fill'][7:9]
+        self.app.options['global_sel_fill'] = _database_option(self.app, 'global_sel_fill')[7:9]
 
     def on_sl_color_entry(self):
         self.app.options['global_sel_line'] = self.sl_color_entry.get_value()[:7] + \
-            self.app.options['global_sel_line'][7:9]
+            _database_option(self.app, 'global_sel_line')[7:9]
 
     def on_left_right_alpha_changed(self, spinner_value):
         """
@@ -459,19 +460,19 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         :rtype:
         """
 
-        self.app.options['global_sel_fill'] = self.app.options['global_sel_fill'][:7] + \
+        self.app.options['global_sel_fill'] = _database_option(self.app, 'global_sel_fill')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
-        self.app.options['global_sel_line'] = self.app.options['global_sel_line'][:7] + \
+        self.app.options['global_sel_line'] = _database_option(self.app, 'global_sel_line')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
 
     # Setting selection colors (right - left) handlers
     def on_alt_sf_color_entry(self):
         self.app.options['global_alt_sel_fill'] = self.alt_sf_color_entry.get_value()[:7] + \
-                                                   self.app.options['global_alt_sel_fill'][7:9]
+                                                   _database_option(self.app, 'global_alt_sel_fill')[7:9]
 
     def on_alt_sl_color_entry(self):
         self.app.options['global_alt_sel_line'] = self.alt_sl_color_entry.get_value()[:7] + \
-                                                   self.app.options['global_alt_sel_line'][7:9]
+                                                   _database_option(self.app, 'global_alt_sel_line')[7:9]
 
     def on_right_left_alpha_changed(self, spinner_value):
         """
@@ -484,9 +485,9 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         :rtype:
         """
 
-        self.app.options['global_alt_sel_fill'] = self.app.options['global_alt_sel_fill'][:7] + \
+        self.app.options['global_alt_sel_fill'] = _database_option(self.app, 'global_alt_sel_fill')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
-        self.app.options['global_alt_sel_line'] = self.app.options['global_alt_sel_line'][:7] + \
+        self.app.options['global_alt_sel_line'] = _database_option(self.app, 'global_alt_sel_line')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
 
     # Setting Editor colors

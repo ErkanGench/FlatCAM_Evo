@@ -6,6 +6,7 @@ from PyQt6.QtCore import QSettings
 from appGUI.GUIElements import RadioSet, FCSpinner, FCCheckBox, FCComboBox, FCButton, OptionalInputSection, \
     FCDoubleSpinner, FCLabel, GLay, RadioSetDefaults, FCFrame, FCComboBox2
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appDatabase import _database_option
 
 import gettext
 import appTranslation as fcTranslate
@@ -195,7 +196,7 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
         grid3_frame.setLayout(grid3)
 
         self.language_combo = FCComboBox()
-        self.language_combo.addItems(self.app.options["global_languages"])
+        self.language_combo.addItems(_database_option(app, "global_languages"))
         grid3.addWidget(self.language_combo, 0, 0, 1, 2)
 
         self.language_apply_btn = FCButton(_("Apply Language"))
@@ -258,14 +259,22 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
         )
         grid4.addWidget(self.project_startup_cb, 6, 0, 1, 2)
 
-        # Version Check CB
-        self.version_check_cb = FCCheckBox(label='%s' % _('Version Check'))
+        # Automatic Update Check CB
+        self.version_check_cb = FCCheckBox(label='%s' % _('Check for updates automatically'))
         self.version_check_cb.setToolTip(
-            _("Check this box if you want to check\n"
-              "for a new version automatically at startup.")
+            _("Check for updates automatically at startup.\n"
+              "Use Help > Check for Updates for a manual check.")
         )
 
         grid4.addWidget(self.version_check_cb, 8, 0, 1, 2)
+
+        # Prepare Update Files
+        self.prepare_update_files_btn = FCButton('%s' % _('Prepare Update Files'))
+        self.prepare_update_files_btn.setToolTip(
+            _("Create local upload files for manual Digi publishing.\n"
+              "This does not upload or send credentials or application data.")
+        )
+        grid4.addWidget(self.prepare_update_files_btn, 9, 0, 1, 2)
 
         # Send Stats CB
         self.send_stats_cb = FCCheckBox(label='%s' % _('Send Statistics'))
@@ -275,8 +284,6 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
         )
 
         grid4.addWidget(self.send_stats_cb, 10, 0, 1, 2)
-
-        self.ois_version_check = OptionalInputSection(self.version_check_cb, [self.send_stats_cb])
 
         # Save Settings
         self.save_label = FCLabel('%s' % _("Save Settings"), color='purple', bold=True)

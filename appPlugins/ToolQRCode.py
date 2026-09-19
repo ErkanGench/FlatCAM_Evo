@@ -9,6 +9,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt
 
 from appTool import AppTool
+from defaults import AppDefaults
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCFileSaveDialog, RadioSet, FCTextArea, FCSpinner, FCEntry
 
@@ -156,22 +157,26 @@ class QRCode(AppTool):
 
         self.ui.border_size_entry.set_value(4)
 
-        self.ui.version_entry.set_value(int(self.app.options["tools_qrcode_version"]))
-        self.ui.error_radio.set_value(self.app.options["tools_qrcode_error"])
-        self.ui.bsize_entry.set_value(int(self.app.options["tools_qrcode_box_size"]))
-        self.ui.border_size_entry.set_value(int(self.app.options["tools_qrcode_border_size"]))
-        self.ui.pol_radio.set_value(self.app.options["tools_qrcode_polarity"])
-        self.ui.bb_radio.set_value(self.app.options["tools_qrcode_rounded"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
 
-        self.ui.text_data.set_value(self.app.options["tools_qrcode_qrdata"])
+        self.ui.version_entry.set_value(int(app_option("tools_qrcode_version")))
+        self.ui.error_radio.set_value(app_option("tools_qrcode_error"))
+        self.ui.bsize_entry.set_value(int(app_option("tools_qrcode_box_size")))
+        self.ui.border_size_entry.set_value(int(app_option("tools_qrcode_border_size")))
+        self.ui.pol_radio.set_value(app_option("tools_qrcode_polarity"))
+        self.ui.bb_radio.set_value(app_option("tools_qrcode_rounded"))
 
-        self.ui.fill_color_entry.set_value(self.app.options['tools_qrcode_fill_color'])
+        self.ui.text_data.set_value(app_option("tools_qrcode_qrdata"))
+
+        self.ui.fill_color_entry.set_value(app_option('tools_qrcode_fill_color'))
         self.ui.fill_color_button.setStyleSheet("background-color:%s;" %
-                                                str(self.app.options['tools_qrcode_fill_color'])[:7])
+                                                str(app_option('tools_qrcode_fill_color'))[:7])
 
-        self.ui.back_color_entry.set_value(self.app.options['tools_qrcode_back_color'])
+        self.ui.back_color_entry.set_value(app_option('tools_qrcode_back_color'))
         self.ui.back_color_button.setStyleSheet("background-color:%s;" %
-                                                str(self.app.options['tools_qrcode_back_color'])[:7])
+                                                str(app_option('tools_qrcode_back_color'))[:7])
 
         # SELECT THE CURRENT OBJECT
         obj = self.app.collection.get_active()
@@ -180,7 +185,7 @@ class QRCode(AppTool):
             self.ui.grb_object_combo.set_value(obj_name)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = app_option("global_app_level")
         self.change_level(app_mode)
 
     def change_level(self, level):
@@ -421,7 +426,10 @@ class QRCode(AppTool):
 
         qrcode_geometry_len = len(self.qrcode_geometry.geoms) if isinstance(self.qrcode_geometry, MultiPolygon) else \
             len(self.qrcode_geometry)
-        if qrcode_geometry_len <= self.app.options["tools_qrcode_sel_limit"]:
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
+        if qrcode_geometry_len <= app_option("tools_qrcode_sel_limit"):
             qrcode_geo = self.qrcode_utility_geometry.geoms if isinstance(self.qrcode_utility_geometry, MultiPolygon) \
                 else self.qrcode_utility_geometry
             try:
@@ -517,7 +525,10 @@ class QRCode(AppTool):
         # w = float(svg_root.get('width'))
         h = svgparselength(svg_root.get('height'))[0]  # TODO: No units support yet
         units = self.app.app_units if units is None else units
-        res = self.app.options['geometry_circle_steps']
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
+        res = app_option('geometry_circle_steps')
         factor = svgparse_viewbox(svg_root)
         geos = getsvggeo(svg_root, object_type, units=units, res=res, factor=factor, app=self.app)
 

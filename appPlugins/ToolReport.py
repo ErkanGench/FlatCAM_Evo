@@ -8,6 +8,7 @@
 from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCTree
+from defaults import AppDefaults
 import logging
 from copy import deepcopy
 import math
@@ -170,7 +171,10 @@ class ObjectReport(AppTool):
         font = QtGui.QFont()
         font.setBold(True)
 
-        p_color = QtGui.QColor("#000000") if self.app.options['global_theme'] in ['default', 'light'] \
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        p_color = QtGui.QColor("#000000") if self.app.options.get(
+            'global_theme', app_defaults.get('global_theme', AppDefaults.factory_defaults.get('global_theme'))
+        ) in ['default', 'light'] \
             else QtGui.QColor("#FFFFFF")
 
         # main Items categories

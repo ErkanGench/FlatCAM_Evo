@@ -46,15 +46,21 @@ class appEditor(QtCore.QObject):
         for opt_key, opt_val in self.options.items():
             if opt_key.find('geometry' + "_") == 0:
                 o_name = opt_key[len('geometry') + 1:]
-                default_data[o_name] = self.options[opt_key]
+                default_data[o_name] = self.options.get(
+                    opt_key, self.defaults.get(opt_key, self.defaults.factory_defaults.get(opt_key)))
             else:
-                default_data[opt_key] = self.options[opt_key]
+                default_data[opt_key] = self.options.get(
+                    opt_key, self.defaults.get(opt_key, self.defaults.factory_defaults.get(opt_key)))
 
-        if isinstance(self.options["tools_mill_tooldia"], float):
-            tools_diameters = [self.options["tools_mill_tooldia"]]
+        tool_dia = self.options.get(
+            "tools_mill_tooldia",
+            self.defaults.get("tools_mill_tooldia", self.defaults.factory_defaults.get("tools_mill_tooldia"))
+        )
+        if isinstance(tool_dia, float):
+            tools_diameters = [tool_dia]
         else:
             try:
-                dias = str(self.options["tools_mill_tooldia"]).strip('[').strip(']')
+                dias = str(tool_dia).strip('[').strip(']')
                 tools_string = dias.split(",")
                 tools_diameters = [eval(a) for a in tools_string if a != '']
             except Exception as e:
@@ -515,7 +521,11 @@ class appEditor(QtCore.QObject):
                                "Check the generated GCODE."))
             return
 
-        fuse_tools = self.options["geometry_merge_fuse_tools"]
+        fuse_tools = self.options.get(
+            "geometry_merge_fuse_tools",
+            self.defaults.get("geometry_merge_fuse_tools",
+                              self.defaults.factory_defaults.get("geometry_merge_fuse_tools"))
+        )
 
         # Determine parameters based on the check
         # Since len(geo_type_set) == 1, we just need to check which value is in the set
@@ -568,7 +578,11 @@ class appEditor(QtCore.QObject):
                              (_("At least two objects are required for join. Objects currently selected"), len(objs)))
             return 'fail'
 
-        fuse_tools = self.options["excellon_merge_fuse_tools"]
+        fuse_tools = self.options.get(
+            "excellon_merge_fuse_tools",
+            self.defaults.get("excellon_merge_fuse_tools",
+                              self.defaults.factory_defaults.get("excellon_merge_fuse_tools"))
+        )
 
         def initialize(exc_obj, app):
             ExcellonObject.merge(exc_list=objs, exc_final=exc_obj, decimals=self.decimals, fuse_tools=fuse_tools,

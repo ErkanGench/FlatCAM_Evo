@@ -54,7 +54,16 @@ class AppTextEditor(QtWidgets.QWidget):
 
         # CODE Editor
         if self.plain_text:
-            self.editor_class = FCTextAreaLineNumber(color_dict=color_dict, theme=self.app.options['global_theme'])
+            self.editor_class = FCTextAreaLineNumber(
+                color_dict=color_dict,
+                theme=self.app.options.get(
+                    'global_theme',
+                    self.app.defaults.get(
+                        'global_theme',
+                        self.app.defaults.factory_defaults.get('global_theme')
+                    )
+                )
+            )
             self.code_editor = self.editor_class.edit
 
             sel_color = 'black'
@@ -270,7 +279,13 @@ class AppTextEditor(QtWidgets.QWidget):
         try:
             filename = str(FCFileSaveDialog.get_saved_filename(
                 caption=_("Export Code ..."),
-                directory=self.app.options["global_last_folder"] + '/' + str(obj_name),
+                directory=self.app.options.get(
+                    "global_last_folder",
+                    self.app.defaults.get(
+                        "global_last_folder",
+                        self.app.defaults.factory_defaults.get("global_last_folder")
+                    )
+                ) + '/' + str(obj_name),
                 ext_filter=_filter_
             )[0])
         except TypeError:
@@ -286,8 +301,20 @@ class AppTextEditor(QtWidgets.QWidget):
                 my_gcode = self.code_editor.toPlainText()
                 if filename.rpartition('.')[2].lower() == 'pdf':
                     page_size = (
-                        self.app.plotcanvas.pagesize_dict[self.app.options['global_workspaceT']][0] * mm,
-                        self.app.plotcanvas.pagesize_dict[self.app.options['global_workspaceT']][1] * mm
+                        self.app.plotcanvas.pagesize_dict[self.app.options.get(
+                            'global_workspaceT',
+                            self.app.defaults.get(
+                                'global_workspaceT',
+                                self.app.defaults.factory_defaults.get('global_workspaceT')
+                            )
+                        )][0] * mm,
+                        self.app.plotcanvas.pagesize_dict[self.app.options.get(
+                            'global_workspaceT',
+                            self.app.defaults.get(
+                                'global_workspaceT',
+                                self.app.defaults.factory_defaults.get('global_workspaceT')
+                            )
+                        )][1] * mm
                     )
 
                     # add new line after each line
@@ -299,15 +326,63 @@ class AppTextEditor(QtWidgets.QWidget):
                     story = []
 
                     if self.app.app_units.lower() == 'mm':
-                        bmargin = self.app.options['global_tpdf_bmargin'] * mm
-                        tmargin = self.app.options['global_tpdf_tmargin'] * mm
-                        rmargin = self.app.options['global_tpdf_rmargin'] * mm
-                        lmargin = self.app.options['global_tpdf_lmargin'] * mm
+                        bmargin = self.app.options.get(
+                            'global_tpdf_bmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_bmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_bmargin')
+                            )
+                        ) * mm
+                        tmargin = self.app.options.get(
+                            'global_tpdf_tmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_tmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_tmargin')
+                            )
+                        ) * mm
+                        rmargin = self.app.options.get(
+                            'global_tpdf_rmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_rmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_rmargin')
+                            )
+                        ) * mm
+                        lmargin = self.app.options.get(
+                            'global_tpdf_lmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_lmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_lmargin')
+                            )
+                        ) * mm
                     else:
-                        bmargin = self.app.options['global_tpdf_bmargin'] * inch
-                        tmargin = self.app.options['global_tpdf_tmargin'] * inch
-                        rmargin = self.app.options['global_tpdf_rmargin'] * inch
-                        lmargin = self.app.options['global_tpdf_lmargin'] * inch
+                        bmargin = self.app.options.get(
+                            'global_tpdf_bmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_bmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_bmargin')
+                            )
+                        ) * inch
+                        tmargin = self.app.options.get(
+                            'global_tpdf_tmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_tmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_tmargin')
+                            )
+                        ) * inch
+                        rmargin = self.app.options.get(
+                            'global_tpdf_rmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_rmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_rmargin')
+                            )
+                        ) * inch
+                        lmargin = self.app.options.get(
+                            'global_tpdf_lmargin',
+                            self.app.defaults.get(
+                                'global_tpdf_lmargin',
+                                self.app.defaults.factory_defaults.get('global_tpdf_lmargin')
+                            )
+                        ) * inch
 
                     doc = SimpleDocTemplate(
                         filename,
@@ -339,7 +414,12 @@ class AppTextEditor(QtWidgets.QWidget):
                 return
 
         # Just for adding it to the recent files list.
-        if self.app.options["global_open_style"] is False:
+        if self.app.options.get(
+                "global_open_style",
+                self.app.defaults.get(
+                    "global_open_style",
+                    self.app.defaults.factory_defaults.get("global_open_style")
+                )) is False:
             self.app.file_opened.emit("cncjob", filename)
         self.app.file_saved.emit("cncjob", filename)
         self.app.inform.emit('%s: %s' % (_("Saved to"), str(filename)))

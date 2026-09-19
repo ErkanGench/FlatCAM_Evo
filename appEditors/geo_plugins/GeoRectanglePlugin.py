@@ -142,11 +142,23 @@ class RectangleEditorTool(AppToolEditor):
         if corner_type == 'r':
             geo = box(minx, miny, maxx, maxy).buffer(
                 corner_radius, join_style=base.JOIN_STYLE.round,
-                resolution=self.draw_app.app.options["geometry_circle_steps"]).exterior
+                resolution=self.draw_app.app.options.get(
+                    "geometry_circle_steps",
+                    self.draw_app.app.defaults.get(
+                        "geometry_circle_steps",
+                        self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
+                    )
+                )).exterior
         elif corner_type == 'b':
             geo = box(minx, miny, maxx, maxy).buffer(
                 corner_radius, join_style=base.JOIN_STYLE.bevel,
-                resolution=self.draw_app.app.options["geometry_circle_steps"]).exterior
+                resolution=self.draw_app.app.options.get(
+                    "geometry_circle_steps",
+                    self.draw_app.app.defaults.get(
+                        "geometry_circle_steps",
+                        self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
+                    )
+                )).exterior
         else:   # 's' - square
             geo = box(minx, miny, maxx, maxy).exterior
 

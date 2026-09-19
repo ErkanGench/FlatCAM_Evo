@@ -10,6 +10,7 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     RadioSet, FCDoubleSpinner, FCSpinner, OptionalInputSection
 from camlib import grace
+from defaults import AppDefaults
 
 import logging
 from copy import deepcopy
@@ -150,40 +151,50 @@ class Panelize(AppTool):
 
             self.ui.object_combo.set_value(obj_name)
 
-        sp_c = self.app.options["tools_panelize_spacing_columns"] if \
-            self.app.options["tools_panelize_spacing_columns"] else 0.0
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        sp_c = self.app.options.get(
+            "tools_panelize_spacing_columns",
+            app_defaults.get("tools_panelize_spacing_columns", AppDefaults.factory_defaults.get("tools_panelize_spacing_columns")))
         self.ui.spacing_columns.set_value(float(sp_c))
 
-        sp_r = self.app.options["tools_panelize_spacing_rows"] if \
-            self.app.options["tools_panelize_spacing_rows"] else 0.0
+        sp_r = self.app.options.get(
+            "tools_panelize_spacing_rows",
+            app_defaults.get("tools_panelize_spacing_rows", AppDefaults.factory_defaults.get("tools_panelize_spacing_rows")))
         self.ui.spacing_rows.set_value(float(sp_r))
 
-        rr = self.app.options["tools_panelize_rows"] if \
-            self.app.options["tools_panelize_rows"] else 0.0
+        rr = self.app.options.get(
+            "tools_panelize_rows",
+            app_defaults.get("tools_panelize_rows", AppDefaults.factory_defaults.get("tools_panelize_rows")))
         self.ui.rows.set_value(int(rr))
 
-        cc = self.app.options["tools_panelize_columns"] if \
-            self.app.options["tools_panelize_columns"] else 0.0
+        cc = self.app.options.get(
+            "tools_panelize_columns",
+            app_defaults.get("tools_panelize_columns", AppDefaults.factory_defaults.get("tools_panelize_columns")))
         self.ui.columns.set_value(int(cc))
 
-        optimized_path_cb = self.app.options["tools_panelize_optimization"] if \
-            self.app.options["tools_panelize_optimization"] else True
+        optimized_path_cb = self.app.options.get(
+            "tools_panelize_optimization",
+            app_defaults.get("tools_panelize_optimization", AppDefaults.factory_defaults.get("tools_panelize_optimization")))
         self.ui.optimization_cb.set_value(optimized_path_cb)
 
-        c_cb = self.app.options["tools_panelize_constrain"] if \
-            self.app.options["tools_panelize_constrain"] else False
+        c_cb = self.app.options.get(
+            "tools_panelize_constrain",
+            app_defaults.get("tools_panelize_constrain", AppDefaults.factory_defaults.get("tools_panelize_constrain")))
         self.ui.constrain_cb.set_value(c_cb)
 
-        x_w = self.app.options["tools_panelize_constrainx"] if \
-            self.app.options["tools_panelize_constrainx"] else 0.0
+        x_w = self.app.options.get(
+            "tools_panelize_constrainx",
+            app_defaults.get("tools_panelize_constrainx", AppDefaults.factory_defaults.get("tools_panelize_constrainx")))
         self.ui.x_width_entry.set_value(float(x_w))
 
-        y_w = self.app.options["tools_panelize_constrainy"] if \
-            self.app.options["tools_panelize_constrainy"] else 0.0
+        y_w = self.app.options.get(
+            "tools_panelize_constrainy",
+            app_defaults.get("tools_panelize_constrainy", AppDefaults.factory_defaults.get("tools_panelize_constrainy")))
         self.ui.y_height_entry.set_value(float(y_w))
 
-        panel_type = self.app.options["tools_panelize_panel_type"] if \
-            self.app.options["tools_panelize_panel_type"] else 'gerber'
+        panel_type = self.app.options.get(
+            "tools_panelize_panel_type",
+            app_defaults.get("tools_panelize_panel_type", AppDefaults.factory_defaults.get("tools_panelize_panel_type")))
         self.ui.panel_type_radio.set_value(panel_type)
 
         self.ui.on_panel_type(val=panel_type)
@@ -196,7 +207,8 @@ class Panelize(AppTool):
         self.connect_signals_at_init()
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
     def on_type_obj_index_changed(self):
@@ -777,13 +789,16 @@ class Panelize(AppTool):
                     if panel_source_obj.kind == 'gerber':
                         new_obj.multigeo = True
 
+                        app_defaults = getattr(app_obj, "defaults", None) or AppDefaults.factory_defaults
                         default_data = {}
                         for opt_key, opt_val in self.app.options.items():
                             if opt_key.find('geometry' + "_") == 0:
                                 oname = opt_key[len('geometry') + 1:]
-                                default_data[oname] = self.app.options[opt_key]
+                                default_data[oname] = self.app.options.get(
+                                    opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
                             elif opt_key.find('tools_') == 0:
-                                default_data[opt_key] = self.app.options[opt_key]
+                                default_data[opt_key] = self.app.options.get(
+                                    opt_key, app_defaults.get(opt_key, AppDefaults.factory_defaults.get(opt_key)))
 
                         new_obj.tools = {}
                         new_tid = 10
@@ -792,7 +807,9 @@ class Panelize(AppTool):
                             new_sgeo = [g['solid'] for g in new_obj.tools[apid]['geometry'] if 'solid' in g]
                             new_sgeo = unary_union(new_sgeo)
                             new_obj.tools[new_tid] = {
-                                'tooldia': self.app.options["tools_mill_tooldia"],
+                                'tooldia': self.app.options.get(
+                                    "tools_mill_tooldia",
+                                    app_defaults.get("tools_mill_tooldia", AppDefaults.factory_defaults.get("tools_mill_tooldia"))),
                                 'offset': 'Path',
                                 'offset_value': 0.0,
                                 'type': 'Rough',
@@ -802,7 +819,9 @@ class Panelize(AppTool):
                             }
                         new_tid += 1
                         new_obj.tools[new_tid] = {
-                            'tooldia': self.app.options["tools_mill_tooldia"],
+                            'tooldia': self.app.options.get(
+                                "tools_mill_tooldia",
+                                app_defaults.get("tools_mill_tooldia", AppDefaults.factory_defaults.get("tools_mill_tooldia"))),
                             'offset': 'Path',
                             'offset_value': 0.0,
                             'type': 'Rough',

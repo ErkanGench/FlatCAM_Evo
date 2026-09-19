@@ -32,6 +32,7 @@ class AppCanvasEvents(QtCore.QObject):
         self.log = app.log
         self.inform = app.inform
         self.options = app.options
+        self.defaults = getattr(app, 'defaults', {})
         self.ui = app.ui
 
     def on_mouse_click_over_plot(self, event):
@@ -84,7 +85,7 @@ class AppCanvasEvents(QtCore.QObject):
         pan_button = None
         if self.app.use_3d_engine:
             event_pos = event.pos
-            pan_button = 2 if self.options["global_pan_button"] == '2' else 3
+            pan_button = 2 if self.options.get("global_pan_button", self.defaults.get("global_pan_button", '2')) == '2' else 3
             # self.event_is_dragging = event.is_dragging
             self.app.event_is_dragging = self.app.mouse_down
         else:
@@ -126,8 +127,8 @@ class AppCanvasEvents(QtCore.QObject):
                 self.app.app_cursor.set_data(
                     np.asarray([(pos[0], pos[1])]),
                     symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                    edge_width=self.options["global_cursor_width"],
-                    size=self.options["global_cursor_size"]
+                    edge_width=self.options.get("global_cursor_width", self.defaults.get("global_cursor_width", 2)),
+                    size=self.options.get("global_cursor_size", self.defaults.get("global_cursor_size", 20))
                 )
             else:
                 pos = (pos_canvas[0], pos_canvas[1])
@@ -140,7 +141,7 @@ class AppCanvasEvents(QtCore.QObject):
 
             self.app.mouse_pos = [pos[0], pos[1]]
 
-            if self.options['global_selection_shape'] is False:
+            if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)) is False:
                 self.app.selection_type = None
                 return
 
@@ -181,8 +182,8 @@ class AppCanvasEvents(QtCore.QObject):
                     self.draw_moving_selection_shape(
                         self.app.mouse_click_pos,
                         self.app.mouse_pos,
-                        color=self.options['global_alt_sel_line'],
-                        face_color=self.options['global_alt_sel_fill']
+                        color=self.options.get('global_alt_sel_line', self.defaults.get('global_alt_sel_line', '#006E20BF')),
+                        face_color=self.options.get('global_alt_sel_fill', self.defaults.get('global_alt_sel_fill', '#BBF268BF'))
                     )
                 else:
                     self.draw_moving_selection_shape(
@@ -193,7 +194,7 @@ class AppCanvasEvents(QtCore.QObject):
                 self.app.selection_type = not is_alt_selection  # True for regular selection, False for alt selection
 
             # hover effect - enabled in Preferences -> General -> appGUI Settings
-            if self.options['global_hover_shape']:
+            if self.options.get('global_hover_shape', self.defaults.get('global_hover_shape', False)):
                 for obj in self.app.collection.get_list():
                     try:
                         # select the object(s) only if it is enabled (plotted)
@@ -333,7 +334,7 @@ class AppCanvasEvents(QtCore.QObject):
 
             try:
                 if self.app.command_active is None:
-                    if mod_key == self.options["global_mselect_key"]:
+                    if mod_key == self.options.get("global_mselect_key", self.defaults.get("global_mselect_key", 'Control')):
                         # If the modifier key is pressed when the LMB is clicked then if the object is selected it will
                         # deselect, and if it's not selected then it will be selected
                         self.select_objects(key='multisel')
@@ -367,7 +368,7 @@ class AppCanvasEvents(QtCore.QObject):
             # do not auto open the Project Tab
             self.app.click_noproject = True
 
-            self.app.clipboard.setText(self.options["global_point_clipboard_format"] %
+            self.app.clipboard.setText(self.options.get("global_point_clipboard_format", self.defaults.get("global_point_clipboard_format", "(%.*f, %.*f)")) %
                                    (self.app.decimals, position[0], self.app.decimals, position[1]))
             self.inform.emit('[success] %s' % _("Copied to clipboard."))
         elif modifiers == ctrl_shift_mod:
@@ -484,7 +485,7 @@ class AppCanvasEvents(QtCore.QObject):
 
         for idx in sel_obj_list:
             sel_obj = collection_list[idx]
-            if self.options['global_selection_shape']:
+            if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)):
                 self.draw_selection_shape(sel_obj)
 
         # make all objects inactive
@@ -539,7 +540,7 @@ class AppCanvasEvents(QtCore.QObject):
                         curr_sel_obj = self.app.collection.get_active()
 
                         # create the selection box around the selected object
-                        if self.options['global_selection_shape'] is True:
+                        if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)) is True:
                             self.draw_selection_shape(curr_sel_obj)
                             curr_sel_obj.selection_shape_drawn = True
                     elif curr_sel_obj.obj_options['name'] not in self.app.objects_under_the_click_list:
@@ -550,12 +551,12 @@ class AppCanvasEvents(QtCore.QObject):
                         self.app.collection.set_active(self.app.objects_under_the_click_list[0])
                         curr_sel_obj = self.app.collection.get_active()
                         # create the selection box around the selected object
-                        if self.options['global_selection_shape'] is True:
+                        if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)) is True:
                             self.draw_selection_shape(curr_sel_obj)
                             curr_sel_obj.selection_shape_drawn = True
                         self.selected_message(curr_sel_obj=curr_sel_obj)
                     elif curr_sel_obj.selection_shape_drawn is False:
-                        if self.options['global_selection_shape'] is True:
+                        if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)) is True:
                             self.draw_selection_shape(curr_sel_obj)
                             curr_sel_obj.selection_shape_drawn = True
                     else:
@@ -593,7 +594,7 @@ class AppCanvasEvents(QtCore.QObject):
                     curr_sel_obj.selection_shape_drawn = False
 
                     # create the selection box around the selected object
-                    if self.options['global_selection_shape'] is True:
+                    if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)) is True:
                         self.draw_selection_shape(curr_sel_obj)
                         curr_sel_obj.selection_shape_drawn = True
                     self.selected_message(curr_sel_obj=curr_sel_obj)
@@ -754,8 +755,8 @@ class AppCanvasEvents(QtCore.QObject):
             face = color[:-2] + str(hex(int(0.2 * 255)))[2:]
             outline = color[:-2] + str(hex(int(0.8 * 255)))[2:]
         else:
-            face = self.options['global_sel_fill'][:-2] + str(hex(int(0.2 * 255)))[2:]
-            outline = self.options['global_sel_line']
+            face = self.options.get('global_sel_fill', self.defaults.get('global_sel_fill', '#a5a5ffbf'))[:-2] + str(hex(int(0.2 * 255)))[2:]
+            outline = self.options.get('global_sel_line', self.defaults.get('global_sel_line', '#0000ffbf'))
 
         self.app.hover_shapes.add(hover_rect, color=outline, face_color=face, update=True, layer=0, tolerance=None)
 
@@ -809,7 +810,7 @@ class AppCanvasEvents(QtCore.QObject):
         if b_sel_rect is None or b_sel_rect.is_empty or not b_sel_rect.is_valid:
             b_sel_rect = sel_rect
 
-        if self.options['global_selection_shape_as_line'] is True:
+        if self.options.get('global_selection_shape_as_line', self.defaults.get('global_selection_shape_as_line', False)) is True:
             b_sel_rect = b_sel_rect.exterior
 
         if color:
@@ -817,11 +818,11 @@ class AppCanvasEvents(QtCore.QObject):
             outline = color[:-2] + str(hex(int(0.8 * 255)))[2:]
         else:
             if self.app.use_3d_engine:
-                face = self.options['global_sel_fill'][:-2] + str(hex(int(0.2 * 255)))[2:]
-                outline = self.options['global_sel_line'][:-2] + str(hex(int(0.8 * 255)))[2:]
+                face = self.options.get('global_sel_fill', self.defaults.get('global_sel_fill', '#a5a5ffbf'))[:-2] + str(hex(int(0.2 * 255)))[2:]
+                outline = self.options.get('global_sel_line', self.defaults.get('global_sel_line', '#0000ffbf'))[:-2] + str(hex(int(0.8 * 255)))[2:]
             else:
-                face = self.options['global_sel_fill'][:-2] + str(hex(int(0.4 * 255)))[2:]
-                outline = self.options['global_sel_line'][:-2] + str(hex(int(1.0 * 255)))[2:]
+                face = self.options.get('global_sel_fill', self.defaults.get('global_sel_fill', '#a5a5ffbf'))[:-2] + str(hex(int(0.4 * 255)))[2:]
+                outline = self.options.get('global_sel_line', self.defaults.get('global_sel_line', '#0000ffbf'))[:-2] + str(hex(int(1.0 * 255)))[2:]
 
         self.app.sel_objects_list.append(
             self.app.sel_shapes.add(b_sel_rect, color=outline, face_color=face, update=True, layer=0, tolerance=None)
@@ -842,12 +843,12 @@ class AppCanvasEvents(QtCore.QObject):
         if 'color' in kwargs:
             color = kwargs['color']
         else:
-            color = self.options['global_sel_line']
+            color = self.options.get('global_sel_line', self.defaults.get('global_sel_line', '#0000ffbf'))
 
         if 'face_color' in kwargs:
             face_color = kwargs['face_color']
         else:
-            face_color = self.options['global_sel_fill']
+            face_color = self.options.get('global_sel_fill', self.defaults.get('global_sel_fill', '#a5a5ffbf'))
 
         if 'face_alpha' in kwargs:
             face_alpha = kwargs['face_alpha']
@@ -863,7 +864,7 @@ class AppCanvasEvents(QtCore.QObject):
         pt4 = (x0, y1)
         sel_rect = Polygon([pt1, pt2, pt3, pt4])
 
-        if self.options['global_selection_shape_as_line'] is True:
+        if self.options.get('global_selection_shape_as_line', self.defaults.get('global_selection_shape_as_line', False)) is True:
             sel_rect = sel_rect.exterior
 
         color_t = face_color[:-2] + str(hex(int(face_alpha * 255)))[2:]

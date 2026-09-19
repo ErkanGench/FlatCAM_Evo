@@ -10,6 +10,7 @@ from PyQt6 import QtCore, QtGui
 import logging
 from appGUI.VisPyCanvas import VisPyCanvas, Color
 from appGUI.VisPyVisuals import ShapeGroup, ShapeCollection, TextCollection, TextGroup, Cursor
+from appDatabase import _database_option
 from vispy.scene.visuals import InfiniteLine, Line, Rectangle, Text
 
 import gettext
@@ -133,7 +134,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         self.create_native()
         self.native.setParent(self.fcapp.ui)
 
-        axis_default_color = self.fcapp.options['global_axis_color']
+        axis_default_color = _database_option(self.fcapp, 'global_axis_color')
         self.axis_transparency = 0.8
 
         axis_color = self.color_hex2tuple(axis_default_color)
@@ -149,8 +150,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
                                    parent=None)
 
         self.line_parent = None
-        if self.fcapp.options["global_cursor_color_enabled"]:
-            c_color = Color(self.fcapp.options["global_cursor_color"]).rgba
+        if _database_option(self.fcapp, "global_cursor_color_enabled"):
+            c_color = Color(_database_option(self.fcapp, "global_cursor_color")).rgba
         else:
             c_color = self.line_color
 
@@ -176,21 +177,21 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
         # draw a rectangle made out of 4 lines on the canvas to serve as a hint for the work area
         # all CNC have a limited workspace
-        if self.fcapp.options['global_workspace'] is True:
-            self.draw_workspace(workspace_size=self.fcapp.options["global_workspaceT"])
+        if _database_option(self.fcapp, 'global_workspace') is True:
+            self.draw_workspace(workspace_size=_database_option(self.fcapp, "global_workspaceT"))
 
         # HUD Display
         self.hud_enabled = False
 
         # enable the HUD if it is activated in FlatCAM Preferences
-        if self.fcapp.options['global_hud'] is True:
+        if _database_option(self.fcapp, 'global_hud') is True:
             self.on_toggle_hud(state=True, silent=True)
 
         # Axis Display
         self.axis_enabled = False
 
         # enable Axis
-        if self.fcapp.options['global_axis'] is True:
+        if _database_option(self.fcapp, 'global_axis') is True:
             self.on_toggle_axis(state=True, silent=True)
 
         # enable Grid lines
@@ -264,7 +265,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
     def apply_axis_color(self):
         self.fcapp.log.debug('PlotCanvas.apply_axis_color() -> axis color applied')
 
-        axis_default_color = self.fcapp.options['global_axis_color']
+        axis_default_color = _database_option(self.fcapp, 'global_axis_color')
 
         axis_color = self.color_hex2tuple(axis_default_color)
         axis_color = axis_color[0], axis_color[1], axis_color[2], self.axis_transparency
@@ -441,7 +442,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
             self.app.log.error("PlotCanvas.draw_workspace() --> %s" % str(e))
             return
 
-        if self.fcapp.options['global_workspace_orientation'] == 'l':
+        if _database_option(self.fcapp, 'global_workspace_orientation') == 'l':
             dims = (dims[1], dims[0])
 
         a = np.array([(0, 0), (dims[0], 0), (dims[0], dims[1]), (0, dims[1])])
@@ -566,7 +567,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
     def on_mouse_position(self, pos):
 
-        if self.fcapp.options['global_cursor_color_enabled']:
+        if _database_option(self.fcapp, 'global_cursor_color_enabled'):
             # color = Color(self.fcapp.options['global_cursor_color']).rgba
             color = self.cursor_color
         else:
@@ -580,8 +581,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         # key modifiers
         modifiers = event.modifiers
 
-        pan_delta_x = self.fcapp.options["global_gridx"]
-        pan_delta_y = self.fcapp.options["global_gridy"]
+        pan_delta_x = _database_option(self.fcapp, "global_gridx")
+        pan_delta_y = _database_option(self.fcapp, "global_gridy")
         curr_pos = event.pos
 
         # Controlled pan by mouse wheel
@@ -611,8 +612,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
             # Update cursor
             self.fcapp.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
                                            symbol='++', edge_color=self.cursor_color,
-                                           edge_width=self.fcapp.options["global_cursor_width"],
-                                           size=self.fcapp.options["global_cursor_size"])
+                                           edge_width=_database_option(self.fcapp, "global_cursor_width"),
+                                           size=_database_option(self.fcapp, "global_cursor_size"))
 
     def new_text_group(self, collection=None):
         if collection:

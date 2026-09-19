@@ -602,6 +602,14 @@ class Geometry(object):
         # Attributes to be included in serialization
         self.ser_attrs = ["units", 'solid_geometry', 'follow_geometry', 'tools']
 
+    def _app_option(self, key, fallback=None):
+        defaults = getattr(self.app, "defaults", None)
+        if defaults is None:
+            return self.app.options.get(key, fallback)
+
+        factory_defaults = getattr(defaults, "factory_defaults", {})
+        return self.app.options.get(key, defaults.get(key, factory_defaults.get(key, fallback)))
+
     def plot_temp_shapes(self, element: BaseGeometry | list[BaseGeometry], color='red'):
 
         try:
@@ -611,7 +619,7 @@ class Geometry(object):
             # self.add_shape(shape=element, color=color, visible=visible, layer=0)
             self.temp_shapes.add(
                 shape=element,
-                tolerance=float(self.app.options["global_tolerance"]),
+                tolerance=float(self._app_option("global_tolerance")),
                 color=color,
                 visible=True,
                 layer=0,
@@ -1257,7 +1265,7 @@ class Geometry(object):
             return
 
         units = self.app.app_units if units is None else units
-        res = self.app.options['geometry_circle_steps']
+        res = self._app_option('geometry_circle_steps')
         factor = svgparse_viewbox(svg_root)
 
         # Apply unit conversion
@@ -1330,7 +1338,7 @@ class Geometry(object):
             if geos_text_f:
                 self.solid_geometry = self.solid_geometry + geos_text_f
 
-        tooldia = float(self.app.options["tools_mill_tooldia"])
+        tooldia = float(self._app_option("tools_mill_tooldia"))
         tooldia = float('%.*f' % (self.decimals, tooldia))
 
         new_data = {k: v for k, v in self.obj_options.items()}
@@ -1404,7 +1412,7 @@ class Geometry(object):
         else:  # It's shapely geometry
             self.solid_geometry = [self.solid_geometry, geos]
 
-        tooldia = float(self.app.options["tools_mill_tooldia"])
+        tooldia = float(self._app_option("tools_mill_tooldia"))
         tooldia = float('%.*f' % (self.decimals, tooldia))
 
         new_data = {k: v for k, v in self.obj_options.items()}
@@ -2431,12 +2439,12 @@ class Geometry(object):
             if self.multigeo:
                 for tool in self.tools:
                     flat_geo += self.flatten(self.tools[tool]['solid_geometry'],
-                                             pathonly=self.app.options["geometry_paths_only"])
+                                             pathonly=self._app_option("geometry_paths_only"))
                 geom_svg = unary_union(flat_geo)
             else:
-                geom_svg = unary_union(self.flatten(pathonly=self.app.options["geometry_paths_only"]))
+                geom_svg = unary_union(self.flatten(pathonly=self._app_option("geometry_paths_only")))
         else:
-            geom_svg = unary_union(self.flatten(pathonly=self.app.options["geometry_paths_only"]))
+            geom_svg = unary_union(self.flatten(pathonly=self._app_option("geometry_paths_only")))
 
         xmin, ymin, xmax, ymax = geom_svg.bounds
 
@@ -2841,7 +2849,7 @@ class CNCjob(Geometry):
 
         # Used when parsing G-code arcs
         self.steps_per_circle = steps_per_circle if steps_per_circle is not None else \
-            int(self.app.options['cncjob_steps_per_circle'])
+            int(self._app_option('cncjob_steps_per_circle'))
 
         Geometry.__init__(self, geo_steps_per_circle=self.steps_per_circle, app=app)
 
@@ -2884,7 +2892,7 @@ class CNCjob(Geometry):
         self.feedminutecode = "G94"
         # self.absolutecode = "G90"
         # self.incrementalcode = "G91"
-        self.coordinates_type = self.app.options["cncjob_coords_type"]
+        self.coordinates_type = self._app_option("cncjob_coords_type")
 
         self.gcode = ""
         self.gcode_parsed = None
@@ -2925,13 +2933,13 @@ class CNCjob(Geometry):
         self.input_geometry_bounds = None
 
         # compensation for CNC bed not square
-        self._bed_limit_x = self.app.options["cncjob_bed_max_x"]
-        self._bed_limit_y = self.app.options["cncjob_bed_max_y"]
+        self._bed_limit_x = self._app_option("cncjob_bed_max_x")
+        self._bed_limit_y = self._app_option("cncjob_bed_max_y")
 
-        self._bed_offset_x = self.app.options["cncjob_bed_offset_x"]
-        self._bed_offset_y = self.app.options["cncjob_bed_offset_y"]
-        self._bed_skew_x = self.app.options["cncjob_bed_skew_x"]
-        self._bed_skew_y = self.app.options["cncjob_bed_skew_y"]
+        self._bed_offset_x = self._app_option("cncjob_bed_offset_x")
+        self._bed_offset_y = self._app_option("cncjob_bed_offset_y")
+        self._bed_skew_x = self._app_option("cncjob_bed_skew_x")
+        self._bed_skew_y = self._app_option("cncjob_bed_skew_y")
 
         # coordinates used by the preprocessors position_code() method; updated when creating gcode
         self.x = 0.0
@@ -3549,7 +3557,7 @@ class CNCjob(Geometry):
             # if there are no locations then go to the next tool
             if not locations:
                 return 'fail'
-            opt_time = self.app.options["excellon_search_time"]
+            opt_time = self._app_option("excellon_search_time")
             optimized_path = self.optimized_ortools_meta(locations=locations, opt_time=opt_time)
         elif opt_type == 'B':
             locations = self.create_tool_data_array(points=points)
@@ -3626,7 +3634,7 @@ class CNCjob(Geometry):
 
         depths_list = self.calculate_depths(self.z_depthpercut)
 
-        self.coordinates_type = self.app.options["cncjob_coords_type"]
+        self.coordinates_type = self._app_option("cncjob_coords_type")
         if self.coordinates_type == "G90":
             # Drilling! for Absolute coordinates type G90
             # variables to display the percentage of work done
@@ -3939,7 +3947,7 @@ class CNCjob(Geometry):
         self.multidepth = tool_dict['tools_mill_multidepth']
         self.z_depthpercut = float(tool_dict['tools_mill_depthperpass'])
         self.z_move = float(tool_dict['tools_mill_travelz'])
-        self.f_plunge = self.app.options["tools_mill_f_plunge"]
+        self.f_plunge = self._app_option("tools_mill_f_plunge")
 
         self.feedrate = float(tool_dict['tools_mill_feedrate'])
         self.z_feedrate = float(tool_dict['tools_mill_feedrate_z'])
@@ -3961,12 +3969,12 @@ class CNCjob(Geometry):
         try:
             self.spindledir = tool_dict['tools_mill_spindledir']
         except KeyError:
-            self.spindledir = self.app.options["tools_mill_spindledir"]
+            self.spindledir = self._app_option("tools_mill_spindledir")
 
         try:
             self.spindledir = tool_dict['tools_mill_spindledir']
         except KeyError:
-            self.spindledir = self.app.options["tools_mill_spindledir"]
+            self.spindledir = self._app_option("tools_mill_spindledir")
 
         self.dwell = tool_dict['tools_mill_dwell']
         self.dwelltime = float(tool_dict['tools_mill_dwelltime'])
@@ -4515,7 +4523,7 @@ class CNCjob(Geometry):
                     # if there are no locations then go to the next tool
                     if not locations:
                         continue
-                    opt_time = self.app.options["excellon_search_time"]
+                    opt_time = self._app_option("excellon_search_time")
                     optimized_path = self.optimized_ortools_meta(locations=locations, opt_time=opt_time)
                 elif used_excellon_optimization_type == 'B':
                     if tool in points:
@@ -4588,7 +4596,7 @@ class CNCjob(Geometry):
 
                 depths_list = self.calculate_depths(self.z_depthpercut)
 
-                self.coordinates_type = self.app.options["cncjob_coords_type"]
+                self.coordinates_type = self._app_option("cncjob_coords_type")
                 if self.coordinates_type == "G90":
                     # Drilling! for Absolute coordinates type G90
                     # variables to display the percentage of work done
@@ -4758,7 +4766,7 @@ class CNCjob(Geometry):
                 # if there are no locations then go to the next tool
                 if not locations:
                     return 'fail'
-                opt_time = self.app.options["excellon_search_time"]
+                opt_time = self._app_option("excellon_search_time")
                 optimized_path = self.optimized_ortools_meta(locations=locations, opt_time=opt_time)
             elif used_excellon_optimization_type == 'B':
                 if all_points:
@@ -4823,7 +4831,7 @@ class CNCjob(Geometry):
 
             depths_list = self.calculate_depths(self.z_depthpercut)
 
-            self.coordinates_type = self.app.options["cncjob_coords_type"]
+            self.coordinates_type = self._app_option("cncjob_coords_type")
             if self.coordinates_type == "G90":
                 # Drilling! for Absolute coordinates type G90
                 # variables to display the percentage of work done
@@ -5078,19 +5086,26 @@ class CNCjob(Geometry):
         self.z_cut = float(z_cut) if z_cut else None
         self.z_move = float(z_move) if z_move is not None else None
 
-        self.feedrate = float(feedrate) if feedrate else self.app.options["geometry_feedrate"]
-        self.z_feedrate = float(feedrate_z) if feedrate_z is not None else self.app.options["geometry_feedrate_z"]
-        self.feedrate_rapid = float(feedrate_rapid) if feedrate_rapid else self.app.options["geometry_feedrate_rapid"]
+        self.feedrate = float(feedrate) if feedrate else self._app_option(
+            "geometry_feedrate", self._app_option("tools_mill_feedrate", feedrate))
+        self.z_feedrate = float(feedrate_z) if feedrate_z is not None else self._app_option(
+            "geometry_feedrate_z", self._app_option("tools_mill_feedrate_z", feedrate_z))
+        self.feedrate_rapid = float(feedrate_rapid) if feedrate_rapid else self._app_option(
+            "geometry_feedrate_rapid", self._app_option("tools_mill_feedrate_rapid", feedrate_rapid))
 
         self.spindlespeed = int(spindlespeed) if spindlespeed != 0 else None
         self.spindledir = spindledir
         self.dwell = dwell
-        self.dwelltime = float(dwelltime) if dwelltime else self.app.options["geometry_dwelltime"]
+        self.dwelltime = float(dwelltime) if dwelltime else self._app_option(
+            "geometry_dwelltime", self._app_option("tools_mill_dwelltime", dwelltime))
 
-        self.startz = float(startz) if startz is not None else self.app.options["geometry_startz"]
-        self.z_end = float(endz) if endz is not None else self.app.options["geometry_endz"]
+        self.startz = float(startz) if startz is not None else self._app_option(
+            "geometry_startz", self._app_option("tools_mill_startz", startz))
+        self.z_end = float(endz) if endz is not None else self._app_option(
+            "geometry_endz", self._app_option("tools_mill_endz", endz))
 
-        self.xy_end = re.sub(r'[()\[\]]', '', str(endxy)) if endxy else self.app.options["geometry_endxy"]
+        self.xy_end = re.sub(r'[()\[\]]', '', str(endxy)) if endxy else self._app_option(
+            "geometry_endxy", self._app_option("tools_mill_endxy", endxy))
 
         if self.xy_end and self.xy_end != '':
             self.xy_end = [float(eval(a)) for a in self.xy_end.split(",")]
@@ -5100,10 +5115,12 @@ class CNCjob(Geometry):
                                                    "in the format (x, y) but now there is only one value, not two."))
             return 'fail'
 
-        self.z_depthpercut = float(depthpercut) if depthpercut else self.app.options["geometry_depthperpass"]
+        self.z_depthpercut = float(depthpercut) if depthpercut else self._app_option(
+            "geometry_depthperpass", self._app_option("tools_mill_depthperpass", depthpercut))
         self.multidepth = multidepth
 
-        self.z_toolchange = float(toolchangez) if toolchangez is not None else self.app.options["geometry_toolchangez"]
+        self.z_toolchange = float(toolchangez) if toolchangez is not None else self._app_option(
+            "geometry_toolchangez", self._app_option("tools_mill_toolchangez", toolchangez))
 
         # it servers in the preprocessor file
         self.tool = tool_no
@@ -5113,7 +5130,8 @@ class CNCjob(Geometry):
                 self.xy_toolchange = None
             else:
                 self.xy_toolchange = re.sub(r'[()\[\]]', '', str(toolchangexy)) \
-                    if toolchangexy else self.app.options["geometry_toolchangexy"]
+                    if toolchangexy else self._app_option(
+                        "geometry_toolchangexy", self._app_option("tools_mill_toolchangexy", toolchangexy))
 
                 if self.xy_toolchange and self.xy_toolchange != '':
                     self.xy_toolchange = [float(eval(a)) for a in self.xy_toolchange.split(",")]
@@ -5128,7 +5146,7 @@ class CNCjob(Geometry):
             pass
 
         self.pp_geometry_name = pp_geometry_name if pp_geometry_name else 'default'
-        self.f_plunge = self.app.options["geometry_f_plunge"]
+        self.f_plunge = self._app_option("geometry_f_plunge", self._app_option("tools_mill_f_plunge"))
 
         if self.z_cut is None:
             if 'laser' not in self.pp_geometry_name:
@@ -5499,11 +5517,11 @@ class CNCjob(Geometry):
             temp_solid_geometry = flat_geometry
 
         default_dia = None
-        if isinstance(self.app.options["tools_mill_tooldia"], float):
-            default_dia = self.app.options["tools_mill_tooldia"]
+        if isinstance(self._app_option("tools_mill_tooldia"), float):
+            default_dia = self._app_option("tools_mill_tooldia")
         else:
             try:
-                tools_string = self.app.options["tools_mill_tooldia"].split(",")
+                tools_string = self._app_option("tools_mill_tooldia").split(",")
                 tools_diameters = [eval(a) for a in tools_string if a != '']
                 default_dia = tools_diameters[0] if tools_diameters else 0.0
             except Exception as e:
@@ -5518,27 +5536,27 @@ class CNCjob(Geometry):
             self.app.inform.emit('[ERROR] %s' % _("Failed."))
             return 'fail'
 
-        self.z_cut = float(z_cut) if z_cut is not None else self.app.options["tools_mill_cutz"]
-        self.z_move = float(z_move) if z_move is not None else self.app.options["tools_mill_travelz"]
+        self.z_cut = float(z_cut) if z_cut is not None else self._app_option("tools_mill_cutz")
+        self.z_move = float(z_move) if z_move is not None else self._app_option("tools_mill_travelz")
 
-        self.feedrate = float(feedrate) if feedrate is not None else self.app.options["tools_mill_feedrate"]
-        self.z_feedrate = float(feedrate_z) if feedrate_z is not None else self.app.options["tools_mill_feedrate_z"]
+        self.feedrate = float(feedrate) if feedrate is not None else self._app_option("tools_mill_feedrate")
+        self.z_feedrate = float(feedrate_z) if feedrate_z is not None else self._app_option("tools_mill_feedrate_z")
         self.feedrate_rapid = float(feedrate_rapid) if feedrate_rapid is not None else \
-            self.app.options["tools_mill_feedrate_rapid"]
+            self._app_option("tools_mill_feedrate_rapid")
 
         self.spindlespeed = int(spindlespeed) if spindlespeed != 0 and spindlespeed is not None else None
         self.spindledir = spindle_dir
         self.dwell = dwell
-        self.dwelltime = float(dwelltime) if dwelltime is not None else self.app.options["tools_mill_dwelltime"]
+        self.dwelltime = float(dwelltime) if dwelltime is not None else self._app_option("tools_mill_dwelltime")
 
         self.laser_min_power = int(laser_min_power)
         self.laser_on_code = str(laser_on_code)
 
-        self.startz = float(startz) if startz is not None and startz != '' else self.app.options["tools_mill_startz"]
+        self.startz = float(startz) if startz is not None and startz != '' else self._app_option("tools_mill_startz")
 
-        self.z_end = float(endz) if endz is not None else self.app.options["tools_mill_endz"]
+        self.z_end = float(endz) if endz is not None else self._app_option("tools_mill_endz")
 
-        self.xy_end = endxy if endxy != '' and endxy else self.app.options["tools_mill_endxy"]
+        self.xy_end = endxy if endxy != '' and endxy else self._app_option("tools_mill_endxy")
         self.xy_end = re.sub(r'[()\[\]]', '', str(self.xy_end)) if self.xy_end else None
 
         if self.xy_end is not None and self.xy_end != '':
@@ -5554,9 +5572,9 @@ class CNCjob(Geometry):
         self.z_depthpercut = abs(self.z_depthpercut)
         self.multidepth = multidepth
         self.z_toolchange = float(toolchangez) if toolchangez is not None else \
-            self.app.options["tools_mill_toolchangez"]
+            self._app_option("tools_mill_toolchangez")
         self.extracut_length = float(extracut_length) if extracut_length is not None else \
-            self.app.options["tools_mill_extracut_length"]
+            self._app_option("tools_mill_extracut_length")
 
         try:
             if toolchangexy == '':
@@ -5581,7 +5599,7 @@ class CNCjob(Geometry):
             pass
 
         self.pp_geometry_name = pp_geometry_name if pp_geometry_name else 'default'
-        self.f_plunge = self.app.options["tools_mill_f_plunge"]
+        self.f_plunge = self._app_option("tools_mill_f_plunge")
 
         if self.z_cut is None:
             if 'laser' not in self.pp_geometry_name:
@@ -5638,11 +5656,11 @@ class CNCjob(Geometry):
         # #########################################################################################################
         # ############ Create the data. ###########################################################################
         # #########################################################################################################
-        opt_type = self.app.options["tools_mill_optimization_type"]
+        opt_type = self._app_option("tools_mill_optimization_type")
         if not HAS_ORTOOLS:
             opt_type = 'R'
 
-        opt_time = int(self.app.options['tools_mill_search_time'])
+        opt_time = int(self._app_option('tools_mill_search_time'))
 
         if opt_type == 'M':
             self.app.log.debug("Using OR-Tools Metaheuristic Guided Local Search path optimization.")
@@ -5896,7 +5914,7 @@ class CNCjob(Geometry):
         self.postdata['pp_solderpaste_name'] = kwargs['data']['tools_solderpaste_pp']
 
         self.pp_solderpaste_name = kwargs['data']['tools_solderpaste_pp'] if kwargs['data']['tools_solderpaste_pp'] \
-            else self.app.options['tools_solderpaste_pp']
+            else self._app_option('tools_solderpaste_pp')
         p = self.app.preprocessors[self.pp_solderpaste_name]
 
         # ## Flatten the geometry. Only linear elements (no polygons) remain.
@@ -5978,7 +5996,7 @@ class CNCjob(Geometry):
         gcode = ''
         path = geometry.coords
 
-        self.coordinates_type = self.app.options["cncjob_coords_type"]
+        self.coordinates_type = self._app_option("cncjob_coords_type")
         if self.coordinates_type == "G90":
             # For Absolute coordinates type G90
             first_x = path[0][0]
@@ -6275,8 +6293,8 @@ class CNCjob(Geometry):
         current = {'X': 0.0, 'Y': 0.0, 'Z': 0.0, 'G': 0}
 
         if tool_data is None:
-            toolchange_xy_mill = self.app.options["tools_mill_toolchangexy"]
-            toolchange_xy_drill = self.app.options["tools_drill_toolchangexy"]
+            toolchange_xy_mill = self._app_option("tools_mill_toolchangexy")
+            toolchange_xy_drill = self._app_option("tools_drill_toolchangexy")
         else:
             if "tools_drill_toolchange" in tool_data and tool_data["tools_mill_toolchange"] is True:
                 toolchange_xy_mill = tool_data["tools_mill_toolchangexy"]
@@ -6654,8 +6672,8 @@ class CNCjob(Geometry):
 
         if color is None:
             color = {
-                "T": [self.app.options["cncjob_travel_fill"], self.app.options["cncjob_travel_line"]],
-                "C": [self.app.options["cncjob_plot_fill"], self.app.options["cncjob_plot_line"]]
+                "T": [self._app_option("cncjob_travel_fill"), self._app_option("cncjob_travel_line")],
+                "C": [self._app_option("cncjob_plot_fill"), self._app_option("cncjob_plot_line")]
             }
 
         gcode_parsed = gcode_parsed if gcode_parsed else self.gcode_parsed
@@ -6685,7 +6703,7 @@ class CNCjob(Geometry):
         else:
             path_num = 0
 
-            self.coordinates_type = self.app.options["cncjob_coords_type"]
+            self.coordinates_type = self._app_option("cncjob_coords_type")
             if self.coordinates_type == "G90":
                 # For Absolute coordinates type G90
                 batch = []
@@ -6796,13 +6814,13 @@ class CNCjob(Geometry):
             return
 
         try:
-            if self.app.options['global_theme'] in ['default', 'light']:
+            if self._app_option('global_theme') in ['default', 'light']:
                 obj.annotation.set(text=text, pos=pos, visible=obj.obj_options['plot'],
-                                   font_size=self.app.options["cncjob_annotation_fontsize"],
-                                   color=self.app.options["cncjob_annotation_fontcolor"])
+                                   font_size=self._app_option("cncjob_annotation_fontsize"),
+                                   color=self._app_option("cncjob_annotation_fontcolor"))
             else:
                 # invert the color
-                old_color = self.app.options["cncjob_annotation_fontcolor"].lower()
+                old_color = self._app_option("cncjob_annotation_fontcolor").lower()
                 new_color = ''
                 code = {}
                 l1 = "#;0123456789abcdef"
@@ -6814,7 +6832,7 @@ class CNCjob(Geometry):
                     new_color += code[old_color[x]]
 
                 obj.annotation.set(text=text, pos=pos, visible=obj.obj_options['plot'],
-                                   font_size=self.app.options["cncjob_annotation_fontsize"],
+                                   font_size=self._app_option("cncjob_annotation_fontsize"),
                                    color=new_color)
         except Exception as e:
             self.app.log.error("CNCJob.plot2() --> annotations --> %s" % str(e))
@@ -6964,7 +6982,7 @@ class CNCjob(Geometry):
 
         p = self.pp_geometry
 
-        self.coordinates_type = self.app.options["cncjob_coords_type"]
+        self.coordinates_type = self._app_option("cncjob_coords_type")
         if self.coordinates_type == "G90":
             # For Absolute coordinates type G90
             first_x = path[0][0]
@@ -7109,7 +7127,7 @@ class CNCjob(Geometry):
         path = self.segment(target_linear.coords)
         p = self.pp_geometry
 
-        self.coordinates_type = self.app.options["cncjob_coords_type"]
+        self.coordinates_type = self._app_option("cncjob_coords_type")
         if self.coordinates_type == "G90":
             # For Absolute coordinates type G90
             first_x = path[0][0]
@@ -7321,7 +7339,7 @@ class CNCjob(Geometry):
         path = list(point.coords)
         p = self.pp_geometry
 
-        self.coordinates_type = self.app.options["cncjob_coords_type"]
+        self.coordinates_type = self._app_option("cncjob_coords_type")
         if self.coordinates_type == "G90":
             # For Absolute coordinates type G90
             first_x = path[0][0]
@@ -7627,7 +7645,7 @@ class CNCjob(Geometry):
                         for nr in numbers_in_header:
                             new_nr = float(nr) * xfactor
                             # replace the updated string
-                            line = line.replace(nr, ('%.*f' % (self.app.options["cncjob_coords_decimals"], new_nr))
+                            line = line.replace(nr, ('%.*f' % (self._app_option("cncjob_coords_decimals"), new_nr))
                                                 )
 
                 # this scales all the X and Y and Z and F values and also the Tool Dia in the toolchange message
@@ -7647,7 +7665,7 @@ class CNCjob(Geometry):
                             # replace the updated string
                             line = line.replace(
                                 match_x.group(1),
-                                'X%.*f' % (self.app.options["cncjob_coords_decimals"], new_x)
+                                'X%.*f' % (self._app_option("cncjob_coords_decimals"), new_x)
                             )
                     # find the Y group
                     match_y = self.g_y_re.search(line)
@@ -7656,7 +7674,7 @@ class CNCjob(Geometry):
                             new_y = float(match_y.group(1)[1:]) * yfactor
                             line = line.replace(
                                 match_y.group(1),
-                                'Y%.*f' % (self.app.options["cncjob_coords_decimals"], new_y)
+                                'Y%.*f' % (self._app_option("cncjob_coords_decimals"), new_y)
                             )
                     # find the Z group
                     match_z = self.g_z_re.search(line)
@@ -7665,7 +7683,7 @@ class CNCjob(Geometry):
                             new_z = float(match_z.group(1)[1:]) * xfactor
                             line = line.replace(
                                 match_z.group(1),
-                                'Z%.*f' % (self.app.options["cncjob_coords_decimals"], new_z)
+                                'Z%.*f' % (self._app_option("cncjob_coords_decimals"), new_z)
                             )
 
                     # find the F group
@@ -7675,7 +7693,7 @@ class CNCjob(Geometry):
                             new_f = float(match_f.group(1)[1:]) * xfactor
                             line = line.replace(
                                 match_f.group(1),
-                                'F%.*f' % (self.app.options["cncjob_fr_decimals"], new_f)
+                                'F%.*f' % (self._app_option("cncjob_fr_decimals"), new_f)
                             )
                     # find the T group (tool dia on toolchange)
                     match_t = self.g_t_re.search(line)
@@ -7684,7 +7702,7 @@ class CNCjob(Geometry):
                             new_t = float(match_t.group(1)[1:]) * xfactor
                             line = line.replace(
                                 match_t.group(1),
-                                '= %.*f' % (self.app.options["cncjob_coords_decimals"], new_t)
+                                '= %.*f' % (self._app_option("cncjob_coords_decimals"), new_t)
                             )
 
                 temp_gcode += line
@@ -7789,7 +7807,7 @@ class CNCjob(Geometry):
                         # replace the updated string
                         line = line.replace(
                             match_x.group(1),
-                            'X%.*f' % (self.app.options["cncjob_coords_decimals"], new_x)
+                            'X%.*f' % (self._app_option("cncjob_coords_decimals"), new_x)
                         )
                 match_y = self.g_y_re.search(line)
                 if match_y:
@@ -7797,7 +7815,7 @@ class CNCjob(Geometry):
                         new_y = float(match_y.group(1)[1:]) + dy
                         line = line.replace(
                             match_y.group(1),
-                            'Y%.*f' % (self.app.options["cncjob_coords_decimals"], new_y)
+                            'Y%.*f' % (self._app_option("cncjob_coords_decimals"), new_y)
                         )
                 temp_gcode += line
             lines.close()

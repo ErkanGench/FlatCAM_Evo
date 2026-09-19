@@ -20,6 +20,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from camlib import flatten_shapely_geometry
+from defaults import AppDefaults
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -113,8 +114,11 @@ class ToolInvertGerber(AppTool):
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
-        self.ui.margin_entry.set_value(float(self.app.options["tools_invert_margin"]))
-        self.ui.join_radio.set_value(self.app.options["tools_invert_join_style"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.margin_entry.set_value(float(self.app.options.get(
+            "tools_invert_margin", app_defaults.get("tools_invert_margin", AppDefaults.factory_defaults.get("tools_invert_margin")))))
+        self.ui.join_radio.set_value(self.app.options.get(
+            "tools_invert_join_style", app_defaults.get("tools_invert_join_style", AppDefaults.factory_defaults.get("tools_invert_join_style"))))
 
         # SELECT THE CURRENT OBJECT
         obj = self.app.collection.get_active()
@@ -131,7 +135,8 @@ class ToolInvertGerber(AppTool):
         if join_style is None:
             join_style = 'round'
 
-        grb_circle_steps = int(self.app.options["gerber_circle_steps"])
+        grb_circle_steps = int(self.app.options.get(
+            "gerber_circle_steps", app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))))
         obj_name = self.ui.gerber_combo.currentText()
 
         outname = obj_name + "_inverted"

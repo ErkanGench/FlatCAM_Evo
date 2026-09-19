@@ -55,7 +55,7 @@ class GeometryObject(FlatCAMObj, Geometry):
         self.app = app
         self.decimals = self.app.decimals
 
-        self.circle_steps = int(self.app.options["geometry_circle_steps"])
+        self.circle_steps = int(self._app_option("geometry_circle_steps"))
 
         FlatCAMObj.__init__(self, name, app=app)
         Geometry.__init__(self, geo_steps_per_circle=self.circle_steps, app=app)
@@ -97,17 +97,17 @@ class GeometryObject(FlatCAMObj, Geometry):
         })
 
         if "tools_mill_tooldia" not in self.obj_options:
-            if isinstance(self.app.options["tools_mill_tooldia"], float):
-                self.obj_options["tools_mill_tooldia"] = self.app.options["tools_mill_tooldia"]
+            if isinstance(self._app_option("tools_mill_tooldia"), float):
+                self.obj_options["tools_mill_tooldia"] = self._app_option("tools_mill_tooldia")
             else:
                 try:
-                    tools_string = self.app.options["tools_mill_tooldia"].split(",")
+                    tools_string = self._app_option("tools_mill_tooldia").split(",")
                     tools_diameters = [eval(a) for a in tools_string if a != '']
                     self.obj_options["tools_mill_tooldia"] = tools_diameters[0] if tools_diameters else 0.0
                 except Exception as e:
                     self.app.log.error("FlatCAMObj.GeometryObject.init() --> %s" % str(e))
 
-        self.obj_options["tools_mill_startz"] = self.app.options["tools_mill_startz"]
+        self.obj_options["tools_mill_startz"] = self._app_option("tools_mill_startz")
 
         # this will hold the tool unique ID that is useful when having multiple tools with same diameter
         self.tooluid = 0
@@ -152,16 +152,16 @@ class GeometryObject(FlatCAMObj, Geometry):
         self.tool_type = 'C1'
 
         # save here the old value for the Cut Z before it is changed by selecting a V-shape type tool in the tool table
-        self.old_cutz = self.app.options["tools_mill_cutz"]
+        self.old_cutz = self._app_option("tools_mill_cutz")
 
-        self.fill_color = self.app.options['geometry_plot_line']
-        self.outline_color = self.app.options['geometry_plot_line']
+        self.fill_color = self._app_option('geometry_plot_line')
+        self.outline_color = self._app_option('geometry_plot_line')
         self.alpha_level = 'FF'
 
         self.param_fields = {}
 
         # store here the state of the exclusion checkbox state to be restored after building the UI
-        self.exclusion_area_cb_is_checked = self.app.options["tools_mill_area_exclusion"]
+        self.exclusion_area_cb_is_checked = self._app_option("tools_mill_area_exclusion")
 
         # Attributes to be included in serialization
         # Always append to it because it carries contents
@@ -207,7 +207,7 @@ class GeometryObject(FlatCAMObj, Geometry):
                 offset_item_txt = tooluid_value['data']['tools_mill_offset_type']
             except KeyError:
                 # for older loaded projects
-                offset_item_txt = self.app.options['tools_mill_offset_type']
+                offset_item_txt = self._app_option('tools_mill_offset_type')
             offset_item = QtWidgets.QTableWidgetItem(offset_item_txt)
             offset_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
             self.ui.geo_tools_table.setItem(row_idx, 2, offset_item)  # Offset Type
@@ -219,7 +219,7 @@ class GeometryObject(FlatCAMObj, Geometry):
                 job_item_txt = tooluid_value['data']['tools_mill_job_type']
             except KeyError:
                 # for older loaded projects
-                job_item_txt = self.app.options['tools_mill_job_type']
+                job_item_txt = self._app_option('tools_mill_job_type')
             job_item = QtWidgets.QTableWidgetItem(job_item_txt)
             job_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
             self.ui.geo_tools_table.setItem(row_idx, 3, job_item)  # Job Type
@@ -231,7 +231,7 @@ class GeometryObject(FlatCAMObj, Geometry):
                 tool_shape_item_txt = tooluid_value['data']['tools_mill_tool_shape']
             except KeyError:
                 # for older loaded projects
-                tool_shape_item_txt = self.app.options['tools_mill_tool_shape']
+                tool_shape_item_txt = self._app_option('tools_mill_tool_shape')
             tool_shape_item = QtWidgets.QTableWidgetItem(tool_shape_item_txt)
             tool_shape_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
             self.ui.geo_tools_table.setItem(row_idx, 4, tool_shape_item)  # Tool Shape
@@ -415,7 +415,7 @@ class GeometryObject(FlatCAMObj, Geometry):
         self.ui.geo_tools_table.itemSelectionChanged.connect(self.on_row_changed)
         self.ui.geo_tools_table.horizontalHeader().sectionClicked.connect(self.table_toggle_all)
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self._app_option("global_app_level")
         self.change_level(app_mode)
 
     def on_row_changed(self):
@@ -581,7 +581,7 @@ class GeometryObject(FlatCAMObj, Geometry):
 
     def export_dxf(self):
         dwg = None
-        dxf_format = self.app.options['geometry_dxf_format']
+        dxf_format = self._app_option('geometry_dxf_format')
 
         try:
             dwg = ezdxf.new(dxf_format)
@@ -656,8 +656,8 @@ class GeometryObject(FlatCAMObj, Geometry):
         outname = "%s_%s" % (self.obj_options["name"], 'cnc') if outname is None else outname
 
         tools_dict = self.sel_tools if tools_dict is None else tools_dict
-        seg_x = seg_x if seg_x is not None else float(self.app.options['geometry_seg_x'])
-        seg_y = seg_y if seg_y is not None else float(self.app.options['geometry_seg_y'])
+        seg_x = seg_x if seg_x is not None else float(self._app_option('geometry_seg_x'))
+        seg_y = seg_y if seg_y is not None else float(self._app_option('geometry_seg_y'))
 
         try:
             xmin = self.obj_options['xmin']
@@ -697,11 +697,11 @@ class GeometryObject(FlatCAMObj, Geometry):
             job_obj.multigeo = False
             job_obj.tools.clear()
 
-            job_obj.seg_x = seg_x if seg_x else float(self.app.options["geometry_seg_x"])
-            job_obj.seg_y = seg_y if seg_y else float(self.app.options["geometry_seg_y"])
+            job_obj.seg_x = seg_x if seg_x else float(self._app_option("geometry_seg_x"))
+            job_obj.seg_y = seg_y if seg_y else float(self._app_option("geometry_seg_y"))
 
-            job_obj.z_p_depth = float(self.app.options["tools_mill_z_p_depth"])
-            job_obj.feedrate_probe = float(self.app.options["tools_mill_feedrate_probe"])
+            job_obj.z_p_depth = float(self._app_option("tools_mill_z_p_depth"))
+            job_obj.feedrate_probe = float(self._app_option("tools_mill_feedrate_probe"))
 
             total_gcode = ''
             for tool_uid_key in list(tools_dict.keys()):
@@ -760,11 +760,11 @@ class GeometryObject(FlatCAMObj, Geometry):
                 dwelltime = tools_dict[tool_uid_key]['data']["tools_mill_dwelltime"]
                 pp_geometry_name = tools_dict[tool_uid_key]['data']["tools_mill_ppname_g"]
 
-                spindledir = self.app.options['tools_mill_spindledir']
+                spindledir = self._app_option('tools_mill_spindledir')
                 tool_solid_geometry = self.solid_geometry
 
-                job_obj.coords_decimals = self.app.options["cncjob_coords_decimals"]
-                job_obj.fr_decimals = self.app.options["cncjob_fr_decimals"]
+                job_obj.coords_decimals = self._app_option("cncjob_coords_decimals")
+                job_obj.fr_decimals = self._app_option("cncjob_fr_decimals")
 
                 # Propagate options
                 job_obj.obj_options["tooldia"] = tooldia_val
@@ -776,7 +776,7 @@ class GeometryObject(FlatCAMObj, Geometry):
 
                 # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
                 # to a value of 0.0005 which is 20 times less than 0.01
-                tol = float(self.app.options['global_tolerance']) / 20
+                tol = float(self._app_option('global_tolerance')) / 20
                 res, start_gcode = job_obj.generate_from_geometry_2(
                     self, tooldia=tooldia_val, offset=tool_offset, tolerance=tol,
                     z_cut=z_cut, z_move=z_move,
@@ -839,11 +839,11 @@ class GeometryObject(FlatCAMObj, Geometry):
             job_obj.multigeo = True
             job_obj.tools.clear()
 
-            job_obj.seg_x = seg_x if seg_x else float(self.app.options["geometry_seg_x"])
-            job_obj.seg_y = seg_y if seg_y else float(self.app.options["geometry_seg_y"])
+            job_obj.seg_x = seg_x if seg_x else float(self._app_option("geometry_seg_x"))
+            job_obj.seg_y = seg_y if seg_y else float(self._app_option("geometry_seg_y"))
 
-            job_obj.z_p_depth = float(self.app.options["tools_mill_z_p_depth"])
-            job_obj.feedrate_probe = float(self.app.options["tools_mill_feedrate_probe"])
+            job_obj.z_p_depth = float(self._app_option("tools_mill_z_p_depth"))
+            job_obj.feedrate_probe = float(self._app_option("tools_mill_feedrate_probe"))
 
             # make sure that trying to make a CNCJob from an empty file is not creating an app crash
             if not self.solid_geometry:
@@ -864,7 +864,7 @@ class GeometryObject(FlatCAMObj, Geometry):
                     'tooldia': tooldia_val
                 })
                 if "optimization_type" not in tools_dict[tooluid_key]['data']:
-                    optimization_type = self.app.options["tools_mill_optimization_type"]
+                    optimization_type = self._app_option("tools_mill_optimization_type")
                     tools_dict[tooluid_key]['data']["tools_mill_optimization_type"] = optimization_type
 
                 # find the tool_dia associated with the tooluid_key
@@ -917,8 +917,8 @@ class GeometryObject(FlatCAMObj, Geometry):
                 # spindledir = self.app.options['geometry_spindledir']
                 tool_solid_geometry = self.tools[tooluid_key]['solid_geometry']
 
-                job_obj.coords_decimals = self.app.options["cncjob_coords_decimals"]
-                job_obj.fr_decimals = self.app.options["cncjob_fr_decimals"]
+                job_obj.coords_decimals = self._app_option("cncjob_coords_decimals")
+                job_obj.fr_decimals = self._app_option("cncjob_fr_decimals")
 
                 # Propagate options
                 job_obj.obj_options["tooldia"] = tooldia_val
@@ -927,7 +927,7 @@ class GeometryObject(FlatCAMObj, Geometry):
 
                 # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
                 # to a value of 0.0005 which is 20 times less than 0.01
-                tol = float(self.app.options['global_tolerance']) / 20
+                tol = float(self._app_option('global_tolerance')) / 20
 
                 tool_lst = list(tools_dict.keys())
                 is_first = True if tooluid_key == tool_lst[0] else False
@@ -1052,8 +1052,8 @@ class GeometryObject(FlatCAMObj, Geometry):
         multidepth = multidepth if multidepth is not None else self.obj_options["tools_mill_multidepth"]
         depthperpass = dpp if dpp is not None else float(self.obj_options["tools_mill_depthperpass"])
 
-        seg_x = seg_x if seg_x is not None else float(self.app.options['geometry_seg_x'])
-        seg_y = seg_y if seg_y is not None else float(self.app.options['geometry_seg_y'])
+        seg_x = seg_x if seg_x is not None else float(self._app_option('geometry_seg_x'))
+        seg_y = seg_y if seg_y is not None else float(self._app_option('geometry_seg_y'))
 
         extracut = extracut if extracut is not None else float(self.obj_options["tools_mill_extracut"])
         extracut_length = extracut_length if extracut_length is not None else float(self.obj_options[
@@ -1097,8 +1097,8 @@ class GeometryObject(FlatCAMObj, Geometry):
             job_obj.obj_options["tooldia"] = tooldia
             job_obj.obj_options["tools_mill_tooldia"] = tooldia
 
-            job_obj.coords_decimals = self.app.options["cncjob_coords_decimals"]
-            job_obj.fr_decimals = self.app.options["cncjob_fr_decimals"]
+            job_obj.coords_decimals = self._app_option("cncjob_coords_decimals")
+            job_obj.fr_decimals = self._app_option("cncjob_fr_decimals")
 
             job_obj.obj_options['type'] = 'Geometry'
             job_obj.obj_options['tool_dia'] = tooldia
@@ -1116,7 +1116,7 @@ class GeometryObject(FlatCAMObj, Geometry):
 
             # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
             # to a value of 0.0005 which is 20 times less than 0.01
-            tol = float(self.app.options['global_tolerance']) / 20
+            tol = float(self._app_option('global_tolerance')) / 20
             res, start_gcode = job_obj.generate_from_geometry_2(
                 self, tooldia=tooldia, offset=offset, tolerance=tol, z_cut=z_cut, z_move=z_move, feedrate=feedrate,
                 feedrate_z=feedrate_z, feedrate_rapid=feedrate_rapid, spindlespeed=spindlespeed, dwell=dwell,
@@ -1299,10 +1299,10 @@ class GeometryObject(FlatCAMObj, Geometry):
 
         self.obj_options["toolchangez"] = float(self.obj_options["toolchangez"]) * factor
 
-        if self.app.options["tools_mill_toolchangexy"] == '':
+        if self._app_option("tools_mill_toolchangexy") == '':
             self.obj_options['toolchangexy'] = "0.0, 0.0"
         else:
-            coords_xy = [float(eval(coord)) for coord in self.app.options["tools_mill_toolchangexy"].split(",")]
+            coords_xy = [float(eval(coord)) for coord in self._app_option("tools_mill_toolchangexy").split(",")]
             if len(coords_xy) < 2:
                 self.app.inform.emit('[ERROR] %s' %
                                      _("The Toolchange X,Y field in Edit -> Preferences "
@@ -1476,7 +1476,7 @@ class GeometryObject(FlatCAMObj, Geometry):
                             color = self.tools[tooluid_key]['data']['override_color']
                         else:
                             color = random_color() if self.obj_options['multicolored'] else \
-                                self.app.options["geometry_plot_line"]
+                                self._app_option("geometry_plot_line")
 
                         batch.extend(self._collect_elements(solid_geometry, color=color))
                 else:
@@ -1485,7 +1485,7 @@ class GeometryObject(FlatCAMObj, Geometry):
                         color = self.tools[plot_tool]['data']['override_color']
                     else:
                         color = random_color() if self.obj_options['multicolored'] else \
-                            self.app.options["geometry_plot_line"]
+                            self._app_option("geometry_plot_line")
 
                     batch.extend(self._collect_elements(solid_geometry, color=color))
             else:
@@ -1493,7 +1493,7 @@ class GeometryObject(FlatCAMObj, Geometry):
                 # for SingleGeo
                 if self.solid_geometry:
                     solid_geometry = self.solid_geometry
-                    color = self.app.options["geometry_plot_line"]
+                    color = self._app_option("geometry_plot_line")
 
                     batch.extend(self._collect_elements(solid_geometry, color=color))
 

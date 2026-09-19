@@ -78,33 +78,93 @@ class PaintOptionsTool(AppToolEditor):
 
     def set_tool_ui(self):
         # Init appGUI
-        if self.app.options["tools_paint_tooldia"]:
-            self.ui.painttooldia_entry.set_value(self.app.options["tools_paint_tooldia"])
+        if self.app.options.get(
+                "tools_paint_tooldia",
+                self.app.defaults.get(
+                    "tools_paint_tooldia",
+                    self.app.defaults.factory_defaults.get("tools_paint_tooldia")
+                )):
+            self.ui.painttooldia_entry.set_value(self.app.options.get(
+                "tools_paint_tooldia",
+                self.app.defaults.get(
+                    "tools_paint_tooldia",
+                    self.app.defaults.factory_defaults.get("tools_paint_tooldia")
+                )))
         else:
             self.ui.painttooldia_entry.set_value(0.0)
 
-        if self.app.options["tools_paint_overlap"]:
-            self.ui.paintoverlap_entry.set_value(self.app.options["tools_paint_overlap"])
+        if self.app.options.get(
+                "tools_paint_overlap",
+                self.app.defaults.get(
+                    "tools_paint_overlap",
+                    self.app.defaults.factory_defaults.get("tools_paint_overlap")
+                )):
+            self.ui.paintoverlap_entry.set_value(self.app.options.get(
+                "tools_paint_overlap",
+                self.app.defaults.get(
+                    "tools_paint_overlap",
+                    self.app.defaults.factory_defaults.get("tools_paint_overlap")
+                )))
         else:
             self.ui.paintoverlap_entry.set_value(0.0)
 
-        if self.app.options["tools_paint_offset"]:
-            self.ui.paintmargin_entry.set_value(self.app.options["tools_paint_offset"])
+        if self.app.options.get(
+                "tools_paint_offset",
+                self.app.defaults.get(
+                    "tools_paint_offset",
+                    self.app.defaults.factory_defaults.get("tools_paint_offset")
+                )):
+            self.ui.paintmargin_entry.set_value(self.app.options.get(
+                "tools_paint_offset",
+                self.app.defaults.get(
+                    "tools_paint_offset",
+                    self.app.defaults.factory_defaults.get("tools_paint_offset")
+                )))
         else:
             self.ui.paintmargin_entry.set_value(0.0)
 
-        if self.app.options["tools_paint_method"]:
-            self.ui.paintmethod_combo.set_value(self.app.options["tools_paint_method"])
+        if self.app.options.get(
+                "tools_paint_method",
+                self.app.defaults.get(
+                    "tools_paint_method",
+                    self.app.defaults.factory_defaults.get("tools_paint_method")
+                )):
+            self.ui.paintmethod_combo.set_value(self.app.options.get(
+                "tools_paint_method",
+                self.app.defaults.get(
+                    "tools_paint_method",
+                    self.app.defaults.factory_defaults.get("tools_paint_method")
+                )))
         else:
             self.ui.paintmethod_combo.set_value(_("Seed"))
 
-        if self.app.options["tools_paint_connect"]:
-            self.ui.pathconnect_cb.set_value(self.app.options["tools_paint_connect"])
+        if self.app.options.get(
+                "tools_paint_connect",
+                self.app.defaults.get(
+                    "tools_paint_connect",
+                    self.app.defaults.factory_defaults.get("tools_paint_connect")
+                )):
+            self.ui.pathconnect_cb.set_value(self.app.options.get(
+                "tools_paint_connect",
+                self.app.defaults.get(
+                    "tools_paint_connect",
+                    self.app.defaults.factory_defaults.get("tools_paint_connect")
+                )))
         else:
             self.ui.pathconnect_cb.set_value(False)
 
-        if self.app.options["tools_paint_contour"]:
-            self.ui.paintcontour_cb.set_value(self.app.options["tools_paint_contour"])
+        if self.app.options.get(
+                "tools_paint_contour",
+                self.app.defaults.get(
+                    "tools_paint_contour",
+                    self.app.defaults.factory_defaults.get("tools_paint_contour")
+                )):
+            self.ui.paintcontour_cb.set_value(self.app.options.get(
+                "tools_paint_contour",
+                self.app.defaults.get(
+                    "tools_paint_contour",
+                    self.app.defaults.factory_defaults.get("tools_paint_contour")
+                )))
         else:
             self.ui.paintcontour_cb.set_value(False)
 
@@ -190,17 +250,35 @@ class PaintOptionsTool(AppToolEditor):
                             if method == _("Seed"):
                                 cp = Geometry.clear_polygon_seed(
                                     geo_editor, polygon_to_clear=poly_buf, tooldia=tooldia,
-                                    steps_per_circle=geo_editor.app.options["geometry_circle_steps"],
+                                    steps_per_circle=geo_editor.app.options.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.get(
+                                            "geometry_circle_steps",
+                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                        )
+                                    ),
                                     overlap=overlap, contour=contour, connect=connect)
                             elif method == _("Lines"):
                                 cp = Geometry.clear_polygon_lines(
                                     geo_editor, polygon=poly_buf, tooldia=tooldia,
-                                    steps_per_circle=geo_editor.app.options["geometry_circle_steps"],
+                                    steps_per_circle=geo_editor.app.options.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.get(
+                                            "geometry_circle_steps",
+                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                        )
+                                    ),
                                     overlap=overlap, contour=contour, connect=connect)
                             else:
                                 cp = Geometry.clear_polygon_shrink(
                                     geo_editor, polygon=poly_buf, tooldia=tooldia,
-                                    steps_per_circle=geo_editor.app.options["geometry_circle_steps"],
+                                    steps_per_circle=geo_editor.app.options.get(
+                                        "geometry_circle_steps",
+                                        geo_editor.app.defaults.get(
+                                            "geometry_circle_steps",
+                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
+                                        )
+                                    ),
                                     overlap=overlap, contour=contour, connect=connect)
 
                             if cp is not None:

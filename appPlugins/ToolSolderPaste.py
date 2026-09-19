@@ -7,6 +7,7 @@
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
+from defaults import AppDefaults
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCFileSaveDialog, \
     FCComboBox2, FCEntry, FCDoubleSpinner, FCSpinner, FCInputSpinner, FCTable
 
@@ -207,6 +208,11 @@ class SolderPaste(AppTool):
             "tools_solderpaste_dwellrev":       self.ui.dwellrev_entry,
             "tools_solderpaste_pp":             self.ui.pp_combo
         })
+
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+        )
         self.set_form_from_defaults()
 
         self.general_form_fields.update({
@@ -215,14 +221,14 @@ class SolderPaste(AppTool):
 
         for option in self.app.options:
             if option.find('tools_') == 0:
-                self.obj_options[option] = deepcopy(self.app.options[option])
+                self.obj_options[option] = deepcopy(app_option(option))
         self.read_form_to_options()
 
         self.clear_context_menu()
         self.init_context_menu()
 
         # either originally it was a string or not, xy_end will be made string
-        dias_option = self.app.options["tools_solderpaste_tools"]
+        dias_option = app_option("tools_solderpaste_tools")
         dias_option = re.sub(r'[()\[\]]', '', str(dias_option)) if dias_option else None
         try:
             dias = [float(eval(dia)) for dia in dias_option.split(",") if dia != '']
@@ -527,9 +533,12 @@ class SolderPaste(AppTool):
 
         :return:
         """
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+        )
         for key in self.form_fields:
-            if key in self.app.options:
-                self.form_fields[key].set_value(self.app.options[key])
+            self.form_fields[key].set_value(app_option(key))
 
     def set_form(self, val):
         """
@@ -1034,6 +1043,11 @@ class SolderPaste(AppTool):
             assert new_obj.kind == 'cncjob', \
                 "Initializer expected a CNCJobObject, got %s" % type(new_obj)
 
+            app_defaults = getattr(app_obj, "defaults", None) or AppDefaults.factory_defaults
+            app_option = lambda key: app_obj.options.get(
+                key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+            )
+
             # this turn on the FlatCAMCNCJob plot for multiple tools
             new_obj.multitool = True
             new_obj.multigeo = True
@@ -1053,8 +1067,8 @@ class SolderPaste(AppTool):
                 tool_dia = tooluid_value['tooldia']
                 tool_cnc_dict = deepcopy(tooluid_value)
 
-                new_obj.coords_decimals = self.app.options["cncjob_coords_decimals"]
-                new_obj.fr_decimals = self.app.options["cncjob_fr_decimals"]
+                new_obj.coords_decimals = app_option("cncjob_coords_decimals")
+                new_obj.fr_decimals = app_option("cncjob_fr_decimals")
                 new_obj.tool = int(tooluid_key)
 
                 # Propagate options
@@ -1177,6 +1191,10 @@ class SolderPaste(AppTool):
 
         :return:
         """
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        app_option = lambda key: self.app.options.get(
+            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))
+        )
         time_str = "{:%A, %d %B %Y at %H:%M}".format(dt.now())
         name = self.ui.cnc_obj_combo.currentText()
         obj = self.app.collection.get_by_name(name)
@@ -1233,7 +1251,7 @@ class SolderPaste(AppTool):
                                        "Most likely another app is holding the file open and not accessible."))
                 return 'fail'
 
-        if self.app.options["global_open_style"] is False:
+        if app_option("global_open_style") is False:
             self.app.file_opened.emit("gcode", filename)
         self.app.file_saved.emit("gcode", filename)
         self.app.inform.emit('[success] %s: %s' % (_("Saved to"), filename))

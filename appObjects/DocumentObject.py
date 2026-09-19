@@ -70,22 +70,22 @@ class DocumentObject(FlatCAMObj):
         self.to_form()
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self._app_option("global_app_level")
         self.change_level(app_mode)
 
         self.document_editor_tab = AppTextEditor(app=self.app)
 
         self.document_editor_tab.buttonRun.hide()
 
-        self.ui.autocomplete_cb.set_value(self.app.options['document_autocompleter'])
-        self.on_autocomplete_changed(state=self.app.options['document_autocompleter'])
-        self.on_tab_size_change(val=self.app.options['document_tab_size'])
+        self.ui.autocomplete_cb.set_value(self._app_option('document_autocompleter'))
+        self.on_autocomplete_changed(state=self._app_option('document_autocompleter'))
+        self.on_tab_size_change(val=self._app_option('document_tab_size'))
 
-        self.ui.font_color_entry.set_value(self.app.options['document_font_color'])
-        self.ui.sel_color_entry.set_value(self.app.options['document_sel_color'])
-        self.ui.font_size_cb.setCurrentIndex(int(self.app.options['document_font_size']))
+        self.ui.font_color_entry.set_value(self._app_option('document_font_color'))
+        self.ui.sel_color_entry.set_value(self._app_option('document_sel_color'))
+        self.ui.font_size_cb.setCurrentIndex(int(self._app_option('document_font_size')))
 
-        font_sizes = self.app.options['document_font_sizes']
+        font_sizes = self._app_option('document_font_sizes')
         self.ui.font_size_cb.addItems(font_sizes)
 
         flt = "FlatCAM Docs (*.FlatDoc);;All Files (*.*)"
@@ -138,7 +138,7 @@ class DocumentObject(FlatCAMObj):
         except AttributeError:
             self.document_editor_tab.load_text(self.source_file, move_to_start=True, clear_text=True, as_html=True)
 
-        self.on_selection_color_entry(self.app.options["document_sel_color"])
+        self.on_selection_color_entry(self._app_option("document_sel_color"))
         # self.on_font_color_entry(self.app.options["document_font_color"])
 
         self.build_ui()

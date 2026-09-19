@@ -37,6 +37,7 @@ import builtins
 from appPlugins.ToolNCC.NccGen import NccGen
 from appParsers.ParseGerber import Gerber
 from appDatabase import load_tools_database
+from defaults import AppDefaults
 from camlib import grace, flatten_shapely_geometry
 from matplotlib.backend_bases import KeyEvent as mpl_key_event
 
@@ -56,7 +57,13 @@ class ToolNcc(Gerber, AppTool):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        Gerber.__init__(self, steps_per_circle=self.app.options["gerber_circle_steps"], app=app)
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        Gerber.__init__(
+            self,
+            steps_per_circle=self.app.options.get(
+                "gerber_circle_steps",
+                app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
+            app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -122,7 +129,9 @@ class ToolNcc(Gerber, AppTool):
         self.select_method = None
         self.tool_type_item_options = []
 
-        self.circle_steps = int(self.app.options["gerber_circle_steps"])
+        self.circle_steps = int(self.app.options.get(
+            "gerber_circle_steps",
+            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))))
 
         self.tooldia = None
 
@@ -358,7 +367,10 @@ class ToolNcc(Gerber, AppTool):
 
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
-        self.old_tool_dia = self.app.options["tools_ncc_newdia"]
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.old_tool_dia = self.app.options.get(
+            "tools_ncc_newdia",
+            app_defaults.get("tools_ncc_newdia", AppDefaults.factory_defaults.get("tools_ncc_newdia")))
 
         self.clear_ui(self.layout)
         self.ui = NccUI(layout=self.layout, app=self.app)
@@ -410,35 +422,78 @@ class ToolNcc(Gerber, AppTool):
             self.on_type_obj_index_changed(val=kind)
             self.on_reference_combo_changed()
 
-        self.ui.op_radio.set_value(self.app.options["tools_ncc_operation"])
-        self.ui.order_combo.set_value(self.app.options["tools_ncc_order"])
-        self.ui.overlap_entry.set_value(self.app.options["tools_ncc_overlap"])
-        self.ui.margin_entry.set_value(self.app.options["tools_ncc_margin"])
-        self.ui.method_combo.set_value(self.app.options["tools_ncc_method"])
-        self.ui.connect_cb.set_value(self.app.options["tools_ncc_connect"])
-        self.ui.contour_cb.set_value(self.app.options["tools_ncc_contour"])
-        self.ui.offset_choice_cb.set_value(self.app.options["tools_ncc_offset_choice"])
-        self.ui.offset_entry.set_value(self.app.options["tools_ncc_offset_value"])
+        self.ui.op_radio.set_value(self.app.options.get(
+            "tools_ncc_operation",
+            app_defaults.get("tools_ncc_operation", AppDefaults.factory_defaults.get("tools_ncc_operation"))))
+        self.ui.order_combo.set_value(self.app.options.get(
+            "tools_ncc_order",
+            app_defaults.get("tools_ncc_order", AppDefaults.factory_defaults.get("tools_ncc_order"))))
+        self.ui.overlap_entry.set_value(self.app.options.get(
+            "tools_ncc_overlap",
+            app_defaults.get("tools_ncc_overlap", AppDefaults.factory_defaults.get("tools_ncc_overlap"))))
+        self.ui.margin_entry.set_value(self.app.options.get(
+            "tools_ncc_margin",
+            app_defaults.get("tools_ncc_margin", AppDefaults.factory_defaults.get("tools_ncc_margin"))))
+        self.ui.method_combo.set_value(self.app.options.get(
+            "tools_ncc_method",
+            app_defaults.get("tools_ncc_method", AppDefaults.factory_defaults.get("tools_ncc_method"))))
+        self.ui.connect_cb.set_value(self.app.options.get(
+            "tools_ncc_connect",
+            app_defaults.get("tools_ncc_connect", AppDefaults.factory_defaults.get("tools_ncc_connect"))))
+        self.ui.contour_cb.set_value(self.app.options.get(
+            "tools_ncc_contour",
+            app_defaults.get("tools_ncc_contour", AppDefaults.factory_defaults.get("tools_ncc_contour"))))
+        self.ui.offset_choice_cb.set_value(self.app.options.get(
+            "tools_ncc_offset_choice",
+            app_defaults.get("tools_ncc_offset_choice", AppDefaults.factory_defaults.get("tools_ncc_offset_choice"))))
+        self.ui.offset_entry.set_value(self.app.options.get(
+            "tools_ncc_offset_value",
+            app_defaults.get("tools_ncc_offset_value", AppDefaults.factory_defaults.get("tools_ncc_offset_value"))))
 
-        self.ui.rest_cb.set_value(self.app.options["tools_ncc_rest"])
-        self.ui.on_rest_machining_check(state=self.app.options["tools_ncc_rest"])
+        self.ui.rest_cb.set_value(self.app.options.get(
+            "tools_ncc_rest",
+            app_defaults.get("tools_ncc_rest", AppDefaults.factory_defaults.get("tools_ncc_rest"))))
+        self.ui.on_rest_machining_check(state=self.app.options.get(
+            "tools_ncc_rest",
+            app_defaults.get("tools_ncc_rest", AppDefaults.factory_defaults.get("tools_ncc_rest"))))
 
-        self.ui.rest_margin_entry.set_value(self.app.options["tools_ncc_margin"])
-        self.ui.rest_connect_cb.set_value(self.app.options["tools_ncc_connect"])
-        self.ui.rest_contour_cb.set_value(self.app.options["tools_ncc_contour"])
-        self.ui.rest_offset_choice_cb.set_value(self.app.options["tools_ncc_offset_choice"])
-        self.ui.rest_offset_entry.set_value(self.app.options["tools_ncc_offset_value"])
+        self.ui.rest_margin_entry.set_value(self.app.options.get(
+            "tools_ncc_margin",
+            app_defaults.get("tools_ncc_margin", AppDefaults.factory_defaults.get("tools_ncc_margin"))))
+        self.ui.rest_connect_cb.set_value(self.app.options.get(
+            "tools_ncc_connect",
+            app_defaults.get("tools_ncc_connect", AppDefaults.factory_defaults.get("tools_ncc_connect"))))
+        self.ui.rest_contour_cb.set_value(self.app.options.get(
+            "tools_ncc_contour",
+            app_defaults.get("tools_ncc_contour", AppDefaults.factory_defaults.get("tools_ncc_contour"))))
+        self.ui.rest_offset_choice_cb.set_value(self.app.options.get(
+            "tools_ncc_offset_choice",
+            app_defaults.get("tools_ncc_offset_choice", AppDefaults.factory_defaults.get("tools_ncc_offset_choice"))))
+        self.ui.rest_offset_entry.set_value(self.app.options.get(
+            "tools_ncc_offset_value",
+            app_defaults.get("tools_ncc_offset_value", AppDefaults.factory_defaults.get("tools_ncc_offset_value"))))
 
-        self.ui.select_method_combo.set_value(self.app.options["tools_ncc_ref"])
-        self.ui.area_shape_radio.set_value(self.app.options["tools_ncc_area_shape"])
-        self.ui.valid_cb.set_value(self.app.options["tools_ncc_check_valid"])
+        self.ui.select_method_combo.set_value(self.app.options.get(
+            "tools_ncc_ref",
+            app_defaults.get("tools_ncc_ref", AppDefaults.factory_defaults.get("tools_ncc_ref"))))
+        self.ui.area_shape_radio.set_value(self.app.options.get(
+            "tools_ncc_area_shape",
+            app_defaults.get("tools_ncc_area_shape", AppDefaults.factory_defaults.get("tools_ncc_area_shape"))))
+        self.ui.valid_cb.set_value(self.app.options.get(
+            "tools_ncc_check_valid",
+            app_defaults.get("tools_ncc_check_valid", AppDefaults.factory_defaults.get("tools_ncc_check_valid"))))
 
-        self.ui.milling_type_radio.set_value(self.app.options["tools_ncc_milling_type"])
+        self.ui.milling_type_radio.set_value(self.app.options.get(
+            "tools_ncc_milling_type",
+            app_defaults.get("tools_ncc_milling_type", AppDefaults.factory_defaults.get("tools_ncc_milling_type"))))
 
-        self.ui.new_tooldia_entry.set_value(self.app.options["tools_ncc_newdia"])
+        self.ui.new_tooldia_entry.set_value(self.app.options.get(
+            "tools_ncc_newdia",
+            app_defaults.get("tools_ncc_newdia", AppDefaults.factory_defaults.get("tools_ncc_newdia"))))
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
 
         # init the working variables
@@ -447,18 +502,22 @@ class ToolNcc(Gerber, AppTool):
         for option in self.app.options:
             if option.find(kind + "_") == 0:
                 oname = option[len(kind) + 1:]
-                self.default_data[oname] = self.app.options[option]
+                self.default_data[oname] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
             if option.find('tools_') == 0:
-                self.default_data[option] = self.app.options[option]
+                self.default_data[option] = self.app.options.get(
+                    option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
+        tools_ncc_tools = self.app.options.get(
+            "tools_ncc_tools", app_defaults.get("tools_ncc_tools", AppDefaults.factory_defaults.get("tools_ncc_tools")))
         try:
-            dias = [float(self.app.options["tools_ncc_tools"])]
+            dias = [float(tools_ncc_tools)]
         except (ValueError, TypeError):
             try:
-                dias = [float(eval(dia)) for dia in self.app.options["tools_ncc_tools"].split(",") if dia != '']
+                dias = [float(eval(dia)) for dia in tools_ncc_tools.split(",") if dia != '']
             except AttributeError:
-                dias = self.app.options["tools_ncc_tools"]
+                dias = tools_ncc_tools
         except Exception:
             dias = []
 
@@ -480,7 +539,9 @@ class ToolNcc(Gerber, AppTool):
         self.cursor_pos = None
         self.mouse_is_dragging = False
 
-        prog_plot = True if self.app.options["tools_ncc_plotting"] == 'progressive' else False
+        prog_plot = True if self.app.options.get(
+            "tools_ncc_plotting",
+            app_defaults.get("tools_ncc_plotting", AppDefaults.factory_defaults.get("tools_ncc_plotting"))) == 'progressive' else False
         if prog_plot:
             self.temp_shapes.clear(update=True)
 
@@ -506,6 +567,7 @@ class ToolNcc(Gerber, AppTool):
         self.on_level_changed(self.ui.level.isChecked())
 
     def on_level_changed(self, checked):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         if not checked:
             self.ui.level.setText('%s' % _('Beginner'))
             self.ui.level.setStyleSheet("""
@@ -558,16 +620,25 @@ class ToolNcc(Gerber, AppTool):
 
             # Tool parameters section
             if self.ncc_tools:
-                app_defaults = self.app.options
                 for tool in self.ncc_tools:
                     tool_data = self.ncc_tools[tool]['data']
 
-                    tool_data['tools_ncc_operation'] = app_defaults['tools_ncc_operation']
-                    tool_data['tools_ncc_milling_type'] = app_defaults['tools_ncc_milling_type']
+                    tool_data['tools_ncc_operation'] = self.app.options.get(
+                        "tools_ncc_operation",
+                        app_defaults.get("tools_ncc_operation", AppDefaults.factory_defaults.get("tools_ncc_operation")))
+                    tool_data['tools_ncc_milling_type'] = self.app.options.get(
+                        "tools_ncc_milling_type",
+                        app_defaults.get("tools_ncc_milling_type", AppDefaults.factory_defaults.get("tools_ncc_milling_type")))
 
-                    tool_data['tools_ncc_offset_choice'] = app_defaults['tools_ncc_offset_choice']
-                    tool_data['tools_ncc_offset_value'] = app_defaults['tools_ncc_offset_value']
-                    tool_data['tools_ncc_rest'] = app_defaults['tools_ncc_rest']
+                    tool_data['tools_ncc_offset_choice'] = self.app.options.get(
+                        "tools_ncc_offset_choice",
+                        app_defaults.get("tools_ncc_offset_choice", AppDefaults.factory_defaults.get("tools_ncc_offset_choice")))
+                    tool_data['tools_ncc_offset_value'] = self.app.options.get(
+                        "tools_ncc_offset_value",
+                        app_defaults.get("tools_ncc_offset_value", AppDefaults.factory_defaults.get("tools_ncc_offset_value")))
+                    tool_data['tools_ncc_rest'] = self.app.options.get(
+                        "tools_ncc_rest",
+                        app_defaults.get("tools_ncc_rest", AppDefaults.factory_defaults.get("tools_ncc_rest")))
 
             self.ui.op_label.show()
             self.ui.op_radio.show()
@@ -1772,12 +1843,17 @@ class ToolNcc(Gerber, AppTool):
         if self.app.grid_status():
             # Update cursor
             curr_pos = self.app.geo_editor.snap(curr_pos[0], curr_pos[1])
+            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
             self.app.app_cursor.set_data(
                 np.asarray([(curr_pos[0], curr_pos[1])]),
                 symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                edge_width=self.app.options["global_cursor_width"],
-                size=self.app.options["global_cursor_size"],
+                edge_width=self.app.options.get(
+                    "global_cursor_width",
+                    app_defaults.get("global_cursor_width", AppDefaults.factory_defaults.get("global_cursor_width"))),
+                size=self.app.options.get(
+                    "global_cursor_size",
+                    app_defaults.get("global_cursor_size", AppDefaults.factory_defaults.get("global_cursor_size"))),
             )
 
         if self.cursor_pos is None:

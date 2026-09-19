@@ -48,7 +48,7 @@ class GerberObject(FlatCAMObj, Gerber):
         self.app = app
         self.decimals = self.app.decimals
 
-        self.circle_steps = int(self.app.options["gerber_circle_steps"])
+        self.circle_steps = int(self._app_option("gerber_circle_steps"))
 
         Gerber.__init__(self, steps_per_circle=self.circle_steps, app=app)
         FlatCAMObj.__init__(self, name, app=app)
@@ -98,8 +98,8 @@ class GerberObject(FlatCAMObj, Gerber):
 
         self.units_found = self.app.app_units
 
-        self.fill_color = self.app.options['gerber_plot_fill']
-        self.outline_color = self.app.options['gerber_plot_line']
+        self.fill_color = self._app_option('gerber_plot_fill')
+        self.outline_color = self._app_option('gerber_plot_line')
         self.alpha_level = 'bf'
 
         # keep track if the UI is built, so we don't have to build it every time
@@ -183,10 +183,10 @@ class GerberObject(FlatCAMObj, Gerber):
         self.do_buffer_signal.connect(self.on_generate_buffer)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self._app_option("global_app_level")
         self.change_level(app_mode)
 
-        if self.app.options["gerber_buffering"] == 'no':
+        if self._app_option("gerber_buffering") == 'no':
             self.ui.create_buffer_button.show()
             try:
                 self.ui.create_buffer_button.clicked.disconnect(self.on_generate_buffer)
@@ -548,20 +548,20 @@ class GerberObject(FlatCAMObj, Gerber):
             work_geo = geometry
 
         if dia is None:
-            dia = float(self.app.options["tools_iso_tooldia"])
+            dia = float(self._app_option("tools_iso_tooldia"))
 
         if passes is None:
-            passes = int(self.app.options["tools_iso_passes"])
+            passes = int(self._app_option("tools_iso_passes"))
 
         if overlap is None:
-            overlap = float(self.app.options["tools_iso_overlap"])
+            overlap = float(self._app_option("tools_iso_overlap"))
 
         overlap /= 100.0
 
-        combine = self.app.options["tools_iso_combine_passes"] if combine is None else bool(combine)
+        combine = self._app_option("tools_iso_combine_passes") if combine is None else bool(combine)
 
         if milling_type is None:
-            milling_type = self.app.options["tools_iso_milling_type"]
+            milling_type = self._app_option("tools_iso_milling_type")
 
         if iso_type is None:
             iso_t = 2
@@ -584,7 +584,7 @@ class GerberObject(FlatCAMObj, Gerber):
             def iso_init(geo_obj, app_obj):
                 # Propagate options
                 geo_obj.obj_options["tools_mill_tooldia"] = str(dia)
-                geo_obj.tool_type = self.app.options["tools_iso_tool_shape"]
+                geo_obj.tool_type = self._app_option("tools_iso_tool_shape")
                 geo_obj.multigeo = True
 
                 # store here the default data for Geometry Data
@@ -592,9 +592,9 @@ class GerberObject(FlatCAMObj, Gerber):
                 for opt_key, opt_val in app_obj.options.items():
                     if opt_key.find('geometry' + "_") == 0:
                         oname = opt_key[len('geometry') + 1:]
-                        default_data[oname] = app_obj.options[opt_key]
+                        default_data[oname] = self._app_option(opt_key)
                     if opt_key.find('tools_mill' + "_") == 0:
-                        default_data[opt_key] = app_obj.options[opt_key]
+                        default_data[opt_key] = self._app_option(opt_key)
 
                 geo_obj.tools = {
                     1: {
@@ -672,7 +672,7 @@ class GerberObject(FlatCAMObj, Gerber):
                 def iso_init(geo_obj, app_obj):
                     # Propagate options
                     geo_obj.obj_options["tools_mill_tooldia"] = str(dia)
-                    geo_obj.tool_type = app_obj.options["tools_iso_tool_shape"]
+                    geo_obj.tool_type = self._app_option("tools_iso_tool_shape")
                     geo_obj.multigeo = True
 
                     # if milling type is climb then the move is counter-clockwise around features
@@ -691,9 +691,9 @@ class GerberObject(FlatCAMObj, Gerber):
                     for opt_key, opt_val in app_obj.options.items():
                         if opt_key.find('geometry' + "_") == 0:
                             oname = opt_key[len('geometry') + 1:]
-                            default_data[oname] = app_obj.options[opt_key]
+                            default_data[oname] = self._app_option(opt_key)
                         if opt_key.find('tools_mill' + "_") == 0:
-                            default_data[opt_key] = app_obj.options[opt_key]
+                            default_data[opt_key] = self._app_option(opt_key)
 
                     geo_obj.tools = {
                         1: {
@@ -778,11 +778,15 @@ class GerberObject(FlatCAMObj, Gerber):
             follow_name = outname
 
         def follow_init(new_obj, app_obj):
-            if type(app_obj.defaults["tools_mill_tooldia"]) == float:
-                tools_list = [app_obj.defaults["tools_mill_tooldia"]]
+            tool_dia_default = app_obj.defaults.get(
+                "tools_mill_tooldia",
+                app_obj.defaults.factory_defaults.get("tools_mill_tooldia")
+            )
+            if type(tool_dia_default) == float:
+                tools_list = [tool_dia_default]
             else:
                 try:
-                    temp_tools = app_obj.defaults["tools_mill_tooldia"].split(",")
+                    temp_tools = tool_dia_default.split(",")
                     tools_list = [
                         float(eval(dia)) for dia in temp_tools if dia != ''
                     ]
@@ -795,16 +799,16 @@ class GerberObject(FlatCAMObj, Gerber):
             # new_obj.obj_options["tools_mill_tooldia"] = str(self.app.options["tools_iso_tooldia"])
             new_obj.solid_geometry = deepcopy(self.follow_geometry)
 
-            new_obj.obj_options["tools_mill_tooldia"] = app_obj.options["tools_mill_tooldia"]
+            new_obj.obj_options["tools_mill_tooldia"] = self._app_option("tools_mill_tooldia")
 
             # store here the default data for Geometry Data
             default_data = {}
             for opt_key, opt_val in app_obj.options.items():
                 if opt_key.find('geometry' + "_") == 0:
                     oname = opt_key[len('geometry') + 1:]
-                    default_data[oname] = app_obj.options[opt_key]
+                    default_data[oname] = self._app_option(opt_key)
                 if opt_key.find('tools_mill' + "_") == 0:
-                    default_data[opt_key] = app_obj.options[opt_key]
+                    default_data[opt_key] = self._app_option(opt_key)
 
             new_obj.tools = {
                 1: {
@@ -960,7 +964,7 @@ class GerberObject(FlatCAMObj, Gerber):
                         used_color = random_color() if self.obj_options['multicolored'] else 'black'
                         used_face_color = None
 
-                    if self.app.options["gerber_plot_line_enable"] is False:
+                    if self._app_option("gerber_plot_line_enable") is False:
                         used_color = None
                     if isinstance(g, (Polygon, LineString)):
                         batch.append({
@@ -983,7 +987,7 @@ class GerberObject(FlatCAMObj, Gerber):
                     used_color = random_color() if self.obj_options['multicolored'] else 'black'
                     used_face_color = None
 
-                if self.app.options["gerber_plot_line_enable"] is False:
+                if self._app_option("gerber_plot_line_enable") is False:
                     used_color = None
                 if isinstance(plot_geometry, (Polygon, LineString)):
                     self.add_shape(shape=plot_geometry, color=used_color, face_color=used_face_color, visible=visible)
@@ -1017,7 +1021,7 @@ class GerberObject(FlatCAMObj, Gerber):
         #     return
 
         # for marking apertures, line color and fill color are the same
-        color = kwargs['color'] if 'color' in kwargs else self.app.options['gerber_plot_fill']
+        color = kwargs['color'] if 'color' in kwargs else self._app_option('gerber_plot_fill')
 
         if 'marked_aperture' in kwargs:
             aperture_to_plot_mark = kwargs['marked_aperture']
@@ -1114,7 +1118,7 @@ class GerberObject(FlatCAMObj, Gerber):
         if self.ui.apertures_table.cellWidget(cw_row, 5).isChecked():
             self.marked_rows.append(True)
             # self.plot_aperture(color='#2d4606bf', marked_aperture=aperture, visible=True)
-            color = self.app.options['global_sel_draw_color']
+            color = self._app_option('global_sel_draw_color')
             color = (color + 'AF') if len(color) == 7 else (color[:-2] + 'AF')
             self.plot_aperture(color=color, marked_aperture=aperture, visible=True, run_thread=True)
         else:
@@ -1152,7 +1156,7 @@ class GerberObject(FlatCAMObj, Gerber):
         if mark_all:
             for aperture in self.tools:
                 # self.plot_aperture(color='#2d4606bf', marked_aperture=aperture, visible=True)
-                color = self.app.options['global_sel_draw_color']
+                color = self._app_option('global_sel_draw_color')
                 color = (color + 'AF') if len(color) == 7 else (color[:-2] + 'AF')
                 self.plot_aperture(color=color, marked_aperture=aperture, visible=True)
             # HACK: enable/disable the grid for a better look

@@ -9,6 +9,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCEntry, \
     RadioSet, FCDoubleSpinner, NumericalEvalEntry
+from defaults import AppDefaults
 from camlib import flatten_shapely_geometry
 
 import logging
@@ -182,7 +183,11 @@ class ToolEtchCompensation(AppTool):
         ratio_type = self.ui.ratio_radio.get_value()
         thickness = self.ui.thick_entry.get_value() / 1000     # in microns
 
-        grb_circle_steps = int(self.app.options["gerber_circle_steps"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        grb_circle_steps = int(self.app.options.get(
+            "gerber_circle_steps",
+            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))
+        ))
         obj_name = self.ui.gerber_combo.currentText()
 
         outname = obj_name + "_comp"

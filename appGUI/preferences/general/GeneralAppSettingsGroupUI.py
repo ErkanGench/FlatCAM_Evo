@@ -6,6 +6,7 @@ from appGUI.GUIElements import OptionalInputSection
 from appGUI.preferences.OptionUI import OptionUI, HeadingOptionUI, SeparatorOptionUI, DoubleSpinnerOptionUI, \
     SpinnerOptionUI, CheckboxOptionUI, ComboboxOptionUI, RadioSetOptionUI, ColorOptionUI
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI2
+from appDatabase import _database_option
 
 import gettext
 import appTranslation as fcTranslate
@@ -291,7 +292,7 @@ class GeneralAppSettingsGroupUI(OptionsGroupUI2):
 
     def on_mouse_cursor_color_enable(self, val):
         if val:
-            self.app.cursor_color_3D = self.app.options["global_cursor_color"]
+            self.app.cursor_color_3D = _database_option(self.app, "global_cursor_color")
         else:
             theme_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
             if theme_settings.contains("theme"):
@@ -311,4 +312,4 @@ class GeneralAppSettingsGroupUI(OptionsGroupUI2):
 
     def on_mouse_cursor_entry(self):
         self.app.options['global_cursor_color'] = self.mouse_cursor_color_field.get_value()
-        self.app.cursor_color_3D = self.app.options["global_cursor_color"]
+        self.app.cursor_color_3D = _database_option(self.app, "global_cursor_color")

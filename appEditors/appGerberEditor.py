@@ -99,7 +99,13 @@ class PadEditorGrb(ShapeToolEditorGrb):
             self.dont_execute = False
 
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
-        self.steps_per_circ = self.draw_app.app.options["geometry_circle_steps"]
+        self.steps_per_circ = self.draw_app.app.options.get(
+            "geometry_circle_steps",
+            self.draw_app.app.defaults.get(
+                "geometry_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
+            )
+        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -171,7 +177,13 @@ class PadEditorGrb(ShapeToolEditorGrb):
         # updating values here allows us to change the aperture on the fly, after the Tool has been started
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
         self.radius = float(self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['size']) / 2
-        self.steps_per_circ = self.draw_app.app.options["geometry_circle_steps"]
+        self.steps_per_circ = self.draw_app.app.options.get(
+            "geometry_circle_steps",
+            self.draw_app.app.defaults.get(
+                "geometry_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
+            )
+        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -454,7 +466,13 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         QtGui.QGuiApplication.setOverrideCursor(self.cursor)
 
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
-        self.steps_per_circ = self.draw_app.app.options["geometry_circle_steps"]
+        self.steps_per_circ = self.draw_app.app.options.get(
+            "geometry_circle_steps",
+            self.draw_app.app.defaults.get(
+                "geometry_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
+            )
+        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -689,7 +707,13 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         # updating values here allows us to change the aperture on the fly, after the Tool has been started
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
         self.radius = float(self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['size']) / 2
-        self.steps_per_circ = self.draw_app.app.options["geometry_circle_steps"]
+        self.steps_per_circ = self.draw_app.app.options.get(
+            "geometry_circle_steps",
+            self.draw_app.app.defaults.get(
+                "geometry_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
+            )
+        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -1106,7 +1130,12 @@ class PoligonizeEditorGrb(ShapeToolEditorGrb):
         # MS: always return to the Select Tool if modifier key is not pressed
         # else return to the current tool
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
-        if self.draw_app.app.options["global_mselect_key"] == 'Control':
+        if self.draw_app.app.options.get(
+                "global_mselect_key",
+                self.draw_app.app.defaults.get(
+                    "global_mselect_key",
+                    self.draw_app.app.defaults.factory_defaults.get("global_mselect_key")
+                )) == 'Control':
             modifier_to_use = Qt.KeyboardModifier.ControlModifier
         else:
             modifier_to_use = Qt.KeyboardModifier.ShiftModifier
@@ -1136,7 +1165,13 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         self.app = self.draw_app.app
         self.dont_execute = False
 
-        self.steps_per_circle = self.draw_app.app.options["gerber_circle_steps"]
+        self.steps_per_circle = self.draw_app.app.options.get(
+            "gerber_circle_steps",
+            self.draw_app.app.defaults.get(
+                "gerber_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
+            )
+        )
 
         # regions are added always in the 0 aperture
         if 0 not in self.draw_app.storage_dict:
@@ -1616,7 +1651,13 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         self.app = self.draw_app.app
         self.dont_execute = False
 
-        self.steps_per_circle = self.draw_app.app.options["gerber_circle_steps"]
+        self.steps_per_circle = self.draw_app.app.options.get(
+            "gerber_circle_steps",
+            self.draw_app.app.defaults.get(
+                "gerber_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
+            )
+        )
 
         try:
             self.size_ap = float(self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['size'])
@@ -2107,7 +2148,13 @@ class DiscEditorGrb(ShapeToolEditorGrb):
 
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
-        self.steps_per_circ = self.draw_app.app.options["gerber_circle_steps"]
+        self.steps_per_circ = self.draw_app.app.options.get(
+            "gerber_circle_steps",
+            self.draw_app.app.defaults.get(
+                "gerber_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
+            )
+        )
 
     def click(self, point):
         self.points.append(point)
@@ -2227,7 +2274,13 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
             }
             self.storage_obj = self.draw_app.storage_dict[0]['geometry']
 
-        self.steps_per_circ = self.draw_app.app.options["gerber_circle_steps"]
+        self.steps_per_circ = self.draw_app.app.options.get(
+            "gerber_circle_steps",
+            self.draw_app.app.defaults.get(
+                "gerber_circle_steps",
+                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
+            )
+        )
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
     def click(self, point):
@@ -2600,7 +2653,12 @@ class SimplifyEditorGrb(ShapeToolEditorGrb):
         else:
             mod_key = None
 
-        if mod_key == self.draw_app.app.options["global_mselect_key"]:
+        if mod_key == self.draw_app.app.options.get(
+                "global_mselect_key",
+                self.draw_app.app.defaults.get(
+                    "global_mselect_key",
+                    self.draw_app.app.defaults.factory_defaults.get("global_mselect_key")
+                )):
             pass
         else:
             self.draw_app.selected = []
@@ -2616,7 +2674,12 @@ class SimplifyEditorGrb(ShapeToolEditorGrb):
         else:
             mod_key = None
 
-        if mod_key != self.draw_app.app.options["global_mselect_key"]:
+        if mod_key != self.draw_app.app.options.get(
+                "global_mselect_key",
+                self.draw_app.app.defaults.get(
+                    "global_mselect_key",
+                    self.draw_app.app.defaults.factory_defaults.get("global_mselect_key")
+                )):
             self.draw_app.selected.clear()
 
         for storage_val in self.draw_app.storage_dict.values():
@@ -2798,7 +2861,13 @@ class MoveEditorGrb(ShapeToolEditorGrb):
 
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
-        self.sel_limit = self.draw_app.app.options["gerber_editor_sel_limit"]
+        self.sel_limit = self.draw_app.app.options.get(
+            "gerber_editor_sel_limit",
+            self.draw_app.app.defaults.get(
+                "gerber_editor_sel_limit",
+                self.draw_app.app.defaults.factory_defaults.get("gerber_editor_sel_limit")
+            )
+        )
         self.selection_shape = self.selection_bbox()
 
     def set_origin(self, origin):
@@ -3013,7 +3082,13 @@ class EraserEditorGrb(ShapeToolEditorGrb):
 
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
-        self.sel_limit = self.draw_app.app.options["gerber_editor_sel_limit"]
+        self.sel_limit = self.draw_app.app.options.get(
+            "gerber_editor_sel_limit",
+            self.draw_app.app.defaults.get(
+                "gerber_editor_sel_limit",
+                self.draw_app.app.defaults.factory_defaults.get("gerber_editor_sel_limit")
+            )
+        )
 
     def set_origin(self, origin):
         self.origin = origin
@@ -3251,7 +3326,12 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
         else:
             mod_key = None
 
-        if mod_key == self.draw_app.app.options["global_mselect_key"]:
+        if mod_key == self.draw_app.app.options.get(
+                "global_mselect_key",
+                self.draw_app.app.defaults.get(
+                    "global_mselect_key",
+                    self.draw_app.app.defaults.factory_defaults.get("global_mselect_key")
+                )):
             pass
         else:
             self.draw_app.selected = []
@@ -3267,7 +3347,12 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
         else:
             mod_key = None
 
-        if mod_key != self.draw_app.app.options["global_mselect_key"]:
+        if mod_key != self.draw_app.app.options.get(
+                "global_mselect_key",
+                self.draw_app.app.defaults.get(
+                    "global_mselect_key",
+                    self.draw_app.app.defaults.factory_defaults.get("global_mselect_key")
+                )):
             self.draw_app.selected.clear()
             self.sel_aperture.clear()
 
@@ -3544,8 +3629,20 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
 
             # Update cursor
             self.app.app_cursor.set_data(np.asarray([(x, y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options["global_cursor_width"],
-                                         size=self.app.options["global_cursor_size"])
+                                         edge_width=self.app.options.get(
+                                             "global_cursor_width",
+                                             self.app.defaults.get(
+                                                 "global_cursor_width",
+                                                 self.app.defaults.factory_defaults.get("global_cursor_width")
+                                             )
+                                         ),
+                                         size=self.app.options.get(
+                                             "global_cursor_size",
+                                             self.app.defaults.get(
+                                                 "global_cursor_size",
+                                                 self.app.defaults.factory_defaults.get("global_cursor_size")
+                                             )
+                                         ))
 
         self.snap_x = x
         self.snap_y = y
@@ -3572,8 +3669,20 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
             self.app.delete_selection_shape()
             if dx < 0:
                 self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y),
-                                                     color=self.app.options["global_alt_sel_line"],
-                                                     face_color=self.app.options['global_alt_sel_fill'])
+                                                     color=self.app.options.get(
+                                                         "global_alt_sel_line",
+                                                         self.app.defaults.get(
+                                                             "global_alt_sel_line",
+                                                             self.app.defaults.factory_defaults.get("global_alt_sel_line")
+                                                         )
+                                                     ),
+                                                     face_color=self.app.options.get(
+                                                         'global_alt_sel_fill',
+                                                         self.app.defaults.get(
+                                                             'global_alt_sel_fill',
+                                                             self.app.defaults.factory_defaults.get('global_alt_sel_fill')
+                                                         )
+                                                     ))
                 self.app.selection_type = False
             else:
                 self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y))
@@ -4000,7 +4109,13 @@ class AppGerberEditor(QtCore.QObject):
         # this will flag if the Editor "tools" are launched from key shortcuts (True) or from menu toolbar (False)
         self.launched_from_shortcuts = False
 
-        def_tol_val = float(self.app.options["global_tolerance"])
+        def_tol_val = float(self.app.options.get(
+            "global_tolerance",
+            self.app.defaults.get(
+                "global_tolerance",
+                self.app.defaults.factory_defaults.get("global_tolerance")
+            )
+        ))
         self.tolerance = def_tol_val if self.units == 'MM' else def_tol_val / 25.4
 
         # options of this widget (AppGerberEditor class is a widget)
@@ -4017,7 +4132,10 @@ class AppGerberEditor(QtCore.QObject):
 
         for option in self.editor_options:
             if option in self.app.options:
-                self.editor_options[option] = self.app.options[option]
+                self.editor_options[option] = self.app.options.get(
+                    option,
+                    self.app.defaults.get(option, self.app.defaults.factory_defaults.get(option))
+                )
 
         # flag to show if the object was modified
         self.is_modified = False
@@ -4169,22 +4287,94 @@ class AppGerberEditor(QtCore.QObject):
         # #############################################################################################################
         # Init appGUI
         # #############################################################################################################
-        self.ui.scale_factor_entry.set_value(self.app.options["gerber_editor_scale_f"])
-        self.ui.ma_upper_threshold_entry.set_value(self.app.options["gerber_editor_ma_high"])
-        self.ui.ma_lower_threshold_entry.set_value(self.app.options["gerber_editor_ma_low"])
+        self.ui.scale_factor_entry.set_value(self.app.options.get(
+            "gerber_editor_scale_f",
+            self.app.defaults.get(
+                "gerber_editor_scale_f",
+                self.app.defaults.factory_defaults.get("gerber_editor_scale_f")
+            )
+        ))
+        self.ui.ma_upper_threshold_entry.set_value(self.app.options.get(
+            "gerber_editor_ma_high",
+            self.app.defaults.get(
+                "gerber_editor_ma_high",
+                self.app.defaults.factory_defaults.get("gerber_editor_ma_high")
+            )
+        ))
+        self.ui.ma_lower_threshold_entry.set_value(self.app.options.get(
+            "gerber_editor_ma_low",
+            self.app.defaults.get(
+                "gerber_editor_ma_low",
+                self.app.defaults.factory_defaults.get("gerber_editor_ma_low")
+            )
+        ))
 
-        self.ui.apsize_entry.set_value(self.app.options["gerber_editor_newsize"])
-        self.ui.aptype_cb.set_value(self.app.options["gerber_editor_newtype"])
-        self.ui.apdim_entry.set_value(self.app.options["gerber_editor_newdim"])
+        self.ui.apsize_entry.set_value(self.app.options.get(
+            "gerber_editor_newsize",
+            self.app.defaults.get(
+                "gerber_editor_newsize",
+                self.app.defaults.factory_defaults.get("gerber_editor_newsize")
+            )
+        ))
+        self.ui.aptype_cb.set_value(self.app.options.get(
+            "gerber_editor_newtype",
+            self.app.defaults.get(
+                "gerber_editor_newtype",
+                self.app.defaults.factory_defaults.get("gerber_editor_newtype")
+            )
+        ))
+        self.ui.apdim_entry.set_value(self.app.options.get(
+            "gerber_editor_newdim",
+            self.app.defaults.get(
+                "gerber_editor_newdim",
+                self.app.defaults.factory_defaults.get("gerber_editor_newdim")
+            )
+        ))
 
         # PAD Array
         self.last_parray_type = 'linear'
-        self.last_parray_size = int(self.app.options['gerber_editor_array_size'])
-        self.last_parray_lin_dir = self.app.options['gerber_editor_lin_dir']
-        self.last_parray_circ_dir = self.app.options['gerber_editor_circ_dir']
-        self.last_parray_pitch = float(self.app.options['gerber_editor_lin_pitch'])
-        self.last_parray_lin_angle = float(self.app.options['gerber_editor_lin_angle'])
-        self.last_parray_circ_angle = float(self.app.options['gerber_editor_circ_angle'])
+        self.last_parray_size = int(self.app.options.get(
+            'gerber_editor_array_size',
+            self.app.defaults.get(
+                'gerber_editor_array_size',
+                self.app.defaults.factory_defaults.get('gerber_editor_array_size')
+            )
+        ))
+        self.last_parray_lin_dir = self.app.options.get(
+            'gerber_editor_lin_dir',
+            self.app.defaults.get(
+                'gerber_editor_lin_dir',
+                self.app.defaults.factory_defaults.get('gerber_editor_lin_dir')
+            )
+        )
+        self.last_parray_circ_dir = self.app.options.get(
+            'gerber_editor_circ_dir',
+            self.app.defaults.get(
+                'gerber_editor_circ_dir',
+                self.app.defaults.factory_defaults.get('gerber_editor_circ_dir')
+            )
+        )
+        self.last_parray_pitch = float(self.app.options.get(
+            'gerber_editor_lin_pitch',
+            self.app.defaults.get(
+                'gerber_editor_lin_pitch',
+                self.app.defaults.factory_defaults.get('gerber_editor_lin_pitch')
+            )
+        ))
+        self.last_parray_lin_angle = float(self.app.options.get(
+            'gerber_editor_lin_angle',
+            self.app.defaults.get(
+                'gerber_editor_lin_angle',
+                self.app.defaults.factory_defaults.get('gerber_editor_lin_angle')
+            )
+        ))
+        self.last_parray_circ_angle = float(self.app.options.get(
+            'gerber_editor_circ_angle',
+            self.app.defaults.get(
+                'gerber_editor_circ_angle',
+                self.app.defaults.factory_defaults.get('gerber_editor_circ_angle')
+            )
+        ))
         self.last_parray_radius = 0.0
 
         self.ui.geo_coords_entry.setText('')
@@ -4192,7 +4382,13 @@ class AppGerberEditor(QtCore.QObject):
         self.ui.geo_zoom.set_value(False)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self.app.options.get(
+            "global_app_level",
+            self.app.defaults.get(
+                "global_app_level",
+                self.app.defaults.factory_defaults.get("global_app_level")
+            )
+        )
         self.change_level(app_mode)
 
     def build_ui(self, first_run=None):
@@ -4352,7 +4548,13 @@ class AppGerberEditor(QtCore.QObject):
             self.ui.apcode_entry.set_value(max(self.tid2apcode.values()) + 1)
         except ValueError:
             # this means that the edited object has no apertures, so we start with 10 (Gerber specifications)
-            self.ui.apcode_entry.set_value(self.app.options["gerber_editor_newcode"])
+            self.ui.apcode_entry.set_value(self.app.options.get(
+                "gerber_editor_newcode",
+                self.app.defaults.get(
+                    "gerber_editor_newcode",
+                    self.app.defaults.factory_defaults.get("gerber_editor_newcode")
+                )
+            ))
 
     def on_aperture_add(self, apcode=None):
         self.is_modified = True
@@ -5130,7 +5332,13 @@ class AppGerberEditor(QtCore.QObject):
             else:
                 self.conversion_factor = 0.0393700787401575
 
-        def_tol_val = float(self.app.options["global_tolerance"])
+        def_tol_val = float(self.app.options.get(
+            "global_tolerance",
+            self.app.defaults.get(
+                "global_tolerance",
+                self.app.defaults.factory_defaults.get("global_tolerance")
+            )
+        ))
         self.tolerance = def_tol_val if self.units == 'MM' else def_tol_val / 25.4
 
         # Hide original geometry
@@ -5579,7 +5787,12 @@ class AppGerberEditor(QtCore.QObject):
     def on_row_selected(self, row, col):
         # log.debug("AppGerberEditor.on_row_selected() --> %s" % str(inspect.stack()[1][3]))
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
-        if self.app.options["global_mselect_key"] == 'Control':
+        if self.app.options.get(
+                "global_mselect_key",
+                self.app.defaults.get(
+                    "global_mselect_key",
+                    self.app.defaults.factory_defaults.get("global_mselect_key")
+                )) == 'Control':
             modifier_to_use = Qt.KeyboardModifier.ControlModifier
         else:
             modifier_to_use = Qt.KeyboardModifier.ShiftModifier
@@ -5773,7 +5986,13 @@ class AppGerberEditor(QtCore.QObject):
                 # If the SHIFT key is pressed when LMB is clicked then the coordinates are copied to clipboard
                 if modifiers == QtCore.Qt.KeyboardModifier.ShiftModifier:
                     self.app.clipboard.setText(
-                        self.app.options["global_point_clipboard_format"] %
+                        self.app.options.get(
+                            "global_point_clipboard_format",
+                            self.app.defaults.get(
+                                "global_point_clipboard_format",
+                                self.app.defaults.factory_defaults.get("global_point_clipboard_format")
+                            )
+                        ) %
                         (self.decimals, self.pos[0], self.decimals, self.pos[1])
                     )
                     self.app.inform.emit('[success] %s' % _("Copied to clipboard."))
@@ -5791,7 +6010,12 @@ class AppGerberEditor(QtCore.QObject):
                     # MS: always return to the Select Tool if modifier key is not pressed
                     # else return to the current tool
                     key_modifier = QtWidgets.QApplication.keyboardModifiers()
-                    if self.app.options["global_mselect_key"] == 'Control':
+                    if self.app.options.get(
+                            "global_mselect_key",
+                            self.app.defaults.get(
+                                "global_mselect_key",
+                                self.app.defaults.factory_defaults.get("global_mselect_key")
+                            )) == 'Control':
                         modifier_to_use = Qt.KeyboardModifier.ControlModifier
                     else:
                         modifier_to_use = Qt.KeyboardModifier.ShiftModifier
@@ -5871,9 +6095,19 @@ class AppGerberEditor(QtCore.QObject):
                                     self.select_tool(self.active_tool.name)
                                 else:
                                     key_modifier = QtWidgets.QApplication.keyboardModifiers()
-                                    if (self.app.options["global_mselect_key"] == 'Control' and
+                                    if (self.app.options.get(
+                                            "global_mselect_key",
+                                            self.app.defaults.get(
+                                                "global_mselect_key",
+                                                self.app.defaults.factory_defaults.get("global_mselect_key")
+                                            )) == 'Control' and
                                         key_modifier == Qt.KeyboardModifier.ControlModifier) or \
-                                            (self.app.options["global_mselect_key"] == 'Shift' and
+                                            (self.app.options.get(
+                                                "global_mselect_key",
+                                                self.app.defaults.get(
+                                                    "global_mselect_key",
+                                                    self.app.defaults.factory_defaults.get("global_mselect_key")
+                                                )) == 'Shift' and
                                              key_modifier == Qt.KeyboardModifier.ShiftModifier):
 
                                         self.select_tool(self.active_tool.name)
@@ -5922,7 +6156,12 @@ class AppGerberEditor(QtCore.QObject):
                     geometric_data = obj.geo['solid']
                     if (sel_type is True and poly_selection.contains(geometric_data)) or \
                             (sel_type is False and poly_selection.intersects(geometric_data)):
-                        if self.key == self.app.options["global_mselect_key"]:
+                        if self.key == self.app.options.get(
+                                "global_mselect_key",
+                                self.app.defaults.get(
+                                    "global_mselect_key",
+                                    self.app.defaults.factory_defaults.get("global_mselect_key")
+                                )):
                             if obj in self.selected:
                                 self.selected.remove(obj)
                             else:
@@ -6036,8 +6275,20 @@ class AppGerberEditor(QtCore.QObject):
 
             # Update cursor
             self.app.app_cursor.set_data(np.asarray([(x, y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options["global_cursor_width"],
-                                         size=self.app.options["global_cursor_size"])
+                                         edge_width=self.app.options.get(
+                                             "global_cursor_width",
+                                             self.app.defaults.get(
+                                                 "global_cursor_width",
+                                                 self.app.defaults.factory_defaults.get("global_cursor_width")
+                                             )
+                                         ),
+                                         size=self.app.options.get(
+                                             "global_cursor_size",
+                                             self.app.defaults.get(
+                                                 "global_cursor_size",
+                                                 self.app.defaults.factory_defaults.get("global_cursor_size")
+                                             )
+                                         ))
 
         self.snap_x = x
         self.snap_y = y
@@ -6085,8 +6336,20 @@ class AppGerberEditor(QtCore.QObject):
                 self.app.delete_selection_shape()
                 if dx < 0:
                     self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y),
-                                                         color=self.app.options["global_alt_sel_line"],
-                                                         face_color=self.app.options['global_alt_sel_fill'])
+                                                         color=self.app.options.get(
+                                                             "global_alt_sel_line",
+                                                             self.app.defaults.get(
+                                                                 "global_alt_sel_line",
+                                                                 self.app.defaults.factory_defaults.get("global_alt_sel_line")
+                                                             )
+                                                         ),
+                                                         face_color=self.app.options.get(
+                                                             'global_alt_sel_fill',
+                                                             self.app.defaults.get(
+                                                                 'global_alt_sel_fill',
+                                                                 self.app.defaults.factory_defaults.get('global_alt_sel_fill')
+                                                             )
+                                                         ))
                     self.app.selection_type = False
                 else:
                     self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y))
@@ -6129,9 +6392,20 @@ class AppGerberEditor(QtCore.QObject):
         self.tool_shape.redraw()
 
     def get_draw_color(self):
-        orig_color = self.app.options["global_draw_color"]
+        orig_color = self.app.options.get(
+            "global_draw_color",
+            self.app.defaults.get(
+                "global_draw_color",
+                self.app.defaults.factory_defaults.get("global_draw_color")
+            )
+        )
 
-        if self.app.options['global_theme'] in ['default', 'light']:
+        if self.app.options.get(
+                'global_theme',
+                self.app.defaults.get(
+                    'global_theme',
+                    self.app.defaults.factory_defaults.get('global_theme')
+                )) in ['default', 'light']:
             return orig_color
 
         # in the "dark" theme we invert the color
@@ -6144,7 +6418,13 @@ class AppGerberEditor(QtCore.QObject):
         return new_color
 
     def get_sel_color(self):
-        return self.app.options['global_sel_draw_color']
+        return self.app.options.get(
+            'global_sel_draw_color',
+            self.app.defaults.get(
+                'global_sel_draw_color',
+                self.app.defaults.factory_defaults.get('global_sel_draw_color')
+            )
+        )
 
     def plot_all(self):
         """
@@ -6525,7 +6805,13 @@ class AppGerberEditor(QtCore.QObject):
 
         if text:
             self.ma_annotation.set(text=text, pos=position, visible=True,
-                                   font_size=self.app.options["cncjob_annotation_fontsize"],
+                                   font_size=self.app.options.get(
+                                       "cncjob_annotation_fontsize",
+                                       self.app.defaults.get(
+                                           "cncjob_annotation_fontsize",
+                                           self.app.defaults.factory_defaults.get("cncjob_annotation_fontsize")
+                                       )
+                                   ),
                                    color='#000000FF')
             self.app.inform.emit('[success] %s' % _("Polygons marked."))
         else:
@@ -7421,27 +7707,111 @@ class TransformEditorTool(AppTool):
 
     def set_tool_ui(self):
         # Initialize form
-        ref_val = self.app.options["tools_transform_reference"]
+        ref_val = self.app.options.get(
+            "tools_transform_reference",
+            self.app.defaults.get(
+                "tools_transform_reference",
+                self.app.defaults.factory_defaults.get("tools_transform_reference")
+            )
+        )
         if ref_val == _("Object"):
             ref_val = _("Selection")
         self.ref_combo.set_value(ref_val)
-        self.point_entry.set_value(self.app.options["tools_transform_ref_point"])
-        self.rotate_entry.set_value(self.app.options["tools_transform_rotate"])
+        self.point_entry.set_value(self.app.options.get(
+            "tools_transform_ref_point",
+            self.app.defaults.get(
+                "tools_transform_ref_point",
+                self.app.defaults.factory_defaults.get("tools_transform_ref_point")
+            )
+        ))
+        self.rotate_entry.set_value(self.app.options.get(
+            "tools_transform_rotate",
+            self.app.defaults.get(
+                "tools_transform_rotate",
+                self.app.defaults.factory_defaults.get("tools_transform_rotate")
+            )
+        ))
 
-        self.skewx_entry.set_value(self.app.options["tools_transform_skew_x"])
-        self.skewy_entry.set_value(self.app.options["tools_transform_skew_y"])
-        self.skew_link_cb.set_value(self.app.options["tools_transform_skew_link"])
+        self.skewx_entry.set_value(self.app.options.get(
+            "tools_transform_skew_x",
+            self.app.defaults.get(
+                "tools_transform_skew_x",
+                self.app.defaults.factory_defaults.get("tools_transform_skew_x")
+            )
+        ))
+        self.skewy_entry.set_value(self.app.options.get(
+            "tools_transform_skew_y",
+            self.app.defaults.get(
+                "tools_transform_skew_y",
+                self.app.defaults.factory_defaults.get("tools_transform_skew_y")
+            )
+        ))
+        self.skew_link_cb.set_value(self.app.options.get(
+            "tools_transform_skew_link",
+            self.app.defaults.get(
+                "tools_transform_skew_link",
+                self.app.defaults.factory_defaults.get("tools_transform_skew_link")
+            )
+        ))
 
-        self.scalex_entry.set_value(self.app.options["tools_transform_scale_x"])
-        self.scaley_entry.set_value(self.app.options["tools_transform_scale_y"])
-        self.scale_link_cb.set_value(self.app.options["tools_transform_scale_link"])
+        self.scalex_entry.set_value(self.app.options.get(
+            "tools_transform_scale_x",
+            self.app.defaults.get(
+                "tools_transform_scale_x",
+                self.app.defaults.factory_defaults.get("tools_transform_scale_x")
+            )
+        ))
+        self.scaley_entry.set_value(self.app.options.get(
+            "tools_transform_scale_y",
+            self.app.defaults.get(
+                "tools_transform_scale_y",
+                self.app.defaults.factory_defaults.get("tools_transform_scale_y")
+            )
+        ))
+        self.scale_link_cb.set_value(self.app.options.get(
+            "tools_transform_scale_link",
+            self.app.defaults.get(
+                "tools_transform_scale_link",
+                self.app.defaults.factory_defaults.get("tools_transform_scale_link")
+            )
+        ))
 
-        self.offx_entry.set_value(self.app.options["tools_transform_offset_x"])
-        self.offy_entry.set_value(self.app.options["tools_transform_offset_y"])
+        self.offx_entry.set_value(self.app.options.get(
+            "tools_transform_offset_x",
+            self.app.defaults.get(
+                "tools_transform_offset_x",
+                self.app.defaults.factory_defaults.get("tools_transform_offset_x")
+            )
+        ))
+        self.offy_entry.set_value(self.app.options.get(
+            "tools_transform_offset_y",
+            self.app.defaults.get(
+                "tools_transform_offset_y",
+                self.app.defaults.factory_defaults.get("tools_transform_offset_y")
+            )
+        ))
 
-        self.buffer_entry.set_value(self.app.options["tools_transform_buffer_dis"])
-        self.buffer_factor_entry.set_value(self.app.options["tools_transform_buffer_factor"])
-        self.buffer_rounded_cb.set_value(self.app.options["tools_transform_buffer_corner"])
+        self.buffer_entry.set_value(self.app.options.get(
+            "tools_transform_buffer_dis",
+            self.app.defaults.get(
+                "tools_transform_buffer_dis",
+                self.app.defaults.factory_defaults.get("tools_transform_buffer_dis")
+            )
+        ))
+        self.buffer_factor_entry.set_value(self.app.options.get(
+            "tools_transform_buffer_factor",
+            self.app.defaults.get(
+                "tools_transform_buffer_factor",
+                self.app.defaults.factory_defaults.get("tools_transform_buffer_factor")
+            )
+        ))
+        self.buffer_rounded_cb.set_value(self.app.options.get(
+            "tools_transform_buffer_corner",
+            self.app.defaults.get(
+                "tools_transform_buffer_corner",
+                self.app.defaults.factory_defaults.get("tools_transform_buffer_corner")
+            )
+        ))
 
         # initial state is hidden
         self.point_label.hide()
@@ -7865,10 +8235,26 @@ class TransformEditorTool(AppTool):
                     else:
                         if 'solid' in sel_el:
                             sel_el['solid'] = sel_el['solid'].buffer(
-                                value, resolution=self.app.options["gerber_circle_steps"], join_style=join)
+                                value,
+                                resolution=self.app.options.get(
+                                    "gerber_circle_steps",
+                                    self.app.defaults.get(
+                                        "gerber_circle_steps",
+                                        self.app.defaults.factory_defaults.get("gerber_circle_steps")
+                                    )
+                                ),
+                                join_style=join)
                         if 'clear' in sel_el:
                             sel_el['clear'] = sel_el['clear'].buffer(
-                                value, resolution=self.app.options["gerber_circle_steps"], join_style=join)
+                                value,
+                                resolution=self.app.options.get(
+                                    "gerber_circle_steps",
+                                    self.app.defaults.get(
+                                        "gerber_circle_steps",
+                                        self.app.defaults.factory_defaults.get("gerber_circle_steps")
+                                    )
+                                ),
+                                join_style=join)
 
                     self.draw_app.plot_all()
 
@@ -7883,7 +8269,13 @@ class TransformEditorTool(AppTool):
         val_box = FCInputDoubleSpinner(title=_("Rotate ..."),
                                        text='%s:' % _('Enter an Angle Value (degrees)'),
                                        min=-359.9999, max=360.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options['tools_transform_rotate']),
+                                       init_val=float(self.app.options.get(
+                                           'tools_transform_rotate',
+                                           self.app.defaults.get(
+                                               'tools_transform_rotate',
+                                               self.app.defaults.factory_defaults.get('tools_transform_rotate')
+                                           )
+                                       )),
                                        parent=self.app.ui)
         val_box.set_icon(QtGui.QIcon(self.app.resource_location + '/rotate.png'))
 
@@ -7901,7 +8293,13 @@ class TransformEditorTool(AppTool):
         val_box = FCInputDoubleSpinner(title=_("Offset on X axis ..."),
                                        text='%s: (%s)' % (_('Enter a distance Value'), str(units)),
                                        min=-10000.0000, max=10000.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options['tools_transform_offset_x']),
+                                       init_val=float(self.app.options.get(
+                                           'tools_transform_offset_x',
+                                           self.app.defaults.get(
+                                               'tools_transform_offset_x',
+                                               self.app.defaults.factory_defaults.get('tools_transform_offset_x')
+                                           )
+                                       )),
                                        parent=self.app.ui)
         val_box.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/offsetx32.png'))
 
@@ -7919,7 +8317,13 @@ class TransformEditorTool(AppTool):
         val_box = FCInputDoubleSpinner(title=_("Offset on Y axis ..."),
                                        text='%s: (%s)' % (_('Enter a distance Value'), str(units)),
                                        min=-10000.0000, max=10000.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options['tools_transform_offset_y']),
+                                       init_val=float(self.app.options.get(
+                                           'tools_transform_offset_y',
+                                           self.app.defaults.get(
+                                               'tools_transform_offset_y',
+                                               self.app.defaults.factory_defaults.get('tools_transform_offset_y')
+                                           )
+                                       )),
                                        parent=self.app.ui)
         val_box.set_icon(QtGui.QIcon(self.app.resource_location + '/offsety32.png'))
 
@@ -7935,7 +8339,13 @@ class TransformEditorTool(AppTool):
         val_box = FCInputDoubleSpinner(title=_("Skew on X axis ..."),
                                        text='%s:' % _('Enter an Angle Value (degrees)'),
                                        min=-359.9999, max=360.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options['tools_transform_skew_x']),
+                                       init_val=float(self.app.options.get(
+                                           'tools_transform_skew_x',
+                                           self.app.defaults.get(
+                                               'tools_transform_skew_x',
+                                               self.app.defaults.factory_defaults.get('tools_transform_skew_x')
+                                           )
+                                       )),
                                        parent=self.app.ui)
         val_box.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/skewX.png'))
 
@@ -7951,7 +8361,13 @@ class TransformEditorTool(AppTool):
         val_box = FCInputDoubleSpinner(title=_("Skew on Y axis ..."),
                                        text='%s:' % _('Enter an Angle Value (degrees)'),
                                        min=-359.9999, max=360.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options['tools_transform_skew_y']),
+                                       init_val=float(self.app.options.get(
+                                           'tools_transform_skew_y',
+                                           self.app.defaults.get(
+                                               'tools_transform_skew_y',
+                                               self.app.defaults.factory_defaults.get('tools_transform_skew_y')
+                                           )
+                                       )),
                                        parent=self.app.ui)
         val_box.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/skewY.png'))
 

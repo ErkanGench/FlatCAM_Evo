@@ -9,6 +9,7 @@ from PyQt6 import QtWidgets, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, NumericalEvalEntry, RadioSet, \
     FCDoubleSpinner, FCSpinner
+from defaults import AppDefaults
 
 import logging
 import math
@@ -163,23 +164,34 @@ class ToolCalculator(AppTool):
         self.ui.fl_oz_entry.set_value('%.*f' % (self.decimals, 0))
 
         # Electroplating Calculator
-        length = self.app.options["tools_calc_electro_length"]
-        width = self.app.options["tools_calc_electro_width"]
-        density = self.app.options["tools_calc_electro_cdensity"]
-        growth = self.app.options["tools_calc_electro_growth"]
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        length = self.app.options.get("tools_calc_electro_length", app_defaults.get(
+            "tools_calc_electro_length", AppDefaults.factory_defaults.get("tools_calc_electro_length")))
+        width = self.app.options.get("tools_calc_electro_width", app_defaults.get(
+            "tools_calc_electro_width", AppDefaults.factory_defaults.get("tools_calc_electro_width")))
+        density = self.app.options.get("tools_calc_electro_cdensity", app_defaults.get(
+            "tools_calc_electro_cdensity", AppDefaults.factory_defaults.get("tools_calc_electro_cdensity")))
+        growth = self.app.options.get("tools_calc_electro_growth", app_defaults.get(
+            "tools_calc_electro_growth", AppDefaults.factory_defaults.get("tools_calc_electro_growth")))
 
         self.ui.pcblength_entry.set_value(length)
         self.ui.pcbwidth_entry.set_value(width)
-        self.ui.area_entry.set_value(self.app.options["tools_calc_electro_area"])
+        self.ui.area_entry.set_value(self.app.options.get(
+            "tools_calc_electro_area",
+            app_defaults.get("tools_calc_electro_area", AppDefaults.factory_defaults.get("tools_calc_electro_area"))
+        ))
         self.ui.cdensity_entry.set_value(density)
         self.ui.growth_entry.set_value(growth)
         self.ui.cvalue_entry.set_value(0.00)
         self.ui.time_entry.set_value(0.0)
 
         # V-Shape tool Calculator
-        tip_dia = self.app.options["tools_calc_vshape_tip_dia"]
-        tip_angle = self.app.options["tools_calc_vshape_tip_angle"]
-        cut_z = self.app.options["tools_calc_vshape_cut_z"]
+        tip_dia = self.app.options.get("tools_calc_vshape_tip_dia", app_defaults.get(
+            "tools_calc_vshape_tip_dia", AppDefaults.factory_defaults.get("tools_calc_vshape_tip_dia")))
+        tip_angle = self.app.options.get("tools_calc_vshape_tip_angle", app_defaults.get(
+            "tools_calc_vshape_tip_angle", AppDefaults.factory_defaults.get("tools_calc_vshape_tip_angle")))
+        cut_z = self.app.options.get("tools_calc_vshape_cut_z", app_defaults.get(
+            "tools_calc_vshape_cut_z", AppDefaults.factory_defaults.get("tools_calc_vshape_cut_z")))
 
         self.ui.tipDia_entry.set_value(tip_dia)
         self.ui.tipAngle_entry.set_value(tip_angle)

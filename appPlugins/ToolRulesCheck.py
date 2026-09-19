@@ -10,6 +10,7 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCDoubleSpinner, OptionalInputSection
 from appObjects import GerberObject
+from defaults import AppDefaults
 
 import logging
 from copy import deepcopy
@@ -163,26 +164,47 @@ class RulesCheck(AppTool):
         self.ui.e1_object.setDisabled(True)
         self.ui.e2_object.setDisabled(True)
 
-        self.ui.trace_size_cb.set_value(self.app.options["tools_cr_trace_size"])
-        self.ui.trace_size_entry.set_value(float(self.app.options["tools_cr_trace_size_val"]))
-        self.ui.clearance_copper2copper_cb.set_value(self.app.options["tools_cr_c2c"])
-        self.ui.clearance_copper2copper_entry.set_value(float(self.app.options["tools_cr_c2c_val"]))
-        self.ui.clearance_copper2ol_cb.set_value(self.app.options["tools_cr_c2o"])
-        self.ui.clearance_copper2ol_entry.set_value(float(self.app.options["tools_cr_c2o_val"]))
-        self.ui.clearance_silk2silk_cb.set_value(self.app.options["tools_cr_s2s"])
-        self.ui.clearance_silk2silk_entry.set_value(float(self.app.options["tools_cr_s2s_val"]))
-        self.ui.clearance_silk2sm_cb.set_value(self.app.options["tools_cr_s2sm"])
-        self.ui.clearance_silk2sm_entry.set_value(float(self.app.options["tools_cr_s2sm_val"]))
-        self.ui.clearance_silk2ol_cb.set_value(self.app.options["tools_cr_s2o"])
-        self.ui.clearance_silk2ol_entry.set_value(float(self.app.options["tools_cr_s2o_val"]))
-        self.ui.clearance_sm2sm_cb.set_value(self.app.options["tools_cr_sm2sm"])
-        self.ui.clearance_sm2sm_entry.set_value(float(self.app.options["tools_cr_sm2sm_val"]))
-        self.ui.ring_integrity_cb.set_value(self.app.options["tools_cr_ri"])
-        self.ui.ring_integrity_entry.set_value(float(self.app.options["tools_cr_ri_val"]))
-        self.ui.clearance_d2d_cb.set_value(self.app.options["tools_cr_h2h"])
-        self.ui.clearance_d2d_entry.set_value(float(self.app.options["tools_cr_h2h_val"]))
-        self.ui.drill_size_cb.set_value(self.app.options["tools_cr_dh"])
-        self.ui.drill_size_entry.set_value(float(self.app.options["tools_cr_dh_val"]))
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.trace_size_cb.set_value(self.app.options.get(
+            "tools_cr_trace_size", app_defaults.get("tools_cr_trace_size", AppDefaults.factory_defaults.get("tools_cr_trace_size"))))
+        self.ui.trace_size_entry.set_value(float(self.app.options.get(
+            "tools_cr_trace_size_val", app_defaults.get("tools_cr_trace_size_val", AppDefaults.factory_defaults.get("tools_cr_trace_size_val")))))
+        self.ui.clearance_copper2copper_cb.set_value(self.app.options.get(
+            "tools_cr_c2c", app_defaults.get("tools_cr_c2c", AppDefaults.factory_defaults.get("tools_cr_c2c"))))
+        self.ui.clearance_copper2copper_entry.set_value(float(self.app.options.get(
+            "tools_cr_c2c_val", app_defaults.get("tools_cr_c2c_val", AppDefaults.factory_defaults.get("tools_cr_c2c_val")))))
+        self.ui.clearance_copper2ol_cb.set_value(self.app.options.get(
+            "tools_cr_c2o", app_defaults.get("tools_cr_c2o", AppDefaults.factory_defaults.get("tools_cr_c2o"))))
+        self.ui.clearance_copper2ol_entry.set_value(float(self.app.options.get(
+            "tools_cr_c2o_val", app_defaults.get("tools_cr_c2o_val", AppDefaults.factory_defaults.get("tools_cr_c2o_val")))))
+        self.ui.clearance_silk2silk_cb.set_value(self.app.options.get(
+            "tools_cr_s2s", app_defaults.get("tools_cr_s2s", AppDefaults.factory_defaults.get("tools_cr_s2s"))))
+        self.ui.clearance_silk2silk_entry.set_value(float(self.app.options.get(
+            "tools_cr_s2s_val", app_defaults.get("tools_cr_s2s_val", AppDefaults.factory_defaults.get("tools_cr_s2s_val")))))
+        self.ui.clearance_silk2sm_cb.set_value(self.app.options.get(
+            "tools_cr_s2sm", app_defaults.get("tools_cr_s2sm", AppDefaults.factory_defaults.get("tools_cr_s2sm"))))
+        self.ui.clearance_silk2sm_entry.set_value(float(self.app.options.get(
+            "tools_cr_s2sm_val", app_defaults.get("tools_cr_s2sm_val", AppDefaults.factory_defaults.get("tools_cr_s2sm_val")))))
+        self.ui.clearance_silk2ol_cb.set_value(self.app.options.get(
+            "tools_cr_s2o", app_defaults.get("tools_cr_s2o", AppDefaults.factory_defaults.get("tools_cr_s2o"))))
+        self.ui.clearance_silk2ol_entry.set_value(float(self.app.options.get(
+            "tools_cr_s2o_val", app_defaults.get("tools_cr_s2o_val", AppDefaults.factory_defaults.get("tools_cr_s2o_val")))))
+        self.ui.clearance_sm2sm_cb.set_value(self.app.options.get(
+            "tools_cr_sm2sm", app_defaults.get("tools_cr_sm2sm", AppDefaults.factory_defaults.get("tools_cr_sm2sm"))))
+        self.ui.clearance_sm2sm_entry.set_value(float(self.app.options.get(
+            "tools_cr_sm2sm_val", app_defaults.get("tools_cr_sm2sm_val", AppDefaults.factory_defaults.get("tools_cr_sm2sm_val")))))
+        self.ui.ring_integrity_cb.set_value(self.app.options.get(
+            "tools_cr_ri", app_defaults.get("tools_cr_ri", AppDefaults.factory_defaults.get("tools_cr_ri"))))
+        self.ui.ring_integrity_entry.set_value(float(self.app.options.get(
+            "tools_cr_ri_val", app_defaults.get("tools_cr_ri_val", AppDefaults.factory_defaults.get("tools_cr_ri_val")))))
+        self.ui.clearance_d2d_cb.set_value(self.app.options.get(
+            "tools_cr_h2h", app_defaults.get("tools_cr_h2h", AppDefaults.factory_defaults.get("tools_cr_h2h"))))
+        self.ui.clearance_d2d_entry.set_value(float(self.app.options.get(
+            "tools_cr_h2h_val", app_defaults.get("tools_cr_h2h_val", AppDefaults.factory_defaults.get("tools_cr_h2h_val")))))
+        self.ui.drill_size_cb.set_value(self.app.options.get(
+            "tools_cr_dh", app_defaults.get("tools_cr_dh", AppDefaults.factory_defaults.get("tools_cr_dh"))))
+        self.ui.drill_size_entry.set_value(float(self.app.options.get(
+            "tools_cr_dh_val", app_defaults.get("tools_cr_dh_val", AppDefaults.factory_defaults.get("tools_cr_dh_val")))))
 
         self.reset_fields()
 

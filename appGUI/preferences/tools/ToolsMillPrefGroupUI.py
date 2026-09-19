@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt
 from appGUI.GUIElements import RadioSet, FCDoubleSpinner, FCComboBox, FCCheckBox, FCSpinner, NumericalEvalTupleEntry, \
     OptionalInputSection, NumericalEvalEntry, FCLabel, FCComboBox2, FCEntry, GLay, FCFrame
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appDatabase import _database_option
 
 import gettext
 import appTranslation as fcTranslate
@@ -273,7 +274,7 @@ class ToolsMillPrefGroupUI(OptionsGroupUI):
         self.pp_geometry_name_cb.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.pp_geometry_name_cb.setSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding,
                                                QtWidgets.QSizePolicy.Policy.Preferred)
-        self.pp_geometry_name_cb.addItems(self.options["tools_mill_preprocessor_list"])
+        self.pp_geometry_name_cb.addItems(_database_option(app, "tools_mill_preprocessor_list"))
 
         for it in range(self.pp_geometry_name_cb.count()):
             self.pp_geometry_name_cb.setItemData(it, self.pp_geometry_name_cb.itemText(it),

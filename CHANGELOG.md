@@ -8,6 +8,107 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+19.09.2026
+
+appMain.py:
+
+- added complete updater system: version checking, manifest validation, download with progress/cancel, external transactional apply with automatic rollback
+- integrated Digi public share transport with dynamic short URL resolution and optional explicit UUID pin
+- added automatic update check on startup (configurable via preferences) and manual Help → Check for Updates
+- added release preparation workflow for maintainers
+- added rollback/revert support with restore point management
+- fixed download worker error handling: transport setup failures now properly emit completion and reset active state
+- added stable version-independent preferences and factory defaults filenames (no longer include version number)
+- added legacy defaults file discovery and migration for versioned files
+
+defaults.py:
+
+- refactored AppDefaults to use version-independent persistence: stable filenames, obsolete 'version' field stripped on load/save
+- added factory defaults snapshot with transactional write: serialize to temp file then os.replace, preserving existing bytes on failure
+- added safe .get() fallback pattern: AppDefaults.get() and AppOptions.get() return factory baseline when key missing
+- added AppOptions baseline parameter for sparse overlay with falsy value preservation
+- added find_legacy_defaults_file() for discovering versioned legacy files (exact version match, then mtime with filename tiebreak)
+- fixed propagate_defaults() to use fallback-aware accessor and skip keys absent from both runtime and factory defaults
+- fixed mutable aliasing: all factory default injections now use deepcopy
+- removed obsolete version-based migration logic; load() now merges saved data over factory defaults
+
+Bookmark.py:
+
+- fixed mutable defaults aliasing: build_bm_ui() now deepcopies fallback and preserves existing runtime dictionary identity
+- fixed global_bookmarks_limit reads to use safe .get() fallback pattern
+
+appDatabase.py:
+
+- added _database_option() helper with 3-level fallback (options → defaults → factory deepcopy) for safe preference reads
+- added _database_option_items() for iterating defaults regardless of underlying type
+
+appGUI/UpdateDialog.py:
+
+- new module: update dialog with release notes display, version comparison, and user choice (install/later/exit)
+
+services/updater/:
+
+- new updater subsystem: transport.py (Digi public share), manifest.py (validation/security), checker.py (version checking), launcher.py (external apply), recovery.py (rollback), release.py (preparation)
+- added manifest security validation: checksum verification, path traversal protection, symlink rejection
+- added protected paths exclusion (config/, updater/) from payload extraction
+- added transactional archive staging with cleanup on failure
+
+updater_app.py:
+
+- standalone updater application for applying updates outside the main FlatCAM process
+
+make_freeze.py:
+
+- cx_Freeze packaging configuration with updater integration and protected path exclusion
+
+appGUI/preferences/:
+
+- added automatic update check preference (global_version_check) with UI checkbox in General Preferences
+- added release preparation UI for maintainers
+- converted all preference reads to safe .get() fallback pattern across General, Gerber, Excellon, Geometry, CNCJob, Tools, Utilities groups
+
+appHandlers/:
+
+- converted all preference reads to safe .get() fallback pattern in appIO, appLifecycle, appEdit, appPlotManager, appObjectOps, appSignalConnector, appCanvasEvents
+
+appPlugins/:
+
+- converted all preference reads to safe .get() fallback pattern across all tools: ToolPaint, ToolIsolation, ToolMilling, ToolDrilling, ToolCutOut, ToolNCC, ToolFilm, ToolFollow, ToolPanelize, ToolDblSided, ToolExtract, ToolPunchGerber, ToolCopperThieving, ToolSolderPaste, ToolTransform, ToolFiducials, ToolLevelling, ToolMarkers, ToolQRCode, ToolRulesCheck, ToolShell, ToolSub, ToolAlignObjects, ToolCalculators, ToolDistance, ToolEtchCompensation, ToolImage, ToolInvertGerber, ToolMove, ToolOptimal, ToolPdf, ToolReport
+- fixed ToolPdf runtime preference precedence for gerber_circle_steps
+
+appEditors/:
+
+- converted all preference reads to safe .get() fallback pattern in Gerber, Excellon, Geometry, GCode, Text editors and their plugins
+
+appObjects/:
+
+- converted all preference reads to safe .get() fallback pattern in AppObject, GerberObject, ExcellonObject, GeometryObject, CNCJobObject, DocumentObject, ScriptObject, ObjectCollection
+- fixed gerber_color_list initialization: missing runtime storage now populated with deepcopy before mutation
+
+appParsers/:
+
+- converted all preference reads to safe .get() fallback pattern in ParseGerber, ParseHPGL2
+
+tclCommands/:
+
+- converted all preference reads to safe .get() fallback pattern across all Tcl commands
+
+camlib.py:
+
+- added _app_option() helper for safe preference reads with factory fallback
+- converted geometry_* legacy fallback chains to use _app_option()
+
+appCommon/:
+
+- converted preference reads to safe .get() fallback pattern in Common.py, RegisterFileKeywords.py
+
+tests/:
+
+- added test_database_option_fallback.py: mutable factory fallback independence and precedence
+- added test_defaults_audit_regressions.py: bookmark aliasing, propagation fallback, factory snapshot equality
+- added test_factory_snapshot_atomic.py: transactional write guarantees (dump/replace failure preservation, temp cleanup, mode restoration)
+- added tests/updater/: comprehensive updater tests covering transport, manifest validation, preferences integration, legacy discovery, falsy preservation, frozen packaging
+
 16.09.2026
 
 appMain.py:

@@ -8,6 +8,7 @@
 from PyQt6 import QtWidgets, QtGui, QtCore
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, RadioSet
+from defaults import AppDefaults
 
 from shapely import Point
 from shapely.affinity import translate
@@ -154,7 +155,14 @@ class AlignObjects(AppTool):
         self.aligned_old_fill_color = None
         self.aligned_old_line_color = None
 
-        self.ui.a_type_radio.set_value(self.app.options["tools_align_objects_align_type"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.a_type_radio.set_value(self.app.options.get(
+            "tools_align_objects_align_type",
+            app_defaults.get(
+                "tools_align_objects_align_type",
+                AppDefaults.factory_defaults.get("tools_align_objects_align_type")
+            )
+        ))
         self.ui.type_obj_radio.set_value('grb')
         self.ui.type_aligner_obj_radio.set_value('grb')
 

@@ -5,6 +5,7 @@ from PyQt6.QtCore import QSettings
 from appGUI.GUIElements import FCDoubleSpinner, FCCheckBox, FCComboBox, RadioSet, OptionalInputSection, FCSpinner, \
     FCColorEntry, FCLabel, GLay, FCFrame
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appDatabase import _database_option
 
 import gettext
 import appTranslation as fcTranslate
@@ -491,7 +492,7 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
 
     def on_mouse_cursor_color_enable(self, val):
         if val:
-            self.app.cursor_color_3D = self.app.options["global_cursor_color"]
+            self.app.cursor_color_3D = _database_option(self.app, "global_cursor_color")
         else:
             theme_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
             if theme_settings.contains("theme"):
@@ -511,7 +512,7 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
 
     def on_mouse_cursor_entry(self):
         self.app.options['global_cursor_color'] = self.mouse_cursor_entry.get_value()
-        self.app.cursor_color_3D = self.app.options["global_cursor_color"]
+        self.app.cursor_color_3D = _database_option(self.app, "global_cursor_color")
 
     def on_axis_color_entry(self):
         self.app.options['global_axis_color'] = self.axis_color_entry.get_value()

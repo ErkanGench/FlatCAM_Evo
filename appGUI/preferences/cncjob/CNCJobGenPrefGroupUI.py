@@ -4,6 +4,7 @@ from PyQt6 import QtGui
 from appGUI.GUIElements import FCCheckBox, RadioSet, FCSpinner, FCDoubleSpinner, FCSliderWithSpinner, FCColorEntry, \
     FCLabel, GLay, FCFrame
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appDatabase import _database_option
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -240,18 +241,18 @@ class CNCJobGenPrefGroupUI(OptionsGroupUI):
     # ------------------------------------------------------
     def on_tfill_color_entry(self):
         self.app.options['cncjob_travel_fill'] = self.tfill_color_entry.get_value()[:7] + \
-                                                  self.app.options['cncjob_travel_fill'][7:9]
+                                                  _database_option(self.app, 'cncjob_travel_fill')[7:9]
 
     def on_tline_color_entry(self):
         self.app.options['cncjob_travel_line'] = self.tline_color_entry.get_value()[:7] + \
-                                                  self.app.options['cncjob_travel_line'][7:9]
+                                                  _database_option(self.app, 'cncjob_travel_line')[7:9]
 
     def on_cncjob_alpha_changed(self, spinner_value):
         self.app.options['cncjob_travel_fill'] = \
-            self.app.options['cncjob_travel_fill'][:7] + \
+            _database_option(self.app, 'cncjob_travel_fill')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
         self.app.options['cncjob_travel_line'] = \
-            self.app.options['cncjob_travel_line'][:7] + \
+            _database_option(self.app, 'cncjob_travel_line')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
 
     # ------------------------------------------------------
@@ -259,8 +260,8 @@ class CNCJobGenPrefGroupUI(OptionsGroupUI):
     # ------------------------------------------------------
     def on_fill_color_entry(self):
         self.app.options['cncjob_plot_fill'] = self.fill_color_entry.get_value()[:7] + \
-                                                  self.app.options['cncjob_plot_fill'][7:9]
+                                                  _database_option(self.app, 'cncjob_plot_fill')[7:9]
 
     def on_line_color_entry(self):
         self.app.options['cncjob_plot_line'] = self.line_color_entry.get_value()[:7] + \
-                                                  self.app.options['cncjob_plot_line'][7:9]
+                                                  _database_option(self.app, 'cncjob_plot_line')[7:9]

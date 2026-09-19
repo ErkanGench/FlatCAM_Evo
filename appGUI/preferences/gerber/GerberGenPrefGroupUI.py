@@ -4,6 +4,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from appGUI.GUIElements import FCCheckBox, FCSpinner, RadioSet, FCButton, FCSliderWithSpinner, FCLabel, \
     GLay, FCFrame, FCTable, FCColorEntry, OptionalInputSection
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appDatabase import _database_option
 
 from copy import deepcopy
 
@@ -294,7 +295,7 @@ class GerberGenPrefGroupUI(OptionsGroupUI):
         :rtype:
         """
         self.app.options['gerber_plot_fill'] = self.fill_color_entry.get_value()[:7] + \
-                                                self.app.options['gerber_plot_fill'][7:9]
+                                                _database_option(self.app, 'gerber_plot_fill')[7:9]
 
     def on_gerber_alpha_changed(self, spinner_value):
         """
@@ -305,10 +306,10 @@ class GerberGenPrefGroupUI(OptionsGroupUI):
         :rtype:
         """
         self.app.options['gerber_plot_fill'] = \
-            self.app.options['gerber_plot_fill'][:7] + \
+            _database_option(self.app, 'gerber_plot_fill')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
         self.app.options['gerber_plot_line'] = \
-            self.app.options['gerber_plot_line'][:7] + \
+            _database_option(self.app, 'gerber_plot_line')[:7] + \
             (hex(spinner_value)[2:] if int(hex(spinner_value)[2:], 16) > 0 else '00')
 
     def on_line_color_changed(self):
@@ -318,7 +319,7 @@ class GerberGenPrefGroupUI(OptionsGroupUI):
         :rtype:
         """
         self.app.options['gerber_plot_line'] = (self.line_color_entry.get_value()[:7] +
-                                                 self.app.options['gerber_plot_line'][7:9])
+                                                 _database_option(self.app, 'gerber_plot_line')[7:9])
 
     def on_colors_clear_clicked(self):
         """
@@ -326,7 +327,11 @@ class GerberGenPrefGroupUI(OptionsGroupUI):
         :return:
         :rtype:
         """
-        self.app.options["gerber_color_list"].clear()
+        color_list = deepcopy(
+            _database_option(self.app, "gerber_color_list")
+        )
+        self.app.options["gerber_color_list"] = color_list
+        color_list.clear()
         self.app.inform.emit('[WARNING_NOTCL] %s' % _("Stored colors for Gerber objects are deleted."))
 
     def on_layers_manager(self):
@@ -349,7 +354,13 @@ class ColorsManager(QtWidgets.QDialog):
 
         self.ok = False
         self.color_list = []
-        self.original_color_list = deepcopy(self.app.options["gerber_color_list"])
+        if "gerber_color_list" not in self.app.options:
+            self.app.options["gerber_color_list"] = deepcopy(
+                _database_option(self.app, "gerber_color_list")
+            )
+        self.original_color_list = deepcopy(
+            _database_option(self.app, "gerber_color_list")
+        )
 
         self.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/set_colors64.png'))
         self.setWindowTitle('%s' % _('Color manager'))
@@ -503,8 +514,8 @@ class ColorsManager(QtWidgets.QDialog):
             layer_nr = list_len
         self.original_color_list.append(
             (
-                self.app.options['gerber_plot_line'],
-                self.app.options['gerber_plot_fill'],
+                _database_option(self.app, 'gerber_plot_line'),
+                _database_option(self.app, 'gerber_plot_fill'),
                 '%s_%d' % (_("Layer"), layer_nr)
             )
         )

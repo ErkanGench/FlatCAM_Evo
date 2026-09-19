@@ -70,6 +70,17 @@ class AppUIActions(QtCore.QObject):
         self.defaults = app.defaults
         self.ui = app.ui
 
+    def _pref(self, key):
+        """Return an application preference with its factory-default fallback."""
+        factory_defaults = getattr(self.defaults, "factory_defaults", {})
+        return self.defaults.get(key, factory_defaults.get(key))
+
+    def _ensure_option(self, key):
+        """Return a mutable application option, initializing missing values safely."""
+        if key not in self.options:
+            self.options[key] = deepcopy(self._pref(key))
+        return self.options.get(key, self._pref(key))
+
     # --------------------------------------------------------------------------
     # Dialogs
     # --------------------------------------------------------------------------
@@ -541,16 +552,17 @@ class AppUIActions(QtCore.QObject):
         :return:            None
         """
 
+        bookmarks = self._ensure_option("global_bookmarks")
         if book_dict is None:
-            self.options["global_bookmarks"].update(
+            bookmarks.update(
                 {
                     '1': ['FlatCAM', "http://flatcam.org"],
                     '2': [_('Backup Site'), ""]
                 }
             )
         else:
-            self.options["global_bookmarks"].clear()
-            self.options["global_bookmarks"].update(book_dict)
+            bookmarks.clear()
+            bookmarks.update(book_dict)
 
         # Remove the generated actions while preserving the Bookmark Manager action.
         for act in self.ui.menuhelp_bookmarks.actions():
@@ -562,9 +574,9 @@ class AppUIActions(QtCore.QObject):
             if act is not self.ui.menuhelp_bookmarks_manager:
                 self.ui.menuhelp_bookmarks.removeAction(act)
 
-        bm_limit = int(self.options["global_bookmarks_limit"])
+        bm_limit = int(self.options.get("global_bookmarks_limit", self._pref("global_bookmarks_limit")))
         sorted_bookmarks = sorted(
-            list(self.options["global_bookmarks"].items())[:bm_limit],
+            list(bookmarks.items())[:bm_limit],
             key=lambda item: int(item[0])
         )
         for entry, bookmark in sorted_bookmarks:
@@ -593,8 +605,8 @@ class AppUIActions(QtCore.QObject):
                 # there can be only one instance of Bookmark Manager at one time
                 return
 
-        # BookDialog(app=self, storage=self.options["global_bookmarks"], parent=self.ui).exec()
-        self.app.book_dialog_tab = BookmarkManager(app=self.app, storage=self.options["global_bookmarks"], parent=self.ui)
+        # BookDialog(app=self, storage=self.options.get("global_bookmarks", self._pref("global_bookmarks")), parent=self.ui).exec()
+        self.app.book_dialog_tab = BookmarkManager(app=self.app, storage=self._ensure_option("global_bookmarks"), parent=self.ui)
         self.app.book_dialog_tab.setObjectName("bookmarks_tab")
 
         # add the tab if it was closed
@@ -647,11 +659,11 @@ class AppUIActions(QtCore.QObject):
 
         self.app.plotcanvas.delete_workspace()
         self.app.preferencesUiManager.defaults_read_form()
-        self.app.plotcanvas.draw_workspace(workspace_size=self.options['global_workspaceT'])
+        self.app.plotcanvas.draw_workspace(workspace_size=self.options.get('global_workspaceT', self._pref('global_workspaceT')))
 
     def on_workspace(self):
         if self.ui.general_pref_form.general_app_set_group.workspace_cb.get_value():
-            self.app.plotcanvas.draw_workspace(workspace_size=self.options['global_workspaceT'])
+            self.app.plotcanvas.draw_workspace(workspace_size=self.options.get('global_workspaceT', self._pref('global_workspaceT')))
             self.inform[str, bool].emit(_("Workspace enabled."), False)
         else:
             self.app.plotcanvas.delete_workspace()
@@ -734,7 +746,7 @@ class AppUIActions(QtCore.QObject):
                 return
             if active_obj.kind == 'geometry':
                 # Tool add works for Geometry only if Advanced is True in Preferences
-                if self.app.options["global_app_level"] == 'a':
+                if self.options.get("global_app_level", self._pref("global_app_level")) == 'a':
                     tool_add_popup = FCInputSpinner(title='%s...' % _("New Tool"),
                                                     text='%s:' % _('Enter a Tool Diameter'),
                                                     min=0.0000, max=100.0000, decimals=self.app.decimals, step=0.1)
@@ -1012,7 +1024,7 @@ class AppUIActions(QtCore.QObject):
         # So it can receive key presses
         plotcanvas3d.native.setFocus()
 
-        pan_button = 2 if self.options["global_pan_button"] == '2' else 3
+        pan_button = 2 if self.options.get("global_pan_button", self._pref("global_pan_button")) == '2' else 3
         # Set the mouse button for panning
         plotcanvas3d.view.camera.pan_button_setting = pan_button
 
@@ -1100,8 +1112,8 @@ class AppUIActions(QtCore.QObject):
             pass
 
         # restore the coords toolbars
-        self.ui.toggle_coords(checked=self.options["global_coords_bar_show"])
-        self.ui.toggle_delta_coords(checked=self.options["global_delta_coords_bar_show"])
+        self.ui.toggle_coords(checked=self.options.get("global_coords_bar_show", self._pref("global_coords_bar_show")))
+        self.ui.toggle_delta_coords(checked=self.options.get("global_delta_coords_bar_show", self._pref("global_delta_coords_bar_show")))
 
     def on_plot_area_tab_double_clicked(self):
         # tab_obj_name = self.ui.plot_tab_area.widget(index).objectName()
@@ -1242,7 +1254,7 @@ class AppUIActions(QtCore.QObject):
         root = d_properties_tw.invisibleRootItem()
         font = QtGui.QFont()
         font.setBold(True)
-        p_color = QtGui.QColor("#000000") if self.options['global_theme'] in ['default', 'light'] else \
+        p_color = QtGui.QColor("#000000") if self.options.get('global_theme', self._pref('global_theme')) in ['default', 'light'] else \
             QtGui.QColor("#FFFFFF")
 
         # main Items categories
@@ -1256,10 +1268,10 @@ class AppUIActions(QtCore.QObject):
 
         grid_cat = d_properties_tw.addParent(root, _('Grid'), expanded=True, color=p_color, font=font)
         d_properties_tw.addChild(parent=grid_cat,
-                                 title=['%s:' % _("Displayed"), '%s' % str(self.options['global_grid_lines'])],
+                                 title=['%s:' % _("Displayed"), '%s' % str(self.options.get('global_grid_lines', self._pref('global_grid_lines')))],
                                  column1=True)
         d_properties_tw.addChild(parent=grid_cat,
-                                 title=['%s:' % _("Snap"), '%s' % str(self.options['global_grid_snap'])],
+                                 title=['%s:' % _("Snap"), '%s' % str(self.options.get('global_grid_snap', self._pref('global_grid_snap')))],
                                  column1=True)
         d_properties_tw.addChild(parent=grid_cat,
                                  title=['%s:' % _("X value"), '%s' % str(self.ui.grid_gap_x_entry.get_value())],
@@ -1270,24 +1282,24 @@ class AppUIActions(QtCore.QObject):
 
         canvas_cat = d_properties_tw.addParent(root, _('Canvas'), expanded=True, color=p_color, font=font)
         d_properties_tw.addChild(parent=canvas_cat,
-                                 title=['%s:' % _("Axis"), '%s' % str(self.options['global_axis'])],
+                                 title=['%s:' % _("Axis"), '%s' % str(self.options.get('global_axis', self._pref('global_axis')))],
                                  column1=True)
         d_properties_tw.addChild(parent=canvas_cat,
                                  title=['%s:' % _("Workspace active"),
-                                        '%s' % str(self.options['global_workspace'])],
+                                        '%s' % str(self.options.get('global_workspace', self._pref('global_workspace')))],
                                  column1=True)
         d_properties_tw.addChild(parent=canvas_cat,
                                  title=['%s:' % _("Workspace size"),
-                                        '%s' % str(self.options['global_workspaceT'])],
+                                        '%s' % str(self.options.get('global_workspaceT', self._pref('global_workspaceT')))],
                                  column1=True)
         d_properties_tw.addChild(parent=canvas_cat,
                                  title=['%s:' % _("Workspace orientation"),
-                                        '%s' % _("Portrait") if self.options[
-                                                                    'global_workspace_orientation'] == 'p' else
+                                         '%s' % _("Portrait") if self.options.get(
+                                                                    'global_workspace_orientation', self._pref('global_workspace_orientation')) == 'p' else
                                         _("Landscape")],
                                  column1=True)
         d_properties_tw.addChild(parent=canvas_cat,
-                                 title=['%s:' % _("HUD"), '%s' % str(self.options['global_hud'])],
+                                 title=['%s:' % _("HUD"), '%s' % str(self.options.get('global_hud', self._pref('global_hud')))],
                                  column1=True)
         self.ui.properties_scroll_area.setWidget(d_properties_tw)
 
@@ -1305,7 +1317,11 @@ class AppUIActions(QtCore.QObject):
         #     act.triggered.disconnect()
         self.ui.cmenu_gridmenu.clear()
 
-        sorted_list = sorted(self.options["global_grid_context_menu"][str(units)])
+        grid_context_menu = self._ensure_option("global_grid_context_menu")
+        factory_grid_context_menu = self._pref("global_grid_context_menu") or {}
+        sorted_list = sorted(grid_context_menu.get(
+            str(units), factory_grid_context_menu.get(str(units), [])
+        ))
 
         grid_toggle = self.ui.cmenu_gridmenu.addAction(QtGui.QIcon(self.app.resource_location + '/grid32_menu.png'),
                                                        _("Grid On/Off"))
@@ -1351,8 +1367,13 @@ class AppUIActions(QtCore.QObject):
                                  _("Please enter a grid value with non-zero value, in Float format."))
                 return
             else:
-                if val not in self.options["global_grid_context_menu"][str(units)]:
-                    self.options["global_grid_context_menu"][str(units)].append(val)
+                grid_context_menu = self._ensure_option("global_grid_context_menu")
+                factory_grid_context_menu = self._pref("global_grid_context_menu") or {}
+                grid_values = grid_context_menu.setdefault(
+                    str(units), deepcopy(factory_grid_context_menu.get(str(units), []))
+                )
+                if val not in grid_values:
+                    grid_values.append(val)
                     self.inform.emit('[success] %s...' % _("New Grid added"))
                 else:
                     self.inform.emit('[WARNING_NOTCL] %s...' % _("Grid already exists"))
@@ -1376,8 +1397,13 @@ class AppUIActions(QtCore.QObject):
                                  _("Please enter a grid value with non-zero value, in Float format."))
                 return
             else:
+                grid_context_menu = self._ensure_option("global_grid_context_menu")
+                grid_values = grid_context_menu.get(str(units))
+                if grid_values is None:
+                    self.inform.emit('[ERROR_NOTCL]%s...' % _("Grid Value does not exist"))
+                    return
                 try:
-                    self.options["global_grid_context_menu"][str(units)].remove(val)
+                    grid_values.remove(val)
                 except ValueError:
                     self.inform.emit('[ERROR_NOTCL]%s...' % _("Grid Value does not exist"))
                     return

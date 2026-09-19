@@ -9,6 +9,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     RadioSet, FCDoubleSpinner, FCTable
+from defaults import AppDefaults
 
 import logging
 from copy import deepcopy
@@ -194,30 +195,79 @@ class ToolExtract(AppTool):
 
         self.ui_disconnect()
         self.ui_connect()
-        self.ui.method_radio.set_value(self.app.options["tools_extract_hole_type"])
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.ui.method_radio.set_value(self.app.options.get(
+            "tools_extract_hole_type",
+            app_defaults.get("tools_extract_hole_type", AppDefaults.factory_defaults.get("tools_extract_hole_type"))
+        ))
 
-        self.ui.dia_entry.set_value(float(self.app.options["tools_extract_hole_fixed_dia"]))
+        self.ui.dia_entry.set_value(float(self.app.options.get(
+            "tools_extract_hole_fixed_dia",
+            app_defaults.get("tools_extract_hole_fixed_dia", AppDefaults.factory_defaults.get("tools_extract_hole_fixed_dia"))
+        )))
 
-        self.ui.circular_ring_entry.set_value(float(self.app.options["tools_extract_circular_ring"]))
-        self.ui.oblong_ring_entry.set_value(float(self.app.options["tools_extract_oblong_ring"]))
-        self.ui.square_ring_entry.set_value(float(self.app.options["tools_extract_square_ring"]))
-        self.ui.rectangular_ring_entry.set_value(float(self.app.options["tools_extract_rectangular_ring"]))
-        self.ui.other_ring_entry.set_value(float(self.app.options["tools_extract_others_ring"]))
+        self.ui.circular_ring_entry.set_value(float(self.app.options.get(
+            "tools_extract_circular_ring",
+            app_defaults.get("tools_extract_circular_ring", AppDefaults.factory_defaults.get("tools_extract_circular_ring"))
+        )))
+        self.ui.oblong_ring_entry.set_value(float(self.app.options.get(
+            "tools_extract_oblong_ring",
+            app_defaults.get("tools_extract_oblong_ring", AppDefaults.factory_defaults.get("tools_extract_oblong_ring"))
+        )))
+        self.ui.square_ring_entry.set_value(float(self.app.options.get(
+            "tools_extract_square_ring",
+            app_defaults.get("tools_extract_square_ring", AppDefaults.factory_defaults.get("tools_extract_square_ring"))
+        )))
+        self.ui.rectangular_ring_entry.set_value(float(self.app.options.get(
+            "tools_extract_rectangular_ring",
+            app_defaults.get("tools_extract_rectangular_ring", AppDefaults.factory_defaults.get("tools_extract_rectangular_ring"))
+        )))
+        self.ui.other_ring_entry.set_value(float(self.app.options.get(
+            "tools_extract_others_ring",
+            app_defaults.get("tools_extract_others_ring", AppDefaults.factory_defaults.get("tools_extract_others_ring"))
+        )))
 
-        self.ui.circular_cb.set_value(self.app.options["tools_extract_circular"])
-        self.ui.oblong_cb.set_value(self.app.options["tools_extract_oblong"])
-        self.ui.square_cb.set_value(self.app.options["tools_extract_square"])
-        self.ui.rectangular_cb.set_value(self.app.options["tools_extract_rectangular"])
-        self.ui.other_cb.set_value(self.app.options["tools_extract_others"])
+        self.ui.circular_cb.set_value(self.app.options.get(
+            "tools_extract_circular",
+            app_defaults.get("tools_extract_circular", AppDefaults.factory_defaults.get("tools_extract_circular"))
+        ))
+        self.ui.oblong_cb.set_value(self.app.options.get(
+            "tools_extract_oblong",
+            app_defaults.get("tools_extract_oblong", AppDefaults.factory_defaults.get("tools_extract_oblong"))
+        ))
+        self.ui.square_cb.set_value(self.app.options.get(
+            "tools_extract_square",
+            app_defaults.get("tools_extract_square", AppDefaults.factory_defaults.get("tools_extract_square"))
+        ))
+        self.ui.rectangular_cb.set_value(self.app.options.get(
+            "tools_extract_rectangular",
+            app_defaults.get("tools_extract_rectangular", AppDefaults.factory_defaults.get("tools_extract_rectangular"))
+        ))
+        self.ui.other_cb.set_value(self.app.options.get(
+            "tools_extract_others",
+            app_defaults.get("tools_extract_others", AppDefaults.factory_defaults.get("tools_extract_others"))
+        ))
 
-        self.ui.factor_entry.set_value(float(self.app.options["tools_extract_hole_prop_factor"]))
+        self.ui.factor_entry.set_value(float(self.app.options.get(
+            "tools_extract_hole_prop_factor",
+            app_defaults.get("tools_extract_hole_prop_factor", AppDefaults.factory_defaults.get("tools_extract_hole_prop_factor"))
+        )))
 
         # Extract Soldermask
-        self.ui.clearance_entry.set_value(float(self.app.options["tools_extract_sm_clearance"]))
+        self.ui.clearance_entry.set_value(float(self.app.options.get(
+            "tools_extract_sm_clearance",
+            app_defaults.get("tools_extract_sm_clearance", AppDefaults.factory_defaults.get("tools_extract_sm_clearance"))
+        )))
 
         # Extract Cutout
-        self.ui.margin_cut_entry.set_value(float(self.app.options["tools_extract_cut_margin"]))
-        self.ui.thick_cut_entry.set_value(float(self.app.options["tools_extract_cut_thickness"]))
+        self.ui.margin_cut_entry.set_value(float(self.app.options.get(
+            "tools_extract_cut_margin",
+            app_defaults.get("tools_extract_cut_margin", AppDefaults.factory_defaults.get("tools_extract_cut_margin"))
+        )))
+        self.ui.thick_cut_entry.set_value(float(self.app.options.get(
+            "tools_extract_cut_thickness",
+            app_defaults.get("tools_extract_cut_thickness", AppDefaults.factory_defaults.get("tools_extract_cut_thickness"))
+        )))
 
         # SELECT THE CURRENT OBJECT
         obj = self.app.collection.get_active()
@@ -966,7 +1016,11 @@ class ToolExtract(AppTool):
         assert isinstance(wdg, FCCheckBox)
         if wdg.isChecked():
             # self.plot_aperture(color='#2d4606bf', marked_aperture=aperture, visible=True)
-            color = self.app.options['global_sel_draw_color']
+            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+            color = self.app.options.get(
+                'global_sel_draw_color',
+                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))
+            )
             color = (color + 'AA') if len(color) == 7 else (color[:-2] + 'AA')
             grb_obj.plot_aperture(color=color, marked_aperture=aperture, visible=True, run_thread=True)
         else:

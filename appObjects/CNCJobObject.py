@@ -56,7 +56,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
 
         CNCjob.__init__(self, app=app, units=units, kind=kind, z_move=z_move,
                         feedrate=feedrate, feedrate_rapid=feedrate_rapid, z_cut=z_cut, tooldia=tooldia,
-                        spindlespeed=spindlespeed, steps_per_circle=int(self.app.options["cncjob_steps_per_circle"]))
+                        spindlespeed=spindlespeed, steps_per_circle=int(self._app_option("cncjob_steps_per_circle")))
 
         FlatCAMObj.__init__(self, name, app)
 
@@ -71,33 +71,33 @@ class CNCJobObject(FlatCAMObj, CNCjob):
             "dwelltime": 1,
             "type": 'Geometry',
 
-            "cncjob_tooldia": self.app.options["cncjob_tooldia"],
-            "cncjob_coords_type": self.app.options["cncjob_coords_type"],
-            "cncjob_coords_decimals": self.app.options["cncjob_coords_decimals"],
-            "cncjob_fr_decimals": self.app.options["cncjob_fr_decimals"],
+            "cncjob_tooldia": self._app_option("cncjob_tooldia"),
+            "cncjob_coords_type": self._app_option("cncjob_coords_type"),
+            "cncjob_coords_decimals": self._app_option("cncjob_coords_decimals"),
+            "cncjob_fr_decimals": self._app_option("cncjob_fr_decimals"),
 
             # bed square compensation
-            "cncjob_bed_max_x": self.app.options["cncjob_bed_max_x"],
-            "cncjob_bed_max_y": self.app.options["cncjob_bed_max_y"],
-            "cncjob_bed_offset_x": self.app.options["cncjob_bed_offset_x"],
-            "cncjob_bed_offset_y": self.app.options["cncjob_bed_offset_y"],
-            "cncjob_bed_skew_x": self.app.options["cncjob_bed_skew_x"],
-            "cncjob_bed_skew_y": self.app.options["cncjob_bed_skew_y"],
+            "cncjob_bed_max_x": self._app_option("cncjob_bed_max_x"),
+            "cncjob_bed_max_y": self._app_option("cncjob_bed_max_y"),
+            "cncjob_bed_offset_x": self._app_option("cncjob_bed_offset_x"),
+            "cncjob_bed_offset_y": self._app_option("cncjob_bed_offset_y"),
+            "cncjob_bed_skew_x": self._app_option("cncjob_bed_skew_x"),
+            "cncjob_bed_skew_y": self._app_option("cncjob_bed_skew_y"),
 
             "cncjob_steps_per_circle": 16,
 
             # "toolchange_macro": '',
             # "toolchange_macro_enable": False
-            "tools_al_travel_z": self.app.options["tools_al_travel_z"],
-            "tools_al_probe_depth": self.app.options["tools_al_probe_depth"],
-            "tools_al_probe_fr": self.app.options["tools_al_probe_fr"],
-            "tools_al_controller": self.app.options["tools_al_controller"],
-            "tools_al_method": self.app.options["tools_al_method"],
-            "tools_al_mode": self.app.options["tools_al_mode"],
-            "tools_al_rows": self.app.options["tools_al_rows"],
-            "tools_al_columns": self.app.options["tools_al_columns"],
-            "tools_al_grbl_jog_step": self.app.options["tools_al_grbl_jog_step"],
-            "tools_al_grbl_jog_fr": self.app.options["tools_al_grbl_jog_fr"],
+            "tools_al_travel_z": self._app_option("tools_al_travel_z"),
+            "tools_al_probe_depth": self._app_option("tools_al_probe_depth"),
+            "tools_al_probe_fr": self._app_option("tools_al_probe_fr"),
+            "tools_al_controller": self._app_option("tools_al_controller"),
+            "tools_al_method": self._app_option("tools_al_method"),
+            "tools_al_mode": self._app_option("tools_al_mode"),
+            "tools_al_rows": self._app_option("tools_al_rows"),
+            "tools_al_columns": self._app_option("tools_al_columns"),
+            "tools_al_grbl_jog_step": self._app_option("tools_al_grbl_jog_step"),
+            "tools_al_grbl_jog_fr": self._app_option("tools_al_grbl_jog_fr"),
         })
 
         '''
@@ -518,7 +518,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
             self.ui.updateplot_button.hide()
 
         # set the kind of geometries are plotted by default with plot2() from camlib.CNCJob
-        self.ui.cncplot_method_combo.set_value(self.app.options["cncjob_plot_kind"])
+        self.ui.cncplot_method_combo.set_value(self._app_option("cncjob_plot_kind"))
 
         # #############################################################################################################
         # ##################################### SIGNALS CONNECTIONS ###################################################
@@ -533,7 +533,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
         self.ui.annotation_cb.stateChanged.connect(self.on_annotation_change)
 
         # set if to display text annotations
-        self.ui.annotation_cb.set_value(self.app.options["cncjob_annotation"])
+        self.ui.annotation_cb.set_value(self._app_option("cncjob_annotation"))
 
         # update plot button - active only for SingleGeo type objects
         self.ui.updateplot_button.clicked.connect(self.on_updateplot_button_click)
@@ -564,8 +564,8 @@ class CNCJobObject(FlatCAMObj, CNCjob):
 
         # On CNCJob object creation, generate the GCode
         if self.is_loaded_from_project is False:
-            self.prepend_snippet = self.app.options['cncjob_prepend']
-            self.append_snippet = self.app.options['cncjob_append']
+            self.prepend_snippet = self._app_option('cncjob_prepend')
+            self.append_snippet = self._app_option('cncjob_append')
             self.gc_header = self.gcode_header()
         else:
             # this is dealt when loading the project, the header, prepend and append are already loaded
@@ -587,7 +587,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
             self.ui.snippets_cb.set_value(True)
 
         # Show/Hide Advanced Options
-        app_mode = self.app.options["global_app_level"]
+        app_mode = self._app_option("global_app_level")
         self.change_level(app_mode)
 
     def change_level(self, level):
@@ -713,7 +713,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
             _filter_ = "HPGL Files .plt (*.plt);;All Files (*.*)"
         else:
             save_gcode = True
-            _filter_ = self.app.options['cncjob_save_filters']
+            _filter_ = self._app_option('cncjob_save_filters')
 
         try:
             dir_file_to_save = self.app.get_last_save_folder() + '/' + str(name)
@@ -751,7 +751,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
             return 'fail'
 
         try:
-            force_windows_line_endings = self.app.options['cncjob_line_ending']
+            force_windows_line_endings = self._app_option('cncjob_line_ending')
             if force_windows_line_endings and sys.platform != 'win32':
                 with open(filename, 'w', newline='\r\n') as f:
                     for line in self.source_file:
@@ -770,7 +770,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
             )
             return 'fail'
 
-        if self.app.options["global_open_style"] is False:
+        if self._app_option("global_open_style") is False:
             self.app.file_opened.emit("gcode", filename)
         self.app.file_saved.emit("gcode", filename)
         self.app.inform.emit('[success] %s: %s' % (_("File saved to"), filename))
@@ -879,7 +879,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
                         ppg = self.tools[key]['data']['tools_mill_ppname_g']
                     except KeyError:
                         # for older loaded projects
-                        ppg = self.app.options['tools_mill_ppname_g']
+                        ppg = self._app_option('tools_mill_ppname_g')
 
                     if 'marlin' in ppg.lower() or 'repetier' in ppg.lower():
                         marlin = True
@@ -1003,9 +1003,9 @@ class CNCJobObject(FlatCAMObj, CNCjob):
         include_header = True
 
         if preamble == '':
-            preamble = self.app.options["cncjob_prepend"]
+            preamble = self._app_option("cncjob_prepend")
         if postamble == '':
-            postamble = self.app.options["cncjob_append"]
+            postamble = self._app_option("cncjob_append")
 
         # try:
         #     if self.special_group:
@@ -1029,12 +1029,12 @@ class CNCJobObject(FlatCAMObj, CNCjob):
                         # for older loaded projects
                         self.app.log.debug(
                             "CNCJobObject.export_gcode() --> old project detected. Results are unreliable.")
-                        include_header = self.app.preprocessors[self.app.options['ppname_g']]
+                        include_header = self.app.preprocessors[self._app_option('ppname_g')]
                     except KeyError:
                         # for older loaded projects
                         self.app.log.debug(
                             "CNCJobObject.export_gcode() --> old project detected. Results are unreliable.")
-                        include_header = self.app.preprocessors[self.app.options['tools_mill_ppname_g']]
+                        include_header = self.app.preprocessors[self._app_option('tools_mill_ppname_g')]
 
                 include_header = include_header.include_header
             except (TypeError, IndexError):
@@ -1060,7 +1060,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
                             "CNCJobObject.export_gcode() --> old project detected. Results are unreliable.")
                         # for older loaded projects
                         include_header = self.app.preprocessors[
-                            self.app.options['tools_drill_ppname_e']
+                            self._app_option('tools_drill_ppname_e')
                         ].include_header
             except TypeError:
                 # when self.tools is empty - old projects
@@ -1085,7 +1085,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
 
             # g = sstart_code + '\n' + preamble + '\n' + gcode + '\n' + postamble
             g = ''
-            end_gcode = self.gcode_footer() if self.app.options['cncjob_footer'] is True else ''
+            end_gcode = self.gcode_footer() if self._app_option('cncjob_footer') is True else ''
             if preamble != '' and postamble != '':
                 g = start_code + '\n' + preamble + '\n' + gcode + '\n' + postamble + '\n' + end_gcode
             if preamble == '':
@@ -1117,7 +1117,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
             else:
                 gcode += global_gcode
 
-            end_gcode = self.gcode_footer() if self.app.options['cncjob_footer'] is True else ''
+            end_gcode = self.gcode_footer() if self._app_option('cncjob_footer') is True else ''
 
             # detect if using a HPGL preprocessor
             hpgl = False
@@ -1173,7 +1173,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
         # Write
         if filename is not None:
             try:
-                force_windows_line_endings = self.app.options['cncjob_line_ending']
+                force_windows_line_endings = self._app_option('cncjob_line_ending')
                 if force_windows_line_endings and sys.platform != 'win32':
                     with open(filename, 'w', newline='\r\n') as f:
                         for line in lines:
@@ -1193,7 +1193,7 @@ class CNCJobObject(FlatCAMObj, CNCjob):
                 return 'fail'
         elif to_file is False:
             # Just for adding it to the recent files list.
-            if self.app.options["global_open_style"] is False:
+            if self._app_option("global_open_style") is False:
                 self.app.file_opened.emit("cncjob", filename)
             self.app.file_saved.emit("cncjob", filename)
 

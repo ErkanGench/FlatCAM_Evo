@@ -56,6 +56,6 @@ class TclCommandGetSys(TclCommand):
         name = args['name']
 
         if name in self.app.options:
-            return self.app.options[name]
+            return self._app_option(name)
         else:
             return "The keyword: %s does not exist as a parameter" % str(name)

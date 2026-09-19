@@ -325,7 +325,7 @@ class RegisterFK(QtCore.QObject):
         self.prj_list = extensions.prj_list
         self.conf_list = extensions.conf_list
 
-        autocomplete_kw_list = self.options['util_autocomplete_keywords'].replace(' ', '').split(',')
+        autocomplete_kw_list = self.options.get('util_autocomplete_keywords').replace(' ', '').split(',')
         self.myKeywords = self.tcl_commands_list + autocomplete_kw_list + self.tcl_keywords
 
         # initial register of keywords for the shell
@@ -337,7 +337,7 @@ class RegisterFK(QtCore.QObject):
         # ##################################### Register files with FlatCAM;  #######################################
         # ################################### It works only for Windows for now  ####################################
         # ###########################################################################################################
-        if sys.platform == 'win32' and self.options["first_run"] is True:
+        if sys.platform == 'win32' and self.options.get("first_run") is True:
             self.on_register_files()
 
     def connect_signals(self):
@@ -480,7 +480,7 @@ class RegisterFK(QtCore.QObject):
             self.set_reg('', root_pth=root_path, new_reg_path_par=new_k, value='FlatCAM')
 
         # and unregister those that are no longer in the Preferences windows but are in the file
-        for ext in self.options["fa_excellon"].replace(' ', '').split(','):
+        for ext in self.options.get("fa_excellon").replace(' ', '').split(','):
             if ext not in exc_list:
                 self.delete_reg(root_pth=root_path, reg_path=new_reg_path, key_to_del='.%s' % ext)
 
@@ -503,7 +503,7 @@ class RegisterFK(QtCore.QObject):
             self.set_reg('', root_pth=root_path, new_reg_path_par=new_k, value='FlatCAM')
 
         # and unregister those that are no longer in the Preferences windows but are in the file
-        for ext in self.options["fa_gerber"].replace(' ', '').split(','):
+        for ext in self.options.get("fa_gerber").replace(' ', '').split(','):
             if ext not in grb_list:
                 self.delete_reg(root_pth=root_path, reg_path=new_reg_path, key_to_del='.%s' % ext)
 
@@ -521,7 +521,7 @@ class RegisterFK(QtCore.QObject):
             self.set_reg('', root_pth=root_path, new_reg_path_par=new_k, value='FlatCAM')
 
         # and unregister those that are no longer in the Preferences windows but are in the file
-        for ext in self.options["fa_gcode"].replace(' ', '').split(','):
+        for ext in self.options.get("fa_gcode").replace(' ', '').split(','):
             if ext not in gco_list:
                 self.delete_reg(root_pth=root_path, reg_path=new_reg_path, key_to_del='.%s' % ext)
 

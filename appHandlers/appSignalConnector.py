@@ -143,6 +143,12 @@ class AppSignalConnector(QtCore.QObject):
     def connect_menuhelp_signals(self):
         self.ui.menuhelp_about.triggered.connect(self.app.on_about)
         self.ui.menuhelp_readme.triggered.connect(self.app.on_howto)
+        check_updates = getattr(self.ui, "menuhelp_check_updates", None)
+        if check_updates is not None:
+            check_updates.triggered.connect(self.app.on_check_for_updates)
+        revert_update = getattr(self.ui, "menuhelp_revert_update", None)
+        if revert_update is not None:
+            revert_update.triggered.connect(self.app.on_revert_update)
         self.ui.menuhelp_donate.triggered.connect(lambda: webbrowser.open(self.app.donate_url))
         self.ui.menuhelp_manual.triggered.connect(lambda: webbrowser.open(self.app.manual_url))
         self.ui.menuhelp_report_bug.triggered.connect(lambda: webbrowser.open(self.app.bug_report_url))
