@@ -2308,23 +2308,26 @@ class AppGeoEditor(QtCore.QObject):
                     return
 
                 tools = selected[1:]
-                toolgeo = unary_union([shp.geo for shp in tools])
+                toolgeo = unary_union([
+                    Polygon(geo) if isinstance(geo, (LineString, LinearRing)) and geo.is_ring else geo
+                    for shp in tools for geo in editor_self.flatten(shp.geo)
+                ])
 
                 target = selected[0]
                 if type(target.geo) == Polygon:
-                    for ring in poly2rings(target.geo):
-                        editor_self.add_shape(DrawToolShape(ring.difference(toolgeo)))
+                    paths = poly2rings(target.geo)
                 elif type(target.geo) == LineString or type(target.geo) == LinearRing:
-                    editor_self.add_shape(DrawToolShape(target.geo.difference(toolgeo)))
+                    paths = [target.geo]
                 elif type(target.geo) == MultiLineString:
-                    try:
-                        for linestring in target.geo:
-                            editor_self.add_shape(DrawToolShape(linestring.difference(toolgeo)))
-                    except Exception as e:
-                        editor_self.app.log.error("Current LinearString does not intersect the target. %s" % str(e))
+                    paths = target.geo.geoms
                 else:
                     editor_self.app.log.warning("Not implemented. Object type: %s" % str(type(target.geo)))
                     return
+
+                for path in paths:
+                    for result in editor_self.flatten(path.difference(toolgeo)):
+                        if not result.is_empty:
+                            editor_self.add_shape(DrawToolShape(result))
 
                 editor_self.delete_shape(target)
                 editor_self.plot_all()

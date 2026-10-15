@@ -564,9 +564,10 @@ class FlatCAMObj(QtCore.QObject):
 
         self.muted_ui = False
 
-    def on_name_activate(self, silent=None):
+    def on_name_activate(self, silent=None, new_name=None):
         old_name = copy(self.obj_options["name"])
-        new_name = self.ui.name_entry.get_value()
+        if new_name is None:
+            new_name = self.ui.name_entry.get_value()
 
         if new_name != old_name:
             # update the SHELL auto-completer model data
@@ -578,8 +579,12 @@ class FlatCAMObj(QtCore.QObject):
                 self.app.log.debug(
                     "on_name_activate() --> Could not remove the old object name from auto-completer model list")
 
-            self.obj_options["name"] = self.ui.name_entry.get_value()
-            self.default_data["name"] = self.ui.name_entry.get_value()
+            self.obj_options["name"] = new_name
+            self.default_data["name"] = new_name
+            try:
+                self.ui.name_entry.set_value(new_name)
+            except (AttributeError, RuntimeError):
+                pass
             self.app.collection.update_view()
             if silent:
                 self.app.inform.emit('[success] %s: %s %s: %s' % (
@@ -691,6 +696,9 @@ class FlatCAMObj(QtCore.QObject):
         except KeyError:
             # self.app.log.warn("Tried to set an option or field that does not exist: %s" % option)
             pass
+        except (AttributeError, RuntimeError):
+            if option != 'name':
+                raise
 
     def read_form_item(self, option):
         """

@@ -851,7 +851,9 @@ class AppObjectOps(QtCore.QObject):
         if notebook_widget_name == 'properties_tab':
             active = self.app.collection.get_active()
             if active is not None and active.kind == 'geometry':
-                active.on_tool_delete()
+                delete_handler = getattr(active, 'on_tool_delete', None)
+                if callable(delete_handler):
+                    delete_handler()
 
         # work only if the notebook tab on focus is the Tools_Tab
         elif notebook_widget_name == 'plugin_tab':

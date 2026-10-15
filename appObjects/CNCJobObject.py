@@ -684,7 +684,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         self.app.defaults.report_usage("cncjob_on_exportgcode_button")
 
         self.read_form()
-        name = self.app.collection.get_active().obj_options['name']
+        name = self.obj_options['name']
         save_gcode = False
 
         if 'Roland' in self.pp_excellon_name or 'Roland' in self.pp_geometry_name:
@@ -726,8 +726,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         if rename_object:
             new_name = os.path.split(str(filename))[1].rpartition('.')[0]
-            self.ui.name_entry.set_value(new_name)
-            self.on_name_activate(silent=True)
+            self.on_name_activate(silent=True, new_name=new_name)
 
         if self.source_file == '':
             return 'fail'

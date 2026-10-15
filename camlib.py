@@ -976,7 +976,7 @@ class Geometry(object):
         w_geo = flatten_shapely_geometry(geometry)
         for geo in w_geo:
             try:
-                interiors.append(geo.interiors)
+                interiors.extend(geo.interiors)
             except Exception:
                 continue
 
@@ -3904,6 +3904,12 @@ class CNCjob(Geometry):
 
         temp_solid_geometry = [t_geo for t_geo in temp_solid_geometry if not t_geo.is_empty]
 
+        # Depth parameters for the current tool must be loaded before validation.
+        self.z_cut = float(tool_dict['tools_mill_cutz']) if tool_dict['tools_mill_cutz'] is not None else None
+        self.multidepth = tool_dict['tools_mill_multidepth']
+        self.z_depthpercut = float(tool_dict['tools_mill_depthperpass'])
+        self.z_move = float(tool_dict['tools_mill_travelz']) if tool_dict['tools_mill_travelz'] is not None else None
+
         if self.z_cut is None:
             if 'laser' not in self.pp_geometry_name:
                 self.app.inform.emit(
@@ -3949,11 +3955,6 @@ class CNCjob(Geometry):
         if abs(self.z_cut) < self.z_depthpercut:
             self.z_depthpercut = abs(self.z_cut)
 
-        # Depth parameters
-        self.z_cut = float(tool_dict['tools_mill_cutz'])
-        self.multidepth = tool_dict['tools_mill_multidepth']
-        self.z_depthpercut = float(tool_dict['tools_mill_depthperpass'])
-        self.z_move = float(tool_dict['tools_mill_travelz'])
         self.f_plunge = self._app_option("tools_mill_f_plunge")
 
         self.feedrate = float(tool_dict['tools_mill_feedrate'])

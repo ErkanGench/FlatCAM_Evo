@@ -13,7 +13,7 @@ CHANGELOG for FlatCAM Evo beta
 Levelling Tool:
 
 - the Manual/Grid mode and Voronoi/Bilinear method are saved per CNCJob; reopening the tool restores the job's choices instead of the global method, without clearing a valid height map
-- added optional GRBL precision probing (two touches), inspired by FlatCAM-Plus: coarse touch, retract, slow touch, then lift to the travel height; only the second measurement is used
+- added optional GRBL precision probing (two touches): coarse touch, retract, slow touch, then lift to the travel height; only the second measurement is used
 - the fine probe feedrate and precision retract are saved per job, with unit conversion; defaults are 10 mm/min and 0.5 mm, and precision probing is off by default
 - precision probing checks the contact, retract limits and coordinate frame between stages; a failed touch or an uncertain frame stops the operation and requires recovery
 - fixed: malformed, incomplete, duplicate or nonfinite GRBL work-offset replies could escape error handling; they now fail through the normal recovery path
@@ -54,6 +54,8 @@ CNCJob / Drilling:
 - the OR-Tools 'Basic' path optimization has a time limit: the 'Duration' preference (Excellon and Geometry) is now used by 'MetaHeuristic' and 'Basic' and is enabled for both; 0 means 3 seconds. A panel of 1152 holes took 134 s, now about 3 s
 - the OR-Tools distances are given as a matrix and with a resolution of 1/1000 unit: holes less than 1 mm apart were in a random order
 - fixed: in a CNCJob made from an Excellon, the 'Plot' checkbox did not check or uncheck the plot checkboxes of the tools, and a click on a tool checkbox did not update the 'Plot' checkbox
+- fixed: the milling G-code generation checked the Cut Z and Travel Z of the previous tool, then used the raw values of the current tool; a positive Cut Z or a negative Travel Z went into the G-code without the sign correction, and a laser job without a Cut Z raised an error
+- fixed: the G-code export suggested the file name of the active object instead of the exported CNCJob; renaming the job after export works when its Properties panel is closed
 
 Tcl:
 
@@ -67,6 +69,9 @@ Other:
 - fixed: the Style combobox in Preferences was empty when an application theme stylesheet was active
 - startup keeps Qt's native default style instead of forcing windowsvista, allowing Windows 11 styling and native dark title bars on supported Qt versions
 - fixed: the restored objects of a project did not react to option changes
+- fixed: the interiors of a geometry (isolation with the 'Interiors' type, the Tcl command interiors) were returned as ring sequences instead of rings
+- fixed: in the Geometry editor, Cut Path with a closed cutter (polygon or closed path) removes the part of the target inside it; results with more than 1 part are added as separate shapes and empty results are dropped
+- fixed: the Delete key raised an error on a Geometry object in the Properties tab that has no tool delete handler
 - the plugins Isolation, NCC, Paint, Follow, Punch Gerber, Drilling and Milling no longer inherit the Gerber or Excellon class
 - the project moved to GitHub: https://github.com/MariusAdrian88/FlatCAM_Evo (branch 'main' is the stable code, branch '1.0' the development code). The About, How To and Report a bug links point there
 - Python 3.10 is the minimum version; an older Python stops with a message
