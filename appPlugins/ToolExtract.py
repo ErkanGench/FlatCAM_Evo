@@ -83,7 +83,7 @@ class ToolExtract(AppTool):
         self.build_tool_ui()
 
     def install(self, icon=None, separator=None, **kwargs):
-        AppTool.install(self, icon, separator, shortcut='Alt+I', **kwargs)
+        AppTool.install(self, icon, separator, shortcut='Alt+E', **kwargs)
 
     def run(self, toggle=True):
         self.app.defaults.report_usage("Extract Drills()")

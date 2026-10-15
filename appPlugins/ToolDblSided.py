@@ -56,7 +56,7 @@ class DblSidedTool(AppTool):
         self.local_connected = False
 
     def install(self, icon=None, separator=None, **kwargs):
-        AppTool.install(self, icon, separator, shortcut='Alt+D', **kwargs)
+        AppTool.install(self, icon, separator, shortcut='Alt+U', **kwargs)
 
     def run(self, toggle=True):
         self.app.defaults.report_usage("Tool2Sided()")

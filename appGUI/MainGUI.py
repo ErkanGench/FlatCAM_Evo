@@ -3208,9 +3208,9 @@ class MainGUI(QtWidgets.QMainWindow):
                 if key == QtCore.Qt.Key.Key_C:
                     self.app.calculator_tool.run(toggle=True)
 
-                # 2-Sided PCB Tool
+                # Drilling Tool
                 if key == QtCore.Qt.Key.Key_D:
-                    self.app.dblsidedtool.run(toggle=True)
+                    self.app.drilling_tool.run(toggle=True)
                     return
 
                 # Extract Drills  Tool
@@ -3288,6 +3288,11 @@ class MainGUI(QtWidgets.QMainWindow):
                 # Transformation Tool
                 if key == QtCore.Qt.Key.Key_T:
                     self.app.transform_tool.run(toggle=True)
+                    return
+
+                # 2-Sided PCB Tool
+                if key == QtCore.Qt.Key.Key_U:
+                    self.app.dblsidedtool.run(toggle=True)
                     return
 
                 # Substract Tool
@@ -5115,7 +5120,7 @@ class ShortcutsTab(QtWidgets.QWidget):
             _('Alt+A'), _("Align Objects"),
             _('Alt+B'), _("Markers"),
             _('Alt+C'), _("Calculators"),
-            _('Alt+D'), _("2-Sided PCB"),
+            _('Alt+D'), _("Drilling"),
             _('Alt+E'), _("Extract"),
             _('Alt+F'), _("Fiducials"),
             _('Alt+G'), _("Invert Gerber"),
@@ -5132,6 +5137,7 @@ class ShortcutsTab(QtWidgets.QWidget):
             _('Alt+R'), _("Rules Check"),
             _('Alt+S'), _("View File Source"),
             _('Alt+T'), _("Transform"),
+            _('Alt+U'), _("2-Sided PCB"),
             _('Alt+W'), _("Subtract"),
             _('Alt+X'), _("Cutout PCB"),
             _('Alt+Z'), _("Panelize PCB"),

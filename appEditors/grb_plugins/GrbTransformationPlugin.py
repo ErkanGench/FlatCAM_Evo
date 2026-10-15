@@ -103,7 +103,7 @@ class TransformEditorTool(AppToolEditor):
         self.app.ui.notebook.callback_on_close = lambda: None
 
     def install(self, icon=None, separator=None, **kwargs):
-        AppTool.install(self, icon, separator, shortcut='Alt+T', **kwargs)
+        AppTool.install(self, icon, separator, shortcut='Alt+R', **kwargs)
 
     def set_tool_ui(self):
         # Initialize form

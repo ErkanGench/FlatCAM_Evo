@@ -45,7 +45,7 @@ class ToolInvertGerber(AppTool):
         self.connect_signals_at_init()
 
     def install(self, icon=None, separator=None, **kwargs):
-        AppTool.install(self, icon, separator, shortcut='ALT+G', **kwargs)
+        AppTool.install(self, icon, separator, shortcut='Alt+G', **kwargs)
 
     def run(self, toggle=True):
         self.app.defaults.report_usage("ToolInvertGerber()")
