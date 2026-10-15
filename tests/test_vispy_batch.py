@@ -226,9 +226,9 @@ class TestShapeCollectionVisualBatch(unittest.TestCase):
         
         shapes_data = [{'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])}]
         
-        result = collection.add_batch(shapes_data, layer=5)
+        result = collection.add_batch(shapes_data, layer=2)
         
-        self.assertEqual(collection.data[result[0]]['layer'], 5)
+        self.assertEqual(collection.data[result[0]]['layer'], 2)
     
     def test_add_batch_per_shape_layer_override(self):
         """Test add_batch() allows per-shape layer override."""

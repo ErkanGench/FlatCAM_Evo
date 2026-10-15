@@ -321,6 +321,13 @@ class ShapeCollectionVisual(CompoundVisual):
 
         self.freeze()
 
+    def _check_layer(self, layer):
+        """
+        Raise ValueError unless layer is an integer in 0..len(self._meshes)-1.
+        """
+        if isinstance(layer, bool) or not isinstance(layer, (int, np.integer)) or not 0 <= layer < len(self._meshes):
+            raise ValueError("Layer %r is out of range 0..%d." % (layer, len(self._meshes) - 1))
+
     def add(self, shape=None, color=None, face_color=None, alpha=None, visible=True,
             update=False, layer=1, tolerance=0.001, linewidth=None):
         """
@@ -347,6 +354,8 @@ class ShapeCollectionVisual(CompoundVisual):
         :return: int
             Index of shape
         """
+        self._check_layer(layer)
+
         # Get new key
         self.key_lock.acquire(True)
         self.last_key += 1
@@ -398,6 +407,10 @@ class ShapeCollectionVisual(CompoundVisual):
         """
         if not shapes_data:
             return []
+
+        # Validate every effective layer before any state changes (lock, last_key, data, line width)
+        for item in shapes_data:
+            self._check_layer(item.get('layer', layer))
 
         if linewidth:
             self._line_width = linewidth
