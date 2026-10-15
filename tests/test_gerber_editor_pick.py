@@ -207,8 +207,9 @@ class TestHitRule(PickCase):
         self.assertEqual(results, [True, True])
 
     def test_follow_missing_sorts_last(self):
+        # same area: the 'follow' distance decides, and a missing 'follow' sorts last
         with_follow = pad(0, 0, 1.0, True)
-        without = pad(0, 0, 0.5, False)
+        without = pad(0, 0, 1.0, False)
         ed = make_editor({10: aperture([without]), 11: aperture([with_follow])})
         make_select(ed)
         click(ed, 0.1, 0.1)
@@ -564,6 +565,90 @@ class TestModifiers(PickCase):
             self.assertEqual(ed.selected, [b])
         click(ed, 0, 0)
         self.assertEqual(ed.selected, [a])
+
+
+class TestOverlapAndCycle(PickCase):
+    def test_small_shape_wins_even_when_the_big_center_is_nearer(self):
+        # the small pad covers the center of the big pad; the click is nearer to the big center
+        big, small = pad(0, 0, 3.0), pad(0.8, 0, 1.0)
+        ed = make_editor({10: aperture([big]), 11: aperture([small])})
+        make_select(ed)
+        click(ed, 0.2, 0)
+        self.assertEqual(ed.selected, [small])
+
+    def test_repeated_click_cycles_through_the_shapes(self):
+        big, mid, small = pad(0, 0, 3.0), pad(0, 0, 2.0), pad(0, 0, 1.0)
+        ed = make_editor({10: aperture([big, mid, small])})
+        make_select(ed)
+        order = []
+        for __ in range(4):
+            click(ed, 0.1, 0.1)
+            self.assertEqual(len(ed.selected), 1)
+            order.append(ed.selected[0])
+        # small first (smallest area), then mid, then big, then small again
+        self.assertEqual(order, [small, mid, big, small])
+        ed.app.inform.emit.assert_called_with(
+            'Shape 1 / 3. Click again at the same place to select the next one.')
+
+    def test_equal_stacked_shapes_are_all_reachable(self):
+        a, b = pad(0, 0, 1.0), pad(0, 0, 1.0)
+        ed = make_editor({10: aperture([a]), 11: aperture([b])})
+        make_select(ed)
+        click(ed, 0, 0)
+        first = ed.selected[0]
+        click(ed, 0, 0)
+        self.assertEqual(len(ed.selected), 1)
+        self.assertIsNot(ed.selected[0], first)
+        self.assertEqual({id(first), id(ed.selected[0])}, {id(a), id(b)})
+
+    def test_cycle_restarts_after_a_click_elsewhere(self):
+        big, small, other = pad(0, 0, 3.0), pad(0, 0, 1.0), pad(20, 0, 1.0)
+        ed = make_editor({10: aperture([big, small, other])})
+        make_select(ed)
+        click(ed, 0, 0)
+        click(ed, 20, 0)
+        click(ed, 0, 0)
+        self.assertEqual(ed.selected, [small])
+
+    def test_cycle_restarts_when_the_click_moves_5_px(self):
+        big, small = pad(0, 0, 3.0), pad(0, 0, 1.0)
+        ed = make_editor({10: aperture([big, small])}, pixel=0.05)
+        make_select(ed)
+        click(ed, 0, 0)
+        click(ed, 0.3, 0)   # 6 px away, still inside both pads
+        self.assertEqual(ed.selected, [small])
+        click(ed, 0.35, 0)  # 1 px from the last click: next one
+        self.assertEqual(ed.selected, [big])
+
+    def test_cycle_restarts_after_a_storage_change(self):
+        big, small = pad(0, 0, 3.0), pad(0, 0, 1.0)
+        ed = make_editor({10: aperture([big, small])})
+        make_select(ed)
+        click(ed, 0, 0)
+        ed.touch_geometry()
+        click(ed, 0, 0)
+        self.assertEqual(ed.selected, [small])
+
+    def test_cycle_with_the_multi_select_key_replaces_only_the_last_pick(self):
+        big, small, other = pad(0, 0, 3.0), pad(0, 0, 1.0), pad(20, 0, 1.0)
+        ed = make_editor({10: aperture([big, small, other])})
+        make_select(ed)
+        with modifiers(CONTROL):
+            click(ed, 20, 0)
+            click(ed, 0, 0)
+            self.assertEqual(ed.selected, [other, small])
+            click(ed, 0, 0)
+            self.assertEqual(ed.selected, [other, big])
+
+    def test_single_candidate_toggles_as_before(self):
+        a = pad(0, 0, 1.0)
+        ed = make_editor({10: aperture([a])})
+        make_select(ed)
+        with modifiers(CONTROL):
+            click(ed, 0, 0)
+            self.assertEqual(ed.selected, [a])
+            click(ed, 0, 0)
+            self.assertEqual(ed.selected, [])
 
 
 class TestClickOrDrag(PickCase):

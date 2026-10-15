@@ -3351,14 +3351,24 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
             self.draw_app.selected.clear()
             self.sel_aperture.clear()
 
-        hit = self.draw_app.pick_at(point)
+        hit, previous, position, count = self.draw_app.pick_cycle_at(point)
         if hit is not None:
             shape_stored = hit[0]
-            if shape_stored in self.draw_app.selected:
+            if previous is not None:
+                # a repeated click at the same place: the next shape under the cursor replaces the last pick
+                if previous in self.draw_app.selected:
+                    self.draw_app.selected.remove(previous)
+                if shape_stored not in self.draw_app.selected:
+                    self.draw_app.selected.append(shape_stored)
+            elif shape_stored in self.draw_app.selected:
                 self.draw_app.selected.remove(shape_stored)
             else:
                 # add the object to the selected shapes
                 self.draw_app.selected.append(shape_stored)
+
+            if count > 1:
+                self.draw_app.app.inform.emit('%s %d / %d. %s' % (
+                    _("Shape"), position + 1, count, _("Click again at the same place to select the next one.")))
 
         self.draw_app.update_ui()
         self.after_selection()
@@ -3948,6 +3958,8 @@ class AppGerberEditor(QtCore.QObject):
         # the pick index: the revision counts the changes of the shapes, see touch_geometry()
         self.geometry_revision = 0
         self._pick_cache = None
+        # the last click pick, so a repeated click at the same place picks the next shape (pick_cycle_at())
+        self.pick_cycle = None
         # the raw (not snapped) position of the last mouse press, in plot units
         self.press_pos_raw = None
 
@@ -5241,6 +5253,7 @@ class AppGerberEditor(QtCore.QObject):
         self.storage_dict.clear()
         self.touch_geometry()
         self._pick_cache = None
+        self.pick_cycle = None
         self.results.clear()
 
         self.shapes.clear(update=True)
@@ -5882,26 +5895,26 @@ class AppGerberEditor(QtCore.QObject):
         self._pick_cache = (self.geometry_revision, count, tree, refs)
         return tree, refs
 
-    def pick_at(self, point):
+    def pick_candidates(self, point):
         """
-        Pick the shape under (or near) a point.
+        All the shapes under (or near) a point, the best first.
 
-        The tolerance is PICK_TOLERANCE_PX screen pixels. Among the candidates the order is: distance to the solid,
-        distance to the 'follow' line (a missing one sorts last), area of the solid, aperture order, element index.
+        The tolerance is PICK_TOLERANCE_PX screen pixels. The order is: distance to the solid, area of the solid (the
+        smaller first, so a small shape on a big one is the first pick), distance to the 'follow' line (a missing one
+        sorts last), aperture order, element index.
 
         :param point:   (x, y) in plot units
-        :return:        (shape, aperture_key) or None
+        :return:        list of (shape, aperture_key)
         """
         tree, refs = self.get_pick_index()
         if tree is None:
-            return None
+            return []
 
         tol = PICK_TOLERANCE_PX * self.canvas.pixel_size()
         pt = Point(point[0], point[1])
         found, dists = tree.query_nearest(pt, max_distance=tol, return_distance=True, all_matches=True)
 
-        best_key = None
-        best = None
+        keyed = []
         for pos, dist in zip(found, dists):
             ap_key, idx, shape = refs[int(pos)]
             follow = shape.geo.get('follow')
@@ -5909,11 +5922,55 @@ class AppGerberEditor(QtCore.QObject):
                 follow_dist = float('inf')
             else:
                 follow_dist = pt.distance(follow)
-            key = (round(float(dist), 9), follow_dist, shape.geo['solid'].area, aperture_rank(ap_key), idx, int(pos))
-            if best_key is None or key < best_key:
-                best_key = key
-                best = (shape, ap_key)
-        return best
+            key = (round(float(dist), 9), shape.geo['solid'].area, follow_dist, aperture_rank(ap_key), idx, int(pos))
+            keyed.append((key, shape, ap_key))
+        keyed.sort(key=lambda item: item[0])
+        return [(shape, ap_key) for __, shape, ap_key in keyed]
+
+    def pick_at(self, point):
+        """
+        Pick the shape under (or near) a point: the first of pick_candidates().
+
+        :param point:   (x, y) in plot units
+        :return:        (shape, aperture_key) or None
+        """
+        candidates = self.pick_candidates(point)
+        return candidates[0] if candidates else None
+
+    def pick_cycle_at(self, point):
+        """
+        Pick a shape, and go to the next candidate when the click is repeated at the same place.
+
+        A click is a repeat when it is less than CLICK_DRAG_THRESHOLD_PX screen pixels from the last pick, the storage
+        did not change, and the candidates are the same. Then the next candidate is picked (after the last one, the
+        first again).
+
+        :param point:   (x, y) in plot units
+        :return:        (hit, previous, position, count): hit is (shape, aperture_key) or None; previous is the shape
+                        that the last click picked when this click is a repeat, else None; position is the index of hit
+                        in the candidates; count is the number of candidates
+        """
+        candidates = self.pick_candidates(point)
+        if not candidates:
+            self.pick_cycle = None
+            return None, None, 0, 0
+
+        ids = tuple(id(shape) for shape, __ in candidates)
+        last = self.pick_cycle
+        position = 0
+        previous = None
+        if last is not None and len(candidates) > 1 and last['ids'] == ids and \
+                last['revision'] == self.geometry_revision:
+            pixel_size = self.canvas.pixel_size()
+            if pixel_size and pixel_size > 0:
+                moved = math.hypot(point[0] - last['point'][0], point[1] - last['point'][1]) / pixel_size
+                if moved < CLICK_DRAG_THRESHOLD_PX:
+                    position = (last['position'] + 1) % len(candidates)
+                    previous = candidates[last['position']][0]
+
+        self.pick_cycle = {'point': (point[0], point[1]), 'ids': ids, 'position': position,
+                           'revision': self.geometry_revision}
+        return candidates[position], previous, position, len(candidates)
 
     def sync_aperture_rows(self, apertures):
         """

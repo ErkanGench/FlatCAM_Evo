@@ -168,12 +168,21 @@ There is no async result. No "late apply" code is needed.
 2. `idx, dist = tree.query_nearest(Point(point), max_distance=tol, return_distance=True, all_matches=True)`. A point inside a polygon has distance 0.
 3. For each candidate build the key:
    1. `round(dist, 9)` (plot units). The rounding makes equal distances compare equal.
-   2. Distance from the point to `shape.geo['follow']`. If `follow` is missing, `None` or empty, use `+inf`. The key then sorts last.
-   3. `solid.area`.
+   2. `solid.area`. The smaller shape comes first, so a small shape on a big shape is always the first pick.
+   3. Distance from the point to `shape.geo['follow']`. If `follow` is missing, `None` or empty, use `+inf`. The key then sorts last.
    4. `(aperture_rank, element_index)`.
 4. Pick the minimum key.
 
-Order of the sort key, as the plan requires: distance, distance to `follow`, area, then `(aperture, element index)`.
+Order of the sort key: distance, area, distance to `follow`, then `(aperture, element index)`.
+Maintainer decision (after the first version): area comes before the `follow` distance. With `follow` first, a click inside a small pad that covers the center of a big pad picked the big pad.
+
+**Cycle on a repeated click.** `pick_candidates(point)` returns all candidates in this order, and `pick_at` returns the first. The Select tool uses `pick_cycle_at(point)`:
+- A click is a repeat when it is less than `CLICK_DRAG_THRESHOLD_PX` pixels from the last pick, `geometry_revision` did not change, and the candidate list is the same (same shapes, same order). Then the next candidate is picked. After the last one, the first one again.
+- A repeat replaces the shape of the last pick in `selected` with the new one. With the multi-select key, the other selected shapes stay.
+- With only 1 candidate there is no cycle. A click toggles the shape, as before.
+- With more than 1 candidate, the status bar shows "Shape N / M. Click again at the same place to select the next one."
+- The state is `AppGerberEditor.pick_cycle`, not a Select tool field, because the Select tool object is made again each time another tool ends. `clear()` resets it.
+- The Simplify and Erase clicks use `pick_at` (the first candidate) with no cycle.
 
 ### 2.4 Pixel size per canvas
 
