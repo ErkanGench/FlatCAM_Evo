@@ -16,6 +16,7 @@ from defaults import AppDefaults
 
 import math
 import logging
+from collections import namedtuple
 from copy import deepcopy
 import simplejson as json
 import sys
@@ -25,7 +26,8 @@ except ImportError:
     from numpy import inf as Inf
 
 from shapely import Polygon, MultiPolygon, box, Point, LineString, MultiLineString, LinearRing
-from shapely.ops import unary_union, linemerge
+import shapely
+from shapely.ops import unary_union, linemerge, polygonize_full
 from shapely.affinity import rotate
 
 from matplotlib.backend_bases import KeyEvent as mpl_key_event
@@ -67,13 +69,19 @@ class CutoutResult:
 
 
 def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, convex_box, gap_type, thin_entry,
-                          mb_dia, mb_spacing, handler):
+                          mb_dia, mb_spacing, handler, inner_active=False, inner_gaps=False):
     """
     The geometry part of the freeform ("Any") cutout: the cut paths, the thin gaps and the mouse bites.
 
-    :param handler: ``CutOut.any_cutout_handler``, it cuts the gaps out of a path
-    :return:        CutoutResult
+    :param handler:      ``CutOut.any_cutout_handler``, it cuts the gaps out of a path
+    :param inner_active: the source is a board outline and its inner contours are cut too; False runs the old code
+    :param inner_gaps:   with inner_active: gaps, thin gaps and mouse bites also on the inner contours
+    :return:             CutoutResult
     """
+    if inner_active:
+        return _inner_contour_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, convex_box, gap_type, thin_entry,
+                                    mb_dia, mb_spacing, handler, inner_gaps)
+
     solid_geo = []
     gaps_solid_geo = []
     mouse_bites_geo = []
@@ -244,6 +252,284 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
 
 
 
+Contour = namedtuple('Contour', ['ring', 'depth', 'side', 'index', 'width'], defaults=(0.0,))
+# ring: the filled Polygon of the contour line; depth: how many other contours hold it; side: 'outer' (board material
+# inside) or 'inner' (a slot or cutout); index: the order in the input; width: the stroke width of the aperture that
+# drew it (0 for a region or a Geometry)
+
+_OPEN_PATH = "open path ignored"
+
+
+def _record_width(tool):
+    try:
+        return float(tool.get('size') or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _closed_loops(lines, width, warnings):
+    """Polygons of the closed loops that the center lines make; an open path is dropped with a warning."""
+    if not lines:
+        return []
+    snapped = [shapely.set_precision(line, 1e-6) for line in lines]
+    noded = unary_union(snapped)
+    polygons, __, dangles, __ = polygonize_full(noded)
+    if warnings is not None and (not dangles.is_empty):
+        warnings.append(_OPEN_PATH)
+    loops = []
+    seen = []
+    for poly in flatten_shapely_geometry(polygons):
+        if not isinstance(poly, Polygon) or poly.is_empty:
+            continue
+        shell = Polygon(poly.exterior)
+        if any(shell.equals(other) for other in seen):
+            continue
+        seen.append(shell)
+        loops.append((shell, width))
+    return loops
+
+
+def _gerber_items(obj, warnings):
+    """The filled loops of a Gerber object: (Polygon, stroke width) from the center lines and the region records."""
+    groups = {}
+    dark, clear = [], []
+    for aperture, tool in obj.tools.items():
+        width = _record_width(tool)
+        is_region = aperture == 0 or tool.get('type') == 'REG'
+        for rec in tool.get('geometry', []):
+            if not rec:
+                continue
+            if is_region:
+                if rec.get('solid') is not None:
+                    dark.extend(flatten_shapely_geometry(rec['solid']))
+                if rec.get('clear') is not None:
+                    clear.extend(flatten_shapely_geometry(rec['clear']))
+            else:
+                follow = rec.get('follow')
+                if 'solid' not in rec or not isinstance(follow, (LineString, LinearRing)) or follow.is_empty:
+                    continue
+                groups.setdefault(width, []).append(LineString(follow.coords))
+
+    items = []
+    for width, lines in groups.items():
+        items += _closed_loops(lines, width, warnings)
+    region = unary_union(dark) if dark else Polygon()
+    if clear and not region.is_empty:
+        region = region.difference(unary_union(clear))
+    for poly in flatten_shapely_geometry(region):
+        if isinstance(poly, Polygon) and not poly.is_empty:
+            items.append((poly, 0.0))
+    if not items:
+        # a Gerber without records: the composed copper is all there is
+        for poly in flatten_shapely_geometry(fused_solid(obj)):
+            if isinstance(poly, Polygon) and not poly.is_empty:
+                items.append((poly, 0.0))
+    return items
+
+
+def _geometry_items(source_geo, warnings):
+    items = []
+    lines = []
+    for geo in flatten_shapely_geometry(source_geo):
+        if isinstance(geo, Polygon):
+            if not geo.is_empty:
+                items.append((geo, 0.0))
+        elif isinstance(geo, LinearRing):
+            items.append((Polygon(geo), 0.0))
+        elif isinstance(geo, LineString) and not geo.is_empty:
+            lines.append(geo)
+    if lines:
+        merged = linemerge(lines)
+        for line in flatten_shapely_geometry(merged):
+            if line.is_closed and len(line.coords) >= 4:
+                items.append((Polygon(line), 0.0))
+            elif warnings is not None:
+                warnings.append(_OPEN_PATH)
+    return items
+
+
+def _rings_of(area):
+    """(ring Polygon, side) for the exterior and interior rings of every part of ``area``."""
+    rings = []
+    for part in flatten_shapely_geometry(area):
+        if not isinstance(part, Polygon) or part.is_empty:
+            continue
+        rings.append((Polygon(part.exterior), 'outer'))
+        for interior in part.interiors:
+            rings.append((Polygon(interior), 'inner'))
+    return rings
+
+
+def outline_contours(source_geo, convex_box, kind, warnings=None):
+    """
+    The contours of a board outline, from the stroke center lines and the region records with the even-odd rule.
+
+    :param source_geo:  a Gerber object (its aperture records are used) or a Geometry (Polygon, lines, a list of them)
+    :param convex_box:  replace the depth 0 contours by their convex hull (all of them in 'single', each in 'panel')
+    :param kind:        'single' or 'panel'
+    :param warnings:    a list; the texts for the user are appended to it
+    :return:            list of Contour, sorted deepest first (the cut order), then by the order in the input
+    """
+    if getattr(source_geo, 'kind', None) == 'gerber':
+        items = _gerber_items(source_geo, warnings)
+    else:
+        items = _geometry_items(source_geo, warnings)
+
+    area = Polygon()
+    for poly, __ in items:
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        area = area.symmetric_difference(poly)
+
+    # the candidates for the stroke width of a ring: the rings of the items
+    candidates = []
+    for poly, width in items:
+        candidates.append((poly.exterior, width))
+        candidates += [(interior, 0.0) for interior in poly.interiors if width == 0.0]
+
+    rings = _rings_of(area)
+    contours = []
+    for index, (ring, side) in enumerate(rings):
+        probe = ring.exterior.interpolate(0.5, normalized=True)
+        depth = 0
+        for other_index, (other, __) in enumerate(rings):
+            if other_index != index and other.contains(probe) and other.exterior.distance(probe) > 1e-9:
+                depth += 1
+        width = 0.0
+        best = None
+        for line, line_width in candidates:
+            dist = shapely.hausdorff_distance(ring.exterior, line)
+            if best is None or dist < best:
+                best, width = dist, line_width
+        if best is None or best > 1e-6:
+            width = 0.0
+        contours.append(Contour(ring, depth, side, index, width))
+
+    top = [c for c in contours if c.depth == 0]
+    groups = []
+    if top and convex_box:
+        if kind == 'single':
+            groups = [(unary_union([c.ring for c in top]).convex_hull, top)]
+        else:
+            groups = [(c.ring.convex_hull, [c]) for c in top]
+    elif len(top) > 1 and kind == 'single':
+        if warnings is not None:
+            warnings.append(_("Single mode with several outlines: using one bounding box. "
+                              "Use Panel to cut each board."))
+        groups = [(box(*unary_union([c.ring for c in top]).bounds), top)]
+    if groups:
+        rest = [c for c in contours if c.depth != 0]
+        replaced = [Contour(Polygon(shape.exterior), 0, 'outer', min(c.index for c in members),
+                            max(c.width for c in members))
+                    for shape, members in groups]
+        contours = replaced + rest
+
+    return sorted(contours, key=lambda c: (-c.depth, c.index))
+
+
+def offset_contours(contours, margin, radius, source_kind):
+    """
+    The cut path of every contour. A positive margin moves the path away from the board material, a negative one
+    into it. The distance is ``margin + e`` or ``margin - e`` with ``e = width / 2 + radius`` for a Gerber source and 0
+    for a Geometry source.
+
+    :return:    one list of LineString per contour, in the order of ``contours``; empty when the offset is empty
+    """
+    out = []
+    for contour in contours:
+        e = (contour.width / 2.0 + radius) if source_kind == 'gerber' else 0.0
+        dist = margin + e if margin >= 0 else margin - e
+        shape = contour.ring.buffer(dist if contour.side == 'outer' else -dist)
+        out.append([part.exterior for part in flatten_shapely_geometry(shape)
+                    if isinstance(part, Polygon) and not part.is_empty])
+    return out
+
+
+def _inner_contour_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, convex_box, gap_type, thin_entry,
+                         mb_dia, mb_spacing, handler, inner_gaps):
+    """freeform_cutout_paths for a board outline source whose inner contours are cut too."""
+    result = CutoutResult()
+    gerber = cutout_obj.kind == 'gerber'
+    source_kind = 'gerber' if gerber else 'geometry'
+    gapsize = gapsize + abs(cut_dia)
+
+    if gerber:
+        source = cutout_obj
+    elif cutout_obj.multigeo is False:
+        source = cutout_obj.solid_geometry
+    else:
+        source = cutout_obj.tools[list(cutout_obj.tools.keys())[0]]['solid_geometry']
+
+    contours = outline_contours(source, bool(convex_box) and gerber, kind, result.warnings)
+    if not any(c.side == 'inner' for c in contours):
+        result.warnings.append(_("No inner contour found. Is this a board outline file?"))
+
+    paths = offset_contours(contours, margin, abs(cut_dia) / 2.0, source_kind)
+
+    solid_geo = []
+    gaps_solid_geo = []
+    skipped = 0
+    cut_with_gaps = []      # the contours that went through the gap handler
+    for contour, contour_paths in zip(contours, paths):
+        with_gaps = contour.side == 'outer' or inner_gaps
+        if not contour_paths:
+            skipped += contour.side == 'inner'
+            continue
+        for path in contour_paths:
+            if not with_gaps:
+                solid_geo.append(path)
+                continue
+            try:
+                c_geo, r_geo = handler(path, abs(cut_dia), gaps, gapsize, margin)
+            except Exception as err:
+                log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
+                result.errors.append(_("Failed."))
+                continue
+            if contour.side == 'inner' and not c_geo:
+                skipped += 1
+                continue
+            solid_geo += c_geo
+            if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
+                gaps_solid_geo += r_geo
+        if with_gaps:
+            cut_with_gaps.append(contour)
+
+    if skipped:
+        result.warnings.append(
+            _("{n} inner contours were skipped: the slot is narrower than the cutter plus margin.").format(n=skipped))
+
+    if not solid_geo:
+        log.debug("Cutout.on_freeform_cutout() -> Empty solid geometry.")
+        result.failed = True
+        return result
+
+    try:
+        solid_geo = linemerge(solid_geo)
+    except Exception:
+        # there are not lines but polygons
+        pass
+
+    holes = []
+    if gap_type == 2:   # "mouse bytes"
+        gapsize -= abs(cut_dia) / 2
+        mouse_bites_geo = []
+        mb_paths = offset_contours(cut_with_gaps, margin, mb_dia / 2.0, source_kind)
+        for contour_paths in mb_paths:
+            for path in contour_paths:
+                __, mb_r_geo = handler(path, abs(cut_dia), gaps, gapsize, margin)
+                mouse_bites_geo += mb_r_geo
+        for line in mouse_bites_geo:
+            calc_len = 0
+            while calc_len <= line.length:
+                holes.append(line.interpolate(calc_len))
+                calc_len += mb_dia + mb_spacing
+
+    result.solid_geo = solid_geo
+    result.gaps_solid_geo = gaps_solid_geo
+    result.holes = holes
+    return result
+
+
 class CutOut(AppTool):
 
     def __init__(self, app):
@@ -312,11 +598,45 @@ class CutOut(AppTool):
         # here store the tool data for the Cutout Tool
         self.cut_tool_dict = {}
 
+    def inner_active(self):
+        """The inner contours are cut: the source is marked as a board outline and the option is on."""
+        return bool(self.ui.is_outline_cb.get_value()) and bool(self.ui.inner_cb.get_value()) and \
+            not self.ui.cutout_shape_cb.get_value()
+
+    def update_inner_state(self, *args):
+        outline = bool(self.ui.is_outline_cb.get_value())
+        any_shape = not self.ui.cutout_shape_cb.get_value()
+        self.ui.inner_cb.setEnabled(outline and any_shape)
+        self.ui.inner_gaps_cb.setEnabled(outline and any_shape and bool(self.ui.inner_cb.get_value()))
+
+    def reset_outline_mark(self):
+        """The source is not marked as a board outline (the mark is never kept)."""
+        self.ui.is_outline_cb.set_value(False)
+        self.update_inner_state()
+
+    def apply_outline_mark(self, name):
+        """Mark the source as a board outline only if it is a Gerber with the X2 file function Profile."""
+        self.reset_outline_mark()
+        try:
+            obj = self.app.collection.get_by_name(str(name))
+        except Exception:
+            return
+        if obj is None or getattr(obj, 'kind', None) != 'gerber':
+            return
+        function = obj.obj_options.get('file_function') or []
+        if 'Profile' in function:
+            self.ui.is_outline_cb.set_value(True)
+            self.update_inner_state()
+
+    def on_source_object_changed(self, *args):
+        self.apply_outline_mark(self.ui.obj_combo.currentText())
+
     def on_type_obj_changed(self, val):
         obj_type = {'grb': 0, 'geo': 2}[val]
         self.ui.obj_combo.setRootModelIndex(self.app.collection.index(obj_type, 0, QtCore.QModelIndex()))
         self.ui.obj_combo.setCurrentIndex(0)
         self.ui.obj_combo.obj_type = {"grb": "Gerber", "geo": "Geometry"}[val]
+        self.reset_outline_mark()
 
         if val == 'grb':
             self.ui.convex_box_label.setDisabled(False)
@@ -418,6 +738,11 @@ class CutOut(AppTool):
 
         self.ui.type_obj_radio.activated_custom.connect(self.on_type_obj_changed)
         self.ui.cutout_shape_cb.stateChanged.connect(self.on_cutout_shape_changed)
+        self.ui.cutout_shape_cb.stateChanged.connect(self.update_inner_state)
+        self.ui.obj_combo.currentIndexChanged.connect(self.on_source_object_changed)
+        self.ui.obj_kind_combo.activated_custom.connect(lambda val: self.reset_outline_mark())
+        self.ui.is_outline_cb.stateChanged.connect(self.update_inner_state)
+        self.ui.inner_cb.stateChanged.connect(self.update_inner_state)
 
         self.ui.cutout_type_radio.activated_custom.connect(self.on_cutout_type)
 
@@ -501,6 +826,15 @@ class CutOut(AppTool):
 
         self.ui.cutout_shape_cb.set_value(False)
         self.on_cutout_shape_changed(self.ui.cutout_shape_cb.get_value())
+
+        # the inner contours: the mark is off, the other two come from the preferences
+        self.ui.inner_cb.set_value(bool(self.app.options.get(
+            "tools_cutout_inner", app_defaults.get("tools_cutout_inner", False))))
+        self.ui.inner_gaps_cb.set_value(bool(self.app.options.get(
+            "tools_cutout_inner_gaps", app_defaults.get("tools_cutout_inner_gaps", False))))
+        self.reset_outline_mark()
+        if len(sel_list) == 1:
+            self.apply_outline_mark(active.obj_options['name'])
 
         # set the Cut By Drilling parameters
         self.ui.drill_dia_entry.set_value(float(self.app.options.get(
@@ -910,6 +1244,9 @@ class CutOut(AppTool):
 
             has_mouse_bites = True if self.ui.gaptype_combo.get_value() == 2 else False     # "mouse bytes"
 
+            inner_active = self.inner_active()
+            inner_gaps = bool(self.ui.inner_gaps_cb.get_value()) and inner_active
+
             outname_exc = "%s_mouse_bites" % formatted_name
             if has_mouse_bites is True:
                 self.app.collection.promise(outname_exc)
@@ -919,7 +1256,8 @@ class CutOut(AppTool):
                     cutout_obj, kind, cut_dia, margin, gaps, self.ui.gapsize.get_value(),
                     self.ui.convex_box_cb.get_value(), self.ui.gaptype_combo.get_value(),
                     self.ui.thin_depth_entry.get_value(), self.ui.mb_dia_entry.get_value(),
-                    self.ui.mb_spacing_entry.get_value(), self.any_cutout_handler)
+                    self.ui.mb_spacing_entry.get_value(), self.any_cutout_handler,
+                    inner_active=inner_active, inner_gaps=inner_gaps)
                 for message in result.errors:
                     self.app.inform.emit('[ERROR_NOTCL] %s' % message)
                 for message in result.warnings:
@@ -2532,6 +2870,29 @@ class CutoutUI:
         )
         param_grid.addWidget(self.margin_label, 6, 0)
         param_grid.addWidget(self.margin, 6, 1)
+
+        # Board outline: cut the inner contours too
+        self.is_outline_cb = FCCheckBox('%s' % _("Source is board outline"))
+        self.is_outline_cb.setToolTip(
+            _("Check only for a board outline (profile, Edge.Cuts, GKO/GM1) file.\n"
+              "Every hole and every inner closed contour in it is cut as a cutout.\n"
+              "Not saved: it is unchecked again when the object changes.")
+        )
+        param_grid.addWidget(self.is_outline_cb, 8, 0, 1, 2)
+
+        self.inner_cb = FCCheckBox('%s' % _("Cut inside contours"))
+        self.inner_cb.setToolTip(
+            _("Cut the slots and the inner contours of the board outline as well as the outer edge.\n"
+              "Active only when the source is a board outline and the shape is 'Any'.")
+        )
+        param_grid.addWidget(self.inner_cb, 10, 0, 1, 2)
+
+        self.inner_gaps_cb = FCCheckBox('%s' % _("Gaps on inner contours"))
+        self.inner_gaps_cb.setToolTip(
+            _("Add the gaps, thin gaps and mouse bites also to the inner contours.\n"
+              "Off: the inner contours are cut without gaps.")
+        )
+        param_grid.addWidget(self.inner_gaps_cb, 12, 0, 1, 2)
 
         self.gaps_label = FCLabel('%s' % _("Gaps"), color='green', bold=True)
         self.tools_box.addWidget(self.gaps_label)

@@ -135,6 +135,22 @@ class ToolsCutoutPrefGroupUI(OptionsGroupUI):
         param_grid.addWidget(marginlabel, 10, 0)
         param_grid.addWidget(self.cutout_margin_entry, 10, 1)
 
+        # Cut the inner contours of a board outline file
+        self.inner_cb = FCCheckBox('%s' % _("Cut inside contours"))
+        self.inner_cb.setToolTip(
+            _("Used only for a Gerber or Geometry source marked as a board outline\n"
+              "and with the shape 'Any'. Every slot and every inner closed contour\n"
+              "of the outline is cut as well as the outer edge.")
+        )
+        param_grid.addWidget(self.inner_cb, 12, 0, 1, 2)
+
+        self.inner_gaps_cb = FCCheckBox('%s' % _("Gaps on inner contours"))
+        self.inner_gaps_cb.setToolTip(
+            _("Add the gaps, thin gaps and mouse bites also to the inner contours.\n"
+              "Off: the inner contours are cut without gaps.")
+        )
+        param_grid.addWidget(self.inner_gaps_cb, 14, 0, 1, 2)
+
         self.gaps_label = FCLabel('%s' % _("Gaps"), color='green', bold=True)
         self.layout.addWidget(self.gaps_label)
         # #############################################################################################################
