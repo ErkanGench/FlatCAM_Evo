@@ -54,6 +54,196 @@ def gerber_cutout_geometry(cutout_obj, convex_box):
         return copper
 
 
+class CutoutResult:
+    """What ``freeform_cutout_paths`` computed. ``errors`` and ``warnings`` are the texts for the status bar."""
+
+    def __init__(self):
+        self.solid_geo = []
+        self.gaps_solid_geo = []
+        self.holes = []         # the Points of the mouse bites
+        self.warnings = []
+        self.errors = []
+        self.failed = False
+
+
+def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, convex_box, gap_type, thin_entry,
+                          mb_dia, mb_spacing, handler):
+    """
+    The geometry part of the freeform ("Any") cutout: the cut paths, the thin gaps and the mouse bites.
+
+    :param handler: ``CutOut.any_cutout_handler``, it cuts the gaps out of a path
+    :return:        CutoutResult
+    """
+    solid_geo = []
+    gaps_solid_geo = []
+    mouse_bites_geo = []
+    holes = []
+    result = CutoutResult()
+    has_mouse_bites = gap_type == 2     # "mouse bytes"
+
+    # real gapsize has to be bigger because it will be made less by the cutting tool diameter
+    gapsize = gapsize + abs(cut_dia)
+
+    mb_buff_val = mb_dia / 2.0
+
+    if cutout_obj.kind == 'gerber':
+        object_geo = gerber_cutout_geometry(cutout_obj, convex_box)
+    else:
+        if cutout_obj.multigeo is False:
+            object_geo = cutout_obj.solid_geometry
+        else:
+            # first tool in the tools dict
+            t_first = list(cutout_obj.tools.keys())[0]
+            object_geo = cutout_obj.tools[t_first]['solid_geometry']
+
+    if kind == 'single':
+        object_geo = unary_union(object_geo)
+
+        # for geo in object_geo:
+        if cutout_obj.kind == 'gerber':
+            if isinstance(object_geo, MultiPolygon):
+                x0, y0, x1, y1 = object_geo.bounds
+                object_geo = box(x0, y0, x1, y1)
+            if margin >= 0:
+                geo_buf = object_geo.buffer(margin + abs(cut_dia / 2))
+                geo = geo_buf.exterior
+            else:
+                geo_buf = object_geo.buffer(-margin + abs(cut_dia / 2))
+                geo = unary_union(geo_buf.interiors)
+        else:
+            if isinstance(object_geo, (MultiPolygon, MultiLineString)):
+                x0, y0, x1, y1 = object_geo.bounds
+                object_geo = box(x0, y0, x1, y1)
+            if isinstance(object_geo, (LinearRing, LineString)):
+                object_geo = Polygon(object_geo)
+            if margin >= 0:
+                geo_buf = object_geo.buffer(margin)
+                if geo_buf.is_empty:
+                    geo_buf = object_geo.buffer(margin + 0.0000001)
+                geo = geo_buf.exterior
+            else:
+                geo_buf = object_geo.buffer(0.0000001)
+                geo_ext = geo_buf.exterior
+                buff_geo_ext = geo_ext.buffer(-margin)
+                geo = unary_union(buff_geo_ext.interiors)
+
+        if geo.is_empty:
+            log.debug("Cutout.on_freeform_cutout() -> Empty geometry.")
+            result.failed = True
+            return result
+        try:
+            solid_geo, rest_geo = handler(geo, abs(cut_dia), gaps, gapsize, margin)
+        except Exception as err:
+            log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
+            result.failed = True
+            return result
+
+        if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
+            gaps_solid_geo = rest_geo
+    else:
+        object_geo = flatten_shapely_geometry(object_geo)
+        for geom_struct in object_geo:
+            if cutout_obj.kind == 'gerber':
+                if margin >= 0:
+                    geom_struct = (geom_struct.buffer(margin + abs(cut_dia / 2))).exterior
+                else:
+                    geom_struct_buff = geom_struct.buffer(-margin + abs(cut_dia / 2))
+                    geom_struct = geom_struct_buff.interiors
+            else:
+                if margin >= 0:
+                    geo_buf = geom_struct.buffer(margin)
+                    if geo_buf.is_empty:
+                        geo_buf = geom_struct.buffer(margin + 0.0000001)
+                    geom_struct = geo_buf.exterior
+                else:
+                    geo_buf = geom_struct.buffer(0.0000001)
+                    geo_ext = geo_buf.exterior
+                    buff_geo_ext = geo_ext.buffer(-margin)
+                    if isinstance(buff_geo_ext, MultiPolygon):
+                        log.debug(
+                            "Cutout.on_freeform_cutout() -> The source geometry cannot be used.")
+                        result.errors.append(_("Failed."))
+                        unary_union(buff_geo_ext)
+                    else:
+                        geom_struct = unary_union(buff_geo_ext.interiors)
+
+            try:
+                c_geo, r_geo = handler(geom_struct, abs(cut_dia), gaps, gapsize, margin)
+            except Exception as err:
+                log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
+                result.errors.append(_("Failed."))
+                continue
+
+            solid_geo += c_geo
+            if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
+                gaps_solid_geo += r_geo
+
+    if not solid_geo:
+        log.debug("Cutout.on_freeform_cutout() -> Empty solid geometry.")
+        result.failed = True
+        return result
+
+    try:
+        solid_geo = linemerge(solid_geo)
+    except Exception:
+        # there ar enot lines but polygons
+        pass
+
+    # If it has mouse bytes
+    if has_mouse_bites is True:
+        gapsize -= abs(cut_dia) / 2
+        mb_object_geo = deepcopy(object_geo)
+        if kind == 'single':
+            mb_object_geo = unary_union(mb_object_geo)
+
+            # for geo in object_geo:
+            if cutout_obj.kind == 'gerber':
+                if isinstance(mb_object_geo, MultiPolygon):
+                    x0, y0, x1, y1 = mb_object_geo.bounds
+                    mb_object_geo = box(x0, y0, x1, y1)
+                if margin >= 0:
+                    geo_buf = mb_object_geo.buffer(margin + mb_buff_val)
+                else:
+                    geo_buf = mb_object_geo.buffer(margin - mb_buff_val)
+                mb_geo = geo_buf.exterior
+            else:
+                if isinstance(mb_object_geo, MultiPolygon):
+                    x0, y0, x1, y1 = mb_object_geo.bounds
+                    mb_object_geo = box(x0, y0, x1, y1)
+                geo_buf = mb_object_geo.buffer(0.0000001)
+                mb_geo = geo_buf.exterior
+
+            __, rest_geo = handler(mb_geo, abs(cut_dia), gaps, gapsize, margin)
+            mouse_bites_geo = rest_geo
+        else:
+            mb_object_geo = flatten_shapely_geometry(mb_object_geo)
+            for mb_geom_struct in mb_object_geo:
+                if cutout_obj.kind == 'gerber':
+                    if margin >= 0:
+                        mb_geom_struct = mb_geom_struct.buffer(margin + mb_buff_val)
+                        mb_geom_struct = mb_geom_struct.exterior
+                    else:
+                        mb_geom_struct = mb_geom_struct.buffer(-margin + mb_buff_val)
+                        mb_geom_struct = mb_geom_struct.interiors
+
+                __, mb_r_geo = handler(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin)
+                mouse_bites_geo += mb_r_geo
+
+        # list of Shapely Points to mark the drill points centers
+        holes = []
+        for line in mouse_bites_geo:
+            calc_len = 0
+            while calc_len <= line.length:
+                holes.append(line.interpolate(calc_len))
+                calc_len += mb_dia + mb_spacing
+
+    result.solid_geo = solid_geo
+    result.gaps_solid_geo = gaps_solid_geo
+    result.holes = holes
+    return result
+
+
+
 class CutOut(AppTool):
 
     def __init__(self, app):
@@ -725,171 +915,23 @@ class CutOut(AppTool):
                 self.app.collection.promise(outname_exc)
 
             def job_thread(app_obj):
-                solid_geo = []
-                gaps_solid_geo = []
-                mouse_bites_geo = []
-
-                convex_box = self.ui.convex_box_cb.get_value()
-                gapsize = self.ui.gapsize.get_value()
-                # real gapsize has to be bigger because it will be made less by the cutting tool diameter
-                gapsize = gapsize + abs(cut_dia)
-
-                mb_dia = self.ui.mb_dia_entry.get_value()
-                mb_buff_val = mb_dia / 2.0
-                mb_spacing = self.ui.mb_spacing_entry.get_value()
-                gap_type = self.ui.gaptype_combo.get_value()
-                thin_entry = self.ui.thin_depth_entry.get_value()
-
-                if cutout_obj.kind == 'gerber':
-                    object_geo = gerber_cutout_geometry(cutout_obj, convex_box)
-                else:
-                    if cutout_obj.multigeo is False:
-                        object_geo = cutout_obj.solid_geometry
-                    else:
-                        # first tool in the tools dict
-                        t_first = list(cutout_obj.tools.keys())[0]
-                        object_geo = cutout_obj.tools[t_first]['solid_geometry']
-
-                if kind == 'single':
-                    object_geo = unary_union(object_geo)
-
-                    # for geo in object_geo:
-                    if cutout_obj.kind == 'gerber':
-                        if isinstance(object_geo, MultiPolygon):
-                            x0, y0, x1, y1 = object_geo.bounds
-                            object_geo = box(x0, y0, x1, y1)
-                        if margin >= 0:
-                            geo_buf = object_geo.buffer(margin + abs(cut_dia / 2))
-                            geo = geo_buf.exterior
-                        else:
-                            geo_buf = object_geo.buffer(-margin + abs(cut_dia / 2))
-                            geo = unary_union(geo_buf.interiors)
-                    else:
-                        if isinstance(object_geo, (MultiPolygon, MultiLineString)):
-                            x0, y0, x1, y1 = object_geo.bounds
-                            object_geo = box(x0, y0, x1, y1)
-                        if isinstance(object_geo, (LinearRing, LineString)):
-                            object_geo = Polygon(object_geo)
-                        if margin >= 0:
-                            geo_buf = object_geo.buffer(margin)
-                            if geo_buf.is_empty:
-                                geo_buf = object_geo.buffer(margin + 0.0000001)
-                            geo = geo_buf.exterior
-                        else:
-                            geo_buf = object_geo.buffer(0.0000001)
-                            geo_ext = geo_buf.exterior
-                            buff_geo_ext = geo_ext.buffer(-margin)
-                            geo = unary_union(buff_geo_ext.interiors)
-
-                    if geo.is_empty:
-                        self.app.log.debug("Cutout.on_freeform_cutout() -> Empty geometry.")
-                        self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                        return 'fail'
-                    try:
-                        solid_geo, rest_geo = self.any_cutout_handler(geo, abs(cut_dia), gaps, gapsize, margin)
-                    except Exception as err:
-                        self.app.log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
-                        self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                        return
-
-                    if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
-                        gaps_solid_geo = rest_geo
-                else:
-                    object_geo = flatten_shapely_geometry(object_geo)
-                    for geom_struct in object_geo:
-                        if cutout_obj.kind == 'gerber':
-                            if margin >= 0:
-                                geom_struct = (geom_struct.buffer(margin + abs(cut_dia / 2))).exterior
-                            else:
-                                geom_struct_buff = geom_struct.buffer(-margin + abs(cut_dia / 2))
-                                geom_struct = geom_struct_buff.interiors
-                        else:
-                            if margin >= 0:
-                                geo_buf = geom_struct.buffer(margin)
-                                if geo_buf.is_empty:
-                                    geo_buf = geom_struct.buffer(margin + 0.0000001)
-                                geom_struct = geo_buf.exterior
-                            else:
-                                geo_buf = geom_struct.buffer(0.0000001)
-                                geo_ext = geo_buf.exterior
-                                buff_geo_ext = geo_ext.buffer(-margin)
-                                if isinstance(buff_geo_ext, MultiPolygon):
-                                    self.app.log.debug(
-                                        "Cutout.on_freeform_cutout() -> The source geometry cannot be used.")
-                                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                                    unary_union(buff_geo_ext)
-                                else:
-                                    geom_struct = unary_union(buff_geo_ext.interiors)
-
-                        try:
-                            c_geo, r_geo = self.any_cutout_handler(geom_struct, abs(cut_dia), gaps, gapsize, margin)
-                        except Exception as err:
-                            self.app.log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
-                            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                            continue
-
-                        solid_geo += c_geo
-                        if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
-                            gaps_solid_geo += r_geo
-
-                if not solid_geo:
-                    self.app.log.debug("Cutout.on_freeform_cutout() -> Empty solid geometry.")
+                result = freeform_cutout_paths(
+                    cutout_obj, kind, cut_dia, margin, gaps, self.ui.gapsize.get_value(),
+                    self.ui.convex_box_cb.get_value(), self.ui.gaptype_combo.get_value(),
+                    self.ui.thin_depth_entry.get_value(), self.ui.mb_dia_entry.get_value(),
+                    self.ui.mb_spacing_entry.get_value(), self.any_cutout_handler)
+                for message in result.errors:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % message)
+                for message in result.warnings:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % message)
+                if result.failed:
                     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    return "fail"
+                    return 'fail'
 
-                try:
-                    solid_geo = linemerge(solid_geo)
-                except Exception:
-                    # there ar enot lines but polygons
-                    pass
-
-                # If it has mouse bytes
-                if has_mouse_bites is True:
-                    gapsize -= abs(cut_dia) / 2
-                    mb_object_geo = deepcopy(object_geo)
-                    if kind == 'single':
-                        mb_object_geo = unary_union(mb_object_geo)
-
-                        # for geo in object_geo:
-                        if cutout_obj.kind == 'gerber':
-                            if isinstance(mb_object_geo, MultiPolygon):
-                                x0, y0, x1, y1 = mb_object_geo.bounds
-                                mb_object_geo = box(x0, y0, x1, y1)
-                            if margin >= 0:
-                                geo_buf = mb_object_geo.buffer(margin + mb_buff_val)
-                            else:
-                                geo_buf = mb_object_geo.buffer(margin - mb_buff_val)
-                            mb_geo = geo_buf.exterior
-                        else:
-                            if isinstance(mb_object_geo, MultiPolygon):
-                                x0, y0, x1, y1 = mb_object_geo.bounds
-                                mb_object_geo = box(x0, y0, x1, y1)
-                            geo_buf = mb_object_geo.buffer(0.0000001)
-                            mb_geo = geo_buf.exterior
-
-                        __, rest_geo = self.any_cutout_handler(mb_geo, abs(cut_dia), gaps, gapsize, margin)
-                        mouse_bites_geo = rest_geo
-                    else:
-                        mb_object_geo = flatten_shapely_geometry(mb_object_geo)
-                        for mb_geom_struct in mb_object_geo:
-                            if cutout_obj.kind == 'gerber':
-                                if margin >= 0:
-                                    mb_geom_struct = mb_geom_struct.buffer(margin + mb_buff_val)
-                                    mb_geom_struct = mb_geom_struct.exterior
-                                else:
-                                    mb_geom_struct = mb_geom_struct.buffer(-margin + mb_buff_val)
-                                    mb_geom_struct = mb_geom_struct.interiors
-
-                            __, mb_r_geo = self.any_cutout_handler(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin)
-                            mouse_bites_geo += mb_r_geo
-
-                    # list of Shapely Points to mark the drill points centers
-                    holes = []
-                    for line in mouse_bites_geo:
-                        calc_len = 0
-                        while calc_len <= line.length:
-                            holes.append(line.interpolate(calc_len))
-                            calc_len += mb_dia + mb_spacing
+                solid_geo = result.solid_geo
+                gaps_solid_geo = result.gaps_solid_geo
+                holes = result.holes
+                mb_dia = self.ui.mb_dia_entry.get_value()
 
                 def geo_init(geo_obj, app_object):
                     geo_obj.multigeo = True
