@@ -49,6 +49,35 @@ Panelize:
 - fixed: Tcl panelize no longer runs eval() on the -use_thread value, reports a missing -box object, and uses 1 for a missing -rows or -columns
 - the messages show the object name, and 'done' is shown after the panel exists
 
+Gerber Editor:
+
+- a click selects 1 shape: the nearest one within 5 screen pixels, so a thin trace is easy to hit. Inside more than 1 shape, the smallest shape is selected first
+- a repeated click at the same place selects the next shape under the cursor; the status bar shows 'Shape N / M'. Every shape is reachable, also equal shapes on top of each other. With the multi-select key, the next shape replaces only the last pick
+- the click selection uses a spatial index on the main thread: about 0.1 ms per click on a board of 20000 shapes (it sent all the geometry to the worker processes on each click, about 0.9 s)
+- the select click is not snapped to the grid; a mouse move of less than 5 pixels between press and release is a click, not a selection box
+- the Simplify tool click selects 1 shape (it selected every shape under the cursor); the Erase tool picks its shape with the same rule
+- the Apertures Table follows the selection without firing its handlers
+- fixed: the Erase tool turned the center line of an erased trace into a polygon, added an empty shape for every shape it did not touch and added its cut shapes more than 1 time
+
+Geometry Editor:
+
+- fixed: deleting more than 1 selected shape deleted only some of them, and some wrong ones stayed in the storage
+- fixed: the last deleted or deselected shape stayed on the canvas; utility shapes were drawn only when unselected shapes were present
+
+Cutout:
+
+- new option for the 'Any' (freeform) cutout: 'Source is board outline' and 'Cut inside contours'. The closed contours and the holes inside a board outline (slots, windows, cutouts) are cut from the inside; an island in a cutout is cut again from the outside. Contours drawn with lines and filled regions (also clear regions) are both supported
+- the inner contours are cut first and the board outline last, so the board stays held while its inside is cut. Gaps and mouse bites on the inner contours are off by default ('Gaps on inner contours')
+- a Gerber with the X2 attribute '%TF.FileFunction,Profile' marks itself as a board outline; the file function is kept in the object options and in the project
+- a slot that is narrower than the cutter is skipped with a warning; an outline drawn with an aperture that has no center line (a rectangle aperture) is reported and never cut as an inner contour
+- with the option off the cutout output is the same as before
+- fixed: the mouse bites in Single mode with a negative margin raised an error
+
+Isolation:
+
+- fixed: a change of the V-shape tool parameters could leave the plugin signals disconnected, and an unchanged diameter was reported as a duplicate of the tool itself
+- a V-shape tool added with a diameter of 0 gets its diameter from the tip diameter, the tip angle and the Cut Z; when the tool comes from the Tools Database, its own parameters are used
+
 CNCJob / Drilling:
 
 - the OR-Tools 'Basic' path optimization has a time limit: the 'Duration' preference (Excellon and Geometry) is now used by 'MetaHeuristic' and 'Basic' and is enabled for both; 0 means 3 seconds. A panel of 1152 holes took 134 s, now about 3 s
@@ -72,6 +101,11 @@ Other:
 - fixed: the interiors of a geometry (isolation with the 'Interiors' type, the Tcl command interiors) were returned as ring sequences instead of rings
 - fixed: in the Geometry editor, Cut Path with a closed cutter (polygon or closed path) removes the part of the target inside it; results with more than 1 part are added as separate shapes and empty results are dropped
 - fixed: the Delete key raised an error on a Geometry object in the Properties tab that has no tool delete handler
+- fixed: a Geometry object was drawn below the filled copper of a Gerber object; it is now drawn on the top layer of the canvas, and a plot with visible=False stays hidden
+- fixed: after a rename, the old name could stay in the Tcl autocomplete and the new name was missing when the old name was not registered
+- the project tree refreshes only the renamed row instead of the whole layout; the selection is kept
+- fixed: a Gerber file with a macro flash in 2 parts failed to load when Clipper2 was not used
+- a shape added to a canvas layer that does not exist raises an error with the layer number
 - the plugins Isolation, NCC, Paint, Follow, Punch Gerber, Drilling and Milling no longer inherit the Gerber or Excellon class
 - the project moved to GitHub: https://github.com/MariusAdrian88/FlatCAM_Evo (branch 'main' is the stable code, branch '1.0' the development code). The About, How To and Report a bug links point there
 - Python 3.10 is the minimum version; an older Python stops with a message
