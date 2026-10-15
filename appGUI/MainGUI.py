@@ -2177,6 +2177,8 @@ class MainGUI(QtWidgets.QMainWindow):
         # status bar activation/deactivation
         self.infobar.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.ActionsContextMenu)
         self.build_infobar_context_menu()
+        self.plot_tab_area.currentChanged.connect(self.on_plot_area_tab_changed)
+        self.on_plot_area_tab_changed()
 
         self.plot_tab_area.tab_detached.connect(self.on_tab_detached)
 
@@ -2308,45 +2310,27 @@ class MainGUI(QtWidgets.QMainWindow):
         self.app.defaults["global_tabs_detachable"] = checked
 
     def build_infobar_context_menu(self):
-        delta_coords_action_name = str(_("Delta Coordinates Toolbar"))
-        delta_coords_action = QtGui.QAction(self)
-        delta_coords_action.setCheckable(True)
-        delta_coords_action.setText(delta_coords_action_name)
-        delta_coords_action.setChecked(_database_option(self.app, "global_delta_coords_bar_show"))
-        self.infobar.addAction(delta_coords_action)
-        delta_coords_action.triggered.connect(self.toggle_delta_coords)
+        for toolbar, callback in ((self.delta_coords_toolbar, self.toggle_delta_coords),
+                                   (self.coords_toolbar, self.toggle_coords),
+                                   (self.grid_toolbar, self.toggle_gridbar),
+                                   (self.status_toolbar, self.toggle_statusbar)):
+            action = toolbar.toggleViewAction()
+            self.infobar.addAction(action)
+            action.triggered.connect(callback)
 
-        coords_action_name = str(_("Coordinates Toolbar"))
-        coords_action = QtGui.QAction(self)
-        coords_action.setCheckable(True)
-        coords_action.setText(coords_action_name)
-        coords_action.setChecked(_database_option(self.app, "global_coords_bar_show"))
-        self.infobar.addAction(coords_action)
-        coords_action.triggered.connect(self.toggle_coords)
-
-        grid_action_name = str(_("Grid Toolbar"))
-        grid_action = QtGui.QAction(self)
-        grid_action.setCheckable(True)
-        grid_action.setText(grid_action_name)
-        grid_action.setChecked(_database_option(self.app, "global_grid_bar_show"))
-        self.infobar.addAction(grid_action)
-        grid_action.triggered.connect(self.toggle_gridbar)
-
-        status_action_name = str(_("Status Toolbar"))
-        status_action = QtGui.QAction(self)
-        status_action.setCheckable(True)
-        status_action.setText(status_action_name)
-        status_action.setChecked(_database_option(self.app, "global_statusbar_show"))
-        self.infobar.addAction(status_action)
-        status_action.triggered.connect(self.toggle_statusbar)
+    def on_plot_area_tab_changed(self, index=None):
+        plot_active = self.plot_tab_area.currentWidget() is self.plot_tab
+        self.coords_toolbar.setVisible(plot_active and _database_option(self.app, "global_coords_bar_show"))
+        self.delta_coords_toolbar.setVisible(
+            plot_active and _database_option(self.app, "global_delta_coords_bar_show"))
 
     def toggle_coords(self, checked):
         self.app.options["global_coords_bar_show"] = checked
-        self.coords_toolbar.setVisible(checked)
+        self.coords_toolbar.setVisible(checked and self.plot_tab_area.currentWidget() is self.plot_tab)
 
     def toggle_delta_coords(self, checked):
         self.app.options["global_delta_coords_bar_show"] = checked
-        self.delta_coords_toolbar.setVisible(checked)
+        self.delta_coords_toolbar.setVisible(checked and self.plot_tab_area.currentWidget() is self.plot_tab)
 
     def toggle_gridbar(self, checked):
         self.app.options["global_grid_bar_show"] = checked

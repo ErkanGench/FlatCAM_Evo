@@ -27,7 +27,7 @@ dependencies:
 - simplejson
 - svg.path>=4.0
 - svglib
-- vispy>=0.9.0
+- vispy>=0.17.0
 - pip:
   - ortools>=7.0
   - pyqt6>=6.1.0

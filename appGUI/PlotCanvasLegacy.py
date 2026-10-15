@@ -466,13 +466,12 @@ class PlotCanvasLegacy(QtCore.QObject):
             # set font size
             q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
             if q_settings.contains("hud_font_size"):
-                # I multiply with 2.5 because this seems to be the difference between the value taken by the VisPy (3D)
-                # and Matplotlib (Legacy2D FlatCAM graphic engine)
-                fsize = int(q_settings.value('hud_font_size', type=int) * 2.5)
+                fsize = q_settings.value('hud_font_size', type=int)
             else:
-                fsize = 20
+                fsize = 8
 
-            self.hud_holder = AnchoredText(self._text, prop=dict(size=fsize), frameon=True, loc='upper left')
+            self.hud_holder = AnchoredText(self._text, prop=dict(size=fsize, family='monospace'),
+                                           frameon=True, loc='upper left')
             self.hud_holder.patch.set_boxstyle("round,pad=0.,rounding_size=0.2")
 
             fc_color = self.p.rect_hud_color[:-2]
@@ -527,10 +526,12 @@ class PlotCanvasLegacy(QtCore.QObject):
             dy_dec = str(self.p.app.dec_format(dy, self.p.app.decimals)) if dy else '0.0'
             x_dec = str(self.p.app.dec_format(x, self.p.app.decimals)) if x else '0.0'
             y_dec = str(self.p.app.dec_format(y, self.p.app.decimals)) if y else '0.0'
-            l1_hud_text = 'Dx:\t%s [%s]' % (dx_dec, units)
-            l2_hud_text = 'Dy:\t%s [%s]' % (dy_dec, units)
-            l3_hud_text = 'X:  \t%s [%s]' % (x_dec, units)
-            l4_hud_text = 'Y:  \t%s [%s]' % (y_dec, units)
+            values = (dx_dec, dy_dec, x_dec, y_dec)
+            value_width = max(len(value) for value in values)
+            l1_hud_text, l2_hud_text, l3_hud_text, l4_hud_text = [
+                '%s %s [%s]' % (label.ljust(3), value.rjust(value_width), units)
+                for label, value in zip(('Dx:', 'Dy:', 'X:', 'Y:'), values)
+            ]
             hud_text = '%s\n%s\n\n%s\n%s' % (l1_hud_text, l2_hud_text, l3_hud_text, l4_hud_text)
             self.text = hud_text
 

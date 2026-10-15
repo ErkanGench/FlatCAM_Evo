@@ -6,17 +6,19 @@
 # ##########################################################
 
 from PyQt6 import QtCore
-from PyQt6.QtGui import QPalette
+from PyQt6.QtGui import QFont, QFontMetricsF, QPalette
 # from PyQt6.QtCore import QSettings
 
 import time
+from itertools import product
 
 import vispy.scene as scene
 from vispy.scene.cameras.base_camera import BaseCamera
-from vispy.scene.cameras.perspective import PerspectiveCamera
 from vispy.util import keys
+from vispy.util.quaternion import Quaternion
 from vispy.color import Color
-from appGUI.VisPyVisuals import ShapeGroup, ShapeCollection, TextCollection, TextGroup, Cursor
+from appGUI.VisPyVisuals import ShapeGroup, ShapeCollection, TextCollection, TextGroup, Cursor, GridLines
+from appGUI.ViewCube import ViewCube
 from vispy.scene.visuals import InfiniteLine, Line, Rectangle, Text, XYZAxis
 from appDatabase import _database_option
 
@@ -58,6 +60,9 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         # VisPyCanvas does not allow new attributes. Override.
         self.unfreeze()
 
+        # Text uses logical pixels; Qt already handles the device pixel ratio.
+        self.dpi = self.native.logicalDpiY()
+
         self.fcapp = fcapp
 
         # Parent container
@@ -83,71 +88,56 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
             theme_color = Color('#FFFFFF')
             tick_color = Color('#000000')
             back_color = str(QPalette().color(QPalette.ColorRole.Window).name())
+            grid_color = 'dimgray'
         else:
-            theme_color = Color('#000000')
+            if theme not in ['default', 'light']:
+                theme_color = Color('#202124')
+                back_color = Color('#202124')
+            else:
+                theme_color = Color('#000000')
+                back_color = Color('#000000')
             tick_color = Color('gray')
-            back_color = Color('#000000')
+            grid_color = '#dededeff'
 
         self.central_widget.bgcolor = back_color
         self.central_widget.border_color = back_color
+        self.line_color = tick_color.rgba
 
         self.grid_widget = self.central_widget.add_grid()
         self.grid_widget.spacing = 0
 
-        top_padding = self.grid_widget.add_widget(row=0, col=0, col_span=2)
-        top_padding.height_max = 0
+        self.view = self.grid_widget.add_view(row=0, col=0, border_color=tick_color, bgcolor=theme_color)
+        self.view.camera = Camera_3D(fov=0)
+        self.view.camera.set_state(_quaternion=Quaternion.create_from_axis_angle(-90, 1, 0, 0, degrees=True))
+        self.axis_padding = max(100, 8 * a_fsize)
 
-        # self.yaxis = scene.AxisWidget(
-        #     orientation='left', axis_color=tick_color, text_color=tick_color, font_size=a_fsize, axis_width=1
-        # )
-        # self.yaxis.width_max = 55
-        # self.grid_widget.add_widget(self.yaxis, row=1, col=0)
-        #
-        # self.xaxis = scene.AxisWidget(
-        #     orientation='bottom', axis_color=tick_color, text_color=tick_color, font_size=a_fsize, axis_width=1,
-        #     anchors=['center', 'bottom']
-        # )
-        # self.xaxis.height_max = 30
-        # self.grid_widget.add_widget(self.xaxis, row=2, col=1)
+        units_per_mm = 1 / 25.4 if self.fcapp.app_units.upper() == 'IN' else 1
+        self.workspace_size = (400 * units_per_mm, 400 * units_per_mm)
+        self.view.camera.minimum_scene_size = 10 * units_per_mm
+        size = self.workspace_size[0]
 
-        right_padding = self.grid_widget.add_widget(row=0, col=2, row_span=2)
-        # right_padding.width_max = 24
-        right_padding.width_max = 0
+        self.grid = GridLines(
+            parent=self.view.scene, color=grid_color, grid_bounds=(0, size, 0, size), border_width=0
+        )
+        self.grid.set_gl_state('translucent', depth_test=True, cull_face=False)
+        self.workspace_line = Line(
+            pos=np.array([(0, 0, 0), (size, 0, 0), (size, size, 0), (0, size, 0), (0, 0, 0)]),
+            color=tick_color, width=1.5, parent=self.view.scene
+        )
 
-        self.view = self.grid_widget.add_view(row=1, col=1, border_color=tick_color, bgcolor=theme_color)
-        # self.view.camera = Camera_3D(aspect=1, rect=(-25, -25, 150, 150))
-        self.view.camera = Camera_3D()
-
-        xax = scene.Axis(pos=[[0, 0], [0, 500]], tick_direction=(0, 1), domain=(0, 500),
-                         font_size=16, axis_color='k', tick_color='k', text_color='k',
-                         parent=self.view.scene)
-        xax.transform = scene.STTransform(translate=(0, 0, -0.2))
-
-        yax = scene.Axis(pos=[[0, 0], [500, 0]], tick_direction=(1, 0), domain=(0, 500),
-                         font_size=16, axis_color='k', tick_color='k', text_color='k',
-                         parent=self.view.scene)
-        yax.transform = scene.STTransform(translate=(0, 0, -0.2))
-
+        self.xaxis = scene.Axis(
+            pos=[[0, 0], [size, 0]], tick_direction=(0, -1), domain=(0, size),
+            font_size=a_fsize, axis_color='red', tick_color=tick_color, text_color=tick_color,
+            axis_label='X (%s)' % self.fcapp.app_units.lower(), parent=self.view.scene
+        )
+        self.yaxis = scene.Axis(
+            pos=[[0, 0], [0, size]], tick_direction=(-1, 0), domain=(0, size),
+            font_size=a_fsize, axis_color='green', tick_color=tick_color, text_color=tick_color,
+            axis_label='Y (%s)' % self.fcapp.app_units.lower(), parent=self.view.scene
+        )
+        self._update_axis_label_margins()
         self.xyz_axis = XYZAxis(parent=self.view.scene)
-
-        # Following function was removed from 'prepare_draw()' of 'Grid' class by patch,
-        # it is necessary to call manually
-        # self.grid_widget._update_child_widget_dim()
-
-        # self.xaxis.link_view(self.view)
-        # self.yaxis.link_view(self.view)
-
-        # if theme == 'light':
-        #     self.grid = scene.GridLines(parent=self.view.scene, color='dimgray')
-        # else:
-        #     self.grid = scene.GridLines(parent=self.view.scene, color='#dededeff')
-        #
-        # self.grid.set_gl_state(depth_test=False)
-
-        # workspace lines; I didn't use the rectangle because I didn't want to add another VisPy Node,
-        # which might decrease performance
-        # self.b_line, self.r_line, self.t_line, self.l_line = None, None, None, None
-        self.workspace_line = None
+        self.xyz_axis.transform = scene.STTransform(scale=(size / 10,) * 3)
 
         # <VisPyCanvas>
         self.create_native()
@@ -190,6 +180,12 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         self.text_collection.enabled = True
 
         self.c = None
+        self.view_cube = ViewCube(self.view.camera, self.native)
+        self.view_cube.fit_requested.connect(self.fit_view)
+        self.view_cube.rotation_requested.connect(lambda dx, dy: self.view.camera.rotate_about(
+            (dx, dy), (self.workspace_size[0] / 2, self.workspace_size[1] / 2, 0)
+        ))
+        self.view.events.resize.connect(self.on_view_resize)
 
         # Keep VisPy canvas happy by letting it be "frozen" again.
         self.freeze()
@@ -310,49 +306,112 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
     def new_text_collection(self, **kwargs):
         return TextCollection(parent=self.view.scene, **kwargs)
 
+    def get_grid_size(self):
+        """Return the grid's (X, Y) dimensions in millimetres."""
+        factor = 25.4 if self.fcapp.app_units.upper() == 'IN' else 1
+        return tuple(size * factor for size in self.workspace_size)
+
+    def _update_axis_label_margins(self):
+        """Keep axis titles just beyond the numeric labels, in logical pixels."""
+        for axis in (self.xaxis, self.yaxis):
+            font = QFont(axis._text.face)
+            font.setPointSizeF(max(1, axis.tick_font_size))
+            metrics = QFontMetricsF(font, self.native)
+            labels = axis.ticker._get_tick_frac_labels()[2]
+            bounds = [metrics.tightBoundingRect(label) for label in labels]
+            if axis is self.xaxis:
+                extent = max((rect.height() for rect in bounds), default=0)
+            else:
+                extent = max((rect.width() for rect in bounds), default=0)
+            title_height = metrics.tightBoundingRect(axis.axis_label).height()
+            gap = max(4, axis.tick_font_size * self.dpi / 72 * 0.25)
+            axis.axis_label_margin = axis.tick_label_margin + extent + title_height / 2 + gap
+
+    def set_grid_size(self, x_mm, y_mm=None):
+        """Resize immediately in millimetres; omitted Y defaults to X."""
+        x_mm = float(x_mm)
+        y_mm = x_mm if y_mm is None else float(y_mm)
+        if not np.isfinite((x_mm, y_mm)).all() or min(x_mm, y_mm) <= 0:
+            raise ValueError('Grid dimensions must be positive, finite numbers of millimetres.')
+        factor = 1 / 25.4 if self.fcapp.app_units.upper() == 'IN' else 1
+        x, y = x_mm * factor, y_mm * factor
+        self.workspace_size = (x, y)
+        self.grid.grid_bounds = (0, x, 0, y)
+        self.workspace_line.set_data(pos=np.array([
+            (0, 0, 0), (x, 0, 0), (x, y, 0), (0, y, 0), (0, 0, 0)
+        ]))
+        self.xaxis.pos = np.array([(0, 0), (x, 0)])
+        self.yaxis.pos = np.array([(0, 0), (0, y)])
+        self.xaxis.domain = (0, x)
+        self.yaxis.domain = (0, y)
+        self._update_axis_label_margins()
+        self.xyz_axis.transform = scene.STTransform(scale=(min(x, y) / 10,) * 3)
+        self.fit_view()
+        self.update()
+
+    def _scene_corners(self, rect=None):
+        if rect is not None:
+            return np.array(list(product((rect.left, rect.right), (rect.bottom, rect.top), (0,))))
+        bounds = np.array([(0, 0, 0), (*self.workspace_size, 0)], dtype=float)
+        nodes = list(self.view.scene.children)
+        while nodes:
+            node = nodes.pop()
+            if not node.visible:
+                continue
+            nodes.extend(node.children)
+            if not hasattr(node, 'bounds'):
+                continue
+            # VisPy caches bounds separately from live visual data.
+            node._bounds_changed()
+            limits = [node.bounds(axis) for axis in range(3)]
+            if all(limit is None for limit in limits):
+                continue
+            corners = np.array(list(product(*(limit if limit is not None else (0, 0) for limit in limits))))
+            points = node.node_transform(self.view.scene).map(corners)
+            points = points[:, :3] / points[:, 3:]
+            points = points[np.isfinite(points).all(axis=1)]
+            if len(points):
+                bounds[0] = np.minimum(bounds[0], points.min(axis=0))
+                bounds[1] = np.maximum(bounds[1], points.max(axis=0))
+        return np.array(list(product(*bounds.T)))
+
     def fit_view(self, rect=None):
+        width, height = self.view.size
+        padding = self.axis_padding
+        if min(width, height) <= padding + 20:
+            return
+        camera = self.view.camera
+        points = camera.transform.imap(self._scene_corners(rect))
+        points = points[:, :3] / points[:, 3:]
+        lower, upper = points.min(axis=0), points.max(axis=0)
+        units_per_pixel = max(
+            (upper[0] - lower[0]) / (width - padding - 20),
+            (upper[1] - lower[1]) / (height - padding - 20),
+            camera.minimum_scene_size / min(width, height)
+        )
+        center = (lower + upper) / 2
+        center[:2] += (20 - padding) * units_per_pixel / 2
+        center = camera.transform.map(center)
+        camera.center = center[:3] / center[3]
+        camera.maximum_scene_size = units_per_pixel * min(width, height)
+        camera.scale_factor = camera.maximum_scene_size
+        camera._view_modified = False
 
-        # Lock updates in other threads
-        self.shape_collection.lock_updates()
-
-        if not rect:
-            rect = Rect(-1, -1, 20, 20)
-            try:
-                rect.left, rect.right = self.shape_collection.bounds(axis=0)
-                rect.bottom, rect.top = self.shape_collection.bounds(axis=1)
-            except TypeError:
-                pass
-
-        # adjust the view camera to be slightly bigger than the bounds so the shape collection can be seen clearly
-        # otherwise the shape collection boundary will have no border
-        dx = rect.right - rect.left
-        dy = rect.top - rect.bottom
-        x_factor = dx * 0.02
-        y_factor = dy * 0.02
-
-        rect.left -= x_factor
-        rect.bottom -= y_factor
-        rect.right += x_factor
-        rect.top += y_factor
-
-        self.view.camera.rect = rect
-
-        self.shape_collection.unlock_updates()
+    def on_view_resize(self, event):
+        camera = self.view.camera
+        center = camera.center
+        zoom = camera.scale_factor / camera.maximum_scene_size
+        modified = camera._view_modified
+        self.fit_view()
+        if modified:
+            camera.zoom(zoom)
+            camera.center = center
+            camera._view_modified = True
 
     def fit_center(self, loc, rect=None):
-
-        # Lock updates in other threads
-        self.shape_collection.lock_updates()
-
-        if not rect:
-            try:
-                rect = Rect(loc[0]-20, loc[1]-20, 40, 40)
-            except TypeError:
-                pass
-
-        self.view.camera.rect = rect
-
-        self.shape_collection.unlock_updates()
+        if rect is not None:
+            self.fit_view(rect)
+        self.view.camera.center = (loc[0], loc[1], 0)
 
     def clear(self):
         pass
@@ -375,12 +434,81 @@ class Camera_3D(scene.ArcballCamera):
 
         self.last_event = None
         self.last_time = 0
+        self._view_modified = False
+        self._rotation_anchor = None
 
         # Default mouse button for panning is RMB
         self.pan_button_setting = "2"
 
+    def set_view(self, name):
+        views = {
+            'top': (-90, 1, 0, 0), 'bottom': (90, 1, 0, 0),
+            'left': (-90, 0, 1, 0), 'right': (90, 0, 1, 0),
+            'front': (0, 1, 0, 0), 'back': (180, 0, 1, 0),
+            'iso': (-np.degrees(np.arctan(1 / np.sqrt(2))), 1, 0, 0),
+        }
+        if name not in views:
+            raise ValueError('Unknown camera view: %s' % name)
+        self._event_value = None
+        self._rotation_anchor = None
+        self._view_modified = True
+        rotation = Quaternion.create_from_axis_angle(*views[name], degrees=True)
+        if name == 'iso':
+            rotation = rotation * Quaternion.create_from_axis_angle(45, 0, 1, 0, degrees=True)
+        self.set_state(fov=0, _quaternion=rotation)
+
     def zoom(self, factor, center=None):
-        pass
+        factor = float(factor)
+        if not np.isfinite(factor) or factor <= 0:
+            return
+        scale = np.clip(self.scale_factor * factor, self.minimum_scene_size, self.maximum_scene_size)
+        if scale == self.scale_factor:
+            return
+        factor = scale / self.scale_factor
+        if center is not None:
+            anchor = np.zeros(3)
+            anchor[:min(len(center), 3)] = center[:3]
+            self.center = anchor + (np.asarray(self.center) - anchor) * factor
+        if self._distance is not None:
+            self.distance *= factor
+        self.scale_factor = scale
+        self._view_modified = True
+
+    def _screen_to_world(self, pos, reference=None):
+        reference = self.center if reference is None else reference
+        depth = self._scene_transform.map((*reference, 1))
+        point = self._scene_transform.imap((*pos[:2], depth[2] / depth[3], 1))
+        return point[:3] / point[3]
+
+    def _update_rotation(self, event):
+        pos = np.asarray(event.pos[:2], dtype=float)
+        start = event.mouse_event.press_event.pos
+        previous = start if self._event_value is None else self._event_value
+        delta = (pos - previous) * np.pi / max(1, min(self._viewbox.size))
+        self._event_value = pos
+        if not np.any(delta):
+            return
+        if self._rotation_anchor is None:
+            ray = self._scene_transform.imap([(start[0], start[1], 0, 1), (start[0], start[1], 1, 1)])
+            ray = ray[:, :3] / ray[:, 3:]
+            direction = ray[1] - ray[0]
+            if abs(direction[2]) > np.linalg.norm(direction) * 1e-8:
+                self._rotation_anchor = ray[0] - direction * ray[0, 2] / direction[2]
+            else:
+                # Edge-on views have no unique intersection with the grid plane.
+                self._rotation_anchor = self._screen_to_world(start)
+        self.rotate_about(delta, self._rotation_anchor)
+
+    def rotate_about(self, delta, anchor):
+        """Rotate by screen-space angles while keeping a world-space pivot fixed on screen."""
+        projected = self._scene_transform.map((*anchor, 1))
+        pos = projected[:2] / projected[3]
+        horizontal = Quaternion.create_from_axis_angle(-delta[0], 0, 1, 0)
+        vertical = Quaternion.create_from_axis_angle(-delta[1], 1, 0, 0)
+        self._quaternion = vertical * horizontal * self._quaternion
+        self._view_modified = True
+        self.view_changed()
+        self.center = np.asarray(self.center) + anchor - self._screen_to_world(pos, anchor)
 
     # def viewbox_mouse_event(self, event):
     #     """
@@ -467,11 +595,26 @@ class Camera_3D(scene.ArcballCamera):
         if event.handled or not self.interactive:
             return
 
-        PerspectiveCamera.viewbox_mouse_event(self, event)
+        BaseCamera.viewbox_mouse_event(self, event)
+
+        if event.type == 'mouse_wheel':
+            if not event.mouse_event.modifiers:
+                center = self._screen_to_world(event.pos)
+                scale = (1 + self.zoom_factor) ** (-event.delta[1] * 30)
+                self.limited_zoom(scale, center)
+            event.handled = True
+            return
+        elif event.type == 'gesture_zoom':
+            self.zoom(1 - event.scale)
+            event.handled = True
+            return
 
         if event.type == 'mouse_release':
             self._event_value = None  # Reset
+            self._rotation_anchor = None
         elif event.type == 'mouse_press':
+            self._event_value = None
+            self._rotation_anchor = None
             event.handled = True
         elif event.type == 'mouse_move':
             if event.press_event is None:
@@ -486,19 +629,15 @@ class Camera_3D(scene.ArcballCamera):
                 # Rotate
                 self._update_rotation(event)
 
-            elif 1 in event.buttons and keys.SHIFT in modifiers:
+            elif (1 in event.buttons or int(self.pan_button_setting) in event.buttons) and keys.SHIFT in modifiers:
                 # Zoom
                 if self._event_value is None:
                     self._event_value = (self._scale_factor, self._distance)
                 zoomy = (1 + self.zoom_factor) ** d[1]
 
-                self.scale_factor = self._event_value[0] * zoomy
-                # Modify distance if its given
-                if self._distance is not None:
-                    self._distance = self._event_value[1] * zoomy
-                self.view_changed()
+                self.zoom(self._event_value[0] * zoomy / self.scale_factor)
 
-            elif 2 in event.buttons and not modifiers:
+            elif int(self.pan_button_setting) in event.buttons and not modifiers:
                 # Translate
                 norm = np.mean(self._viewbox.size)
                 if self._event_value is None or len(self._event_value) == 2:
@@ -514,21 +653,7 @@ class Camera_3D(scene.ArcballCamera):
                 dx, dy, dz = ff[0] * dx, ff[1] * dy, dz * ff[2]
                 c = self._event_value
                 self.center = c[0] + dx, c[1] + dy, c[2] + dz
-
-            elif 2 in event.buttons and keys.SHIFT in modifiers:
-                # Change fov
-                if self._event_value is None:
-                    self._event_value = self._fov
-                fov = self._event_value - d[1] / 5.0
-                self.fov = min(180.0, max(0.0, fov))
+                self._view_modified = True
 
     def limited_zoom(self, scale, center):
-
-        try:
-            zoom_in = scale[1] < 1
-        except IndexError:
-            zoom_in = scale < 1
-
-        if (not zoom_in and self.rect.width < self.maximum_scene_size) \
-                or (zoom_in and self.rect.width > self.minimum_scene_size):
-            self.zoom(scale, center)
+        self.zoom(scale, center)

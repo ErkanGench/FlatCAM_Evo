@@ -226,7 +226,7 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         # Axis Font Size
         self.axis_font_size_label = FCLabel('%s:' % _('Axis'))
         self.axis_font_size_label.setToolTip(
-            _("This sets the font size for canvas axis.")
+            _("This sets the font size for canvas axis. In points.")
         )
 
         self.axis_font_size_spinner = FCSpinner()

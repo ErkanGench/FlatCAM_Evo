@@ -7,6 +7,8 @@
 # ##########################################################
 
 from vispy.visuals import CompoundVisual, LineVisual, MeshVisual, TextVisual, MarkersVisual
+from vispy.visuals.gridlines import GridLinesVisual as VisPyGridLinesVisual, _GRID_COLOR
+from vispy.visuals.shaders import Function
 from vispy.scene.visuals import VisualNode, generate_docstring, visuals
 from vispy.gloo import set_state
 from vispy.color import Color
@@ -847,6 +849,48 @@ class ShapeCollectionVisual(CompoundVisual):
         self.update_lock.release()
 
 
+class GridLinesVisual(VisPyGridLinesVisual):
+    """Grid with a stable ray-plane intersection at high zoom and oblique angles."""
+
+    _shaders = dict(VisPyGridLinesVisual._shaders, fragment="""
+        uniform vec2 image_size;
+        uniform int method;
+        varying vec2 v_texcoord;
+
+        void main() {
+            vec2 texcoord = v_texcoord;
+            if (method == 1) {
+                vec4 origin = $transform(vec4(v_texcoord, 0, 1));
+                // Transform a direction, not a second point half a depth range away.
+                // Subtracting those distant points loses the small grid coordinates.
+                vec4 direction = $transform(vec4(0, 0, 1, 0));
+                if (abs(direction.z) <= 1e-6 * length(direction.xyz)) {
+                    discard;
+                }
+                vec4 point = origin - direction * (origin.z / direction.z);
+                texcoord = point.xy / (point.w * image_size);
+            }
+            gl_FragColor = $color_transform($get_data(texcoord));
+        }
+    """)
+
+    def __init__(self, scale=(1, 1), color='w', **kwargs):
+        super(GridLinesVisual, self).__init__(scale=scale, color=color, **kwargs)
+        # Use the actual projected plane footprint, not a constant-depth slice.
+        self._grid_color_fn = Function(_GRID_COLOR.replace(
+            'vec2 px = vec2(abs(dx.x) + abs(dy.x), abs(dx.y) + abs(dy.y));',
+            'vec2 px = fwidth(pos) * $pixel_scale;'
+        ))
+        self._grid_color_fn['color'] = Color(color).rgba
+        self._grid_color_fn['scale'] = scale
+        self.shared_program.frag['get_data'] = self._grid_color_fn
+
+    def _prepare_transforms(self, view):
+        if view.transforms.canvas is not None:
+            self._grid_color_fn['pixel_scale'] = view.transforms.canvas.pixel_scale
+        super(GridLinesVisual, self)._prepare_transforms(view)
+
+
 class TextGroup(object):
     def __init__(self, collection):
         self._collection = collection
@@ -917,9 +961,28 @@ class TextCollectionVisual(TextVisual):
         self.last_key = -1
         self.lock = threading.Lock()
         self.method = 'gpu'
+        self._annotation_scale = None
         super(TextCollectionVisual, self).__init__(**kwargs)
 
         self.freeze()
+
+    def _prepare_draw(self, view):
+        result = super(TextCollectionVisual, self)._prepare_draw(view)
+        if result is False:
+            return False
+
+        transform = view.transforms.get_transform('visual', 'document')
+        points = transform.map([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)])
+        points = points[:, :2] / points[:, 3:4]
+        # The largest projected scale follows zoom without depending on camera rotation.
+        scale = np.linalg.norm(points[1:] - points[0], ord=2)
+        if np.isfinite(scale) and scale > 0:
+            if self._annotation_scale is None:
+                self._annotation_scale = scale
+            zoom = min(1.0, scale / self._annotation_scale)
+            self.shared_program['u_npix'] = self.font_size / 72. * self.transforms.dpi * zoom
+
+        return result
 
     def add(self, text, pos, visible=True, update=True, font_size=9, color='black'):
         """
@@ -1075,5 +1138,6 @@ def create_fast_node(subclass):
 
 
 ShapeCollection = create_fast_node(ShapeCollectionVisual)
+GridLines = create_fast_node(GridLinesVisual)
 TextCollection = create_fast_node(TextCollectionVisual)
 Cursor = create_fast_node(MarkersVisual)

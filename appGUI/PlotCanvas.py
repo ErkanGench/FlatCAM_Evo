@@ -165,10 +165,12 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
         # TEXT HUD
         self.text_hud = Text('', color=self.text_hud_color, method='gpu', anchor_x='left', parent=None)
+        self.text_hud.order = 2
         # RECT HUD
         self.rect_hud = Rectangle(width=10, height=10, radius=[5, 5, 5, 5], center=(20, 20),
                                   border_color=self.rect_hud_color, color=self.rect_hud_color, parent=None)
         self.rect_hud.set_gl_state(depth_test=False)
+        self.rect_hud.order = 1
 
         self.on_update_text_hud()
 
@@ -331,11 +333,10 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         dy_dec = str(self.fcapp.dec_format(dy, self.fcapp.decimals)) if dy else '0.0'
         x_dec = str(self.fcapp.dec_format(x, self.fcapp.decimals)) if x else '0.0'
         y_dec = str(self.fcapp.dec_format(y, self.fcapp.decimals)) if y else '0.0'
-        l1_hud_text = 'Dx: %s [%s]' % (dx_dec, units)
-        l2_hud_text = 'Dy: %s [%s]' % (dy_dec, units)
-        l3_hud_text = 'X:   %s [%s]' % (x_dec, units)
-        l4_hud_text = 'Y:   %s [%s]' % (y_dec, units)
-        hud_text = '%s\n%s\n\n%s\n%s' % (l1_hud_text, l2_hud_text, l3_hud_text, l4_hud_text)
+        values = (dx_dec, dy_dec, x_dec, y_dec)
+        value_width = max(len(value) for value in values)
+        hud_text = ['%s %s [%s]' % (label.ljust(3), value.rjust(value_width), units)
+                    for label, value in zip(('Dx:', 'Dy:', 'X:', 'Y:'), values)]
 
         # font size
         q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
@@ -344,38 +345,26 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         else:
             fsize = 8
 
-        try:
-            c_font = QtGui.QFont("times", fsize)
-        except Exception:
-            # maybe Unix-like OS's don't have the Times font installed, use whatever is available
-            c_font = QtGui.QFont()
-            c_font.setPointSize(fsize)
-
-        c_font_metrics = QtGui.QFontMetrics(c_font)
-
-        l1_length = c_font_metrics.horizontalAdvance('Dx:xxx[mm]') + c_font_metrics.horizontalAdvance(str(dx_dec))
-        l2_length = c_font_metrics.horizontalAdvance('Dy:xxx[mm]') + c_font_metrics.horizontalAdvance(str(dy_dec))
-        l3_length = c_font_metrics.horizontalAdvance('X:xxxxx[mm]') + c_font_metrics.horizontalAdvance(str(x_dec))
-        l4_length = c_font_metrics.horizontalAdvance('Y:xxxxx[mm]') + c_font_metrics.horizontalAdvance(str(y_dec))
-        # l1_length = c_font_metrics.boundingRect(l1_hud_text).width()
-        # l2_length = c_font_metrics.boundingRect(l2_hud_text).width()
-        # l3_length = c_font_metrics.boundingRect(l3_hud_text).width()
-        # l4_length = c_font_metrics.boundingRect(l4_hud_text).width()
-
-        l1_height = c_font_metrics.boundingRect(l1_hud_text).height()
-        # print(self.fcapp.qapp.devicePixelRatio())
-
-        # coordinates and anchors
-        height = (5 * l1_height) + c_font_metrics.lineSpacing() * 1.5 + 10
-        width = max(l1_length, l2_length, l3_length, l4_length) * 1.3  # don't know where the 1.3 comes
+        c_font = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont)
+        c_font.setPointSize(max(1, fsize))
+        c_font_metrics = QtGui.QFontMetricsF(c_font, self.native)
+        padding = 6
+        line_height = c_font_metrics.height()
+        text_bounds = [c_font_metrics.tightBoundingRect(line) for line in hud_text]
+        ascent = -min(rect.top() for rect in text_bounds)
+        height = 4 * line_height + ascent + max(rect.bottom() for rect in text_bounds) + 2 * padding
+        width = max(c_font_metrics.horizontalAdvance(line) for line in hud_text) + 2 * padding
         center_x = (width / 2) + 5
         center_y = (height / 2) + 5
 
         # text
         self.text_hud.font_size = fsize
+        self.text_hud.face = c_font.family()
+        self.text_hud.color = 'white' if np.mean(self.view.bgcolor.rgb) < 0.5 else 'black'
         self.text_hud.text = hud_text
-        self.text_hud.pos = 10, center_y
-        self.text_hud.anchors = 'left', 'center'
+        self.text_hud.pos = [(5 + padding, 5 + padding + ascent + row * line_height)
+                             for row in (0, 1, 3, 4)]
+        self.text_hud.anchors = 'left', 'baseline'
 
         # rectangle
         self.rect_hud.center = center_x, center_y

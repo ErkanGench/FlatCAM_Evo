@@ -15,6 +15,7 @@ import vispy.scene as scene
 from vispy.scene.cameras.base_camera import BaseCamera
 # from vispy.scene.widgets import Widget as VisPyWidget
 from vispy.color import Color
+from appGUI.VisPyVisuals import GridLines
 
 import time
 
@@ -29,6 +30,9 @@ class VisPyCanvas(scene.SceneCanvas):
         super().__init__(config=config, keys=None)
 
         self.unfreeze()
+
+        # Text uses logical pixels; Qt already handles the device pixel ratio.
+        self.dpi = self.native.logicalDpiY()
 
         settings = QSettings("Open Source", "FlatCAM_EVO")
         if settings.contains("axis_font_size"):
@@ -115,9 +119,9 @@ class VisPyCanvas(scene.SceneCanvas):
 
         self.view = view
         if (theme == 'default' or theme == 'light') and not dark_canvas:
-            self.grid = scene.GridLines(parent=self.view.scene, color='dimgray')
+            self.grid = GridLines(parent=self.view.scene, color='dimgray')
         else:
-            self.grid = scene.GridLines(parent=self.view.scene, color='#dededeff')
+            self.grid = GridLines(parent=self.view.scene, color='#dededeff')
 
         self.grid.set_gl_state(depth_test=False)
 

@@ -116,6 +116,27 @@ Other:
 - the Tcl editor autocomplete has the correct preprocessor names (GRBL_11_no_M6 was GRL_11_no_M6) and the missing ones
 - Linux: setup_ubuntu.sh installs the Python packages in a .venv in the project folder (no system-wide pip), with the GDAL package that matches the system library; the launcher starts flatcam.py with that .venv; the man page and the desktop file are updated
 - the README is rewritten: features, every plugin, editors, file formats, preprocessors, path optimization, Tcl scripting and the installation on Windows, Linux and macOS
+- the '3D Area' plot tab is renamed to 'Plot 3D'
+- the minimum VisPy version is raised to 0.17.0
+
+Plot 3D:
+
+- the 3D view is rewritten: a clickable ViewCube overlay gives Top, Bottom, Left, Right, Front, Back and Iso views (right-click for the full menu); the camera zooms toward the cursor, rotates about the clicked point and pans with the configured mouse button
+- dragging the ViewCube rotates both the cube and the workspace around the grid center; face clicks and the context menu remain available, while dragging on the canvas still rotates around the clicked point
+- the grid is rendered with a stable ray-plane intersection shader that no longer breaks up at maximum zoom or edge-on angles; the same renderer is used by the accelerated 2D canvas
+- the X and Y axes show their labels with units (e.g. 'X (mm)'); the title spacing is measured from the tick-label font metrics and is recalculated when the grid size changes
+- the workspace is a fixed-size rectangle in millimetres (or inches); the Fit View button and the ViewCube both frame it with room for the axes
+
+Canvas:
+
+- the coordinates HUD on the accelerated canvas uses a measured fixed-width font with right-aligned values, tight background padding and a foreground color that contrasts with the canvas background; the legacy HUD loses its historical 2.5× size multiplier and uses aligned monospaced columns
+- grid labels, HUD text and CNCJob annotations use the Qt logical DPI instead of the VisPy physical-DPI estimate, fixing oversized text under high-DPI scaling; the annotation and axis font-size preferences are in points
+- CNCJob annotations scale down with zoom-out and are capped at the configured annotation font size
+
+Status bar:
+
+- the right-click menu of the status bar uses the native toolbar toggle actions, so the check marks track the actual visibility of the Coordinates, Delta Coordinates, Grid and Status toolbars
+- the Coordinates and Delta Coordinates toolbars are hidden when the active plot tab is not the Plot tab and restored when returning to it; their toggle actions respect the active tab
 
 14.10.2026
 

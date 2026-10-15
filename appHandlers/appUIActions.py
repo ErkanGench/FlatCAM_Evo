@@ -1001,7 +1001,7 @@ class AppUIActions(QtCore.QObject):
 
         # add the tab if it was closed
         try:
-            self.ui.plot_tab_area.addTab(self.app.area_3d_tab, _("3D Area"))
+            self.ui.plot_tab_area.addTab(self.app.area_3d_tab, _("Plot 3D"))
             self.app.area_3d_tab.setObjectName("3D_area_tab")
         except Exception as e:
             self.log.error("App.on_3d_area() --> %s" % str(e))

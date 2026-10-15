@@ -48,7 +48,7 @@ pyopengl
 PyQt6>=6.1.0
 
 freetype-py
-vispy>=0.9.0
+vispy>=0.17.0
 # pyqtdarktheme==1.1.1
 
 svgtrace

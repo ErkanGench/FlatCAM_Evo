@@ -40,7 +40,7 @@ class CNCJobAdvOptPrefGroupUI(OptionsGroupUI):
         # Annotation Font Size
         self.annotation_fontsize_label = FCLabel('%s:' % _("Annotation Size"))
         self.annotation_fontsize_label.setToolTip(
-            _("The font size of the annotation text. In pixels.")
+            _("The font size of the annotation text. In points.")
         )
         self.annotation_fontsize_sp = FCSpinner()
         self.annotation_fontsize_sp.set_range(0, 9999)
