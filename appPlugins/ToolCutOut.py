@@ -294,7 +294,7 @@ def _closed_loops(lines, width, warnings):
 def _gerber_items(obj, warnings):
     """The filled loops of a Gerber object: (Polygon, stroke width) from the center lines and the region records."""
     groups = {}
-    dark, clear = [], []
+    region_steps = []
     has_records = False
     # apertures with drawn records that have no center line (a rectangle aperture draw, a flash)
     no_line_apertures = set()
@@ -306,10 +306,11 @@ def _gerber_items(obj, warnings):
                 continue
             has_records = True
             if is_region:
+                # the records are in file order; the polarity of each one applies to what came before it
                 if rec.get('solid') is not None:
-                    dark.extend(flatten_shapely_geometry(rec['solid']))
+                    region_steps.append(('dark', flatten_shapely_geometry(rec['solid'])))
                 if rec.get('clear') is not None:
-                    clear.extend(flatten_shapely_geometry(rec['clear']))
+                    region_steps.append(('clear', flatten_shapely_geometry(rec['clear'])))
             else:
                 follow = rec.get('follow')
                 if not isinstance(follow, (LineString, LinearRing)) or follow.is_empty:
@@ -327,9 +328,12 @@ def _gerber_items(obj, warnings):
     items = []
     for width, lines in groups.items():
         items += _closed_loops(lines, width, warnings)
-    region = unary_union(dark) if dark else Polygon()
-    if clear and not region.is_empty:
-        region = region.difference(unary_union(clear))
+    region = Polygon()
+    for polarity, geos in region_steps:
+        if polarity == 'dark':
+            region = unary_union([region] + list(geos))
+        elif not region.is_empty:
+            region = region.difference(unary_union(geos))
     for poly in flatten_shapely_geometry(region):
         if isinstance(poly, Polygon) and not poly.is_empty:
             items.append((poly, 0.0))

@@ -632,3 +632,14 @@ def test_off_mouse_bites_negative_margin_single_gerber(cutout_app):
     for hole in (shapely.from_wkt(w) for w in got['holes']):
         x, y = hole.x, hole.y
         assert min(abs(x - 0.7), abs(x - 49.3), abs(y - 0.7), abs(y - 29.3)) < 0.01
+
+
+def test_region_island_after_clear_cutout_is_kept():
+    # dark board, then a clear cutout, then a dark island inside the cutout: the file order decides
+    grb = SimpleNamespace(kind='gerber', tools={0: {'type': 'REG', 'size': 0.0, 'geometry': [
+        {'solid': box(0, 0, 50, 30)},
+        {'clear': box(15, 9, 35, 21)},
+        {'solid': box(23, 13, 27, 17)},
+    ]}})
+    contours = outline_contours(grb, False, 'single')
+    assert sorted((c.depth, c.side) for c in contours) == [(0, 'outer'), (1, 'inner'), (2, 'outer')]
