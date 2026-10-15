@@ -1,7 +1,7 @@
 # FlatCAM Evo
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![Qt](https://img.shields.io/badge/GUI-PyQt6-green)
 ![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
 
@@ -92,7 +92,12 @@ FlatCAM Evo runs from the source code on **Windows**, **Linux** and **macOS**.
 
 ### Requirements
 
-- **Python 3.11 or newer**, 64-bit. The program is tested with Python 3.11 to 3.14.
+- **Python 3.10 or newer**. Use a 64-bit Python: the OR-Tools path optimization works only on a 64-bit Python.
+  - **Windows** has no Python by default. Install it from [python.org](https://www.python.org/downloads/windows/)
+    (select "Add python.exe to PATH"), or use conda / mamba as shown below.
+  - **Linux**: most current distributions have Python 3.10 or newer (for example Ubuntu 22.04 and newer, Debian 12
+    and newer, Fedora). Check with `python3 --version`.
+  - **macOS**: install Python with Homebrew (`brew install python`) or from python.org.
 - A graphics driver with **OpenGL** support for the fast canvas. Without OpenGL, select the "Legacy (2D)" graphic
   engine in the Preferences.
 - The Python packages in [`requirements.txt`](requirements.txt). The main packages are PyQt6, Shapely 2, NumPy,
@@ -102,7 +107,7 @@ Some packages are optional. FlatCAM Evo runs without them, but the related featu
 
 | Package | Feature |
 |---|---|
-| `ortools` | The MetaHeuristic and Basic path optimization of drill and mill paths. Needs a 64-bit Python. |
+| `ortools` | The MetaHeuristic and Basic path optimization of drill and mill paths. Works only on a 64-bit Python. |
 | `rasterio` (with GDAL) | The Image import plugin. |
 | `svgtrace`, `pyppeteer` | The tracing mode of the Image import plugin. |
 | `pikepdf` | An alternative PDF parser (the built-in parser is the default). |
@@ -159,17 +164,33 @@ Conda installs the packages that need system libraries (GDAL, GEOS, libspatialin
      command again.
    - **Linux / macOS**: install the GDAL system library first (see below), or use the conda installation.
 
-#### System packages for Linux (Debian / Ubuntu)
+#### Linux (Debian / Ubuntu): the setup script
 
-Install these packages before the `pip` step:
+[`setup_ubuntu.sh`](setup_ubuntu.sh) does all the steps of the pip installation for you:
+
+```bash
+./setup_ubuntu.sh
+.venv/bin/python flatcam.py
+```
+
+The script installs the system libraries with `apt` (it asks for the sudo password), makes the `.venv` virtual
+environment in the project folder, and installs the Python packages into it. It also installs the GDAL Python package
+with the same version as the GDAL system library. Set `PYTHON=python3.12` (for example) before the command to use
+another Python.
+
+To do the same steps by hand, install these system packages before the `pip` step:
 
 ```bash
 sudo apt install python3-venv python3-dev build-essential \
      libgeos-dev libspatialindex-dev libfreetype6-dev gdal-bin libgdal-dev \
      libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0
+python -m pip install "gdal==$(gdal-config --version)"   # in the virtual environment
 ```
 
 Use a virtual environment as shown above. Newer Debian and Ubuntu releases refuse a system-wide `pip install`.
+
+After the installation, `make install` adds FlatCAM Evo to the applications menu of your user (`sudo make install`
+installs it for all users in `/usr/share/flatcam-beta`). `make remove` removes it.
 
 #### System packages for macOS
 
@@ -222,7 +243,7 @@ The window layout and the style are kept in the Qt settings (`Open Source / Flat
    number of passes and the overlap, then click **Generate Geometry**.
 4. Select the new isolation Geometry and open **Plugins > Milling**. Set the cut depth, the travel height, the feed
    rates and the preprocessor of your machine, then click **Generate CNCJob object**.
-5. Select the Excellon object and open **Plugins > Drilling**. Select the tools, set the drill parameters, and
+5. Select the Excellon object and open **Plugins > Drilling** (`Alt+D`). Select the tools, set the drill parameters, and
    click **Generate CNCJob object**. Turn on **Tool change** if your machine must stop to change the drill bit
    between tools. If it is off, all holes are drilled with the first tool.
 6. Select each CNCJob object and click **Save** in its Properties to write the G-code file.
@@ -565,8 +586,7 @@ python flatcam.py [files...] [--shellfile=<script>] [--shellvar=<value1,value2,.
 
 On Windows, a second start of the program sends its file arguments to the program that already runs.
 
-To run without a window (headless), set `headless=True` in `config/configuration.txt` (Windows). The program then
-shows only a tray icon. Use it with `--shellfile` and end the script with `quit_app`.
+End a script with `quit_app` to close the program when the script is done.
 
 ### Tcl command reference
 
