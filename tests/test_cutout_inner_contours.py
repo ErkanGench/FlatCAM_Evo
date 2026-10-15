@@ -606,3 +606,19 @@ def test_production_run_reports_warnings(cutout_app):
     run_case(cutout_app, 'outline_narrow_slot', {}, after_configure=mark_inner)
     texts = [str(c.args[0]) for c in cutout_app.test_app.inform.emit.call_args_list]
     assert any('[WARNING_NOTCL]' in t and 'inner contours were skipped' in t for t in texts)
+
+
+def test_ring_without_center_line_never_becomes_a_cutout():
+    # a ring drawn with a rectangle aperture: the parser keeps no center line for it, only the band
+    band = box(0, 0, 50, 30).difference(box(0.2, 0.2, 49.8, 29.8))
+    grb = SimpleNamespace(kind='gerber', tools={
+        11: {'type': 'R', 'size': 0.2, 'geometry': [{'solid': band, 'follow': band.representative_point()}]}
+    })
+    warnings = []
+    # a real object composes its copper into this same band
+    with patch('appPlugins.ToolCutOut.fused_solid', return_value=band):
+        contours = outline_contours(grb, False, 'single', warnings)
+    # the hole of the band is the board: it must not be read as a cutout
+    assert all(c.side != 'inner' for c in contours)
+    assert contours == []
+    assert any('without a center line' in w and '11' in w for w in warnings)

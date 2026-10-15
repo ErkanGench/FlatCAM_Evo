@@ -293,12 +293,16 @@ def _gerber_items(obj, warnings):
     """The filled loops of a Gerber object: (Polygon, stroke width) from the center lines and the region records."""
     groups = {}
     dark, clear = [], []
+    has_records = False
+    # apertures with drawn records that have no center line (a rectangle aperture draw, a flash)
+    no_line_apertures = set()
     for aperture, tool in obj.tools.items():
         width = _record_width(tool)
         is_region = aperture == 0 or tool.get('type') == 'REG'
         for rec in tool.get('geometry', []):
             if not rec:
                 continue
+            has_records = True
             if is_region:
                 if rec.get('solid') is not None:
                     dark.extend(flatten_shapely_geometry(rec['solid']))
@@ -306,9 +310,17 @@ def _gerber_items(obj, warnings):
                     clear.extend(flatten_shapely_geometry(rec['clear']))
             else:
                 follow = rec.get('follow')
-                if 'solid' not in rec or not isinstance(follow, (LineString, LinearRing)) or follow.is_empty:
+                if not isinstance(follow, (LineString, LinearRing)) or follow.is_empty:
+                    no_line_apertures.add(aperture)
+                    continue
+                if 'solid' not in rec:
                     continue
                 groups.setdefault(width, []).append(LineString(follow.coords))
+
+    if no_line_apertures and warnings is not None:
+        warnings.append(_("Apertures without a center line were not used as contours: %s. "
+                          "Draw the outline with a round aperture.") %
+                        ", ".join(str(ap) for ap in sorted(no_line_apertures, key=str)))
 
     items = []
     for width, lines in groups.items():
@@ -319,8 +331,9 @@ def _gerber_items(obj, warnings):
     for poly in flatten_shapely_geometry(region):
         if isinstance(poly, Polygon) and not poly.is_empty:
             items.append((poly, 0.0))
-    if not items:
-        # a Gerber without records: the composed copper is all there is
+    if not items and not has_records:
+        # a Gerber without records: the composed copper is all there is. With records the fused solid is not used:
+        # the band of a drawn ring has a hole that is the board itself, and it must never become a cutout.
         for poly in flatten_shapely_geometry(fused_solid(obj)):
             if isinstance(poly, Polygon) and not poly.is_empty:
                 items.append((poly, 0.0))
