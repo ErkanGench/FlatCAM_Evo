@@ -1711,37 +1711,42 @@ class AppGeoEditor(QtCore.QObject):
         """
         # self.app.log.debug(str(inspect.stack()[1][3]) + " --> AppGeoEditor.plot_all()")
 
-        orig_draw_color = self.get_draw_color()
-        draw_color = orig_draw_color[:-2] + "FF"
-        orig_sel_color = self.get_sel_color()
-        sel_color = orig_sel_color[:-2] + 'FF'
+        draw_color = self.color_with_alpha(self.get_draw_color(), 'FF')
+        sel_color = self.color_with_alpha(self.get_sel_color(), 'FF')
 
         geo_drawn = []
         geos_selected = []
 
+        selected = self.get_selected()
         for shape in self.storage.get_objects():
             if shape.geo and not shape.geo.is_empty and shape.geo.is_valid:
-                if shape in self.get_selected():
+                if shape in selected:
                     geos_selected.append(shape.geo)
                 else:
                     geo_drawn.append(shape.geo)
 
-        if geo_drawn:
-            self.shapes.clear(update=True)
+        # always clear, otherwise the last shape deleted or deselected stays on the canvas
+        self.shapes.clear(update=False)
+        self.sel_shapes.clear(update=False)
 
-            for geo in geo_drawn:
-                self.plot_shape(storage=self.shapes, geometry=geo, color=draw_color, linewidth=1)
+        for geo in geo_drawn:
+            self.plot_shape(storage=self.shapes, geometry=geo, color=draw_color, linewidth=1)
 
-            for shape in self.utility:
-                self.plot_shape(storage=self.shapes, geometry=shape.geo, linewidth=1)
+        for shape in self.utility:
+            self.plot_shape(storage=self.shapes, geometry=shape.geo, linewidth=1)
 
-            self.shapes.redraw()
+        for geo in geos_selected:
+            self.plot_shape(storage=self.sel_shapes, geometry=geo, color=sel_color, linewidth=3)
 
-        if geos_selected:
-            self.sel_shapes.clear(update=True)
-            for geo in geos_selected:
-                self.plot_shape(storage=self.sel_shapes, geometry=geo, color=sel_color, linewidth=3)
-            self.sel_shapes.redraw()
+        self.shapes.redraw()
+        self.sel_shapes.redraw()
+
+    @staticmethod
+    def color_with_alpha(color, alpha):
+        """
+        Returns the color as '#RRGGBB' + alpha, whether it came as '#RRGGBB' or '#RRGGBBAA'.
+        """
+        return color[:7] + alpha
 
     def on_shape_complete(self):
         self.app.log.debug("on_shape_complete()")

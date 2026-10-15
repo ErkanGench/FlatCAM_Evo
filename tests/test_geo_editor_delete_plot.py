@@ -42,6 +42,7 @@ def make_editor(shapes, selected=(), utility=()):
         fcgeometry=SimpleNamespace(drawing_tolerance=0.01), build_ui=Mock(), plot_all=Mock())
     editor.get_selected = lambda: editor.selected
     editor.get_draw_color = lambda: AppGeoEditor.get_draw_color(editor)
+    editor.color_with_alpha = AppGeoEditor.color_with_alpha
     editor.get_sel_color = lambda: AppGeoEditor.get_sel_color(editor)
     editor.plot_shape = lambda *a, **k: AppGeoEditor.plot_shape(editor, *a, **k)
     editor.delete_shape = lambda s: AppGeoEditor.delete_shape(editor, s)
@@ -72,6 +73,51 @@ class TestGeoEditorDelete(unittest.TestCase):
         self.assertEqual(list(editor.storage.get_objects()), [a, c])
         self.assertEqual(editor.selected, [a])
         self.assertEqual(editor.utility, [a, c])
+
+
+class TestGeoEditorPlotAll(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def check(self, editor, shapes_adds, sel_adds):
+        AppGeoEditor.plot_all(editor)
+        self.assertEqual(editor.shapes.calls[0], ('clear', False))
+        self.assertEqual(editor.sel_shapes.calls[0], ('clear', False))
+        self.assertEqual(editor.shapes.calls.count(('redraw',)), 1)
+        self.assertEqual(editor.sel_shapes.calls.count(('redraw',)), 1)
+        self.assertEqual(editor.shapes.calls[-1], ('redraw',))
+        self.assertEqual(editor.sel_shapes.calls[-1], ('redraw',))
+        self.assertEqual(len(editor.shapes.items), shapes_adds)
+        self.assertEqual(len(editor.sel_shapes.items), sel_adds)
+
+    def test_all_selected_clears_drawn_collection(self):
+        a, b = line(0), line(1)
+        editor = make_editor([a, b], selected=[a, b])
+        self.check(editor, 0, 2)
+
+    def test_none_selected_clears_selection_collection(self):
+        a, b = line(0), line(1)
+        editor = make_editor([a, b])
+        self.check(editor, 2, 0)
+
+    def test_empty_storage_clears_both(self):
+        editor = make_editor([])
+        self.check(editor, 0, 0)
+
+    def test_utility_only_is_plotted(self):
+        u = DrawToolShape(box(0, 0, 1, 1))
+        editor = make_editor([], utility=[u])
+        self.check(editor, 1, 0)
+
+    def test_colors_with_and_without_alpha(self):
+        for color in ('#112233', '#11223380'):
+            a = line(0)
+            editor = make_editor([a], selected=[a])
+            editor.app.options['global_draw_color'] = color
+            editor.app.options['global_sel_draw_color'] = color
+            AppGeoEditor.plot_all(editor)
+            self.assertEqual(editor.sel_shapes.calls[1], ('add', '#112233FF'))
 
 
 if __name__ == '__main__':
