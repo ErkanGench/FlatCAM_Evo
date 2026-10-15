@@ -174,6 +174,7 @@ class BufferEditorTool(AppToolEditor):
                 target_geo = self.draw_app.storage_dict[apcode]['geometry']
                 buffered_geo = buffer_recursion(target_geo, self.draw_app.selected)
                 self.draw_app.storage_dict[apcode]['geometry'] = deepcopy(buffered_geo)
+                self.draw_app.touch_geometry()
             except Exception as e:
                 self.app.log.error(
                     "AppGerberEditor.BufferEditorTool.buffer() --> %s\n%s" % (str(e)), str(traceback.print_exc()))

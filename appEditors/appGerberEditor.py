@@ -32,7 +32,7 @@ from numpy.linalg import norm as numpy_norm
 import math
 from copy import deepcopy
 
-from shapely import Point, Polygon, MultiPolygon, LineString, LinearRing, box
+from shapely import Point, Polygon, MultiPolygon, LineString, LinearRing, box, STRtree
 from shapely.ops import unary_union
 from shapely.affinity import translate, scale, skew, rotate
 
@@ -43,6 +43,21 @@ import builtins
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
+
+# pick tolerance and click versus drag threshold, in screen pixels
+PICK_TOLERANCE_PX = 5
+CLICK_DRAG_THRESHOLD_PX = 5
+
+
+def aperture_rank(key):
+    """
+    Total order for aperture keys that can be int or str: numeric keys first (by value), the rest by their text.
+    """
+    if isinstance(key, int) and not isinstance(key, bool):
+        return 0, key
+    if isinstance(key, str) and key.isascii() and key.isdigit():
+        return 0, int(key)
+    return 1, str(key)
 
 
 class PadEditorGrb(ShapeToolEditorGrb):
@@ -2142,6 +2157,7 @@ class DiscEditorGrb(ShapeToolEditorGrb):
                 'size': 0.0,
                 'geometry': []
             }
+            self.draw_app.touch_geometry()
             self.storage_obj = self.draw_app.storage_dict[0]['geometry']
 
         self.draw_app.app.inform.emit(_("Click on Center point ..."))
@@ -2272,6 +2288,7 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
                 'size': 0.0,
                 'geometry': []
             }
+            self.draw_app.touch_geometry()
             self.storage_obj = self.draw_app.storage_dict[0]['geometry']
 
         self.steps_per_circ = self.draw_app.app.options.get(
@@ -2603,6 +2620,9 @@ class BufferEditorGrb(ShapeToolEditorGrb):
 
 
 class SimplifyEditorGrb(ShapeToolEditorGrb):
+    # the click picks a shape: it uses the raw (not grid snapped) position
+    uses_raw_pick = True
+
     def __init__(self, draw_app):
         ShapeToolEditorGrb.__init__(self, draw_app)
         self.name = 'simplify'
@@ -2664,7 +2684,7 @@ class SimplifyEditorGrb(ShapeToolEditorGrb):
             self.draw_app.selected = []
 
     def click_release(self, point):
-        self.draw_app.ui.apertures_table.clearSelection()
+        self.draw_app.sync_aperture_rows(())
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
 
         if key_modifier == QtCore.Qt.KeyboardModifier.ShiftModifier:
@@ -2682,15 +2702,13 @@ class SimplifyEditorGrb(ShapeToolEditorGrb):
                 )):
             self.draw_app.selected.clear()
 
-        for storage_val in self.draw_app.storage_dict.values():
-            for shape_stored in storage_val['geometry']:
-                if 'solid' in shape_stored.geo:
-                    geometric_data = shape_stored.geo['solid']
-                    if Point(point).intersects(geometric_data):
-                        if shape_stored in self.draw_app.selected:
-                            self.draw_app.selected.remove(shape_stored)
-                        else:
-                            self.draw_app.selected.append(shape_stored)
+        hit = self.draw_app.pick_at(point)
+        if hit is not None:
+            shape_stored = hit[0]
+            if shape_stored in self.draw_app.selected:
+                self.draw_app.selected.remove(shape_stored)
+            else:
+                self.draw_app.selected.append(shape_stored)
 
         self.draw_app.plot_all()
         self.simp_tool.calculate_coords_vertex()
@@ -2957,6 +2975,7 @@ class MoveEditorGrb(ShapeToolEditorGrb):
 
                     self.geometry.append(DrawToolShape(new_geo_el))
                     self.current_storage.remove(select_shape)
+                    self.draw_app.touch_geometry()
                     sel_shapes_to_be_deleted.append(select_shape)
                     self.draw_app.on_grb_shape_complete(self.current_storage, no_plot=True)
                     self.geometry = []
@@ -3093,42 +3112,22 @@ class EraserEditorGrb(ShapeToolEditorGrb):
     def set_origin(self, origin):
         self.origin = origin
 
+    def wants_raw_pick(self):
+        # the first click picks the eraser shape: raw position; the click that places the eraser is snapped
+        return len(self.draw_app.get_selected()) == 0
+
     def click(self, point):
         if len(self.draw_app.get_selected()) == 0:
-            self.draw_app.ui.apertures_table.clearSelection()
-            sel_aperture = set()
-
-            for storage in self.draw_app.storage_dict:
-                try:
-                    for geo_el in self.draw_app.storage_dict[storage]['geometry']:
-                        if 'solid' in geo_el.geo:
-                            geometric_data = geo_el.geo['solid']
-                            if Point(point).within(geometric_data):
-                                self.draw_app.selected = []
-                                self.draw_app.selected.append(geo_el)
-                                sel_aperture.add(storage)
-                except KeyError:
-                    pass
-
-            # select the aperture in the Apertures Table that is associated with the selected shape
-            try:
-                self.draw_app.ui.apertures_table.cellPressed.disconnect()
-            except Exception as e:
-                log.error("AppGerberEditor.EraserEditorGrb.click_release() --> %s" % str(e))
-
-            self.draw_app.ui.apertures_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
-            for aper in sel_aperture:
-                for row in range(self.draw_app.ui.apertures_table.rowCount()):
-                    if str(aper) == self.draw_app.ui.apertures_table.item(row, 1).text():
-                        self.draw_app.ui.apertures_table.selectRow(row)
-                        self.draw_app.last_aperture_selected = aper
-            self.draw_app.ui.apertures_table.setSelectionMode(
-                QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
-
-            self.draw_app.ui.apertures_table.cellPressed.connect(self.draw_app.on_row_selected)
+            hit = self.draw_app.pick_at(point)
+            if hit is not None:
+                shape, aperture = hit
+                self.draw_app.selected = [shape]
+                self.draw_app.sync_aperture_rows({aperture})
+            else:
+                self.draw_app.sync_aperture_rows(())
 
         if len(self.draw_app.get_selected()) == 0:
-            return "Nothing to ersase."
+            return _("Nothing to erase.")
 
         if self.origin is None:
             self.set_origin(point)
@@ -3151,7 +3150,7 @@ class EraserEditorGrb(ShapeToolEditorGrb):
             eraser_sel_shapes.append(temp_shape)
         eraser_sel_shapes = unary_union(eraser_sel_shapes)
 
-        # all shapes that are `cut` will be stored in the 0 aperture
+        # all shapes that are `cut` will be stored in the 0 aperture, after the loop (so the loop never sees them)
         intersection_geo_list = []
         # if at least one of the apertures have zero geometry left then we delete it, so we need to rebuild UI
         should_build = False
@@ -3160,33 +3159,27 @@ class EraserEditorGrb(ShapeToolEditorGrb):
             to_delete = []
             try:
                 for idx, geo_el in enumerate(self.draw_app.storage_dict[storage]['geometry']):
-                    if 'solid' in geo_el.geo:
-                        new_geo_el = {}
-                        solid_data = geo_el.geo['solid']
-                        if eraser_sel_shapes.within(solid_data) or eraser_sel_shapes.intersects(solid_data):
-                            geos = solid_data.difference(eraser_sel_shapes)
-                            to_delete.append(idx)
-                            geos = geos.buffer(0)
-                            new_geo_el['solid'] = deepcopy(geos)
-                            if 'follow' in geo_el.geo:
-                                follow_data = geo_el.geo['solid']
-                                if eraser_sel_shapes.within(follow_data) or eraser_sel_shapes.intersects(follow_data):
-                                    geos_f = follow_data.difference(eraser_sel_shapes)
-                                    geos_f = geos_f.buffer(0)
-                                    new_geo_el['follow'] = deepcopy(geos_f)
-                        intersection_geo_list.append(DrawToolShape(new_geo_el))
+                    if 'solid' not in geo_el.geo:
+                        continue
+                    solid_data = geo_el.geo['solid']
+                    if not eraser_sel_shapes.intersects(solid_data):
+                        continue
+
+                    # only the shapes touched by the eraser are cut
+                    to_delete.append(idx)
+                    geos = solid_data.difference(eraser_sel_shapes).buffer(0)
+                    if geos.is_empty:
+                        continue
+
+                    new_geo_el = {'solid': deepcopy(geos)}
+                    follow_data = geo_el.geo.get('follow')
+                    if follow_data is not None:
+                        if eraser_sel_shapes.intersects(follow_data):
+                            follow_data = follow_data.difference(eraser_sel_shapes)
+                        new_geo_el['follow'] = deepcopy(follow_data)
+                    intersection_geo_list.append(DrawToolShape(new_geo_el))
             except KeyError:
                 pass
-
-            if intersection_geo_list:
-                if 0 not in self.draw_app.storage_dict.keys():
-                    self.draw_app.storage_dict[0] = {
-                        'type': 'REG',
-                        'size': 0.0,
-                        'geometry': intersection_geo_list
-                    }
-                else:
-                    self.draw_app.storage_dict[0]['geometry'] += intersection_geo_list
 
             if len(to_delete) == len(self.draw_app.storage_dict[storage]['geometry']):
                 self.draw_app.storage_dict.pop(storage, None)
@@ -3195,6 +3188,17 @@ class EraserEditorGrb(ShapeToolEditorGrb):
                 # delete empty geometries
                 for td in to_delete[::-1]:
                     self.draw_app.storage_dict[storage]['geometry'].pop(td)
+
+        if intersection_geo_list:
+            if 0 not in self.draw_app.storage_dict.keys():
+                self.draw_app.storage_dict[0] = {
+                    'type': 'REG',
+                    'size': 0.0,
+                    'geometry': intersection_geo_list
+                }
+            else:
+                self.draw_app.storage_dict[0]['geometry'] += intersection_geo_list
+        self.draw_app.touch_geometry()
 
         if should_build:
             self.draw_app.build_ui()
@@ -3247,7 +3251,8 @@ class EraserEditorGrb(ShapeToolEditorGrb):
 
 
 class SelectEditorGrb(QtCore.QObject, DrawTool):
-    selection_triggered = QtCore.pyqtSignal(object)
+    # the click picks a shape: it uses the raw (not grid snapped) position
+    uses_raw_pick = True
 
     def __init__(self, draw_app):
         super().__init__(draw_app=draw_app)
@@ -3283,18 +3288,9 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
             log.error("FlatCAMGerbEditor.SelectEditorGrb.__init__() --> %s" % str(e))
 
         try:
-            self.selection_triggered.disconnect()
-        except (TypeError, AttributeError):
-            pass
-        self.selection_triggered.connect(self.selection_worker)
-
-        try:
             self.draw_app.plot_object.disconnect()
         except (TypeError, AttributeError):
             pass
-
-        # after the shape is selected make sure that the aperture row in the Aperture Table is selected
-        self.draw_app.plot_object.connect(self.after_selection)
 
         # if the shapes are not visible make them visible
         if self.draw_app.visible is False:
@@ -3337,7 +3333,6 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
             self.draw_app.selected = []
 
     def click_release(self, point):
-        self.draw_app.ui.apertures_table.clearSelection()
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
 
         if key_modifier == QtCore.Qt.KeyboardModifier.ShiftModifier:
@@ -3356,95 +3351,30 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
             self.draw_app.selected.clear()
             self.sel_aperture.clear()
 
-        self.selection_triggered.emit(point)
+        hit = self.draw_app.pick_at(point)
+        if hit is not None:
+            shape_stored = hit[0]
+            if shape_stored in self.draw_app.selected:
+                self.draw_app.selected.remove(shape_stored)
+            else:
+                # add the object to the selected shapes
+                self.draw_app.selected.append(shape_stored)
 
-    def selection_worker(self, point):
-        def job_thread(editor_obj):
-            self.results = []
-            with editor_obj.app.proc_container.new('%s...' % _("Working")):
-
-                def divide_chunks(lst, n):
-                    # looping till length of lst
-                    for i in range(0, len(lst), n):
-                        yield lst[i:i + n]
-
-                # divide in chunks of 77 elements
-                n_chunks = 77
-
-                for ap_key, storage_val in editor_obj.storage_dict.items():
-                    # divide in chunks of 77 elements
-                    geo_list = list(divide_chunks(storage_val['geometry'], n_chunks))
-                    for chunk, list30 in enumerate(geo_list):
-                        self.results.append(
-                            editor_obj.pool.apply_async(
-                                self.check_intersection, args=(ap_key, chunk, list30, point))
-                        )
-
-                output = []
-                for p in self.results:
-                    output.append(p.get())
-
-                for ret_val in output:
-                    if ret_val:
-                        k = ret_val[0]
-                        part = ret_val[1]
-                        idx = ret_val[2] + (part * n_chunks)
-                        shape_stored = editor_obj.storage_dict[k]['geometry'][idx]
-
-                        if shape_stored in editor_obj.selected:
-                            editor_obj.selected.remove(shape_stored)
-                        else:
-                            # add the object to the selected shapes
-                            editor_obj.selected.append(shape_stored)
-
-                self.draw_app.update_ui_sig.emit()
-
-            editor_obj.plot_object.emit(None)
-
-        self.draw_app.app.worker_task.emit({'fcn': job_thread, 'params': [self.draw_app]})
-
-    @staticmethod
-    def check_intersection(ap_key, chunk, geo_storage, point):
-        for idx, shape_stored in enumerate(geo_storage):
-            if 'solid' in shape_stored.geo:
-                geometric_data = shape_stored.geo['solid']
-                if Point(point).intersects(geometric_data):
-                    return ap_key, chunk, idx
+        self.draw_app.update_ui()
+        self.after_selection()
 
     def after_selection(self):
         # ######################################################################################################
         # select the aperture in the Apertures Table that is associated with the selected shape
         # ######################################################################################################
         self.sel_aperture.clear()
-        self.draw_app.ui.apertures_table.clearSelection()
 
         for shape_s in self.draw_app.selected:
             for storage in self.draw_app.storage_dict:
                 if shape_s in self.draw_app.storage_dict[storage]['geometry']:
                     self.sel_aperture.add(storage)
 
-        # disconnect signal when clicking in the table
-        try:
-            self.draw_app.ui.apertures_table.cellPressed.disconnect(self.draw_app.on_row_selected)
-        except Exception as e:
-            log.error("AppGerberEditor.SelectEditorGrb.click_release() --> %s" % str(e))
-        try:
-            self.draw_app.ui.apertures_table.selectionModel().selectionChanged.disconnect(
-                self.draw_app.on_table_selection)
-        except Exception as e:
-            log.error("AppGerberEditor.SelectEditorGrb.click_release() selectionChanged.disconnect() --> %s" % str(e))
-        # actual row selection is done here
-        # self.draw_app.ui.apertures_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
-        for aper in self.sel_aperture:
-            for row in range(self.draw_app.ui.apertures_table.rowCount()):
-                if str(aper) == self.draw_app.ui.apertures_table.item(row, 1).text():
-                    if row not in set(idx.row() for idx in self.draw_app.ui.apertures_table.selectedIndexes()):
-                        self.draw_app.ui.apertures_table.selectRow(row)
-                        self.draw_app.last_aperture_selected = aper
-        # self.draw_app.ui.apertures_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
-        # reconnect signal when clicking in the table
-        self.draw_app.ui.apertures_table.cellPressed.connect(self.draw_app.on_row_selected)
-        self.draw_app.ui.apertures_table.selectionModel().selectionChanged.connect(self.draw_app.on_table_selection)
+        self.draw_app.sync_aperture_rows(self.sel_aperture)
 
         # and plot all
         self.draw_app.plot_all()
@@ -3951,6 +3881,7 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
                 st_dict[new_apid]['geometry'] = ap_dict['geometry']
                 new_apid += 1
 
+        self.draw_app.touch_geometry()
         self.draw_app.plot_object.emit(None)
         self.draw_app.build_ui_sig.emit()
         self.app.inform.emit('[success] %s' % _("Done."))
@@ -4013,6 +3944,12 @@ class AppGerberEditor(QtCore.QObject):
 
         self.storage_dict = {}
         self.current_storage = []
+
+        # the pick index: the revision counts the changes of the shapes, see touch_geometry()
+        self.geometry_revision = 0
+        self._pick_cache = None
+        # the raw (not snapped) position of the last mouse press, in plot units
+        self.press_pos_raw = None
 
         self.sorted_apcode = []
 
@@ -4632,6 +4569,7 @@ class AppGerberEditor(QtCore.QObject):
         # since we add a new tool, we update also the initial state of the plugin_table through its dictionary
         # we add a new entry in the tid2apcode dict
         self.tid2apcode[len(self.oldapcode_newapcode)] = int(ap_code)
+        self.touch_geometry()
 
         self.app.inform.emit('[success] %s: %s' % (_("Added new aperture with code"), str(ap_code)))
 
@@ -4683,6 +4621,7 @@ class AppGerberEditor(QtCore.QObject):
             for deleted_aperture in deleted_apcode_list:
                 # delete the storage used for that tool
                 self.storage_dict.pop(deleted_aperture, None)
+                self.touch_geometry()
 
                 for deleted_tool in list(self.tid2apcode.keys()):
                     if self.tid2apcode[deleted_tool] == deleted_aperture:
@@ -4787,6 +4726,7 @@ class AppGerberEditor(QtCore.QObject):
 
                 old_aperture_val = self.storage_dict.pop(ap_code_old)
                 self.storage_dict[val_edited] = old_aperture_val
+                self.touch_geometry()
 
             else:
                 # aperture code is already in use so, we move the pads from the prior tool to the new tool
@@ -4808,6 +4748,7 @@ class AppGerberEditor(QtCore.QObject):
                         geometry.append(new_geo_el)
 
                     self.add_gerber_shape(geometry, self.storage_dict[val_edited])
+                    self.touch_geometry()
 
                     self.on_aperture_delete(ap_code=ap_code_old)
 
@@ -4835,6 +4776,7 @@ class AppGerberEditor(QtCore.QObject):
 
             self.storage_dict[ap_code_old]['geometry'].clear()
             self.add_gerber_shape(geometry, self.storage_dict[ap_code_old]['geometry'])
+            self.touch_geometry()
             # self.storage_dict[ap_code_old]['geometry'] = geometry
 
         # In case we edited the Dims of the Aperture therefore the val_edited holds a list with the dimensions
@@ -4885,6 +4827,7 @@ class AppGerberEditor(QtCore.QObject):
 
                 self.storage_dict[ap_code_old]['geometry'].clear()
                 self.add_gerber_shape(geometry, self.storage_dict[ap_code_old]['geometry'])
+                self.touch_geometry()
 
         self.plot_all()
 
@@ -5036,6 +4979,7 @@ class AppGerberEditor(QtCore.QObject):
 
         # init working objects
         self.storage_dict = {}
+        self.touch_geometry()
         self.current_storage = []
         self.sorted_apcode = []
         self.new_apertures = {}
@@ -5295,6 +5239,8 @@ class AppGerberEditor(QtCore.QObject):
         self.active_tool = None
         self.selected = []
         self.storage_dict.clear()
+        self.touch_geometry()
+        self._pick_cache = None
         self.results.clear()
 
         self.shapes.clear(update=True)
@@ -5476,6 +5422,7 @@ class AppGerberEditor(QtCore.QObject):
 
                     for elem in output:
                         app_obj.storage_dict[elem[0]] = deepcopy(elem[1])
+                    app_obj.touch_geometry()
                     app_obj.mp_finished.emit(output)
                     # #################################################################################################
 
@@ -5543,6 +5490,7 @@ class AppGerberEditor(QtCore.QObject):
         return [aperture_id, storage_dict]
 
     def on_multiprocessing_finished(self):
+        self.touch_geometry()
         self.app.proc_container.update_view_text(' %s' % _("Setting up the UI"))
         self.app.inform.emit('[success] %s.' % _("Adding geometry finished. Preparing the GUI"))
         self.set_editor_ui()
@@ -5897,6 +5845,124 @@ class AppGerberEditor(QtCore.QObject):
             # Re-plot and reset tool.
             self.plot_all()
 
+    def touch_geometry(self):
+        """
+        Every code that adds, removes, replaces or changes a shape of the storage calls this, so the pick index is
+        rebuilt on the next pick.
+        """
+        self.geometry_revision += 1
+
+    def get_pick_index(self):
+        """
+        :return: (tree, refs): tree is a STRtree on the solids (None if there is none), refs is a list of
+                 (aperture_key, element_index, shape) in the same order.
+        """
+        count = 0
+        for storage_val in self.storage_dict.values():
+            count += len(storage_val.get('geometry', ()))
+
+        cache = self._pick_cache
+        if cache is not None and cache[0] == self.geometry_revision and cache[1] == count:
+            return cache[2], cache[3]
+
+        refs = []
+        solids = []
+        for ap_key in sorted(self.storage_dict, key=aperture_rank):
+            for idx, shape in enumerate(self.storage_dict[ap_key].get('geometry', ())):
+                geo = getattr(shape, 'geo', None)
+                if not isinstance(geo, dict):
+                    continue
+                solid = geo.get('solid')
+                if solid is None or solid.is_empty:
+                    continue
+                refs.append((ap_key, idx, shape))
+                solids.append(solid)
+
+        tree = STRtree(solids) if solids else None
+        self._pick_cache = (self.geometry_revision, count, tree, refs)
+        return tree, refs
+
+    def pick_at(self, point):
+        """
+        Pick the shape under (or near) a point.
+
+        The tolerance is PICK_TOLERANCE_PX screen pixels. Among the candidates the order is: distance to the solid,
+        distance to the 'follow' line (a missing one sorts last), area of the solid, aperture order, element index.
+
+        :param point:   (x, y) in plot units
+        :return:        (shape, aperture_key) or None
+        """
+        tree, refs = self.get_pick_index()
+        if tree is None:
+            return None
+
+        tol = PICK_TOLERANCE_PX * self.canvas.pixel_size()
+        pt = Point(point[0], point[1])
+        found, dists = tree.query_nearest(pt, max_distance=tol, return_distance=True, all_matches=True)
+
+        best_key = None
+        best = None
+        for pos, dist in zip(found, dists):
+            ap_key, idx, shape = refs[int(pos)]
+            follow = shape.geo.get('follow')
+            if follow is None or follow.is_empty:
+                follow_dist = float('inf')
+            else:
+                follow_dist = pt.distance(follow)
+            key = (round(float(dist), 9), follow_dist, shape.geo['solid'].area, aperture_rank(ap_key), idx, int(pos))
+            if best_key is None or key < best_key:
+                best_key = key
+                best = (shape, ap_key)
+        return best
+
+    def sync_aperture_rows(self, apertures):
+        """
+        Select in the Apertures Table the rows of the given apertures, without firing the table handlers.
+        """
+        table = self.ui.apertures_table
+        apertures = list(apertures)
+        wanted = {str(ap) for ap in apertures}
+        by_text = {str(ap): ap for ap in apertures}
+
+        with QtCore.QSignalBlocker(table), QtCore.QSignalBlocker(table.selectionModel()):
+            table.clearSelection()
+            if wanted:
+                old_mode = table.selectionMode()
+                table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
+                for row in range(table.rowCount()):
+                    item = table.item(row, 1)
+                    if item is not None and item.text() in wanted:
+                        table.selectRow(row)
+                        self.last_aperture_selected = by_text[item.text()]
+                table.setSelectionMode(old_mode)
+
+    def _tool_wants_raw_pick(self):
+        """
+        True when the active tool uses the click to pick a shape: that click is never grid snapped.
+        """
+        tool = self.active_tool
+        if tool is None:
+            return False
+        wants = getattr(tool, 'wants_raw_pick', None)
+        if callable(wants):
+            return bool(wants())
+        return bool(getattr(tool, 'uses_raw_pick', False))
+
+    def _pixel_distance_from_press(self, pos):
+        """
+        :return: the distance in screen pixels between the last mouse press and pos, None if it is not known
+        """
+        if self.press_pos_raw is None:
+            return None
+        pixel_size = self.canvas.pixel_size()
+        if not pixel_size or pixel_size <= 0:
+            return None
+        return math.hypot(pos[0] - self.press_pos_raw[0], pos[1] - self.press_pos_raw[1]) / pixel_size
+
+    def _is_click_not_drag(self, pos):
+        dist = self._pixel_distance_from_press(pos)
+        return dist is not None and dist < CLICK_DRAG_THRESHOLD_PX
+
     def add_gerber_shape(self, shape_element, storage):
         """
         Adds a shape to the shape storage.
@@ -5927,6 +5993,7 @@ class AppGerberEditor(QtCore.QObject):
             self.utility.append(shape_element)
         else:
             storage.append(shape_element)
+            self.touch_geometry()
 
     def on_canvas_click(self, event):
         """
@@ -5938,11 +6005,15 @@ class AppGerberEditor(QtCore.QObject):
         """
         event_pos = event.pos if self.app.use_3d_engine else (event.xdata, event.ydata)
         self.pos = self.canvas.translate_coords(event_pos)
+        self.press_pos_raw = (self.pos[0], self.pos[1])
+        raw_pick = self._tool_wants_raw_pick()
 
         if self.app.grid_status():
-            self.pos = self.app.geo_editor.snap(self.pos[0], self.pos[1])
+            snapped_pos = self.app.geo_editor.snap(self.pos[0], self.pos[1])
         else:
-            self.pos = (self.pos[0], self.pos[1])
+            snapped_pos = (self.pos[0], self.pos[1])
+        # a click that picks a shape uses the raw position, all the others the snapped one
+        self.pos = self.press_pos_raw if raw_pick else snapped_pos
 
         if event.button == 1:
             self.app.ui.rel_position_label.setText("<b>Dx</b>: %.4f&nbsp;&nbsp;  <b>Dy</b>: "
@@ -5962,13 +6033,16 @@ class AppGerberEditor(QtCore.QObject):
                                 self.app.defaults.factory_defaults.get("global_point_clipboard_format")
                             )
                         ) %
-                        (self.decimals, self.pos[0], self.decimals, self.pos[1])
+                        (self.decimals, snapped_pos[0], self.decimals, snapped_pos[1])
                     )
                     self.app.inform.emit('[success] %s' % _("Copied to clipboard."))
                     return
 
                 # Dispatch event to active_tool
-                self.active_tool.click(self.app.geo_editor.snap(self.pos[0], self.pos[1]))
+                if raw_pick:
+                    self.active_tool.click(self.pos)
+                else:
+                    self.active_tool.click(self.app.geo_editor.snap(self.pos[0], self.pos[1]))
 
                 # If it is a shape generating tool
                 if isinstance(self.active_tool, ShapeToolEditorGrb) and self.active_tool.complete:
@@ -6016,10 +6090,11 @@ class AppGerberEditor(QtCore.QObject):
             right_button = 3
 
         pos_canvas = self.canvas.translate_coords(event_pos)
-        if self.app.grid_status():
+        raw_pos = (pos_canvas[0], pos_canvas[1])
+        if self.app.grid_status() and not self._tool_wants_raw_pick():
             pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
         else:
-            pos = (pos_canvas[0], pos_canvas[1])
+            pos = raw_pos
 
         # if the released mouse button was RMB then test if it was a panning motion or not, if not it was a context
         # canvas menu
@@ -6090,6 +6165,11 @@ class AppGerberEditor(QtCore.QObject):
         # selection and then select a type of selection ("enclosing" or "touching")
         try:
             if event.button == 1:  # left click
+                # a small move between the press and the release is a click, not a drag
+                if self.app.selection_type is not None and self._is_click_not_drag(raw_pos):
+                    self.app.selection_type = None
+                    self.app.delete_selection_shape()
+
                 if self.app.selection_type is not None:
                     self.draw_selection_area_handler(self.pos, pos, self.app.selection_type)
                     self.app.selection_type = None
@@ -6240,10 +6320,13 @@ class AppGerberEditor(QtCore.QObject):
 
         # # ## Snap coordinates
         if self.app.grid_status():
-            x, y = self.app.geo_editor.snap(x, y)
+            snap_x, snap_y = self.app.geo_editor.snap(x, y)
+            # the rubber band of a pick tool uses the same raw position as the release
+            if not self._tool_wants_raw_pick():
+                x, y = snap_x, snap_y
 
             # Update cursor
-            self.app.app_cursor.set_data(np.asarray([(x, y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
+            self.app.app_cursor.set_data(np.asarray([(snap_x, snap_y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
                                          edge_width=self.app.options.get(
                                              "global_cursor_width",
                                              self.app.defaults.get(
@@ -6300,6 +6383,9 @@ class AppGerberEditor(QtCore.QObject):
             # regions can create strange issues like missing a point in a track/region
             if isinstance(self.active_tool, RegionEditorGrb) or isinstance(self.active_tool, TrackEditorGrb):
                 self.app.selection_type = None
+            elif self._is_click_not_drag((pos_canvas[0], pos_canvas[1])):
+                self.app.selection_type = None
+                self.app.delete_selection_shape()
             else:
                 dx = pos_canvas[0] - self.pos[0]
                 self.app.delete_selection_shape()
@@ -6608,6 +6694,7 @@ class AppGerberEditor(QtCore.QObject):
                     self.storage_dict[storage]['geometry'].remove(geo_el)
             except KeyError:
                 pass
+        self.touch_geometry()
         if geo_el in self.selected:
             self.selected.remove(geo_el)
 
@@ -6734,6 +6821,7 @@ class AppGerberEditor(QtCore.QObject):
                 temp_storage = deepcopy(scale_recursion(self.storage_dict[apcode]['geometry'], self.selected))
                 self.storage_dict[apcode]['geometry'] = []
                 self.storage_dict[apcode]['geometry'] = temp_storage
+                self.touch_geometry()
 
             except Exception as e:
                 self.app.log.error("AppGerberEditor.on_scale() --> %s" % str(e))
@@ -8010,6 +8098,7 @@ class TransformEditorTool(AppTool):
                         sel_el['follow'] = rotate(sel_el['follow'], angle=-val, origin=(px, py))
                     if 'clear' in sel_el:
                         sel_el['clear'] = rotate(sel_el['clear'], angle=-val, origin=(px, py))
+                self.draw_app.touch_geometry()
                 self.draw_app.plot_all()
 
                 self.app.inform.emit('[success] %s' % _("Done."))
@@ -8054,6 +8143,7 @@ class TransformEditorTool(AppTool):
                         if 'clear' in sel_el:
                             sel_el['clear'] = scale(sel_el['clear'], xfact=-1, yfact=1, origin=(px, py))
                         self.app.inform.emit('[success] %s...' % _('Flip on X axis done'))
+                self.draw_app.touch_geometry()
                 self.draw_app.plot_all()
             except Exception as e:
                 self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(e)))
@@ -8089,6 +8179,7 @@ class TransformEditorTool(AppTool):
                     if 'clear' in sel_el:
                         sel_el['clear'] = skew(sel_el['clear'], xval, yval, origin=(px, py))
 
+                self.draw_app.touch_geometry()
                 self.draw_app.plot_all()
 
                 if str(axis) == 'X':
@@ -8127,6 +8218,7 @@ class TransformEditorTool(AppTool):
                             sel_el['follow'] = scale(sel_el['follow'], xfactor, yfactor, origin=(px, py))
                         if 'clear' in sel_el:
                             sel_el['clear'] = scale(sel_el['clear'], xfactor, yfactor, origin=(px, py))
+                    self.draw_app.touch_geometry()
                     self.draw_app.plot_all()
 
                     if str(axis) == 'X':
@@ -8171,7 +8263,8 @@ class TransformEditorTool(AppTool):
                             sel_el['follow'] = translate(sel_el['follow'], 0, num)
                         if 'clear' in sel_el:
                             sel_el['clear'] = translate(sel_el['clear'], 0, num)
-                    self.draw_app.plot_all()
+                self.draw_app.touch_geometry()
+                self.draw_app.plot_all()
 
                 if str(axis) == 'X':
                     self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
@@ -8225,7 +8318,8 @@ class TransformEditorTool(AppTool):
                                 ),
                                 join_style=join)
 
-                    self.draw_app.plot_all()
+                self.draw_app.touch_geometry()
+                self.draw_app.plot_all()
 
                 self.app.inform.emit('[success] %s...' % _('Buffer done'))
 
