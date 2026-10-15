@@ -296,6 +296,38 @@ class TestParseGrbl(unittest.TestCase):
             parse_grbl_work_offset(text, active_wcs='G55')
         self.assertIn('G55', str(ctx.exception))
 
+    def test_work_offset_malformed_records_raise_value_error(self):
+        for key in ('G54', 'G55', 'G92', 'TLO'):
+            payloads = ('', ' ', '0,', '0,,0', '0,0,0,0', 'bad', 'nan', 'inf', '-inf', '1e309')
+            if key != 'TLO':
+                payloads += ('0', '0,0', '0,0,0,', '0,0,nan', '0,inf,0', '1e309,0,0')
+            else:
+                payloads += ('0,0', '0,nan')
+            for payload in payloads:
+                with self.subTest(key=key, payload=payload):
+                    prefix = '' if key == 'G54' else '[G54:0,0,0]\n'
+                    with self.assertRaises(ValueError):
+                        parse_grbl_work_offset(prefix + '[%s:%s]\nok\n' % (key, payload))
+            for record in ('[%s:0,0,0', '[%s:]', '[%s]', '[%s:0]junk'):
+                with self.subTest(key=key, record=record):
+                    with self.assertRaises(ValueError):
+                        parse_grbl_work_offset('[G54:0,0,0]\n' + record % key)
+
+    def test_work_offset_duplicate_records_raise_value_error(self):
+        for record in ('[G54:0,0,0]', '[G92:0,0,0]', '[TLO:0]'):
+            with self.subTest(record=record):
+                with self.assertRaises(ValueError):
+                    prefix = '[G54:0,0,0]\n' if 'G54' not in record else ''
+                    parse_grbl_work_offset(prefix + record + '\n' + record)
+
+    def test_work_offset_sum_must_remain_finite(self):
+        with self.assertRaises(ValueError):
+            parse_grbl_work_offset('[G54:1e308,0,0]\n[G92:1e308,0,0]')
+
+    def test_work_offset_valid_numeric_formats_and_whitespace(self):
+        text = ' [G54: -1e2, +2.0, .5] \r\n[G92:0,0,0]\n[TLO:-.25]\n[PRB:0,0,0:0]\nok\n'
+        self.assertEqual(parse_grbl_work_offset(text), (-100.0, 2.0, 0.25))
+
 
 class TestMatchNearestPoint(unittest.TestCase):
     def setUp(self):

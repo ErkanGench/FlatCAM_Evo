@@ -397,6 +397,9 @@ class ToolLevelling(CNCjob, AppTool):
         self.ui.al_mode_radio.activated_custom.connect(self.on_mode_radio)
         self.ui.al_method_radio.activated_custom.connect(self.on_method_radio)
         self.ui.al_controller_combo.currentIndexChanged.connect(self.on_controller_change)
+        self.ui.precision_probe_cb.toggled.connect(self.on_precision_probe_changed)
+        self.ui.precision_feed_entry.valueChanged.connect(self.on_precision_probe_changed)
+        self.ui.precision_retract_entry.valueChanged.connect(self.on_precision_probe_changed)
         self.ui.plot_probing_pts_cb.toggled.connect(self.show_probing_geo)
         # GRBL
         self.ui.com_search_button.clicked.connect(self.on_grbl_search_ports)
@@ -448,12 +451,22 @@ class ToolLevelling(CNCjob, AppTool):
         # alone does not make a valid map: keep the flag that a probe or an import set
         self.al_heights_valid = bool(getattr(self, 'al_heights_valid', False)) and \
             self._height_map_is_complete()
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-
         self.clear_ui(self.layout)
         self.ui = LevelUI(layout=self.layout, app=self.app)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
+
+        mode_blocked = self.ui.al_mode_radio.blockSignals(True)
+        method_blocked = self.ui.al_method_radio.blockSignals(True)
+        try:
+            self._populate_tool_ui()
+        finally:
+            self.ui.al_method_radio.blockSignals(method_blocked)
+            self.ui.al_mode_radio.blockSignals(mode_blocked)
+
+    def _populate_tool_ui(self):
+        # Both radio groups stay blocked, including the initial to_form().
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         # try to select in the CNCJob combobox the active object
         try:
@@ -466,7 +479,7 @@ class ToolLevelling(CNCjob, AppTool):
 
         loaded_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
         # kept probe data belongs to its owner object; drop it if the tool opens on another object
-        if self.al_voronoi_geo_storage and getattr(self, '_al_target_name', None) is not None and (
+        if getattr(self, '_al_target_name', None) is not None and (
                 self.ui.object_combo.get_value() != self._al_target_name or
                 loaded_obj is not getattr(self, '_al_target_obj', None)):
             self._clear_probe_data()
@@ -551,15 +564,9 @@ class ToolLevelling(CNCjob, AppTool):
 
         if self._is_supported_al_target(loaded_obj):
             self.ui.al_frame.setDisabled(False)
-            # block signals so set_value() cannot trigger the signal-connected
-            # on_mode_radio() handler, which would clear a retained height map
-            self.ui.al_mode_radio.blockSignals(True)
-            self.ui.al_mode_radio.set_value(loaded_obj.obj_options.get('tools_al_mode', 'grid'))
-            self.ui.al_mode_radio.blockSignals(False)
+            self._restore_al_radios(loaded_obj)
+            self._restore_al_precision(loaded_obj)
             self.on_controller_change()
-
-            self._update_mode_radio_ui(val=loaded_obj.obj_options.get('tools_al_mode', 'grid'))
-            self.on_method_radio(val=loaded_obj.obj_options.get('tools_al_method', 'v'))
         else:
             self.ui.al_frame.setDisabled(True)
 
@@ -626,14 +633,8 @@ class ToolLevelling(CNCjob, AppTool):
             # Shapes container for the Voronoi cells in Autolevelling
             self._new_probing_shapes(obj_name)
 
-            mode = target_obj.obj_options.get('tools_al_mode', 'grid')
-            method = target_obj.obj_options.get('tools_al_method', 'v')
-            # block signals so set_value() cannot trigger on_mode_radio()
-            self.ui.al_mode_radio.blockSignals(True)
-            self.ui.al_mode_radio.set_value(mode)
-            self.ui.al_mode_radio.blockSignals(False)
-            self._update_mode_radio_ui(val=mode)
-            self.on_method_radio(val=method)
+            self._restore_al_radios(target_obj)
+            self._restore_al_precision(target_obj)
 
             # the new container is empty: draw the kept points again
             if self.al_voronoi_geo_storage:
@@ -1665,7 +1666,7 @@ class ToolLevelling(CNCjob, AppTool):
 
         return True
 
-    def autolevell_gcode(self, target_obj, al_method, snapshot=None):
+    def autolevell_gcode(self, target_obj, al_method, snapshot=None, diagnostics=None):
         """
         Apply the probed height map (self.al_voronoi_geo_storage) to each
         of a CNCJob object's per-tool G-code texts
@@ -1685,6 +1686,8 @@ class ToolLevelling(CNCjob, AppTool):
                              height-compensated. Not modified.
         :param al_method:   'v' (Voronoi/nearest-point) or 'b' (bilinear).
         :param snapshot:    optional validated (points, units, grid tolerance).
+        :param diagnostics: optional list receiving the coverage warning for later
+                             GUI-thread publication; otherwise emit it directly.
         :return:             {tooluid: levelled G-code text} for every tool
                               in target_obj.tools, or None on error.
         :rtype:              dict | None
@@ -1702,6 +1705,23 @@ class ToolLevelling(CNCjob, AppTool):
         state = new_levelling_state(arc_segment=self._al_arc_segment(target_obj),
                                     units=getattr(target_obj, 'units', None),
                                     map_bounds=map_bounds)
+        state['outside'] = 0
+        if map_points:
+            tol = snapshot[2] if snapshot is not None else self._al_grid_tolerance()
+            if al_method == 'b' and self._al_grid is not None:
+                xs, ys, _grid = self._al_grid
+                footprint = box(xs[0], ys[0], xs[-1], ys[-1])
+            else:
+                # A degenerate hull is a measured line or point, not a filled rectangle.
+                footprint = MultiPoint([(p[0], p[1]) for p in map_points]).convex_hull
+            offset_fn = self._al_offset_fn
+
+            def coverage_offset(x, y):
+                if footprint.distance(Point(x, y)) > tol:
+                    state['outside'] += 1
+                return offset_fn(x, y)
+
+            state['coverage_offset'] = coverage_offset
         result = {}
         for tooluid in target_obj.tools.keys():
             tool_gcode = target_obj.tools[tooluid].get('gcode') or ''
@@ -1761,6 +1781,16 @@ class ToolLevelling(CNCjob, AppTool):
 
         if state['arcs_split'] > 0:
             self.app.inform.emit("%s: %d" % (_("Arc moves split into line moves"), state['arcs_split']))
+
+        if state['outside'] > 0:
+            warning = '[WARNING_NOTCL] %s: %d. %s' % (
+                _("Compensation samples outside the measured height map"), state['outside'],
+                _("Extend and reprobe the height map over the cutting path. "
+                  "Existing height compensation was retained."))
+            if diagnostics is None:
+                self.app.inform.emit(warning)
+            else:
+                diagnostics.append(warning)
 
         return result
 
@@ -1831,7 +1861,7 @@ class ToolLevelling(CNCjob, AppTool):
         GUI-thread slot of al_result_ready_sig. Publishes a probing or import
         result only if its context is still current, and only as a whole.
 
-        :param result: dict with 'kind' ('probe', 'import', 'import_points' or
+        :param result: dict with 'kind' ('coverage', 'probe', 'import', 'import_points' or
             'failed'), 'context' (an _AlContext), and 'heights' ({key: z}) or
             'points' ([(x, y, z), ...]).
         """
@@ -1848,6 +1878,13 @@ class ToolLevelling(CNCjob, AppTool):
                 return
 
             kind = result['kind']
+            if kind == 'coverage':
+                ctx = result['context']
+                if (ctx.target_obj.obj_options['name'] == ctx.target_name and
+                        str(ctx.target_obj.units).upper() == ctx.units):
+                    for warning in result['warnings']:
+                        self.app.inform.emit(warning)
+                return
             storage = self.al_voronoi_geo_storage
             if kind == 'failed':
                 self.al_heights_valid = False
@@ -1880,12 +1917,74 @@ class ToolLevelling(CNCjob, AppTool):
         self.ui.al_probe_points_table.show() if state else self.ui.al_probe_points_table.hide()
 
     def on_mode_radio(self, val):
+        if val not in ('grid', 'manual'):
+            return
         self._clear_probe_data()
 
         # build AL table
         self.build_al_table()
 
         self._update_mode_radio_ui(val)
+        method = self.ui.al_method_radio.get_value()
+        self._update_method_radio_ui(method)
+        target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
+        if self._is_supported_al_target(target_obj) and getattr(target_obj, 'kind', None) == 'cncjob':
+            target_obj.obj_options['tools_al_mode'] = val
+            if method in ('v', 'b'):
+                target_obj.obj_options['tools_al_method'] = method
+
+    def _restore_al_radios(self, target_obj):
+        mode = target_obj.obj_options.get('tools_al_mode', 'grid')
+        method = target_obj.obj_options.get('tools_al_method', 'v')
+        mode = mode if mode in ('grid', 'manual') else 'grid'
+        method = method if method in ('v', 'b') and mode != 'manual' else 'v'
+        mode_blocked = self.ui.al_mode_radio.blockSignals(True)
+        method_blocked = self.ui.al_method_radio.blockSignals(True)
+        try:
+            self.ui.al_mode_radio.set_value(mode)
+            self.ui.al_method_radio.set_value(method)
+            self._update_mode_radio_ui(val=mode)
+            self._update_method_radio_ui(val=method)
+        finally:
+            self.ui.al_method_radio.blockSignals(method_blocked)
+            self.ui.al_mode_radio.blockSignals(mode_blocked)
+
+    def _restore_al_precision(self, target_obj):
+        # Store the calibration's units with the job, not in mutable global options.
+        # Legacy jobs start with precision disabled and physical defaults in mm.
+        options = target_obj.obj_options
+        units = self.app.app_units.upper()
+        saved_units = options.get('tools_al_precision_units', 'MM')
+        scale = 1.0 if saved_units == units else (25.4 if units == 'MM' else 1.0 / 25.4)
+        fields = (
+            (self.ui.precision_probe_cb, options.get('tools_al_precision_probe', False) is True),
+            (self.ui.precision_feed_entry, options.get('tools_al_precision_feed', 10.0) * scale),
+            (self.ui.precision_retract_entry, options.get('tools_al_precision_retract', 0.5) * scale),
+        )
+        blocked = [(widget, widget.blockSignals(True)) for widget, value in fields]
+        try:
+            for widget, value in fields:
+                widget.set_value(value)
+        finally:
+            for widget, previous in blocked:
+                widget.blockSignals(previous)
+        self._update_precision_probe_ui()
+
+    def _update_precision_probe_ui(self):
+        enabled = self.ui.precision_probe_cb.get_value() is True
+        self.ui.precision_feed_entry.setEnabled(enabled)
+        self.ui.precision_retract_entry.setEnabled(enabled)
+
+    def on_precision_probe_changed(self, *args):
+        self._update_precision_probe_ui()
+        target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
+        if self._is_supported_al_target(target_obj) and getattr(target_obj, 'kind', None) == 'cncjob':
+            target_obj.obj_options.update({
+                'tools_al_precision_probe': self.ui.precision_probe_cb.get_value() is True,
+                'tools_al_precision_feed': self.ui.precision_feed_entry.get_value(),
+                'tools_al_precision_retract': self.ui.precision_retract_entry.get_value(),
+                'tools_al_precision_units': self.app.app_units.upper(),
+            })
 
     def _update_mode_radio_ui(self, val):
         # enable/disable the widgets relevant to the selected AL mode, without
@@ -1894,10 +1993,12 @@ class ToolLevelling(CNCjob, AppTool):
         # radio through the UI (see on_mode_radio(), the signal-connected
         # handler); set_tool_ui() calls this helper directly so that a
         # retained (probed/imported) height map survives re-opening the tool.
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-
         if val == "manual":
-            self.ui.al_method_radio.set_value('v')
+            method_blocked = self.ui.al_method_radio.blockSignals(True)
+            try:
+                self.ui.al_method_radio.set_value('v')
+            finally:
+                self.ui.al_method_radio.blockSignals(method_blocked)
             self.ui.al_rows_entry.setDisabled(True)
             self.ui.al_rows_label.setDisabled(True)
             self.ui.al_columns_entry.setDisabled(True)
@@ -1912,11 +2013,6 @@ class ToolLevelling(CNCjob, AppTool):
             self.ui.al_columns_label.setDisabled(False)
             self.ui.al_method_lbl.setDisabled(False)
             self.ui.al_method_radio.setDisabled(False)
-            self.ui.al_method_radio.set_value(
-                self.app.options.get(
-                    'tools_al_method',
-                    app_defaults.get('tools_al_method', AppDefaults.factory_defaults.get('tools_al_method')))
-            )
             # self.ui.avoid_exc_holes_cb.setDisabled(True)
 
     def on_avoid_exc_holes(self, state):
@@ -1924,6 +2020,17 @@ class ToolLevelling(CNCjob, AppTool):
         self.ui.avoid_exc_holes_size_entry.show() if state else self.ui.avoid_exc_holes_size_entry.hide()
 
     def on_method_radio(self, val):
+        if val not in ('v', 'b'):
+            return
+        if self.ui.al_mode_radio.get_value() == 'manual':
+            val = 'v'
+            self._update_mode_radio_ui('manual')
+        self._update_method_radio_ui(val)
+        target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
+        if self._is_supported_al_target(target_obj) and getattr(target_obj, 'kind', None) == 'cncjob':
+            target_obj.obj_options['tools_al_method'] = val
+
+    def _update_method_radio_ui(self, val):
         if val == 'b':
             self.ui.al_columns_entry.setMinimum(2)
             self.ui.al_rows_entry.setMinimum(2)
@@ -3170,6 +3277,9 @@ class ToolLevelling(CNCjob, AppTool):
         if inputs is None:
             return
         travel_z, depth, probe_fr = inputs
+        precision = self._al_read_precision_inputs(travel_z, depth, probe_fr)
+        if precision is None:
+            return
         if not self.al_voronoi_geo_storage:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no probe points. Add probe points first."))
             return
@@ -3178,6 +3288,7 @@ class ToolLevelling(CNCjob, AppTool):
         op = self._grbl_reserve('probe', motion=True)
         if op is None:
             return
+        op.precision_inputs = precision
 
         context = self._al_capture_context(replacement=True)
         if context is None:
@@ -3203,6 +3314,30 @@ class ToolLevelling(CNCjob, AppTool):
         self.app.inform.emit('%s' % _("Sending probing GCode to the GRBL controller."))
         self.app.worker_task.emit({'fcn': worker_task, 'params': []})
 
+    def _al_read_precision_inputs(self, travel_z, depth, probe_fr):
+        """Capture optional fine probing parameters before reserving or moving GRBL."""
+        if self.ui.precision_probe_cb.get_value() is not True:
+            return ()
+        try:
+            feed = float(self.ui.precision_feed_entry.get_value())
+            retract = float(self.ui.precision_retract_entry.get_value())
+            valid = all(math.isfinite(v) for v in (feed, retract)) and \
+                0.0001 <= feed <= min(probe_fr, 910000.0) and \
+                0.0001 <= retract <= travel_z - depth
+            # The wire protocol uses four decimal places; never round a limit
+            # deeper, a retract above clearance, or a positive feed to zero.
+            valid = valid and round(feed, 4) <= probe_fr and round(depth, 4) >= depth and \
+                round(travel_z, 4) <= travel_z and round(probe_fr, 4) > 0
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                "Precision probing needs a positive fine feed no faster than the coarse feed, "
+                "and a positive retract within the depth-to-clearance range. "
+                "Use probing limits representable to four decimal places."))
+            return None
+        return round(feed, 4), round(retract, 4)
+
     def _grbl_probe_run(self, op, context, points, tol, travel_z, depth, probe_fr, units_cmd, probe_timeout):
         """
         Probe every point. Runs in a worker thread and reads no widgets.
@@ -3215,12 +3350,30 @@ class ToolLevelling(CNCjob, AppTool):
         modes_ok = False
         staged = {}
         evidence = {'context': context, 'operation': op, 'safety_generation': op.safety_generation}
+        precision = getattr(op, 'precision_inputs', ())
 
         def step(command, timeout=10.0):
             text, status = self._grbl_transact(op, command, timeout=timeout)
             if status != 'ok':
                 raise _GrblProbeAbort(command, text, status)
             return text
+
+        def check_frame():
+            # A changed/unknown coordinate frame must not produce a guessed lift.
+            try:
+                text = step('$G')
+                if not grbl_modes_confirmed(text, units_cmd) or parse_grbl_active_wcs(text) != active_wcs:
+                    raise ValueError('distance mode, units or active WCS changed')
+                if parse_grbl_work_offset(step('$#'), active_wcs) != offset:
+                    raise ValueError('work offset changed')
+                if parse_grbl_status_state(self._grbl_query_status(op)) != 'Idle':
+                    raise ValueError('GRBL is not Idle')
+            except ValueError as err:
+                raise _GrblProbeAbort('$G / $# / ?', str(err), 'probe_invalid')
+            except _GrblProbeAbort as abort:
+                if abort.status == 'error':
+                    raise _GrblProbeAbort(abort.command, abort.text, 'probe_invalid')
+                raise
 
         try:
             state = parse_grbl_status_state(self._grbl_query_status(op))
@@ -3230,7 +3383,12 @@ class ToolLevelling(CNCjob, AppTool):
             report_setting = parse_grbl_setting(step('$$'), 13)
             if report_setting is None:
                 raise _GrblProbeAbort('$$', '', 'unknown_units')
+            if precision and report_setting not in (0.0, 1.0):
+                raise _GrblProbeAbort('$$', _('GRBL $13 must report 0 or 1 before precision probing.'), 'error')
             scale = grbl_report_scale(context.units, report_setting == 1.0)
+            if precision and precision[1] <= 0.0001 * scale:
+                raise _GrblProbeAbort('precision retract', _(
+                    'Increase the precision retract above the GRBL position report resolution.'), 'error')
 
             step(units_cmd)
             step('G90')
@@ -3252,7 +3410,30 @@ class ToolLevelling(CNCjob, AppTool):
                 # so the probe time limit starts when the probe move starts
                 step('G4 P0', timeout=120.0)
                 text = step(probe_cmd, timeout=probe_timeout)
-                staged[key] = self._al_check_probe_reply(probe_cmd, text, key, points, tol, offset, scale)
+                height = self._al_check_probe_reply(probe_cmd, text, key, points, tol, offset, scale)
+                if precision:
+                    fine_feed, retract = precision
+                    retract_z = round(height + retract, 4)
+                    if not depth <= height < retract_z <= travel_z:
+                        raise _GrblProbeAbort(probe_cmd, _(
+                            'Contact or precision retract is outside the depth/clearance limits.'), 'probe_invalid')
+                    check_frame()
+                    # PRB is machine position in report units. height is already
+                    # converted to the active work frame and job units. Stay G90
+                    # so every normal/error recovery lift uses the same frame.
+                    step('G0 Z{0:.4f}'.format(retract_z))
+                    step('G4 P0', timeout=120.0)
+                    check_frame()
+                    step('G4 P0', timeout=120.0)
+                    fine_cmd = 'G38.2 Z{0:.4f} F{1:.4f}'.format(depth, fine_feed)
+                    text = step(fine_cmd, timeout=probe_timeout_s(retract_z, depth, fine_feed))
+                    height = self._al_check_probe_reply(fine_cmd, text, key, points, tol, offset, scale)
+                    if not depth <= height < retract_z:
+                        raise _GrblProbeAbort(fine_cmd, text, 'probe_invalid')
+                    check_frame()
+                    step('G0 Z{0:.4f}'.format(travel_z))
+                    step('G4 P0', timeout=120.0)
+                staged[key] = height
 
             step('G0 Z{0:.4f}'.format(travel_z))
             step('G4 P0', timeout=120.0)
@@ -3266,7 +3447,11 @@ class ToolLevelling(CNCjob, AppTool):
         except ValueError as err:
             # the $G or $# reply could not be read; the modes are confirmed, so lift Z
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not read the GRBL work offset"), str(err)))
-            self._grbl_retract(op, travel_z)
+            if precision:
+                self._grbl_hold_for_recovery()
+                self.app.inform.emit('[ERROR_NOTCL] %s' % self._grbl_recovery_text())
+            else:
+                self._grbl_retract(op, travel_z)
             self.al_result_ready_sig.emit(dict(evidence, kind='failed'))
             return False
 
@@ -3355,6 +3540,8 @@ class ToolLevelling(CNCjob, AppTool):
             self._grbl_hold_for_recovery()
             self.app.inform.emit('[ERROR_NOTCL] %s: %s (%s). %s' % (
                 _("Probing stopped"), abort.command, status, self._grbl_recovery_text()))
+            if status == 'probe_invalid' and abort.text:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % abort.text)
             return
 
         if status == 'probe_failed' or 'alarm' in (abort.text or '').lower():
@@ -3472,7 +3659,9 @@ class ToolLevelling(CNCjob, AppTool):
                 with self.app.proc_container.new('%s...' % _("Autolevelling")):
                     if not context_current():
                         return
-                    tools_gcode = self.autolevell_gcode(target_obj, al_method, snapshot=snapshot)
+                    diagnostics = []
+                    tools_gcode = self.autolevell_gcode(
+                        target_obj, al_method, snapshot=snapshot, diagnostics=diagnostics)
                     if tools_gcode is None:
                         return
 
@@ -3552,6 +3741,9 @@ class ToolLevelling(CNCjob, AppTool):
                         )
                         return
 
+                    if diagnostics and context_current():
+                        self.al_result_ready_sig.emit({
+                            'kind': 'coverage', 'context': ctx, 'warnings': diagnostics})
                     self.app.inform.emit('[success] %s' % _("Finished autolevelling."))
             finally:
                 self._al_apply_running = False
@@ -3873,6 +4065,32 @@ class LevelUI:
         self.grbl_box = QtWidgets.QVBoxLayout()
         self.grbl_box.setContentsMargins(0, 0, 0, 0)
         self.grbl_frame.setLayout(self.grbl_box)
+
+        self.precision_probe_cb = FCCheckBox(_("Precision probing (two touches)"))
+        self.precision_probe_cb.setToolTip(_(
+            "GRBL only: retract after the coarse touch and probe again at the fine feed. "
+            "Only the second measurement is used."))
+        self.precision_probe_cb.set_value(False)
+        self.grbl_box.addWidget(self.precision_probe_cb)
+        precision_grid = GLay(v_spacing=5, h_spacing=3)
+        self.grbl_box.addLayout(precision_grid)
+        precision_grid.addWidget(FCLabel('%s:' % _("Fine probe feedrate")), 0, 0)
+        self.precision_feed_entry = FCDoubleSpinner()
+        self.precision_feed_entry.set_precision(max(self.decimals, 4))
+        self.precision_feed_entry.set_range(0.0001, 910000.0)
+        self.precision_feed_entry.set_value(10.0 if app.app_units.upper() == 'MM' else 10.0 / 25.4)
+        self.precision_feed_entry.setEnabled(False)
+        precision_grid.addWidget(self.precision_feed_entry, 0, 1)
+        precision_grid.addWidget(FCLabel('%s:' % _("Precision retract")), 1, 0)
+        self.precision_retract_entry = FCDoubleSpinner()
+        self.precision_retract_entry.set_precision(max(self.decimals, 4))
+        self.precision_retract_entry.set_range(0.0001, 910000.0)
+        self.precision_retract_entry.setToolTip(_(
+            "Distance above the coarse contact, in current units. "
+            "Must release the probe without exceeding Probe Z travel."))
+        self.precision_retract_entry.set_value(0.5 if app.app_units.upper() == 'MM' else 0.5 / 25.4)
+        self.precision_retract_entry.setEnabled(False)
+        precision_grid.addWidget(self.precision_retract_entry, 1, 1)
 
         # #############################################################################################################
         # ########################## GRBL TOOLBAR #####################################################################

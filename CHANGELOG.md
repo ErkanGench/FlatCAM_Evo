@@ -10,6 +10,16 @@ CHANGELOG for FlatCAM Evo beta
 
 15.10.2026
 
+Levelling Tool:
+
+- the Manual/Grid mode and Voronoi/Bilinear method are saved per CNCJob; reopening the tool restores the job's choices instead of the global method, without clearing a valid height map
+- added optional GRBL precision probing (two touches), inspired by FlatCAM-Plus: coarse touch, retract, slow touch, then lift to the travel height; only the second measurement is used
+- the fine probe feedrate and precision retract are saved per job, with unit conversion; defaults are 10 mm/min and 0.5 mm, and precision probing is off by default
+- precision probing checks the contact, retract limits and coordinate frame between stages; a failed touch or an uncertain frame stops the operation and requires recovery
+- fixed: malformed, incomplete, duplicate or nonfinite GRBL work-offset replies could escape error handling; they now fail through the normal recovery path
+- applying autolevelling warns once when compensation samples fall outside the measured map: grid bounds for bilinear maps, the convex hull of measured points for Voronoi maps; the warning includes the sample count and asks for the map to be extended and reprobed
+- coverage warnings do not change the compensation and are published only for the current job; rapid moves and motions skipped by the coordinate-frame checks do not cause coverage warnings
+
 Gerber / Excellon objects (the 2 object kinds now share their transforms, copy, merge, export and plot code):
 
 - the Gerber export writes the composed geometry as regions when the native writer cannot represent the object: aperture macros (AM), polygon (P) apertures, clear (LPC) features, tracks drawn with a rectangle aperture, a transform that the apertures cannot follow (for example a skew or a rotation that is not a quarter turn), and the PCB board imports. Holes and islands in holes are kept. The object keeps this state through copy, join, editor save and project save/load

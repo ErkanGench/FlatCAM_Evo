@@ -95,6 +95,87 @@ def make_storage_grid(xs, ys):
     return storage
 
 
+class TestHeightMapCoverage(unittest.TestCase):
+    @staticmethod
+    def warnings(tool):
+        return [call.args[0] for call in tool.app.inform.emit.call_args_list
+                if 'outside the measured height map' in call.args[0]]
+
+    def test_bilinear_warns_once_across_tools_without_changing_clamped_values(self):
+        tool = make_tool(storage=make_storage_grid([0, 10], [0, 10]))
+        target = make_tool_target({1: 'G21 G90\nG1 X20 Y0 Z-1\n',
+                                   2: 'G1 X30 Y0\nG1 X40 Y0\n'})
+        result = tool.autolevell_gcode(target, 'b')
+        self.assertIn('Z-0.8000', result[1])
+        self.assertEqual(result[2], 'G1 X30 Y0 Z-0.8000\nG1 X40 Y0 Z-0.8000\n')
+        warnings = self.warnings(tool)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn(': 3.', warnings[0])
+        self.assertIn('reprobe', warnings[0])
+
+    def test_in_map_boundaries_and_rounding_tolerance_do_not_warn(self):
+        for method in ('b', 'v'):
+            with self.subTest(method=method):
+                tool = make_tool(storage=make_storage_grid([0, 10], [0, 10]))
+                target = make_tool_target({1: 'G21 G90\nG1 X0 Y0 Z-1\nG1 X10 Y10\n'
+                                             'G1 X10.0005 Y5\n'})
+                self.assertIsNotNone(tool.autolevell_gcode(target, method))
+                self.assertEqual(self.warnings(tool), [])
+
+    def test_scattered_footprint_is_hull_not_bounding_rectangle(self):
+        for method in ('v', 'b'):
+            with self.subTest(method=method):
+                storage = make_storage_grid([0, 10], [0, 10])
+                storage.pop(3)
+                tool = make_tool(storage=storage)
+                result = tool.autolevell_gcode(make_tool_target({
+                    1: 'G21 G90\nG1 X2 Y2 Z-1\nG1 X5 Y5\n'
+                       'G1 X5.0002 Y5.0002\nG1 X8 Y9\n'}), method)
+                self.assertIn('G1 X8 Y9 Z-1.1000', result[1])
+                self.assertEqual(len(self.warnings(tool)), 1)
+                self.assertIn(': 1.', self.warnings(tool)[0])
+
+    def test_single_and_collinear_samples_have_only_point_or_line_coverage(self):
+        for xs, inside, outside in (([0], 'X0 Y0', 'X0.01 Y0'),
+                                    ([0, 10], 'X5 Y0.0005', 'X5 Y0.01')):
+            with self.subTest(xs=xs):
+                tool = make_tool(storage=make_storage_grid(xs, [0]))
+                tool.autolevell_gcode(make_tool_target({
+                    1: 'G21 G90\nG1 %s Z-1\nG1 %s\n' % (inside, outside)}), 'v')
+                self.assertEqual(len(self.warnings(tool)), 1)
+                self.assertIn(': 1.', self.warnings(tool)[0])
+
+    def test_rapids_comments_unknown_positions_and_frame_skips_do_not_warn(self):
+        for text in ('G21 G90\nG0 X20 Y20 Z5\n(comment G1 X30 Y30)\nG0 Z10\n',
+                     'G21 G90\nG1 X20 Z-1\n',
+                     'G21 G90 G54\nG0 X0 Y0 Z5\nG55\nG1 X20 Y20 Z-1\n',
+                     'G21 G90 G54\nG0 X0 Y0 Z5\nG20\nG1 X20 Y20 Z-1\n'):
+            with self.subTest(text=text):
+                tool = make_tool(storage=make_storage_grid([0, 10], [0, 10]))
+                self.assertEqual(tool.autolevell_gcode(make_tool_target({1: text}), 'b')[1], text)
+                self.assertEqual(self.warnings(tool), [])
+
+    def test_arc_interior_samples_outside_map_warn_even_with_in_map_endpoints(self):
+        tool = make_tool(storage=make_storage_grid([0, 10], [0, 10]))
+        result = tool.autolevell_gcode(make_tool_target({
+            1: 'G21 G90 G17\nG0 X0 Y0 Z5\nG1 Z-1\nG3 X10 Y0 I5 J0\n'}), 'b')
+        self.assertGreater(result[1].count('G1 X'), 2)
+        self.assertEqual(len(self.warnings(tool)), 1)
+        outside_samples = len(re.findall(r'G1 X[\d.-]+ Y-\d', result[1]))
+        self.assertIn(': %d.' % outside_samples, self.warnings(tool)[0])
+
+    def test_relative_compensation_counts_and_no_evidence_leaks_to_next_call(self):
+        tool = make_tool(storage=make_storage_grid([0, 10], [0, 10]))
+        tool.autolevell_gcode(make_tool_target({
+            1: 'G21 G90\nG0 X0 Y0 Z5\nG1 Z-1\nG91\nG1 X20\n'}), 'b')
+        self.assertEqual(len(self.warnings(tool)), 1)
+        self.assertIn(': 1.', self.warnings(tool)[0])
+        tool.app.inform.emit.reset_mock()
+        tool.autolevell_bilinear(100, 100)
+        tool.autolevell_gcode(make_tool_target({1: 'G21 G90\nG1 X5 Y5 Z-1\n'}), 'b')
+        self.assertEqual(self.warnings(tool), [])
+
+
 class RecordingShapeCollection:
     def __init__(self):
         self.shapes = []
@@ -603,7 +684,10 @@ class TestToolUiState(unittest.TestCase):
         tool._al_target_obj = None
         tool._al_generation = 0
 
-        with patch('appPlugins.ToolLevelling.LevelUI', return_value=MagicMock()), \
+        ui = MagicMock()
+        ui.al_mode_radio.blockSignals.return_value = False
+        ui.al_method_radio.blockSignals.return_value = False
+        with patch('appPlugins.ToolLevelling.LevelUI', return_value=ui), \
                 patch('appPlugins.ToolLevelling.ShapeCollection'):
             tool.set_tool_ui()
         return tool
@@ -1012,6 +1096,54 @@ class TestApplyAutolevel(unittest.TestCase):
         worker_dict['fcn']()
 
         return captured
+
+    def test_coverage_warning_published_only_by_current_gui_result(self):
+        for change in ('none', 'generation', 'target', 'units'):
+            with self.subTest(change=change):
+                tool = make_tool(storage=self.storage)
+                target = make_apply_target({1: 'G21 G90\nG1 X30 Y0 Z-1\nG1 X40 Y0\n'})
+                pending = []
+                tool.al_result_ready_sig.emit.side_effect = pending.append
+                captured = self._run_worker(tool, target)
+                self.assertIn('new_obj', captured)
+                self.assertEqual(TestHeightMapCoverage.warnings(tool), [])
+                self.assertEqual(len(pending), 1)
+                if change == 'generation':
+                    tool._al_bump_generation()
+                elif change == 'target':
+                    tool._al_target_obj = make_apply_target({1: ''})
+                elif change == 'units':
+                    target.units = 'IN'
+                tool._on_al_result_ready(pending[0])
+                self.assertEqual(len(TestHeightMapCoverage.warnings(tool)),
+                                 1 if change == 'none' else 0)
+                tool.build_al_table_sig.emit.assert_not_called()
+
+    def test_coverage_uses_captured_map_without_worker_widget_reads(self):
+        tool = make_tool(storage=self.storage)
+        target = make_apply_target({1: 'G21 G90\nG1 X30 Y0 Z-1\n'})
+        self._set_owner(tool, target)
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+        tool.apply_autolevel()
+        worker = tool.app.worker_task.emit.call_args.args[0]['fcn']
+        tool.al_voronoi_geo_storage = make_storage_grid([0, 100], [0, 100])
+        tool.ui = None
+        tool.app.app_obj.new_object.return_value = 'success'
+        worker()
+        self.assertEqual(len(TestHeightMapCoverage.warnings(tool)), 1)
+
+    def test_stale_apply_does_not_publish_coverage_warning(self):
+        tool = make_tool(storage=self.storage)
+        target = make_apply_target({1: 'G21 G90\nG1 X30 Y0 Z-1\n'})
+        self._set_owner(tool, target)
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+        tool.apply_autolevel()
+        worker = tool.app.worker_task.emit.call_args.args[0]['fcn']
+        tool._al_target_obj = make_apply_target({1: ''})
+        worker()
+        self.assertEqual(TestHeightMapCoverage.warnings(tool), [])
+        tool.app.app_obj.new_object.assert_not_called()
+        tool.al_result_ready_sig.emit.assert_not_called()
 
     def test_new_object_called_with_levelled_name_and_levels_gcode(self):
         original_gcode = "G0 Z2.0000\nG0 X0.0000 Y0.0000\nG1 Z-0.1000 F100\n"

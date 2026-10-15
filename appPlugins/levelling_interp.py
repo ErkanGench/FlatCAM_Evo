@@ -254,7 +254,7 @@ def parse_grbl_probe_output(text):
 
 
 _ACTIVE_WCS_RE = re.compile(r'(?<![A-Z0-9.])G(5[4-9])(?![A-Z0-9.])')
-_OFFSET_RE = re.compile(r'\[(G5[4-9]|G92|TLO):\s*([^\]]+)\]')
+_OFFSET_RE = re.compile(r'\[(G5[4-9]|G92|TLO)(?=[:\]\s]|$)(.*)')
 
 
 def parse_grbl_active_wcs(text):
@@ -289,26 +289,41 @@ def parse_grbl_work_offset(text, active_wcs='G54'):
     :param active_wcs: selected work coordinate system, defaulting to G54.
     :return: (x, y, z) offset, computed as selected WCS + G92 per axis,
         with TLO added to Z. Missing G92 or TLO count as 0.
-    :raises ValueError: if the selected WCS line is missing.
+    :raises ValueError: if the selected WCS line is missing, an offset record
+        is malformed, duplicated or nonfinite, or the combined offset overflows.
     """
     work_offset = None
     g92 = (0.0, 0.0, 0.0)
     tlo = 0.0
+    seen = set()
 
     for line in text.splitlines():
-        m = _OFFSET_RE.search(line)
+        # Recognize the record key even if its payload or closing bracket is
+        # truncated. A malformed optional G92/TLO is not an absent zero offset.
+        m = _OFFSET_RE.fullmatch(line.strip())
         if not m:
             continue
 
         key, val = m.group(1), m.group(2)
-        parts = [p.strip() for p in val.split(',') if p.strip() != '']
+        if key in seen or not val.startswith(':') or not val.endswith(']'):
+            raise ValueError("Malformed or duplicate %s offset in $# output" % key)
+        seen.add(key)
+        parts = [p.strip() for p in val[1:-1].split(',')]
+        if len(parts) != (1 if key == 'TLO' else 3):
+            raise ValueError("Invalid %s offset field count in $# output" % key)
+        try:
+            values = tuple(float(p) for p in parts)
+        except ValueError as err:
+            raise ValueError("Invalid %s offset number in $# output" % key) from err
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("Nonfinite %s offset in $# output" % key)
 
         if key == active_wcs:
-            work_offset = tuple(float(p) for p in parts[:3])
+            work_offset = values
         elif key == 'G92':
-            g92 = tuple(float(p) for p in parts[:3])
+            g92 = values
         elif key == 'TLO':
-            tlo = float(parts[0])
+            tlo = values[0]
 
     if work_offset is None:
         raise ValueError("%s work offset not found in $# output" % active_wcs)
@@ -316,6 +331,8 @@ def parse_grbl_work_offset(text, active_wcs='G54'):
     x = work_offset[0] + g92[0]
     y = work_offset[1] + g92[1]
     z = work_offset[2] + g92[2] + tlo
+    if not all(math.isfinite(value) for value in (x, y, z)):
+        raise ValueError("Nonfinite combined work offset in $# output")
     return x, y, z
 
 
@@ -1160,8 +1177,10 @@ def _level_line(line, state, offset_fn, decimals):
         return line
 
     raw_fn = offset_fn
+    # Instrument compensation only, not the raw lookup used to re-reference a Z zero.
+    offset_fn = state.get('coverage_offset', raw_fn)
     if state['z_ref']:
-        offset_fn = _referenced(raw_fn, state['z_ref'])
+        offset_fn = _referenced(offset_fn, state['z_ref'])
 
     x_val = y_val = z_val = None
     z_match = None

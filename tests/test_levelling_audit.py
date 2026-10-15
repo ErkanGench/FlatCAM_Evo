@@ -225,9 +225,12 @@ def run_worker(tool, index=-1):
     tool.app.worker_task.emit.call_args_list[index].args[0]['fcn']()
 
 
-def run_set_tool_ui(storage, heights_valid, loaded_obj=None, plot_points=False, owner=None):
+def run_set_tool_ui(storage, heights_valid, loaded_obj=None, plot_points=False, owner=None,
+                    real_radios=False, global_method='v'):
     """Run the real set_tool_ui() with a mocked UI. `owner` is (name, obj) or None."""
     tool = ToolLevelling.__new__(ToolLevelling)
+    if real_radios:
+        QtWidgets.QWidget.__init__(tool)
     tool.app = MagicMock()
     tool.app.app_units = 'MM'
     tool.app.use_3d_engine = True
@@ -235,7 +238,8 @@ def run_set_tool_ui(storage, heights_valid, loaded_obj=None, plot_points=False, 
         'global_app_level': 'a',
         'tools_al_plot_points': plot_points,
         'tools_al_avoid_exc_holes': False,
-        'tools_al_method': 'v',
+        'tools_al_method': global_method,
+        'tools_al_mode': 'manual',
     }
     tool.app.collection.get_active.return_value = None
     tool.app.collection.get_by_name.return_value = loaded_obj
@@ -263,12 +267,163 @@ def run_set_tool_ui(storage, heights_valid, loaded_obj=None, plot_points=False, 
     if owner is not None:
         tool._al_target_name, tool._al_target_obj = owner
     ui = MagicMock()
+    if real_radios:
+        from appGUI.GUIElements import RadioSet
+        ui.al_mode_radio = RadioSet([{'label': v, 'value': v} for v in ('grid', 'manual')])
+        ui.al_method_radio = RadioSet([{'label': v, 'value': v} for v in ('v', 'b')])
+        tool.radio_events = MagicMock()
+        ui.al_mode_radio.activated_custom.connect(tool.radio_events)
+        ui.al_method_radio.activated_custom.connect(tool.radio_events)
+        tool._al_core_signals_connected = True
+        del tool.connect_signals_at_init
+        del tool.to_form
     ui.plot_probing_pts_cb.get_value.return_value = plot_points
     ui.object_combo.get_value.return_value = loaded_obj.obj_options['name'] if loaded_obj is not None else ''
     with patch('appPlugins.ToolLevelling.LevelUI', return_value=ui), \
             patch('appPlugins.ToolLevelling.ShapeCollection'):
         tool.set_tool_ui()
     return tool
+
+
+class TestRadioSettings(unittest.TestCase):
+    def open_tool(self, target, global_method='v', storage=None):
+        return run_set_tool_ui(storage or {}, bool(storage), loaded_obj=target,
+                               owner=(target.obj_options['name'], target), real_radios=True,
+                               global_method=global_method)
+
+    def test_saved_method_wins_over_global_and_sets_minima(self):
+        for saved, global_method in (('b', 'v'), ('v', 'b')):
+            with self.subTest(saved=saved):
+                target = TestTargetOwnership.target(tools_al_mode='grid', tools_al_method=saved)
+                before = dict(target.obj_options)
+                tool = self.open_tool(target, global_method)
+                self.assertEqual(tool.ui.al_mode_radio.get_value(), 'grid')
+                self.assertEqual(tool.ui.al_method_radio.get_value(), saved)
+                tool.ui.al_rows_entry.setMinimum.assert_called_with(2 if saved == 'b' else 1)
+                self.assertEqual(target.obj_options, before)
+
+    def test_user_edits_only_selected_target_and_a_b_a_restores(self):
+        a = TestTargetOwnership.target('a', tools_al_mode='grid', tools_al_method='v')
+        b = TestTargetOwnership.target('b', tools_al_mode='manual', tools_al_method='v')
+        tool = self.open_tool(a)
+        globals_before = dict(tool.app.options)
+        tool._al_target_obj = b
+        tool.ui.al_method_radio.set_value('b')
+        self.assertEqual(a.obj_options['tools_al_method'], 'b')
+        self.assertEqual(b.obj_options['tools_al_method'], 'v')
+        tool._new_probing_shapes = MagicMock()
+        for target, method in ((b, 'v'), (a, 'b')):
+            tool.app.collection.get_by_name.return_value = target
+            tool.ui.object_combo.currentText.return_value = target.obj_options['name']
+            tool.ui.object_combo.get_value.return_value = target.obj_options['name']
+            tool.on_object_changed()
+            self.assertEqual(tool.ui.al_mode_radio.get_value(), target.obj_options['tools_al_mode'])
+            self.assertEqual(tool.ui.al_method_radio.get_value(), method)
+        self.assertEqual(tool.app.options, globals_before)
+
+    def test_manual_transition_persists_effective_method_and_resets_once(self):
+        target = TestTargetOwnership.target(tools_al_mode='grid', tools_al_method='b')
+        tool = self.open_tool(target)
+        tool.al_voronoi_geo_storage = {1: {'point': Point(0, 0), 'height': 0.2}}
+        tool.al_heights_valid = True
+        generation = tool._al_generation
+        tool.build_al_table.reset_mock()
+        tool.ui.al_mode_radio.set_value('manual')
+        self.assertEqual(target.obj_options['tools_al_mode'], 'manual')
+        self.assertEqual(target.obj_options['tools_al_method'], 'v')
+        self.assertEqual(tool.ui.al_method_radio.get_value(), 'v')
+        self.assertFalse(tool.ui.al_method_radio.isEnabled())
+        self.assertEqual(tool.al_voronoi_geo_storage, {})
+        self.assertEqual(tool._al_generation, generation + 1)
+        tool.build_al_table.assert_called_once()
+        tool.ui.al_mode_radio.set_value('grid')
+        self.assertEqual(tool.ui.al_method_radio.get_value(), 'v')
+
+    def test_initialization_preserves_valid_map_and_emits_no_radio_signals(self):
+        target = TestTargetOwnership.target(tools_al_mode='grid', tools_al_method='b')
+        storage = {1: {'point': Point(0, 0), 'geo': None, 'height': 0.2}}
+        tool = self.open_tool(target, storage=storage)
+        self.assertEqual(tool.al_voronoi_geo_storage, storage)
+        self.assertTrue(tool.al_heights_valid)
+        self.assertEqual(tool._al_generation, 0)
+        tool.radio_events.assert_not_called()
+        self.assertFalse(tool.ui.al_mode_radio.signalsBlocked())
+        self.assertFalse(tool.ui.al_method_radio.signalsBlocked())
+        events = MagicMock()
+        tool.ui.al_mode_radio.activated_custom.connect(events)
+        tool.ui.al_method_radio.activated_custom.connect(events)
+        tool.ui.al_method_radio.blockSignals(True)
+        tool._new_probing_shapes = MagicMock()
+        tool.ui.object_combo.currentText.return_value = target.obj_options['name']
+        tool.on_object_changed()
+        events.assert_not_called()
+        self.assertFalse(tool.ui.al_mode_radio.signalsBlocked())
+        self.assertTrue(tool.ui.al_method_radio.signalsBlocked())
+        self.assertTrue(tool.al_heights_valid)
+
+    def test_legacy_and_manual_restoration_do_not_write_options(self):
+        for options, mode, method in (({}, 'grid', 'v'),
+                                      ({'tools_al_mode': 'manual', 'tools_al_method': 'b'}, 'manual', 'v')):
+            target = TestTargetOwnership.target(**options)
+            before = dict(target.obj_options)
+            tool = self.open_tool(target, global_method='b')
+            self.assertEqual(tool.ui.al_mode_radio.get_value(), mode)
+            self.assertEqual(tool.ui.al_method_radio.get_value(), method)
+            self.assertEqual(target.obj_options, before)
+
+    def test_unsupported_and_invalid_changes_do_not_write(self):
+        target = TestTargetOwnership.target(tools_al_mode='grid', tools_al_method='v')
+        target.is_segmented_gcode = False
+        before = dict(target.obj_options)
+        tool = self.open_tool(target)
+        tool.ui.al_frame.setDisabled.assert_called_with(True)
+        tool.ui.al_mode_radio.set_value('grid')
+        tool.ui.al_method_radio.set_value('b')
+        tool.on_mode_radio('invalid')
+        tool.on_method_radio('invalid')
+        self.assertEqual(target.obj_options, before)
+
+    def test_invalid_values_and_non_cncjob_do_not_persist(self):
+        target = TestTargetOwnership.target(tools_al_mode='grid', tools_al_method='v')
+        tool = self.open_tool(target)
+        before = dict(target.obj_options)
+        tool.on_mode_radio('invalid')
+        tool.on_method_radio('invalid')
+        self.assertEqual(target.obj_options, before)
+        target.kind = 'geometry'
+        tool.ui.al_method_radio.set_value('b')
+        tool.ui.al_mode_radio.set_value('manual')
+        self.assertEqual(target.obj_options, before)
+
+    def test_signal_block_states_survive_restoration_and_initialization_errors(self):
+        target = TestTargetOwnership.target(tools_al_mode='grid', tools_al_method='b')
+        tool = self.open_tool(target)
+        for mode_blocked, method_blocked in ((True, False), (False, True)):
+            with self.subTest(mode_blocked=mode_blocked):
+                tool.ui.al_mode_radio.blockSignals(mode_blocked)
+                tool.ui.al_method_radio.blockSignals(method_blocked)
+                with patch.object(tool, '_update_mode_radio_ui', side_effect=RuntimeError('restore')):
+                    with self.assertRaisesRegex(RuntimeError, 'restore'):
+                        tool._restore_al_radios(target)
+                self.assertEqual(tool.ui.al_mode_radio.signalsBlocked(), mode_blocked)
+                self.assertEqual(tool.ui.al_method_radio.signalsBlocked(), method_blocked)
+                with patch('appPlugins.ToolLevelling.LevelUI', return_value=tool.ui), \
+                        patch.object(tool, 'connect_signals_at_init'), \
+                        patch.object(tool, '_populate_tool_ui', side_effect=RuntimeError('initialize')):
+                    with self.assertRaisesRegex(RuntimeError, 'initialize'):
+                        tool.set_tool_ui()
+                self.assertEqual(tool.ui.al_mode_radio.signalsBlocked(), mode_blocked)
+                self.assertEqual(tool.ui.al_method_radio.signalsBlocked(), method_blocked)
+
+    def test_same_name_replacement_clears_owner_even_without_points(self):
+        target = TestTargetOwnership.target(tools_al_mode='grid', tools_al_method='b')
+        replacement = TestTargetOwnership.target(tools_al_mode='manual', tools_al_method='v')
+        tool = run_set_tool_ui({}, False, loaded_obj=replacement,
+                               owner=(target.obj_options['name'], target), real_radios=True)
+        self.assertIsNone(tool._al_target_obj)
+        self.assertIsNone(tool._al_target_name)
+        self.assertEqual(tool._al_generation, 1)
+        self.assertEqual(tool.ui.al_mode_radio.get_value(), 'manual')
 
 
 class TestScaffold(unittest.TestCase):
@@ -1552,7 +1707,7 @@ class TestTargetOwnership(unittest.TestCase):
         tool.app.collection.get_by_name.return_value = new_obj
         tool._new_probing_shapes = MagicMock()
         tool._update_mode_radio_ui = MagicMock()
-        tool.on_method_radio = MagicMock()
+        tool._update_method_radio_ui = MagicMock()
         tool.show_probing_geo = MagicMock()
         return tool
 
@@ -1587,13 +1742,15 @@ class TestTargetOwnership(unittest.TestCase):
         tool.on_object_changed()
         tool.ui.al_mode_radio.set_value.assert_called_with('manual')
         tool._update_mode_radio_ui.assert_called_with(val='manual')
-        tool.on_method_radio.assert_called_with(val='b')
+        tool.ui.al_method_radio.set_value.assert_called_with('v')
+        tool._update_method_radio_ui.assert_called_with(val='v')
 
     def test_old_project_object_without_al_options(self):
         tool = self._tool('job_a', self.target('job_a'), 'job_b', self.target('job_b'))
         tool.on_object_changed()
         tool.ui.al_mode_radio.set_value.assert_called_with('grid')
-        tool.on_method_radio.assert_called_with(val='v')
+        tool.ui.al_method_radio.set_value.assert_called_with('v')
+        tool._update_method_radio_ui.assert_called_with(val='v')
 
     def test_reopen_on_another_object_clears(self):
         storage = {1: {'point': Point(0.0, 0.0), 'geo': None, 'height': 0.3}}
@@ -1616,7 +1773,7 @@ class TestTargetOwnership(unittest.TestCase):
 
     def test_set_tool_ui_accepts_object_without_al_options(self):
         with patch.object(ToolLevelling, '_update_mode_radio_ui') as mode_ui, \
-                patch.object(ToolLevelling, 'on_method_radio') as method_radio, \
+                patch.object(ToolLevelling, '_update_method_radio_ui') as method_radio, \
                 patch.object(ToolLevelling, 'on_controller_change'):
             run_set_tool_ui({}, heights_valid=False, loaded_obj=self.target('job_a'))
         mode_ui.assert_called_once_with(val='grid')
