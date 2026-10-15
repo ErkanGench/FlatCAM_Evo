@@ -10,8 +10,8 @@ from zipfile import ZipFile
 try:
     import make_freeze
 except ImportError:
-    # make_freeze.py is local only (git-ignored); skip the module when it is absent
-    raise unittest.SkipTest("make_freeze.py is not present")
+    # make_freeze.py is local only (git-ignored); skip the tests when it is absent
+    make_freeze = None
 
 from services.updater.release import build_deterministic_zip
 
@@ -48,6 +48,7 @@ def _fake_freezer_class(calls, *, include_recovery=True, include_executable=True
     return FakeFreezer
 
 
+@unittest.skipIf(make_freeze is None, "make_freeze.py is not present")
 class TestMakeFreeze(unittest.TestCase):
     def test_import_does_not_require_cx_freeze(self):
         result = subprocess.run(
