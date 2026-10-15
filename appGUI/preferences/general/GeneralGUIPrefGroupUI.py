@@ -113,10 +113,11 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         self.style_combo = FCComboBox()
         self.style_combo.addItems(QtWidgets.QStyleFactory.keys())
         # find current style
-        current_style = QtWidgets.QApplication.style().objectName()
+        current_style = (QtWidgets.QApplication.instance().property('flatcam_style') or
+                         QtWidgets.QApplication.style().objectName())
         index = self.style_combo.findText(current_style, QtCore.Qt.MatchFlag.MatchFixedString)
         self.style_combo.setCurrentIndex(index)
-        self.style_combo.activated.connect(self.handle_style)
+        self.style_combo.textActivated.connect(self.handle_style)
 
         grid0.addWidget(self.style_label, 8, 0)
         grid0.addWidget(self.style_combo, 8, 1)
@@ -419,10 +420,10 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
     def handle_style(style):
         # set current style
         q_settings = QSettings("Open Source", "FlatCAM_EVO")
-        q_settings.setValue('style', str(style))
+        q_settings.setValue('style', style)
 
-        new_style = QtWidgets.QStyleFactory.keys()[int(style)]
-        QtWidgets.QApplication.setStyle(new_style)
+        QtWidgets.QApplication.setStyle(style)
+        QtWidgets.QApplication.instance().setProperty('flatcam_style', style)
 
         # This will write the setting to the platform specific storage.
         del q_settings

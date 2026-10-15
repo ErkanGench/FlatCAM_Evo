@@ -174,16 +174,22 @@ if __name__ == '__main__':
 
     # apply style
     settings = QSettings("Open Source", "FlatCAM_EVO")
+    styles = QtWidgets.QStyleFactory.keys()
+    style = app.style().objectName()
     if settings.contains("style"):
-        style_index = settings.value('style', type=str)
+        saved_style = settings.value('style', type=str)
+        # Older versions stored a position in Qt's platform-dependent style list.
         try:
-            idx = int(style_index)
-        except Exception:
-            idx = 0
-        style = QtWidgets.QStyleFactory.keys()[idx]
+            idx = int(saved_style)
+        except ValueError:
+            style = next((name for name in styles if name.lower() == saved_style.lower()), style)
+        else:
+            if 0 <= idx < len(styles):
+                style = styles[idx]
         app.setStyle(style)
-    else:
-        app.setStyle('windowsvista')
+        settings.setValue('style', style)
+    # Application stylesheets wrap QStyle and hide its objectName().
+    app.setProperty('flatcam_style', style)
 
     if settings.contains("font_size"):
         font_size = int(settings.value("font_size", type=str))      # noqa

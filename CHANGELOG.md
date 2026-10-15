@@ -53,6 +53,9 @@ Tcl:
 
 Other:
 
+- fixed: the saved application style is restored by name instead of its position in Qt's style list; older numeric settings are converted and invalid settings use Qt's default style
+- fixed: the Style combobox in Preferences was empty when an application theme stylesheet was active
+- startup keeps Qt's native default style instead of forcing windowsvista, allowing Windows 11 styling and native dark title bars on supported Qt versions
 - fixed: the restored objects of a project did not react to option changes
 - the plugins Isolation, NCC, Paint, Follow, Punch Gerber, Drilling and Milling no longer inherit the Gerber or Excellon class
 - the project moved to GitHub: https://github.com/MariusAdrian88/FlatCAM_Evo (branch 'main' is the stable code, branch '1.0' the development code). The About, How To and Report a bug links point there
