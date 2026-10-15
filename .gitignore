@@ -19,3 +19,6 @@ nul
 
 # Git worktrees
 .worktrees/
+
+# Freeze build script (local only)
+make_freeze*.py
