@@ -410,7 +410,11 @@ class RegisterFK(QtCore.QObject):
             self.register_keywords(self.myKeywords)
 
     def remove_keyword(self, kw, update=True):
-        self.myKeywords.remove(kw)
+        try:
+            self.myKeywords.remove(kw)
+        except ValueError:
+            # the keyword was never registered; nothing to remove
+            pass
         if update:
             self.register_keywords(self.myKeywords)
 
