@@ -7,7 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
 
-import make_freeze
+try:
+    import make_freeze
+except ImportError:
+    # make_freeze.py is local only (git-ignored); skip the module when it is absent
+    raise unittest.SkipTest("make_freeze.py is not present")
+
 from services.updater.release import build_deterministic_zip
 
 
