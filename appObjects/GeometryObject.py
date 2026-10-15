@@ -47,6 +47,9 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
     """
     # Dispatch metadata, read by AppObject, ObjectCollection and appPlotManager instead of kind chains.
     # status_color: color of the object name in the status bar message (None: no message).
+    # top of the 3 canvas layers: Geometry is drawn above the filled Gerber (layer 1)
+    PLOT_LAYER = 2
+
     status_color = 'red'
     source_exporter = 'export_dxf'
     # tool_option_prefix: extra application options (with this prefix) copied into obj_options on creation.
@@ -1407,7 +1410,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                     self._collect_elements(sub_el, color=color, collected=collected)
         except TypeError:
             # Leaf element - not iterable
-            collected.append({'shape': element, 'color': color, 'layer': 0})
+            collected.append({'shape': element, 'color': color, 'layer': GeometryObject.PLOT_LAYER})
 
         return collected
 
@@ -1416,17 +1419,17 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         if color is None:
             color = '#FF0000FF'
 
-        visible = visible if visible else self.obj_options['plot']
+        visible = self.obj_options['plot'] if visible is None else visible
         try:
             if isinstance(element, (MultiPolygon, MultiLineString)):
                 for sub_el in element.geoms:
-                    self.plot_element(sub_el, color=color)
+                    self.plot_element(sub_el, color=color, visible=visible)
             else:
                 for sub_el in element:
-                    self.plot_element(sub_el, color=color)
+                    self.plot_element(sub_el, color=color, visible=visible)
         except TypeError:  # Element is not iterable...
             # if self.app.use_3d_engine:
-            self.add_shape(shape=element, color=color, visible=visible, layer=0)
+            self.add_shape(shape=element, color=color, visible=visible, layer=GeometryObject.PLOT_LAYER)
 
     def plot(self, visible=None, kind=None, plot_tool=None):
         """
@@ -1449,7 +1452,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
 
         try:
             batch = []
-            visible = visible if visible else self.obj_options['plot']
+            visible = self.obj_options['plot'] if visible is None else visible
 
             # plot solid geometries found as members of self.tools attribute dict
             # for MultiGeo
