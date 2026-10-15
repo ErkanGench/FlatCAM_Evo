@@ -821,12 +821,14 @@ class AppDefaults:
                      'gbl, gbo, gbp, gbr, gbs, gdo, ger, gko, gm1, gm2, gm3, grb, gtl, gto, gtp, gts, ly15, ly2, '
                      'mil, outline, pho, plc, pls, smb, smt, sol, spb, spt, ssb, sst, stc, sts, top, tsm',
         # Keyword list
-        "util_autocomplete_keywords": 'Berta_CNC, Default_no_M6, Desktop, Documents, FlatConfig, FlatPrj, False, '
-                                      'GRBL_11, GRL_11_no_M6, GRBL_laser, grbl_laser_eleks_drd, GRBL_laser_z, '
+        "util_autocomplete_keywords": 'Berta_CNC, Check_points, Default_no_M6, Desktop, Documents, FlatConfig, '
+                                      'FlatPrj, False, '
+                                      'GRBL_11, GRBL_11_no_M6, GRBL_laser, grbl_laser_eleks_drd, GRBL_laser_z, '
                                       'ISEL_CNC, ISEL_ICP_CNC, '
                                       'Line_xyz, Marlin, Marlin_laser_FAN_pin, '
-                                      'Marlin_laser_Spindle_pin, NCCAD9, '
-                                      'Marius, My Documents, Paste_1, '
+                                      'Marlin_laser_Spindle_pin, Marlin_laser_z, NCCAD9, '
+                                      'Marius, My Documents, Paste_1, Paste_GRBL, Paste_Marlin, '
+                                      'default_laser, '
                                       'Repetier, Roland_MDX_20, Roland_MDX_540,'
                                       'Toolchange_Manual, Toolchange_Probe_MACH3, True, '
                                       'Users, all, auto, axis, axisoffset, '
