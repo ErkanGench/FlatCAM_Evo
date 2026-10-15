@@ -55,6 +55,15 @@ Other:
 
 - fixed: the restored objects of a project did not react to option changes
 - the plugins Isolation, NCC, Paint, Follow, Punch Gerber, Drilling and Milling no longer inherit the Gerber or Excellon class
+- the project moved to GitHub: https://github.com/MariusAdrian88/FlatCAM_Evo (branch 'main' is the stable code, branch '1.0' the development code). The About, How To and Report a bug links point there
+- Python 3.10 is the minimum version; an older Python stops with a message
+- the headless mode is removed (the --headless option and the 'headless' key of config/configuration.txt)
+- OR-Tools is used only on a 64-bit Python and only if it can be imported (on a 32-bit Python the app said it was available)
+- shortcuts: Alt+D opens the Drilling plugin; 2-Sided moved to Alt+U; the menus show Alt+E for Extract and Alt+R for the Transformation of the editors
+- fixed: the F3 shortcut list raised an error after the Alt+U row was added, and it showed 'T' for Alt+S
+- the Tcl editor autocomplete has the correct preprocessor names (GRBL_11_no_M6 was GRL_11_no_M6) and the missing ones
+- Linux: setup_ubuntu.sh installs the Python packages in a .venv in the project folder (no system-wide pip), with the GDAL package that matches the system library; the launcher starts flatcam.py with that .venv; the man page and the desktop file are updated
+- the README is rewritten: features, every plugin, editors, file formats, preprocessors, path optimization, Tcl scripting and the installation on Windows, Linux and macOS
 
 14.10.2026
 

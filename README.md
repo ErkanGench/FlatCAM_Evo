@@ -664,6 +664,7 @@ FlatCAM Evo is released under the [MIT License](LICENSE).
 - Copyright (c) 2018-2026 Marius Stanciu — FlatCAM Evo
 - Copyright (c) 2014-2018 Juan Pablo Caram — FlatCAM
 
-Many contributors and translators helped FlatCAM and FlatCAM Evo. The full list is in the program, in
-**Help > About**. The icons come from Freepik, Pixel perfect, Anggara and Kharisma (flaticon.com), Icons8
+Many contributors and translators helped FlatCAM and FlatCAM Evo. The list is in the program, in
+**Help > About**. If you are not in the list and you have contributed, please let me know.
+The icons come from Freepik, Pixel perfect, Anggara and Kharisma (flaticon.com), Icons8
 and oNline Web Fonts.
