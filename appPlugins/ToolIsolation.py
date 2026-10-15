@@ -410,6 +410,7 @@ class ToolIsolation(Geometry, AppTool):
                     option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
 
         # transfer some Isolation Plugin values to the Milling Plugin; that works only for adding a default tool
+        self.default_data['tools_mill_tool_shape'] = deepcopy(self.default_data['tools_iso_tool_shape'])
         self.default_data['tools_mill_cutz'] = deepcopy(self.default_data['tools_iso_cutz'])
         self.default_data['tools_mill_vtipdia'] = deepcopy(self.default_data['tools_iso_vtipdia'])
         self.default_data['tools_mill_vtipangle'] = deepcopy(self.default_data['tools_iso_vtipangle'])
@@ -716,6 +717,9 @@ class ToolIsolation(Geometry, AppTool):
             )
 
     def ui_connect(self):
+        # connect each signal exactly once, whatever the previous state
+        self.ui_disconnect()
+
         self.ui.tool_shape_combo.currentIndexChanged.connect(self.on_tt_change)
 
         self.ui.tools_table.itemChanged.connect(self.on_tool_edit)
@@ -759,15 +763,18 @@ class ToolIsolation(Geometry, AppTool):
 
         # V-shape tool parameters changes
         try:
-            self.ui.cutz_entry.editingFinished.disconnect()
+            # only our slot: the widget has its own editingFinished receiver
+            self.ui.cutz_entry.editingFinished.disconnect(self.on_update_tool_dia)
         except (TypeError, AttributeError):
             pass
         try:
-            self.ui.tipdia_entry.editingFinished.disconnect()
+            # only our slot: the widget has its own editingFinished receiver
+            self.ui.tipdia_entry.editingFinished.disconnect(self.on_update_tool_dia)
         except (TypeError, AttributeError):
             pass
         try:
-            self.ui.tipangle_entry.editingFinished.disconnect()
+            # only our slot: the widget has its own editingFinished receiver
+            self.ui.tipangle_entry.editingFinished.disconnect(self.on_update_tool_dia)
         except (TypeError, AttributeError):
             pass
 
@@ -847,47 +854,70 @@ class ToolIsolation(Geometry, AppTool):
             return
         self.ui.v_frame.hide()
 
+    V_SHAPE_INDEX = 5
+
+    @staticmethod
+    def is_v_shape_data(data):
+        return data.get('tools_mill_tool_shape') == ToolIsolation.V_SHAPE_INDEX
+
+    @staticmethod
+    def v_effective_diameter(data):
+        """
+        Effective diameter of a V-shaped tool: tip + 2 * |cut_z| * tan(angle / 2).
+
+        :param data: tool data dict (tools_mill_vtipdia, tools_mill_vtipangle, tools_mill_cutz)
+        :return: the diameter or None if the parameters are missing or not usable
+        """
+        try:
+            tip = float(data['tools_mill_vtipdia'])
+            half_angle = float(data['tools_mill_vtipangle']) / 2
+            cut_z = abs(float(data['tools_mill_cutz']))
+            dia = tip + (2 * cut_z * math.tan(math.radians(half_angle)))
+        except (KeyError, TypeError, ValueError):
+            return None
+        return dia if math.isfinite(dia) else None
+
     def on_update_tool_dia(self):
         if not self.ui.v_frame.isVisible():
             return
 
         self.ui_disconnect()
-
-        vdia = float(self.ui.tipdia_entry.get_value())
-        half_vangle = float(self.ui.tipangle_entry.get_value()) / 2
-        cut_z = self.ui.cutz_entry.get_value()
-        cut_z = -cut_z if cut_z < 0 else cut_z  # cut_z param has to have a positive value here
-
-        row = self.ui.tools_table.currentRow()
-        tool_uid_item = self.ui.tools_table.item(row, 3)
-        if tool_uid_item is None:
-            return
-        tool_uid = int(tool_uid_item.text())
-
-        tool_dia_item = self.ui.tools_table.item(row, 1)
-        if tool_dia_item is None:
-            return
-
         try:
-            new_tooldia = vdia + (2 * cut_z * math.tan(math.radians(half_vangle)))
-        except ZeroDivisionError:
+            row = self.ui.tools_table.currentRow()
+            tool_uid_item = self.ui.tools_table.item(row, 3)
+            tool_dia_item = self.ui.tools_table.item(row, 1)
+            if tool_uid_item is None or tool_dia_item is None:
+                return
+            tool_uid = int(tool_uid_item.text())
+            if tool_uid not in self.iso_tools:
+                return
+
+            new_tooldia = self.v_effective_diameter({
+                'tools_mill_vtipdia':   self.ui.tipdia_entry.get_value(),
+                'tools_mill_vtipangle': self.ui.tipangle_entry.get_value(),
+                'tools_mill_cutz':      self.ui.cutz_entry.get_value(),
+            })
+            if new_tooldia is None:
+                return
+            f_new_tool_dia = self.app.dec_format(new_tooldia, self.decimals)
+
+            current_dia = self.iso_tools[tool_uid].get('tooldia')
+            if current_dia is not None and f_new_tool_dia == self.app.dec_format(current_dia, self.decimals):
+                return
+
+            other_dias = [
+                self.app.dec_format(v['tooldia'], self.decimals)
+                for uid, v in self.iso_tools.items() if 'tooldia' in v and uid != tool_uid]
+            if f_new_tool_dia in other_dias:
+                # we do not want duplicates: keep the old value
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
+                return
+
+            self.iso_tools[tool_uid]['tooldia'] = deepcopy(f_new_tool_dia)
+            self.iso_tools[tool_uid]['data']['tools_iso_tooldia'] = deepcopy(f_new_tool_dia)
+            tool_dia_item.setText(str(f_new_tool_dia))
+        finally:
             self.ui_connect()
-            return
-
-        f_new_tool_dia = self.app.dec_format(new_tooldia, self.decimals)
-
-        tool_dias = [
-            self.app.dec_format(v['tooldia'], self.decimals) for v in self.iso_tools.values() if 'tooldia' in v]
-        if f_new_tool_dia in tool_dias:
-            # if the new diameter is already in the current tools abort: we don't want duplicates
-            self.ui_connect()
-            return
-
-        self.iso_tools[tool_uid]['tooldia'] = deepcopy(f_new_tool_dia)
-        self.iso_tools[tool_uid]['data']['tools_iso_tooldia'] = deepcopy(f_new_tool_dia)
-        self.ui.tools_table.item(row, 1).setText(str(f_new_tool_dia))
-
-        self.ui_connect()
 
     def on_toggle_all_rows(self):
         """
@@ -1419,6 +1449,12 @@ class ToolIsolation(Geometry, AppTool):
         updated_tooldia = None
 
         # determine the new tool diameter
+        derive_v_dia = tool_dia is None or tool_dia == 0
+        if derive_v_dia and self.is_v_shape_data(new_tools_dict):
+            # 1. provisional diameter from the V parameters of the defaults
+            provisional_dia = self.v_effective_diameter(new_tools_dict)
+            if provisional_dia is not None and provisional_dia > 0:
+                tool_dia = provisional_dia
         if tool_dia is None or tool_dia == 0:
             self.build_ui()
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, "
@@ -1440,7 +1476,7 @@ class ToolIsolation(Geometry, AppTool):
             self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
             self.ui_connect()
-            self.on_tool_default_add(dia=tool_dia)
+            self.on_tool_default_add(dia=tool_dia, v_derived=derive_v_dia)
             return
 
         tool_found = 0
@@ -1472,7 +1508,7 @@ class ToolIsolation(Geometry, AppTool):
         # test we found a suitable tool in Tools Database or if multiple ones
         if tool_found == 0:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Tool not in Tools Database. Adding a default tool."))
-            self.on_tool_default_add(dia=tool_dia)
+            self.on_tool_default_add(dia=tool_dia, v_derived=derive_v_dia)
             return
 
         if tool_found > 1:
@@ -1489,6 +1525,12 @@ class ToolIsolation(Geometry, AppTool):
         #     return
 
         new_tdia = deepcopy(updated_tooldia) if updated_tooldia is not None else deepcopy(truncated_tooldia)
+        if derive_v_dia and self.is_v_shape_data(new_tools_dict):
+            # 4. + 5. the final (merged) data decides the diameter; no 2nd Tools DB lookup
+            final_dia = self.v_effective_diameter(new_tools_dict)
+            if final_dia is not None and final_dia > 0:
+                new_tdia = self.app.dec_format(final_dia, self.decimals)
+                new_tools_dict['tools_iso_tooldia'] = deepcopy(new_tdia)
         self.iso_tools.update({
             tooluid: {
                 'tooldia':          new_tdia,
@@ -1509,10 +1551,17 @@ class ToolIsolation(Geometry, AppTool):
 
         self.app.inform.emit('[success] %s' % _("New tool added to Tool Table from Tools Database."))
 
-    def on_tool_default_add(self, dia=None, muted=None):
+    def on_tool_default_add(self, dia=None, muted=None, v_derived=False):
         self.ui_disconnect()
 
         tool_dia = dia if dia is not None else self.ui.new_tooldia_entry.get_value()
+
+        new_data = deepcopy(self.default_data)
+        derive_v_dia = v_derived or tool_dia is None or tool_dia == 0
+        if (tool_dia is None or tool_dia == 0) and self.is_v_shape_data(new_data):
+            v_dia = self.v_effective_diameter(new_data)
+            if v_dia is not None and v_dia > 0:
+                tool_dia = v_dia
 
         if tool_dia is None or tool_dia == 0:
             self.build_ui()
@@ -1534,10 +1583,12 @@ class ToolIsolation(Geometry, AppTool):
                     tool_dias.append(self.app.dec_format(v[tool_v], self.decimals))
 
         truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
+        if derive_v_dia and self.is_v_shape_data(new_data):
+            new_data['tools_iso_tooldia'] = deepcopy(truncated_tooldia)
         self.iso_tools.update({
             int(self.tooluid): {
                 'tooldia':          truncated_tooldia,
-                'data':             deepcopy(self.default_data),
+                'data':             new_data,
                 'solid_geometry':   []
             }
         })
