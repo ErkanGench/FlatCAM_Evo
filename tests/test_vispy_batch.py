@@ -399,7 +399,7 @@ class TestCollectElements(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['shape'], poly)
         self.assertEqual(result[0]['color'], 'red')
-        self.assertEqual(result[0]['layer'], 0)
+        self.assertEqual(result[0]['layer'], GeometryObject.PLOT_LAYER)
     
     def test_collect_elements_multi_polygon(self):
         """Test _collect_elements with a MultiPolygon."""
