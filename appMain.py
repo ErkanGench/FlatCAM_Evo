@@ -249,7 +249,7 @@ class App(QtCore.QObject):
     gerber_spec_url = ("https://www.ucamco.com/files/downloads/file/81/"
                        "The_Gerber_File_Format_specification.pdf?7ac957791daba2cdf4c2c913f67a43da")
     excellon_spec_url = "https://www.ucamco.com/files/downloads/file/305/the_xnc_file_format_specification.pdf"
-    bug_report_url = "https://bitbucket.org/jpcgt/flatcam/issues?status=new&status=open"
+    bug_report_url = "https://github.com/MariusAdrian88/FlatCAM_Evo/issues"
     donate_url = ("https://www.paypal.com/cgi-bin/webscr?cmd="
                   "_donations&business=WLTJJ3Q77D98L&currency_code=USD&source=url")
     # this variable will hold the project status

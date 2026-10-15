@@ -14200,8 +14200,8 @@ msgid "you can <b>contribute</b> to the development yourself by:"
 msgstr "вы можете <b> внести свой вклад </b> в разработку самостоятельно:"
 
 #: appMain.py:3810
-msgid "Pull Requests on the Bitbucket repository, if you are a developer"
-msgstr "Pull Requests в репозитории Bitbucket, если вы разработчик"
+msgid "Pull Requests on the GitHub repository, if you are a developer"
+msgstr "Pull Requests в репозитории GitHub, если вы разработчик"
 
 #: appMain.py:3812
 msgid "Bug Reports by providing the steps required to reproduce the bug"

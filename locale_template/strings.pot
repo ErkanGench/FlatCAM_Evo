@@ -11879,7 +11879,7 @@ msgid "you can <b>contribute</b> to the development yourself by:"
 msgstr ""
 
 #: appMain.py:3810
-msgid "Pull Requests on the Bitbucket repository, if you are a developer"
+msgid "Pull Requests on the GitHub repository, if you are a developer"
 msgstr ""
 
 #: appMain.py:3812

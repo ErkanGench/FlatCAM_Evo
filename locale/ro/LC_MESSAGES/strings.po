@@ -13867,8 +13867,8 @@ msgid "you can <b>contribute</b> to the development yourself by:"
 msgstr "puteți <b> contribui </b> la dezvoltare prin:"
 
 #: appMain.py:3810
-msgid "Pull Requests on the Bitbucket repository, if you are a developer"
-msgstr "Efectuand PR's in Bitbucket, dacă sunteți dezvoltator"
+msgid "Pull Requests on the GitHub repository, if you are a developer"
+msgstr "Efectuand PR's in GitHub, dacă sunteți dezvoltator"
 
 #: appMain.py:3812
 msgid "Bug Reports by providing the steps required to reproduce the bug"

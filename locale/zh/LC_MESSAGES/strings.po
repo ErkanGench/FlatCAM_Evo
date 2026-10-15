@@ -13409,8 +13409,8 @@ msgid "you can <b>contribute</b> to the development yourself by:"
 msgstr "您可以通过以下方式为自己的发展做出<b>贡献</b>："
 
 #: appMain.py:3810
-msgid "Pull Requests on the Bitbucket repository, if you are a developer"
-msgstr "如果您是开发人员，则在Bitbucket存储库上提取请求"
+msgid "Pull Requests on the GitHub repository, if you are a developer"
+msgstr "如果您是开发人员，则在GitHub存储库上提取请求"
 
 #: appMain.py:3812
 msgid "Bug Reports by providing the steps required to reproduce the bug"

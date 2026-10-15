@@ -118,9 +118,9 @@ class AppUIActions(QtCore.QObject):
                 download_label = _("DOWNLOAD")
                 issue_label = _("Issue tracker")
 
-                devel_link = "https://bitbucket.org/jpcgt/flatcam/src/Beta/"
-                download_link = "https://bitbucket.org/jpcgt/flatcam/downloads/"
-                issues_link = "https://bitbucket.org/jpcgt/flatcam/issues?status=new&status=open/"
+                devel_link = "https://github.com/MariusAdrian88/FlatCAM_Evo/tree/1.0"
+                download_link = "https://github.com/MariusAdrian88/FlatCAM_Evo"
+                issues_link = "https://github.com/MariusAdrian88/FlatCAM_Evo/issues"
 
                 title = FCLabel(
                     f"<font size=8><B>FlatCAM Evo</B></font><BR>"
@@ -410,13 +410,13 @@ class AppUIActions(QtCore.QObject):
                 self.app = app
                 self.app_icon = self.app.ui.app_icon
 
-                open_source_link = "<a href = 'https://opensource.org/'<b>Open Source</b></a>"
-                new_features_link = "<a href = 'https://bitbucket.org/jpcgt/flatcam/pull-requests/'" \
+                open_source_link = "<a href = 'https://opensource.org/'><b>Open Source</b></a>"
+                new_features_link = "<a href = 'https://github.com/MariusAdrian88/FlatCAM_Evo/pulls'>" \
                                     "<b>click</b></a>"
 
-                bugs_link = "<a href = 'https://bitbucket.org/jpcgt/flatcam/issues/new'<b>click</b></a>"
+                bugs_link = "<a href = 'https://github.com/MariusAdrian88/FlatCAM_Evo/issues/new'><b>click</b></a>"
                 donation_link = "<a href = 'https://www.paypal.com/cgi-bin/webscr?cmd=_" \
-                                "donations&business=WLTJJ3Q77D98L&currency_code=USD&source=url'<b>click</b></a>"
+                                "donations&business=WLTJJ3Q77D98L&currency_code=USD&source=url'><b>click</b></a>"
 
                 # Icon and title
                 self.setWindowIcon(self.app_icon)
@@ -443,7 +443,7 @@ class AppUIActions(QtCore.QObject):
                         _("Yet it cannot evolve without <b>contributions</b>."),
                         _("If you want to see this application grow and become better and better"),
                         _("you can <b>contribute</b> to the development yourself by:"),
-                        _("Pull Requests on the Bitbucket repository, if you are a developer"),
+                        _("Pull Requests on the GitHub repository, if you are a developer"),
                         new_features_link,
                         _("Bug Reports by providing the steps required to reproduce the bug"),
                         bugs_link,
