@@ -1,9 +1,9 @@
 
 # Install on Ubuntu(-like) systems
 
-# Install dependencies system-wide (including python modules)
+# Install the system libraries (apt, asks for sudo) and the Python modules (in the .venv folder of the project)
 install_dependencies:
-	sudo -H ./setup_ubuntu.sh
+	./setup_ubuntu.sh
 
 USER_ID = $(shell id -u)
 
@@ -14,7 +14,7 @@ ASSEST_PATH = assets/linux
 INSTALL_PATH = /usr/share/flatcam-beta
 APPS_PATH = /usr/share/applications
 
-MIN_PY3_MINOR_VERSION := 8
+MIN_PY3_MINOR_VERSION := 10
 # required version
 MIN_PY3_MINOR_VERSION := $(shell python3 -c 'import sys; print($(MIN_PY3_MINOR_VERSION))')
 

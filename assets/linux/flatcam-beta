@@ -1,5 +1,13 @@
 #!/bin/bash
 
-script_path=$(readlink -f $0)
-python_script_path=$(dirname $script_path)/../../
-python3 $python_script_path/FlatCAM.py $*
+# Starts FlatCAM Evo. It uses the virtual environment of the project (.venv) if there is one.
+script_path=$(readlink -f "$0")
+python_script_path=$(dirname "$script_path")/../..
+
+if [ -x "$python_script_path/.venv/bin/python" ]; then
+    python_bin="$python_script_path/.venv/bin/python"
+else
+    python_bin=python3
+fi
+
+exec "$python_bin" "$python_script_path/flatcam.py" "$@"

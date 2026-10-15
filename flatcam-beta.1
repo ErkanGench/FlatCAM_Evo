@@ -1,22 +1,32 @@
-.TH FLATCAM "1" "August 2021" "flatcam-beta" "User Commands"
+.TH FLATCAM "1" "October 2026" "flatcam-beta" "User Commands"
 .SH NAME
-flatcam-beta \- PCB CAM software
+flatcam-beta \- FlatCAM Evo, 2D CAM software for PCB manufacturing
 .SH SYNOPSIS
 .B flatcam-beta
-[\fI\,OPTION\/\fR]...
+[\fI\,FILE\/\fR]... [\fB\-\-shellfile\fR=\fI\,SCRIPT\/\fR] [\fB\-\-shellvar\fR=\fI\,VALUE1,VALUE2,...\/\fR]
 .SH DESCRIPTION
 .PP
-FlatCAM is a Gerber Viewer/Editor. It has many plugins that do a variety of tasks.
-You can open Gerber, Excellon, G-code, DXF, SVG, edit it, transform it
-or create a new one from scratch.
-
-You can output a film to help in creating PCB's through the UV method.
-Through isolation routing it lets you take your designs to a CNC router.
-.PP
+FlatCAM Evo reads the manufacturing files of a printed circuit board (Gerber, Excellon, and the board files of
+Altium, KiCad, Eagle, OrCAD/Allegro and Sprint Layout) and makes the G-code for a CNC router, a CNC mill or a laser:
+isolation routing, copper clearing, drilling, slot milling, board cutout, solder paste dispensing and more.
+It also opens G-code, DXF, SVG, PDF, HPGL2 and images, has editors for Gerber, Excellon and Geometry objects,
+and a Tcl shell for scripts.
+.SH OPTIONS
 .TP
-\fB\-h, \-?, \-\-help\fP
-show a help message and exit
-.PP
-
+\fIFILE\fR
+Open the file. A project (.FlatPrj) is opened, a script (.FlatScript, .tcl) is run, and Gerber, Excellon and
+G-code files are opened by their extension (see the file associations in the Preferences).
+.TP
+\fB\-\-shellfile\fR=\fISCRIPT\fR
+Run the Tcl script file after the program starts.
+.TP
+\fB\-\-shellvar\fR=\fIVALUE1,VALUE2,...\fR
+Define the Tcl variables shellvar_0, shellvar_1, ... with these values, for use in the script.
+.SH FILES
+.TP
+\fI~/.FlatCAM\fR
+The preferences, the Tools Database, the recent files lists, the log file and the user preprocessors.
 .SH "REPORTING BUGS"
-Report bugs to <https://bitbucket.org/jpcgt/flatcam/issues>
+Report bugs to <https://github.com/MariusAdrian88/FlatCAM_Evo/issues>
+.SH "SEE ALSO"
+<https://github.com/MariusAdrian88/FlatCAM_Evo>
