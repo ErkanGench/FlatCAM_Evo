@@ -1163,6 +1163,16 @@ class PlotCanvasLegacy(QtCore.QObject):
             self.draw_cursor(x_pos=x, y_pos=y, color=None)
         # self.canvas.blit(self.axes.bbox)
 
+    def pixel_size(self):
+        """
+        Plot units per screen pixel.
+        """
+        xmin, xmax = self.axes.get_xlim()
+        width = self.axes.bbox.width
+        if not width:
+            return 1.0
+        return abs(xmax - xmin) / width
+
     @staticmethod
     def translate_coords(position):
         """

@@ -214,6 +214,14 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         tr = self.grid.get_transform('canvas', 'visual')
         return tr.map(pos)
 
+    def pixel_size(self):
+        """
+        Plot units per screen pixel.
+        """
+        a = self.translate_coords((0, 0))
+        b = self.translate_coords((1, 0))
+        return float(np.hypot(b[0] - a[0], b[1] - a[1]))
+
     def translate_coords_2(self, pos):
         """
         Translate FlatCAM units to pixels.
