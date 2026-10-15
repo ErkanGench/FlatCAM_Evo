@@ -63,13 +63,12 @@ class TclCommandPlotObjects(TclCommand):
         else:
             plot_status = True
 
-        if self.app.cmd_line_headless != 1:
-            names = [x.strip() for x in args['names'].split(",") if x != '']
-            objs = []
-            for name in names:
-                obj = self.app.collection.get_by_name(name)
-                obj.obj_options["plot"] = True if plot_status is True else False
-                objs.append(obj)
+        names = [x.strip() for x in args['names'].split(",") if x != '']
+        objs = []
+        for name in names:
+            obj = self.app.collection.get_by_name(name)
+            obj.obj_options["plot"] = True if plot_status is True else False
+            objs.append(obj)
 
-            for obj in objs:
-                obj.plot()
+        for obj in objs:
+            obj.plot()

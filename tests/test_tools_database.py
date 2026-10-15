@@ -115,6 +115,10 @@ class LifecycleChecks(DatabaseCase):
         self.app.should_we_save = False
         self.app.defaults = MagicMock()
         self.app.ui.hide = MagicMock()
+        # quit_application saves the GUI state; these stand-ins keep it away from the real QSettings
+        self.app.ui.saveState = MagicMock(return_value=b'')
+        self.app.ui.isMaximized = MagicMock(return_value=False)
+        self.app.ui.general_pref_form = MagicMock()
         self.app.autosave_timer = MagicMock()
         self.app.new_launch = SimpleNamespace(thread_exit=False, address=('127.0.0.1', 1))
         self.app.listen_th = MagicMock()
@@ -131,7 +135,6 @@ class LifecycleChecks(DatabaseCase):
         self.app.mr = MagicMock()
         self.app.mdc = MagicMock()
         self.app.kp = MagicMock()
-        self.app.cmd_line_headless = 1
         self.app.pool = MagicMock()
         self.app.workers = MagicMock()
         return AppLifecycle(self.app)
@@ -147,6 +150,7 @@ class LifecycleChecks(DatabaseCase):
                 database.confirm_close.return_value = decision
                 lifecycle = self.shutdown_lifecycle(database)
                 with patch('appHandlers.appLifecycle.sys.platform', 'linux'), \
+                        patch('PyQt6.QtCore.QSettings'), \
                         patch.object(QtWidgets.QApplication, 'quit') as quit_app:
                     result = lifecycle.quit_application(silent=True)
                 self.assertEqual(expected, result)

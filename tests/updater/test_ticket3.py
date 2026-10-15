@@ -103,10 +103,11 @@ def _startup_app(auto_updates):
 
     app = App.__new__(App)
     app.log = MagicMock()
-    app.cmd_line_headless = 1
     app.cmd_line_shellvar = ""
     app.cmd_line_shellfile = ""
     app.trayIcon = SimpleNamespace(show=MagicMock())
+    app.splash = None
+    app.ui = MagicMock()
     app.options = {
         "global_systray_icon": False,
         "global_version_check": auto_updates,
@@ -130,6 +131,7 @@ def test_startup_update_toggle_gates_automatic_queueing(monkeypatch):
     from appMain import App
 
     monkeypatch.setattr(App, "args", [])
+    monkeypatch.setattr("appMain.QSettings", MagicMock())  # the window state is not read from the real settings
     disabled = _startup_app(False)
     App._setup_startup(disabled)
     disabled._queue_version_check.assert_not_called()

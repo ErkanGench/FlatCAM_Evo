@@ -188,12 +188,10 @@ class App(QtCore.QObject):
     # #################################### Get Cmd Line Options #####################################################
     cmd_line_shellfile = ''
     cmd_line_shellvar = ''
-    cmd_line_headless = None
 
     cmd_line_help = (
         "FlatCam.py --shellfile=<cmd_line_shellfile>\n"
-        "FlatCam.py --shellvar=<1,'C:\\path',23>\n"
-        "FlatCam.py --headless=1"
+        "FlatCam.py --shellvar=<1,'C:\\path',23>"
     )
     try:
         # Multiprocessing pool will spawn additional processes with 'multiprocessing-fork' flag
@@ -203,7 +201,6 @@ class App(QtCore.QObject):
             [
                 "shellfile=",
                 "shellvar=",
-                "headless=",
                 "multiprocessing-fork="
             ]
         )
@@ -219,11 +216,6 @@ class App(QtCore.QObject):
             cmd_line_shellfile = arg
         elif opt == '--shellvar':
             cmd_line_shellvar = arg
-        elif opt == '--headless':
-            try:
-                cmd_line_headless = eval(arg)
-            except NameError:
-                pass
 
     # ################################### Version and VERSION DATE ##################################################
     version = "Unstable"
@@ -725,7 +717,6 @@ class App(QtCore.QObject):
         # ########################################## OS-specific #####################################################
 
         portable = False
-        self.cmd_line_headless = 0
 
         # Folder for user settings.
         if sys.platform == 'win32':
@@ -757,8 +748,6 @@ class App(QtCore.QObject):
                                 portable = bool(literal_eval(value))
                             except (ValueError, SyntaxError):
                                 portable = False
-                        elif key == 'headless':
-                            self.cmd_line_headless = 1 if value.lower() == 'true' else 0
             except FileNotFoundError as e:
                 self.log.error(str(e))
             except Exception as e:
@@ -962,7 +951,7 @@ class App(QtCore.QObject):
             del splash_settings
             show_splash = 1
 
-        if show_splash and self.cmd_line_headless != 1:
+        if show_splash:
             splash_pix = QtGui.QPixmap(self.resource_location + '/splash.png')
             splash_pix = splash_pix.scaled(
                 QtCore.QSize(622, 344),  # You can set this to your desired width and height
@@ -1364,18 +1353,10 @@ class App(QtCore.QObject):
         # ############################################### SYS TRAY ##################################################
         self.parent_w = QtWidgets.QWidget()
         self.trayIcon = None
-        if self.cmd_line_headless == 1:
-            # if running headless always have the systray to be able to quit the app correctly
+        if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")):
             self.trayIcon = AppSystemTray(app=self,
-                                          icon=QtGui.QIcon(self.resource_location +
-                                                           '/app32.png'),
-                                          headless=True,
+                                          icon=QtGui.QIcon(self.resource_location + '/app32.png'),
                                           parent=self.parent_w)
-        else:
-            if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")):
-                self.trayIcon = AppSystemTray(app=self,
-                                              icon=QtGui.QIcon(self.resource_location + '/app32.png'),
-                                              parent=self.parent_w)
 
         # ############################################ SETUP RECENT ITEMS ###########################################
         self.setup_recent_items()
@@ -1511,30 +1492,22 @@ class App(QtCore.QObject):
         self.log.debug("... I disagree. While we live and breath, we can be free!\n")
 
         # ########################################## SHOW GUI #######################################################
-        # if the app is not started as headless, show it
-        if self.cmd_line_headless != 1:
-            if self.splash:
-                # finish the splash
-                self.splash.finish(self.ui)
+        if self.splash:
+            # finish the splash
+            self.splash.finish(self.ui)
 
-            mgui_settings = QSettings("Open Source", "FlatCAM_EVO")
-            if mgui_settings.contains("maximized_gui"):
-                maximized_ui = mgui_settings.value('maximized_gui', type=bool)
-                if maximized_ui is True:
-                    self.ui.showMaximized()
-                else:
-                    self.ui.show()
+        mgui_settings = QSettings("Open Source", "FlatCAM_EVO")
+        if mgui_settings.contains("maximized_gui"):
+            maximized_ui = mgui_settings.value('maximized_gui', type=bool)
+            if maximized_ui is True:
+                self.ui.showMaximized()
             else:
                 self.ui.show()
-
-            if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")) and self.trayIcon is not None:
-                self.trayIcon.show()
         else:
-            try:
-                self.trayIcon.show()
-            except Exception as t_err:
-                self.log.error("App.__init__() Running headless and trying to show the systray got: %s" % str(t_err))
-            self.log.warning("*******************  RUNNING HEADLESS  *******************")
+            self.ui.show()
+
+        if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")) and self.trayIcon is not None:
+            self.trayIcon.show()
 
         self.refresh_rollback_action()
         if not self.beta and self.options.get("global_version_check", self.defaults.get("global_version_check")):
@@ -1568,9 +1541,8 @@ class App(QtCore.QObject):
                 sys.exit(2)
 
         if self.cmd_line_shellfile:
-            if self.cmd_line_headless != 1:
-                if self.ui.shell_dock.isHidden():
-                    self.ui.shell_dock.show()
+            if self.ui.shell_dock.isHidden():
+                self.ui.shell_dock.show()
             try:
                 with open(self.cmd_line_shellfile, "r") as myfile:
                     # if show_splash:
@@ -1581,10 +1553,7 @@ class App(QtCore.QObject):
                     #                             alignment=Qt.AlignBottom | Qt.AlignmentFlag.AlignLeft,
                     #                             color=QtGui.QColor("lightgray"))
                     cmd_line_shellfile_text = myfile.read()
-                    if self.cmd_line_headless != 1:
-                        self.shell.exec_command(cmd_line_shellfile_text)
-                    else:
-                        self.shell.exec_command(cmd_line_shellfile_text, no_echo=True)
+                    self.shell.exec_command(cmd_line_shellfile_text)
 
             except Exception as ext:
                 print("ERROR: ", ext)

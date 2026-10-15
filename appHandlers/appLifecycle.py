@@ -398,33 +398,32 @@ class AppLifecycle(QtCore.QObject):
         except Exception:
             pass
 
-        if self.app.cmd_line_headless != 1:
-            # save app state to file
-            stgs = QSettings("Open Source", "FlatCAM_EVO")
-            stgs.setValue('saved_gui_state', self.app.ui.saveState())
-            stgs.setValue('maximized_gui', self.app.ui.isMaximized())
-            stgs.setValue(
-                'language',
-                self.app.ui.general_pref_form.general_app_group.language_combo.get_value()
-            )
-            stgs.setValue(
-                'notebook_font_size',
-                self.app.ui.general_pref_form.general_app_set_group.notebook_font_size_spinner.get_value()
-            )
-            stgs.setValue(
-                'axis_font_size',
-                self.app.ui.general_pref_form.general_app_set_group.axis_font_size_spinner.get_value()
-            )
-            stgs.setValue(
-                'textbox_font_size',
-                self.app.ui.general_pref_form.general_app_set_group.textbox_font_size_spinner.get_value()
-            )
-            stgs.setValue(
-                'hud_font_size',
-                self.app.ui.general_pref_form.general_app_set_group.hud_font_size_spinner.get_value()
-            )
-            # This will write the setting to the platform specific storage.
-            del stgs
+        # save app state to file
+        stgs = QSettings("Open Source", "FlatCAM_EVO")
+        stgs.setValue('saved_gui_state', self.app.ui.saveState())
+        stgs.setValue('maximized_gui', self.app.ui.isMaximized())
+        stgs.setValue(
+            'language',
+            self.app.ui.general_pref_form.general_app_group.language_combo.get_value()
+        )
+        stgs.setValue(
+            'notebook_font_size',
+            self.app.ui.general_pref_form.general_app_set_group.notebook_font_size_spinner.get_value()
+        )
+        stgs.setValue(
+            'axis_font_size',
+            self.app.ui.general_pref_form.general_app_set_group.axis_font_size_spinner.get_value()
+        )
+        stgs.setValue(
+            'textbox_font_size',
+            self.app.ui.general_pref_form.general_app_set_group.textbox_font_size_spinner.get_value()
+        )
+        stgs.setValue(
+            'hud_font_size',
+            self.app.ui.general_pref_form.general_app_set_group.hud_font_size_spinner.get_value()
+        )
+        # This will write the setting to the platform specific storage.
+        del stgs
 
         if silent is False:
             self.log.debug("AppLifecycle.quit_application() --> App UI state saved.")

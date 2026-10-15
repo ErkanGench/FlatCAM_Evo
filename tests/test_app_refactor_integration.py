@@ -225,6 +225,12 @@ class UiSignals(QtCore.QObject):
 
 class StrictUI:
 
+    def show(self):
+        pass
+
+    def showMaximized(self):
+        pass
+
     def __init__(self):
         for action_name in ACTION_NAMES:
             setattr(self, action_name, QtGui.QAction())
@@ -479,7 +485,6 @@ class TestControlledAppStartup(unittest.TestCase):
 
         def setup_paths(app):
             setup_calls.append('_setup_paths_and_config')
-            app.cmd_line_headless = 1
             app.data_path = temporary_directory.name
             app.preprocessorpaths = temporary_directory.name
             app.os = 'windows'
@@ -517,6 +522,8 @@ class TestControlledAppStartup(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temporary_directory = SimpleNamespace(name=temp_dir)
             with ExitStack() as stack:
+                # the constructor reads the window state; it must not touch the real settings
+                stack.enter_context(patch('appMain.QSettings'))
                 stack.enter_context(
                     patch.object(App, '_setup_paths_and_config', autospec=True, side_effect=setup_paths)
                 )

@@ -8,7 +8,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -618,7 +618,9 @@ class TestLifecycle(AppTestCase):
                         plot_calls.append(("close",))
 
                 app.preferencesUiManager = Recorder(("save_defaults",))
-                app.ui = SimpleNamespace(hide=Recorder(("call",)).call)
+                # quit_application saves the GUI state, so the ui needs these members (QSettings is patched below)
+                app.ui = SimpleNamespace(hide=Recorder(("call",)).call, saveState=lambda: b"",
+                                         isMaximized=lambda: False, general_pref_form=MagicMock())
                 app.autosave_timer = Timer(active=True)
                 app.geo_editor = app.exc_editor = app.grb_editor = app.gcode_editor = None
                 app._editor_for = lambda kind: None
@@ -630,10 +632,10 @@ class TestLifecycle(AppTestCase):
                 app.on_mouse_double_click_over_plot = object()
                 app.ui.keyPressEvent = object()
                 app.mm, app.mp, app.mr, app.mdc, app.kp = "mm", "mp", "mr", "mdc", "kp"
-                app.cmd_line_headless = 1
                 app.pool = Recorder(("terminate", "join"))
                 app.workers = Recorder(("quit",))
                 with patch.object(lifecycle_module.sys, "platform", "linux"), \
+                        patch("PyQt6.QtCore.QSettings"), \
                         patch.object(QtWidgets.QApplication, "quit"):
                     invoke("lifecycle", handler, "quit_application", silent=True)
                 if use_3d:

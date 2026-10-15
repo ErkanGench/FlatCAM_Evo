@@ -6086,13 +6086,12 @@ class AppSystemTray(QtWidgets.QSystemTrayIcon):
     This class create the Sys Tray icon for the app
     """
 
-    def __init__(self, app, icon, headless=None, parent=None):
+    def __init__(self, app, icon, parent=None):
         """
         Class that constructs the system tray
 
         :param app:         Main Application
         :param icon:        The used icon in the sys tray
-        :param headless:    Boolean; if it will be used in a headless situation
         :param parent:
         """
         # QtWidgets.QSystemTrayIcon.__init__(self, icon, parent)
@@ -6121,36 +6120,35 @@ class AppSystemTray(QtWidgets.QSystemTrayIcon):
 
         menu.addSeparator()
 
-        if headless is None:
-            self.menu_open = menu.addMenu(QtGui.QIcon(self.app.resource_location + '/folder32_bis.png'), _('Open'))
+        self.menu_open = menu.addMenu(QtGui.QIcon(self.app.resource_location + '/folder32_bis.png'), _('Open'))
 
-            # Open Project ...
-            menu_openproject = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/folder16.png'),
-                                             '%s ...' % _('Open Project'), self)
-            self.menu_open.addAction(menu_openproject)
-            self.menu_open.addSeparator()
+        # Open Project ...
+        menu_openproject = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/folder16.png'),
+                                         '%s ...' % _('Open Project'), self)
+        self.menu_open.addAction(menu_openproject)
+        self.menu_open.addSeparator()
 
-            # Open Gerber ...
-            menu_opengerber = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/open_gerber32.png'),
-                                            '%s ...\t%s' % (_('Open Gerber'), _('Ctrl+G')), self)
-            self.menu_open.addAction(menu_opengerber)
+        # Open Gerber ...
+        menu_opengerber = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/open_gerber32.png'),
+                                        '%s ...\t%s' % (_('Open Gerber'), _('Ctrl+G')), self)
+        self.menu_open.addAction(menu_opengerber)
 
-            # Open Excellon ...
-            menu_openexcellon = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/open_excellon32.png'),
-                                              '%s ...\t%s' % (_('Open Excellon'), _('Ctrl+E')), self)
-            self.menu_open.addAction(menu_openexcellon)
+        # Open Excellon ...
+        menu_openexcellon = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/open_excellon32.png'),
+                                          '%s ...\t%s' % (_('Open Excellon'), _('Ctrl+E')), self)
+        self.menu_open.addAction(menu_openexcellon)
 
-            # Open G-Code ...
-            menu_opengcode = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/code.png'),
-                                           '%s ...' % _('Open G-Code'), self)
-            self.menu_open.addAction(menu_opengcode)
+        # Open G-Code ...
+        menu_opengcode = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/code.png'),
+                                       '%s ...' % _('Open G-Code'), self)
+        self.menu_open.addAction(menu_opengcode)
 
-            self.menu_open.addSeparator()
+        self.menu_open.addSeparator()
 
-            menu_openproject.triggered.connect(lambda: self.app.f_handlers.on_file_open_project())
-            menu_opengerber.triggered.connect(lambda: self.app.f_handlers.on_file_open_gerber())
-            menu_openexcellon.triggered.connect(lambda: self.app.f_handlers.on_file_open_excellon())
-            menu_opengcode.triggered.connect(lambda: self.app.f_handlers.on_file_open_gcode())
+        menu_openproject.triggered.connect(lambda: self.app.f_handlers.on_file_open_project())
+        menu_opengerber.triggered.connect(lambda: self.app.f_handlers.on_file_open_gerber())
+        menu_openexcellon.triggered.connect(lambda: self.app.f_handlers.on_file_open_excellon())
+        menu_opengcode.triggered.connect(lambda: self.app.f_handlers.on_file_open_gcode())
 
         exitAction = menu.addAction(_("Exit"))
         exitAction.setIcon(QtGui.QIcon(self.app.resource_location + '/power16.png'))
@@ -6159,9 +6157,7 @@ class AppSystemTray(QtWidgets.QSystemTrayIcon):
         menu_toggle_gui.triggered.connect(self.app.ui.on_toggle_gui)
 
         menu_runscript.triggered.connect(
-            lambda: self.app.f_handlers.on_file_run_script(
-                silent=True if self.app.cmd_line_headless == 1 else False
-            )
+            lambda: self.app.f_handlers.on_file_run_script()
         )
 
         exitAction.triggered.connect(self.app.final_save)

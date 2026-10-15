@@ -52,7 +52,6 @@ class TestInitializationOrder(unittest.TestCase):
         self.mock_app.kp = None
         self.mock_app.workers = Mock()
         self.mock_app.pool = Mock()
-        self.mock_app.cmd_line_headless = 0
         self.mock_app.save_in_progress = False
         self.mock_app.block_autosave = False
         self.mock_app.on_properties_tab_click = Mock()
@@ -298,7 +297,6 @@ class TestAppShutdownSequence(unittest.TestCase):
         mock_app.gcode_editor = None
         mock_app.use_3d_engine = False
         mock_app.plotcanvas = Mock()
-        mock_app.cmd_line_headless = 1
         mock_app.workers = Mock()
         mock_app.pool = Mock()
         mock_app.log = Mock()
@@ -307,7 +305,8 @@ class TestAppShutdownSequence(unittest.TestCase):
         
         # This should work
         try:
-            with patch('appHandlers.appLifecycle.sys.platform', 'linux'):
+            with patch('appHandlers.appLifecycle.sys.platform', 'linux'), \
+                    patch('PyQt6.QtCore.QSettings'):
                 lifecycle.quit_application(silent=True)
             mock_prefs.save_defaults.assert_called_once_with(silent=True)
         except AttributeError as e:
@@ -458,7 +457,6 @@ class TestFinalSaveSequence(unittest.TestCase):
         mock_app.use_3d_engine = False
         mock_app.plotcanvas = Mock()
         mock_app.plotcanvas.close = Mock()
-        mock_app.cmd_line_headless = 1
         mock_app.workers = Mock()
         mock_app.workers.quit = Mock()
         mock_app.pool = Mock()
@@ -470,7 +468,8 @@ class TestFinalSaveSequence(unittest.TestCase):
         
         # Call final_save which should call quit_application
         try:
-            with patch('appHandlers.appLifecycle.sys.platform', 'linux'):
+            with patch('appHandlers.appLifecycle.sys.platform', 'linux'), \
+                    patch('PyQt6.QtCore.QSettings'):
                 lifecycle.final_save()
             # After fix: this should work without AttributeError
             mock_prefs.save_defaults.assert_called()

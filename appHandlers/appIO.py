@@ -1355,14 +1355,13 @@ class appIO(QtCore.QObject):
 
         if name:
             filename = name
-            if self.app.cmd_line_headless != 1:
-                self.splash.showMessage('%s: %ssec\n%s' %
-                                        (_("Canvas initialization started.\n"
-                                           "Canvas initialization finished in"), '%.2f' % self.app.used_time,
-                                         _("Executing ScriptObject file.")
-                                         ),
-                                        alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
-                                        color=QtGui.QColor("lightgray"))
+            self.splash.showMessage('%s: %ssec\n%s' %
+                                    (_("Canvas initialization started.\n"
+                                       "Canvas initialization finished in"), '%.2f' % self.app.used_time,
+                                     _("Executing ScriptObject file.")
+                                     ),
+                                    alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
+                                    color=QtGui.QColor("lightgray"))
         else:
             _filter_ = "TCL script .FlatScript (*.FlatScript);;TCL script .tcl (*.TCL);;TCL script .txt (*.TXT);;" \
                        "All Files (*.*)"
@@ -1381,17 +1380,13 @@ class appIO(QtCore.QObject):
             if silent is False:
                 self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
         else:
-            if self.app.cmd_line_headless != 1:
-                if self.app.ui.shell_dock.isHidden():
-                    self.app.ui.shell_dock.show()
+            if self.app.ui.shell_dock.isHidden():
+                self.app.ui.shell_dock.show()
 
             try:
                 with open(filename, "r") as tcl_script:
                     cmd_line_shell_file_content = tcl_script.read()
-                    if self.app.cmd_line_headless != 1:
-                        self.app.shell.exec_command(cmd_line_shell_file_content)
-                    else:
-                        self.app.shell.exec_command(cmd_line_shell_file_content, no_echo=True)
+                    self.app.shell.exec_command(cmd_line_shell_file_content)
 
                 if silent is False:
                     self.inform.emit('[success] %s' % _("TCL script file opened in Code Editor and executed."))
