@@ -4802,7 +4802,7 @@ class ShortcutsTab(QtWidgets.QWidget):
                         <td>&nbsp;%s</td>
                     </tr>
                     <tr height="20">
-                        <td height="20"><strong%s>T</strong></td>
+                        <td height="20"><strong>%s</strong></td>
                         <td>&nbsp;%s</td>
                     </tr>
                     <tr height="20">
@@ -5074,7 +5074,11 @@ class ShortcutsTab(QtWidgets.QWidget):
                         <td>&nbsp;%s</td>
                     </tr>
                     <tr height="20">
-                        <td height="20"><strong%s>T</strong></td>
+                        <td height="20"><strong>%s</strong></td>
+                        <td>&nbsp;%s</td>
+                    </tr>
+                    <tr height="20">
+                        <td height="20"><strong>%s</strong></td>
                         <td>&nbsp;%s</td>
                     </tr>
                     <tr height="20">
