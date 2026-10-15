@@ -1083,8 +1083,31 @@ class ObjectCollection(QtCore.QAbstractItemModel):
 
         return obj_list
 
-    def update_view(self):
-        self.layoutChanged.emit()
+    def update_view(self, obj=None):
+        """
+        Refresh the project tree rows without resetting the layout, so the selection and the persistent
+        indexes are kept.
+
+        :param obj:     If set, only the row of this object is refreshed; if the object is not in the collection
+                        nothing happens. If None, all the rows of all the non-empty groups are refreshed.
+        :return:        None
+        """
+        if obj is not None:
+            for group in self.root_item.child_items:
+                for row, item in enumerate(group.child_items):
+                    if item.obj is obj:
+                        # both indexes have the same parent (the group)
+                        item_index = self.createIndex(row, 0, item)
+                        self.dataChanged.emit(item_index, item_index)
+                        return
+            return
+
+        for group_row, group in enumerate(self.root_item.child_items):
+            if not group.child_items:
+                continue
+            parent = self.createIndex(group_row, 0, group)
+            last = len(group.child_items) - 1
+            self.dataChanged.emit(self.index(0, 0, parent), self.index(last, 0, parent))
 
     def on_row_activated(self, index):
         if index.isValid():

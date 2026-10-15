@@ -585,7 +585,7 @@ class FlatCAMObj(QtCore.QObject):
                 self.ui.name_entry.set_value(new_name)
             except (AttributeError, RuntimeError):
                 pass
-            self.app.collection.update_view()
+            self.app.collection.update_view(self)
             if silent:
                 self.app.inform.emit('[success] %s: %s %s: %s' % (
                     _("Name changed from"), str(old_name), _("to"), str(new_name)
