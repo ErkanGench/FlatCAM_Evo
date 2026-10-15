@@ -211,9 +211,11 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
                     mb_object_geo = box(x0, y0, x1, y1)
                 if margin >= 0:
                     geo_buf = mb_object_geo.buffer(margin + mb_buff_val)
+                    mb_geo = geo_buf.exterior
                 else:
-                    geo_buf = mb_object_geo.buffer(margin - mb_buff_val)
-                mb_geo = geo_buf.exterior
+                    # the inside edge, as the main cut and the Panel mouse bites use for a negative margin
+                    geo_buf = mb_object_geo.buffer(-margin + mb_buff_val)
+                    mb_geo = unary_union(geo_buf.interiors)
             else:
                 if isinstance(mb_object_geo, MultiPolygon):
                     x0, y0, x1, y1 = mb_object_geo.bounds

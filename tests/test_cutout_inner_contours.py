@@ -622,3 +622,13 @@ def test_ring_without_center_line_never_becomes_a_cutout():
     assert all(c.side != 'inner' for c in contours)
     assert contours == []
     assert any('without a center line' in w and '11' in w for w in warnings)
+
+
+def test_off_mouse_bites_negative_margin_single_gerber(cutout_app):
+    # it raised TypeError: the bites used buffer(margin - r).exterior, the main cut the inside edge
+    got = run_case(cutout_app, 'outline_single', {'gap_type': 2, 'margin': -0.3})
+    assert got['solid_geo'] and got['holes']
+    # the board ring is 50 x 30 with a 0.2 stroke: its inside edge is 0.1 in; the bites are 0.3 + 0.3 further in
+    for hole in (shapely.from_wkt(w) for w in got['holes']):
+        x, y = hole.x, hole.y
+        assert min(abs(x - 0.7), abs(x - 49.3), abs(y - 0.7), abs(y - 29.3)) < 0.01
