@@ -1552,6 +1552,10 @@ class Gerber(Geometry):
             self.follow_geometry = flatten_shapely_geometry(follow_buffer)
 
             # this treats the case when we are storing geometry as solids
+            # Some entries are MultiPolygons (macro flashes, regions repaired by buffer). MultiPolygon(poly_buffer)
+            # below accepts only Polygons, so split every entry into its parts and drop empties and non-polygons.
+            poly_buffer = [geo for geo in flatten_shapely_geometry(poly_buffer) if isinstance(geo, Polygon)]
+
             try:
                 buff_length = len(poly_buffer)
             except TypeError:
