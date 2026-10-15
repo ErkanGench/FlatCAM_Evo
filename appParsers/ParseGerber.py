@@ -436,6 +436,19 @@ class Gerber(Geometry):
         self.app.log.warning("Aperture not implemented: %s" % str(apertureType))
         return None
 
+    @staticmethod
+    def _read_file_function(text: str) -> list:
+        """
+        The value list of the first ``%TF.FileFunction,...*%`` attribute of a Gerber text, or an empty list.
+
+        :param text:    the content of the Gerber file
+        :return:        for example ['Profile', 'NP']
+        """
+        match = re.search(r'%TF\.FileFunction,([^*%]*)', text)
+        if not match:
+            return []
+        return [item.strip() for item in match.group(1).split(',') if item.strip()]
+
     def parse_file(self, filename: str, follow: bool = False) -> Optional[str]:
         """
         Calls Gerber.parse_lines() with generator of lines
@@ -459,6 +472,12 @@ class Gerber(Geometry):
         with open(filename, 'r') as gfile:
 
             read_gfile = gfile.read()
+
+            # the X2 file function (for example ['Profile', 'NP']) is kept: the %TF lines are removed below
+            self.file_function = self._read_file_function(read_gfile)
+            obj_options = getattr(self, 'obj_options', None)
+            if isinstance(obj_options, dict):
+                obj_options['file_function'] = list(self.file_function)
 
             # clean KiCAD files of garbage
             if '%TF.' in read_gfile or '%TO.' in read_gfile or '%TD' in read_gfile or '%TA' in read_gfile:
