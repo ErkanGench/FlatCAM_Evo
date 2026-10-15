@@ -70,14 +70,26 @@ import gettext
 import appTranslation as fcTranslate
 import builtins
 
-HAS_ORTOOLS = True
 
-if platform.architecture()[0] == '64bit':
+def _ortools_available(arch):
+    """
+    OR-Tools is used only on a 64-bit Python and only if it can be imported.
+
+    :param arch: the first item of platform.architecture(), e.g. '64bit'
+    :return: True if the OR-Tools modules were imported (they are then module globals), False otherwise
+    """
+    if arch != '64bit':
+        return False
+    global pywrapcp, routing_enums_pb2
     try:
         from ortools.constraint_solver import pywrapcp      # noqa
         from ortools.constraint_solver import routing_enums_pb2     # noqa
-    except ModuleNotFoundError:
-        HAS_ORTOOLS = False
+    except ImportError:
+        return False
+    return True
+
+
+HAS_ORTOOLS = _ortools_available(platform.architecture()[0])
 
 fcTranslate.apply_language('strings')
 

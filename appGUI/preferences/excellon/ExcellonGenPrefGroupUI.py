@@ -348,9 +348,9 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
             self.optimization_time_label.setDisabled(True)
             self.optimization_time_entry.setDisabled(True)
 
-        try:
-            import ortools
-        except ModuleNotFoundError:
+        # OR-Tools options only if it was imported on a 64-bit Python
+        from camlib import HAS_ORTOOLS
+        if not HAS_ORTOOLS:
             self.excellon_optimization_radio.setOptionsDisabled([_('MetaHeuristic'), _('Basic')], True)
             self.optimization_time_label.setDisabled(True)
             self.optimization_time_entry.setDisabled(True)
