@@ -149,7 +149,7 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
                     self.assertEqual(stream.read(), job.source_file)
                 self.assertEqual(job.obj_options['name'], 'renamed')
                 self.assertEqual(job.default_data['name'], 'renamed')
-                job.app.collection.update_view.assert_called_once_with()
+                job.app.collection.update_view.assert_called_once_with(job)
                 job.app.regFK.remove_keyword.assert_called_once_with('own_job', update=False)
                 job.app.regFK.prepend_keyword.assert_called_once_with('renamed')
                 if ui_state == 'live':
