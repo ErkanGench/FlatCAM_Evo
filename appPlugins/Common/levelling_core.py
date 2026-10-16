@@ -38,6 +38,8 @@ from defaults import AppDefaults
 from appPlugins.Common.levelling_interp import (
     build_bilinear_grid,
     bilinear_offset,
+    bicubic_offset,
+    bicubic_supported,
     nearest_offset,
     match_nearest_point,
     match_tolerance,
@@ -572,7 +574,7 @@ class LevellingCoreMixin:
             self.plot_probing_geo(geometry=points_geo, visibility=state, custom_color='#000000FF')
             self.plot_probing_geo(geometry=poly_geo, visibility=state)
         # bilinear interpolation
-        elif al_method == 'b':
+        elif al_method in ('b', 'c'):
             bilinear_points = self.al_bilinear_geo_storage
             if not bilinear_points:
                 bilinear_points = [
@@ -1107,7 +1109,7 @@ class LevellingCoreMixin:
         self._al_points = points
         self._al_decimals = target_obj.coords_decimals
 
-        if al_method == 'b':
+        if al_method in ('b', 'c'):
             self._al_grid = build_bilinear_grid(points, tol)
             if self._al_grid is None:
                 self.app.inform.emit(
@@ -1115,6 +1117,15 @@ class LevellingCoreMixin:
                     _("Probe points do not form a regular grid. Using nearest-point levelling.")
                 )
                 self._al_offset_fn = self.autolevell_voronoi
+            elif al_method == 'c' and not bicubic_supported(self._al_grid):
+                self.app.inform.emit(
+                    '[WARNING_NOTCL] %s' %
+                    _("Bicubic needs a grid of at least 4 x 4 points with equal spacing. "
+                      "Using bilinear levelling.")
+                )
+                self._al_offset_fn = self.autolevell_bilinear
+            elif al_method == 'c':
+                self._al_offset_fn = self.autolevell_bicubic
             else:
                 self._al_offset_fn = self.autolevell_bilinear
         else:
@@ -1140,7 +1151,7 @@ class LevellingCoreMixin:
 
         :param target_obj:  the CNCJobObject whose tools' G-code is to be
                              height-compensated. Not modified.
-        :param al_method:   'v' (Voronoi/nearest-point) or 'b' (bilinear).
+        :param al_method:   'v' (Voronoi/nearest-point), 'b' (bilinear) or 'c' (bicubic).
         :param snapshot:    optional validated (points, units, grid tolerance).
         :param diagnostics: optional list receiving the coverage warning for later
                              GUI-thread publication; otherwise emit it directly.
@@ -1164,7 +1175,7 @@ class LevellingCoreMixin:
         state['outside'] = 0
         if map_points:
             tol = snapshot[2] if snapshot is not None else self._al_grid_tolerance()
-            if al_method == 'b' and self._al_grid is not None:
+            if al_method in ('b', 'c') and self._al_grid is not None:
                 xs, ys, _grid = self._al_grid
                 footprint = box(xs[0], ys[0], xs[-1], ys[-1])
             else:
@@ -1268,6 +1279,9 @@ class LevellingCoreMixin:
 
     def autolevell_bilinear(self, x, y):
         return bilinear_offset(self._al_grid, x, y)
+
+    def autolevell_bicubic(self, x, y):
+        return bicubic_offset(self._al_grid, x, y)
 
     def autolevell_voronoi(self, x, y):
         return nearest_offset(self._al_points, x, y)
@@ -1383,14 +1397,14 @@ class LevellingCoreMixin:
         target_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
         if self._is_supported_al_target(target_obj) and getattr(target_obj, 'kind', None) == 'cncjob':
             target_obj.obj_options['tools_al_mode'] = val
-            if method in ('v', 'b'):
+            if method in ('v', 'b', 'c'):
                 target_obj.obj_options['tools_al_method'] = method
 
     def _restore_al_radios(self, target_obj):
         mode = target_obj.obj_options.get('tools_al_mode', 'grid')
         method = target_obj.obj_options.get('tools_al_method', 'v')
         mode = mode if mode in ('grid', 'manual') else 'grid'
-        method = method if method in ('v', 'b') and mode != 'manual' else 'v'
+        method = method if method in ('v', 'b', 'c') and mode != 'manual' else 'v'
         mode_blocked = self.ui.al_mode_radio.blockSignals(True)
         method_blocked = self.ui.al_method_radio.blockSignals(True)
         try:
@@ -1436,7 +1450,7 @@ class LevellingCoreMixin:
         self.ui.avoid_exc_holes_size_entry.show() if state else self.ui.avoid_exc_holes_size_entry.hide()
 
     def on_method_radio(self, val):
-        if val not in ('v', 'b'):
+        if val not in ('v', 'b', 'c'):
             return
         if self.ui.al_mode_radio.get_value() == 'manual':
             val = 'v'
@@ -1447,7 +1461,7 @@ class LevellingCoreMixin:
             target_obj.obj_options['tools_al_method'] = val
 
     def _update_method_radio_ui(self, val):
-        if val == 'b':
+        if val in ('b', 'c'):
             self.ui.al_columns_entry.setMinimum(2)
             self.ui.al_rows_entry.setMinimum(2)
         else:

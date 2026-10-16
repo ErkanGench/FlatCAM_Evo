@@ -150,6 +150,84 @@ def bilinear_offset(grid_data, x, y):
     )
 
 
+def _catmull_rom(p0, p1, p2, p3, t):
+    """Catmull-Rom spline value between p1 (t=0) and p2 (t=1)."""
+    return p1 + 0.5 * t * (p2 - p0 + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 +
+                                          t * (3.0 * (p1 - p2) + p3 - p0)))
+
+
+def _neighbours(values, i):
+    """
+    Return the 4 values (p0, p1, p2, p3) around the interval [i, i+1] of a
+    sequence. A missing neighbour is made by linear extrapolation, so a plane
+    stays exact at the border: 2 * v[0] - v[1] before the first value and
+    2 * v[n-1] - v[n-2] after the last one.
+    """
+    n = len(values)
+    p1 = values[i]
+    p2 = values[i + 1]
+    p0 = values[i - 1] if i - 1 >= 0 else 2.0 * values[0] - values[1]
+    p3 = values[i + 2] if i + 2 <= n - 1 else 2.0 * values[n - 1] - values[n - 2]
+    return p0, p1, p2, p3
+
+
+def bicubic_offset(grid_data, x, y):
+    """
+    Compute the bicubic (Catmull-Rom) interpolated height offset at (x, y)
+    using a grid built by build_bilinear_grid.
+
+    x and y are clamped into the grid's range, so the spline parameter is
+    always in [0, 1] and the value is never extrapolated. At the border of
+    the grid the missing neighbour is made by linear extrapolation of the
+    2 nearest values, so a plane is reproduced exactly. The spline is
+    applied on each row (X direction) and then on the 4 row results
+    (Y direction).
+
+    :param grid_data: tuple (xs, ys, grid) as returned by build_bilinear_grid.
+        It must have at least 4 values on each axis (see bicubic_supported()).
+    :param x: query X coordinate.
+    :param y: query Y coordinate.
+    :return: interpolated height offset (float).
+    """
+    xs, ys, grid = grid_data
+
+    x = min(max(x, xs[0]), xs[-1])
+    y = min(max(y, ys[0]), ys[-1])
+
+    i = bisect.bisect_right(xs, x) - 1
+    i = min(max(i, 0), len(xs) - 2)
+    j = bisect.bisect_right(ys, y) - 1
+    j = min(max(j, 0), len(ys) - 2)
+
+    tx = 0.0 if xs[i + 1] == xs[i] else (x - xs[i]) / (xs[i + 1] - xs[i])
+    ty = 0.0 if ys[j + 1] == ys[j] else (y - ys[j]) / (ys[j + 1] - ys[j])
+
+    # only the rows around the interval [j, j+1] are needed
+    lo = max(j - 1, 0)
+    hi = min(j + 2, len(ys) - 1)
+    row_values = [_catmull_rom(*_neighbours(r, i), tx) for r in grid[lo:hi + 1]]
+    return _catmull_rom(*_neighbours(row_values, j - lo), ty)
+
+
+def _equal_spacing(values, rel_tol):
+    steps = [b - a for a, b in zip(values, values[1:])]
+    mean_step = sum(steps) / len(steps)
+    return all(abs(step - mean_step) <= rel_tol * mean_step for step in steps)
+
+
+def bicubic_supported(grid_data, rel_tol=1e-6):
+    """
+    :return: True if the grid has at least 4 values on each axis and equal
+        spacing on each axis.
+    """
+    if grid_data is None:
+        return False
+    xs, ys = grid_data[0], grid_data[1]
+    if len(xs) < 4 or len(ys) < 4:
+        return False
+    return _equal_spacing(xs, rel_tol) and _equal_spacing(ys, rel_tol)
+
+
 def nearest_offset(points, x, y):
     """
     Return the height of the point in `points` nearest to (x, y).

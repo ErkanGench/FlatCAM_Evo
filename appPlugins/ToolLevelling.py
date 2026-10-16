@@ -2370,12 +2370,14 @@ class LevelUI:
         self.al_method_lbl = FCLabel('%s:' % _("Method"))
         self.al_method_lbl.setToolTip(_("Choose a method for approximation of heights from autolevelling data.\n"
                                         "- Voronoi: will generate a Voronoi diagram\n"
-                                        "- Bilinear: will use bilinear interpolation. Usable only for grid mode."))
+                                        "- Bilinear: will use bilinear interpolation. Usable only for grid mode.\n"
+                                        "- Bicubic: smooth surface through the grid. Needs at least 4 rows and 4 columns."))
 
         self.al_method_radio = RadioSet(
             [
                 {'label': _('Voronoi'), 'value': 'v'},
-                {'label': _('Bilinear'), 'value': 'b'}
+                {'label': _('Bilinear'), 'value': 'b'},
+                {'label': _('Bicubic'), 'value': 'c'}
             ])
         self.al_method_lbl.setDisabled(True)
         self.al_method_radio.setDisabled(True)

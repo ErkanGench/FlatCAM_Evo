@@ -269,6 +269,13 @@ tests/test_geometry_walker.py::test_single_geometry_is_one_leaf_and_type_is_kept
 tests/test_geometry_walker.py::test_single_geometry_is_one_leaf_and_type_is_kept[geom5]
 tests/test_geometry_walker.py::test_single_geometry_is_one_leaf_and_type_is_kept[geom6]
 tests/test_geometry_walker.py::test_tuple_is_a_leaf_by_default_and_a_container_with_any_iterable
+tests/test_grbl_bicubic.py::TestBicubic::test_clamped_outside
+tests/test_grbl_bicubic.py::TestBicubic::test_close_to_bilinear_on_smooth_surface
+tests/test_grbl_bicubic.py::TestBicubic::test_hits_grid_nodes
+tests/test_grbl_bicubic.py::TestBicubic::test_nonuniform_not_supported
+tests/test_grbl_bicubic.py::TestBicubic::test_plane_exact_at_border
+tests/test_grbl_bicubic.py::TestBicubic::test_plane_is_exact
+tests/test_grbl_bicubic.py::TestBicubic::test_supported_needs_4x4
 tests/test_grid_zoom.py::TestGridZoom::test_grid_lines_remain_continuous_when_rotated_at_maximum_zoom
 tests/test_grid_zoom.py::TestGridZoom::test_inch_grid_lines_remain_continuous_at_maximum_zoom
 tests/test_hud_layout.py::TestHudLayout::test_coordinate_columns_are_aligned
