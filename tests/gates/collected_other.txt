@@ -422,6 +422,15 @@ tests/test_grbl_stream_abort.py::TestStreamAbort::test_port_exception_latches
 tests/test_grbl_stream_abort.py::TestStreamAbort::test_reset_after_idle_wait
 tests/test_grbl_stream_abort.py::TestStreamAbort::test_reset_clears_dirty
 tests/test_grbl_stream_abort.py::TestStreamAbort::test_reset_during_final_wait_kept
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_arc_is_chord
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_basic
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_g92_then_unknown
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_no_move_no_segment
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_probe_then_unknown
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_relative
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_segments_start_after_all_axes_known
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_skips_g28_g92
+tests/test_grbl_toolpath.py::ParseToolpathTest::test_unknown_start_no_segment
 tests/test_grid_zoom.py::TestGridZoom::test_grid_lines_remain_continuous_when_rotated_at_maximum_zoom
 tests/test_grid_zoom.py::TestGridZoom::test_inch_grid_lines_remain_continuous_at_maximum_zoom
 tests/test_hud_layout.py::TestHudLayout::test_coordinate_columns_are_aligned

@@ -42,6 +42,131 @@ def _g_key(g):
     return '%.1f' % g
 
 
+class _ModalState:
+    """
+    The modal state of a G-code stream, with the rules of level_gcode_line():
+    the motion mode, G90/G91, G93/G94, the units and X/Y/Z. An axis that is
+    None is not known. Used by split_long_moves() and parse_toolpath().
+    """
+
+    def __init__(self, pos=None):
+        self.pos = {'X': None, 'Y': None, 'Z': None} if pos is None else dict(zip('XYZ', pos))
+        self.motion = 0         # modal G0..G3 (as level_gcode_line), None: not known
+        self.dist = 90          # 90, 91, or None: not known
+        self.inverse = False    # G93 True, G94 False, None: not known
+        self.units = None       # 20, 21, or None: not known
+
+    def lose(self, axes=('X', 'Y', 'Z')):
+        for axis in axes:
+            self.pos[axis] = None
+
+    def advance(self, line):
+        """
+        Apply 1 line to the state.
+
+        :return: None if the line does not change the state (blank, comment, "%"),
+            else a dict with the keys: words, g_words, letters, axes, keys, start
+            (the position before the line), blocked (the block makes a position
+            unknown).
+        """
+        pos = self.pos
+        if line.strip().startswith('$'):
+            # a GRBL setting or command line
+            self.lose()
+            self.motion = None
+            return None
+        masked = _COMMENT_RE.sub(' ', line)
+        idx = masked.find(';')
+        if idx != -1:
+            masked = masked[:idx]
+        if not masked.strip() or masked.strip() == '%':
+            return None
+        if masked.strip().startswith('/'):
+            # an optional line: the controller can skip it, so every modal setting that
+            # it could change is not known
+            self.lose()
+            self.motion = self.dist = self.inverse = self.units = None
+            return None
+
+        upper = masked.upper()
+        words = _words(masked)
+        # text that is not a word (an expression, a parameter) or lower case letters
+        unparsed = (masked != upper) or bool(re.sub(r'[\s%]', '', _WORD_RE.sub('', upper)))
+        g_words = [v for k, v in words if k == 'G']
+        letters = {k for k, _v in words}
+        axes = {k: v for k, v in words if k in 'XYZ'}
+        keys = [_g_key(g) for g in g_words]
+        start = dict(pos)
+        # `blocked`: the block makes a position unknown
+        blocked = False
+        for key in keys:
+            if key in _MOTION_G_KEYS:
+                self.motion = int(float(key))
+            elif key == '80.0':
+                self.motion = None
+            elif key in _NO_EFFECT_G_KEYS:
+                pass
+            elif key == '90.0':
+                self.dist = 90
+            elif key == '91.0':
+                self.dist = 91
+            elif key == '93.0':
+                self.inverse = True
+            elif key == '94.0':
+                self.inverse = False
+            elif key in ('20.0', '21.0'):
+                value = int(float(key))
+                if value != self.units:
+                    if self.units is not None or any(v is not None for v in pos.values()):
+                        blocked = True
+                    self.lose()
+                self.units = value
+            elif key in ('43.1', '49.0'):
+                blocked = True
+                self.lose(['Z'])
+            elif key in ('38.2', '38.3', '38.4', '38.5'):
+                blocked = True
+                self.lose()
+                self.motion = None
+            elif key in _LOSE_G_KEYS:
+                blocked = True
+                self.lose()
+            else:
+                # any other G code: it can be a motion, a frame or a mode change
+                blocked = True
+                self.lose()
+                self.motion = None
+        # M2 and M30 end the program and reset the modal state
+        if any(k == 'M' and v in (2.0, 30.0) for k, v in words):
+            blocked = True
+            self.lose()
+            self.motion = None
+            self.dist = 90
+            self.inverse = False
+        if unparsed:
+            blocked = True
+            self.lose()
+            self.motion = None
+            if upper.count('G') > len(g_words):
+                # a G word that is not read can be any G code
+                self.dist = self.inverse = self.units = None
+
+        # the axis words: only an absolute G0..G3 move makes an axis known
+        if axes:
+            if blocked or self.motion not in (0, 1, 2, 3):
+                self.lose(axes.keys())
+            elif self.dist == 90:
+                pos.update(axes)
+            elif self.dist == 91:
+                for k, v in axes.items():
+                    if pos[k] is not None:
+                        pos[k] += v
+            else:
+                self.lose(axes.keys())
+        return {'words': words, 'g_words': g_words, 'letters': letters, 'axes': axes,
+                'keys': keys, 'start': start, 'blocked': blocked}
+
+
 def split_long_moves(lines, max_len, decimals=4):
     """
     Split each absolute G1 move with X or Y that is longer than `max_len`
@@ -68,120 +193,27 @@ def split_long_moves(lines, max_len, decimals=4):
     """
     if not max_len > 0:
         raise ValueError("max_len must be > 0")
-    pos = {'X': None, 'Y': None, 'Z': None}
-    motion = 0              # modal G0..G3 (as level_gcode_line), None: not known
-    dist = 90               # 90, 91, or None: not known
-    inverse = False         # G93 True, G94 False, None: not known
-    units = None            # 20, 21, or None: not known
+    state = _ModalState()
+    pos = state.pos
     out = []
     split_count = 0
 
-    def lose(axes=('X', 'Y', 'Z')):
-        for axis in axes:
-            pos[axis] = None
-
     for line in lines:
-        if line.strip().startswith('$'):
-            # a GRBL setting or command line
-            lose()
-            motion = None
+        info = state.advance(line)
+        if info is None:
             out.append(line)
             continue
-        masked = _COMMENT_RE.sub(' ', line)
-        idx = masked.find(';')
-        if idx != -1:
-            masked = masked[:idx]
-        if not masked.strip() or masked.strip() == '%':
-            out.append(line)
-            continue
-        if masked.strip().startswith('/'):
-            # an optional line: the controller can skip it, so every modal setting that
-            # it could change is not known
-            lose()
-            motion = dist = inverse = units = None
-            out.append(line)
-            continue
-
-        upper = masked.upper()
-        words = _words(masked)
-        # text that is not a word (an expression, a parameter) or lower case letters
-        unparsed = (masked != upper) or bool(re.sub(r'[\s%]', '', _WORD_RE.sub('', upper)))
-        g_words = [v for k, v in words if k == 'G']
-        letters = {k for k, _v in words}
-        axes = {k: v for k, v in words if k in 'XYZ'}
-        keys = [_g_key(g) for g in g_words]
-        start = dict(pos)
-        # `blocked`: the block makes a position unknown
-        blocked = False
-        for key in keys:
-            if key in _MOTION_G_KEYS:
-                motion = int(float(key))
-            elif key == '80.0':
-                motion = None
-            elif key in _NO_EFFECT_G_KEYS:
-                pass
-            elif key == '90.0':
-                dist = 90
-            elif key == '91.0':
-                dist = 91
-            elif key == '93.0':
-                inverse = True
-            elif key == '94.0':
-                inverse = False
-            elif key in ('20.0', '21.0'):
-                value = int(float(key))
-                if value != units:
-                    if units is not None or any(v is not None for v in pos.values()):
-                        blocked = True
-                    lose()
-                units = value
-            elif key in ('43.1', '49.0'):
-                blocked = True
-                lose(['Z'])
-            elif key in ('38.2', '38.3', '38.4', '38.5'):
-                blocked = True
-                lose()
-                motion = None
-            elif key in _LOSE_G_KEYS:
-                blocked = True
-                lose()
-            else:
-                # any other G code: it can be a motion, a frame or a mode change
-                blocked = True
-                lose()
-                motion = None
+        words = info['words']
+        letters = info['letters']
+        axes = info['axes']
+        keys = info['keys']
+        start = info['start']
+        blocked = info['blocked']
         nonmotion_keys = [key for key in keys if key != '1.0']
-        # M2 and M30 end the program and reset the modal state
-        if any(k == 'M' and v in (2.0, 30.0) for k, v in words):
-            blocked = True
-            lose()
-            motion = None
-            dist = 90
-            inverse = False
-        if unparsed:
-            blocked = True
-            lose()
-            motion = None
-            if upper.count('G') > len(g_words):
-                # a G word that is not read can be any G code
-                dist = inverse = units = None
-
-        # the axis words: only an absolute G0..G3 move makes an axis known
-        if axes:
-            if blocked or motion not in (0, 1, 2, 3):
-                lose(axes.keys())
-            elif dist == 90:
-                pos.update(axes)
-            elif dist == 91:
-                for k, v in axes.items():
-                    if pos[k] is not None:
-                        pos[k] += v
-            else:
-                lose(axes.keys())
 
         can_split = (
             not blocked and
-            motion == 1 and dist == 90 and inverse is False and
+            state.motion == 1 and state.dist == 90 and state.inverse is False and
             ('X' in axes or 'Y' in axes) and
             letters <= set('GXYZFN') and all(k in _SPLIT_G_KEYS for k in keys) and
             None not in (start['X'], start['Y'], start['Z']) and
@@ -210,3 +242,36 @@ def split_long_moves(lines, max_len, decimals=4):
             out.append(piece)
         split_count += 1
     return out, split_count
+
+
+def parse_toolpath(lines, start=None):
+    """
+    The 3D toolpath of stream lines: 1 straight segment for each G0..G3 line
+    that moves. Arcs must be split before (SenderGen.split_arcs()); a G2/G3
+    line gives 1 straight segment (the chord) from its start to its end point.
+
+    The position is tracked with the rules of split_long_moves(). A segment
+    is made only if the start and the end point are known (all 3 axes): after
+    a line that makes the position unknown (probe, G53, G92, G28, ...) there
+    is no segment until X, Y and Z are known again.
+
+    :param lines: list of str.
+    :param start: the start position (x, y, z), or None if it is not known.
+    :return: list of (line_index, (x0, y0, z0), (x1, y1, z1), rapid) where
+        rapid is True for G0.
+    """
+    state = _ModalState(start)
+    pos = state.pos
+    segments = []
+    for index, line in enumerate(lines):
+        info = state.advance(line)
+        if info is None or not info['axes'] or info['blocked']:
+            continue
+        if state.motion not in (0, 1, 2, 3):
+            continue
+        p0 = (info['start']['X'], info['start']['Y'], info['start']['Z'])
+        p1 = (pos['X'], pos['Y'], pos['Z'])
+        if None in p0 or None in p1 or p0 == p1:
+            continue
+        segments.append((index, p0, p1, state.motion == 0))
+    return segments
