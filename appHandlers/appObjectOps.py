@@ -36,7 +36,7 @@ def _finish_origin_move(app, result, retry):
     if result['error'] is not None:
         app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed."), result['error']))
         return
-    if result['threaded'] and app.use_3d_engine:
+    if result['threaded']:
         if app.plotcanvas.fit_view(blocking=False) is False:
             QtCore.QTimer.singleShot(25, lambda: retry(result))
             return
@@ -58,8 +58,6 @@ class AppObjectOps(QtCore.QObject):
         self.options = app.options
         self.defaults = app.defaults
         self.ui = app.ui
-        # Handler-local state for mouse event tracking
-        self._mp_zc = None
         self.move_origin_finished.connect(self._on_move_origin_finished)
 
     def on_flipy(self):
@@ -326,15 +324,12 @@ class AppObjectOps(QtCore.QObject):
                     for obj in self.app.collection.get_list():
                         obj.plot()
                     self.app.custom_signal.emit(None)
-                if self.app.use_3d_engine:
-                    self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
-                else:
-                    self.app.plotcanvas.graph_event_disconnect(self._mp_zc)
+                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
                 self.app.inhibit_context_menu = False
 
             self.app.worker_task.emit({'fcn': worker_task, 'params': []})
 
-        self._mp_zc = self.app.plotcanvas.graph_event_connect('mouse_release', self.on_set_zero_click)
+        self.app.plotcanvas.graph_event_connect('mouse_release', self.on_set_zero_click)
 
         # first disconnect it as it may have been used by something else
         try:
@@ -352,7 +347,7 @@ class AppObjectOps(QtCore.QObject):
         :return:
         """
         noplot_sig = noplot
-        right_button = 2 if self.app.use_3d_engine else 3
+        right_button = 2
 
         def worker_task(app_obj):
             with app_obj.proc_container.new(_("Setting Origin...")):
@@ -400,7 +395,7 @@ class AppObjectOps(QtCore.QObject):
             return
 
         if event is not None and event.button == 1:
-            event_pos = event.pos if self.app.use_3d_engine else (event.xdata, event.ydata)
+            event_pos = event.pos
 
             pos_canvas = self.app.plotcanvas.translate_coords(event_pos)
 
@@ -420,11 +415,8 @@ class AppObjectOps(QtCore.QObject):
             self.app.should_we_save = True
         elif event is not None and event.button == right_button:
             if self.ui.popMenu.mouse_is_panning is False:
-                if self.app.use_3d_engine:
-                    self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
-                    self.app.inhibit_context_menu = False
-                else:
-                    self.app.plotcanvas.graph_event_disconnect(self._mp_zc)
+                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_set_zero_click)
+                self.app.inhibit_context_menu = False
 
                 self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
 
@@ -536,34 +528,14 @@ class AppObjectOps(QtCore.QObject):
 
         cursor = QtGui.QCursor()
 
-        if self.app.use_3d_engine:
-            cal_location = (location[0], location[1])
-            canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
-            jump_loc = self.app.plotcanvas.translate_coords_2((cal_location[0], cal_location[1]))
-            j_pos = (
-                int(canvas_origin.x() + round(jump_loc[0])),
-                int(canvas_origin.y() + round(jump_loc[1]))
-            )
-            cursor.setPos(j_pos[0], j_pos[1])
-        else:
-            # find the canvas origin which is in the top left corner
-            canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
-
-            # determine the coordinates for the lowest left point of the canvas
-            x0, y0 = canvas_origin.x(), canvas_origin.y() + self.ui.right_layout.geometry().height()
-
-            # transform the given location from data coordinates to display coordinates
-            loc = self.app.plotcanvas.axes.transData.transform_point(location)
-            j_pos = (
-                int(x0 + loc[0]),
-                int(y0 - loc[1])
-            )
-            cursor.setPos(j_pos[0], j_pos[1])
-            self.app.plotcanvas.mouse = [location[0], location[1]]
-            if self.options.get("global_cursor_color_enabled", self.defaults.get("global_cursor_color_enabled", True)) is True:
-                self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1], color=self.app.cursor_color_3D)
-            else:
-                self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1])
+        cal_location = (location[0], location[1])
+        canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
+        jump_loc = self.app.plotcanvas.translate_coords_2((cal_location[0], cal_location[1]))
+        j_pos = (
+            int(canvas_origin.x() + round(jump_loc[0])),
+            int(canvas_origin.y() + round(jump_loc[1]))
+        )
+        cursor.setPos(j_pos[0], j_pos[1])
 
         if self.app.grid_status():
             # Update cursor
@@ -642,34 +614,14 @@ class AppObjectOps(QtCore.QObject):
 
         cursor = QtGui.QCursor()
 
-        if self.app.use_3d_engine:
-            cal_location = (location[0], location[1])
-            canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
-            jump_loc = self.app.plotcanvas.translate_coords_2((cal_location[0], cal_location[1]))
-            j_pos = (
-                int(canvas_origin.x() + round(jump_loc[0])),
-                int(canvas_origin.y() + round(jump_loc[1]))
-            )
-            cursor.setPos(j_pos[0], j_pos[1])
-        else:
-            # find the canvas origin which is in the top left corner
-            canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
-
-            # determine the coordinates for the lowest left point of the canvas
-            x0, y0 = canvas_origin.x(), canvas_origin.y() + self.ui.right_layout.geometry().height()
-
-            # transform the given location from data coordinates to display coordinates
-            loc = self.app.plotcanvas.axes.transData.transform_point(location)
-            j_pos = (
-                int(x0 + loc[0]),
-                int(y0 - loc[1])
-            )
-            cursor.setPos(j_pos[0], j_pos[1])
-            self.app.plotcanvas.mouse = [location[0], location[1]]
-            if self.options.get("global_cursor_color_enabled", self.defaults.get("global_cursor_color_enabled", True)) is True:
-                self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1], color=self.app.cursor_color_3D)
-            else:
-                self.app.plotcanvas.draw_cursor(x_pos=location[0], y_pos=location[1])
+        cal_location = (location[0], location[1])
+        canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
+        jump_loc = self.app.plotcanvas.translate_coords_2((cal_location[0], cal_location[1]))
+        j_pos = (
+            int(canvas_origin.x() + round(jump_loc[0])),
+            int(canvas_origin.y() + round(jump_loc[1]))
+        )
+        cursor.setPos(j_pos[0], j_pos[1])
 
         if self.app.grid_status():
             # Update cursor
@@ -963,16 +915,7 @@ class AppObjectOps(QtCore.QObject):
 
                     if bulk:
                         names = [ob.obj_options['name'] for ob in selected]
-                        if not self.app.use_3d_engine:
-                            for ob in selected:
-                                if ob.obj_options['plot']:
-                                    try:
-                                        self.app.plotcanvas.figure.delaxes(ob.shapes.axes)
-                                    except Exception as e:
-                                        self.log.error("App.on_delete() --> %s" % str(e))
                         self.app.collection.delete_objects(selected)
-                        if not self.app.use_3d_engine:
-                            self.app.plotcanvas.auto_adjust_axes()
                         self.app.setup_default_properties_tab()
                         for name in names:
                             self.inform.emit('%s: %s' % (_("Object deleted"), name))
@@ -1000,20 +943,9 @@ class AppObjectOps(QtCore.QObject):
                 sel_obj = self.app.collection.get_active()
 
             name = sel_obj.obj_options["name"]
-            isPlotted = sel_obj.obj_options["plot"]
         except AttributeError:
             self.log.debug("Nothing selected for deletion")
             return
-
-        if self.app.use_3d_engine is False:
-            # Remove plot only if the object was plotted otherwise will fail
-            if isPlotted:
-                try:
-                    self.app.plotcanvas.figure.delaxes(sel_obj.shapes.axes)
-                except Exception as e:
-                    self.log.error("App.delete_first_selected() --> %s" % str(e))
-
-            self.app.plotcanvas.auto_adjust_axes()
 
         # Remove from dictionary
         self.app.collection.delete_active()

@@ -64,10 +64,6 @@ class ToolCopperThieving(AppTool):
         # store the flattened geometry here:
         self.flat_geometry = []
 
-        # Events ID
-        self.mr = None
-        self.mm = None
-
         # Mouse cursor positions
         self.mouse_is_dragging = False
         self.cursor_pos = (0, 0)
@@ -436,14 +432,8 @@ class ToolCopperThieving(AppTool):
         # To be called after clicking on the plot.
 
     def on_mouse_release(self, event):
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            # event_is_dragging = event.is_dragging
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            # event_is_dragging = self.app.plotcanvas.is_dragging
-            right_button = 3
+        event_pos = event.pos
+        right_button = 2
 
         event_pos = self.app.plotcanvas.translate_coords(event_pos)
 
@@ -503,14 +493,8 @@ class ToolCopperThieving(AppTool):
 
     # called on mouse move
     def on_mouse_move(self, event):
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            event_is_dragging = event.is_dragging
-            # right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            event_is_dragging = self.app.plotcanvas.is_dragging
-            # right_button = 3
+        event_pos = event.pos
+        event_is_dragging = event.is_dragging
 
         curr_pos = self.app.plotcanvas.translate_coords(event_pos)
 
@@ -1185,10 +1169,6 @@ class ToolCopperThieving(AppTool):
         # reset the variables
         self.sel_rect = []
 
-        # Events ID
-        self.mr = None
-        self.mm = None
-
         # Mouse cursor positions
         self.mouse_is_dragging = False
         self.cursor_pos = (0, 0)
@@ -1205,34 +1185,22 @@ class ToolCopperThieving(AppTool):
 
     def connect_event_handlers(self):
         if self.handlers_connected is False:
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-                self.app.plotcanvas.graph_event_disconnect(self.app.mm)
-                self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-            self.mr = self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
-            self.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
             self.handlers_connected = True
 
     def disconnect_event_handlers(self):
         if self.handlers_connected is True:
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.mr)
-                self.app.plotcanvas.graph_event_disconnect(self.mm)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
 
-            self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                                  self.app.on_mouse_click_over_plot)
-            self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move',
-                                                                  self.app.on_mouse_move_over_plot)
-            self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                  self.app.on_mouse_click_release_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
             self.handlers_connected = False
 
     def flatten(self, geometry):

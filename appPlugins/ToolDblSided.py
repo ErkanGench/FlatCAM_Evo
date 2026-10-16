@@ -42,8 +42,6 @@ class DblSidedTool(AppTool):
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
-        self.mr = None
-
         self.drill_values = ""
 
         # will hold the Excellon object used for picking a hole as mirror reference
@@ -399,22 +397,13 @@ class DblSidedTool(AppTool):
         self.app.call_source = "2_sided_tool"
 
         self.app.inform.emit('%s.' % _("Click on canvas within the desired Excellon drill hole"))
-        self.mr = self.canvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
+        self.canvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
 
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-        else:
-            self.canvas.graph_event_disconnect(self.app.mr)
+        self.canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
     def on_mouse_click_release(self, event):
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            right_button = 2
-            self.app.event_is_dragging = self.app.event_is_dragging
-        else:
-            event_pos = (event.xdata, event.ydata)
-            right_button = 3
-            self.app.event_is_dragging = self.app.ui.popMenu.mouse_is_panning
+        event_pos = event.pos
+        right_button = 2
 
         pos_canvas = self.canvas.translate_coords(event_pos)
 
@@ -493,12 +482,9 @@ class DblSidedTool(AppTool):
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled by user request."))
 
     def disconnect_events(self):
-        self.app.mr = self.canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
-        else:
-            self.canvas.graph_event_disconnect(self.mr)
+        self.canvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
 
         self.local_connected = False
 

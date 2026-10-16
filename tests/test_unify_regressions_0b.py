@@ -51,7 +51,7 @@ def make_app(**option_overrides):
     plotcanvas.new_shape_collection.side_effect = lambda **kwargs: Mock()
     return SimpleNamespace(
         log=Mock(), inform=Mock(), options=options, defaults=defaults, app_units='MM', decimals=4,
-        use_3d_engine=True, plotcanvas=plotcanvas, pool=Mock(), abort_flag=False,
+        plotcanvas=plotcanvas, pool=Mock(), abort_flag=False,
         proc_container=MagicMock(), shell=Mock(), collection=Mock(), call_source='app',
         preprocessors=defaultdict(Mock), splash=None, worker_task=Mock(), app_obj=Mock(),
     )

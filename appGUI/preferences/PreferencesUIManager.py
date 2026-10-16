@@ -56,7 +56,6 @@ class PreferencesUIManager(QtCore.QObject):
         self.defaults_form_fields = {
             # General App
             "units_precision": self.ui.general_pref_form.general_app_group.precision_metric_entry,
-            "global_graphic_engine": self.ui.general_pref_form.general_app_group.ge_radio,
             "global_graphic_engine_3d_no_mp": self.ui.general_pref_form.general_app_group.ge_comp_cb,
             "global_app_level": self.ui.general_pref_form.general_app_group.app_level_radio,
             "global_log_verbose": self.ui.general_pref_form.general_app_group.verbose_combo,
@@ -1167,10 +1166,7 @@ class PreferencesUIManager(QtCore.QObject):
         custom_titlebar = self._pref("global_custom_titlebar")
         custom_titlebar_new_val = self.ui.general_pref_form.general_gui_group.custom_titlebar_cb.get_value()
 
-        ge = self._pref("global_graphic_engine")
-        ge_val = self.ui.general_pref_form.general_app_group.ge_radio.get_value()
-
-        if (appearance_new_val != appearance or ge != ge_val or dark_canvas_new_val != dark_canvas or
+        if (appearance_new_val != appearance or dark_canvas_new_val != dark_canvas or
                 custom_titlebar_new_val != custom_titlebar):
             msgbox = FCMessageBox(parent=self.ui)
             title = _("Application will restart")
@@ -1204,13 +1200,6 @@ class PreferencesUIManager(QtCore.QObject):
 
             # This will write the setting to the platform specific storage.
             del appearance_settings
-
-            if ge != ge_val:
-                if response == bt_yes:
-                    self.defaults["global_graphic_engine"] = ge_val
-                    should_restart = True
-                else:
-                    self.ui.general_pref_form.general_app_group.ge_radio.set_value(ge)
 
             if custom_titlebar_new_val != custom_titlebar:
                 if response == bt_yes:

@@ -37,7 +37,6 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False):
     tool.app.decimals = 4
     tool.app.app_units = units
     tool.app.options = {}
-    tool.app.use_3d_engine = True
     tool.app.inform_shell = MagicMock()
     tool.ui = MagicMock()
     tool.ui.plot_probing_pts_cb.get_value.return_value = False
@@ -55,9 +54,6 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False):
     tool.solid_geo = None
     tool.mouse_events_connected = False
     tool.mouse_is_dragging = False
-    tool.kp = None
-    tool.mm = None
-    tool.mr = None
     tool.old_selection_state = True
     tool.build_al_table_sig = MagicMock()
     tool.apply_autolevel_sig = MagicMock()
@@ -233,7 +229,6 @@ def run_set_tool_ui(storage, heights_valid, loaded_obj=None, plot_points=False, 
         QtWidgets.QWidget.__init__(tool)
     tool.app = MagicMock()
     tool.app.app_units = 'MM'
-    tool.app.use_3d_engine = True
     tool.app.options = {
         'global_app_level': 'a',
         'tools_al_plot_points': plot_points,
@@ -1514,11 +1509,9 @@ class TestManualFinish(unittest.TestCase):
             2: {'point': Point(5.0, 1.0), 'geo': None, 'height': 0.0},
         }
         tool = make_audit_tool(storage=storage)
-        tool.app.use_3d_engine = False
         tool.app.options = {'global_selection_shape': False}
         tool.old_selection_state = 'OLD'
         tool.mouse_events_connected = True
-        tool.kp, tool.mr, tool.mm = 11, 12, 13
         tool.ui.al_method_radio.get_value.return_value = method
         tool.probing_gcode = MagicMock(return_value='GCODE')
         tool.generate_voronoi_geometry = MagicMock()
@@ -1530,15 +1523,15 @@ class TestManualFinish(unittest.TestCase):
 
     def _check_released(self, tool):
         disconnected = [c.args for c in tool.app.plotcanvas.graph_event_disconnect.call_args_list]
-        self.assertIn((11,), disconnected)
-        self.assertIn((12,), disconnected)
-        self.assertIn((13,), disconnected)
+        self.assertIn(('key_press', tool.on_key_press), disconnected)
+        self.assertIn(('mouse_release', tool.on_mouse_click_release), disconnected)
+        self.assertIn(('mouse_move', tool.on_mouse_move), disconnected)
         self.assertFalse(tool.mouse_events_connected)
         self.assertEqual(tool.app.options['global_selection_shape'], 'OLD')
 
     def test_right_click_bilinear_builds_probing_gcode(self):
         tool = self._tool('b')
-        tool.on_mouse_click_release(SimpleNamespace(xdata=0.0, ydata=0.0, button=3))
+        tool.on_mouse_click_release(SimpleNamespace(pos=(0.0, 0.0), button=2))
         self._check_released(tool)
         self.assertEqual(tool.al_bilinear_geo_storage, [(1.0, 1.0, 0.0), (5.0, 1.0, 0.0)])
         self.assertEqual(tool.probing_gcode_text, 'GCODE')
@@ -1546,7 +1539,7 @@ class TestManualFinish(unittest.TestCase):
 
     def test_right_click_voronoi_builds_probing_gcode(self):
         tool = self._tool('v')
-        tool.on_mouse_click_release(SimpleNamespace(xdata=0.0, ydata=0.0, button=3))
+        tool.on_mouse_click_release(SimpleNamespace(pos=(0.0, 0.0), button=2))
         self._check_released(tool)
         self.assertEqual(tool.probing_gcode_text, 'GCODE')
 
@@ -1577,7 +1570,7 @@ class TestManualFinish(unittest.TestCase):
         tool.ui.probe_tip_dia_entry.get_value.return_value = 0.5
         tool.app.plotcanvas.translate_coords.return_value = (2.0, 2.0)
         tool.app.geo_editor.snap.return_value = (2.0, 2.0)
-        tool.on_mouse_click_release(SimpleNamespace(xdata=2.0, ydata=2.0, button=1))
+        tool.on_mouse_click_release(SimpleNamespace(pos=(2.0, 2.0), button=1))
         self.assertEqual(len(tool.al_voronoi_geo_storage), 3)
         self.assertEqual(tool._al_generation, 1)
 
@@ -1667,16 +1660,18 @@ class TestProbingShapes(unittest.TestCase):
         old = MagicMock()
         tool.probing_shapes = old
         with patch('appPlugins.ToolLevelling.ShapeCollection') as shape_cls:
+            shape_cls.side_effect = lambda **kwargs: (
+                old.clear.assert_called_once_with(update=True) or MagicMock())
             tool._new_probing_shapes('job')
         old.clear.assert_called_once_with(update=True)
-        self.assertIs(tool.probing_shapes, shape_cls.return_value)
+        self.assertIsNot(tool.probing_shapes, old)
 
-    def test_legacy_engine_uses_legacy_collection(self):
+    def test_vispy_collection_uses_scene_and_pool(self):
         tool = make_audit_tool()
-        tool.app.use_3d_engine = False
-        with patch('appPlugins.ToolLevelling.ShapeCollectionLegacy') as legacy_cls:
+        with patch('appPlugins.ToolLevelling.ShapeCollection') as shape_cls:
             tool._new_probing_shapes('job')
-        self.assertEqual(legacy_cls.call_args.kwargs['name'], 'job_probing_shapes')
+        shape_cls.assert_called_once_with(parent=tool.app.plotcanvas.view.scene, layers=1, pool=tool.app.pool)
+        self.assertIs(tool.probing_shapes, shape_cls.return_value)
 
     def test_kept_map_is_replotted_when_plotting_is_on(self):
         storage = {1: {'point': Point(0.0, 0.0), 'geo': None, 'height': 0.2}}

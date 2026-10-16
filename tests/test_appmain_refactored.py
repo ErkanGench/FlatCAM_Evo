@@ -507,17 +507,64 @@ class TestSignalConnections(unittest.TestCase):
             "file_opened signal should be connected")
 
     def test_object_status_changed_connected(self):
-        """RED: object_status_changed signal should be connected."""
-        source = read_appmain()
-        method_match = re.search(
-            r'def _setup_signal_connections\(self\):(.*?)(?=\n    def |\Z)',
-            source, re.DOTALL
-        )
-        self.assertIsNotNone(method_match, "_setup_signal_connections not found")
-        method_body = method_match.group(1)
-        
-        self.assertIn('object_status_changed', method_body,
-            "object_status_changed signal should be connected")
+        """UI rebuilds retain one lifetime subscription and wire new widgets."""
+        from PyQt6 import QtCore
+        from unittest.mock import Mock, patch
+        from appMain import App
+        from appPlugins.ToolSolderPaste import SolderPaste
+
+        app = App.__new__(App)
+        QtCore.QObject.__init__(app)
+        app.decimals = 4
+        tool = SimpleNamespace(layout=None, update_comboboxes=Mock())
+        tool.connect_signals_at_init = lambda: SolderPaste.connect_signals_at_init(tool)
+
+        class WidgetSignals(QtCore.QObject):
+            triggered = QtCore.pyqtSignal()
+            clicked = QtCore.pyqtSignal()
+            returnPressed = QtCore.pyqtSignal()
+            currentIndexChanged = QtCore.pyqtSignal(int)
+            sectionClicked = QtCore.pyqtSignal(int)
+
+            def horizontalHeader(self):
+                return self
+
+        def make_ui(**kwargs):
+            ui = SimpleNamespace(pluginName='SolderPaste')
+            for name in (
+                    'combo_context_del_action', 'tools_table', 'addtool_btn', 'addtool_entry',
+                    'deltool_btn', 'soldergeo_btn', 'solder_gcode_btn', 'solder_gcode_view_btn',
+                    'solder_gcode_save_btn', 'geo_obj_combo', 'cnc_obj_combo', 'reset_button'):
+                setattr(ui, name, WidgetSignals())
+            return ui
+
+        for name in (
+                'on_delete_object', 'on_toggle_all_rows', 'on_tool_add', 'on_tool_delete',
+                'on_create_geo_click', 'on_create_gcode_click', 'on_view_gcode',
+                'on_save_gcode', 'on_geo_select', 'on_cncjob_select', 'set_tool_ui'):
+            setattr(tool, name, Mock())
+        obj = object()
+        tool.update_comboboxes.assert_not_called()
+
+        with patch('appPlugins.ToolSolderPaste.AppTool.__init__', return_value=None), \
+                patch('appPlugins.ToolSolderPaste.SolderUI', side_effect=make_ui):
+            SolderPaste.__init__(tool, app)
+        try:
+            for rebuild in range(4):
+                if rebuild:
+                    tool.ui = make_ui()
+                    tool.connect_signals_at_init()
+                tool.update_comboboxes.reset_mock()
+                app.object_status_changed.emit(obj, 'rename', 'solder_board')
+                tool.update_comboboxes.assert_called_once_with(obj, 'rename', 'solder_board')
+                tool.on_tool_add.reset_mock()
+                tool.ui.addtool_btn.clicked.emit()
+                tool.on_tool_add.assert_called_once_with()
+                tool.set_tool_ui.reset_mock()
+                tool.ui.reset_button.clicked.emit()
+                tool.set_tool_ui.assert_called_once_with()
+        finally:
+            app.object_status_changed.disconnect(tool.update_comboboxes)
 
 
 # =============================================================================

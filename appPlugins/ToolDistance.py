@@ -59,10 +59,6 @@ class Distance(AppTool):
 
         self.original_call_source = 'app'
 
-        # store here the event connection ID's
-        self.mm = None
-        self.mr = None
-
         # monitor if the tool was used
         self.tool_done = False
 
@@ -88,11 +84,7 @@ class Distance(AppTool):
             app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
 
         # VisPy visuals
-        if self.app.use_3d_engine:
-            self.sel_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool)
-        else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.sel_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name='measurement')
+        self.sel_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool)
         
         # Signals
         self.ui.measure_btn.clicked.connect(self.on_start_measuring)
@@ -251,15 +243,9 @@ class Distance(AppTool):
                     "global_theme",
                     app_defaults.get("global_theme", AppDefaults.factory_defaults.get("global_theme"))) in [
                 'default', 'light']:
-                if self.app.use_3d_engine is True:
-                    self.app.plotcanvas.cursor_color = '#000000FF'
-                else:
-                    self.app.plotcanvas.cursor_color = '#000000'
+                self.app.plotcanvas.cursor_color = '#000000FF'
             else:
-                if self.app.use_3d_engine is True:
-                    self.app.plotcanvas.cursor_color = '#AAAAAAFF'
-                else:
-                    self.app.plotcanvas.cursor_color = '#AAAAAA'
+                self.app.plotcanvas.cursor_color = '#AAAAAAFF'
             self.app.app_cursor.enabled = True
 
         self.app.call_source = 'measurement'
@@ -297,81 +283,54 @@ class Distance(AppTool):
     def ui_connect(self):
         # we can connect the app mouse events to the measurement tool
         # NEVER DISCONNECT THOSE before connecting some other handlers; it breaks something in VisPy
-        self.mm = self.canvas.graph_event_connect('mouse_move', self.on_mouse_move)
-        self.mr = self.canvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
+        self.canvas.graph_event_connect('mouse_move', self.on_mouse_move)
+        self.canvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
 
         # we disconnect the mouse/key handlers from wherever the measurement tool was called
         if self.app.call_source == 'app':
-            if self.app.use_3d_engine:
-                self.canvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-                self.canvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-                self.canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            else:
-                self.canvas.graph_event_disconnect(self.app.mm)
-                self.canvas.graph_event_disconnect(self.app.mp)
-                self.canvas.graph_event_disconnect(self.app.mr)
+            self.canvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.canvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
         elif self.app.call_source == 'geo_editor':
-            if self.app.use_3d_engine:
-                self.canvas.graph_event_disconnect('mouse_move', self.app.geo_editor.on_canvas_move)
-                self.canvas.graph_event_disconnect('mouse_press', self.app.geo_editor.on_canvas_click)
-                self.canvas.graph_event_disconnect('mouse_release', self.app.geo_editor.on_canvas_click_release)
-            else:
-                self.canvas.graph_event_disconnect(self.app.geo_editor.mm)
-                self.canvas.graph_event_disconnect(self.app.geo_editor.mp)
-                self.canvas.graph_event_disconnect(self.app.geo_editor.mr)
+            self.canvas.graph_event_disconnect('mouse_move', self.app.geo_editor.on_canvas_move)
+            self.canvas.graph_event_disconnect('mouse_press', self.app.geo_editor.on_canvas_click)
+            self.canvas.graph_event_disconnect('mouse_release', self.app.geo_editor.on_canvas_click_release)
 
         elif self.app.call_source == 'exc_editor':
-            if self.app.use_3d_engine:
-                self.canvas.graph_event_disconnect('mouse_move', self.app.exc_editor.on_canvas_move)
-                self.canvas.graph_event_disconnect('mouse_press', self.app.exc_editor.on_canvas_click)
-                self.canvas.graph_event_disconnect('mouse_release', self.app.exc_editor.on_exc_click_release)
-            else:
-                self.canvas.graph_event_disconnect(self.app.exc_editor.mm)
-                self.canvas.graph_event_disconnect(self.app.exc_editor.mp)
-                self.canvas.graph_event_disconnect(self.app.exc_editor.mr)
+            self.canvas.graph_event_disconnect('mouse_move', self.app.exc_editor.on_canvas_move)
+            self.canvas.graph_event_disconnect('mouse_press', self.app.exc_editor.on_canvas_click)
+            self.canvas.graph_event_disconnect('mouse_release', self.app.exc_editor.on_exc_click_release)
 
         elif self.app.call_source == 'grb_editor':
-            if self.app.use_3d_engine:
-                self.canvas.graph_event_disconnect('mouse_move', self.app.grb_editor.on_canvas_move)
-                self.canvas.graph_event_disconnect('mouse_press', self.app.grb_editor.on_canvas_click)
-                self.canvas.graph_event_disconnect('mouse_release', self.app.grb_editor.on_canvas_click_release)
-            else:
-                self.canvas.graph_event_disconnect(self.app.grb_editor.mm)
-                self.canvas.graph_event_disconnect(self.app.grb_editor.mp)
-                self.canvas.graph_event_disconnect(self.app.grb_editor.mr)
+            self.canvas.graph_event_disconnect('mouse_move', self.app.grb_editor.on_canvas_move)
+            self.canvas.graph_event_disconnect('mouse_press', self.app.grb_editor.on_canvas_click)
+            self.canvas.graph_event_disconnect('mouse_release', self.app.grb_editor.on_canvas_click_release)
 
     def ui_disconnect(self):
         if self.original_call_source == 'app':
-            self.app.mm = self.canvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
-            self.app.mp = self.canvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.mr = self.canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+            self.canvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.canvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
         elif self.original_call_source == 'geo_editor':
-            self.app.geo_editor.mm = self.canvas.graph_event_connect('mouse_move', self.app.geo_editor.on_canvas_move)
-            self.app.geo_editor.mp = self.canvas.graph_event_connect('mouse_press', self.app.geo_editor.on_canvas_click)
-            self.app.geo_editor.mr = self.canvas.graph_event_connect('mouse_release',
-                                                                     self.app.geo_editor.on_canvas_click_release)
+            self.canvas.graph_event_connect('mouse_move', self.app.geo_editor.on_canvas_move)
+            self.canvas.graph_event_connect('mouse_press', self.app.geo_editor.on_canvas_click)
+            self.canvas.graph_event_connect('mouse_release', self.app.geo_editor.on_canvas_click_release)
 
         elif self.original_call_source == 'exc_editor':
-            self.app.exc_editor.mm = self.canvas.graph_event_connect('mouse_move', self.app.exc_editor.on_canvas_move)
-            self.app.exc_editor.mp = self.canvas.graph_event_connect('mouse_press', self.app.exc_editor.on_canvas_click)
-            self.app.exc_editor.mr = self.canvas.graph_event_connect('mouse_release',
-                                                                     self.app.exc_editor.on_exc_click_release)
+            self.canvas.graph_event_connect('mouse_move', self.app.exc_editor.on_canvas_move)
+            self.canvas.graph_event_connect('mouse_press', self.app.exc_editor.on_canvas_click)
+            self.canvas.graph_event_connect('mouse_release', self.app.exc_editor.on_exc_click_release)
 
         elif self.original_call_source == 'grb_editor':
-            self.app.grb_editor.mm = self.canvas.graph_event_connect('mouse_move', self.app.grb_editor.on_canvas_move)
-            self.app.grb_editor.mp = self.canvas.graph_event_connect('mouse_press', self.app.grb_editor.on_canvas_click)
-            self.app.grb_editor.mr = self.canvas.graph_event_connect('mouse_release',
-                                                                     self.app.grb_editor.on_canvas_click_release)
+            self.canvas.graph_event_connect('mouse_move', self.app.grb_editor.on_canvas_move)
+            self.canvas.graph_event_connect('mouse_press', self.app.grb_editor.on_canvas_click)
+            self.canvas.graph_event_connect('mouse_release', self.app.grb_editor.on_canvas_click_release)
 
         # disconnect the mouse/key events from functions of measurement tool
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-            self.canvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
-        else:
-            self.canvas.graph_event_disconnect(self.mm)
-            self.canvas.graph_event_disconnect(self.mr)
+        self.canvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+        self.canvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
 
     def on_exit(self):
         # DISABLE the Measuring TOOL
@@ -545,10 +504,7 @@ class Distance(AppTool):
         if self.ui.big_cursor_cb.get_value():
             self.app.on_cursor_type(val="big", control_cursor=True)
             self.cursor_color_memory = self.app.plotcanvas.cursor_color
-            if self.app.use_3d_engine is True:
-                self.app.plotcanvas.cursor_color = '#000000FF'
-            else:
-                self.app.plotcanvas.cursor_color = '#000000'
+            self.app.plotcanvas.cursor_color = '#000000FF'
 
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         self.app.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
@@ -642,14 +598,9 @@ class Distance(AppTool):
         snap_enabled = self.ui.snap_center_cb.get_value()
         multipoint = self.ui.multipoint_cb.get_value()
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            right_button = 2
-            event_is_dragging = self.mouse_is_dragging
-        else:
-            event_pos = (event.xdata, event.ydata)
-            right_button = 3
-            event_is_dragging = self.app.plotcanvas.is_dragging
+        event_pos = event.pos
+        right_button = 2
+        event_is_dragging = self.mouse_is_dragging
 
         pos_canvas = self.canvas.translate_coords(event_pos)
         if snap_enabled is False:
@@ -687,11 +638,8 @@ class Distance(AppTool):
         multipoint = self.ui.multipoint_cb.get_value()
 
         try:  # May fail in case mouse not within axes
-            if self.app.use_3d_engine:
-                event_pos = event.pos
-                self.mouse_is_dragging = event.is_dragging
-            else:
-                event_pos = (event.xdata, event.ydata)
+            event_pos = event.pos
+            self.mouse_is_dragging = event.is_dragging
 
             try:
                 x = float(event_pos[0])
@@ -828,16 +776,10 @@ class Distance(AppTool):
         else:
             dark_canvas = False
 
-        if self.app.use_3d_engine:
-            if (theme == 'default' or theme == 'light') and not dark_canvas:
-                color = '#000000FF'
-            else:
-                color = '#FFFFFFFF'
+        if (theme == 'default' or theme == 'light') and not dark_canvas:
+            color = '#000000FF'
         else:
-            if (theme == 'default' or theme == 'light') and not dark_canvas:
-                color = '#000000'
-            else:
-                color = '#FFFFFF'
+            color = '#FFFFFFFF'
 
         self.last_shape = self.sel_shapes.add(meas_line, color=color, update=True, layer=0, tolerance=None, linewidth=2)
         self.sel_shapes.redraw()

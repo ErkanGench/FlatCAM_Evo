@@ -370,16 +370,19 @@ class TestUIBehavior(AppCharacterizationTest):
                 target, _ = target_for(app, 'ui')
                 self.assertIs(target.grid_status(), checked)
 
-    def test_3d_area_rejects_legacy_engine(self):
+    def test_3d_area_opens_despite_stale_backend_setting(self):
         app = base_app()
-        app.use_3d_engine = False
         app.ui.plot_tab_area = Mock()
+        app.area_3d_tab = QtWidgets.QWidget()
+        app.ui.coords_toolbar = Mock()
+        app.ui.delta_coords_toolbar = Mock()
         target, _ = target_for(app, 'ui')
 
-        self.assertIsNone(target.on_3d_area())
-        self.assertEqual(len(app.inform.emissions), 1)
-        self.assertIn('Legacy 2D', app.inform.emissions[0][0])
-        app.ui.plot_tab_area.addTab.assert_not_called()
+        with patch('appGUI.PlotCanvas3d.PlotCanvas3d') as canvas:
+            self.assertIsNone(target.on_3d_area())
+        canvas.return_value.native.setFocus.assert_called_once_with()
+        app.ui.plot_tab_area.addTab.assert_called_once_with(app.area_3d_tab, 'Plot 3D')
+        app.ui.plot_tab_area.setCurrentWidget.assert_called_once_with(app.area_3d_tab)
 
     def test_bookmark_menu_rebuild_and_limit(self):
         app = base_app()
@@ -488,7 +491,6 @@ class TestObjectBehavior(AppCharacterizationTest):
 
     def test_invalid_origin_coordinates_return_fail(self):
         app = base_app()
-        app.use_3d_engine = False
         target, _ = target_for(app, 'objects')
 
         result = target.on_set_zero_click(None, location=[1], use_thread=False)
@@ -507,7 +509,6 @@ class TestObjectBehavior(AppCharacterizationTest):
 
     def test_origin_exports_remain_inside_process_context(self):
         app = base_app()
-        app.use_3d_engine = False
         state = SimpleNamespace(active=False)
 
         class ProcessContext:
@@ -557,6 +558,17 @@ class TestObjectBehavior(AppCharacterizationTest):
 
 
 class TestCanvasBehavior(AppCharacterizationTest):
+    def test_key_handler_suppresses_direct_qt_and_vispy_autorepeat(self):
+        from appGUI.MainGUI import MainGUI
+        from PyQt6 import QtCore, QtGui
+
+        # No backend flag or dispatch state: both paths must return before dispatch.
+        ui = SimpleNamespace(app=SimpleNamespace(collection=Mock()))
+        event = QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, QtCore.Qt.Key.Key_Delete,
+                                QtCore.Qt.KeyboardModifier.NoModifier)
+        MainGUI.keyPressEvent(ui, event)
+        MainGUI.keyPressEvent(ui, SimpleNamespace(native=SimpleNamespace(isAutoRepeat=lambda: True)))
+
     def test_double_click_only_marks_left_button(self):
         for button, initial, expected in ((1, False, True), (2, False, False), (3, True, True)):
             with self.subTest(button=button, initial=initial):

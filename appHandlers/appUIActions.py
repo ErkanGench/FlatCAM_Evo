@@ -994,11 +994,6 @@ class AppUIActions(QtCore.QObject):
     def on_3d_area(self):
         from appGUI.PlotCanvas3d import PlotCanvas3d
 
-        if self.app.use_3d_engine is False:
-            msg = '[ERROR_NOTCL] %s' % _("Not available for Legacy 2D graphic mode.")
-            self.inform.emit(msg)
-            return
-
         # add the tab if it was closed
         try:
             self.ui.plot_tab_area.addTab(self.app.area_3d_tab, _("Plot 3D"))

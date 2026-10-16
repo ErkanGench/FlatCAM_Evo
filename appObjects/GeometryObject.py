@@ -1428,7 +1428,6 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 for sub_el in element:
                     self.plot_element(sub_el, color=color, visible=visible)
         except TypeError:  # Element is not iterable...
-            # if self.app.use_3d_engine:
             self.add_shape(shape=element, color=color, visible=visible, layer=GeometryObject.PLOT_LAYER)
 
     def plot(self, visible=None, kind=None, plot_tool=None):

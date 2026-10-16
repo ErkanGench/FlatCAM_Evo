@@ -8,12 +8,9 @@ from shapely import Point, box
 from test_levelling_audit import make_audit_tool
 
 
-def make_lifecycle_tool(use_3d_engine):
+def make_lifecycle_tool():
     tool = make_audit_tool()
-    tool.app.use_3d_engine = use_3d_engine
     tool.app.options = {'global_selection_shape': True, 'global_grid_snap': True}
-    tool.app.kp, tool.app.mp, tool.app.mr = 101, 102, 103
-    tool.app.plotcanvas.graph_event_connect.side_effect = iter(range(201, 301))
     tool.app.plotcanvas.translate_coords.return_value = (2.2, 3.3)
     tool.app.geo_editor.snap.return_value = (2.0, 3.0)
     tool.ui.avoid_exc_holes_cb.get_value.return_value = False
@@ -37,16 +34,16 @@ def make_lifecycle_tool(use_3d_engine):
 
 
 def left_click(tool):
-    return SimpleNamespace(pos=(2.2, 3.3), xdata=2.2, ydata=3.3, button=1)
+    return SimpleNamespace(pos=(2.2, 3.3), button=1)
 
 
-def assert_released(tool, handles):
+def assert_released(tool):
     canvas = tool.app.plotcanvas
     expected = [
         call('key_press', tool.on_key_press),
         call('mouse_release', tool.on_mouse_click_release),
         call('mouse_move', tool.on_mouse_move),
-    ] if tool.app.use_3d_engine else [call(handle) for handle in handles]
+    ]
     canvas.graph_event_disconnect.assert_has_calls(expected)
     canvas.graph_event_connect.assert_has_calls([
         call('key_press', tool.app.ui.keyPressEvent),
@@ -54,14 +51,14 @@ def assert_released(tool, handles):
         call('mouse_release', tool.app.on_mouse_click_release_over_plot),
     ])
     assert not tool.mouse_events_connected
-    assert (tool.kp, tool.mr, tool.mm) == (None, None, None)
+    assert not any(name in tool.__dict__ for name in ('kp', 'mr', 'mm'))
     assert tool.app.options['global_selection_shape'] is True
     assert tool.app.options['global_grid_snap'] is True
 
 
 @pytest.mark.parametrize('mode', ['grid', 'manual'])
 def test_mode_change_clears_complete_probe_data(mode):
-    tool = make_lifecycle_tool(False)
+    tool = make_lifecycle_tool()
     tool.al_voronoi_geo_storage = {1: {'point': Point(2, 3), 'height': 0.1}}
     tool.al_bilinear_geo_storage = [(2.0, 3.0, 0.1)]
     tool._al_data_units = 'MM'
@@ -84,12 +81,10 @@ def test_mode_change_clears_complete_probe_data(mode):
     tool.probing_shapes.clear.assert_called_once_with(update=True)
 
 
-@pytest.mark.parametrize('use_3d_engine', [False, True])
 @pytest.mark.parametrize('reset', ['mode', 'target', 'clear'])
-def test_destructive_reset_releases_before_clearing(use_3d_engine, reset):
-    tool = make_lifecycle_tool(use_3d_engine)
+def test_destructive_reset_releases_before_clearing(reset):
+    tool = make_lifecycle_tool()
     tool.on_add_manual_points()
-    handles = (tool.kp, tool.mr, tool.mm)
     tool.app.plotcanvas.reset_mock()
     released_at_clear = []
     tool.probing_shapes.clear.side_effect = lambda **kwargs: released_at_clear.append(
@@ -105,15 +100,14 @@ def test_destructive_reset_releases_before_clearing(use_3d_engine, reset):
         tool._clear_probe_data()
 
     assert released_at_clear == [False]
-    assert_released(tool, handles)
+    assert_released(tool)
     tool.on_mouse_click_release(left_click(tool))
     assert tool.al_voronoi_geo_storage == {}
 
 
-@pytest.mark.parametrize('use_3d_engine', [False, True])
 @pytest.mark.parametrize('active,has_geometry', [(False, True), (False, False), (True, False)])
-def test_stale_left_click_is_ignored(use_3d_engine, active, has_geometry):
-    tool = make_lifecycle_tool(use_3d_engine)
+def test_stale_left_click_is_ignored(active, has_geometry):
+    tool = make_lifecycle_tool()
     tool.mouse_events_connected = active
     if not has_geometry:
         tool.solid_geo = None
@@ -127,11 +121,9 @@ def test_stale_left_click_is_ignored(use_3d_engine, active, has_geometry):
     tool.app.geo_editor.snap.assert_not_called()
 
 
-@pytest.mark.parametrize('use_3d_engine', [False, True])
-def test_second_add_releases_before_geometry_replacement(use_3d_engine):
-    tool = make_lifecycle_tool(use_3d_engine)
+def test_second_add_releases_before_geometry_replacement():
+    tool = make_lifecycle_tool()
     tool.on_add_al_probepoints()
-    handles = (tool.kp, tool.mr, tool.mm)
     tool.app.plotcanvas.reset_mock()
     active_at_lookup = []
     target = tool._al_target_obj
@@ -152,21 +144,21 @@ def test_second_add_releases_before_geometry_replacement(use_3d_engine):
         call('mouse_release', tool.on_mouse_click_release),
         call('mouse_move', tool.on_mouse_move),
     ]
-    if not use_3d_engine:
-        tool.app.plotcanvas.graph_event_disconnect.assert_has_calls(
-            [call(handle) for handle in handles])
+    tool.app.plotcanvas.graph_event_disconnect.assert_has_calls([
+        call('key_press', tool.on_key_press),
+        call('mouse_release', tool.on_mouse_click_release),
+        call('mouse_move', tool.on_mouse_move),
+    ])
     assert tool._al_data_units == 'MM'
 
 
-@pytest.mark.parametrize('use_3d_engine', [False, True])
-def test_release_is_idempotent_and_preserves_grid_snap(use_3d_engine):
-    tool = make_lifecycle_tool(use_3d_engine)
+def test_release_is_idempotent_and_preserves_grid_snap():
+    tool = make_lifecycle_tool()
     tool.on_add_manual_points()
-    handles = (tool.kp, tool.mr, tool.mm)
     tool.app.plotcanvas.reset_mock()
 
     tool._release_manual_mouse_events()
-    assert_released(tool, handles)
+    assert_released(tool)
     tool.app.plotcanvas.reset_mock()
     tool._release_manual_mouse_events()
 
@@ -174,9 +166,8 @@ def test_release_is_idempotent_and_preserves_grid_snap(use_3d_engine):
     tool.app.plotcanvas.graph_event_connect.assert_not_called()
 
 
-@pytest.mark.parametrize('use_3d_engine', [False, True])
-def test_active_manual_click_keeps_existing_snapping(use_3d_engine):
-    tool = make_lifecycle_tool(use_3d_engine)
+def test_active_manual_click_keeps_existing_snapping():
+    tool = make_lifecycle_tool()
     tool.on_add_manual_points()
     tool.build_al_table_sig.emit.reset_mock()
 

@@ -71,7 +71,7 @@ def make_app():
     })
     app = SimpleNamespace(
         log=Mock(), inform=Mock(), splash=None, worker_task=Mock(), options=options, app_units='MM',
-        abort_flag=False, app_obj=Mock(), plot_all=Mock(), defaults=defaults, decimals=4, use_3d_engine=True,
+        abort_flag=False, app_obj=Mock(), plot_all=Mock(), defaults=defaults, decimals=4,
         version='test', version_date='test', proc_container=MagicMock(), plotcanvas=Mock(), pool=Mock(),
         collection=Mock(), new_project_signal=Mock(), file_opened=Mock(), file_saved=Mock(), call_source='app', ui=MagicMock(),
         should_we_save=False, block_autosave=False, save_in_progress=False, start_delayed_quit=Mock(),

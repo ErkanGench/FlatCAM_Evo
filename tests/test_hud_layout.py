@@ -18,7 +18,6 @@ app.use_app('pyqt6')
 
 from defaults import AppDefaults
 from appGUI.PlotCanvas import PlotCanvas
-from appGUI.PlotCanvasLegacy import PlotCanvasLegacy
 
 
 class TestHudLayout(unittest.TestCase):
@@ -125,20 +124,6 @@ class TestHudLayout(unittest.TestCase):
                     actual = canvas.render()[:, :, :3].min(axis=2) > 180
                     np.testing.assert_array_equal(actual, expected,
                                                   err_msg='Object rendering must not erase HUD glyphs')
-
-    def test_legacy_hud_uses_the_configured_point_size_and_aligned_columns(self):
-        canvas = self.make_canvas(True, 8)
-        plot = SimpleNamespace(app=canvas.fcapp, rect_hud_color='#80808040', text_hud_color='white')
-        settings = Mock()
-        settings.contains.return_value = True
-        settings.value.return_value = 8
-        with patch('appGUI.PlotCanvasLegacy.QtCore.QSettings', return_value=settings):
-            hud = PlotCanvasLegacy.Thud(plot)
-        self.assertEqual(hud.hud_holder.txt._text.get_fontsize(), 8)
-        hud.on_update_text_hud(dx=-123.4, x=123456)
-        lines = hud.text.splitlines()
-        lines = [line for line in lines if line]
-        self.assertTrue(all(line.index('[') == lines[0].index('[') for line in lines))
 
 
 if __name__ == '__main__':

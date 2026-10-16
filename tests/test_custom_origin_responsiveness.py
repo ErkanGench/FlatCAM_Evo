@@ -83,7 +83,6 @@ class Worker(QtCore.QThread):
 def setup_operation():
     app = make_app()
     app.resource_location = 'assets/resources'
-    app.use_3d_engine = True
     app.should_we_save = False
     events, threads, tasks = [], [], []
     app.inform.emit.side_effect = events.append

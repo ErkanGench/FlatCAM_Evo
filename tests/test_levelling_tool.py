@@ -202,7 +202,6 @@ def make_overlay_tool(heights_valid=True):
         3: {'point': Point(10.0, 10.0), 'geo': None, 'height': 3.0},
     }
     tool = make_tool(storage=storage, heights_valid=heights_valid)
-    tool.app.use_3d_engine = False
     tool.al_bilinear_geo_storage = [
         (0.0, 0.0, 0.0),
         (10.0, 0.0, 0.0),
@@ -258,11 +257,10 @@ class TestBilinearOverlay(unittest.TestCase):
         self.assertRegex(color, r'^#[0-9A-Fa-f]{8}$')
         self.assertNotIn(color[-2:].upper(), ('00', 'FF'))
 
-    def test_bilinear_render_is_engine_neutral_and_uses_collection(self):
+    def test_bilinear_render_is_repeatable_and_uses_collection(self):
         rendered = []
-        for use_3d_engine in (False, True):
+        for _ in range(2):
             tool = make_overlay_tool()
-            tool.app.use_3d_engine = use_3d_engine
 
             tool.show_probing_geo(state=True, reset=True)
             heatmap_items = [
@@ -307,7 +305,7 @@ class TestBilinearOverlay(unittest.TestCase):
 
         cell_items = [
             item for item in tool.probing_shapes.shapes
-            if item['face_color'] != '#000000FF'
+            if not isinstance(item['face_color'], str)
         ]
         self.assertEqual(len(cell_items), 4)
         for cell in cells.values():
@@ -316,7 +314,11 @@ class TestBilinearOverlay(unittest.TestCase):
                 for item in cell_items
             ))
         self.assertTrue(all(item['color'] == '#000000FF' for item in cell_items))
-        self.assertTrue(all(item['face_color'] != '#00000000' for item in cell_items))
+        for item in cell_items:
+            color = item['face_color']
+            self.assertEqual(color.shape, (4,))
+            self.assertTrue(all(0.0 <= channel <= 1.0 for channel in color))
+            self.assertEqual(color[3], 0.5)
 
     def test_valid_heights_draw_cell_outlines_under_heatmap(self):
         tool = make_overlay_tool()
@@ -653,7 +655,6 @@ class TestToolUiState(unittest.TestCase):
         tool = ToolLevelling.__new__(ToolLevelling)
         tool.app = MagicMock()
         tool.app.app_units = 'MM'
-        tool.app.use_3d_engine = True
         tool.app.options = {
             'global_app_level': 'a',
             'tools_al_plot_points': False,

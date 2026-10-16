@@ -107,7 +107,6 @@ class Env:
         tool = make_audit_tool(units='MM')
         self.tool = tool
         app = tool.app
-        app.use_3d_engine = True
         app.defaults = {}
         app.options = {'cncjob_save_filters': 'Text (*.txt)', 'cncjob_line_ending': False}
         app.version = '9.9'

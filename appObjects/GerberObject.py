@@ -101,11 +101,6 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         # list of rows with apertures plotted
         self.marked_rows = []
 
-        # Mouse events
-        self.mr = None
-        self.mm = None
-        self.mp = None
-
         # dict to store the polygons selected for isolation; key is the shape added to be plotted and value is the poly
         self.poly_dict = {}
 
@@ -1089,8 +1084,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
 
         if self.mark_shapes_storage:
             if aperture == 'all':
-                val = True if self.app.use_3d_engine else False
-                self.mark_shapes.clear(update=val)
+                self.mark_shapes.clear(update=True)
             else:
                 for shape_key in self.mark_shapes_storage.get(aperture, []):
                     try:

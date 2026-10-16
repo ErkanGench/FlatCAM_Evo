@@ -72,7 +72,6 @@ def aperture(shapes, kind='C'):
 def make_editor(storage=None, pixel=0.05, grid=False):
     app = MagicMock()
     app.options = {'global_mselect_key': 'Control', 'gerber_circle_steps': 16}
-    app.use_3d_engine = True
     app.decimals = 4
     app.app_units = 'MM'
     app.resource_location = ASSETS
@@ -125,7 +124,7 @@ def make_select(editor):
 
 
 def event(x, y, button=1, dragging=0):
-    return SimpleNamespace(pos=(x, y), button=button, is_dragging=dragging, xdata=None, ydata=None)
+    return SimpleNamespace(pos=(x, y), button=button, is_dragging=dragging)
 
 
 def press(editor, x, y):
@@ -500,9 +499,8 @@ class TestPerformance(PickCase):
 
 
 class TestPixelSize(PickCase):
-    def test_pixel_size_vispy_and_legacy(self):
+    def test_pixel_size_vispy(self):
         from appGUI.PlotCanvas3d import PlotCanvas3d
-        from appGUI.PlotCanvasLegacy import PlotCanvasLegacy
         from appGUI.VisPyCanvas import VisPyCanvas
 
         class Transform:
@@ -515,8 +513,72 @@ class TestPixelSize(PickCase):
             stub.translate_coords = lambda pos, stub=stub, cls=cls: cls.translate_coords(stub, pos)
             self.assertAlmostEqual(cls.pixel_size(stub), 0.05)
 
-        stub = SimpleNamespace(axes=SimpleNamespace(get_xlim=lambda: (0, 100), bbox=SimpleNamespace(width=1000)))
-        self.assertAlmostEqual(PlotCanvasLegacy.pixel_size(stub), 0.1)
+
+class TestCanvasOwnership(PickCase):
+    def test_semidisc_exit_and_reentry_disconnect_shortcut(self):
+        from PyQt6.QtGui import QAction
+
+        ed = make_editor()
+        action = QAction('Semidisc')
+        ed.app.ui.grb_draw_semidisc = action
+        ed.on_add_semidisc = MagicMock()
+        for cycle in range(3):
+            ed.connect_canvas_event_handlers()
+            action.trigger()
+            self.assertEqual(ed.on_add_semidisc.call_count, cycle + 1)
+            ed.disconnect_canvas_event_handlers()
+            action.trigger()
+            self.assertEqual(ed.on_add_semidisc.call_count, cycle + 1)
+
+    def test_editor_import_exit_and_reentry_restore_callbacks_once(self):
+        ed = make_editor()
+        callbacks = {}
+
+        def connect(name, callback):
+            handlers = callbacks.setdefault(name, [])
+            self.assertNotIn(callback, handlers)
+            handlers.append(callback)
+
+        def disconnect(name, callback):
+            callbacks[name].remove(callback)
+
+        ed.canvas.graph_event_connect = connect
+        ed.canvas.graph_event_disconnect = disconnect
+        app_handlers = {
+            'mouse_press': ed.app.on_mouse_click_over_plot,
+            'mouse_move': ed.app.on_mouse_move_over_plot,
+            'mouse_release': ed.app.on_mouse_click_release_over_plot,
+            'mouse_double_click': ed.app.on_mouse_double_click_over_plot,
+        }
+        for name, callback in app_handlers.items():
+            connect(name, callback)
+        tool = ImportEditorGrb.__new__(ImportEditorGrb)
+        tool.app, tool.draw_app, tool.canvas = ed.app, ed, ed.canvas
+        tool._canvas_connected = False
+        ed.toolbar_old_state = False
+        for exit_path in ('switch', 'escape', 'exit'):
+            ed.connect_canvas_event_handlers()
+            ed.active_tool = tool
+            tool.grid_status_memory = True
+            ed.app.ui.grid_snap_btn.trigger.reset_mock()
+            tool.import_connect()
+            tool.import_connect()
+            self.assertEqual(callbacks['mouse_press'], [tool.on_mouse_click])
+            if exit_path == 'escape':
+                tool.clean_up()
+                tool.clean_up()
+            if exit_path == 'exit':
+                ed.deactivate_grb_editor()
+            else:
+                AppGerberEditor.select_tool(ed, 'select')
+                self.assertEqual(callbacks['mouse_press'], [ed.on_canvas_click])
+                ed.disconnect_canvas_event_handlers()
+            self.assertEqual(callbacks, {name: [callback] for name, callback in app_handlers.items()})
+            ed.app.ui.grid_snap_btn.trigger.assert_called_once_with()
+        self.assertIsNone(ed.app.plotcanvas.text_cursor.parent)
+        ed.app.tool_shapes.clear.assert_called_with(update=True)
+        for name in ('mp', 'mm', 'mr', 'mdc', 'kp'):
+            self.assertNotIn(name, ed.app.__dict__)
 
 
 class TestSnap(PickCase):

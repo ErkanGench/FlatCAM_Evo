@@ -74,7 +74,6 @@ class AppDefaults:
         # General APP Preferences
         "units": "MM",
         "units_precision": 4,
-        "global_graphic_engine": '3D',
         "global_graphic_engine_3d_no_mp": False,
         "global_backface_culling": True,
         "global_app_level": 'b',
@@ -1072,6 +1071,7 @@ class AppDefaults:
 
         # ponytail: strip obsolete 'version' field from loaded data
         defaults.pop('version', None)
+        defaults.pop('global_graphic_engine', None)
         
         # ponytail: merge saved data over factory defaults. Missing keys get factory values,
         # user overrides (including falsy values) are preserved. No version gating.
@@ -1155,6 +1155,7 @@ class AppOptions:
         self.current_options = {}  # copy used for restoring after cancelled prefs changes
         self.version = version
         self.baseline = deepcopy(dict(baseline)) if baseline is not None else deepcopy(AppDefaults.factory_defaults)
+        self.baseline.pop('global_graphic_engine', None)
         self.options.set_change_callback(callback)
         if baseline is not None:
             self.options.update(deepcopy(self.baseline))
@@ -1219,6 +1220,8 @@ class AppOptions:
 
         if baseline is not None:
             self.baseline = deepcopy(dict(baseline))
+        self.baseline.pop('global_graphic_engine', None)
+        options.pop('global_graphic_engine', None)
 
         # Save the resulting defaults
         self.options.clear()

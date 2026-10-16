@@ -17,7 +17,7 @@ class ColorActionApp(QtCore.QObject):
     def __init__(self, selected):
         super().__init__()
         for name in ('log', 'inform', 'worker_task', 'plotcanvas', 'clear_pool',
-                     'app_obj', 'proc_container', 'use_3d_engine'):
+                     'app_obj', 'proc_container'):
             setattr(self, name, Mock())
         self.options = {}
         self.defaults = {'gerber_plot_fill': '#00FF00BF', 'gerber_plot_line': '#006600BF'}

@@ -77,9 +77,6 @@ class NccGen:
 
         self.ui = tool.ui
 
-        self.mm = tool.mm
-        self.mr = tool.mr
-        self.kp = tool.kp
 
         self.decimals = tool.app.decimals
         self.temp_shapes = tool.temp_shapes
@@ -87,7 +84,6 @@ class NccGen:
         self.first_click = tool.first_click
         self.cursor_pos = tool.cursor_pos
         self.mouse_is_dragging = tool.mouse_is_dragging
-        self.area_sel_disconnect_flag = tool.area_sel_disconnect_flag
         self.areas_to_clear_list = tool.areas_to_clear_list
 
         self.circle_steps = tool.circle_steps
@@ -214,39 +210,34 @@ class NccGen:
         elif self.select_method == 1:   # Area Selection
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the start point of the area."))
 
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect(
-                    'mouse_press',
-                    self.app.on_mouse_click_over_plot,
-                )
-                self.app.plotcanvas.graph_event_disconnect(
-                    'mouse_move',
-                    self.app.on_mouse_move_over_plot,
-                )
-                self.app.plotcanvas.graph_event_disconnect(
-                    'mouse_release',
-                    self.app.on_mouse_click_release_over_plot,
-                )
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-                self.app.plotcanvas.graph_event_disconnect(self.app.mm)
-                self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+            self.app.plotcanvas.graph_event_disconnect(
+                'mouse_press',
+                self.app.on_mouse_click_over_plot,
+            )
+            self.app.plotcanvas.graph_event_disconnect(
+                'mouse_move',
+                self.app.on_mouse_move_over_plot,
+            )
+            self.app.plotcanvas.graph_event_disconnect(
+                'mouse_release',
+                self.app.on_mouse_click_release_over_plot,
+            )
 
-            self.mr = self.app.plotcanvas.graph_event_connect(
+            self.app.plotcanvas.graph_event_connect(
                 'mouse_release',
                 self.parent_tool.on_mouse_release,
             )
-            self.mm = self.app.plotcanvas.graph_event_connect(
+            self.app.plotcanvas.graph_event_connect(
                 'mouse_move',
                 self.parent_tool.on_mouse_move,
             )
-            self.kp = self.app.plotcanvas.graph_event_connect(
+            self.app.plotcanvas.graph_event_connect(
                 'key_press',
                 self.parent_tool.on_key_press,
             )
 
             # disconnect flags
-            self.area_sel_disconnect_flag = True
+            self.parent_tool.area_sel_disconnect_flag = True
             # disable the "notebook UI" until finished
             self.app.ui.notebook.setDisabled(True)
         elif self.select_method == 2:   # Reference Object

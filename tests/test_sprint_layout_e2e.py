@@ -63,7 +63,7 @@ def _app(units):
         options=options, app_units=units, new_project_signal=Mock(),
         abort_flag=False, app_obj=Mock(), plot_all=Mock(),
         register_folder=Mock(), defaults=defaults, decimals=4,
-        use_3d_engine=True, version='test', version_date='test',
+        version='test', version_date='test',
         proc_container=Mock(), plotcanvas=plotcanvas, pool=Mock(),
         collection=Mock(), file_opened=Mock(), file_saved=Mock(),
     )

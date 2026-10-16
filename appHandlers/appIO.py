@@ -649,13 +649,11 @@ class appIO(QtCore.QObject):
         date = ''.join(c for c in date if c not in ':-')
         date = date.replace(' ', '_')
 
-        data = None
-        if self.app.use_3d_engine:
-            image = _screenshot(alpha=False)
-            data = np.asarray(image)
-            if not data.ndim == 3 and data.shape[-1] in (3, 4):
-                self.inform.emit('[[WARNING_NOTCL]] %s' % _('Data must be a 3D array with last dimension 3 or 4'))
-                return
+        image = _screenshot(alpha=False)
+        data = np.asarray(image)
+        if data.ndim != 3 or data.shape[-1] not in (3, 4):
+            self.inform.emit('[[WARNING_NOTCL]] %s' % _('Data must be a 3D array with last dimension 3 or 4'))
+            return
 
         filter_ = "PNG File (*.png);;All Files (*.*)"
         try:
@@ -674,10 +672,7 @@ class appIO(QtCore.QObject):
             self.inform.emit(_("Cancelled."))
             return
         else:
-            if self.app.use_3d_engine:
-                write_png(filename, data)   # noqa
-            else:
-                self.app.plotcanvas.figure.savefig(filename)
+            write_png(filename, data)   # noqa
 
             if self.app.options.get("global_open_style", self.app.defaults.get("global_open_style")) is False:
                 self.app.file_opened.emit("png", filename)
@@ -2992,13 +2987,15 @@ class appIO(QtCore.QObject):
                 # self.app.defaults.update(self.app.options)
                 # self.app.preferencesUiManager.save_defaults()
                 # Project options
-                self.app.options.update(proj_dict['options'])
+                self.app.options.update({k: v for k, v in proj_dict['options'].items()
+                                         if k != 'global_graphic_engine'})
             if response == bt_no:
                 pass
         else:
             # Load by default new options when not using GUI
             # Project options
-            self.app.options.update(proj_dict['options'])
+            self.app.options.update({k: v for k, v in proj_dict['options'].items()
+                                     if k != 'global_graphic_engine'})
 
         self.app.project_filename = filename
 

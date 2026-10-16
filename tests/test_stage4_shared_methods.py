@@ -1,7 +1,6 @@
 """Stage 4, item 1: methods that were copied into every object class now live once on FlatCAMObj (or on a small
 mixin). Headless: ShapeCollection is patched, the ObjectUI is a Mock."""
 
-import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -30,7 +29,8 @@ def defining_class(cls, name):
 
 
 def make_obj(cls):
-    return cls('obj', make_app())
+    app = make_app()
+    return cls('obj', app)
 
 
 # ---------------------------------------------------------------- random_color
@@ -40,9 +40,8 @@ def test_random_color_resolves_to_flatcamobj(cls):
     assert defining_class(cls, 'random_color') is FlatCAMObj
 
 
-def test_random_color_3d_engine_is_an_opaque_rgba_array(no_shape_collection):  # noqa: F811
+def test_random_color_is_an_opaque_rgba_array(no_shape_collection):  # noqa: F811
     obj = make_obj(GerberObject)
-    obj.app.use_3d_engine = True
     for _ in range(20):
         color = obj.random_color()
         assert isinstance(color, np.ndarray)
@@ -51,14 +50,84 @@ def test_random_color_3d_engine_is_an_opaque_rgba_array(no_shape_collection):  #
         assert np.all((color >= 0) & (color <= 1))
 
 
-def test_random_color_2d_engine_is_a_9_char_hex_string(no_shape_collection):  # noqa: F811
+def test_shape_and_annotation_ownership_without_backend_flag(no_shape_collection):  # noqa: F811
+    obj = make_obj(CNCJobObject)
+    canvas = obj.app.plotcanvas
+    canvas.new_shape_group.assert_called_once_with()
+    canvas.new_text_collection.assert_called_once_with()
+    canvas.new_text_group.assert_called_once_with(collection=obj.text_col)
+    assert obj.text_col.enabled is True
+    assert obj.annotation is canvas.new_text_group.return_value
+
     obj = make_obj(GeometryObject)
-    obj.app.use_3d_engine = False
-    for _ in range(50):
-        color = obj.random_color()
-        assert isinstance(color, str)
-        assert len(color) == 9
-        assert re.fullmatch(r'#[0-9a-f]{8}', color)
+    obj.app.plotcanvas.new_shape_collection.assert_called_once_with(layers=1)
+
+    obj = make_obj(GerberObject)
+    assert not hasattr(obj, 'axes')
+    obj.mark_shapes_storage = {10: [1]}
+    obj.clear_plot_apertures()
+    obj.mark_shapes.clear.assert_called_once_with(update=True)
+
+
+def test_annotations_follow_checkboxes_and_cached_visibility(no_shape_collection):  # noqa: F811
+    obj = make_obj(CNCJobObject)
+    obj.shapes._indexes = [1]
+    obj.shapes._collection.data = {1: {}}
+    obj.mark_full_plot()
+    obj._full_plot_kind = 'all'
+    obj.ui = MagicMock()
+    obj.plot_annotations = Mock()
+    for checked, visible in ((True, True), (True, False), (False, True)):
+        obj.ui.annotation_cb.get_value.return_value = checked
+        assert obj.show_plotted_shapes(visible)
+        obj.plot_annotations.assert_called_with(obj=obj, visible=checked and visible)
+        assert obj.shapes.visible is visible
+
+        obj.ui.plot_cb.get_value.return_value = visible
+        obj.on_annotation_change(checked)
+        obj.plot_annotations.assert_called_with(obj=obj, visible=checked and visible)
+    obj.shapes.add.assert_not_called()
+    obj.shapes.add_batch.assert_not_called()
+
+    obj.plot_annotations.side_effect = AttributeError
+    obj.on_annotation_change(True)
+    obj.annotation.clear.assert_called_once_with(update=True)
+
+
+def test_exclusion_events_use_named_callbacks_without_backend_flag():
+    from appCommon.Common import ExclusionAreas
+
+    app = make_app()
+    app.on_mouse_click_over_plot = Mock()
+    app.on_mouse_move_over_plot = Mock()
+    app.on_mouse_click_release_over_plot = Mock()
+    app.grid_status = lambda: False
+    app.plotcanvas.translate_coords.side_effect = lambda pos: pos
+    with patch('appCommon.Common.ShapeCollection', Mock()):
+        areas = ExclusionAreas(app)
+    areas.on_add_area_click(Mock(get_value=Mock(return_value='square')), Mock(), Mock(), Mock(), [], 'geometry')
+    assert [c.args[0] for c in app.plotcanvas.graph_event_disconnect.call_args_list] == [
+        'mouse_press', 'mouse_move', 'mouse_release']
+    app.plotcanvas.graph_event_disconnect.reset_mock()
+    areas.on_mouse_release(SimpleNamespace(pos=(1, 2), button=2))
+    assert [c.args for c in app.plotcanvas.graph_event_disconnect.call_args_list] == [
+        ('mouse_release', areas.on_mouse_release), ('mouse_move', areas.on_mouse_move)]
+    assert app.call_source == 'app'
+    expected_connections = [
+        ('mouse_press', app.on_mouse_click_over_plot),
+        ('mouse_move', app.on_mouse_move_over_plot),
+        ('mouse_release', app.on_mouse_click_release_over_plot)]
+    assert [c.args for c in app.plotcanvas.graph_event_connect.call_args_list][-3:] == expected_connections
+    assert not {'mp', 'mm', 'mr'} & vars(app).keys()
+
+    app.plotcanvas.graph_event_connect.reset_mock()
+    app.plotcanvas.graph_event_disconnect.reset_mock()
+    app.sel_shapes = Mock()
+    areas.area_disconnect()
+    assert [c.args for c in app.plotcanvas.graph_event_disconnect.call_args_list] == [
+        ('mouse_release', areas.on_mouse_release), ('mouse_move', areas.on_mouse_move)]
+    assert [c.args for c in app.plotcanvas.graph_event_connect.call_args_list] == expected_connections
+    assert not {'mp', 'mm', 'mr'} & vars(app).keys()
 
 
 # ------------------------------------------------- on_properties / on_properties_expanded

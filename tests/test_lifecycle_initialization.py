@@ -44,12 +44,6 @@ class TestInitializationOrder(unittest.TestCase):
         self.mock_app.exc_editor = Mock()
         self.mock_app.grb_editor = Mock()
         self.mock_app.gcode_editor = Mock()
-        self.mock_app.use_3d_engine = True
-        self.mock_app.mm = None
-        self.mock_app.mp = None
-        self.mock_app.mr = None
-        self.mock_app.mdc = None
-        self.mock_app.kp = None
         self.mock_app.workers = Mock()
         self.mock_app.pool = Mock()
         self.mock_app.save_in_progress = False
@@ -295,7 +289,6 @@ class TestAppShutdownSequence(unittest.TestCase):
         mock_app.exc_editor = None
         mock_app.grb_editor = None
         mock_app.gcode_editor = None
-        mock_app.use_3d_engine = False
         mock_app.plotcanvas = Mock()
         mock_app.workers = Mock()
         mock_app.pool = Mock()
@@ -454,7 +447,6 @@ class TestFinalSaveSequence(unittest.TestCase):
         mock_app.exc_editor = None
         mock_app.grb_editor = None
         mock_app.gcode_editor = None
-        mock_app.use_3d_engine = False
         mock_app.plotcanvas = Mock()
         mock_app.plotcanvas.close = Mock()
         mock_app.workers = Mock()

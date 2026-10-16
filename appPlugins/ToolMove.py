@@ -51,10 +51,6 @@ class ToolMove(AppTool):
 
         self.sel_shapes = self.app.sel_shapes
 
-        self.mm = None
-        self.mp = None
-        self.kr = None
-
         self.replot_signal[list].connect(self.replot)
 
     def install(self, icon=None, separator=None, **kwargs):
@@ -71,16 +67,10 @@ class ToolMove(AppTool):
         if self.isVisible():
             self.setVisible(False)
 
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_move)
-                self.app.plotcanvas.graph_event_disconnect('mouse_press', self.on_left_click)
-                self.app.plotcanvas.graph_event_disconnect('key_release', self.on_key_press)
-                self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.mm)
-                self.app.plotcanvas.graph_event_disconnect(self.mp)
-                self.app.plotcanvas.graph_event_disconnect(self.kr)
-                self.app.kr = self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_move)
+            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.on_left_click)
+            self.app.plotcanvas.graph_event_disconnect('key_release', self.on_key_press)
+            self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
 
             self.clicked_move = 0
 
@@ -100,9 +90,9 @@ class ToolMove(AppTool):
                 self.app.inform.emit(_("MOVE: Click on the Start point ..."))
 
                 # if we have an object selected then we can safely activate the mouse events
-                self.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.on_move)
-                self.mp = self.app.plotcanvas.graph_event_connect('mouse_press', self.on_left_click)
-                self.kr = self.app.plotcanvas.graph_event_connect('key_release', self.on_key_press)
+                self.app.plotcanvas.graph_event_connect('mouse_move', self.on_move)
+                self.app.plotcanvas.graph_event_connect('mouse_press', self.on_left_click)
+                self.app.plotcanvas.graph_event_connect('key_release', self.on_key_press)
 
                 # draw the selection box
                 self.draw_sel_bbox()
@@ -115,7 +105,7 @@ class ToolMove(AppTool):
         # this is necessary because right mouse click and middle mouse click
         # are used for panning on the canvas
 
-        event_pos = event.pos if self.app.use_3d_engine else (event.xdata, event.ydata)
+        event_pos = event.pos
         if event.button == 1:
             if self.clicked_move == 0:
                 pos_canvas = self.app.plotcanvas.translate_coords(event_pos)
@@ -246,7 +236,7 @@ class ToolMove(AppTool):
         self.app.worker_task.emit({'fcn': job_move, 'params': [self]})
 
     def on_move(self, event):
-        event_pos = event.pos if self.app.use_3d_engine else (event.xdata, event.ydata)
+        event_pos = event.pos
         try:
             x = float(event_pos[0])
             y = float(event_pos[1])
@@ -310,8 +300,7 @@ class ToolMove(AppTool):
         self.old_coords = [p1, p2, p3, p4]
         self.draw_shape(Polygon(self.old_coords))
 
-        if self.app.use_3d_engine:
-            self.sel_shapes.redraw()
+        self.sel_shapes.redraw()
 
     def update_sel_bbox(self, pos):
         self.delete_shape()
@@ -322,8 +311,7 @@ class ToolMove(AppTool):
         pt4 = (self.old_coords[3][0] + pos[0], self.old_coords[3][1] + pos[1])
         self.draw_shape(Polygon([pt1, pt2, pt3, pt4]))
 
-        if self.app.use_3d_engine:
-            self.sel_shapes.redraw()
+        self.sel_shapes.redraw()
 
     def delete_shape(self):
         self.sel_shapes.clear()

@@ -603,47 +603,46 @@ class TestLifecycle(AppTestCase):
         self.assertEqual(321, app.autosave_timer.interval)
 
     @covers("lifecycle", "quit_application")
-    def test_quit_application_disconnects_2d_and_3d_canvas_paths(self):
-        for use_3d in (False, True):
-            with self.subTest(use_3d=use_3d):
-                app, handler = self.make_handler()
-                plot_calls = []
+    def test_quit_application_disconnects_vispy_despite_stale_backend_setting(self):
+        app, handler = self.make_handler()
+        plot_calls = []
 
-                class PlotCanvas:
-                    def graph_event_disconnect(self, *args):
-                        plot_calls.append(args)
-                        return "disconnected"
+        class PlotCanvas:
+            def graph_event_disconnect(self, *args):
+                plot_calls.append(args)
+                return "disconnected"
 
-                    def close(self):
-                        plot_calls.append(("close",))
+            def close(self):
+                plot_calls.append(("close",))
 
-                app.preferencesUiManager = Recorder(("save_defaults",))
-                # quit_application saves the GUI state, so the ui needs these members (QSettings is patched below)
-                app.ui = SimpleNamespace(hide=Recorder(("call",)).call, saveState=lambda: b"",
-                                         isMaximized=lambda: False, general_pref_form=MagicMock())
-                app.autosave_timer = Timer(active=True)
-                app.geo_editor = app.exc_editor = app.grb_editor = app.gcode_editor = None
-                app._editor_for = lambda kind: None
-                app.use_3d_engine = use_3d
-                app.plotcanvas = PlotCanvas()
-                app.on_mouse_move_over_plot = object()
-                app.on_mouse_click_over_plot = object()
-                app.on_mouse_click_release_over_plot = object()
-                app.on_mouse_double_click_over_plot = object()
-                app.ui.keyPressEvent = object()
-                app.mm, app.mp, app.mr, app.mdc, app.kp = "mm", "mp", "mr", "mdc", "kp"
-                app.pool = Recorder(("terminate", "join"))
-                app.workers = Recorder(("quit",))
-                with patch.object(lifecycle_module.sys, "platform", "linux"), \
-                        patch("PyQt6.QtCore.QSettings"), \
-                        patch.object(QtWidgets.QApplication, "quit"):
-                    invoke("lifecycle", handler, "quit_application", silent=True)
-                if use_3d:
-                    self.assertEqual(["mouse_move", "mouse_press", "mouse_release", "mouse_double_click", "key_press"],
-                                     [call[0] for call in plot_calls[:5]])
-                else:
-                    self.assertEqual([("mm",), ("mp",), ("mr",), ("mdc",), ("kp",)], plot_calls[:5])
-                self.assertEqual("quit", app.workers.calls[-1][0])
+        app.preferencesUiManager = Recorder(("save_defaults",))
+        # quit_application saves the GUI state, so the ui needs these members (QSettings is patched below)
+        app.ui = SimpleNamespace(hide=Recorder(("call",)).call, saveState=lambda: b"",
+                                 isMaximized=lambda: False, general_pref_form=MagicMock())
+        app.autosave_timer = Timer(active=True)
+        app.geo_editor = app.exc_editor = app.grb_editor = app.gcode_editor = None
+        app._editor_for = lambda kind: None
+        app.plotcanvas = PlotCanvas()
+        app.on_mouse_move_over_plot = object()
+        app.on_mouse_click_over_plot = object()
+        app.on_mouse_click_release_over_plot = object()
+        app.on_mouse_double_click_over_plot = object()
+        app.ui.keyPressEvent = object()
+        app.pool = Recorder(("terminate", "join"))
+        app.workers = Recorder(("quit",))
+        with patch.object(lifecycle_module.sys, "platform", "linux"), \
+                patch("PyQt6.QtCore.QSettings"), \
+                patch.object(QtWidgets.QApplication, "quit"):
+            invoke("lifecycle", handler, "quit_application", silent=True)
+        self.assertEqual([
+            ("mouse_move", app.on_mouse_move_over_plot),
+            ("mouse_press", app.on_mouse_click_over_plot),
+            ("mouse_release", app.on_mouse_click_release_over_plot),
+            ("mouse_double_click", app.on_mouse_double_click_over_plot),
+            ("key_press", app.ui.keyPressEvent),
+        ], plot_calls[:5])
+        self.assertEqual(("close",), plot_calls[5])
+        self.assertEqual("quit", app.workers.calls[-1][0])
 
 
 class TestUIActions(AppTestCase):
@@ -788,9 +787,16 @@ class TestUIActions(AppTestCase):
         app.data_path = "data"
         self.assertEqual("fail", invoke("ui_actions", handler, "on_tools_database"))
 
-        app.use_3d_engine = False
-        self.assertIsNone(invoke("ui_actions", handler, "on_3d_area"))
-        self.assertIn("Legacy 2D", app.inform.emissions[-1][0])
+        app.area_3d_tab = QtWidgets.QWidget()
+        app.ui.plot_tab_area = MagicMock()
+        app.ui.coords_toolbar = MagicMock()
+        app.ui.delta_coords_toolbar = MagicMock()
+        canvas = MagicMock()
+        with patch("appGUI.PlotCanvas3d.PlotCanvas3d", return_value=canvas):
+            self.assertIsNone(invoke("ui_actions", handler, "on_3d_area"))
+        canvas.native.setFocus.assert_called_once_with()
+        self.assertEqual(2, canvas.view.camera.pan_button_setting)
+        app.ui.plot_tab_area.setCurrentWidget.assert_called_once_with(app.area_3d_tab)
 
         app.collection = Collection()
         invoke("ui_actions", handler, "on_geometry_tool_add_from_db_executed", {"data": {"tool_target": 0}})
@@ -990,7 +996,6 @@ class TestObjectOps(AppTestCase):
         app.worker_task = Signal()
         app.custom_signal = Signal()
         app.proc_container = SimpleNamespace(new=lambda *args: Context())
-        app.use_3d_engine = True
         app.inhibit_context_menu = False
         invoke("object_ops", handler, "on_set_origin")
         self.assertTrue(app.inhibit_context_menu)
@@ -1014,7 +1019,6 @@ class TestObjectOps(AppTestCase):
         obj = ObjectStub("board", kind="geometry")
         app, handler = self.make_handler([obj])
         app.clipboard = SimpleNamespace(value="", text=lambda: "", setText=lambda value: setattr(app.clipboard, "value", value))
-        app.use_3d_engine = True
         app.plotcanvas = Recorder(("fit_center",))
         app.plotcanvas.native = SimpleNamespace(mapToGlobal=lambda point: QtCore.QPoint(0, 0))
         app.plotcanvas.translate_coords_2 = lambda pos: pos
@@ -1069,7 +1073,6 @@ class TestObjectOps(AppTestCase):
         app.exc_areas = Recorder(("clear_shapes",))
         app.tool_shapes = None
         app.setup_default_properties_tab = Recorder(("call",)).call
-        app.use_3d_engine = True
         invoke("object_ops", handler, "on_delete", force_deletion=True)
         self.assertEqual([], app.collection.objects)
 
@@ -1115,7 +1118,6 @@ class TestCanvasEvents(AppTestCase):
             ),
             collection=Collection(objects), all_objects_list=list(objects), app_plugins=[],
         )
-        app.use_3d_engine = False
         app.rel_point1 = None
         app.mouse_down = False
         app.event_is_dragging = False
@@ -1163,7 +1165,7 @@ class TestCanvasEvents(AppTestCase):
     )
     def test_mouse_modifier_context_and_plugin_routes(self):
         app, handler = self.make_handler()
-        event = SimpleNamespace(button=1, xdata=2.0, ydata=3.0)
+        event = SimpleNamespace(button=1, pos=(2.0, 3.0))
         original_move = handler.on_mouse_move_over_plot
         move_calls = []
         handler.on_mouse_move_over_plot = lambda *args, **kwargs: move_calls.append((args, kwargs))

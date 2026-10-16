@@ -65,8 +65,6 @@ class ToolMarkers(AppTool):
         # store the flattened geometry here:
         self.flat_geometry = []
 
-        self.mr = None
-
         # Tool properties
         self.fid_dia = None
 
@@ -366,10 +364,7 @@ class ToolMarkers(AppTool):
             if self.ui.big_cursor_cb.get_value():
                 self.app.on_cursor_type(val="big", control_cursor=True)
                 self.cursor_color_memory = self.app.plotcanvas.cursor_color
-                if self.app.use_3d_engine is True:
-                    self.app.plotcanvas.cursor_color = '#000000FF'
-                else:
-                    self.app.plotcanvas.cursor_color = '#000000'
+                self.app.plotcanvas.cursor_color = '#000000FF'
                 self.app.app_cursor.enabled = True
             else:
                 self.app.on_cursor_type(val="small", control_cursor=True)
@@ -1150,29 +1145,20 @@ class ToolMarkers(AppTool):
 
     def connect_event_handlers(self):
         if self.handlers_connected is False:
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-                self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-            self.mr = self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
 
             self.handlers_connected = True
 
     def disconnect_event_handlers(self):
         if self.handlers_connected is True:
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.mr)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
 
-            self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                                  self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
 
-            self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                  self.app.on_mouse_click_release_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
             self.handlers_connected = False
             self.app.ui.notebook.setDisabled(False)
 
@@ -1180,14 +1166,8 @@ class ToolMarkers(AppTool):
         pass
 
     def on_mouse_release(self, event):
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            right_button = 2
-            self.app.event_is_dragging = self.app.event_is_dragging
-        else:
-            event_pos = (event.xdata, event.ydata)
-            right_button = 3
-            self.app.event_is_dragging = self.app.ui.popMenu.mouse_is_panning
+        event_pos = event.pos
+        right_button = 2
 
         if event.button == 1:
             pos_canvas = self.canvas.translate_coords(event_pos)
@@ -1226,8 +1206,7 @@ class ToolMarkers(AppTool):
         for shp in [line_geo_hor, line_geo_vert]:
             self.temp_shapes.add(shp, color=outline, update=True, layer=0, tolerance=None)
 
-        if self.app.use_3d_engine:
-            self.temp_shapes.redraw()
+        self.temp_shapes.redraw()
 
     def clear_utility_geometry(self):
         self.temp_shapes.clear(update=True)

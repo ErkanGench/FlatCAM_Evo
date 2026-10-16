@@ -786,8 +786,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.endRemoveRows()
         # ############ OBJECT DELETION FROM MODEL STOPS HERE ####################
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.redraw()
+        self.app.plotcanvas.redraw()
 
         if select_project:
             # always go to the Project Tab after object deletion as it may be done with a shortcut key
@@ -856,8 +855,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
             self.app.regFK.register_keywords(self.app.regFK.myKeywords)
         except Exception as e:
             self.app.log.error("delete_objects() --> Could not update auto-completer model. %s" % str(e))
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.redraw()
+        self.app.plotcanvas.redraw()
         self.app.ui.notebook.setCurrentWidget(self.app.ui.project_tab)
         if self.app.options.get("global_project_autohide",
                                 self.app.defaults.get("global_project_autohide",
@@ -904,8 +902,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.endRemoveRows()
         # ############ OBJECT DELETION FROM MODEL STOPS HERE ####################
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.redraw()
+        self.app.plotcanvas.redraw()
 
         if select_project:
             # always go to the Project Tab after object deletion as it may be done with a shortcut key

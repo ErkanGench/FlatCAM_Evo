@@ -62,7 +62,6 @@ class MockApp:
         self.log = MockLog()
         self.inform = MockInform()
         self.app_units = 'MM'
-        self.use_3d_engine = True
         
         class MockPlotCanvas:
             class new_shape_collection:

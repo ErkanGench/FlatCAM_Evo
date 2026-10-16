@@ -22,7 +22,7 @@ log = logging.getLogger('base2')
 # Explicit import for version checking
 import ezdxf
 
-# Try to import text2path addon (available in ezdxf >= 0.16.0)
+# Try to import text2path addon (supported with ezdxf >= 1.4.5)
 # Graceful degradation handles edge case where ezdxf is installed but addon is missing/corrupted
 try:
     from ezdxf.addons import text2path
@@ -32,7 +32,7 @@ except ImportError:
     text2path = None  # Prevent NameError in downstream code
     log.warning("ezdxf text2path addon not available. "
                 "DXF TEXT/MTEXT/ATTRIB entities will be skipped. "
-                "Upgrade ezdxf to >= 0.16.0 for text support.")
+                "Install ezdxf >= 1.4.5 with fontTools for text support.")
 
 # Separate version check with its own error handling
 # This prevents version parsing errors from affecting the import flag
@@ -40,10 +40,10 @@ HAS_TEXT2PATH_VERSION_OK = True
 if HAS_TEXT2PATH:
     try:
         EZDXF_VERSION = tuple(map(int, ezdxf.__version__.split('.')[:3]))
-        if EZDXF_VERSION < (0, 16, 0):
+        if EZDXF_VERSION < (1, 4, 5):
             HAS_TEXT2PATH_VERSION_OK = False
             log.warning(f"ezdxf version {ezdxf.__version__} detected. "
-                        f"text2path requires >= 0.16.0. Text import may not work correctly.")
+                        f"FlatCAM text import requires ezdxf >= 1.4.5. Text import will be skipped.")
     except (ValueError, AttributeError) as e:
         # Version string format unexpected - log warning but continue
         HAS_TEXT2PATH_VERSION_OK = False

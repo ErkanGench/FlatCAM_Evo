@@ -524,7 +524,7 @@ class TestTitleBar(unittest.TestCase):
         window = QtWidgets.QMainWindow()
         self.addCleanup(window.deleteLater)
         window.app = SimpleNamespace(options={'global_custom_titlebar': False},
-                                     version='1.2.3', beta=False, use_3d_engine=False)
+                                     version='1.2.3', beta=False)
         window.menu = QtWidgets.QMenuBar(window)
         window.menu_toggle_nb = window.menu.addAction('Notebook')
         file_menu = window.menu.addMenu('File')
@@ -537,12 +537,12 @@ class TestTitleBar(unittest.TestCase):
         self.assertFalse(window.findChildren(TitleBar))
         MainGUI.set_ui_title(window, 'board.FlatPrj')
         self.assertIn('FlatCAM Evo 1.2.3', window.windowTitle())
-        self.assertIn('[2D]', window.windowTitle())
+        self.assertNotIn('[2D]', window.windowTitle())
+        self.assertNotIn('[3D]', window.windowTitle())
         self.assertIn('board.FlatPrj', window.windowTitle())
-        del window.app.use_3d_engine
         window.app.options['global_graphic_engine'] = '3D'
         MainGUI.set_ui_title(window, '')
-        self.assertIn('[3D]', window.windowTitle())
+        self.assertNotIn('[3D]', window.windowTitle())
 
     def test_main_window_fullscreen_preserves_geometry_and_maximized_state(self):
         for custom_titlebar in (True, False):
@@ -615,7 +615,6 @@ class TestTitleBarPreferences(unittest.TestCase):
         ui.app = app
         ui.plot_tab_area.count.return_value = 0
         ui.general_pref_form.general_gui_group = group
-        ui.general_pref_form.general_app_group.ge_radio.get_value.return_value = defaults['global_graphic_engine']
         for name in ('notebook', 'axis', 'textbox', 'hud'):
             spinner = getattr(ui.general_pref_form.general_app_set_group, name + '_font_size_spinner')
             spinner.get_value.return_value = 9

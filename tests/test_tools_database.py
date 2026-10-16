@@ -9,7 +9,7 @@ import tempfile
 from copy import deepcopy
 from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,13 +128,12 @@ class LifecycleChecks(DatabaseCase):
         self.app.gcode_editor = None
         # quit_application looks the editors up through App._editor_for (Stage 5); no editor exists here
         self.app._editor_for = lambda kind: None
-        self.app.use_3d_engine = False
         self.app.plotcanvas = MagicMock()
-        self.app.mm = MagicMock()
-        self.app.mp = MagicMock()
-        self.app.mr = MagicMock()
-        self.app.mdc = MagicMock()
-        self.app.kp = MagicMock()
+        self.app.on_mouse_move_over_plot = MagicMock(name='on_mouse_move_over_plot')
+        self.app.on_mouse_click_over_plot = MagicMock(name='on_mouse_click_over_plot')
+        self.app.on_mouse_click_release_over_plot = MagicMock(name='on_mouse_click_release_over_plot')
+        self.app.on_mouse_double_click_over_plot = MagicMock(name='on_mouse_double_click_over_plot')
+        self.app.ui.keyPressEvent = MagicMock(name='keyPressEvent')
         self.app.pool = MagicMock()
         self.app.workers = MagicMock()
         return AppLifecycle(self.app)
@@ -157,9 +156,27 @@ class LifecycleChecks(DatabaseCase):
                 database.confirm_close.assert_called_once_with()
                 if expected:
                     self.app.ui.hide.assert_called_once_with()
+                    self.assertEqual(self.app.plotcanvas.graph_event_disconnect.call_args_list, [
+                        call('mouse_move', self.app.on_mouse_move_over_plot),
+                        call('mouse_press', self.app.on_mouse_click_over_plot),
+                        call('mouse_release', self.app.on_mouse_click_release_over_plot),
+                        call('mouse_double_click', self.app.on_mouse_double_click_over_plot),
+                        call('key_press', self.app.ui.keyPressEvent)])
+                    self.app.plotcanvas.close.assert_called_once_with()
+                    self.app.autosave_timer.stop.assert_called_once_with()
+                    self.app.pool.terminate.assert_called_once_with()
+                    self.app.pool.join.assert_called_once_with()
+                    self.app.workers.quit.assert_called_once_with()
                     quit_app.assert_called_once_with()
                 else:
                     self.app.ui.hide.assert_not_called()
+                    self.app.preferencesUiManager.save_defaults.assert_not_called()
+                    self.app.plotcanvas.graph_event_disconnect.assert_not_called()
+                    self.app.plotcanvas.close.assert_not_called()
+                    self.app.autosave_timer.stop.assert_not_called()
+                    self.app.pool.terminate.assert_not_called()
+                    self.app.pool.join.assert_not_called()
+                    self.app.workers.quit.assert_not_called()
                     quit_app.assert_not_called()
 
 

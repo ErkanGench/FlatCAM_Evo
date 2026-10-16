@@ -193,10 +193,9 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         gcodenr_re_string = r'([+-]?\d*\.\d+)'
         self.g_nr_re = re.compile(gcodenr_re_string)
 
-        if self.app.use_3d_engine:
-            self.text_col = self.app.plotcanvas.new_text_collection()
-            self.text_col.enabled = True
-            self.annotation = self.app.plotcanvas.new_text_group(collection=self.text_col)
+        self.text_col = self.app.plotcanvas.new_text_collection()
+        self.text_col.enabled = True
+        self.annotation = self.app.plotcanvas.new_text_group(collection=self.text_col)
 
         self.gcode_editor_tab = None
         self.gcode_viewer_tab = None
@@ -1241,14 +1240,12 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         # same as the annotations part of plot()
         try:
-            if self.app.use_3d_engine:
-                if self.ui.annotation_cb.get_value() and visible:
-                    self.plot_annotations(obj=self, visible=True)
-                else:
-                    self.plot_annotations(obj=self, visible=False)
+            if self.ui.annotation_cb.get_value() and visible:
+                self.plot_annotations(obj=self, visible=True)
+            else:
+                self.plot_annotations(obj=self, visible=False)
         except (ObjectDeleted, AttributeError):
-            if self.app.use_3d_engine:
-                self.annotation.clear(update=True)
+            self.annotation.clear(update=True)
         return True
 
     def on_plot_cb_click_table(self):
@@ -1393,20 +1390,17 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         except (ObjectDeleted, AttributeError) as err:
             self.app.log.debug("CNCJobObject.plot() --> %s" % str(err))
             self.shapes.clear(update=True)
-            if self.app.use_3d_engine:
-                self.annotation.clear(update=True)
+            self.annotation.clear(update=True)
 
         # Annotations shapes plotting
         try:
-            if self.app.use_3d_engine:
-                if self.ui.annotation_cb.get_value() and visible:
-                    self.plot_annotations(obj=self, visible=True)
-                else:
-                    self.plot_annotations(obj=self, visible=False)
+            if self.ui.annotation_cb.get_value() and visible:
+                self.plot_annotations(obj=self, visible=True)
+            else:
+                self.plot_annotations(obj=self, visible=False)
 
         except (ObjectDeleted, AttributeError):
-            if self.app.use_3d_engine:
-                self.annotation.clear(update=True)
+            self.annotation.clear(update=True)
 
     def on_annotation_change(self, val):
         """
@@ -1414,23 +1408,17 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         :return:
         """
 
-        if self.app.use_3d_engine:
-            # Annotations shapes plotting
-            try:
-                if self.app.use_3d_engine:
-                    if val and self.ui.plot_cb.get_value():
-                        self.plot_annotations(obj=self, visible=True)
-                    else:
-                        self.plot_annotations(obj=self, visible=False)
+        # Annotations shapes plotting
+        try:
+            if val and self.ui.plot_cb.get_value():
+                self.plot_annotations(obj=self, visible=True)
+            else:
+                self.plot_annotations(obj=self, visible=False)
 
-            except (ObjectDeleted, AttributeError):
-                if self.app.use_3d_engine:
-                    self.annotation.clear(update=True)
+        except (ObjectDeleted, AttributeError):
+            self.annotation.clear(update=True)
 
-            # self.annotation.redraw()
-        else:
-            kind = self.ui.cncplot_method_combo.get_value()
-            self.plot(kind=kind)
+        # self.annotation.redraw()
 
     def convert_units(self, units):
         """

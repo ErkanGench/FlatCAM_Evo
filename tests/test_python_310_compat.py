@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP_DIRS = {'.git', '.venv', 'venv', 'build', 'dist', '__pycache__', 'node_modules'}
+SKIP_DIRS = {'.git', '.venv', 'venv', 'build', 'dist', '__pycache__', 'node_modules', '.worktrees'}
 
 
 def source_files():
@@ -43,6 +43,21 @@ def python_310_offenders():
 def test_no_syntax_newer_than_python_310():
     offenders = python_310_offenders()
     assert not offenders, 'syntax that needs Python 3.12:\n' + '\n'.join(offenders)
+
+
+def test_scanner_ignores_worktrees_but_checks_application_source(tmp_path, monkeypatch):
+    source = 'type Alias = int\n'
+    app_source = tmp_path / 'appPlugins' / 'incompatible.py'
+    worktree_source = tmp_path / '.worktrees' / 'other' / 'appPlugins' / 'incompatible.py'
+    for path in (app_source, worktree_source):
+        path.parent.mkdir(parents=True)
+        path.write_text(source, encoding='utf-8')
+    monkeypatch.setitem(globals(), 'ROOT', tmp_path)
+
+    offenders = python_310_offenders()
+
+    assert len(offenders) == 1, offenders
+    assert offenders[0].startswith('appPlugins/incompatible.py:1:'), offenders
 
 
 if __name__ == '__main__':

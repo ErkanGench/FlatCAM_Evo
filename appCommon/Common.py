@@ -241,20 +241,11 @@ class ExclusionAreas(QtCore.QObject):
         self.app.log.debug("+ Adding Exclusion Areas")
         # Storage for shapes, storage that can be used by FlatCAm tools for utility geometry
         # VisPy visuals
-        if self.app.use_3d_engine:
-            try:
-                self.exclusion_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1,
-                                                        pool=self.app.pool)
-            except AttributeError:
-                self.exclusion_shapes = None
-        else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.exclusion_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name="exclusion")
-
-        # Event signals disconnect id holders
-        self.mr = None
-        self.mm = None
-        self.kp = None
+        try:
+            self.exclusion_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1,
+                                                    pool=self.app.pool)
+        except AttributeError:
+            self.exclusion_shapes = None
 
         # variables to be used in area exclusion
         self.cursor_pos = (0, 0)
@@ -311,17 +302,12 @@ class ExclusionAreas(QtCore.QObject):
         self.solid_geometry = solid_geo
         self.obj_type = obj_type
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mm)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+        self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-        self.mr = self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
-        self.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
+        self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
+        self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
         # self.kp = self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
 
     # To be called after clicking on the plot.
@@ -334,14 +320,9 @@ class ExclusionAreas(QtCore.QObject):
         :return:        None
         :rtype:
         """
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            # event_is_dragging = event.is_dragging
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            # event_is_dragging = self.app.plotcanvas.is_dragging
-            right_button = 3
+        event_pos = event.pos
+        # event_is_dragging = event.is_dragging
+        right_button = 2
 
         event_pos = self.app.plotcanvas.translate_coords(event_pos)
         if self.app.grid_status():
@@ -476,21 +457,13 @@ class ExclusionAreas(QtCore.QObject):
 
             # AppTool.delete_tool_selection_shape(self, shapes_storage=self.exclusion_shapes)
 
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-                # self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.mr)
-                self.app.plotcanvas.graph_event_disconnect(self.mm)
-                # self.app.plotcanvas.graph_event_disconnect(self.kp)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+            # self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
 
-            self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                                  self.app.on_mouse_click_over_plot)
-            self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move',
-                                                                  self.app.on_mouse_move_over_plot)
-            self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                  self.app.on_mouse_click_release_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
             self.app.call_source = 'app'
 
@@ -525,20 +498,12 @@ class ExclusionAreas(QtCore.QObject):
         :return:    None
         :rtype:
         """
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.mr)
-            self.app.plotcanvas.graph_event_disconnect(self.mm)
-            self.app.plotcanvas.graph_event_disconnect(self.kp)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
 
-        self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                              self.app.on_mouse_click_over_plot)
-        self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move',
-                                                              self.app.on_mouse_move_over_plot)
-        self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                              self.app.on_mouse_click_release_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
         self.points = []
         self.poly_drawn = False
         self.exclusion_areas_storage = []
@@ -560,14 +525,9 @@ class ExclusionAreas(QtCore.QObject):
         """
         shape_type = self.shape_type_button.get_value()
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            event_is_dragging = event.is_dragging
-            # right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            event_is_dragging = self.app.plotcanvas.is_dragging
-            # right_button = 3
+        event_pos = event.pos
+        event_is_dragging = event.is_dragging
+        # right_button = 2
 
         curr_pos = self.app.plotcanvas.translate_coords(event_pos)
 
@@ -688,8 +648,7 @@ class ExclusionAreas(QtCore.QObject):
             if isinstance(geo_el['shape'], Polygon):
                 self.exclusion_shapes.add(
                     geo_el['shape'], color=color, face_color=color_t, update=True, layer=0, tolerance=None)
-        if self.app.use_3d_engine:
-            self.exclusion_shapes.redraw()
+        self.exclusion_shapes.redraw()
 
         # if there are still some exclusion areas in the storage
         if self.exclusion_areas_storage:

@@ -691,9 +691,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
 class CursorBig(QtCore.QObject):
     """
-    This is a fake cursor to ensure compatibility with the OpenGL engine (VisPy).
-    This way I don't have to chane (disable) things related to the cursor all over when
-    using the low performance Matplotlib 2D graphic engine.
+    Signals cursor visibility and position updates for the VisPy big crosshair cursor.
     """
 
     mouse_state_updated = QtCore.pyqtSignal(bool)

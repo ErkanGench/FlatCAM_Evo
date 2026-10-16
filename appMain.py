@@ -475,13 +475,6 @@ class App(QtCore.QObject):
         self.area_3d_tab = None
 
         # Canvas/plotting
-        self.use_3d_engine = True
-        self.mp = None
-        self.mm = None
-        self.mr = None
-        self.mdc = None
-        self.kp = None
-        self.axes = None
         self.app_cursor = None
         self.hover_shapes = None
         self.tool_shapes = None
@@ -1143,21 +1136,6 @@ class App(QtCore.QObject):
         self.area_3d_tab = QtWidgets.QWidget()
 
         # ######################################## SETUP Plot Area ##################################################
-        self.use_3d_engine = True
-        # determine if the Legacy Graphic Engine is to be used or the OpenGL one
-        if self.options.get("global_graphic_engine", self.defaults.get("global_graphic_engine")) == '2D':
-            self.use_3d_engine = False
-
-        # PlotCanvas Event signals disconnect id holders
-        self.mp = None
-        self.mm = None
-        self.mr = None
-        self.mdc = None
-        self.kp = None
-
-        # Matplotlib axis
-        self.axes = None
-
         self.app_cursor = None
         self.hover_shapes = None
 
@@ -1175,7 +1153,8 @@ class App(QtCore.QObject):
                 self.splash.finish(self.ui)
             self.log.debug("Failed to start the Canvas.")
 
-            self.clear_pool()
+            self.pool.terminate()
+            self.pool.join()
             self.log.error("Failed to start the Canvas")
             raise SystemError("Failed to start the Canvas")
 
@@ -1184,27 +1163,17 @@ class App(QtCore.QObject):
 
         # ################   SHAPES STORAGE   #########################################################################
         # Storage for shapes, storage that can be used by FlatCAm tools for utility geometry
-        if self.use_3d_engine:
-            # VisPy visuals
-            try:
-                self.tool_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
-            except AttributeError:
-                self.tool_shapes = None
+        # VisPy visuals
+        try:
+            self.tool_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+        except AttributeError:
+            self.tool_shapes = None
 
-            # Storage for Hover Shapes
-            self.hover_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+        # Storage for Hover Shapes
+        self.hover_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
 
-            # Storage for Selection shapes
-            self.sel_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
-        else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.tool_shapes = ShapeCollectionLegacy(obj=self, app=self, name="tool")
-
-            # Storage for Hover Shapes will use the default Matplotlib axes
-            self.hover_shapes = ShapeCollectionLegacy(obj=self, app=self, name='hover')
-
-            # Storage for Selection shapes
-            self.sel_shapes = ShapeCollectionLegacy(obj=self, app=self, name="selection")
+        # Storage for Selection shapes
+        self.sel_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
         # #############################################################################################################
 
         end_plot_time = time.time()
@@ -2256,9 +2225,8 @@ class App(QtCore.QObject):
 
         # make sure that when we exit an Editor with a tool active then we make some clean-up
         try:
-            if self.use_3d_engine:
-                self.plotcanvas.text_cursor.parent = None
-                self.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.plotcanvas.text_cursor.parent = None
+            self.plotcanvas.view.camera.zoom_callback = lambda *args: None
         except Exception:
             pass
 
@@ -3851,50 +3819,39 @@ class App(QtCore.QObject):
         :return:            None
         """
 
-        modifier = QtWidgets.QApplication.queryKeyboardModifiers()
-        if modifier == QtCore.Qt.KeyboardModifier.ControlModifier:
-            self.options["global_graphic_engine"] = "2D"
+        self.log.debug("Setting up canvas: VisPy")
 
-        self.log.debug("Setting up canvas: %s" % str(self.options.get("global_graphic_engine", self.defaults.get("global_graphic_engine"))))
-
-        if modifier == QtCore.Qt.KeyboardModifier.ControlModifier:
-            self.use_3d_engine = False
-
-        if self.use_3d_engine:
-            try:
-                plotcanvas = PlotCanvas(self)
-            except Exception as er:
-                msg_txt = traceback.format_exc()
-                self.log.error("App.on_plotcanvas_setup() failed -> %s" % str(er))
-                self.log.error("OpenGL canvas initialization failed with the following error.\n" + msg_txt)
-                msg = '[ERROR] %s' % _("An internal error has occurred. See shell.\n")
-                msg += _("OpenGL canvas initialization failed. HW or HW configuration not supported."
-                         "Change the graphic engine to Legacy(2D) in Edit -> Preferences -> General tab.\n\n")
-                msg += msg_txt
-                self.log.error(msg)
-                self.inform.emit(msg)
-                return 'fail'
-        else:
-            from appGUI.PlotCanvasLegacy import PlotCanvasLegacy
-            plotcanvas = PlotCanvasLegacy(self)
-            if plotcanvas.status != 'ok':
-                return 'fail'
+        try:
+            plotcanvas = PlotCanvas(self)
+        except Exception as er:
+            msg_txt = traceback.format_exc()
+            self.log.error("App.on_plotcanvas_setup() failed -> %s" % str(er))
+            self.log.error("OpenGL canvas initialization failed with the following error.\n" + msg_txt)
+            msg = _("OpenGL canvas initialization failed.\n"
+                    "Check your graphics drivers and OpenGL support, including remote desktop or VM graphics settings.\n"
+                    "Technical details are available in the application log and error details.")
+            self.log.error(msg)
+            msgbox = FCMessageBox(parent=self.ui)
+            msgbox.setWindowTitle(_("OpenGL initialization failed"))
+            msgbox.setInformativeText(msg)
+            msgbox.setDetailedText(msg_txt)
+            msgbox.exec()
+            return 'fail'
 
         # So it can receive key presses
         plotcanvas.native.setFocus()
 
-        if self.use_3d_engine:
-            pan_button = 2 if self.options.get("global_pan_button", self.defaults.get("global_pan_button")) == '2' else 3
-            # Set the mouse button for panning
-            plotcanvas.view.camera.pan_button_setting = pan_button
+        pan_button = 2 if self.options.get("global_pan_button", self.defaults.get("global_pan_button")) == '2' else 3
+        # Set the mouse button for panning
+        plotcanvas.view.camera.pan_button_setting = pan_button
 
-        self.mm = plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move_over_plot)
-        self.mp = plotcanvas.graph_event_connect('mouse_press', self.on_mouse_click_over_plot)
-        self.mr = plotcanvas.graph_event_connect('mouse_release', self.on_mouse_click_release_over_plot)
-        self.mdc = plotcanvas.graph_event_connect('mouse_double_click', self.on_mouse_double_click_over_plot)
+        plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move_over_plot)
+        plotcanvas.graph_event_connect('mouse_press', self.on_mouse_click_over_plot)
+        plotcanvas.graph_event_connect('mouse_release', self.on_mouse_click_release_over_plot)
+        plotcanvas.graph_event_connect('mouse_double_click', self.on_mouse_double_click_over_plot)
 
         # Keys over plot enabled
-        self.kp = plotcanvas.graph_event_connect('key_press', self.ui.keyPressEvent)
+        plotcanvas.graph_event_connect('key_press', self.ui.keyPressEvent)
 
         if self.options.get('global_cursor_type', self.defaults.get('global_cursor_type')) == 'small':
             self.app_cursor = plotcanvas.new_cursor()
@@ -3924,22 +3881,12 @@ class App(QtCore.QObject):
     def on_zoom_fit(self):
         """
         Callback for zoom-fit request. This can be either from the corresponding
-        toolbar button or the '1' key when the canvas is focused. Calls ``self.adjust_axes()``
-        with axes limits from the geometry bounds of all objects.
+        toolbar button or the '1' key when the canvas is focused. Calls ``self.plotcanvas.fit_view()``
+        to fit the view to the geometry bounds of all objects.
 
         :return:        None
         """
-        if self.use_3d_engine:
-            self.plotcanvas.fit_view()
-        else:
-            xmin, ymin, xmax, ymax = self.collection.get_bounds()
-            width = xmax - xmin
-            height = ymax - ymin
-            xmin -= 0.05 * width
-            xmax += 0.05 * width
-            ymin -= 0.05 * height
-            ymax += 0.05 * height
-            self.plotcanvas.adjust_axes(xmin, ymin, xmax, ymax)
+        self.plotcanvas.fit_view()
 
     def on_zoom_in(self):
         """

@@ -54,12 +54,6 @@ from shapely.wkt import dumps as sdumps
 from shapely.geometry.base import BaseGeometry, BaseMultipartGeometry, GeometrySequence
 from shapely import union, difference
 
-# ---------------------------------------
-# NEEDED for Legacy mode
-# Used for solid polygons in Matplotlib
-# from descartes.patch import PolygonPatch
-# ---------------------------------------
-
 from typing import Any
 
 import logging
@@ -608,11 +602,7 @@ class Geometry(object):
         self.old_disp_number = 0
         self.el_count = 0
 
-        if self.app.use_3d_engine:
-            self.temp_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
-        else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.temp_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name='camlib.geometry')
+        self.temp_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
 
         # Attributes to be included in serialization
         self.ser_attrs = ["units", 'solid_geometry', 'follow_geometry', 'tools']
@@ -6616,41 +6606,6 @@ class CNCjob(Geometry):
             )
         return geometry
 
-    # def plot(self, tooldia=None, dpi=75, margin=0.1,
-    #          color={"T": ["#F0E24D", "#B5AB3A"], "C": ["#5E6CFF", "#4650BD"]},
-    #          alpha={"T": 0.3, "C": 1.0}):
-    #     """
-    #     Creates a Matplotlib figure with a plot of the
-    #     G-code job.
-    #     """
-    #     if tooldia is None:
-    #         tooldia = self.tooldia
-    #
-    #     fig = Figure(dpi=dpi)
-    #     ax = fig.add_subplot(111)
-    #     ax.set_aspect(1)
-    #     xmin, ymin, xmax, ymax = self.input_geometry_bounds
-    #     ax.set_xlim(xmin-margin, xmax+margin)
-    #     ax.set_ylim(ymin-margin, ymax+margin)
-    #
-    #     if tooldia == 0:
-    #         for geo in self.gcode_parsed:
-    #             linespec = '--'
-    #             linecolor = color[geo['kind'][0]][1]
-    #             if geo['kind'][0] == 'C':
-    #                 linespec = 'k-'
-    #             x, y = geo['geom'].coords.xy
-    #             ax.plot(x, y, linespec, color=linecolor)
-    #     else:
-    #         for geo in self.gcode_parsed:
-    #             poly = geo['geom'].buffer(tooldia/2.0)
-    #             patch = PolygonPatch(poly, facecolor=color[geo['kind'][0]][0],
-    #                                  edgecolor=color[geo['kind'][0]][1],
-    #                                  alpha=alpha[geo['kind'][0]], zorder=2)
-    #             ax.add_patch(patch)
-    #
-    #     return fig
-
     def plot2(self, tooldia=None, dpi=75, margin=0.1, gcode_parsed: str = None,
               color=None, alpha={"T": 0.3, "C": 1.0}, tool_tolerance=0.0005, obj=None, visible=False, kind='all'):
         """
@@ -6808,8 +6763,7 @@ class CNCjob(Geometry):
             return
 
         if visible is True:
-            if self.app.use_3d_engine:
-                obj.annotation.clear(update=True)
+            obj.annotation.clear(update=True)
             obj.text_col.visible = True
         else:
             obj.text_col.visible = False
@@ -6847,8 +6801,7 @@ class CNCjob(Geometry):
                                    color=new_color)
         except Exception as e:
             self.app.log.error("CNCJob.plot2() --> annotations --> %s" % str(e))
-            if self.app.use_3d_engine:
-                obj.annotation.clear(update=True)
+            obj.annotation.clear(update=True)
 
         obj.annotation.redraw()
 

@@ -65,23 +65,9 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
         grid1 = GLay(v_spacing=5, h_spacing=3)
         grid1_frame.setLayout(grid1)
 
-        # Graphic Engine for FlatCAM
-        self.ge_label = FCLabel('%s:' % _('Graphic Engine'), bold=True)
-        self.ge_label.setToolTip(_("Choose what graphic engine to use in FlatCAM.\n"
-                                   "Legacy(2D) -> reduced functionality, slow performance but enhanced compatibility.\n"
-                                   "OpenGL(3D) -> full functionality, high performance\n"
-                                   "Some graphic cards are too old and do not work in OpenGL(3D) mode, like:\n"
-                                   "Intel HD3000 or older. In this case the plot area will be black therefore\n"
-                                   "use the Legacy(2D) mode."))
-        self.ge_radio = RadioSet([{'label': _('2D'), 'value': '2D'},
-                                  {'label': _('3D'), 'value': '3D'}], compact=True)
-
-        grid1.addWidget(self.ge_label, 0, 0)
-        grid1.addWidget(self.ge_radio, 0, 1)
-
-        self.ge_comp_cb = FCCheckBox(_("3D Compatibility"))
-        self.ge_comp_cb.setToolTip(_("Check this if you have problems in 3D mode. Works only for 3D mode.\n"
-                                     "It will disable performance mods but perhaps add more compatibility."))
+        self.ge_comp_cb = FCCheckBox(_("Disable parallel shape processing"))
+        self.ge_comp_cb.setToolTip(_("Process shapes synchronously instead of using parallel worker processes.\n"
+                                     "This may improve compatibility but can reduce performance."))
 
         grid1.addWidget(self.ge_comp_cb, 1, 0, 1, 2)
 

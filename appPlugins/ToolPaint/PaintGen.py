@@ -103,20 +103,9 @@ class PaintGen:
 
         self.temp_shapes = tool.temp_shapes
 
-        self.grid_status_memory = tool.grid_status_memory
-        self.poly_sel_disconnect_flag = tool.poly_sel_disconnect_flag
-        self.area_sel_disconnect_flag = tool.area_sel_disconnect_flag
-
         self.bound_obj_name = tool.bound_obj_name
         self.bound_obj = tool.bound_obj
 
-        self.mr = tool.mr
-        self.mm = tool.mm
-        self.kp = tool.kp
-        self.mp = tool.mp
-        self.mr = tool.mr
-        self.kp = tool.kp
-        self.kp = tool.kp
 
         self.poly_drawn = tool.poly_drawn
         self.points = tool.points
@@ -1141,76 +1130,70 @@ class PaintGen:
         )
 
     def _paint_poly_single(self):
+        self.parent_tool.paint_obj = self.paint_obj
+        self.parent_tool.tooldia_list = self.tooldia_list
+
         # disengage the grid snapping since it may be hard to click on polygons with grid snapping on
         if self.app.ui.grid_snap_btn.isChecked():
-            self.grid_status_memory = True
+            self.parent_tool.grid_status_memory = True
             self.app.ui.grid_snap_btn.trigger()
         else:
-            self.grid_status_memory = False
+            self.parent_tool.grid_status_memory = False
 
         self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click on a polygon to paint it."))
 
-        self.mr = self.app.plotcanvas.graph_event_connect(
+        self.app.plotcanvas.graph_event_connect(
             'mouse_release',
             self.parent_tool.on_single_poly_mouse_release,
         )
-        self.kp = self.app.plotcanvas.graph_event_connect(
+        self.app.plotcanvas.graph_event_connect(
             'key_press',
             self.parent_tool.on_key_press,
         )
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.graph_event_disconnect(
-                'mouse_release',
-                self.app.on_mouse_click_release_over_plot,
-            )
-            self.app.plotcanvas.graph_event_disconnect(
-                'mouse_press',
-                self.app.on_mouse_click_over_plot,
-            )
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
+        self.app.plotcanvas.graph_event_disconnect(
+            'mouse_release',
+            self.app.on_mouse_click_release_over_plot,
+        )
+        self.app.plotcanvas.graph_event_disconnect(
+            'mouse_press',
+            self.app.on_mouse_click_over_plot,
+        )
 
         # disconnect flags
-        self.poly_sel_disconnect_flag = True
+        self.parent_tool.poly_sel_disconnect_flag = True
 
     def _paint_poly_area(self):
         self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the start point of the area."))
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.graph_event_disconnect(
-                'mouse_press',
-                self.app.on_mouse_click_over_plot,
-            )
-            self.app.plotcanvas.graph_event_disconnect(
-                'mouse_move',
-                self.app.on_mouse_move_over_plot,
-            )
-            self.app.plotcanvas.graph_event_disconnect(
-                'mouse_release',
-                self.app.on_mouse_click_release_over_plot,
-            )
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mm)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+        self.app.plotcanvas.graph_event_disconnect(
+            'mouse_press',
+            self.app.on_mouse_click_over_plot,
+        )
+        self.app.plotcanvas.graph_event_disconnect(
+            'mouse_move',
+            self.app.on_mouse_move_over_plot,
+        )
+        self.app.plotcanvas.graph_event_disconnect(
+            'mouse_release',
+            self.app.on_mouse_click_release_over_plot,
+        )
 
-        self.mr = self.app.plotcanvas.graph_event_connect(
+        self.app.plotcanvas.graph_event_connect(
             'mouse_release',
             self.parent_tool.on_mouse_release,
         )
-        self.mm = self.app.plotcanvas.graph_event_connect(
+        self.app.plotcanvas.graph_event_connect(
             'mouse_move',
             self.parent_tool.on_mouse_move,
         )
-        self.kp = self.app.plotcanvas.graph_event_connect(
+        self.app.plotcanvas.graph_event_connect(
             'key_press',
             self.parent_tool.on_key_press,
         )
 
         # disconnect flags
-        self.area_sel_disconnect_flag = True
+        self.parent_tool.area_sel_disconnect_flag = True
         # disable the "notebook" until the process is finished
         self.app.ui.notebook.setDisabled(True)
 

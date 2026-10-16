@@ -1,5 +1,4 @@
 
-# from matplotlib.colors import LinearSegmentedColormap
 from tclCommands.TclCommand import TclCommand
 
 import collections

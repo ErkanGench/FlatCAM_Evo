@@ -250,7 +250,7 @@ class PlotColorApp(QtCore.QObject):
     def __init__(self, selected):
         super().__init__()
         for name in ('log', 'inform', 'worker_task', 'plotcanvas', 'clear_pool',
-                     'app_obj', 'proc_container', 'use_3d_engine'):
+                     'app_obj', 'proc_container'):
             setattr(self, name, Mock())
         self.options = {}
         self.defaults = dict(PM_OPTIONS, gerber_color_list=[])

@@ -2,6 +2,8 @@
 
 Status: draft for approval. No code was changed. Implement only after the maintainer approves this note.
 
+Renderer update: the active contracts below use the existing VisPy PCB canvas and retained separate 3D scene canvas. The Legacy backend has been removed. The problem analysis and original line references remain historical context, not current renderer requirements.
+
 Scope: the Select tool of the Gerber Editor (`appEditors/appGerberEditor.py`, class `SelectEditorGrb`) and the code that feeds it.
 Out of scope: the drag-rectangle selection (`draw_selection_area_handler`), undo.
 In scope (maintainer decision, section 6): the Simplify tool click and the Erase tool click also use `pick_at` (section 2.10).
@@ -186,13 +188,12 @@ Maintainer decision (after the first version): area comes before the `follow` di
 
 ### 2.4 Pixel size per canvas
 
-Add `pixel_size()` (plot units per screen pixel) to each canvas class that the editor can use:
+Use the existing `pixel_size()` contract (plot units per screen pixel) on the VisPy canvases. Ordinary 2D PCB editing remains on `PlotCanvas`; the separate 3D scene canvas is retained. Both require working OpenGL; there is no Legacy render path to implement or test.
 
 | Canvas | File | Formula |
 |---|---|---|
-| VisPy 2D/3D engine | `appGUI/VisPyCanvas.py` (class `VisPyCanvas`, `translate_coords` at line 128; `PlotCanvas` in `appGUI/PlotCanvas.py:30` inherits it) | `a = translate_coords((0, 0)); b = translate_coords((1, 0)); hypot(b[0]-a[0], b[1]-a[1])`. |
-| 3D scene canvas | `appGUI/PlotCanvas3d.py` (`translate_coords` at line 209) | Same formula. |
-| Legacy (matplotlib) | `appGUI/PlotCanvasLegacy.py` (`translate_coords` at line 1167 returns the data coordinates unchanged) | `(xmax - xmin) / axes.bbox.width` with `xmin, xmax = self.axes.get_xlim()`. The view keeps the aspect ratio (see `PlotCanvasLegacy` lines 868-897), so one value serves both axes. |
+| VisPy 2D PCB canvas | `appGUI/VisPyCanvas.py` (class `VisPyCanvas`; `PlotCanvas` in `appGUI/PlotCanvas.py` inherits it) | `a = translate_coords((0, 0)); b = translate_coords((1, 0)); hypot(b[0]-a[0], b[1]-a[1])`. |
+| Separate 3D scene canvas | `appGUI/PlotCanvas3d.py` (class `PlotCanvas3d`) | Same formula. |
 
 The editor calls `self.canvas.pixel_size()` at pick time. It never caches the value, so a zoom changes the tolerance on the next click.
 
@@ -213,7 +214,7 @@ Settled in section 3.
 
 - Constant `CLICK_DRAG_THRESHOLD_PX = 5`.
 - At press, `on_canvas_click` stores `self.press_pos_raw = (x, y)` in plot units (the unsnapped value).
-- The distance in pixels is `hypot(dx, dy) / canvas.pixel_size()`. This works on both canvases, because both give plot-unit positions in the handlers and both have `pixel_size()`.
+- The distance in pixels is `hypot(dx, dy) / canvas.pixel_size()`. This works on both VisPy canvases in section 2.4, because both give plot-unit positions in the handlers and both have `pixel_size()`.
 - Move handler (6298-6327): if the button is down and the pixel distance from `press_pos_raw` is below the threshold, set `app.selection_type = None` and call `app.delete_selection_shape()`. Do not draw the rectangle. Otherwise run the existing code.
 - Release handler (6091): compute the pixel distance between `press_pos_raw` and the raw release position. If it is below the threshold, treat the event as a click: set `app.selection_type = None` and go to the `click_release` branch. This also covers the case where the pointer moved out and came back. If it is at or above the threshold, run the rectangle path as now.
 - The pick point is the press position, as today (line 6100 passes `self.pos`).
@@ -328,7 +329,7 @@ New file: `tests/test_gerber_editor_pick.py`. Use `unittest` (project style) wit
 | AT-13 | `test_revision_counter_sites` | One parametrized test. For every row of the mutation table in section 2.1 (A1, A4, A5, D1, D2, D4, R1, R4, R5, T1 to T6, L1, L3): run the production action and assert that `geometry_revision` increased. |
 | AT-14 | `test_count_guard_rebuilds` | Append a shape directly to `storage_dict[10]['geometry']` (a "forgotten" site). The next pick sees the new shape because the count changed. |
 | AT-15 | `test_zoom_changes_tolerance` | Same click and same shapes. Pixel size 0.05, trace 0.2 mm away: hit (4 px). Pixel size 0.2 (zoomed out), same distance: hit (1 px). Pixel size 0.01 (zoomed in), same distance: miss (20 px). |
-| AT-16 | `test_pixel_size_vispy_and_legacy` | `VisPyCanvas.pixel_size()` with a stub `grid.get_transform` that maps 1 px to 0.05 units. `PlotCanvasLegacy.pixel_size()` with a stub axes (`get_xlim` = (0, 100), `bbox.width` = 1000): 0.1. |
+| AT-16 | `test_pixel_size_vispy` | `VisPyCanvas.pixel_size()` and `PlotCanvas3d.pixel_size()` with a stub `grid.get_transform` that maps 1 px to 0.05 units: both return 0.05. No Legacy canvas requirement. |
 | AT-17 | `test_grid_snap_does_not_change_pick` | Grid on, grid step 2.54. Click 0.05 off a trace: the trace is picked, and the stored press position equals the raw one. Then run the Pad tool with the grid on: the pad center is on the grid (snap kept for draw tools). |
 | AT-18 | `test_ctrl_adds` | Set `global_mselect_key` to Control and set the keyboard modifier to Control (patch `QApplication.keyboardModifiers`). Click A then click B: both selected. Click A again: A is removed. |
 | AT-19 | `test_three_pixel_move_is_click` | Press, move 3 px (one move event), release. A shape is picked. `app.selection_type` is `None`. No rubber band was drawn (spy on `draw_moving_selection_shape`). |
@@ -356,7 +357,7 @@ New file: `tests/test_gerber_editor_pick.py`. Use `unittest` (project style) wit
 - **Eraser storage fix changes output.** After the fixes of section 2.10, aperture 0 holds fewer shapes than before (no empty shapes, no copies). A project that was saved after an erase with the old code keeps its extra shapes. They are harmless copies. No migration.
 - **Area selection handler.** `draw_selection_area_handler` (6148, 6194) disconnects `cellPressed` with no argument and reconnects only `on_row_selected`. The same blocker pattern would be safer. Not part of this item.
 - **Nearby defect.** `on_table_selection` (5821-5828) appends all shapes again when all rows are selected, with no duplicate check. It can double the entries in `selected`. Not part of this item. The new code does not depend on it.
-- **HiDPI.** Pixel positions are logical pixels on both canvases. A 5-pixel rule is therefore the same size on screen on all displays. The VisPy `translate_coords` is the same mapping the handlers already use, so no extra scaling is applied.
+- **HiDPI.** Pixel positions use the existing VisPy canvas coordinate mapping on both canvases in section 2.4. The 5-pixel rule uses that mapping without extra scaling; display scaling and driver combinations still need manual verification.
 
 ## 6. Maintainer decisions
 

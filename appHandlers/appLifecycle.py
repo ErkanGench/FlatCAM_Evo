@@ -377,19 +377,11 @@ class AppLifecycle(QtCore.QObject):
                     self.log.debug("App.quit_application() --> %s deactivated." % editor_name)
 
         # disconnect the mouse events
-        if self.app.use_3d_engine:
-            self.app.mm = self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-            self.app.mp = self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.mr = self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            self.app.mdc = self.app.plotcanvas.graph_event_disconnect('mouse_double_click',
-                                                                      self.app.on_mouse_double_click_over_plot)
-            self.app.kp = self.app.plotcanvas.graph_event_disconnect('key_press', self.app.ui.keyPressEvent)
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.app.mm)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mdc)
-            self.app.plotcanvas.graph_event_disconnect(self.app.kp)
+        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('key_press', self.app.ui.keyPressEvent)
 
         # Release VisPy OpenGL resources early so the GL thread has time to
         # fully exit before QApplication.quit() processes the quit event

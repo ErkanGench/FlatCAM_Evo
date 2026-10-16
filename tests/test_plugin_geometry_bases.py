@@ -36,7 +36,6 @@ def qapp():
 def make_tool_app():
     app = MagicMock()
     app.decimals = 4
-    app.use_3d_engine = True
     app.app_units = "MM"
     app.collection = QStringListModel()
     app.resource_location = "assets/resources"

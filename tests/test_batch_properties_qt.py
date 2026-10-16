@@ -98,7 +98,7 @@ class TestBatchPropertiesQt(unittest.TestCase):
             log=Mock(), inform=Mock(), regFK=Mock(), worker_task=Mock(),
             object_status_changed=self.signals.status, proj_selection_changed=self.signals.selection,
             on_plots_updated=Mock(), on_zoom_fit=Mock(), flush_recent_items=Mock(),
-            call_source='app', use_3d_engine=True)
+            call_source='app')
         self.window.app = self.app
         self.app.collection = ObjectCollection(self.app)
         self.app.app_obj = AppObject(self.app)
@@ -242,7 +242,7 @@ class TestBatchPropertiesQt(unittest.TestCase):
             obj.clear.assert_called_once_with()
             obj.delete.assert_called_once_with()
 
-    def test_bulk_delete_legacy_cnc_cleanup_and_empty_autohide(self):
+    def test_bulk_delete_vispy_cnc_cleanup_and_empty_autohide(self):
         objects = []
         for name in ('first', 'second'):
             obj = Layer(name, self.app)
@@ -265,19 +265,18 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.app.exc_areas = Mock()
         self.app.defaults.report_usage = Mock()
         self.app.options['global_project_autohide'] = True
-        self.app.use_3d_engine = False
         self.app.setup_default_properties_tab = Mock(wraps=self.show_default)
 
         AppObjectOps(self.app).on_delete(force_deletion=True)
 
         self.assertEqual(self.app.collection.get_list(), [])
-        self.assertEqual(self.app.plotcanvas.figure.delaxes.call_count, 2)
-        self.app.plotcanvas.auto_adjust_axes.assert_called_once_with()
-        self.app.plotcanvas.redraw.assert_not_called()
+        self.app.plotcanvas.redraw.assert_called_once_with()
         self.app.exc_areas.clear_shapes.assert_called_once_with()
         self.window.splitter.setSizes.assert_called_once_with([0, 1])
         self.app.setup_default_properties_tab.assert_called_once_with()
         for obj, annotation, text_col in zip(objects, annotations, text_cols):
+            obj.clear.assert_called_once_with()
+            obj.delete.assert_called_once_with()
             annotation.clear.assert_called_once_with(update=False)
             obj.probing_shapes.clear.assert_called_once_with(update=True)
             self.assertFalse(text_col.enabled)

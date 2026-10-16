@@ -82,7 +82,7 @@ The program keeps all objects of a job in 1 **project** file (`.FlatPrj`).
   HPGL, lasers and solder paste dispensers. You can add your own.
 - **Tcl shell** with 75 commands, script files and command-line options for automatic jobs.
 - **Tools Database** for your tools and their cutting parameters.
-- **Light and dark themes**, a fast **OpenGL (VisPy)** canvas or a compatible **matplotlib** canvas, and
+- **Light and dark themes**, a fast **OpenGL (VisPy)** canvas, and
   translations in 9 languages.
 
 ---
@@ -124,10 +124,15 @@ FlatCAM Evo runs from the source code on **Windows**, **Linux** and **macOS**.
   - **Linux**: most current distributions have Python 3.10 or newer (for example Ubuntu 22.04 and newer, Debian 12
     and newer, Fedora). Check with `python3 --version`.
   - **macOS**: install Python with Homebrew (`brew install python`) or from python.org.
-- A graphics driver with **OpenGL** support for the fast canvas. Without OpenGL, select the "Legacy (2D)" graphic
-  engine in the Preferences.
+- A working **OpenGL** context and graphics driver for the **VisPy** canvas. The Legacy (Matplotlib) backend has
+  been removed. Ordinary 2D PCB editing is unchanged, and the separate 3D view is retained.
 - The Python packages in [`requirements.txt`](requirements.txt). The main packages are PyQt6, Shapely 2, NumPy,
   Rtree, VisPy, ezdxf, svglib, reportlab and lxml.
+
+| Dependency | Current requirement |
+|---|---|
+| `ezdxf` | `>=1.4.5`; DXF text uses the fontTools-based path, without Matplotlib. |
+| Matplotlib | No longer required; the Legacy canvas and vendored `descartes` have been removed. |
 
 Some packages are optional. FlatCAM Evo runs without them, but the related feature is not available:
 
@@ -236,6 +241,22 @@ python flatcam.py
 
 You can give files on the command line, for example `python flatcam.py board.FlatPrj` or
 `python flatcam.py top.gbr drills.drl`. See [Command-line options](#command-line-options).
+
+#### OpenGL startup troubleshooting
+
+If startup reports **OpenGL initialization failed**, open the error details and check `log.txt` in the
+[data folder](#where-flatcam-evo-keeps-its-data) for the traceback.
+
+- Install or update the graphics driver from your GPU vendor or operating system, then restart FlatCAM Evo.
+- For remote desktop sessions or virtual machines, check that the session exposes OpenGL. Enable the VM's graphics
+  acceleration and install its guest graphics drivers where supported. Try a local desktop session to isolate a
+  remote graphics problem.
+- If it still fails, report the error details and log with your OS, GPU, driver version and remote/VM setup in the
+  [issue tracker](https://github.com/MariusAdrian88/FlatCAM_Evo/issues).
+
+There is no Legacy renderer selection, Ctrl-startup fallback or renderer title badge. If your environment cannot
+provide working OpenGL, use a previous release that includes the Legacy backend from the repository's
+[Releases/downloads](https://github.com/MariusAdrian88/FlatCAM_Evo/releases).
 
 ### Update
 
@@ -641,8 +662,12 @@ There are 75 commands. Some have short aliases, for example `bbox`, `ncc`, `pan`
   cutting parameters, and the settings for Isolation, NCC, Paint, Drilling, Milling and Cutout. The plugins can pick a
   tool from the database, or find the tool that fits a diameter. The database is exported and imported as a text
   file.
-- **Graphic engine** (Preferences > General): "3D" uses OpenGL (VisPy) and is fast for large boards. "Legacy (2D)"
-  uses matplotlib and works on any computer, but is slower.
+- **Rendering**: VisPy is the only PCB canvas backend. The retired `global_graphic_engine` preference is discarded
+  automatically when loading or importing settings and when accepting project settings; subsequent saves omit it.
+  No manual preference reset is needed.
+- **Disable parallel shape processing** (Preferences > General): processes shapes synchronously instead of using
+  parallel workers. The compatibility key `global_graphic_engine_3d_no_mp` is preserved; this checkbox does not
+  select another renderer and does not remove the OpenGL requirement.
 - **Themes**: default, automatic (follows the system), light and dark, with an optional dark canvas.
 - **Languages**: English, Brazilian Portuguese, Chinese (Simplified), French, German, Italian, Romanian, Russian,
   Spanish and Turkish.

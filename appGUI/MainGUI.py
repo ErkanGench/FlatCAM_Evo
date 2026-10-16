@@ -2273,13 +2273,10 @@ class MainGUI(QtWidgets.QMainWindow):
         :return: None
         """
         if self.title_bar is None:
-            use_3d_engine = getattr(self.app, 'use_3d_engine',
-                                    _database_option(self.app, 'global_graphic_engine') == '3D')
-            engine = "3D" if use_3d_engine else "2D"
             title = (
                 f"FlatCAM Evo {self.app.version} "
                 f"{'BETA' if self.app.beta else ''} - {platform.architecture()[0]} - "
-                f"[{engine}]    {name}"
+                f"{name}"
             )
             self.setWindowTitle(title)
             return
@@ -3016,8 +3013,6 @@ class MainGUI(QtWidgets.QMainWindow):
         selected = self.app.collection.get_selected()
         names_list = self.app.collection.get_names()
 
-        matplotlib_key_flag = False
-
         # events out of the self.app.collection view (it's about Project Tab) are of type int
         if type(event) is int:
             key = event
@@ -3027,38 +3022,13 @@ class MainGUI(QtWidgets.QMainWindow):
             return
         else:
 
-            # MatPlotLib key events are trickier to interpret than the rest
-            if not self.app.use_3d_engine:
-                matplotlib_key_flag = True
+            # The native object is the QKeyEvent from PyQt/PySide
+            native_event = event.native
+            if hasattr(native_event, 'isAutoRepeat') and native_event.isAutoRepeat():
+                return
 
-                key = event.key
-                key = QtGui.QKeySequence(key)
-
-                # check for modifiers
-                key_string = key.toString().lower()
-                if '+' in key_string:
-                    mod, __, key_text = key_string.rpartition('+')
-                    if mod.lower() == 'ctrl':
-                        modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
-                    elif mod.lower() == 'alt':
-                        modifiers = QtCore.Qt.KeyboardModifier.AltModifier
-                    elif mod.lower() == 'shift':
-                        modifiers = QtCore.Qt.KeyboardModifier.ShiftModifier
-                    else:
-                        modifiers = QtCore.Qt.KeyboardModifier.NoModifier
-                    key = QtGui.QKeySequence(key_text)
-            else:
-                # The native object is the QKeyEvent from PyQt/PySide
-                native_event = event.native
-
-                # Check if the method exists and if it returns True
-                # The hasattr check adds a bit of safety
-                if hasattr(native_event, 'isAutoRepeat') and native_event.isAutoRepeat():
-                    # print(f"Key repeat detected for: {event.key}")
-                    return  # Ignore the repeat event
-
-                # VISPY events
-                key = event.key
+            # VISPY events
+            key = event.key
 
         try:
             if event.isAutoRepeat():
@@ -3379,7 +3349,7 @@ class MainGUI(QtWidgets.QMainWindow):
                 # Delete from PyQt
                 # It's meant to make a difference between delete objects and delete tools in
                 # Geometry Selected tool table
-                if key == QtCore.Qt.Key.Key_Delete and matplotlib_key_flag is False:
+                if key == QtCore.Qt.Key.Key_Delete:
                     widget_name = self.plot_tab_area.currentWidget().objectName()
                     if widget_name == 'database_tab':
                         # Tools DB saved, update flag

@@ -48,7 +48,6 @@ import builtins
 from appObjects.AppObjectTemplate import ObjectDeleted
 
 from appGUI.VisPyVisuals import *
-from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
 
 from appEditors.appTextEditor import AppTextEditor
 
@@ -81,7 +80,6 @@ import serial.tools.list_ports
 import random
 from io import StringIO
 
-from matplotlib.backend_bases import KeyEvent as mpl_key_event
 
 # try:
 #     from foronoi import Voronoi
@@ -217,10 +215,6 @@ class ToolLevelling(CNCjob, AppTool):
         # if mouse events are bound to local methods
         self.mouse_events_connected = False
 
-        # event handlers references
-        self.kp = None
-        self.mm = None
-        self.mr = None
 
         self.probing_gcode_text = ''
         self.grbl_probe_result = ''
@@ -596,18 +590,11 @@ class ToolLevelling(CNCjob, AppTool):
             except Exception as err:
                 self.app.log.debug("ToolLevelling._new_probing_shapes() -> %s" % str(err))
 
-        if self.app.use_3d_engine:
-            self.probing_shapes = ShapeCollection(
-                parent=self.app.plotcanvas.view.scene,
-                layers=1,
-                pool=self.app.pool
-            )
-        else:
-            self.probing_shapes = ShapeCollectionLegacy(
-                obj=self,
-                app=self.app,
-                name=name + "_probing_shapes"
-            )
+        self.probing_shapes = ShapeCollection(
+            parent=self.app.plotcanvas.view.scene,
+            layers=1,
+            pool=self.app.pool
+        )
 
     def on_object_changed(self):
 
@@ -997,18 +984,13 @@ class ToolLevelling(CNCjob, AppTool):
         self.old_selection_state = self.app.options.get('global_selection_shape', True)
         self.app.options['global_selection_shape'] = False
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.graph_event_disconnect('key_press', self.app.ui.keyPressEvent)
-            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.app.kp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+        self.app.plotcanvas.graph_event_disconnect('key_press', self.app.ui.keyPressEvent)
+        self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-        self.kp = self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
-        self.mr = self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
-        self.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
+        self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
+        self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
+        self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
 
         self.mouse_events_connected = True
 
@@ -1173,32 +1155,12 @@ class ToolLevelling(CNCjob, AppTool):
 
     def plot_probing_geo(self, geometry, visibility, custom_color=None):
         if visibility:
-            if self.app.use_3d_engine:
-                def random_color():
-                    r_color = np.random.rand(4)
-                    r_color[3] = 0.5
-                    return r_color
-            else:
-                def random_color():
-                    while True:
-                        r_color = np.random.rand(4)
-                        r_color[3] = 0.5
-
-                        new_color = '#'
-                        for idx in range(len(r_color)):
-                            new_color += '%x' % int(r_color[idx] * 255)
-                        # do it until a valid color is generated
-                        # a valid color has the # symbol, another 6 chars for the color and the last 2 chars for alpha
-                        # for a total of 9 chars
-                        if len(new_color) == 9:
-                            break
-                    return new_color
+            def random_color():
+                r_color = np.random.rand(4)
+                r_color[3] = 0.5
+                return r_color
 
             try:
-                # if self.app.use_3d_engine:
-                #     color = "#0000FFFE"
-                # else:
-                #     color = "#0000FFFE"
                 # for sh in points_geo:
                 #     self.add_probing_shape(shape=sh, color=color, face_color=color, visible=True)
 
@@ -1339,21 +1301,13 @@ class ToolLevelling(CNCjob, AppTool):
             return
         self.mouse_events_connected = False
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
-            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.kp)
-            self.app.plotcanvas.graph_event_disconnect(self.mr)
-            self.app.plotcanvas.graph_event_disconnect(self.mm)
-        self.kp = None
-        self.mr = None
-        self.mm = None
+        self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
+        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
 
-        self.app.kp = self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
-        self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-        self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
+        self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
+        self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_release',
                                                               self.app.on_mouse_click_release_over_plot)
 
         # restore selection
@@ -1399,10 +1353,7 @@ class ToolLevelling(CNCjob, AppTool):
         :return: None
         """
 
-        if self.app.use_3d_engine:
-            self.mouse_is_dragging = event.is_dragging
-        else:
-            self.mouse_is_dragging = self.app.plotcanvas.is_dragging
+        self.mouse_is_dragging = event.is_dragging
 
         # So it can receive key presses but not when the Tcl Shell is active
         if not self.app.ui.shell_dock.isVisible():
@@ -1414,12 +1365,8 @@ class ToolLevelling(CNCjob, AppTool):
         if not self.mouse_events_connected:
             return
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            right_button = 3
+        event_pos = event.pos
+        right_button = 2
 
         try:
             x = float(event_pos[0])
@@ -1495,27 +1442,6 @@ class ToolLevelling(CNCjob, AppTool):
         # events from the GUI are of type QKeyEvent
         elif isinstance(event, QtGui.QKeyEvent):
             key = event.key()
-        elif isinstance(event, mpl_key_event):  # MatPlotLib key events are trickier to interpret than the rest
-            key = event.key
-            key = QtGui.QKeySequence(key)
-
-            # check for modifiers
-            key_string = key.toString().lower()
-            if '+' in key_string:
-                mod, __, key_text = key_string.rpartition('+')
-                if mod.lower() == 'ctrl':
-                    # modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
-                    pass
-                elif mod.lower() == 'alt':
-                    # modifiers = QtCore.Qt.KeyboardModifier.AltModifier
-                    pass
-                elif mod.lower() == 'shift':
-                    # modifiers = QtCore.Qt.KeyboardModifier.
-                    pass
-                else:
-                    # modifiers = QtCore.Qt.KeyboardModifier.NoModifier
-                    pass
-                key = QtGui.QKeySequence(key_text)
         # events from Vispy are of type KeyEvent
         else:
             key = event.key

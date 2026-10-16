@@ -24,7 +24,6 @@ def make_app():
     app.ui = Mock()
     app.collection.get_selected.return_value = []
     app.proc_container.new.side_effect = lambda text: nullcontext()
-    app.use_3d_engine = False
     app.ui.pop_menucolor.actions.return_value = []
     return app
 
@@ -136,7 +135,7 @@ def test_busy_plot_lock_retries_fit_without_blocking_gui_or_repeating_refresh(qt
     from appGUI.PlotCanvas import PlotCanvas
 
     app = make_app()
-    app.use_3d_engine = True
+    # Stale project/backend settings must never enable a blocking GUI fit.
     events, threads, ticks, tasks = [], [], [], []
     layer = Layer(10.0, events, threads)
     app.collection.get_selected.return_value = [layer]

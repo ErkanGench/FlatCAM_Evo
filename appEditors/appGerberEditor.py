@@ -96,8 +96,7 @@ class PadEditorGrb(ShapeToolEditorGrb):
             self.draw_app.select_tool('select')
             return
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.pad_tool = PadEditorTool(self.app, self.draw_app, plugin_name=_("Pad"))
@@ -327,9 +326,8 @@ class PadEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -355,18 +353,17 @@ class PadEditorGrb(ShapeToolEditorGrb):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         # Jump to coords
@@ -429,9 +426,8 @@ class PadEditorGrb(ShapeToolEditorGrb):
         self.draw_app.ui.apertures_table.clearSelection()
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -530,8 +526,7 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         if isinstance(geo, DrawToolShape) and geo.geo is not None:
             self.draw_app.draw_utility_geometry(geo_shape=geo)
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         if not self.draw_app.snap_x:
@@ -935,9 +930,8 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         if not self.points:
@@ -967,18 +961,17 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
@@ -1043,9 +1036,8 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         self.draw_app.ui.apertures_table.clearSelection()
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -1213,8 +1205,7 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero.png'))
         QtGui.QGuiApplication.setOverrideCursor(self.cursor)
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.reg_tool = GrbRegionEditorTool(self.app, self.draw_app, plugin_name=_("Region"))
@@ -1481,9 +1472,8 @@ class RegionEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -1513,18 +1503,17 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
@@ -1718,8 +1707,7 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         self.ui = self.track_tool.ui
         self.track_tool.run()
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.track_tool.length = self.draw_app.last_length
@@ -1901,9 +1889,8 @@ class TrackEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -1937,18 +1924,17 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         if key == 'Backspace' or key == QtCore.Qt.Key.Key_Backspace:
@@ -3297,7 +3283,7 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
             self.draw_app.visible = True
 
         # make sure that the cursor text from the FCPath is deleted
-        if self.draw_app.app.use_3d_engine and self.draw_app.app.plotcanvas.text_cursor.parent:
+        if self.draw_app.app.plotcanvas.text_cursor.parent:
             self.draw_app.app.plotcanvas.text_cursor.parent = None
             self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
@@ -3401,6 +3387,7 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         # DrawTool.__init__(self, draw_app)
         self.name = 'import'
         self.origin = None
+        self._canvas_connected = False
 
         self.draw_app = draw_app
         self.storage = self.draw_app.storage_dict
@@ -3433,9 +3420,6 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         # multiprocessing results
         self.results = []
 
-        self.mp = None
-        self.mr = None
-        self.mm = None
         self.app = self.draw_app.app
         self.canvas = self.draw_app.canvas
 
@@ -3484,41 +3468,34 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         self.draw_app.app.inform.emit('%s' % _("Select shapes to import them into the edited object."))
 
     def import_connect(self):
+        if self._canvas_connected:
+            return
         # first connect to new, then disconnect the old handlers
         # don't ask why but if there is nothing connected I've seen issues
-        self.mp = self.canvas.graph_event_connect('mouse_press', self.on_mouse_click)
-        self.mm = self.canvas.graph_event_connect('mouse_move', self.on_mouse_move)
-        self.mr = self.canvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
+        self.canvas.graph_event_connect('mouse_press', self.on_mouse_click)
+        self.canvas.graph_event_connect('mouse_move', self.on_mouse_move)
+        self.canvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
 
         # disconnect old
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_press', self.draw_app.on_canvas_click)
-            self.canvas.graph_event_disconnect('mouse_move', self.draw_app.on_canvas_move)
-            self.canvas.graph_event_disconnect('mouse_release', self.draw_app.on_canvas_click_release)
-        else:
-            self.canvas.graph_event_disconnect(self.draw_app.mp)
-            self.canvas.graph_event_disconnect(self.draw_app.mm)
-            self.canvas.graph_event_disconnect(self.draw_app.mr)
+        self.canvas.graph_event_disconnect('mouse_press', self.draw_app.on_canvas_click)
+        self.canvas.graph_event_disconnect('mouse_move', self.draw_app.on_canvas_move)
+        self.canvas.graph_event_disconnect('mouse_release', self.draw_app.on_canvas_click_release)
+        self._canvas_connected = True
 
     def import_disconnect(self):
-        self.draw_app.mp = self.canvas.graph_event_connect('mouse_press', self.draw_app.on_canvas_click)
-        self.draw_app.mm = self.canvas.graph_event_connect('mouse_move', self.draw_app.on_canvas_move)
-        self.draw_app.mr = self.canvas.graph_event_connect('mouse_release', self.draw_app.on_canvas_click_release)
+        if not self._canvas_connected:
+            return
+        self.canvas.graph_event_connect('mouse_press', self.draw_app.on_canvas_click)
+        self.canvas.graph_event_connect('mouse_move', self.draw_app.on_canvas_move)
+        self.canvas.graph_event_connect('mouse_release', self.draw_app.on_canvas_click_release)
 
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_press', self.on_mouse_click)
-            self.canvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-            self.canvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
-        else:
-            self.canvas.graph_event_disconnect(self.mp)
-            self.canvas.graph_event_disconnect(self.mm)
-            self.canvas.graph_event_disconnect(self.mr)
+        self.canvas.graph_event_disconnect('mouse_press', self.on_mouse_click)
+        self.canvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+        self.canvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
+        self._canvas_connected = False
 
     def on_mouse_click(self, event):
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-        else:
-            event_pos = (event.xdata, event.ydata)
+        event_pos = event.pos
 
         # update click position (used also in self.on_mouse_move() )
         self.pos = self.canvas.translate_coords(event_pos)
@@ -3535,20 +3512,12 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         if not self.app.plotcanvas.native.hasFocus():
             self.app.plotcanvas.native.setFocus()
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            self.event_is_dragging = event.is_dragging
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            self.event_is_dragging = self.app.plotcanvas.is_dragging
-            right_button = 3
+        event_pos = event.pos
+        self.event_is_dragging = event.is_dragging
+        right_button = 2
 
         pos_canvas = self.canvas.translate_coords(event_pos)
-        event.xdata, event.ydata = pos_canvas[0], pos_canvas[1]
-
-        self.x = event.xdata
-        self.y = event.ydata
+        self.x, self.y = pos_canvas[0], pos_canvas[1]
 
         self.app.ui.popMenu.mouse_is_panning = False
 
@@ -3558,8 +3527,8 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
             return
 
         try:
-            x = float(event.xdata)
-            y = float(event.ydata)
+            x = float(self.x)
+            y = float(self.y)
         except TypeError:
             return
 
@@ -3632,9 +3601,9 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
 
     def on_mouse_click_release(self, event):
         left_button = 1
-        right_button = 2 if self.app.use_3d_engine else 3
+        right_button = 2
 
-        event_pos = event.pos if self.app.use_3d_engine else (event.xdata, event.ydata)
+        event_pos = event.pos
         try:
             x = float(event_pos[0])
             y = float(event_pos[1])
@@ -3661,6 +3630,7 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
                     # restore the Grid snapping if it was active before
                     if self.grid_status_memory is True:
                         self.app.ui.grid_snap_btn.trigger()
+                        self.grid_status_memory = False
 
                     self.import_disconnect()
 
@@ -3901,6 +3871,12 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         self.draw_app.plot_all()
 
     def clean_up(self):
+        self.import_disconnect()
+        if self.grid_status_memory:
+            self.app.ui.grid_snap_btn.trigger()
+            self.grid_status_memory = False
+        if self.app.tool_shapes is not None:
+            self.app.tool_shapes.clear(update=True)
         self.draw_app.plot_all()
 
 
@@ -4001,24 +3977,9 @@ class AppGerberEditor(QtCore.QObject):
         self.gerber_obj_options = {}
 
         # VisPy Visuals
-        if self.app.use_3d_engine:
-            self.shapes = self.canvas.new_shape_collection(layers=1)
-            self.tool_shape = self.canvas.new_shape_collection(layers=1)
-            self.ma_annotation = self.canvas.new_text_group()
-        else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.shapes = ShapeCollectionLegacy(obj=self, app=self.app, name='shapes_grb_editor')
-            self.tool_shape = ShapeCollectionLegacy(obj=self, app=self.app, name='tool_shapes_grb_editor')
-            self.ma_annotation = ShapeCollectionLegacy(
-                obj=self,
-                app=self.app,
-                name='ma_anno_grb_editor',
-                annotation_job=True)
-
-        # Event signals disconnect id holders
-        self.mp = None
-        self.mm = None
-        self.mr = None
+        self.shapes = self.canvas.new_shape_collection(layers=1)
+        self.tool_shape = self.canvas.new_shape_collection(layers=1)
+        self.ma_annotation = self.canvas.new_text_group()
 
         # Remove from scene
         self.shapes.enabled = False
@@ -4871,36 +4832,27 @@ class AppGerberEditor(QtCore.QObject):
                 ymin = xmin
                 ymax = xmax
 
-            if self.app.use_3d_engine:
-                rect = Rect(xmin, ymin, xmax, ymax)
-                rect.left, rect.right = xmin, xmax
-                rect.bottom, rect.top = ymin, ymax
+            rect = Rect(xmin, ymin, xmax, ymax)
+            rect.left, rect.right = xmin, xmax
+            rect.bottom, rect.top = ymin, ymax
 
-                # Lock updates in other threads
-                self.shapes.lock_updates()
+            # Lock updates in other threads
+            self.shapes.lock_updates()
 
-                # adjust the view camera to be slightly bigger than the bounds so the shape collection can be
-                # seen clearly otherwise the shape collection boundary will have no border
-                dx = rect.right - rect.left
-                dy = rect.top - rect.bottom
-                x_factor = dx * 0.02
-                y_factor = dy * 0.02
+            # adjust the view camera to be slightly bigger than the bounds so the shape collection can be
+            # seen clearly otherwise the shape collection boundary will have no border
+            dx = rect.right - rect.left
+            dy = rect.top - rect.bottom
+            x_factor = dx * 0.02
+            y_factor = dy * 0.02
 
-                rect.left -= x_factor
-                rect.bottom -= y_factor
-                rect.right += x_factor
-                rect.top += y_factor
+            rect.left -= x_factor
+            rect.bottom -= y_factor
+            rect.right += x_factor
+            rect.top += y_factor
 
-                self.app.plotcanvas.view.camera.rect = rect
-                self.shapes.unlock_updates()
-            else:
-                width = xmax - xmin
-                height = ymax - ymin
-                xmin -= 0.05 * width
-                xmax += 0.05 * width
-                ymin -= 0.05 * height
-                ymax += 0.05 * height
-                self.app.plotcanvas.adjust_axes(xmin, ymin, xmax, ymax)
+            self.app.plotcanvas.view.camera.rect = rect
+            self.shapes.unlock_updates()
 
         # calculate the coordinates and vertex points number for the selected shape
         if last_sel_geo_solid.geom_type == 'Polygon':
@@ -5100,20 +5052,14 @@ class AppGerberEditor(QtCore.QObject):
 
         # first connect to new, then disconnect the old handlers
         # don't ask why but if there is nothing connected I've seen issues
-        self.mp = self.canvas.graph_event_connect('mouse_press', self.on_canvas_click)
-        self.mm = self.canvas.graph_event_connect('mouse_move', self.on_canvas_move)
-        self.mr = self.canvas.graph_event_connect('mouse_release', self.on_canvas_click_release)
+        self.canvas.graph_event_connect('mouse_press', self.on_canvas_click)
+        self.canvas.graph_event_connect('mouse_move', self.on_canvas_move)
+        self.canvas.graph_event_connect('mouse_release', self.on_canvas_click_release)
 
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.canvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-            self.canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            self.canvas.graph_event_disconnect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
-        else:
-            self.canvas.graph_event_disconnect(self.app.mp)
-            self.canvas.graph_event_disconnect(self.app.mm)
-            self.canvas.graph_event_disconnect(self.app.mr)
-            self.canvas.graph_event_disconnect(self.app.mdc)
+        self.canvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.canvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.canvas.graph_event_disconnect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
 
         self.app.collection.view.clicked.disconnect()
 
@@ -5146,20 +5092,15 @@ class AppGerberEditor(QtCore.QObject):
         # we restore the key and mouse control to FlatCAMApp method
         # first connect to new, then disconnect the old handlers
         # don't ask why but if there is nothing connected I've seen issues
-        self.app.mp = self.canvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-        self.app.mm = self.canvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
-        self.app.mr = self.canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
-        self.app.mdc = self.canvas.graph_event_connect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
+        self.canvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.canvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.canvas.graph_event_connect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
         self.app.collection.view.clicked.connect(self.app.collection.on_mouse_down)
 
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_press', self.on_canvas_click)
-            self.canvas.graph_event_disconnect('mouse_move', self.on_canvas_move)
-            self.canvas.graph_event_disconnect('mouse_release', self.on_canvas_click_release)
-        else:
-            self.canvas.graph_event_disconnect(self.mp)
-            self.canvas.graph_event_disconnect(self.mm)
-            self.canvas.graph_event_disconnect(self.mr)
+        self.canvas.graph_event_disconnect('mouse_press', self.on_canvas_click)
+        self.canvas.graph_event_disconnect('mouse_move', self.on_canvas_move)
+        self.canvas.graph_event_disconnect('mouse_release', self.on_canvas_click_release)
 
         # Canvas context Mneu
         try:
@@ -5207,7 +5148,7 @@ class AppGerberEditor(QtCore.QObject):
         except (TypeError, AttributeError):
             pass
         try:
-            self.app.ui.grb_draw_semidisc.triggered.diconnect(self.on_add_semidisc)
+            self.app.ui.grb_draw_semidisc.triggered.disconnect(self.on_add_semidisc)
         except (TypeError, AttributeError):
             pass
         try:
@@ -5248,6 +5189,10 @@ class AppGerberEditor(QtCore.QObject):
         # except Exception as erp:
         #     self.app.log.error("AppGerberEditor.clear() -> %s" % str(erp))
 
+        if isinstance(self.active_tool, ImportEditorGrb):
+            self.active_tool.clean_up()
+        self.app.plotcanvas.text_cursor.parent = None
+        self.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
         self.active_tool = None
         self.selected = []
         self.storage_dict.clear()
@@ -5689,6 +5634,9 @@ class AppGerberEditor(QtCore.QObject):
 
         self.app.log.debug("on_tool_select('%s')" % tool)
 
+        if isinstance(self.active_tool, ImportEditorGrb):
+            self.active_tool.clean_up()
+
         if self.last_aperture_selected is None and current_tool not in ['select', 'disc', 'semidisc', 'region']:
             # self.draw_app.select_tool('select')
             self.complete = True
@@ -6054,13 +6002,12 @@ class AppGerberEditor(QtCore.QObject):
 
     def on_canvas_click(self, event):
         """
-        event.x and .y have canvas coordinates
-        event.xdata and .ydata have plot coordinates
+        event.pos has canvas coordinates, translated below to plot coordinates.
 
         :param event: Event object dispatched by VisPy
         :return: None
         """
-        event_pos = event.pos if self.app.use_3d_engine else (event.xdata, event.ydata)
+        event_pos = event.pos
         self.pos = self.canvas.translate_coords(event_pos)
         self.press_pos_raw = (self.pos[0], self.pos[1])
         raw_pick = self._tool_wants_raw_pick()
@@ -6139,12 +6086,8 @@ class AppGerberEditor(QtCore.QObject):
 
     def on_canvas_click_release(self, event):
         self.modifiers = QtWidgets.QApplication.keyboardModifiers()
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            right_button = 3
+        event_pos = event.pos
+        right_button = 2
 
         pos_canvas = self.canvas.translate_coords(event_pos)
         raw_pos = (pos_canvas[0], pos_canvas[1])
@@ -6344,20 +6287,12 @@ class AppGerberEditor(QtCore.QObject):
         if not self.app.plotcanvas.native.hasFocus():
             self.app.plotcanvas.native.setFocus()
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            event_is_dragging = event.is_dragging
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            event_is_dragging = self.app.plotcanvas.is_dragging
-            right_button = 3
+        event_pos = event.pos
+        event_is_dragging = event.is_dragging
+        right_button = 2
 
         pos_canvas = self.canvas.translate_coords(event_pos)
-        event.xdata, event.ydata = pos_canvas[0], pos_canvas[1]
-
-        self.x = event.xdata
-        self.y = event.ydata
+        self.x, self.y = pos_canvas[0], pos_canvas[1]
 
         self.app.ui.popMenu.mouse_is_panning = False
 
@@ -6367,8 +6302,8 @@ class AppGerberEditor(QtCore.QObject):
             return
 
         try:
-            x = float(event.xdata)
-            y = float(event.ydata)
+            x = float(self.x)
+            y = float(self.y)
         except TypeError:
             return
 
@@ -6702,17 +6637,8 @@ class AppGerberEditor(QtCore.QObject):
         # calculate the bounds values for the edited Gerber object
         xmin, ymin, xmax, ymax = all_geo.bounds
 
-        if self.app.use_3d_engine:
-            new_rect = Rect(xmin, ymin, xmax, ymax)
-            self.app.plotcanvas.fit_view(rect=new_rect)
-        else:
-            width = xmax - xmin
-            height = ymax - ymin
-            xmin -= 0.05 * width
-            xmax += 0.05 * width
-            ymin -= 0.05 * height
-            ymax += 0.05 * height
-            self.app.plotcanvas.adjust_axes(xmin, ymin, xmax, ymax)
+        new_rect = Rect(xmin, ymin, xmax, ymax)
+        self.app.plotcanvas.fit_view(rect=new_rect)
 
     def get_selected(self):
         """

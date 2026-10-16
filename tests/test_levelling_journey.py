@@ -111,7 +111,6 @@ class MockGerberApp:
         self.log = MockGerberLog()
         self.inform = MockGerberInform()
         self.app_units = 'MM'
-        self.use_3d_engine = True
 
         class MockPlotCanvas:
             class new_shape_collection:
@@ -728,7 +727,6 @@ def make_real_cncjob_app():
     return SimpleNamespace(
         decimals=4,
         app_units='MM',
-        use_3d_engine=True,
         plotcanvas=SimpleNamespace(new_shape_collection=lambda layers=1: None),
         options={
             'cncjob_steps_per_circle': 64,

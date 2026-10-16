@@ -30,7 +30,6 @@ import shapely
 from shapely.ops import unary_union, linemerge, polygonize_full
 from shapely.affinity import rotate
 
-from matplotlib.backend_bases import KeyEvent as mpl_key_event
 
 import gettext
 import appTranslation as fcTranslate
@@ -583,10 +582,6 @@ class CutOut(AppTool):
         # if mouse events are bound to local methods
         self.mouse_events_connected = False
 
-        # event handlers references
-        self.kp = None
-        self.mm = None
-        self.mr = None
 
         # hold the mouse position here
         self.x_pos = None
@@ -2000,20 +1995,14 @@ class CutOut(AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), name))
             return
 
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.graph_event_disconnect('key_press', self.app.ui.keyPressEvent)
-            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-        else:
-            self.app.plotcanvas.graph_event_disconnect(self.app.kp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mm)
+        self.app.plotcanvas.graph_event_disconnect('key_press', self.app.ui.keyPressEvent)
+        self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
 
-        self.kp = self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
-        self.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
-        self.mr = self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
+        self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
+        self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
+        self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_click_release)
 
         self.mouse_events_connected = True
 
@@ -2219,14 +2208,8 @@ class CutOut(AppTool):
     # To be called after clicking on the plot.
     def on_mouse_click_release(self, event):
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            # event_is_dragging = event.is_dragging
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            # event_is_dragging = self.app.plotcanvas.is_dragging
-            right_button = 3
+        event_pos = event.pos
+        right_button = 2
 
         try:
             x = float(event_pos[0])
@@ -2245,20 +2228,14 @@ class CutOut(AppTool):
 
         # if RMB then we exit
         elif event.button == right_button and self.mouse_is_dragging is False:
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.kp)
-                self.app.plotcanvas.graph_event_disconnect(self.mm)
-                self.app.plotcanvas.graph_event_disconnect(self.mr)
+            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
 
-            self.app.kp = self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
-            self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                  self.app.on_mouse_click_release_over_plot)
-            self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
 
             # Remove any previous utility shape
             self.app.geo_editor.tool_shape.clear(update=True)
@@ -2325,14 +2302,8 @@ class CutOut(AppTool):
 
         self.app.on_mouse_move_over_plot(event=event)
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            event_is_dragging = event.is_dragging
-            # right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            event_is_dragging = self.app.plotcanvas.is_dragging
-            # right_button = 3
+        event_pos = event.pos
+        event_is_dragging = event.is_dragging
 
         try:
             x = float(event_pos[0])
@@ -2342,7 +2313,6 @@ class CutOut(AppTool):
         event_pos = (x, y)
 
         pos = self.canvas.translate_coords(event_pos)
-        event.xdata, event.ydata = pos[0], pos[1]
 
         if event_is_dragging is True:
             self.mouse_is_dragging = True
@@ -2350,8 +2320,8 @@ class CutOut(AppTool):
             self.mouse_is_dragging = False
 
         try:
-            x = float(event.xdata)
-            y = float(event.ydata)
+            x = float(pos[0])
+            y = float(pos[1])
         except TypeError:
             return
 
@@ -2435,27 +2405,6 @@ class CutOut(AppTool):
         # events from the GUI are of type QKeyEvent
         elif type(event) == QtGui.QKeyEvent:
             key = event.key()
-        elif isinstance(event, mpl_key_event):  # MatPlotLib key events are trickier to interpret than the rest
-            key = event.key
-            key = QtGui.QKeySequence(key)
-
-            # check for modifiers
-            key_string = key.toString().lower()
-            if '+' in key_string:
-                mod, __, key_text = key_string.rpartition('+')
-                if mod.lower() == 'ctrl':
-                    # modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
-                    pass
-                elif mod.lower() == 'alt':
-                    # modifiers = QtCore.Qt.KeyboardModifier.AltModifier
-                    pass
-                elif mod.lower() == 'shift':
-                    # modifiers = QtCore.Qt.KeyboardModifier.ShiftModifier
-                    pass
-                else:
-                    # modifiers = QtCore.Qt.KeyboardModifier.NoModifier
-                    pass
-                key = QtGui.QKeySequence(key_text)
         # events from Vispy are of type KeyEvent
         else:
             key = event.key
@@ -2464,20 +2413,14 @@ class CutOut(AppTool):
         if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
             if self.mouse_events_connected is True:
                 self.mouse_events_connected = False
-                if self.app.use_3d_engine:
-                    self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-                    self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-                    self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
-                else:
-                    self.app.plotcanvas.graph_event_disconnect(self.kp)
-                    self.app.plotcanvas.graph_event_disconnect(self.mm)
-                    self.app.plotcanvas.graph_event_disconnect(self.mr)
+                self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
 
-                self.app.kp = self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
-                self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-                self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                      self.app.on_mouse_click_release_over_plot)
-                self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+                self.app.plotcanvas.graph_event_connect('key_press', self.app.ui.keyPressEvent)
+                self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+                self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+                self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
 
                 if self.ui.big_cursor_cb.get_value():
                     # restore cursor

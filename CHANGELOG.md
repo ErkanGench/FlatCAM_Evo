@@ -6,7 +6,15 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo beta
 
-=================================================
+16.10.2026
+
+Rendering and compatibility:
+
+- removed the Legacy Matplotlib canvas and vendored descartes; VisPy is now the only PCB canvas backend and requires working OpenGL. Ordinary 2D PCB editing is unchanged, and the separate 3D view is retained.
+- removed renderer selection, the Ctrl-startup fallback and renderer title badges. OpenGL initialization failures now direct users to graphics drivers, remote desktop/VM graphics settings, application logs and error details. See README startup troubleshooting; previous releases remain available through the repository's Releases/downloads page.
+- retired global_graphic_engine is automatically discarded on settings load/import and acceptance of project settings; subsequent saves omit it. The compatibility key global_graphic_engine_3d_no_mp is preserved. Its checkbox is now labelled 'Disable parallel shape processing': it selects synchronous processing, not another renderer.
+- raised ezdxf to >=1.4.5 and removed the Matplotlib requirement. DXF TEXT and ATTRIB use the modern fontTools-based text path without Matplotlib (checked with Arial); upstream MTEXT and ATTDEF still produce empty geometry, unchanged.
+
 
 16.10.2026
 

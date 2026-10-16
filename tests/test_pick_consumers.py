@@ -26,7 +26,6 @@ def _event(pos):
 
 def _fake_app():
     fake_app = MagicMock()
-    fake_app.use_3d_engine = True
     fake_app.selection_type = None
     fake_app.dec_format = lambda value, decimals: round(value, decimals)
     return fake_app

@@ -106,15 +106,9 @@ class AppGeoEditor(QtCore.QObject):
 
         # VisPy visuals
         self.fcgeometry = None
-        if self.app.use_3d_engine:
-            self.shapes = self.app.plotcanvas.new_shape_collection(layers=1)
-            self.sel_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
-            self.tool_shape = self.app.plotcanvas.new_shape_collection(layers=1)
-        else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.shapes = ShapeCollectionLegacy(obj=self, app=self.app, name='shapes_geo_editor')
-            self.sel_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name='sel_shapes_geo_editor')
-            self.tool_shape = ShapeCollectionLegacy(obj=self, app=self.app, name='tool_shapes_geo_editor')
+        self.shapes = self.app.plotcanvas.new_shape_collection(layers=1)
+        self.sel_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
+        self.tool_shape = self.app.plotcanvas.new_shape_collection(layers=1)
 
         # Remove from scene
         self.shapes.enabled = False
@@ -245,11 +239,6 @@ class AppGeoEditor(QtCore.QObject):
         self.ui.tw.customContextMenuRequested.connect(self.on_menu_request)
 
         self.clear_tree_sig.connect(self.on_clear_tree)
-
-        # Event signals disconnect id holders
-        self.mp = None
-        self.mm = None
-        self.mr = None
 
         self.app.log.debug("Initialization of the Geometry Editor is finished ...")
 
@@ -517,41 +506,32 @@ class AppGeoEditor(QtCore.QObject):
                     ymin = xmin
                     ymax = xmax
 
-                if self.app.use_3d_engine:
-                    rect = Rect(xmin, ymin, xmax, ymax)
-                    rect.left, rect.right = xmin, xmax
-                    rect.bottom, rect.top = ymin, ymax
+                rect = Rect(xmin, ymin, xmax, ymax)
+                rect.left, rect.right = xmin, xmax
+                rect.bottom, rect.top = ymin, ymax
 
-                    # Lock updates in other threads
-                    assert isinstance(self.shapes, ShapeCollection)
-                    self.shapes.lock_updates()
+                # Lock updates in other threads
+                assert isinstance(self.shapes, ShapeCollection)
+                self.shapes.lock_updates()
 
-                    assert isinstance(self.sel_shapes, ShapeCollection)
-                    self.sel_shapes.lock_updates()
+                assert isinstance(self.sel_shapes, ShapeCollection)
+                self.sel_shapes.lock_updates()
 
-                    # adjust the view camera to be slightly bigger than the bounds so the shape collection can be
-                    # seen clearly otherwise the shape collection boundary will have no border
-                    dx = rect.right - rect.left
-                    dy = rect.top - rect.bottom
-                    x_factor = dx * 0.02
-                    y_factor = dy * 0.02
+                # adjust the view camera to be slightly bigger than the bounds so the shape collection can be
+                # seen clearly otherwise the shape collection boundary will have no border
+                dx = rect.right - rect.left
+                dy = rect.top - rect.bottom
+                x_factor = dx * 0.02
+                y_factor = dy * 0.02
 
-                    rect.left -= x_factor
-                    rect.bottom -= y_factor
-                    rect.right += x_factor
-                    rect.top += y_factor
+                rect.left -= x_factor
+                rect.bottom -= y_factor
+                rect.right += x_factor
+                rect.top += y_factor
 
-                    self.app.plotcanvas.view.camera.rect = rect
-                    self.shapes.unlock_updates()
-                    self.sel_shapes.unlock_updates()
-                else:
-                    width = xmax - xmin
-                    height = ymax - ymin
-                    xmin -= 0.05 * width
-                    xmax += 0.05 * width
-                    ymin -= 0.05 * height
-                    ymax += 0.05 * height
-                    self.app.plotcanvas.adjust_axes(xmin, ymin, xmax, ymax)
+                self.app.plotcanvas.view.camera.rect = rect
+                self.shapes.unlock_updates()
+                self.sel_shapes.unlock_updates()
 
             self.ui.geo_len_entry.set_value(length, decimals=self.decimals)
             self.ui.geo_coords_entry.setText(str(coords))
@@ -754,9 +734,8 @@ class AppGeoEditor(QtCore.QObject):
         self.tool_shape.enabled = False
 
         # disable text cursor (for FCPath)
-        if self.app.use_3d_engine:
-            self.app.plotcanvas.text_cursor.parent = None
-            self.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.app.plotcanvas.text_cursor.parent = None
+        self.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         self.app.ui.geo_editor_menu.setDisabled(True)
         self.app.ui.geo_editor_menu.menuAction().setVisible(False)
@@ -824,23 +803,16 @@ class AppGeoEditor(QtCore.QObject):
 
         # first connect to new, then disconnect the old handlers
         # don't ask why but if there is nothing connected I've seen issues
-        self.mp = self.canvas.graph_event_connect('mouse_press', self.on_canvas_click)
-        self.mm = self.canvas.graph_event_connect('mouse_move', self.on_canvas_move)
-        self.mr = self.canvas.graph_event_connect('mouse_release', self.on_canvas_click_release)
+        self.canvas.graph_event_connect('mouse_press', self.on_canvas_click)
+        self.canvas.graph_event_connect('mouse_move', self.on_canvas_move)
+        self.canvas.graph_event_connect('mouse_release', self.on_canvas_click_release)
 
-        if self.app.use_3d_engine:
-            # make sure that the shortcuts key and mouse events will no longer be linked to the methods from FlatCAMApp
-            # but those from AppGeoEditor
-            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            self.app.plotcanvas.graph_event_disconnect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
-        else:
-
-            self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mm)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mr)
-            self.app.plotcanvas.graph_event_disconnect(self.app.mdc)
+        # make sure that the shortcuts key and mouse events will no longer be linked to the methods from FlatCAMApp
+        # but those from AppGeoEditor
+        self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
 
         # self.app.collection.view.clicked.disconnect()
         self.app.ui.popmenu_copy.triggered.disconnect()
@@ -879,22 +851,15 @@ class AppGeoEditor(QtCore.QObject):
         # we restore the key and mouse control to FlatCAMApp method
         # first connect to new, then disconnect the old handlers
         # don't ask why but if there is nothing connected I've seen issues
-        self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-        self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
-        self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                              self.app.on_mouse_click_release_over_plot)
-        self.app.mdc = self.app.plotcanvas.graph_event_connect('mouse_double_click',
-                                                               self.app.on_mouse_double_click_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.app.plotcanvas.graph_event_connect('mouse_double_click', self.app.on_mouse_double_click_over_plot)
         # self.app.collection.view.clicked.connect(self.app.collection.on_mouse_down)
 
-        if self.app.use_3d_engine:
-            self.canvas.graph_event_disconnect('mouse_press', self.on_canvas_click)
-            self.canvas.graph_event_disconnect('mouse_move', self.on_canvas_move)
-            self.canvas.graph_event_disconnect('mouse_release', self.on_canvas_click_release)
-        else:
-            self.canvas.graph_event_disconnect(self.mp)
-            self.canvas.graph_event_disconnect(self.mm)
-            self.canvas.graph_event_disconnect(self.mr)
+        self.canvas.graph_event_disconnect('mouse_press', self.on_canvas_click)
+        self.canvas.graph_event_disconnect('mouse_move', self.on_canvas_move)
+        self.canvas.graph_event_disconnect('mouse_release', self.on_canvas_click_release)
 
         try:
             self.app.ui.popmenu_copy.triggered.disconnect()
@@ -1155,16 +1120,12 @@ class AppGeoEditor(QtCore.QObject):
 
     def on_canvas_click(self, event):
         """
-        event.x and .y have canvas coordinates
-        event.xdaya and .ydata have plot coordinates
+        event.pos has canvas screen coordinates.
 
-        :param event: Event object dispatched by Matplotlib
+        :param event: Event object dispatched by VisPy SceneCanvas
         :return: None
         """
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-        else:
-            event_pos = (event.xdata, event.ydata)
+        event_pos = event.pos
 
         self.pos = self.canvas.translate_coords(event_pos)
 
@@ -1217,14 +1178,8 @@ class AppGeoEditor(QtCore.QObject):
                 self.app.log.debug("No active tool to respond to click!")
 
     def on_canvas_click_release(self, event):
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            # event_is_dragging = event.is_dragging
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            # event_is_dragging = self.app.plotcanvas.is_dragging
-            right_button = 3
+        event_pos = event.pos
+        right_button = 2
 
         pos_canvas = self.canvas.translate_coords(event_pos)
 
@@ -1244,7 +1199,6 @@ class AppGeoEditor(QtCore.QObject):
                     self.app.selection_type = None
                 elif isinstance(self.active_tool, FCSelect):
                     # Dispatch event to active_tool
-                    # msg = self.active_tool.click(self.snap(event.xdata, event.ydata))
                     self.active_tool.click_release((self.pos[0], self.pos[1]))
                     # self.app.inform.emit(msg)
                     self.plot_all()
@@ -1289,20 +1243,13 @@ class AppGeoEditor(QtCore.QObject):
         :param event: Event object dispatched by VisPy SceneCavas
         :return: None
         """
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            event_is_dragging = event.is_dragging
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            event_is_dragging = self.app.plotcanvas.is_dragging
-            right_button = 3
+        event_pos = event.pos
+        event_is_dragging = event.is_dragging
+        right_button = 2
 
         pos = self.canvas.translate_coords(event_pos)
-        event.xdata, event.ydata = pos[0], pos[1]
-
-        self.x = event.xdata
-        self.y = event.ydata
+        self.x = pos[0]
+        self.y = pos[1]
 
         self.app.ui.popMenu.mouse_is_panning = False
 
@@ -1318,8 +1265,8 @@ class AppGeoEditor(QtCore.QObject):
             return
 
         try:
-            x = float(event.xdata)
-            y = float(event.ydata)
+            x = float(pos[0])
+            y = float(pos[1])
         except TypeError:
             return
 
@@ -3099,8 +3046,7 @@ class FCCircle(FCShapeTool):
         self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_circle_geo.png'))
         QtGui.QGuiApplication.setOverrideCursor(self.cursor)
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.circle_tool = CircleEditorTool(self.app, self.draw_app, plugin_name=self.plugin_name)
@@ -3232,9 +3178,8 @@ class FCCircle(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -3261,18 +3206,17 @@ class FCCircle(FCShapeTool):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         # Jump to coords
@@ -3369,9 +3313,8 @@ class FCCircle(FCShapeTool):
         self.draw_app.selected = []
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -3650,8 +3593,7 @@ class FCRectangle(FCShapeTool):
         self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero.png'))
         QtGui.QGuiApplication.setOverrideCursor(self.cursor)
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.rect_tool = RectangleEditorTool(self.app, self.draw_app, plugin_name=self.plugin_name)
@@ -3793,9 +3735,8 @@ class FCRectangle(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -3822,18 +3763,17 @@ class FCRectangle(FCShapeTool):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
@@ -3909,9 +3849,8 @@ class FCRectangle(FCShapeTool):
         self.draw_app.selected = []
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -3938,8 +3877,7 @@ class FCPolygon(FCShapeTool):
         self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero.png'))
         QtGui.QGuiApplication.setOverrideCursor(self.cursor)
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.polygon_tool = PathEditorTool(self.app, self.draw_app, plugin_name=self.plugin_name)
@@ -4011,9 +3949,8 @@ class FCPolygon(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -4040,18 +3977,17 @@ class FCPolygon(FCShapeTool):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
@@ -4129,9 +4065,8 @@ class FCPolygon(FCShapeTool):
         self.draw_app.selected = []
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -4161,8 +4096,7 @@ class FCPath(FCShapeTool):
         self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path5.png'))
         QtGui.QGuiApplication.setOverrideCursor(self.cursor)
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.path_tool = PathEditorTool(self.app, self.draw_app, plugin_name=_("Path"))
@@ -4299,9 +4233,8 @@ class FCPath(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -4328,18 +4261,17 @@ class FCPath(FCShapeTool):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
@@ -4427,9 +4359,8 @@ class FCPath(FCShapeTool):
         self.draw_app.selected = []
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -4454,7 +4385,7 @@ class FCSelect(DrawTool):
         # self.selected = self.draw_app.selected
 
         # make sure that the cursor text from the FCPath is deleted
-        if self.draw_app.app.use_3d_engine and self.draw_app.app.plotcanvas.text_cursor.parent:
+        if self.draw_app.app.plotcanvas.text_cursor.parent:
             self.draw_app.app.plotcanvas.text_cursor.parent = None
             self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
@@ -4672,8 +4603,7 @@ class FCMove(FCShapeTool):
             self.has_selection = True
             self.draw_app.app.inform.emit(_("Click on reference location ..."))
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.move_tool = PathEditorTool(self.app, self.draw_app, plugin_name=_("Move"))
@@ -4877,9 +4807,8 @@ class FCMove(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -4906,18 +4835,17 @@ class FCMove(FCShapeTool):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
@@ -4980,9 +4908,8 @@ class FCMove(FCShapeTool):
         self.draw_app.selected = []
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -5030,8 +4957,7 @@ class FCCopy(FCShapeTool):
             self.has_selection = True
             self.draw_app.app.inform.emit(_("Click on reference location ..."))
 
-        if self.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.copy_tool = CopyEditorTool(self.app, self.draw_app, plugin_name=_("Copy"))
@@ -5413,9 +5339,8 @@ class FCCopy(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            if self.draw_app.app.use_3d_engine:
-                self.draw_app.app.plotcanvas.text_cursor.parent = None
-                self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            self.draw_app.app.plotcanvas.text_cursor.parent = None
+            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
             return
 
         # font size
@@ -5442,18 +5367,17 @@ class FCCopy(FCShapeTool):
         l3_txt = 'L:   %s [%s]' % (length_dec, units)
         cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
 
-        if self.draw_app.app.use_3d_engine:
-            new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-            x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
+        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
+        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
 
-            # text
-            self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-            self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-            self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-            self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
+        # text
+        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
+        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
+        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
+        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
 
-            if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-                self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
+            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
@@ -5516,9 +5440,8 @@ class FCCopy(FCShapeTool):
         self.draw_app.selected = []
         self.draw_app.plot_all()
 
-        if self.draw_app.app.use_3d_engine:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+        self.draw_app.app.plotcanvas.text_cursor.parent = None
+        self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
         try:
             self.draw_app.app.jump_signal.disconnect()

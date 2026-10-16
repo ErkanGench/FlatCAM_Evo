@@ -208,19 +208,11 @@ class FlatCAMObj(QtCore.QObject):
         # store here the default data for Geometry Data
         self.default_data = {}
 
-        # 2D mode
-        # Axes must exist and be attached to canvas.
-        self.axes = None
         self.kind = None  # Override with proper name
 
-        if self.app.use_3d_engine:
-            self.shapes = self.app.plotcanvas.new_shape_group()
-            self.mark_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool,
-                                               fcoptions=self.app.options)
-        else:
-            from appGUI.PlotCanvasLegacy import ShapeCollectionLegacy
-            self.shapes = ShapeCollectionLegacy(obj=self, app=self.app, name=name)
-            self.mark_shapes = ShapeCollectionLegacy(obj=self, app=self.app, name=name + "_mark_shapes")
+        self.shapes = self.app.plotcanvas.new_shape_group()
+        self.mark_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool,
+                                           fcoptions=self.app.options)
 
         self.item = None  # Link with project view item
 
@@ -298,27 +290,11 @@ class FlatCAMObj(QtCore.QObject):
 
     def random_color(self):
         """
-        Return a random opaque color in the format the active canvas engine expects: an RGBA numpy array for the 3D
-        (VisPy) engine, a '#rrggbbaa' string for the legacy 2D engine.
+        Return a random opaque color as an RGBA numpy array for VisPy.
         """
-        if self.app.use_3d_engine:
-            r_color = np.random.rand(4)
-            r_color[3] = 1
-            return r_color
-
-        while True:
-            r_color = np.random.rand(4)
-            r_color[3] = 1
-
-            new_color = '#'
-            for idx in range(len(r_color)):
-                new_color += '%x' % int(r_color[idx] * 255)
-            # do it until a valid color is generated
-            # a valid color has the # symbol, another 6 chars for the color and the last 2 chars for alpha
-            # for a total of 9 chars
-            if len(new_color) == 9:
-                break
-        return new_color
+        r_color = np.random.rand(4)
+        r_color[3] = 1
+        return r_color
 
     def on_options_change(self, key):
         # Update form on programmatically options change
@@ -348,9 +324,6 @@ class FlatCAMObj(QtCore.QObject):
         return True
 
     def _shapes_signature(self):
-        # only the VisPy shape group keeps the keys of its shapes
-        if not self.app.use_3d_engine:
-            return None
         try:
             idx = self.shapes._indexes
         except AttributeError:
@@ -474,12 +447,11 @@ class FlatCAMObj(QtCore.QObject):
                 if value is True:
                     self.shapes.visible = True
 
-            if self.app.use_3d_engine:
-                # Not all object types has annotations
-                try:
-                    self.annotation.visible = value
-                except Exception:
-                    pass
+            # Not all object types has annotations
+            try:
+                self.annotation.visible = value
+            except Exception:
+                pass
 
         if threaded:
             self.app.worker_task.emit({'fcn': task, 'params': [current_visibility]})

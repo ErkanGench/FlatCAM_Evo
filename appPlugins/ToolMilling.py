@@ -27,7 +27,6 @@ import builtins
 
 from appDatabase import load_tools_database
 from defaults import AppDefaults
-from matplotlib.backend_bases import KeyEvent as mpl_key_event
 from camlib import Geometry, grace
 
 fcTranslate.apply_language('strings')
@@ -131,10 +130,6 @@ class ToolMilling(Geometry, AppTool):
 
         # store here the points for the "Polygon" area selection shape
         self.points = []
-
-        self.mm = None
-        self.mr = None
-        self.kp = None
 
         # variable to store the total amount of drills per job
         self.tot_drill_cnt = 0
@@ -3822,7 +3817,6 @@ class ToolMilling(Geometry, AppTool):
 
     def on_key_press(self, event):
         # modifiers = QtWidgets.QApplication.keyboardModifiers()
-        # matplotlib_key_flag = False
 
         # events out of the self.app.collection view (it's about Project Tab) are of type int
         if isinstance(event, int):
@@ -3830,29 +3824,6 @@ class ToolMilling(Geometry, AppTool):
         # events from the GUI are of type QKeyEvent
         elif isinstance(event, QtGui.QKeyEvent):
             key = event.key()
-        elif isinstance(event, mpl_key_event):  # MatPlotLib key events are trickier to interpret than the rest
-            # matplotlib_key_flag = True
-
-            key = event.key
-            key = QtGui.QKeySequence(key)
-
-            # check for modifiers
-            key_string = key.toString().lower()
-            if '+' in key_string:
-                mod, __, key_text = key_string.rpartition('+')
-                if mod.lower() == 'ctrl':
-                    # modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
-                    pass
-                elif mod.lower() == 'alt':
-                    # modifiers = QtCore.Qt.KeyboardModifier.AltModifier
-                    pass
-                elif mod.lower() == 'shift':
-                    # modifiers = QtCore.Qt.KeyboardModifier.
-                    pass
-                else:
-                    # modifiers = QtCore.Qt.KeyboardModifier.NoModifier
-                    pass
-                key = QtGui.QKeySequence(key_text)
 
         # events from Vispy are of type KeyEvent
         else:
@@ -3934,26 +3905,17 @@ class ToolMilling(Geometry, AppTool):
         self.delete_sel_shape()
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
-        if self.app.use_3d_engine:
-            face = self.app.options.get(
-                'global_sel_fill', app_defaults.get('global_sel_fill', AppDefaults.factory_defaults.get('global_sel_fill')))[:-2] \
-                + str(hex(int(0.2 * 255)))[2:]
-            outline = self.app.options.get(
-                'global_sel_line', app_defaults.get('global_sel_line', AppDefaults.factory_defaults.get('global_sel_line')))[:-2] \
-                + str(hex(int(0.8 * 255)))[2:]
-        else:
-            face = self.app.options.get(
-                'global_sel_fill', app_defaults.get('global_sel_fill', AppDefaults.factory_defaults.get('global_sel_fill')))[:-2] \
-                + str(hex(int(0.4 * 255)))[2:]
-            outline = self.app.options.get(
-                'global_sel_line', app_defaults.get('global_sel_line', AppDefaults.factory_defaults.get('global_sel_line')))[:-2] \
-                + str(hex(int(1.0 * 255)))[2:]
+        face = self.app.options.get(
+            'global_sel_fill', app_defaults.get('global_sel_fill', AppDefaults.factory_defaults.get('global_sel_fill')))[:-2] \
+            + str(hex(int(0.2 * 255)))[2:]
+        outline = self.app.options.get(
+            'global_sel_line', app_defaults.get('global_sel_line', AppDefaults.factory_defaults.get('global_sel_line')))[:-2] \
+            + str(hex(int(0.8 * 255)))[2:]
 
         for row in sel_rows:
             sel_rect = self.app.exc_areas.exclusion_areas_storage[row]['shape']
             self.app.sel_shapes.add(sel_rect, color=outline, face_color=face, update=True, layer=0, tolerance=None)
-        if self.app.use_3d_engine:
-            self.app.sel_shapes.redraw()
+        self.app.sel_shapes.redraw()
 
     def clear_selection(self):
         self.app.delete_selection_shape()

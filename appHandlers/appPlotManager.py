@@ -33,7 +33,6 @@ class AppPlotManager(QtCore.QObject):
         self.app_obj = app.app_obj
         self.defaults = app.defaults
         self.proc_container = app.proc_container
-        self.use_3d_engine = app.use_3d_engine
 
     def _get_gerber_color_list(self):
         color_list = self.options.get(
@@ -52,7 +51,7 @@ class AppPlotManager(QtCore.QObject):
 
         :return: None
         """
-        self.plotcanvas.update() if self.use_3d_engine else self.plotcanvas.auto_adjust_axes()
+        self.plotcanvas.update()
         self.app.on_zoom_fit()
         self.collection.update_view()
 

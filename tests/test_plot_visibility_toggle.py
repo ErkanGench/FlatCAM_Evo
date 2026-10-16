@@ -177,7 +177,7 @@ class TestShowPlottedShapes(unittest.TestCase):
         from appObjects.AppObjectTemplate import FlatCAMObj
 
         self.collection = _new_collection()
-        self.obj = SimpleNamespace(app=SimpleNamespace(use_3d_engine=True),
+        self.obj = SimpleNamespace(app=SimpleNamespace(),
                                    shapes=ShapeGroup(self.collection),
                                    _full_plot_sig=None)
         for name in ('_shapes_signature', '_has_full_plot', 'mark_full_plot', 'show_plotted_shapes', 'bring_to_top'):
@@ -194,11 +194,14 @@ class TestShowPlottedShapes(unittest.TestCase):
         self.assertEqual(self._visible_flags(), [True] * 4)
 
     def test_after_full_plot(self):
+        buffers = {k: self.collection.data[k]['mesh_vertices'] for k in self.obj.shapes._indexes}
         self.obj.mark_full_plot()
         self.assertTrue(self.obj.show_plotted_shapes(False))
         self.assertEqual(self._visible_flags(), [False] * 4)
         self.assertTrue(self.obj.show_plotted_shapes(True))
         self.assertEqual(self._visible_flags(), [True] * 4)
+        for key, vertices in buffers.items():
+            self.assertIs(self.collection.data[key]['mesh_vertices'], vertices)
 
     def test_partial_plot_after_full_plot(self):
         # as Geometry and CNCJob do when a row of the tools table is changed
@@ -220,10 +223,11 @@ class TestShowPlottedShapes(unittest.TestCase):
         self.assertTrue(self.obj.bring_to_top())
         self.assertEqual(list(self.collection.data), other + self.obj.shapes._indexes)
 
-    def test_legacy_engine(self):
-        self.obj.mark_full_plot()
-        self.obj.app.use_3d_engine = False
-        self.assertFalse(self.obj.show_plotted_shapes(False))
+    def test_missing_or_empty_indexes_have_no_signature(self):
+        self.obj.shapes = SimpleNamespace()
+        self.assertIsNone(self.obj._shapes_signature())
+        self.obj.shapes._indexes = []
+        self.assertIsNone(self.obj._shapes_signature())
 
 
 if __name__ == '__main__':

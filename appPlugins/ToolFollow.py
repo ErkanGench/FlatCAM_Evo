@@ -22,7 +22,6 @@ import gettext
 import appTranslation as fcTranslate
 import builtins
 
-from matplotlib.backend_bases import KeyEvent as mpl_key_event
 from camlib import Geometry, flatten_shapely_geometry
 
 fcTranslate.apply_language('strings')
@@ -63,10 +62,6 @@ class ToolFollow(Geometry, AppTool):
         self.cursor_pos = None
         self.mouse_is_dragging = False
 
-        self.mm = None
-        self.mp = None
-        self.mr = None
-        self.kp = None
 
         self.sel_rect = []
 
@@ -261,18 +256,13 @@ class ToolFollow(Geometry, AppTool):
 
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the start point of the area."))
 
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.app.mp)
-                self.app.plotcanvas.graph_event_disconnect(self.app.mm)
-                self.app.plotcanvas.graph_event_disconnect(self.app.mr)
+            self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-            self.mr = self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
-            self.mm = self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
-            self.kp = self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
+            self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
 
             # disconnect flags
             self.area_sel_disconnect_flag = True
@@ -486,12 +476,8 @@ class ToolFollow(Geometry, AppTool):
 
     # To be called after clicking on the plot.
     def on_mouse_release(self, event):
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            right_button = 3
+        event_pos = event.pos
+        right_button = 2
 
         try:
             x = float(event_pos[0])
@@ -579,21 +565,13 @@ class ToolFollow(Geometry, AppTool):
 
             self.delete_tool_selection_shape()
 
-            if self.app.use_3d_engine:
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-                self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-            else:
-                self.app.plotcanvas.graph_event_disconnect(self.mr)
-                self.app.plotcanvas.graph_event_disconnect(self.mm)
-                self.app.plotcanvas.graph_event_disconnect(self.kp)
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
 
-            self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                                  self.app.on_mouse_click_over_plot)
-            self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move',
-                                                                  self.app.on_mouse_move_over_plot)
-            self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                  self.app.on_mouse_click_release_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
             # disconnect flags
             self.area_sel_disconnect_flag = False
@@ -609,14 +587,8 @@ class ToolFollow(Geometry, AppTool):
     def on_mouse_move(self, event):
         shape_type = self.ui.area_shape_radio.get_value()
 
-        if self.app.use_3d_engine:
-            event_pos = event.pos
-            event_is_dragging = event.is_dragging
-            # right_button = 2
-        else:
-            event_pos = (event.xdata, event.ydata)
-            event_is_dragging = self.app.plotcanvas.is_dragging
-            # right_button = 3
+        event_pos = event.pos
+        event_is_dragging = event.is_dragging
 
         try:
             x = float(event_pos[0])
@@ -680,7 +652,6 @@ class ToolFollow(Geometry, AppTool):
 
     def on_key_press(self, event):
         # modifiers = QtWidgets.QApplication.keyboardModifiers()
-        # matplotlib_key_flag = False
 
         # events out of the self.app.collection view (it's about Project Tab) are of type int
         if type(event) is int:
@@ -688,29 +659,6 @@ class ToolFollow(Geometry, AppTool):
         # events from the GUI are of type QKeyEvent
         elif type(event) == QtGui.QKeyEvent:
             key = event.key()
-        elif isinstance(event, mpl_key_event):  # MatPlotLib key events are trickier to interpret than the rest
-            # matplotlib_key_flag = True
-
-            key = event.key
-            key = QtGui.QKeySequence(key)
-
-            # check for modifiers
-            key_string = key.toString().lower()
-            if '+' in key_string:
-                mod, __, key_text = key_string.rpartition('+')
-                if mod.lower() == 'ctrl':
-                    # modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
-                    pass
-                elif mod.lower() == 'alt':
-                    # modifiers = QtCore.Qt.KeyboardModifier.AltModifier
-                    pass
-                elif mod.lower() == 'shift':
-                    # modifiers = QtCore.Qt.KeyboardModifier.
-                    pass
-                else:
-                    # modifiers = QtCore.Qt.KeyboardModifier.NoModifier
-                    pass
-                key = QtGui.QKeySequence(key_text)
 
         # events from Vispy are of type KeyEvent
         else:
@@ -719,23 +667,16 @@ class ToolFollow(Geometry, AppTool):
         if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
             if self.area_sel_disconnect_flag is True:
                 try:
-                    if self.app.use_3d_engine:
-                        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-                        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-                        self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-                    else:
-                        self.app.plotcanvas.graph_event_disconnect(self.mr)
-                        self.app.plotcanvas.graph_event_disconnect(self.mm)
-                        self.app.plotcanvas.graph_event_disconnect(self.kp)
+                    self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+                    self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+                    self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
                 except Exception as e:
                     self.app.log.error("ToolFollow.on_key_press() _1 --> %s" % str(e))
 
-                self.app.mp = self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                                      self.app.on_mouse_click_over_plot)
-                self.app.mm = self.app.plotcanvas.graph_event_connect('mouse_move',
-                                                                      self.app.on_mouse_move_over_plot)
-                self.app.mr = self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                      self.app.on_mouse_click_release_over_plot)
+                self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+                self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+                self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+                self.area_sel_disconnect_flag = False
             self.points = []
             self.poly_drawn = False
             self.sel_rect[:] = []

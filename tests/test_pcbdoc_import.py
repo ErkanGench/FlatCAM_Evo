@@ -117,7 +117,6 @@ class TestPcbDocImport(unittest.TestCase):
         self.app.options = dict(defaults.defaults)
         self.app.options['gerber_exp_units'] = 'MM'
         self.app.decimals = 4
-        self.app.use_3d_engine = True
         self.app.plotcanvas = Mock()
         self.app.version = 'test'
         self.app.version_date = 'test'
@@ -184,7 +183,6 @@ class TestPcbDocImport(unittest.TestCase):
         self.app.options = dict(self.app.defaults.defaults)
         self.app.options['gerber_exp_units'] = 'MM'
         self.app.decimals = 4
-        self.app.use_3d_engine = True
         self.app.plotcanvas = Mock()
         self.app.version = self.app.version_date = 'test'
         self.app.proc_container = Mock()
@@ -383,7 +381,6 @@ class TestPcbDocImport(unittest.TestCase):
         self.app.options['excellon_exp_units'] = 'METRIC'
         self.app.options['excellon_exp_format'] = 'dec'
         self.app.decimals = 4
-        self.app.use_3d_engine = True
         self.app.plotcanvas = Mock()
         self.app.version = 'test'
         self.app.version_date = 'test'

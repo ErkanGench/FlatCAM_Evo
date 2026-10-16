@@ -8,6 +8,10 @@ it). Import appMain 1 time here with a clean sys.argv; the later imports get the
 import os
 import sys
 
+# Select native OpenGL support before collection can default Qt to offscreen.
+if sys.platform == 'win32':
+    os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _saved_argv = sys.argv

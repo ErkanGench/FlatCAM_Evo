@@ -51,6 +51,7 @@ class SolderPaste(AppTool):
         self.ui = SolderUI(layout=self.layout, app=self.app, solder_class=self)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
+        self.app.object_status_changed.connect(self.update_comboboxes)
 
         self.tooltable_tools = {}
         self.tooluid = 0
@@ -160,7 +161,6 @@ class SolderPaste(AppTool):
         self.ui.geo_obj_combo.currentIndexChanged.connect(self.on_geo_select)
         self.ui.cnc_obj_combo.currentIndexChanged.connect(self.on_cncjob_select)
 
-        self.app.object_status_changed.connect(self.update_comboboxes)
         self.ui.reset_button.clicked.connect(self.set_tool_ui)
 
     def on_toggle_all_rows(self):
