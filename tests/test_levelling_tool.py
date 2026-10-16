@@ -24,7 +24,8 @@ from shapely import Point, box
 from shapely.ops import unary_union
 
 from appPlugins.ToolLevelling import ToolLevelling
-from appPlugins.Common.levelling_interp import parse_grbl_probe_output, parse_height_map_line
+from appPlugins.Common.grbl_protocol import parse_grbl_probe_output
+from appPlugins.Common.levelling_interp import parse_height_map_line
 
 
 def plane(x, y):

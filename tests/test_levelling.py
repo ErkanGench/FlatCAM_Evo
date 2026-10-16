@@ -16,13 +16,15 @@ from appPlugins.Common.levelling_interp import (
     nearest_offset,
     _group_values,
     parse_height_map_line,
-    parse_grbl_probe_output,
-    parse_grbl_active_wcs,
-    parse_grbl_work_offset,
     match_nearest_point,
     match_tolerance,
     new_levelling_state,
     level_gcode_line,
+)
+from appPlugins.Common.grbl_protocol import (
+    parse_grbl_probe_output,
+    parse_grbl_active_wcs,
+    parse_grbl_work_offset,
 )
 
 

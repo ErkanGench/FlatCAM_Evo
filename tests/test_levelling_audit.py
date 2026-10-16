@@ -29,6 +29,7 @@ import appPlugins.ToolLevelling  # noqa: F401
 tl_module = sys.modules['appPlugins.ToolLevelling']
 from appPlugins.ToolLevelling import ToolLevelling
 from appPlugins.Common import levelling_interp as li
+from appPlugins.Common import grbl_protocol as gp
 
 
 def make_audit_tool(units='MM', storage=None, heights_valid=False):
@@ -550,46 +551,46 @@ class TestAllG1Compensated(unittest.TestCase):
 
 class TestGrblHelpers(unittest.TestCase):
     def test_reply_error(self):
-        self.assertEqual(li.grbl_reply_error('ok\nerror:9'), 'error:9')
-        self.assertEqual(li.grbl_reply_error('ALARM:5\n[PRB:0,0,0:0]'), 'ALARM:5')
-        self.assertIsNone(li.grbl_reply_error('[PRB:0,0,0:1]\nok'))
-        self.assertIsNone(li.grbl_reply_error(''))
-        self.assertIsNone(li.grbl_reply_error(None))
+        self.assertEqual(gp.grbl_reply_error('ok\nerror:9'), 'error:9')
+        self.assertEqual(gp.grbl_reply_error('ALARM:5\n[PRB:0,0,0:0]'), 'ALARM:5')
+        self.assertIsNone(gp.grbl_reply_error('[PRB:0,0,0:1]\nok'))
+        self.assertIsNone(gp.grbl_reply_error(''))
+        self.assertIsNone(gp.grbl_reply_error(None))
 
     def test_probe_timeout(self):
         # 3 mm at 6 mm/min = 30 s; x1.5 = 45 s; +5 s margin = 50 s
-        self.assertAlmostEqual(li.probe_timeout_s(2.0, -1.0, 6.0), 50.0)
-        self.assertEqual(li.probe_timeout_s(2.0, -1.0, 1000.0), 10.0)
-        self.assertEqual(li.probe_timeout_s(2.0, -1.0, 0.0), 10.0)
-        self.assertEqual(li.probe_timeout_s('x', -1.0, 50.0), 10.0)
-        self.assertEqual(li.probe_timeout_s(float('nan'), -1.0, 50.0), 10.0)
+        self.assertAlmostEqual(gp.probe_timeout_s(2.0, -1.0, 6.0), 50.0)
+        self.assertEqual(gp.probe_timeout_s(2.0, -1.0, 1000.0), 10.0)
+        self.assertEqual(gp.probe_timeout_s(2.0, -1.0, 0.0), 10.0)
+        self.assertEqual(gp.probe_timeout_s('x', -1.0, 50.0), 10.0)
+        self.assertEqual(gp.probe_timeout_s(float('nan'), -1.0, 50.0), 10.0)
 
     def test_report_scale(self):
-        self.assertEqual(li.grbl_report_scale('MM', False), 1.0)
-        self.assertEqual(li.grbl_report_scale('IN', True), 1.0)
-        self.assertAlmostEqual(li.grbl_report_scale('IN', False), 1.0 / 25.4)
-        self.assertAlmostEqual(li.grbl_report_scale('MM', True), 25.4)
+        self.assertEqual(gp.grbl_report_scale('MM', False), 1.0)
+        self.assertEqual(gp.grbl_report_scale('IN', True), 1.0)
+        self.assertAlmostEqual(gp.grbl_report_scale('IN', False), 1.0 / 25.4)
+        self.assertAlmostEqual(gp.grbl_report_scale('MM', True), 25.4)
 
     def test_parse_setting(self):
         text = '$10=1\n$13=1\n$130=200.000\nok'
-        self.assertEqual(li.parse_grbl_setting(text, 13), 1.0)
-        self.assertEqual(li.parse_grbl_setting(text, 130), 200.0)
-        self.assertIsNone(li.parse_grbl_setting(text, 22))
-        self.assertIsNone(li.parse_grbl_setting('', 13))
+        self.assertEqual(gp.parse_grbl_setting(text, 13), 1.0)
+        self.assertEqual(gp.parse_grbl_setting(text, 130), 200.0)
+        self.assertIsNone(gp.parse_grbl_setting(text, 22))
+        self.assertIsNone(gp.parse_grbl_setting('', 13))
 
     def test_status_state(self):
-        self.assertEqual(li.parse_grbl_status_state('<Idle|MPos:0.000,0.000,0.000|FS:0,0>'), 'Idle')
-        self.assertEqual(li.parse_grbl_status_state('<Hold:0|MPos:0,0,0>'), 'Hold')
-        self.assertIsNone(li.parse_grbl_status_state('ok'))
-        self.assertIsNone(li.parse_grbl_status_state(None))
+        self.assertEqual(gp.parse_grbl_status_state('<Idle|MPos:0.000,0.000,0.000|FS:0,0>'), 'Idle')
+        self.assertEqual(gp.parse_grbl_status_state('<Hold:0|MPos:0,0,0>'), 'Hold')
+        self.assertIsNone(gp.parse_grbl_status_state('ok'))
+        self.assertIsNone(gp.parse_grbl_status_state(None))
 
     def test_modes_confirmed(self):
         gc = '[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]\nok'
-        self.assertTrue(li.grbl_modes_confirmed(gc, 'G21'))
-        self.assertFalse(li.grbl_modes_confirmed(gc, 'G20'))
-        self.assertFalse(li.grbl_modes_confirmed('[GC:G0 G21 G91 G94]', 'G21'))
-        self.assertFalse(li.grbl_modes_confirmed('[GC:G0 G21 G90 G93]', 'G21'))
-        self.assertFalse(li.grbl_modes_confirmed('ok', 'G21'))
+        self.assertTrue(gp.grbl_modes_confirmed(gc, 'G21'))
+        self.assertFalse(gp.grbl_modes_confirmed(gc, 'G20'))
+        self.assertFalse(gp.grbl_modes_confirmed('[GC:G0 G21 G91 G94]', 'G21'))
+        self.assertFalse(gp.grbl_modes_confirmed('[GC:G0 G21 G90 G93]', 'G21'))
+        self.assertFalse(gp.grbl_modes_confirmed('ok', 'G21'))
 
 
 class TestGrblSession(unittest.TestCase):
@@ -708,7 +709,7 @@ class TestGrblSession(unittest.TestCase):
         tool = self._tool(FakeGrbl(state='Alarm'))
         op = tool._grbl_reserve('t')
         line = tool._grbl_query_status(op)
-        self.assertEqual(li.parse_grbl_status_state(line), 'Alarm')
+        self.assertEqual(gp.parse_grbl_status_state(line), 'Alarm')
 
     def test_start_op_reserves_before_worker_and_releases_after(self):
         tool = self._tool()
