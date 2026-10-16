@@ -6,6 +6,7 @@ Runs pytest, builds a map ``test id -> outcome`` and compares it with the baseli
 
     python tests/gates/run_gate.py                                  # full run, compare with the baseline
     python tests/gates/run_gate.py --save-baseline                  # full run, write the baseline
+    python tests/gates/run_gate.py --save-on-pass                   # full run, compare, write the baseline if passed
     python tests/gates/run_gate.py --targeted "tests/test_x*.py"    # run the files that match, compare those ids
 
 Outcomes: passed, failed, error, skipped, xfailed, collect_error. A collection error has the id
@@ -192,14 +193,22 @@ def compare(current, baseline, removed, allowed, full):
     return failures
 
 
+def save_baseline(current):
+    BASELINE.write_text(json.dumps({k: current[k] for k in sorted(current)}, indent=1) + '\n',
+                        encoding='utf-8', newline='\n')
+    print('baseline saved: %s' % BASELINE.relative_to(ROOT))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--save-baseline', action='store_true', help='full run, write outcome_baseline.json')
+    parser.add_argument('--save-on-pass', action='store_true',
+                        help='full run, compare, and write outcome_baseline.json only if the gate passes')
     parser.add_argument('--targeted', nargs='+', metavar='PATTERN', help='run only the files that match')
     args = parser.parse_args()
 
-    if args.save_baseline and args.targeted:
-        print('GATE FAILED: --save-baseline works in full mode only')
+    if (args.save_baseline or args.save_on_pass) and args.targeted:
+        print('GATE FAILED: --save-baseline and --save-on-pass work in full mode only')
         return 1
 
     if args.targeted:
@@ -231,9 +240,7 @@ def main():
                                                 ', '.join('%s %d' % (o, counts[o]) for o in OUTCOMES)))
 
     if args.save_baseline:
-        BASELINE.write_text(json.dumps({k: current[k] for k in sorted(current)}, indent=1) + '\n',
-                            encoding='utf-8', newline='\n')
-        print('baseline saved: %s' % BASELINE.relative_to(ROOT))
+        save_baseline(current)
         return 0
 
     if not BASELINE.exists():
@@ -244,7 +251,11 @@ def main():
     for line in failures:
         print('  FAIL    %s' % line)
     print('GATE FAILED: %d problem(s)' % len(failures) if failures else 'GATE PASSED')
-    return 1 if failures else 0
+    if failures:
+        return 1
+    if args.save_on_pass:
+        save_baseline(current)
+    return 0
 
 
 if __name__ == '__main__':
