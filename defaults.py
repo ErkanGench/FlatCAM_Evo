@@ -528,6 +528,17 @@ class AppDefaults:
         "tools_al_grbl_jog_fr": 1500,
         "tools_al_grbl_travelz": 15.0,
 
+        # GRBL Sender Plugin
+        "tools_grbl_jog_step": 5,
+        "tools_grbl_jog_fr": 1500,
+        "tools_grbl_travelz": 15.0,
+        "tools_grbl_baudrate": '115200',
+        "tools_grbl_console_visible": False,
+        "tools_grbl_arc_mode": 'split',
+        "tools_grbl_arc_segment": 0.5,
+        "tools_grbl_seg_len": 1.0,
+        "tools_grbl_status_ms": 200,
+
         # NCC Plugin
         "tools_ncc_tools": "0.5",
         "tools_ncc_order": 2,   # "Reverse"

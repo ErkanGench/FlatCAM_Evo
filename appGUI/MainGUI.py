@@ -1503,6 +1503,17 @@ class MainGUI(QtWidgets.QMainWindow):
                                     QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.shell_dock)
 
+        # ####################### GRBL Console DOCK ##############################
+        self.grbl_console_dock = FCDock(_("GRBL Console"), close_callback=self.on_grbl_console_closed)
+        self.grbl_console_dock.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app24.png'))
+        self.grbl_console_dock.setObjectName('GrblConsole_DockWidget')
+        self.grbl_console_dock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.grbl_console_dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable |
+                                           QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+                                           QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.grbl_console_dock)
+        self.grbl_console_dock.hide()
+
         # ########################################################################
         # ########################## Notebook # ##################################
         # ########################################################################
@@ -2100,6 +2111,7 @@ class MainGUI(QtWidgets.QMainWindow):
         q_settings = QSettings("Open Source", "FlatCAM_EVO")
         if q_settings.contains("saved_gui_state"):
             self.restoreState(q_settings.value('saved_gui_state'), 0)
+            self.grbl_console_dock.hide()
         tb_lock_state = q_settings.value('toolbar_lock', "true")
         show_text_state = q_settings.value('menu_show_text', "true")
         win_geo = q_settings.value('window_geometry', (100, 100, 800, 400))
@@ -2971,6 +2983,15 @@ class MainGUI(QtWidgets.QMainWindow):
         :return:
         """
         self.grid_snap_btn.trigger()
+
+    def on_grbl_console_closed(self):
+        """The user closed the GRBL console dock with its own button."""
+        self.grbl_console_dock.hide()
+        try:
+            self.app.options["tools_grbl_console_visible"] = False
+            self.app.grbl_sender_tool.ui.console_cb.set_value(False)
+        except AttributeError:
+            pass
 
     def toggle_shell_ui(self):
         """

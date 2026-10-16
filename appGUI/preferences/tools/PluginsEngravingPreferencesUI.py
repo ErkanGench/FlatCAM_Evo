@@ -3,6 +3,7 @@ from PyQt6 import QtWidgets
 
 from appGUI.preferences.tools.Tools2sidedPrefGroupUI import Tools2sidedPrefGroupUI
 from appGUI.preferences.tools.ToolsLevelPrefGroupUI import ToolsLevelPrefGroupUI
+from appGUI.preferences.tools.ToolsGrblSenderPrefGroupUI import ToolsGrblSenderPrefGroupUI
 
 from appGUI.preferences.tools.ToolsNCCPrefGroupUI import ToolsNCCPrefGroupUI
 from appGUI.preferences.tools.ToolsPaintPrefGroupUI import ToolsPaintPrefGroupUI
@@ -41,6 +42,9 @@ class PluginsEngravingPreferencesUI(QtWidgets.QWidget):
         self.tools_level_group = ToolsLevelPrefGroupUI(app=app)
         self.tools_level_group.setMinimumWidth(250)
 
+        self.tools_grbl_group = ToolsGrblSenderPrefGroupUI(app=app)
+        self.tools_grbl_group.setMinimumWidth(250)
+
         self.vlay = QtWidgets.QVBoxLayout()
         self.vlay.addWidget(self.tools_iso_group)
 
@@ -53,6 +57,7 @@ class PluginsEngravingPreferencesUI(QtWidgets.QWidget):
         self.vlay3 = QtWidgets.QVBoxLayout()
         self.vlay3.addWidget(self.tools_2sided_group)
         self.vlay3.addWidget(self.tools_level_group)
+        self.vlay3.addWidget(self.tools_grbl_group)
 
         self.layout.addLayout(self.vlay)
         self.layout.addLayout(self.vlay1)

@@ -439,7 +439,7 @@ class GrblClientMixin:
                 return '', 'port_error'
 
         if echo:
-            self.app.inform_shell[str, bool].emit(cmd, False)
+            self.console_line_sig.emit(cmd)
 
         decoded_lines = []
         deadline = time.monotonic() + timeout
@@ -470,7 +470,7 @@ class GrblClientMixin:
                         continue
                     decoded_lines.append(decoded_line)
                     if echo:
-                        self.app.inform_shell.emit('\t\t\t: ' + decoded_line.upper())
+                        self.console_line_sig.emit('\t\t\t: ' + decoded_line.upper())
                     lowered = decoded_line.lower()
                     if lowered == 'ok':
                         self._grbl_reply_pending = False

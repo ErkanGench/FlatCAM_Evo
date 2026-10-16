@@ -415,6 +415,16 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_al_grbl_jog_fr":      self.ui.plugin_eng_pref_form.tools_level_group.jog_fr_entry,
             "tools_al_grbl_travelz":     self.ui.plugin_eng_pref_form.tools_level_group.jog_travelz_entry,
 
+            # GRBL Sender Plugin
+            "tools_grbl_jog_step":       self.ui.plugin_eng_pref_form.tools_grbl_group.jog_step_entry,
+            "tools_grbl_jog_fr":         self.ui.plugin_eng_pref_form.tools_grbl_group.jog_fr_entry,
+            "tools_grbl_travelz":        self.ui.plugin_eng_pref_form.tools_grbl_group.jog_travelz_entry,
+            "tools_grbl_baudrate":       self.ui.plugin_eng_pref_form.tools_grbl_group.baudrate_combo,
+            "tools_grbl_arc_mode":       self.ui.plugin_eng_pref_form.tools_grbl_group.arc_mode_radio,
+            "tools_grbl_arc_segment":    self.ui.plugin_eng_pref_form.tools_grbl_group.arc_segment_entry,
+            "tools_grbl_seg_len":        self.ui.plugin_eng_pref_form.tools_grbl_group.seg_len_entry,
+            "tools_grbl_status_ms":      self.ui.plugin_eng_pref_form.tools_grbl_group.status_ms_entry,
+
             # Drilling Tool
             "tools_drill_tool_order":   self.ui.plugin_pref_form.tools_drill_group.order_combo,
             "tools_drill_cutz":         self.ui.plugin_pref_form.tools_drill_group.cutz_entry,

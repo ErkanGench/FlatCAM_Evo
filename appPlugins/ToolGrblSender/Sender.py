@@ -32,6 +32,40 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
+class GrblConsole(QtWidgets.QWidget):
+    """The log of the lines sent to GRBL and of its replies, and a command line."""
+
+    def __init__(self, tool, parent=None):
+        super().__init__(parent)
+        self.tool = tool
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        self.log_view = QtWidgets.QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(5000)
+        lay.addWidget(self.log_view)
+        h_lay = QtWidgets.QHBoxLayout()
+        self.cmd_entry = QtWidgets.QLineEdit()
+        self.cmd_entry.setPlaceholderText(_("Type GRBL command ..."))
+        self.send_btn = QtWidgets.QToolButton()
+        self.send_btn.setText(_("Send"))
+        h_lay.addWidget(self.cmd_entry)
+        h_lay.addWidget(self.send_btn)
+        lay.addLayout(h_lay)
+        self.cmd_entry.returnPressed.connect(self.on_send)
+        self.send_btn.clicked.connect(self.on_send)
+
+    def on_send(self):
+        text = self.cmd_entry.text().strip()
+        if not text:
+            return
+        self.cmd_entry.clear()
+        self.tool.send_console_command(text)
+
+    def append(self, text):
+        self.log_view.appendPlainText(text)
+
+
 class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     grbl_port_closed_sig = QtCore.pyqtSignal()
     al_result_ready_sig = QtCore.pyqtSignal(object)
@@ -43,6 +77,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     status_report_sig = QtCore.pyqtSignal(object)
     # 'finished', 'stopped' or 'error' from the stream worker
     stream_ended_sig = QtCore.pyqtSignal(str)
+    # a text line for the console, from any thread
+    console_line_sig = QtCore.pyqtSignal(str)
 
     def __init__(self, app):
         self.app = app
@@ -116,6 +152,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                         # else remove the Tool Tab
                         self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
                         self.app.ui.notebook.removeTab(2)
+                        self.hide_console()
 
                         # if there are no objects loaded in the app then hide the Notebook widget
                         if not self.app.collection.get_list():
@@ -146,6 +183,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self.stream_progress_sig.connect(self._on_stream_progress)
             self.status_report_sig.connect(self._on_status_report)
             self.stream_ended_sig.connect(self._on_stream_ended)
+            self.console_line_sig.connect(lambda line: self._console().append(line))
             # When object selection on canvas change
             self.app.proj_selection_changed.connect(self.on_object_selection_changed)
             # Cleanup on Graceful exit (CTRL+ALT+X combo key)
@@ -582,17 +620,14 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         def task(op):
             return self._grbl_transact(op, cmd, timeout=30.0)[1] == 'ok'
 
-        # show the Shell Dock
-        self.app.ui.shell_dock.show()
         # a typed command can move the machine, so it needs a machine that is not in recovery
         self._grbl_start_op('command', task, motion=True)
 
     def on_grbl_report(self):
         def task(op):
             line = self._grbl_query_status(op)
-            self.app.inform_shell[str, bool].emit(line if line else _("No answer"), False)
+            self.console_line_sig.emit(line if line else _("No answer"))
 
-        self.app.ui.shell_dock.show()
         self._grbl_start_op('report', task)
 
     def on_grbl_get_parameter(self, param):
@@ -608,9 +643,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             if value is None:
                 self.app.inform.emit('[ERROR_NOTCL] %s: $%d' % (_("GRBL did not report the parameter"), number))
                 return
-            self.app.inform_shell[str, bool].emit("GRBL Parameter: $%d = %s" % (number, str(value)), False)
+            self.console_line_sig.emit("GRBL Parameter: $%d = %s" % (number, str(value)))
 
-        self.app.ui.shell_dock.show()
         self._grbl_start_op('parameter', task)
 
     def on_grbl_jog(self, direction=None):
@@ -622,8 +656,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         travelz = float(
             self.app.options.get(
-                "tools_al_grbl_travelz",
-                app_defaults.get("tools_al_grbl_travelz", AppDefaults.factory_defaults.get("tools_al_grbl_travelz")))
+                "tools_grbl_travelz",
+                app_defaults.get("tools_grbl_travelz", AppDefaults.factory_defaults.get("tools_grbl_travelz")))
         )
         units_cmd = {'IN': 'G20', 'MM': 'G21'}[self.units]
 
@@ -833,8 +867,6 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         units_cmd = 'G20' if context.units == 'IN' else 'G21'
         probe_timeout = probe_timeout_s(travel_z, depth, probe_fr)
 
-        # show the Shell Dock
-        self.app.ui.shell_dock.show()
 
         def worker_task():
             try:
@@ -977,8 +1009,38 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     def _on_stream_ended(self, how):
         pass
 
+    def _console(self):
+        """:return: the GrblConsole in the dock (made at the first call)."""
+        dock = self.app.ui.grbl_console_dock
+        if not isinstance(dock.widget(), GrblConsole):
+            dock.setWidget(GrblConsole(self))
+        return dock.widget()
+
     def on_console_toggled(self, checked):
-        pass
+        self.app.options["tools_grbl_console_visible"] = bool(checked)
+        if checked:
+            self._console()
+            self.app.ui.grbl_console_dock.show()
+        else:
+            self.app.ui.grbl_console_dock.hide()
 
     def show_console_if_wanted(self):
-        pass
+        if self.app.options.get("tools_grbl_console_visible", False):
+            self._console()
+            self.app.ui.grbl_console_dock.show()
+
+    def hide_console(self):
+        self.app.ui.grbl_console_dock.hide()
+
+    def send_console_command(self, text):
+        self.ui.grbl_command_entry.set_value(text)
+        self.on_grbl_send_command()
+
+    def on_plugin_cleanup(self):
+        """The Plugin tab closes: hide the console. The option keeps its value."""
+        self.hide_console()
+
+    def hideEvent(self, event):
+        # another plugin took the Plugin tab, or the tab closed
+        self.hide_console()
+        super().hideEvent(event)
