@@ -820,6 +820,8 @@
  "tests/test_grbl_bicubic.py::TestBicubic::test_plane_exact_at_border": "passed",
  "tests/test_grbl_bicubic.py::TestBicubic::test_plane_is_exact": "passed",
  "tests/test_grbl_bicubic.py::TestBicubic::test_supported_needs_4x4": "passed",
+ "tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_construct": "passed",
+ "tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_populate": "passed",
  "tests/test_grid_zoom.py::TestGridZoom::test_grid_lines_remain_continuous_when_rotated_at_maximum_zoom": "passed",
  "tests/test_grid_zoom.py::TestGridZoom::test_inch_grid_lines_remain_continuous_at_maximum_zoom": "passed",
  "tests/test_hud_layout.py::TestHudLayout::test_coordinate_columns_are_aligned": "passed",
