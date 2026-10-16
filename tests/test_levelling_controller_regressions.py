@@ -8,6 +8,7 @@ from shapely import Point, Polygon
 
 from tests import test_levelling_audit as audit
 from tests.test_levelling_audit import make_audit_tool, tl_module
+import appPlugins.Common.levelling_core as lc_module
 
 
 def import_tool():
@@ -155,7 +156,7 @@ def run_guarded(tool):
 
     def run():
         try:
-            with patch.object(tl_module, 'box', wraps=tl_module.box) as _b:
+            with patch.object(lc_module, 'box', wraps=lc_module.box) as _b:
                 tool.on_add_grid_points()
         except BaseException as err:
             errors.append(err)

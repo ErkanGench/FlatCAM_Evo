@@ -24,6 +24,7 @@ from shapely.ops import unary_union
 from tests import test_levelling_audit as audit
 from tests import test_levelling_journey as journey
 from tests.test_levelling_audit import FakeGrbl, make_audit_tool, tl_module
+import appPlugins.Common.levelling_core as lc_module
 
 PLANE = journey.make_plane(0.01, 0.02, 0.0)       # z = 0.01*x + 0.02*y
 TOL = 3e-4
@@ -123,7 +124,7 @@ class Env:
         tool.apply_autolevel_sig = MagicMock()
         tool.plot_probing_geo = MagicMock()
         tool.on_grbl_search_ports = MagicMock()
-        monkeypatch.setattr(tl_module, 'ShapeCollection', MagicMock())
+        monkeypatch.setattr(lc_module, 'ShapeCollection', MagicMock())
 
         ui = tool.ui
         ui.al_mode_radio.get_value.return_value = 'grid'

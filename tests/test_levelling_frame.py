@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from appPlugins.Common import levelling_interp as li
+import appPlugins.Common.levelling_core as lc_module
 from appPlugins.Common.levelling_interp import level_gcode_line, new_levelling_state
 
 DEC = 4
@@ -369,7 +370,7 @@ class TestToolPassesTheUnits(unittest.TestCase):
     def units_used(self, **kwargs):
         from tests.test_levelling_audit import tl_module
         tool, target = self.tool_and_target('G0 X0 Y0 Z5\n', **kwargs)
-        with patch.object(tl_module, 'new_levelling_state', wraps=li.new_levelling_state) as spy:
+        with patch.object(lc_module, 'new_levelling_state', wraps=li.new_levelling_state) as spy:
             tool.autolevell_gcode(target, 'v')
         return spy.call_args.kwargs['units']
 
@@ -964,7 +965,7 @@ class TestZZero(unittest.TestCase):
         from tests.test_levelling_audit import tl_module
         tool, target = TestToolPassesTheUnits().tool_and_target('G0 X0 Y0 Z5\n')
         tool._al_points = [(0.0, 1.0, 0.5), (4.0, -2.0, 0.1), (2.0, 3.0, 0.2)]
-        with patch.object(tl_module, 'new_levelling_state', wraps=li.new_levelling_state) as spy:
+        with patch.object(lc_module, 'new_levelling_state', wraps=li.new_levelling_state) as spy:
             tool.autolevell_gcode(target, 'v')
         self.assertEqual(spy.call_args.kwargs['map_bounds'], (0.0, -2.0, 4.0, 3.0))
 

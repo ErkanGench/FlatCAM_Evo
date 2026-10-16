@@ -276,7 +276,7 @@ def run_set_tool_ui(storage, heights_valid, loaded_obj=None, plot_points=False, 
     ui.plot_probing_pts_cb.get_value.return_value = plot_points
     ui.object_combo.get_value.return_value = loaded_obj.obj_options['name'] if loaded_obj is not None else ''
     with patch('appPlugins.ToolLevelling.LevelUI', return_value=ui), \
-            patch('appPlugins.ToolLevelling.ShapeCollection'):
+            patch('appPlugins.Common.levelling_core.ShapeCollection'):
         tool.set_tool_ui()
     return tool
 
@@ -1660,7 +1660,7 @@ class TestProbingShapes(unittest.TestCase):
         tool = make_audit_tool()
         old = MagicMock()
         tool.probing_shapes = old
-        with patch('appPlugins.ToolLevelling.ShapeCollection') as shape_cls:
+        with patch('appPlugins.Common.levelling_core.ShapeCollection') as shape_cls:
             shape_cls.side_effect = lambda **kwargs: (
                 old.clear.assert_called_once_with(update=True) or MagicMock())
             tool._new_probing_shapes('job')
@@ -1669,7 +1669,7 @@ class TestProbingShapes(unittest.TestCase):
 
     def test_vispy_collection_uses_scene_and_pool(self):
         tool = make_audit_tool()
-        with patch('appPlugins.ToolLevelling.ShapeCollection') as shape_cls:
+        with patch('appPlugins.Common.levelling_core.ShapeCollection') as shape_cls:
             tool._new_probing_shapes('job')
         shape_cls.assert_called_once_with(parent=tool.app.plotcanvas.view.scene, layers=1, pool=tool.app.pool)
         self.assertIs(tool.probing_shapes, shape_cls.return_value)

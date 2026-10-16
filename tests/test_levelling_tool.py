@@ -690,7 +690,7 @@ class TestToolUiState(unittest.TestCase):
         ui.al_mode_radio.blockSignals.return_value = False
         ui.al_method_radio.blockSignals.return_value = False
         with patch('appPlugins.ToolLevelling.LevelUI', return_value=ui), \
-                patch('appPlugins.ToolLevelling.ShapeCollection'):
+                patch('appPlugins.Common.levelling_core.ShapeCollection'):
             tool.set_tool_ui()
         return tool
 
@@ -769,7 +769,7 @@ class TestLevellingTargetSelection(unittest.TestCase):
                     obj_options={'type': target_type},
                 )
                 tool.probing_shapes = None
-                with patch('appPlugins.ToolLevelling.ShapeCollection'):
+                with patch('appPlugins.Common.levelling_core.ShapeCollection'):
                     tool.on_object_changed()
                 tool.ui.al_frame.setDisabled.assert_called_once_with(False)
 
@@ -1264,7 +1264,7 @@ class TestApplyAutolevel(unittest.TestCase):
         tolerance = tool._al_grid_tolerance()
         tool.apply_autolevel()
         tool.app.decimals = 1
-        with patch('appPlugins.ToolLevelling.build_bilinear_grid', wraps=build_bilinear_grid) as build:
+        with patch('appPlugins.Common.levelling_core.build_bilinear_grid', wraps=build_bilinear_grid) as build:
             tool.app.worker_task.emit.call_args.args[0]['fcn']()
         self.assertEqual(build.call_args.args[1], tolerance)
         self.assertIsInstance(build.call_args.args[0], tuple)
