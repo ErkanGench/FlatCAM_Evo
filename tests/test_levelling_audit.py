@@ -90,6 +90,7 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
     tool.stream_progress_sig = MagicMock()
     tool.status_report_sig = MagicMock()
     tool.stream_ended_sig = MagicMock()
+    tool.frame_ready_sig = MagicMock()
     return tool
 
 

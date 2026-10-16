@@ -281,8 +281,12 @@ class _GrblOperation:
 
 
 class GrblClientMixin:
+    # Counts the events that make a pending levelled Start request old (A8.3). It changes only
+    # under _grbl_op_lock. The class value is the default for the first increment.
+    _start_seq = 0
 
     def _grbl_init_state(self):
+        self._start_seq = 0
         self.grbl_probe_result = ''
         self.grbl_work_offset = (0.0, 0.0, 0.0)
 
@@ -324,6 +328,8 @@ class GrblClientMixin:
             if attempt is not None and (self._grbl_connect_attempt is not attempt or (
                     port is not None and self.grbl_ser_port is not port)):
                 return False
+            # a pending levelled Start request is old (we hold the lock: no helper call)
+            self._start_seq += 1
             port = self.grbl_ser_port
             self.grbl_ser_port = None
             self._grbl_connected = False
@@ -347,6 +353,7 @@ class GrblClientMixin:
         can move the machine) and close the port when the operation releases it.
         """
         with self._grbl_op_lock:
+            self._start_seq += 1
             self._grbl_safety_generation += 1
             self._grbl_reset_pending = False
             op = self._grbl_op
@@ -367,6 +374,7 @@ class GrblClientMixin:
     def _grbl_force_close(self):
         """Close the port now, also during an operation (the application ends)."""
         with self._grbl_op_lock:
+            self._start_seq += 1
             self._grbl_safety_generation += 1
             self._grbl_reset_pending = False
             op = self._grbl_op
@@ -1067,6 +1075,47 @@ class GrblClientMixin:
         frame = (active_wcs, offset, report_setting == 1.0)
         self.al_result_ready_sig.emit(dict(evidence, kind='probe', heights=staged, frame=frame))
         return True
+
+    def _grbl_read_live_frame(self, op, units_cmd):
+        """
+        Read the frame of GRBL as _grbl_probe_run() does, with no motion and no mode command:
+        $$ ($13), $G (units, G90, G94, active WCS) and $# (work offset), then a status report
+        that must be Idle. Call it only when the last status was Idle. A worker thread; no widgets.
+
+        :param units_cmd: 'G20' or 'G21': the units of the height map.
+        :return: {'frame': (active_wcs, offset, report_inches)}, or {'error': text} (the text is for the
+            user), with 'cancelled': True if the operation was stopped.
+        """
+        def step(command):
+            text, status = self._grbl_transact(op, command, timeout=5.0, echo=False)
+            if status != 'ok':
+                raise _GrblProbeAbort(command, text, status)
+            return text
+
+        try:
+            report_setting = parse_grbl_setting(step('$$'), 13)
+            if report_setting is None:
+                return {'error': _("GRBL did not report the setting $13. The levelled job was not started.")}
+            gc_text = step('$G')
+            if not grbl_modes_confirmed(gc_text, units_cmd):
+                return {'error': _(
+                    "GRBL is not in the units of the height map, or not in G90/G94. "
+                    "The levelled job was not started.")}
+            active_wcs = parse_grbl_active_wcs(gc_text)
+            offset = parse_grbl_work_offset(step('$#'), active_wcs)
+            state = parse_grbl_status_state(self._grbl_query_status(op))
+        except _GrblProbeAbort as abort:
+            if abort.status == 'cancelled' or op.cancel.is_set():
+                return {'error': _("The Start was stopped."), 'cancelled': True}
+            return {'error': '%s: %s %s' % (
+                _("Could not read the machine frame of GRBL"), abort.command, abort.text or abort.status)}
+        except ValueError as err:
+            return {'error': '%s: %s' % (_("Could not read the GRBL work offset"), str(err))}
+        if op.cancel.is_set():
+            return {'error': _("The Start was stopped."), 'cancelled': True}
+        if state != 'Idle':
+            return {'error': '%s: %s.' % (_("GRBL must be Idle to start the job. State"), state or _("no answer"))}
+        return {'frame': (active_wcs, offset, report_setting == 1.0)}
 
     def _al_check_probe_reply(self, command, text, expected_key, points, tol, offset, scale):
         """

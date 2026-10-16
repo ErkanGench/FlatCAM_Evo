@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import unittest
 
 from tests.test_levelling_audit import emitted
-from tests.grbl_stream_helpers import make_stream_tool, ended_how, has_success, CheckFake
+from tests.grbl_stream_helpers import make_stream_tool, make_levelled_stream_tool, ended_how, has_success, CheckFake
 
 
 def fast_timeouts(tool):
@@ -191,7 +191,27 @@ class TestCheckModeJob(unittest.TestCase):
         self.assertIsNone(tool._grbl_recovery)
         self.assertIsNone(tool._grbl_op)
 
-    # test_levelled_check_order belongs to T16 (the levelled job does not exist yet)
+    def test_levelled_check_order(self):
+        # GRBL refuses $# in Check: a levelled check-mode Start must read the frame before $C
+        class NoHashInCheck(CheckFake):
+            def _answer(self, cmd):
+                if cmd == '$#' and self.in_check:
+                    self._send('error:8')
+                    return
+                super()._answer(cmd)
+
+        fake = NoHashInCheck()
+        tool, _target = make_levelled_stream_tool(fake, check_mode=True)
+        tool.on_start()
+        commands = fake.commands()
+        first_check = commands.index('$C')
+        self.assertTrue([i for i, c in enumerate(commands) if c == '$#'])
+        self.assertTrue(all(i < first_check for i, c in enumerate(commands) if c == '$#'))
+        self.assertEqual(commands.count('$#'), 2)               # phase 1 and phase 2
+        self.assertEqual(commands.count('$C'), 2)               # enter and exit
+        self.assertEqual(len([c for c in commands if c.startswith('G01 X')]), 4)   # the job streamed
+        self.assertEqual(ended_how(tool), 'check_passed')
+        self.assertFalse(fake.in_check)
 
 
 if __name__ == '__main__':

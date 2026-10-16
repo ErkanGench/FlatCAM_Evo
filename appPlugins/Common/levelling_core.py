@@ -196,6 +196,9 @@ class LevellingCoreMixin:
 
     def _clear_probe_data(self):
         """Forget the probe points, the heights, the bilinear grid, the probing G-code and the owner."""
+        # first: a pending Start request must be old before the map is cleared (no-op in the tools
+        # that have no such request)
+        self._invalidate_start_requests()
         self._release_manual_mouse_events()
         self.al_voronoi_geo_storage.clear()
         self._al_data_units = None
@@ -1327,6 +1330,8 @@ class LevellingCoreMixin:
         """
         units = self._al_data_units if self.al_voronoi_geo_storage else self.app.app_units.upper()
         if replacement:
+            # first: a pending Start request is old when a probe or an import starts
+            self._invalidate_start_requests()
             self._al_bump_generation()
             self.al_heights_valid = False
             if units != self.app.app_units.upper():
@@ -1386,6 +1391,9 @@ class LevellingCoreMixin:
             if kind == 'failed':
                 self.al_heights_valid = False
                 return
+
+            # the new heights are published in this locked section: a pending Start request is old
+            self._al_on_publish_locked(result)
 
             if kind == 'import_points':
                 storage.clear()
@@ -1664,6 +1672,14 @@ class LevellingCoreMixin:
     def _al_result_retired(self, result):
         """:return: True if the operation that made `result` was stopped or replaced."""
         return False
+
+    def _al_on_publish_locked(self, result):
+        """Called with the result lock held, just before a probe or import result is published."""
+        pass
+
+    def _invalidate_start_requests(self):
+        """Make the pending Start requests old. Call it where no lock is held. The GRBL Sender overrides it."""
+        pass
 
     def _al_on_height_map_ready(self, target_obj, result=None):
         """

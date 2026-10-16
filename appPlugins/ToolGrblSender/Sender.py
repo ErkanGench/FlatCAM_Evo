@@ -14,7 +14,7 @@ import serial.tools.list_ports
 
 from appTool import AppTool
 from defaults import AppDefaults
-from appGUI.GUIElements import VerticalScrollArea, FCFileSaveDialog
+from appGUI.GUIElements import VerticalScrollArea, FCFileSaveDialog, FCMessageBox
 from camlib import CNCjob
 
 from appPlugins.Common.levelling_core import LevellingCoreMixin
@@ -69,8 +69,23 @@ class GrblConsole(QtWidgets.QWidget):
         self.log_view.appendPlainText(text)
 
 
+class _StartRequest:
+    """1 levelled Start: the live frame result is valid only for this request."""
+
+    def __init__(self, seq, al_ctx, target_obj, map_frame, map_imported, safety_generation, check_mode):
+        self.seq = seq                          # value of ToolGrblSender._start_seq at the request
+        self.al_ctx = al_ctx                    # _al_capture_context(): map generation, target, units
+        self.target_obj = target_obj
+        self.map_frame = map_frame              # _al_map_frame at the request
+        self.map_imported = map_imported
+        self.safety_generation = safety_generation
+        self.check_mode = check_mode
+
+
 class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     grbl_port_closed_sig = QtCore.pyqtSignal()
+    # (request, {'frame': ...} or {'error': ...}) from the frame worker; emitted after the port is released
+    frame_ready_sig = QtCore.pyqtSignal(object, object)
     al_result_ready_sig = QtCore.pyqtSignal(object)
     build_al_table_sig = QtCore.pyqtSignal()
     show_probing_geo_sig = QtCore.pyqtSignal(bool, bool)
@@ -194,6 +209,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self.stream_progress_sig.connect(self._on_stream_progress)
             self.status_report_sig.connect(self._on_status_report)
             self.stream_ended_sig.connect(self._on_stream_ended)
+            self.frame_ready_sig.connect(self._on_frame_ready)
             self.console_line_sig.connect(lambda line: self._console().append(line))
             # When object selection on canvas change
             self.app.proj_selection_changed.connect(self.on_object_selection_changed)
@@ -410,6 +426,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self._grbl_set_ui_connected(self._grbl_port_ready())
 
     def on_object_changed(self):
+        # first: a pending levelled Start request is old before the new target is published
+        self._invalidate_start_requests()
 
         # load the object
         obj_name = self.ui.object_combo.currentText()
@@ -493,6 +511,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
         attempt = object()
         with self._grbl_op_lock:
+            self._start_seq += 1
             self._grbl_connected = False
             self._grbl_connect_attempt = attempt
         self._grbl_set_ui_connected(False)
@@ -574,6 +593,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self._grbl_rx_buffer = (b'' if alarm else buffered[:buffered.rfind(b'\n') + 1]) + suffix
             self._grbl_rx_port = port
             if banner or any(text.lower() == 'ok' for text in lines):
+                self._start_seq += 1
                 # Only a startup banner confirms reset; DTR and ok do not.
                 if (banner and not alarm and self._grbl_recovery == 'needs_reset'
                         and safety_generation == self._grbl_safety_generation):
@@ -755,6 +775,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     def on_grbl_stop(self):
         """Stop the running operation at once: feed hold, and the machine needs recovery."""
         with self._grbl_op_lock:
+            self._start_seq += 1
             self._grbl_safety_generation += 1
             self._grbl_reset_pending = False
             op = self._grbl_op
@@ -771,6 +792,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def on_grbl_reset(self):
         with self._grbl_op_lock:
+            self._start_seq += 1
             self._grbl_safety_generation += 1
             op = self._grbl_op
             if op is not None:
@@ -989,7 +1011,28 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 'safety_generation' in result and
                 result['safety_generation'] != self._grbl_safety_generation)
 
+    def _al_on_publish_locked(self, result):
+        # _on_al_result_ready() holds _grbl_op_lock: the heights and this increment are 1 step
+        self._start_seq += 1
+
+    def _invalidate_start_requests(self):
+        """Make the pending levelled Start requests old. Never call it with _grbl_op_lock held."""
+        with self._grbl_op_lock:
+            self._start_seq += 1
+
+    def _start_request_current(self, req):
+        """:return: True if nothing changed since the request was made (GUI thread; takes no lock)."""
+        return (req.seq == self._start_seq
+                and self._al_context_current(req.al_ctx)
+                and self._target() is req.target_obj
+                and self._grbl_safety_generation == req.safety_generation
+                and self._al_map_frame == req.map_frame
+                and self._al_map_imported == req.map_imported)
+
     def _al_on_height_map_ready(self, target_obj, result=None):
+        # _on_al_result_ready() calls this hook after it released _grbl_op_lock, so the helper is safe here
+        # (the increment under the lock, before the publication, is _al_on_publish_locked)
+        self._invalidate_start_requests()
         # the levelled job belongs to the old map; the next Start makes it again
         self.job_map_generation = None
         # bind the map to the GRBL frame of the probe; an imported map has no frame yet
@@ -1134,8 +1177,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def on_start(self):
         if self.ui.autolevel_cb.get_value() is True:
-            # T16b replaces this refusal with the 2 phases of a levelled Start
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Levelled streaming is not available yet."))
+            # a levelled Start has 2 phases: the live frame is read before the job is made (A8.3)
+            self._start_levelled()
             return
         if not self.build_stream_job():
             return
@@ -1145,13 +1188,165 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         op = self._grbl_reserve('stream', motion=True)
         if op is None:
             return
-        lines = list(self.job_lines)
-        numbers = list(self.job_line_numbers)
+        self._start_stream_worker(op, list(self.job_lines), list(self.job_line_numbers), check_mode, poll_ms)
+
+    def _start_free_button(self):
+        """A levelled Start ended before the stream: the Start button works again (GUI thread)."""
+        if self._grbl_op is None:
+            self.ui.start_button.setDisabled(False)
+
+    def _confirm_imported_frame(self):
+        """
+        Ask the user if the machine frame is the one of the imported height map (GUI thread).
+
+        :return: True if the user answered Yes.
+        """
+        msgbox = FCMessageBox(parent=self.app.ui)
+        title = _("Imported height map")
+        msgbox.setWindowTitle(title)
+        msgbox.setText('<b>%s</b>' % title)
+        msgbox.setInformativeText(_(
+            "This height map was imported. It has no machine frame. "
+            "Is the machine in the same WCS and zero as when the map was made?"))
+        msgbox.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+        msgbox.setDefaultButton(bt_no)
+        msgbox.exec()
+        return msgbox.clickedButton() == bt_yes
+
+    @staticmethod
+    def _frames_match(live, bound, tolerance=1e-4):
+        """
+        :return: True if the 2 frames (active_wcs, offset, report_inches) are the same: the same WCS and
+            report units, and each axis of the offset within `tolerance` (machine units).
+        """
+        if live is None or bound is None:
+            return False
+        if live[0] != bound[0] or bool(live[2]) != bool(bound[2]) or len(live[1]) != len(bound[1]):
+            return False
+        return all(abs(a - b) <= tolerance for a, b in zip(live[1], bound[1]))
+
+    def _start_levelled(self):
+        """
+        Phase 0 of a levelled Start (GUI thread): make the request, ask about an imported map, reserve
+        the operation 'frame' and read the live frame in a worker (phase 1). _on_frame_ready() goes on.
+        """
+        # widget values are read here, before the request
+        check_mode = self.ui.check_mode_cb.get_value() is True
+        target = self._target()
+        if not self._is_supported_target(target):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Select a CNCJob object."))
+            return
+        if not self._grbl_port_ready():
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Not connected to a GRBL controller."))
+            return
+        ctx = self._al_capture_context()
+        if self._al_capture_apply_input(target, units=ctx.units, require_segmented=False) is None:
+            return
+        units_cmd = 'G20' if ctx.units == 'IN' else 'G21'
+
+        # each Start adds 1; the sequence number and the safety generation are read in 1 locked section
+        with self._grbl_op_lock:
+            self._start_seq += 1
+            seq = self._start_seq
+            safety_generation = self._grbl_safety_generation
+        req = _StartRequest(seq, ctx, target, self._al_map_frame, self._al_map_imported,
+                            safety_generation, check_mode)
+
+        if req.map_imported:
+            if not self._confirm_imported_frame():
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+                return
+            if not self._start_request_current(req):
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    "The height map, the object or the machine state changed while the dialog was open. "
+                    "Press Start again."))
+                return
+
+        op = self._grbl_reserve('frame', motion=False)
+        if op is None:
+            return
+
+        def worker_task():
+            result = {'error': _("The Start failed.")}
+            try:
+                result = self._grbl_frame_run(op, units_cmd)
+            except (serial.SerialException, OSError) as err:
+                self.app.log.error("ToolGrblSender._start_levelled() -> %s" % str(err))
+                with self._grbl_op_lock:
+                    self._grbl_failure_locked(op, 'port_error')
+                result = {'error': '%s: %s' % (_("The serial port failed"), str(err))}
+            except Exception as err:
+                self.app.log.error("ToolGrblSender._start_levelled() -> %s" % str(err))
+            finally:
+                # the GUI hears about it only after the port is free
+                self._grbl_release(op)
+                self.frame_ready_sig.emit(req, result)
+
+        self.ui.start_button.setDisabled(True)
+        self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+
+    def _grbl_frame_run(self, op, units_cmd):
+        """
+        Phase 1 of a levelled Start (a worker thread, operation 'frame', no motion): GRBL must be Idle,
+        then read its frame.
+
+        :return: see _grbl_read_live_frame().
+        """
+        state = parse_grbl_status_state(self._grbl_query_status(op))
+        if op.cancel.is_set():
+            return {'error': _("The Start was stopped."), 'cancelled': True}
+        if state == 'Check':
+            return {'error': _("GRBL is in check mode. Send $C in the console, or press Reset.")}
+        if state != 'Idle':
+            return {'error': '%s: %s.' % (_("GRBL must be Idle to start the job. State"), state or _("no answer"))}
+        return self._grbl_read_live_frame(op, units_cmd)
+
+    def _on_frame_ready(self, req, result):
+        """
+        Slot of frame_ready_sig (GUI thread): phase 1 ended and the port is free. Bind or compare the frame,
+        make the levelled job, reserve the operation 'stream' and start phase 2.
+        """
+        if not self._start_request_current(req):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "The Start request is old (the map, the object or the machine state changed). Press Start again."))
+            self._start_free_button()
+            return
+        if 'error' in result:
+            self.app.inform.emit('%s %s' % (
+                '[WARNING_NOTCL]' if result.get('cancelled') else '[ERROR_NOTCL]', result['error']))
+            self._start_free_button()
+            return
+
+        frame = result['frame']
+        if self._al_map_imported and self._al_map_frame is None:
+            # the first Start with this imported map binds it to the live frame
+            self._al_map_frame = frame
+            req.map_frame = frame
+        elif not self._frames_match(frame, self._al_map_frame):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                "The machine frame (WCS or work offset) changed after the height map was made. Probe again."))
+            self._start_free_button()
+            return
+
+        if not self.build_levelled_job():
+            self._start_free_button()
+            return
+        op = self._grbl_reserve('stream', motion=True)
+        if op is None:
+            self._start_free_button()
+            return
+        poll_ms = int(self.app.options.get("tools_grbl_status_ms", 200))
+        self._start_stream_worker(op, list(self.job_lines), list(self.job_line_numbers), req.check_mode, poll_ms, req)
+
+    def _start_stream_worker(self, op, lines, numbers, check_mode, poll_ms, req=None):
+        """Start the stream worker under the reserved operation `op` (GUI thread). `req`: a levelled Start."""
 
         def worker_task():
             how = 'error'
             try:
-                how = self._grbl_stream_run(op, lines, numbers, check_mode, poll_ms / 1000.0)
+                how = self._grbl_stream_run(op, lines, numbers, check_mode, poll_ms / 1000.0, req)
             except (serial.SerialException, OSError) as err:
                 self.app.log.error("ToolGrblSender.on_start() -> %s" % str(err))
                 how = self._grbl_stream_crashed(op, 'port_error')
@@ -1176,24 +1371,41 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self._grbl_abort_stream_locked(op, reason)
         return reason
 
-    def _grbl_stream_io(self, op):
+    def _grbl_stream_io(self, op, req=None):
         """
         The 2 callables that the pure streamer uses. All port access of the stream goes through them.
 
+        :param req: the _StartRequest of a levelled Start, else None. The write of a levelled Start checks
+            the request before the first job line (A8.3 step 4.4): `write.first_job_line_written` is the
+            list [bool] of that flag.
         :return: (write, readline)
         """
+        first_job_line_written = [False]
+
         def write(data):
+            job_line = data != b'?'
+            # the request check, the write and the flag are 1 locked section: an invalidation either gets
+            # the lock first (no job line is written) or comes after the first job line (the job runs on)
             with self._grbl_op_lock:
                 if op.cancel.is_set():
                     return 'cancelled'
                 if not self._grbl_active_locked(op):
                     return 'port_error'
+                if req is not None and job_line and not first_job_line_written[0] and req.seq != self._start_seq:
+                    return 'stale'
                 try:
                     count = op.port.write(data)
                 except (serial.SerialException, OSError) as err:
                     self.app.log.error("ToolGrblSender.write() -> %s" % str(err))
                     return 'port_error'
-                return 'ok' if count is None or count == len(data) else 'port_error'
+                # a short write is a transport failure, never 'stale'
+                if count is not None and count != len(data):
+                    return 'port_error'
+                if job_line:
+                    first_job_line_written[0] = True
+                return 'ok'
+
+        write.first_job_line_written = first_job_line_written
 
         def readline():
             with self._grbl_op_lock:
@@ -1203,35 +1415,56 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
         return write, readline
 
-    def _grbl_stream_run(self, op, lines, numbers, check_mode, poll_interval):
+    def _grbl_stream_run(self, op, lines, numbers, check_mode, poll_interval, req=None):
         """
         The stream worker under 1 operation (a worker thread; it reads no widgets).
 
         :param numbers:       the line number in the G-code text of each line of `lines`.
         :param check_mode:    True if the user asked for check mode for this job.
         :param poll_interval: seconds between 2 status requests.
+        :param req:           the _StartRequest of a levelled Start (phase 2 of A8.3), else None.
         :return: `how`: 'finished', 'check_passed', 'check_passed_needs_home', 'check_failed',
-            'check_exit_failed', 'stopped', 'incomplete', 'rejected' (nothing was sent), 'stale', or
-            the name of a failure ('port_error', 'timeout', 'error', 'alarm', 'line_too_long').
+            'check_exit_failed', 'stopped', 'incomplete', 'rejected' (nothing was sent), 'stale',
+            'stale_needs_home' (a stale request: GRBL got no job line), or the name of a failure
+            ('port_error', 'timeout', 'error', 'alarm', 'line_too_long').
             It is final: the success values are set only after the commit of A5.3.
         """
         self._stream_result = {}
         port = op.port
+
+        # A8.3 step 4.1: the request must be current when the worker starts
+        if req is not None:
+            with self._grbl_op_lock:
+                stale = op.safety_generation != req.safety_generation or req.seq != self._start_seq
+            if stale:
+                return self._grbl_stale_cleanup(op, False)
 
         # 1. GRBL must be Idle
         state = parse_grbl_status_state(self._grbl_query_status(op))
         if state != 'Idle':
             return self._grbl_start_refused(op, state)
 
-        # 2. <- T16 (A5.4 step 2.2): a levelled job compares the live frame ($G, $#, $13) with the
-        #    bound frame here. GRBL runs $# only in Idle, so this step comes before $C.
+        # 2. A5.4 step 2.2: a levelled job compares the live frame ($$, $G, $#) with the bound frame
+        #    here. GRBL runs $# only in Idle, so this step comes before $C.
+        if req is not None:
+            result = self._grbl_read_live_frame(op, 'G20' if req.al_ctx.units == 'IN' else 'G21')
+            if 'error' in result:
+                return self._grbl_frame_refused(op, result['error'], result.get('cancelled', False))
+            if not self._frames_match(result['frame'], req.map_frame):
+                return self._grbl_frame_refused(op, _(
+                    "The machine frame (WCS or work offset) changed after the height map was made. Probe again."))
 
         # The stream epoch is dirty from the first write: until a confirmed completion or the reset
         # banner, GRBL can hold lines (and their ok replies) of this job.
         with self._grbl_op_lock:
             if not self._grbl_active_locked(op):
                 return 'stopped' if op.cancel.is_set() else 'incomplete'
-            self._grbl_stream_dirty = True
+            # A8.3 step 4.3: after the last preflight query and before $C
+            stale = req is not None and req.seq != self._start_seq
+            if not stale:
+                self._grbl_stream_dirty = True
+        if stale:
+            return self._grbl_stale_cleanup(op, False)
 
         # 3. check mode for this job
         if check_mode:
@@ -1249,7 +1482,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 return status
 
         # 4. stream
-        write, readline = self._grbl_stream_io(op)
+        write, readline = self._grbl_stream_io(op, req)
         res = stream_lines(
             lines, write, readline, check_mode=check_mode,
             on_progress=lambda d, t: self.stream_progress_sig.emit(d, t),
@@ -1275,14 +1508,58 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if status == 'cancelled':
             return 'stopped'
         if status == 'stale':
-            # T16: the levelled Start request is old; GRBL got no job line
-            return 'stale'
+            # the levelled Start request is old; GRBL got no job line (A8.3 step 4.5)
+            return self._grbl_stale_cleanup(op, check_mode)
         with self._grbl_op_lock:
             if op.cancel.is_set():
                 # Stop or Reset already owns the recovery state
                 return 'stopped'
             self._grbl_abort_stream_locked(op, status, res['last_text'])
         return status
+
+    def _grbl_frame_refused(self, op, text, cancelled=False):
+        """
+        The live frame can not start the levelled job. Nothing was written to GRBL, and the stream epoch is
+        clean. The user is told why; a failure that the read latched shows its recovery text.
+
+        :return: `how`.
+        """
+        if cancelled or op.cancel.is_set():
+            return 'stopped'
+        with self._grbl_op_lock:
+            latched = self._grbl_recovery is not None
+        if latched:
+            text += ' ' + self._grbl_recovery_text()
+        self.app.inform.emit('[ERROR_NOTCL] %s' % text)
+        return 'rejected'
+
+    def _grbl_stale_cleanup(self, op, check_entered):
+        """
+        The levelled Start request is old and GRBL got no job line (A8.3). This is not a cancellation and not
+        a failure: no recovery state changes here. A `$C` that was sent still needs a confirmed outcome.
+
+        The stream epoch is clean again only through _grbl_commit_success_locked(), after the cleanup, and
+        not after a failed exit from check mode.
+
+        :param check_entered: True if the job is in check mode (GRBL is in `Check`).
+        :return: `how`: 'stale', 'stale_needs_home', 'check_exit_failed', 'stopped' or 'incomplete'.
+        """
+        exit_state = None
+        if check_entered:
+            with self._grbl_op_lock:
+                if op.cancel.is_set():
+                    return 'stopped'
+                if op.failed:
+                    return 'incomplete'
+            exit_state = self._grbl_exit_check_mode(op)
+            if exit_state == 'failed':
+                with self._grbl_op_lock:
+                    return 'stopped' if op.cancel.is_set() else 'check_exit_failed'
+        with self._grbl_op_lock:
+            if not self._grbl_commit_success_locked(op):
+                # a Stop or a Reset during the cleanup keeps its recovery state
+                return 'stopped'
+        return 'stale_needs_home' if exit_state == 'alarm' else 'stale'
 
     def _grbl_start_refused(self, op, state):
         """GRBL is not Idle at the start of the stream worker. Nothing was written to GRBL."""
@@ -1450,6 +1727,13 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         elif how == 'rejected':
             # the worker told why; nothing was sent
             pass
+        elif how == 'stale':
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "The Start request is old (the map, the object or the machine state changed). Press Start again."))
+        elif how == 'stale_needs_home':
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "The Start request is old. GRBL is in alarm after it left check mode. "
+                "Press Home, then Start again."))
         elif how == 'stopped':
             self.app.inform.emit('[WARNING_NOTCL] %s%s' % (_("The job was stopped."), recovery))
         elif how in ('error', 'alarm'):

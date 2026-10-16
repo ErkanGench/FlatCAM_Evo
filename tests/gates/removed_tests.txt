@@ -1,3 +1,4 @@
 # Format: <test id>  # <reason>   (one per line; blank and # lines are ignored)
 # Tests removed on purpose.
 tests/test_levelling_e2e.py::test_all_ui_controllers_are_covered  # the Levelling Plugin no longer has GRBL
+tests/test_grbl_frame.py::TestStartRefusesLevelled::test_levelled_start_not_available_yet  # T16b replaces the refusal of a levelled Start with the 2 phases
