@@ -28,12 +28,16 @@ import appPlugins.ToolLevelling  # noqa: F401
 # so take the module itself from sys.modules
 tl_module = sys.modules['appPlugins.ToolLevelling']
 from appPlugins.ToolLevelling import ToolLevelling
+from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+import appPlugins.ToolGrblSender.SenderGrbl  # noqa: F401
+# appPlugins/__init__.py also shadows the package name with the class ToolGrblSender
+sg_module = sys.modules['appPlugins.ToolGrblSender.SenderGrbl']
 from appPlugins.Common import levelling_interp as li
 from appPlugins.Common import grbl_protocol as gp
 
 
-def make_audit_tool(units='MM', storage=None, heights_valid=False):
-    tool = ToolLevelling.__new__(ToolLevelling)
+def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
+    tool = (cls or ToolGrblSender).__new__(cls or ToolGrblSender)
     tool.app = MagicMock()
     tool.app.decimals = 4
     tool.app.app_units = units
@@ -75,10 +79,17 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False):
     tool._grbl_rx_buffer = b''
     tool._grbl_reply_pending = False
     tool._grbl_reset_pending = False
+    tool._grbl_stream_dirty = False
     tool._al_generation = 0
     tool._al_target_name = None
     tool._al_target_obj = None
     tool._al_core_signals_connected = False
+    tool.console_line_sig = MagicMock()
+    tool.job_map_generation = None
+    tool.view3d = None
+    tool.stream_progress_sig = MagicMock()
+    tool.status_report_sig = MagicMock()
+    tool.stream_ended_sig = MagicMock()
     return tool
 
 
@@ -743,23 +754,23 @@ class TestGrblConnect(unittest.TestCase):
     def test_bad_baudrate_opens_nothing(self):
         tool = self._tool()
         tool.ui.baudrates_list_combo.currentText.return_value = ''
-        with patch('appPlugins.ToolLevelling.serial.serial_for_url') as opener:
+        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url') as opener:
             tool.on_grbl_connect()
         opener.assert_not_called()
         self.assertTrue(any('[ERROR_NOTCL]' in t for t in emitted(tool)))
 
     def test_connect_schedules_finish_without_sleep(self):
         tool = self._tool()
-        with patch('appPlugins.ToolLevelling.serial.serial_for_url', return_value=make_port()), \
-                patch('appPlugins.ToolLevelling.QtCore.QTimer.singleShot') as single_shot, \
-                patch('appPlugins.ToolLevelling.time.sleep') as sleeper:
+        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url', return_value=make_port()), \
+                patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot') as single_shot, \
+                patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep') as sleeper:
             tool.on_grbl_connect()
         sleeper.assert_not_called()
         self.assertEqual(single_shot.call_args.args[0], 1000)
 
     def test_open_failure_leaves_no_port(self):
         tool = self._tool()
-        with patch('appPlugins.ToolLevelling.serial.serial_for_url', side_effect=serial.SerialException('busy')):
+        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url', side_effect=serial.SerialException('busy')):
             tool.on_grbl_connect()
         self.assertIsNone(tool.grbl_ser_port)
         self.assertTrue(any('[ERROR_NOTCL]' in t for t in emitted(tool)))
@@ -829,7 +840,7 @@ class TestGrblConnect(unittest.TestCase):
         tool._grbl_connected = True
         tool._grbl_reserve('probe', motion=True)
         tool._grbl_disconnect()
-        with patch('appPlugins.ToolLevelling.serial.serial_for_url') as opener:
+        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url') as opener:
             tool.on_grbl_connect()
         opener.assert_not_called()
 
@@ -930,7 +941,7 @@ class TestGrblCommands(unittest.TestCase):
         tool._grbl_connected = True
         tool.ui.jog_step_entry.get_value.return_value = 1.0
         tool.ui.jog_fr_entry.get_value.return_value = 100.0
-        tool.app.options = {'tools_al_grbl_travelz': 2.0}
+        tool.app.options = {'tools_grbl_travelz': 2.0}
         return tool
 
     def test_jog_step_is_a_number(self):
@@ -971,7 +982,7 @@ class TestGrblCommands(unittest.TestCase):
         tool = self._tool(port)
         tool.on_grbl_get_parameter('$10')
         run_worker(tool)
-        shell_texts = [c.args[0] for c in tool.app.inform_shell.__getitem__.return_value.emit.call_args_list]
+        shell_texts = [c.args[0] for c in tool.console_line_sig.emit.call_args_list]
         self.assertTrue(any('$10 = 1.0' in t for t in shell_texts))
 
     def test_bad_parameter_number_starts_nothing(self):
@@ -1078,7 +1089,7 @@ class TestGrblHoming(unittest.TestCase):
         tool.grbl_ser_port = FakeGrbl()
         tool._grbl_connected = True
         tool._grbl_transact = MagicMock(return_value=('ok', 'ok'))
-        with patch('appPlugins.ToolLevelling.time.sleep') as sleeper:
+        with patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep') as sleeper:
             tool.on_grbl_homing()
             run_worker(tool)
         sleeper.assert_not_called()
@@ -1095,9 +1106,9 @@ class TestGrblHoming(unittest.TestCase):
 
     def test_port_list_does_not_open_ports(self):
         infos = [SimpleNamespace(device='COM3'), SimpleNamespace(device='COM7')]
-        with patch('appPlugins.ToolLevelling.serial.tools.list_ports.comports', return_value=infos), \
-                patch('appPlugins.ToolLevelling.serial.Serial') as serial_cls:
-            self.assertEqual(ToolLevelling.on_grbl_list_serial_ports(), ['COM3', 'COM7'])
+        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.tools.list_ports.comports', return_value=infos), \
+                patch('appPlugins.ToolGrblSender.SenderGrbl.serial.Serial') as serial_cls:
+            self.assertEqual(ToolGrblSender.on_grbl_list_serial_ports(), ['COM3', 'COM7'])
         serial_cls.assert_not_called()
 
     def test_wake_method_is_gone(self):
@@ -1147,7 +1158,7 @@ class TestResultPublication(unittest.TestCase):
             1: {'point': Point(0.0, 0.0), 'geo': None, 'height': 0.5},
             2: {'point': Point(10.0, 0.0), 'geo': None, 'height': 0.5},
         }
-        tool = make_audit_tool(storage=storage, heights_valid=False)
+        tool = make_audit_tool(storage=storage, heights_valid=False, cls=ToolLevelling)
         target = SimpleNamespace(obj_options={'name': 'job'}, kind='cncjob')
         tool._al_target_name = 'job'
         tool._al_target_obj = target
@@ -1241,7 +1252,7 @@ class TestGrblProbeRun(unittest.TestCase):
         tool.ui.ptravelz_entry.get_value.return_value = 2.0
         tool.ui.feedrate_probe_entry.get_value.return_value = 600.0
         tool.ui.pdepth_entry.get_value.return_value = -1.0
-        tool.apply_autolevel = MagicMock()
+        tool._al_on_height_map_ready = MagicMock()
         return tool, target
 
     def _run(self, tool):
@@ -1261,7 +1272,7 @@ class TestGrblProbeRun(unittest.TestCase):
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['height'], -0.1)
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['height'], 0.2)
         self.assertTrue(tool.al_heights_valid)
-        tool.apply_autolevel.assert_called_once_with(target_obj=target)
+        tool._al_on_height_map_ready.assert_called_once_with(target)
         self.assertIsNone(tool._grbl_op)
         self.assertIsNone(tool._grbl_recovery)
         self.assertEqual(self._after_last_probe(fake), ['G0 Z2.0000', 'G4 P0'])
@@ -1367,7 +1378,7 @@ class TestGrblProbeRun(unittest.TestCase):
         self.assertEqual(fake.commands()[-2:], ['G0 Z2.0000', 'G4 P0'])
         self.assertTrue(any('error:9' in t for t in emitted(tool)))
         self.assertIsNone(tool._grbl_recovery)
-        tool.apply_autolevel.assert_not_called()
+        tool._al_on_height_map_ready.assert_not_called()
 
     def test_failed_retract_is_reported_and_needs_recovery(self):
         fake = FakeGrbl(replies={'G0 Z2': ['error:9']})
@@ -1383,7 +1394,7 @@ class TestGrblProbeRun(unittest.TestCase):
         self.assertEqual([c for c in self._after_last_probe(fake) if c != '!'], [])
         self.assertEqual(tool._grbl_recovery, 'needs_reset')
         self.assertFalse(tool.al_heights_valid)
-        tool.apply_autolevel.assert_not_called()
+        tool._al_on_height_map_ready.assert_not_called()
 
     def test_alarm_on_probe_stops(self):
         fake = FakeGrbl(replies={'G38.2': ['ALARM:4']})
@@ -1425,7 +1436,7 @@ class TestGrblProbeRun(unittest.TestCase):
     def test_timeout_holds_and_needs_recovery(self):
         fake = FakeGrbl(replies={'G38.2': []})
         tool, target = self._tool(fake)
-        with patch('appPlugins.ToolLevelling.probe_timeout_s', return_value=0.2):
+        with patch('appPlugins.ToolGrblSender.Sender.probe_timeout_s', return_value=0.2):
             self._run(tool)
         self._assert_stopped_at_probe(tool, fake)
         self.assertIn('!', fake.commands())
@@ -1437,13 +1448,13 @@ class TestGrblProbeRun(unittest.TestCase):
         self.assertEqual(tool.al_voronoi_geo_storage[1]['height'], 0.5)
         self.assertEqual(tool.al_voronoi_geo_storage[2]['height'], 0.5)
         self.assertFalse(tool.al_heights_valid)
-        tool.apply_autolevel.assert_not_called()
+        tool._al_on_height_map_ready.assert_not_called()
 
     # ---- recovery and ownership ----
     def test_timeout_blocks_next_probe_until_reset_and_home(self):
         fake = FakeGrbl(replies={'G38.2': []})
         tool, target = self._tool(fake)
-        with patch('appPlugins.ToolLevelling.probe_timeout_s', return_value=0.2):
+        with patch('appPlugins.ToolGrblSender.Sender.probe_timeout_s', return_value=0.2):
             self._run(tool)
         tool.on_grbl_autolevel()
         self.assertEqual(tool.app.worker_task.emit.call_count, 1)
@@ -1465,7 +1476,7 @@ class TestGrblProbeRun(unittest.TestCase):
         self._run(tool)
         cmds = fake.commands()
         self.assertEqual(cmds[cmds.index('!') + 1:], [])
-        tool.apply_autolevel.assert_not_called()
+        tool._al_on_height_map_ready.assert_not_called()
 
     def test_queued_sender_blocks_probe(self):
         fake = FakeGrbl()
@@ -1483,7 +1494,7 @@ class TestGrblProbeRun(unittest.TestCase):
         run_worker(tool)
         self.assertEqual(tool.al_voronoi_geo_storage[1]['height'], 0.0)
         self.assertFalse(tool.al_heights_valid)
-        tool.apply_autolevel.assert_not_called()
+        tool._al_on_height_map_ready.assert_not_called()
 
     def test_stale_result_after_target_replaced(self):
         fake = FakeGrbl()
@@ -1492,7 +1503,7 @@ class TestGrblProbeRun(unittest.TestCase):
         tool.app.collection.get_by_name.return_value = SimpleNamespace(obj_options={'name': 'job'})
         run_worker(tool)
         self.assertFalse(tool.al_heights_valid)
-        tool.apply_autolevel.assert_not_called()
+        tool._al_on_height_map_ready.assert_not_called()
 
     def test_worker_reads_no_widgets(self):
         fake = FakeGrbl()
@@ -1641,11 +1652,20 @@ class TestSignalsOnce(unittest.TestCase):
         with patch('appPlugins.ToolLevelling.QtWidgets.QApplication.instance', return_value=MagicMock()):
             for _i in range(3):
                 tool.connect_signals_at_init()
-        for sig in (tool.build_al_table_sig, tool.apply_autolevel_sig, tool.show_probing_geo_sig,
+        for sig in (tool.build_al_table_sig, tool.show_probing_geo_sig,
                     tool.grbl_port_closed_sig, tool.al_result_ready_sig, tool.app.proj_selection_changed):
             self.assertEqual(sig.connect.call_count, 1)
         # set_tool_ui and _grbl_disconnect
         self.assertEqual(tool.app.cleanup.connect.call_count, 2)
+
+    def test_levelling_core_signals_connect_once(self):
+        tool = make_audit_tool(cls=ToolLevelling)
+        with patch('appPlugins.ToolLevelling.QtWidgets.QApplication.instance', return_value=MagicMock()):
+            for _i in range(3):
+                tool.connect_signals_at_init()
+        for sig in (tool.build_al_table_sig, tool.apply_autolevel_sig, tool.show_probing_geo_sig,
+                    tool.al_result_ready_sig, tool.app.proj_selection_changed):
+            self.assertEqual(sig.connect.call_count, 1)
 
     def test_port_force_closes_on_app_quit(self):
         tool = make_audit_tool()

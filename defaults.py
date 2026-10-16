@@ -524,9 +524,6 @@ class AppDefaults:
         "tools_al_probe_fr": 120,
         "tools_al_probe_tip_dia": 0.3,
         "tools_al_controller": 'MACH3',
-        "tools_al_grbl_jog_step": 5,
-        "tools_al_grbl_jog_fr": 1500,
-        "tools_al_grbl_travelz": 15.0,
 
         # GRBL Sender Plugin
         "tools_grbl_jog_step": 5,

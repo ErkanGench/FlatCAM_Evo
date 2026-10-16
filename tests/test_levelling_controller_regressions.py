@@ -8,6 +8,7 @@ from shapely import Point, Polygon
 
 from tests import test_levelling_audit as audit
 from tests.test_levelling_audit import make_audit_tool, tl_module
+from appPlugins.ToolLevelling import ToolLevelling
 import appPlugins.Common.levelling_core as lc_module
 
 
@@ -19,7 +20,7 @@ def import_tool():
         1: {'point': Point(0.0, 0.0), 'geo': None, 'height': 0.0},
         2: {'point': Point(10.0, 0.0), 'geo': None, 'height': 0.0},
     }
-    tool = make_audit_tool(storage=storage)
+    tool = make_audit_tool(storage=storage, cls=ToolLevelling)
     tool._al_target_name = 'job'
     tool._al_target_obj = target
     tool.app.collection.get_by_name.return_value = target
@@ -68,7 +69,7 @@ GCODE_LINE = re.compile(r'^(\(.*\)|[GMO#%]\S*.*)$')
 
 
 def gcode_tool(controller):
-    tool = make_audit_tool()
+    tool = make_audit_tool(cls=ToolLevelling)
     target = MagicMock()
     target.obj_options = {'name': 'job'}
     target.coords_decimals = 4

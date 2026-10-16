@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from test_levelling_audit import FakeGrbl, make_audit_tool, run_worker, tl_module
+from test_levelling_audit import FakeGrbl, make_audit_tool, run_worker, sg_module
 
 
 class ConnectionPort(FakeGrbl):
@@ -45,9 +45,9 @@ class ConnectionPort(FakeGrbl):
 def connect(tool, port, callbacks):
     tool.ui.com_list_combo.currentText.return_value = 'COM3'
     tool.ui.baudrates_list_combo.currentText.return_value = '115200'
-    with patch.object(tl_module.serial, 'serial_for_url', return_value=port) as opened, \
-            patch.object(tl_module.QtCore.QTimer, 'singleShot',
-                         side_effect=lambda delay, callback: callbacks.append(callback)):
+    with patch.object(sg_module.serial, 'serial_for_url', return_value=port) as opened, \
+            patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot',
+                  side_effect=lambda delay, callback: callbacks.append(callback)):
         tool.on_grbl_connect()
     return opened
 
@@ -239,8 +239,8 @@ class TestConnectionRed:
 def run_home(tool):
     tool.on_grbl_homing()
     ticks = iter(range(10000))
-    with patch('appPlugins.ToolLevelling.time.monotonic', side_effect=lambda: next(ticks)), \
-            patch('appPlugins.ToolLevelling.time.sleep'):
+    with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(ticks)), \
+            patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'):
         run_worker(tool)
 
 
@@ -283,7 +283,7 @@ class TestConnectionCompatibility:
         port = ConnectionPort([b'ok\r\n'])
         callbacks = []
         connect(tool, port, callbacks)
-        with patch.object(tl_module.serial, 'serial_for_url') as opened:
+        with patch.object(sg_module.serial, 'serial_for_url') as opened:
             tool.on_grbl_connect()
         opened.assert_not_called()
         assert tool.grbl_ser_port is None

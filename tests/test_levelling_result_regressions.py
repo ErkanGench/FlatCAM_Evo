@@ -27,7 +27,7 @@ def result_tool(units='MM'):
     tool.build_al_table_sig.reset_mock()
     tool.show_probing_geo_sig.reset_mock()
     # the setup import applies the map (import now applies); tests count only their own applies
-    tool.apply_autolevel.reset_mock()
+    tool._al_on_height_map_ready.reset_mock()
     return tool, fake
 
 
@@ -149,7 +149,7 @@ def test_queued_probe_is_rejected_after_replacement_starts(tmp_path, replacement
     drain_results()
     assert heights(tool) == before
     assert not tool.al_heights_valid
-    tool.apply_autolevel.assert_not_called()
+    tool._al_on_height_map_ready.assert_not_called()
     tool.build_al_table_sig.emit.assert_not_called()
 
 
@@ -171,7 +171,7 @@ def test_released_probe_evidence_is_checked_before_gui_storage_update(action):
     drain_results()
     assert heights(tool) == {1: 0.5, 2: 0.5}
     assert not tool.al_heights_valid
-    tool.apply_autolevel.assert_not_called()
+    tool._al_on_height_map_ready.assert_not_called()
     tool.build_al_table_sig.emit.assert_not_called()
     tool.show_probing_geo_sig.emit.assert_not_called()
 
@@ -190,7 +190,7 @@ def test_released_current_probe_publishes_atomically_on_gui_thread():
     drain_results()
     assert seen == [(True, {1: 0.1, 2: 0.2})]
     assert tool.al_heights_valid
-    tool.apply_autolevel.assert_called_once_with(target_obj=tool._al_target_obj)
+    tool._al_on_height_map_ready.assert_called_once_with(tool._al_target_obj)
 
 
 def test_import_worker_uses_captured_units_without_mutating_shared_units(tmp_path):

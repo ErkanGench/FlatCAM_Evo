@@ -162,47 +162,8 @@ class ToolsLevelPrefGroupUI(OptionsGroupUI):
         )
 
         self.al_controller_combo = FCComboBox()
-        self.al_controller_combo.addItems(["MACH3", "MACH4", "LinuxCNC", "GRBL"])
+        self.al_controller_combo.addItems(["MACH3", "MACH4", "LinuxCNC"])
         par_grid.addWidget(self.al_controller_label, 22, 0)
         par_grid.addWidget(self.al_controller_combo, 22, 1)
-
-        # JOG Step
-        self.jog_step_label = FCLabel('%s:' % _("Step"))
-        self.jog_step_label.setToolTip(
-            _("Each jog action will move the axes with this value.")
-        )
-
-        self.jog_step_entry = FCDoubleSpinner()
-        self.jog_step_entry.set_precision(self.decimals)
-        self.jog_step_entry.set_range(0, 910000.0000)
-
-        par_grid.addWidget(self.jog_step_label, 24, 0)
-        par_grid.addWidget(self.jog_step_entry, 24, 1)
-
-        # JOG Feedrate
-        self.jog_fr_label = FCLabel('%s:' % _("Feedrate"))
-        self.jog_fr_label.setToolTip(
-            _("Feedrate when jogging.")
-        )
-
-        self.jog_fr_entry = FCDoubleSpinner()
-        self.jog_fr_entry.set_precision(self.decimals)
-        self.jog_fr_entry.set_range(0, 910000.0000)
-
-        par_grid.addWidget(self.jog_fr_label, 26, 0)
-        par_grid.addWidget(self.jog_fr_entry, 26, 1)
-
-        # JOG Travel Z
-        self.jog_travelz_label = FCLabel('%s:' % _("Travel Z"))
-        self.jog_travelz_label.setToolTip(
-            _("Safe height (Z) distance when jogging to origin.")
-        )
-
-        self.jog_travelz_entry = FCDoubleSpinner()
-        self.jog_travelz_entry.set_precision(self.decimals)
-        self.jog_travelz_entry.set_range(0, 910000.0000)
-
-        par_grid.addWidget(self.jog_travelz_label, 28, 0)
-        par_grid.addWidget(self.jog_travelz_entry, 28, 1)
 
         self.layout.addStretch(1)

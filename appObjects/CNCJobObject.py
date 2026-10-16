@@ -111,8 +111,6 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             "tools_al_mode": self._app_option("tools_al_mode"),
             "tools_al_rows": self._app_option("tools_al_rows"),
             "tools_al_columns": self._app_option("tools_al_columns"),
-            "tools_al_grbl_jog_step": self._app_option("tools_al_grbl_jog_step"),
-            "tools_al_grbl_jog_fr": self._app_option("tools_al_grbl_jog_fr"),
         })
 
         '''

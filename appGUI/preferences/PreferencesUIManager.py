@@ -411,9 +411,6 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_al_probe_depth":      self.ui.plugin_eng_pref_form.tools_level_group.pdepth_entry,
             "tools_al_probe_fr":         self.ui.plugin_eng_pref_form.tools_level_group.feedrate_probe_entry,
             "tools_al_controller":       self.ui.plugin_eng_pref_form.tools_level_group.al_controller_combo,
-            "tools_al_grbl_jog_step":    self.ui.plugin_eng_pref_form.tools_level_group.jog_step_entry,
-            "tools_al_grbl_jog_fr":      self.ui.plugin_eng_pref_form.tools_level_group.jog_fr_entry,
-            "tools_al_grbl_travelz":     self.ui.plugin_eng_pref_form.tools_level_group.jog_travelz_entry,
 
             # GRBL Sender Plugin
             "tools_grbl_jog_step":       self.ui.plugin_eng_pref_form.tools_grbl_group.jog_step_entry,

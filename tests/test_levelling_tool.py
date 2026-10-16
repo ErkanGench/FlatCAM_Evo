@@ -14,7 +14,7 @@ import threading
 import re
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
 from PyQt6 import QtWidgets
 
@@ -24,6 +24,7 @@ from shapely import Point, box
 from shapely.ops import unary_union
 
 from appPlugins.ToolLevelling import ToolLevelling
+from appPlugins.ToolGrblSender.Sender import ToolGrblSender
 from appPlugins.Common.grbl_protocol import parse_grbl_probe_output
 from appPlugins.Common.levelling_interp import parse_height_map_line
 
@@ -32,8 +33,8 @@ def plane(x, y):
     return 0.01 * x - 0.02 * y + 0.1
 
 
-def make_tool(units='MM', storage=None, heights_valid=True):
-    tool = ToolLevelling.__new__(ToolLevelling)
+def make_tool(units='MM', storage=None, heights_valid=True, cls=None):
+    tool = (cls or ToolLevelling).__new__(cls or ToolLevelling)
     tool.app = MagicMock()
     tool.app.decimals = 4
     tool.app.inform = MagicMock()
@@ -63,6 +64,13 @@ def make_tool(units='MM', storage=None, heights_valid=True):
     # publish results at once (the worker runs inline in these tests)
     tool.al_result_ready_sig = MagicMock()
     tool.al_result_ready_sig.emit.side_effect = lambda result: tool._on_al_result_ready(result)
+    tool.console_line_sig = MagicMock()
+    tool.job_map_generation = None
+    tool.view3d = None
+    tool._grbl_stream_dirty = False
+    tool.stream_progress_sig = MagicMock()
+    tool.status_report_sig = MagicMock()
+    tool.stream_ended_sig = MagicMock()
     return tool
 
 
@@ -573,7 +581,7 @@ class TestSendGrblCommand(unittest.TestCase):
             tool._grbl_release(op)
 
     def _tool(self, replies=None):
-        tool = make_tool()
+        tool = make_tool(cls=ToolGrblSender)
         tool.app.inform_shell = MagicMock()
         tool._grbl_connected = True
         tool._grbl_op_lock = threading.Lock()
@@ -628,7 +636,7 @@ class TestSendGrblCommand(unittest.TestCase):
 
     def test_no_answer_requires_recovery(self):
         tool, port = self._tool([])
-        with patch('appPlugins.ToolLevelling.time.monotonic', side_effect=[0.0, 0.01, 31.0]):
+        with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=[0.0, 0.01, 31.0]):
             result = self._send(tool, 'G0 X1')
         self.assertEqual(result, '')
         port.readline.assert_called_once()
@@ -639,14 +647,13 @@ class TestSendGrblCommand(unittest.TestCase):
     def test_echo_includes_command_and_decoded_reply(self):
         tool, port = self._tool()
         self._send(tool, 'G0 X1')
-        tool.app.inform_shell[str, bool].emit.assert_called_once_with('G0 X1', False)
-        tool.app.inform_shell.emit.assert_called_once_with('\t\t\t: OK')
+        self.assertEqual(tool.console_line_sig.emit.call_args_list,
+                         [call('G0 X1'), call('\t\t\t: OK')])
 
     def test_echo_false_suppresses_command_and_reply(self):
         tool, port = self._tool()
         self.assertEqual(self._send(tool, 'G0 X1', echo=False), 'ok')
-        tool.app.inform_shell[str, bool].emit.assert_not_called()
-        tool.app.inform_shell.emit.assert_not_called()
+        tool.console_line_sig.emit.assert_not_called()
         self.assertEqual([c.args[0] for c in port.write.call_args_list], [b'G0 X1\n', b'?'])
 
 

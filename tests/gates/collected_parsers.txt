@@ -382,7 +382,6 @@ tests/test_kicad_pcb_parser.py::TestKiCadPcbZones::test_filled_zone_without_save
 tests/test_kicad_pcb_parser.py::TestKiCadPcbZones::test_rule_area_adds_no_copper
 tests/test_kicad_pcb_parser.py::TestKiCadPcbZones::test_zone_keeps_a_hole_from_a_keyhole_fill
 tests/test_kicad_pcb_parser.py::TestKiCadPcbZones::test_zone_uses_saved_filled_polygon
-tests/test_levelling_e2e.py::test_all_ui_controllers_are_covered
 tests/test_levelling_e2e.py::test_file_controller_arc_and_g91_block_is_levelled
 tests/test_levelling_e2e.py::test_file_controller_full_journey[LinuxCNC-b-flash]
 tests/test_levelling_e2e.py::test_file_controller_full_journey[LinuxCNC-v-simple_line]

@@ -54,7 +54,7 @@ class TestPrecisionProbing(unittest.TestCase):
         self.assertNotIn('G91', commands)
         self.assertTrue(tool.al_heights_valid)
         self.assertEqual([v['height'] for v in tool.al_voronoi_geo_storage.values()], [-0.12, -0.12])
-        tool.apply_autolevel.assert_called_once_with(target_obj=target)
+        tool._al_on_height_map_ready.assert_called_once_with(target)
         self.assertEqual(sum(c.args[0]['kind'] == 'probe'
                              for c in tool.al_result_ready_sig.emit.call_args_list), 1)
         self.assertEqual(commands[-2:], ['G0 Z2.0000', 'G4 P0'])
@@ -117,7 +117,7 @@ class TestPrecisionProbing(unittest.TestCase):
                 self.assertEqual(fake.probe_count, stage)
                 self.assertNotIn('G0 X10.0000 Y0.0000', fake.commands())
                 self.assertEqual(tool._grbl_recovery, 'needs_reset')
-                tool.apply_autolevel.assert_not_called()
+                tool._al_on_height_map_ready.assert_not_called()
 
     def test_cancel_between_stages_has_no_subsequent_motion(self):
         tool, target, fake = self.tool()
@@ -131,7 +131,7 @@ class TestPrecisionProbing(unittest.TestCase):
         self.assertEqual(fake.probe_count, 1)
         self.assertEqual(fake.commands()[-1], '!')
         self.assertFalse(tool.al_heights_valid)
-        tool.apply_autolevel.assert_not_called()
+        tool._al_on_height_map_ready.assert_not_called()
 
     def test_invalid_precision_settings_schedule_no_motion(self):
         for field, value in (
@@ -270,7 +270,7 @@ class TestPrecisionProbing(unittest.TestCase):
                 self.assertFalse(tool.al_heights_valid)
                 self.assertEqual(fake.probe_count, 2)
                 self.assertNotIn('G0 X10.0000 Y0.0000', fake.commands())
-                tool.apply_autolevel.assert_not_called()
+                tool._al_on_height_map_ready.assert_not_called()
 
     def test_malformed_offset_after_contact_fails_closed(self):
         for record in ('[G54:0]', '[G54:0,0,0,0]', '[G54:0,0,nan]',
@@ -299,7 +299,7 @@ class TestPrecisionProbing(unittest.TestCase):
                 self.assertIsNone(tool._grbl_op)
                 self.assertFalse(tool.al_heights_valid)
                 self.assertEqual([v['height'] for v in tool.al_voronoi_geo_storage.values()], [0.5, 0.5])
-                tool.apply_autolevel.assert_not_called()
+                tool._al_on_height_map_ready.assert_not_called()
                 results = [call.args[0]['kind'] for call in tool.al_result_ready_sig.emit.call_args_list]
                 self.assertEqual(results, ['failed'])
                 self.assertTrue(any('probe_invalid' in text for text in emitted(tool)))

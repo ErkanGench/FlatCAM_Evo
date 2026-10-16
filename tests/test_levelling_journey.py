@@ -44,6 +44,7 @@ try:
 
     from appParsers.ParseGerber import Gerber
     from appPlugins.ToolLevelling import ToolLevelling
+    from appPlugins.ToolGrblSender.Sender import ToolGrblSender
     from appPlugins.Common.grbl_protocol import parse_grbl_work_offset
     import camlib
 
@@ -518,7 +519,8 @@ class TestJourneyPlaneAllSources(LevellingJourneyTestCase):
                             tol = rounded_height_tol
                         else:  # grbl
                             storage = prefill_storage(grid_points)
-                            tool = make_tool(units='MM', storage=storage, heights_valid=False)
+                            tool = make_tool(units='MM', storage=storage, heights_valid=False,
+                                             cls=ToolGrblSender)
                             offset_text = make_grbl_offset_text()
                             tool.grbl_work_offset = parse_grbl_work_offset(offset_text)
                             # each G38.2 reply goes through the real per-probe check, then the

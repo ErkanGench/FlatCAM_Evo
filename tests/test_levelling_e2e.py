@@ -24,6 +24,8 @@ from shapely.ops import unary_union
 from tests import test_levelling_audit as audit
 from tests import test_levelling_journey as journey
 from tests.test_levelling_audit import FakeGrbl, make_audit_tool, tl_module
+from appPlugins.ToolLevelling import ToolLevelling
+from appPlugins.ToolGrblSender.Sender import ToolGrblSender
 import appPlugins.Common.levelling_core as lc_module
 
 PLANE = journey.make_plane(0.01, 0.02, 0.0)       # z = 0.01*x + 0.02*y
@@ -62,16 +64,6 @@ GRBL_CASES = [('b', 'simple_line'), ('v', 'region')]
 _TC = unittest.TestCase()   # reuse the independent G-code verifier of the journey tests
 
 
-def test_all_ui_controllers_are_covered():
-    """The list of the UI combo must be the list this file parametrizes over."""
-    import inspect
-    src = inspect.getsource(tl_module.LevelUI.__init__)
-    m = re.search(r'al_controller_combo\.addItems\(\[([^\]]*)\]\)', src)
-    ui_list = re.findall(r'"([^"]+)"', m.group(1))
-    assert sorted(ui_list) == sorted(CONTROLLERS)
-    assert sorted({c for c, _m, _f in FILE_CASES} | {'GRBL'}) == sorted(CONTROLLERS)
-
-
 # --------------------------------------------------------------------------------------
 # environment
 # --------------------------------------------------------------------------------------
@@ -102,10 +94,10 @@ def make_source_job(gerber_path, name):
 class Env:
     """The tool with a mocked UI/app around the real logic, plus a project registry."""
 
-    def __init__(self, tmp_path, monkeypatch):
+    def __init__(self, tmp_path, monkeypatch, cls=None):
         self.tmp_path = tmp_path
         self.objects = {}
-        tool = make_audit_tool(units='MM')
+        tool = make_audit_tool(units='MM', cls=cls or ToolLevelling)
         self.tool = tool
         app = tool.app
         app.defaults = {}
@@ -170,6 +162,9 @@ class Env:
         self.tool.on_object_changed()
         ui.al_method_radio.get_value.return_value = method
         self.tool.on_method_radio(method)
+        if isinstance(self.tool, ToolGrblSender):
+            # the sender is always GRBL: it has no controller combo
+            return
         ui.al_controller_combo.get_value.return_value = controller
         self.tool.on_controller_change()
 
@@ -233,6 +228,11 @@ class Env:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     return Env(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def sender_env(tmp_path, monkeypatch):
+    return Env(tmp_path, monkeypatch, cls=ToolGrblSender)
 
 
 # --------------------------------------------------------------------------------------
@@ -442,16 +442,18 @@ def grbl_env(env):
 
 
 @pytest.mark.parametrize('method,fixture', GRBL_CASES)
-def test_grbl_full_journey(env, method, fixture):
+def test_grbl_full_journey(sender_env, method, fixture):
+    env = sender_env
     fake = grbl_env(env)
     env.load_cncjob(fixture, 'job_grbl_' + fixture)
     env.select('job_grbl_' + fixture, 'GRBL', method)
     points = env.add_points()
     # GRBL has no probing G-code file: it probes through the serial port
     storage = env.tool.al_voronoi_geo_storage if method == 'v' else env.tool.al_bilinear_geo_storage
-    assert env.tool.probing_gcode(storage) is None
+    assert not env.tool.probing_gcode(storage)
     env.assert_no_levelled()
 
+    env.tool._al_on_height_map_ready = MagicMock()
     env.tool.on_grbl_autolevel()
 
     cmds = fake.commands()
@@ -463,19 +465,22 @@ def test_grbl_full_journey(env, method, fixture):
     for v in env.tool.al_voronoi_geo_storage.values():
         assert v['height'] == pytest.approx(PLANE(v['point'].x, v['point'].y), abs=1e-4)
     assert env.tool._grbl_op is None
-    env.assert_levelled(method, points)
+    env.tool._al_on_height_map_ready.assert_called_once_with(env.objects[env.source_name])
 
 
-def test_grbl_failed_probe_makes_no_levelled_job(env):
+def test_grbl_failed_probe_makes_no_levelled_job(sender_env):
+    env = sender_env
     fake = grbl_env(env)
     fake.fail_probe_at = len(range(COLS * ROWS))     # the last probe answers ALARM:4
     env.load_cncjob('flash', 'job_grbl_neg')
     env.select('job_grbl_neg', 'GRBL', 'b')
     env.add_points()
 
+    env.tool._al_on_height_map_ready = MagicMock()
     env.tool.on_grbl_autolevel()
 
     env.assert_no_levelled()
+    env.tool._al_on_height_map_ready.assert_not_called()
     env.tool.app.app_obj.new_object.assert_not_called()
     assert not env.tool.al_heights_valid
     assert env.errors(), env.messages()

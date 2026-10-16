@@ -696,6 +696,7 @@ tests/test_levelling_audit.py::TestShowSignalSlot::test_slot_always_clears
 tests/test_levelling_audit.py::TestShowSignalSlot::test_slot_shows_when_checkbox_on
 tests/test_levelling_audit.py::TestShowSignalSlot::test_slot_skips_show_when_checkbox_off
 tests/test_levelling_audit.py::TestSignalsOnce::test_core_signals_connect_once
+tests/test_levelling_audit.py::TestSignalsOnce::test_levelling_core_signals_connect_once
 tests/test_levelling_audit.py::TestSignalsOnce::test_port_force_closes_on_app_quit
 tests/test_levelling_audit.py::TestSupportedTarget::test_missing_attributes_return_false
 tests/test_levelling_audit.py::TestSupportedTarget::test_supported_types
