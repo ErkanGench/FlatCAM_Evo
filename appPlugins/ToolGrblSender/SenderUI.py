@@ -449,6 +449,10 @@ class GrblSenderUI:
         self.save_levelled_button.setToolTip(_("Save the G-code that the sender streams, after the levelling."))
         run_grid.addWidget(self.save_levelled_button, 9, 0, 1, 4)
 
+        self.view3d_button = FCButton(_("Show in Plot 3D"))
+        self.view3d_button.setToolTip(_("Show the toolpath, the tool and the height map in the Plot 3D tab."))
+        run_grid.addWidget(self.view3d_button, 10, 0, 1, 4)
+
         self.al_group_label = FCLabel('%s' % _("Autolevelling"), color='blue', bold=True)
         self.tools_box.addWidget(self.al_group_label)
         self.autolevel_cb = FCCheckBox(_("Level the G-code"))

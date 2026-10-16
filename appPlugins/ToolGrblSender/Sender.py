@@ -20,11 +20,13 @@ from camlib import CNCjob
 from appPlugins.Common.levelling_core import LevellingCoreMixin
 from appPlugins.Common.grbl_protocol import (
     parse_grbl_status_state, parse_grbl_setting, parse_grbl_active_wcs, grbl_reply_error, probe_timeout_s,
-    parse_grbl_status_report, work_position)
-from appPlugins.Common.gcode_segment import split_long_moves, _words, _g_key
+    parse_grbl_status_report, work_position, grbl_report_scale)
+from appPlugins.Common.gcode_segment import split_long_moves, parse_toolpath, _words, _g_key
+from appPlugins.Common.levelling_interp import build_bilinear_grid
 from appPlugins.ToolGrblSender import SenderGen
 from appPlugins.ToolGrblSender.SenderGrbl import GrblClientMixin, stream_lines, validate_stream_lines
 from appPlugins.ToolGrblSender.SenderUI import GrblSenderUI
+from appPlugins.ToolGrblSender.SenderView3d import SenderView3d
 
 import gettext
 import appTranslation as fcTranslate
@@ -275,6 +277,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.stop_button.clicked.connect(self.on_stream_stop)
         self.ui.unlock_button.clicked.connect(self.on_unlock)
         self.ui.save_levelled_button.clicked.connect(self.on_save_levelled_gcode)
+        self.ui.view3d_button.clicked.connect(self.on_show_3d)
         for (name, text), (btn, byte) in self.ui.ov_buttons.items():
             btn.clicked.connect(lambda checked=False, b=byte: self._grbl_realtime(b))
 
@@ -429,6 +432,13 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         # first: a pending levelled Start request is old before the new target is published
         self._invalidate_start_requests()
 
+        # the job and its toolpath belong to the old object
+        self.job_lines = []
+        self.job_line_numbers = []
+        self.job_map_generation = None
+        if self.view3d is not None:
+            self.view3d.set_toolpath([])
+
         # load the object
         obj_name = self.ui.object_combo.currentText()
 
@@ -514,6 +524,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self._start_seq += 1
             self._grbl_connected = False
             self._grbl_connect_attempt = attempt
+        # a new controller session: the WCO and the report units of the old one do not apply
+        self._last_wco = None
+        self._grbl_report_inches = None
         self._grbl_set_ui_connected(False)
         try:
             port = serial.serial_for_url(port_name, baudrate,
@@ -575,6 +588,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             error = err
             answer = []
 
+        connected = False
         with self._grbl_op_lock:
             if self.grbl_ser_port is not port or self._grbl_connect_attempt is not attempt:
                 return
@@ -602,14 +616,42 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                     self._grbl_reply_pending = False
                     self._grbl_rx_buffer = suffix  # drop the classified part, keep the fragment
                 self._grbl_connected = True
+                self._last_wco = None
                 self._grbl_set_ui_connected(True)
                 self.app.inform.emit("%s: %s" % (_("Port connected"), port_name))
                 if self._grbl_recovery is not None:
                     self.app.inform.emit('[WARNING_NOTCL] %s' % self._grbl_recovery_text())
-                return
+                connected = True
+
+        if connected:
+            # after this slot ended: the read is a new operation, so the port must be free for the caller
+            QtCore.QTimer.singleShot(0, self._grbl_read_units_after_connect)
+            return
 
         if self._grbl_close_port(port=port, attempt=attempt):
             self.app.inform.emit("[ERROR_NOTCL] %s: %s" % (_("Could not connect to GRBL on port"), port_name))
+
+    def _grbl_read_report_units(self, op):
+        """
+        Read $13 (the report units of GRBL) into self._grbl_report_inches: True (inches), False (mm) or
+        None (not known). A worker thread, under the operation `op`; no motion.
+
+        :return: the status of the transaction ('ok', 'error', 'timeout', 'cancelled' or 'port_error').
+        """
+        text, status = self._grbl_transact(op, '$$', timeout=5.0, echo=False)
+        value = parse_grbl_setting(text, 13) if status == 'ok' else None
+        self._grbl_report_inches = (value == 1.0) if value in (0.0, 1.0) else None
+        return status
+
+    def _grbl_read_units_after_connect(self):
+        """
+        Read $13 after the connect, in a non-motion operation (GUI thread). The connect finish holds no
+        operation, so the read is a new one. It is skipped when GRBL can hold lines of an old job: the
+        Start reads $13 again.
+        """
+        if not self._grbl_port_ready() or self._grbl_stream_dirty or self._grbl_reset_pending:
+            return
+        self._grbl_start_op('units', self._grbl_read_report_units)
 
     def _grbl_set_ui_connected(self, connected):
         """Show the connection state on the Connect button and on the tabs."""
@@ -723,6 +765,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def on_grbl_zero(self, axis):
         axes = {'x': 'X0', 'y': 'Y0', 'z': 'Z0'}.get(axis, 'X0 Y0 Z0')
+        # the work offset changes: the next status report that has no WCO must not use the old one
+        self._last_wco = None
 
         def task(op):
             text, status = self._grbl_transact(op, '$G', timeout=5.0, echo=False)
@@ -791,6 +835,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             _("Stopped. GRBL is in feed hold."), self._grbl_recovery_text()))
 
     def on_grbl_reset(self):
+        self._last_wco = None
         with self._grbl_op_lock:
             self._start_seq += 1
             self._grbl_safety_generation += 1
@@ -1043,6 +1088,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self._al_map_frame = None
             self._al_map_imported = True
         self.app.inform.emit('[success] %s' % _("The height map is ready."))
+        self._update_3d_height_map()
 
     @staticmethod
     def _tlo_line(lines):
@@ -1176,6 +1222,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         return True
 
     def on_start(self):
+        # the WCO of an earlier session or job is not trusted
+        self._last_wco = None
         if self.ui.autolevel_cb.get_value() is True:
             # a levelled Start has 2 phases: the live frame is read before the job is made (A8.3)
             self._start_levelled()
@@ -1446,7 +1494,16 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
         # 2. A5.4 step 2.2: a levelled job compares the live frame ($$, $G, $#) with the bound frame
         #    here. GRBL runs $# only in Idle, so this step comes before $C.
-        if req is not None:
+        if req is None:
+            # a plain job reads $13 (the report units of the status reports) before $C
+            status = self._grbl_read_report_units(op)
+            if status == 'cancelled' or op.cancel.is_set():
+                return 'stopped'
+            if status in ('timeout', 'port_error'):
+                with self._grbl_op_lock:
+                    self._grbl_abort_stream_locked(op, status)
+                return status
+        else:
             result = self._grbl_read_live_frame(op, 'G20' if req.al_ctx.units == 'IN' else 'G21')
             if 'error' in result:
                 return self._grbl_frame_refused(op, result['error'], result.get('cancelled', False))
@@ -1679,6 +1736,27 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def _on_stream_progress(self, done, total):
         self.ui.progress_bar.setValue(int(done * 100 / total) if total else 0)
+        if self.view3d is not None:
+            # `done` counts stream lines; the segments of the toolpath carry the index of their stream line
+            self.view3d.set_accepted(done - 1)
+
+    def _report_scale(self):
+        """
+        :return: the factor that changes a position of a status report (the units of GRBL $13) into the
+            units of the job, or None if $13 or the job units are not known.
+        """
+        inches = getattr(self, '_grbl_report_inches', None)
+        if inches is None:
+            return None
+        try:
+            units = getattr(self._target(), 'units', None)
+        except Exception:
+            units = None
+        if str(units).upper() not in ('MM', 'IN'):
+            units = getattr(self, 'units', None)
+        if str(units).upper() not in ('MM', 'IN'):
+            return None
+        return grbl_report_scale(units, inches)
 
     def _on_status_report(self, report):
         if report is None:
@@ -1688,12 +1766,69 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         pos = work_position(report, getattr(self, '_last_wco', None))
         text = report['state']
         if pos is not None:
-            text += '   X %.3f  Y %.3f  Z %.3f' % pos
+            scale = self._report_scale()
+            if scale is None:
+                # a position in the wrong units is worse than none
+                pos = None
+                text += '   %s' % _("position unknown (GRBL $13 not read)")
+            else:
+                pos = tuple(value * scale for value in pos)
+                text += '   X %.3f  Y %.3f  Z %.3f' % pos
         self.ui.status_label.setText(text)
         if 'ov' in report:
             self.ui.ov_values_label.setText('F: %d%%  R: %d%%  S: %d%%' % report['ov'])
         if self.view3d is not None and pos is not None:
             self.view3d.set_tool_position(pos)
+
+    def on_show_3d(self):
+        canvas = getattr(self.app, 'plotcanvas3d', None)
+        if canvas is None:
+            open_3d_tab = getattr(self.app, 'on_3d_area', None)
+            if callable(open_3d_tab):
+                open_3d_tab()
+            canvas = getattr(self.app, 'plotcanvas3d', None)
+        if canvas is None:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The Plot 3D tab is not available."))
+            return
+        if self.view3d is None or self.view3d.canvas is not canvas:
+            self.view3d = SenderView3d(canvas)
+        # always make the job again: the lines of an earlier Start or Save can be old
+        if not self.build_stream_job():
+            self.view3d.set_toolpath([])
+            return
+        lines, stream_index, chord_lines = self._display_lines()
+        segments = parse_toolpath(lines)
+        if stream_index is not None:
+            segments = [(stream_index[i], a, b, rapid) for i, a, b, rapid in segments]
+        self.view3d.set_toolpath(segments, chord_lines)
+        self._update_3d_height_map()
+        canvas.fit_view()
+
+    def _display_lines(self):
+        """
+        The lines for the 3D display. In the mode "send" for arcs, the stream holds the arcs: a copy is split
+        for the display only, and each display line maps to its stream line.
+
+        :return: (lines, stream_index, chord_lines). stream_index[i] is the stream line index of lines[i]
+            (None: lines[i] is the stream line i). chord_lines: the stream line indexes of the arcs that
+            could not be split: the display draws their chords in grey.
+        """
+        if self.ui.autolevel_cb.get_value() is True or self.app.options.get("tools_grbl_arc_mode", 'split') == 'split':
+            return self.job_lines, None, ()
+        target = self._target()
+        lines, _count, source_index, unsplit = SenderGen.split_arcs(
+            list(self.job_lines), target.units, float(self.app.options.get("tools_grbl_arc_segment", 0.5)),
+            decimals=target.coords_decimals)
+        return lines, source_index, unsplit
+
+    def _update_3d_height_map(self):
+        if self.view3d is None:
+            return
+        if not self.al_heights_valid:
+            self.view3d.set_height_map(None)
+            return
+        points = [(v['point'].x, v['point'].y, v['height']) for v in self.al_voronoi_geo_storage.values()]
+        self.view3d.set_height_map(build_bilinear_grid(points, self._al_grid_tolerance()))
 
     def _on_stream_ended(self, how):
         """

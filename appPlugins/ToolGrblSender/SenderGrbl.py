@@ -284,9 +284,12 @@ class GrblClientMixin:
     # Counts the events that make a pending levelled Start request old (A8.3). It changes only
     # under _grbl_op_lock. The class value is the default for the first increment.
     _start_seq = 0
+    # $13 of GRBL: True (the status reports are in inches), False (mm) or None (not known)
+    _grbl_report_inches = None
 
     def _grbl_init_state(self):
         self._start_seq = 0
+        self._grbl_report_inches = None
         self.grbl_probe_result = ''
         self.grbl_work_offset = (0.0, 0.0, 0.0)
 
@@ -333,6 +336,9 @@ class GrblClientMixin:
             port = self.grbl_ser_port
             self.grbl_ser_port = None
             self._grbl_connected = False
+            # the WCO and the report units belong to the session that ended
+            self._last_wco = None
+            self._grbl_report_inches = None
             self._grbl_connect_attempt = None
             self._grbl_close_pending = False
             if port is not None:
@@ -1094,6 +1100,7 @@ class GrblClientMixin:
 
         try:
             report_setting = parse_grbl_setting(step('$$'), 13)
+            self._grbl_report_inches = None if report_setting is None else report_setting == 1.0
             if report_setting is None:
                 return {'error': _("GRBL did not report the setting $13. The levelled job was not started.")}
             gc_text = step('$G')
