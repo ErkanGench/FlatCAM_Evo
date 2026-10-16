@@ -994,6 +994,10 @@ class AppUIActions(QtCore.QObject):
     def on_3d_area(self):
         from appGUI.PlotCanvas3d import PlotCanvas3d
 
+        if getattr(self.app, 'plotcanvas3d', None) is not None:
+            self.ui.plot_tab_area.setCurrentWidget(self.app.area_3d_tab)
+            return
+
         # add the tab if it was closed
         try:
             self.ui.plot_tab_area.addTab(self.app.area_3d_tab, _("Plot 3D"))
@@ -1007,6 +1011,7 @@ class AppUIActions(QtCore.QObject):
 
         try:
             plotcanvas3d = PlotCanvas3d(plot_container_3d, self.app)
+            self.app.plotcanvas3d = plotcanvas3d
         except Exception as er:
             msg_txt = traceback.format_exc()
             self.log.error("App.on_3d_area() failed -> %s" % str(er))
@@ -1099,6 +1104,7 @@ class AppUIActions(QtCore.QObject):
             self.app.book_dialog_tab.rebuild_actions()
             self.app.book_dialog_tab.deleteLater()
         elif tab_obj_name == "3D_area_tab":
+            self.app.plotcanvas3d = None
             self.app.area_3d_tab.deleteLater()
             self.app.area_3d_tab = QtWidgets.QWidget()
         elif tab_obj_name == "gcode_editor_tab":

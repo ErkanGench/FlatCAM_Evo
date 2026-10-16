@@ -1135,6 +1135,7 @@ class App(QtCore.QObject):
 
         # ######################################## SETUP 3D Area ####################################################
         self.area_3d_tab = QtWidgets.QWidget()
+        self.plotcanvas3d = None
 
         # ######################################## SETUP Plot Area ##################################################
         self.app_cursor = None
