@@ -205,7 +205,7 @@ ACTION_NAMES = """
     popmenu_disable popmenu_panel_toggle popmenu_new_geo popmenu_new_grb popmenu_new_exc popmenu_new_prj
     zoomfit clearplot replot popmenu_copy popmenu_delete popmenu_edit popmenu_save popmenu_numeric_move
     popmenu_move popmenu_move2origin popmenu_properties
-    drill_btn mill_btn level_btn isolation_btn follow_btn ncc_btn paint_btn cutout_btn panelize_btn film_btn
+    drill_btn mill_btn isolation_btn ncc_btn paint_btn cutout_btn panelize_btn film_btn
     dblsided_btn align_btn copperfill_btn markers_tool_btn punch_btn calculators_btn
     file_open_btn file_save_btn file_open_gerber_btn file_open_excellon_btn clear_plot_btn replot_btn
     zoom_fit_btn zoom_in_btn zoom_out_btn editor_start_btn copy_btn delete_btn distance_btn origin_btn jmp_btn
@@ -258,6 +258,10 @@ class StrictUI:
             )
         )
         self.title = None
+        self.close_calls = []
+
+    def close(self):
+        self.close_calls.append(())
 
     def set_ui_title(self, name):
         self.title = name
@@ -616,6 +620,12 @@ class TestControlledAppStartup(unittest.TestCase):
         self.assertEqual(app.trayIcon.show_count, 1)
         app.worker_task.emit({'fcn': ARG, 'params': []})
         self.assertEqual(app.workers.tasks, [{'fcn': ARG, 'params': []}])
+
+        self.assertEqual(app.ui.close_calls, [])
+        with patch.object(AppLifecycle, 'final_save', autospec=True) as final_save:
+            app.ui.menufile_exit.trigger()
+            self.assertEqual(app.ui.close_calls, [()])
+            final_save.assert_not_called()
 
 
 if __name__ == '__main__':

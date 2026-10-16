@@ -16,6 +16,21 @@ GUI:
 - the toolbars use smaller icons and tighter spacing; the status bar is compacted without shrinking its fonts or clipping the coordinate entries
 - the dark-theme blue text is lighter (#66B3FF); inline blue HTML colors in labels (status bar messages, plugin parameter headings, help text) are mapped through the theme color so they stay readable on a dark background
 - fixed: leaving Fullscreen restored the normal-window geometry before the native state finished changing; the window now leaves fullscreen first, then restores the saved rectangle, and a maximized window goes back to maximized
+- fixed: Return and Enter in the project tree open the selected object's Properties through the native tree activation; object insertion keeps both existing Properties UI builds and restores the selected object's UI
+- File / Exit and the system tray Exit now use the guarded window-close path; updater and save guards run before settings are saved, and cancelling the unsaved-project prompt keeps the window open; the native Quit shortcut and Exit Editor remain separate
+- worker progress messages are coalesced on the GUI thread instead of updating widgets from worker threads
+
+File loading:
+
+- opening 3 or more Gerber files and restoring projects insert objects on a GUI timer, with nonmodal progress; completion waits for parsing, object insertion and plotting
+- batch loading refreshes object menus, Tcl keywords and recent files once at completion, fits the view once after plotting, and preserves a selection made while loading
+- project parsing failures and cancelled legacy-project approval restore the prior autosave state; legacy approval runs on the GUI thread before the current project is cleared; CLI/no-plot restoration waits for object insertion without showing progress
+
+Object operations:
+
+- fixed: Move2Origin and Custom Origin menu actions passed Qt's unchecked state as use_thread=False; menu actions now keep worker execution enabled and snapshot the selected objects before dispatch
+- origin moves perform geometry, plotting and source regeneration in the worker; bounds, offset fields and selection overlays refresh on the GUI thread after completion; a busy 3D plot lock retries the camera fit without blocking the interface
+- Replot actions and the Geometry and Gerber editor Transform actions discard Qt's checked argument so command defaults are preserved; added a source guard and real Qt regression checks for these signal connections
 
 Canvas:
 

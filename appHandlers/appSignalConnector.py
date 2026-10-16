@@ -76,7 +76,7 @@ class AppSignalConnector(QtCore.QObject):
         self.ui.menufileimportpref.triggered.connect(self.app.f_handlers.on_import_preferences)
 
     def connect_editmenu_signals(self):
-        self.ui.menufile_exit.triggered.connect(self.app.final_save)
+        self.ui.menufile_exit.triggered.connect(self.ui.close)
 
         self.ui.menueditedit.triggered.connect(lambda: self.app.on_editing_start())
         self.ui.menueditok.triggered.connect(lambda: self.app.on_editing_finished())
@@ -98,8 +98,8 @@ class AppSignalConnector(QtCore.QObject):
         self.ui.menuedit_numeric_move.triggered.connect(lambda: self.app.on_numeric_move())
 
         self.ui.menueditorigin.triggered.connect(self.app.on_set_origin)
-        self.ui.menuedit_move2origin.triggered.connect(self.app.on_move2origin)
-        self.ui.menuedit_center_in_origin.triggered.connect(self.app.edit_class.on_custom_origin)
+        self.ui.menuedit_move2origin.triggered.connect(lambda: self.app.on_move2origin())
+        self.ui.menuedit_center_in_origin.triggered.connect(lambda: self.app.edit_class.on_custom_origin())
 
         self.ui.menueditjump.triggered.connect(self.app.on_jump_to)
         self.ui.menueditlocate.triggered.connect(lambda: self.app.on_locate(obj=self.app.collection.get_active()))
@@ -130,7 +130,7 @@ class AppSignalConnector(QtCore.QObject):
         self.ui.menuview_zoom_fit.triggered.connect(self.app.on_zoom_fit)
         self.ui.menuview_zoom_in.triggered.connect(self.app.on_zoom_in)
         self.ui.menuview_zoom_out.triggered.connect(self.app.on_zoom_out)
-        self.ui.menuview_replot.triggered.connect(self.app.plot_all)
+        self.ui.menuview_replot.triggered.connect(lambda: self.app.plot_all())
 
         self.ui.menuview_toggle_code_editor.triggered.connect(self.app.on_toggle_code_editor)
         self.ui.menuview_toggle_fscreen.triggered.connect(self.ui.on_full_screen_toggled)
@@ -191,7 +191,7 @@ class AppSignalConnector(QtCore.QObject):
         # View
         self.ui.zoomfit.triggered.connect(self.app.on_zoom_fit)
         self.ui.clearplot.triggered.connect(self.app.clear_plots)
-        self.ui.replot.triggered.connect(self.app.plot_all)
+        self.ui.replot.triggered.connect(lambda: self.app.plot_all())
 
         # Colors
         for act in self.ui.pop_menucolor.actions():
@@ -203,7 +203,7 @@ class AppSignalConnector(QtCore.QObject):
         self.ui.popmenu_save.triggered.connect(lambda: self.app.on_editing_finished())
         self.ui.popmenu_numeric_move.triggered.connect(lambda: self.app.on_numeric_move())
         self.ui.popmenu_move.triggered.connect(self.app.obj_move)
-        self.ui.popmenu_move2origin.triggered.connect(self.app.on_move2origin)
+        self.ui.popmenu_move2origin.triggered.connect(lambda: self.app.on_move2origin())
 
         self.ui.popmenu_properties.triggered.connect(self.app.obj_properties)
 
@@ -262,7 +262,7 @@ class AppSignalConnector(QtCore.QObject):
 
         # View Toolbar Signals
         self.ui.clear_plot_btn.triggered.connect(self.app.clear_plots)
-        self.ui.replot_btn.triggered.connect(self.app.plot_all)
+        self.ui.replot_btn.triggered.connect(lambda: self.app.plot_all())
         self.ui.zoom_fit_btn.triggered.connect(self.app.on_zoom_fit)
         self.ui.zoom_in_btn.triggered.connect(lambda: self.app.plotcanvas.zoom(1 / 1.5))
         self.ui.zoom_out_btn.triggered.connect(lambda: self.app.plotcanvas.zoom(1.5))

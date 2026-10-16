@@ -6170,7 +6170,7 @@ class AppSystemTray(QtWidgets.QSystemTrayIcon):
             lambda: self.app.f_handlers.on_file_run_script()
         )
 
-        exitAction.triggered.connect(self.app.final_save)
+        exitAction.triggered.connect(self.app.ui.close)
 
 
 class GLay(QtWidgets.QGridLayout):

@@ -53,8 +53,8 @@ class OffsetUiMixin:
     that have `bounds()` and that show the common section (Gerber, Excellon, Geometry).
     """
 
-    def set_offset_values(self):
-        xmin, ymin, xmax, ymax = self.bounds()
+    def set_offset_values(self, bounds=None):
+        xmin, ymin, xmax, ymax = self.bounds() if bounds is None else bounds
         center_coords = (
             self.app.dec_format((xmin + abs((xmax - xmin) / 2)), self.decimals),
             self.app.dec_format((ymin + abs((ymax - ymin) / 2)), self.decimals)

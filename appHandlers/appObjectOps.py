@@ -20,8 +20,35 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
+def _finish_origin_move(app, result, retry):
+    """GUI completion shared by lower-left and custom-origin group moves."""
+    if not result['refreshed']:
+        for obj, bounds in result['updates']:
+            for key, value in zip(('xmin', 'ymin', 'xmax', 'ymax'), bounds):
+                obj.obj_options[key] = value
+            try:
+                obj.set_offset_values(bounds=bounds)
+            except AttributeError:
+                pass
+        # Refresh the overlay once, using bounds already computed by the worker.
+        app.delete_selection_shape()
+        result['refreshed'] = True
+    if result['error'] is not None:
+        app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed."), result['error']))
+        return
+    if result['threaded'] and app.use_3d_engine:
+        if app.plotcanvas.fit_view(blocking=False) is False:
+            QtCore.QTimer.singleShot(25, lambda: retry(result))
+            return
+    else:
+        app.plotcanvas.fit_view()
+    app.inform.emit('[success] %s...' % _('Origin set'))
+
+
 class AppObjectOps(QtCore.QObject):
     """Handler for object operations: transforms (flip, rotate, skew), copy, delete, move."""
+
+    move_origin_finished = QtCore.pyqtSignal(object)
 
     def __init__(self, app):
         super().__init__()
@@ -33,6 +60,7 @@ class AppObjectOps(QtCore.QObject):
         self.ui = app.ui
         # Handler-local state for mouse event tracking
         self._mp_zc = None
+        self.move_origin_finished.connect(self._on_move_origin_finished)
 
     def on_flipy(self):
         """
@@ -406,58 +434,48 @@ class AppObjectOps(QtCore.QObject):
         :param use_thread: Control if to use threaded operation. Boolean.
         :return:
         """
+        # The tree selection belongs to the GUI thread, not the eventual worker.
+        obj_list = tuple(self.app.collection.get_selected())
+        if not obj_list:
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. No object(s) selected..."))
+            return
+        result = {'updates': [], 'error': None, 'refreshed': False, 'threaded': use_thread is True}
+
         def worker_task():
-            with self.app.proc_container.new(_("Moving to Origin...")):
-                obj_list = self.app.collection.get_selected()
-
-                if not obj_list:
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. No object(s) selected..."))
-                    return
-
-                xminlist = []
-                yminlist = []
-
-                # first get a bounding box to fit all
-                for obj in obj_list:
-                    xmin, ymin, xmax, ymax = obj.bounds()
-                    xminlist.append(xmin)
-                    yminlist.append(ymin)
-
-                # get the minimum x,y for all objects selected
-                x = min(xminlist)
-                y = min(yminlist)
-
-                for obj in obj_list:
-                    obj.offset((-x, -y))
-                    self.app.app_obj.object_changed.emit(obj)
-
-                    # Update the object bounding box options
-                    a, b, c, d = obj.bounds()
-                    obj.obj_options['xmin'] = a
-                    obj.obj_options['ymin'] = b
-                    obj.obj_options['xmax'] = c
-                    obj.obj_options['ymax'] = d
-
-                    # make sure to update the Offset field in Properties Tab
-                    try:
-                        obj.set_offset_values()
-                    except AttributeError:
-                        pass
-
-                for obj in obj_list:
-                    obj.plot()
-                self.app.plotcanvas.fit_view()
-
-                for obj in obj_list:
-                    obj.regenerate_source()
-
-                self.inform.emit('[success] %s...' % _('Origin set'))
+            try:
+                with self.app.proc_container.new(_("Moving to Origin...")):
+                    bounds = [obj.bounds() for obj in obj_list]
+                    x = min(bound[0] for bound in bounds)
+                    y = min(bound[1] for bound in bounds)
+                    for obj in obj_list:
+                        if obj.offset((-x, -y)) == 'fail':
+                            raise ValueError('Object movement failed')
+                        result['updates'].append((obj, obj.bounds()))
+                    for obj in obj_list:
+                        obj.plot()
+                    for obj in obj_list:
+                        obj.regenerate_source()
+            except Exception as error:
+                self.log.exception('Move2Origin failed')
+                result['error'] = str(error)
+            finally:
+                self.move_origin_finished.emit(result)
 
         if use_thread is True:
             self.app.worker_task.emit({'fcn': worker_task, 'params': []})
         else:
             worker_task()
         self.app.should_we_save = True
+
+    def _on_move_origin_finished(self, result):
+        try:
+            self._finish_move_origin(result)
+        except Exception as error:
+            self.log.exception('Move2Origin GUI refresh failed')
+            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed."), str(error)))
+
+    def _finish_move_origin(self, result):
+        _finish_origin_move(self.app, result, self._on_move_origin_finished)
 
     def on_jump_to(self, custom_location=None, fit_center=True):
         """

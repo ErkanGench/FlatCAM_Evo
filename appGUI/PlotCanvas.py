@@ -614,10 +614,13 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
     def new_text_collection(self, **kwargs):
         return TextCollection(parent=self.view.scene, **kwargs)
 
-    def fit_view(self, rect=None):
+    def fit_view(self, rect=None, blocking=True):
 
         # Lock updates in other threads
-        self.shape_collection.lock_updates()
+        if blocking:
+            self.shape_collection.lock_updates()
+        elif not self.shape_collection.update_lock.acquire(False):
+            return False
 
         if not rect:
             rect = Rect(-1, -1, 20, 20)
@@ -657,6 +660,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         self.view.camera.rect = rect
 
         self.shape_collection.unlock_updates()
+        if not blocking:
+            return True
 
     def fit_center(self, loc, rect=None):
 

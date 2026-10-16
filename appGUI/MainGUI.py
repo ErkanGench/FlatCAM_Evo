@@ -401,7 +401,7 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/power16.png'),
             '%s\t%s' % (_('Exit'), ''), self)
         # QuitRole + the standard Quit shortcut: on macOS they route the application menu's Quit item and Cmd+Q to this
-        # action (Cmd+Q is Qt's Ctrl+Q, and the key handler below treats it as a no-op, so it was swallowed)
+        # action, which requests the guarded window-close path.
         self.menufile_exit.setMenuRole(QtGui.QAction.MenuRole.QuitRole)
         self.menufile_exit.setShortcut(QtGui.QKeySequence(QtGui.QKeySequence.StandardKey.Quit))
         # exitAction.setStatusTip('Exit application')
@@ -3125,11 +3125,6 @@ class MainGUI(QtWidgets.QMainWindow):
                 # Open Project
                 if key == QtCore.Qt.Key.Key_P:
                     self.app.f_handlers.on_file_save_objects_pdf(use_thread=True)
-
-                # PDF Import
-                if key == QtCore.Qt.Key.Key_Q:
-                    # self.app.pdf_tool.run()
-                    pass
 
                 # Save Project
                 if key == QtCore.Qt.Key.Key_S:

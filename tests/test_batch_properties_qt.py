@@ -1,0 +1,274 @@
+"""Real collection/Qt event-loop coverage without a rendering canvas."""
+
+import threading
+import unittest
+from contextlib import nullcontext
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+from PyQt6 import QtCore, QtWidgets, QtTest
+
+from appGUI.MainGUI import MainGUI
+from appHandlers.appUIActions import AppUIActions
+from appObjects.AppObject import AppObject, ObjectLoadBatch
+from appObjects.ObjectCollection import ObjectCollection
+
+
+class Defaults(dict):
+    @property
+    def factory_defaults(self):
+        return self
+
+
+class Signals(QtCore.QObject):
+    status = QtCore.pyqtSignal(object, str, str)
+    selection = QtCore.pyqtSignal(object, object)
+
+
+class Window(QtWidgets.QWidget):
+    def keyPressEvent(self, event):
+        MainGUI.keyPressEvent(self, event)
+
+
+class Layer(QtCore.QObject):
+    kind = 'gerber'
+    status_color = None
+    has_plot_colors = False
+    tool_option_prefix = None
+    inherits_mill_options = False
+
+    def __init__(self, name, app):
+        super().__init__()
+        self.app = app
+        self.obj_options = {'name': name, 'plot': True}
+        self.builds = 0
+        self.build_threads = []
+
+    def from_dict(self, data):
+        self.obj_options = dict(data['obj_options'])
+        self.tools = {}
+
+    def on_options_change(self, key):
+        pass
+
+    def bounds(self):
+        return 0.0, 0.0, 1.0, 1.0
+
+    def ui_type(self, app):
+        return QtWidgets.QLabel(self.obj_options['name'])
+
+    def set_ui(self, ui):
+        self.ui = ui
+        # GerberObject.set_ui intentionally builds once; append builds again.
+        self.build_ui()
+
+    def build_ui(self):
+        self.builds += 1
+        self.build_threads.append(QtCore.QThread.currentThread())
+        self.app.ui.properties_scroll_area.takeWidget()
+        self.app.ui.properties_scroll_area.setWidget(self.ui)
+
+
+class TestBatchPropertiesQt(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def setUp(self):
+        self.window = Window()
+        self.window.resize(700, 400)
+        self.window.notebook = QtWidgets.QTabWidget()
+        self.window.project_tab = QtWidgets.QWidget()
+        self.window.properties_tab = QtWidgets.QWidget()
+        self.window.notebook.addTab(self.window.project_tab, 'Project')
+        self.window.notebook.addTab(self.window.properties_tab, 'Properties')
+        self.window.properties_scroll_area = QtWidgets.QScrollArea()
+        QtWidgets.QVBoxLayout(self.window.properties_tab).addWidget(self.window.properties_scroll_area)
+        self.window.menuobjects = QtWidgets.QMenu()
+        self.window.splitter = Mock()
+        self.signals = Signals()
+        defaults = Defaults(
+            global_allow_edit_in_project_tab=False, global_project_autohide=False,
+            gerber_plot_on_select=False,
+            global_proj_item_color_light='#000000FF', global_proj_item_dis_color_light='#808080FF',
+            global_proj_item_color_dark='#FFFFFFFF', global_proj_item_dis_color_dark='#808080FF')
+        self.app = SimpleNamespace(
+            ui=self.window, options=defaults, defaults=defaults, resource_location='assets/resources',
+            log=Mock(), inform=Mock(), regFK=Mock(), worker_task=Mock(),
+            object_status_changed=self.signals.status, proj_selection_changed=self.signals.selection,
+            on_plots_updated=Mock(), on_zoom_fit=Mock(), flush_recent_items=Mock(),
+            call_source='app', use_3d_engine=True)
+        self.window.app = self.app
+        self.app.collection = ObjectCollection(self.app)
+        self.app.app_obj = AppObject(self.app)
+        self.actions = SimpleNamespace(app=self.app, ui=self.window)
+        self.app.on_notebook_tab_changed = lambda: AppUIActions.on_notebook_tab_changed(self.actions)
+        self.app.setup_default_properties_tab = self.show_default
+        self.signals.status.connect(self.app.collection.on_collection_updated)
+        self.window.notebook.currentChanged.connect(self.app.on_notebook_tab_changed)
+        layout = QtWidgets.QHBoxLayout(self.window)
+        layout.addWidget(self.app.collection.view)
+        layout.addWidget(self.window.notebook)
+        self.window.show()
+        self.show_default()
+        self.batches = []
+
+    def tearDown(self):
+        for batch in self.batches:
+            if not batch.completed:
+                batch.timer.stop()
+                batch.progress.close()
+        self.window.close()
+
+    def show_default(self):
+        self.window.properties_scroll_area.takeWidget()
+        label = QtWidgets.QLabel('default')
+        label.setObjectName('default_properties')
+        self.window.properties_scroll_area.setWidget(label)
+
+    def wait_for(self, predicate):
+        timer = QtCore.QElapsedTimer()
+        timer.start()
+        while not predicate() and timer.elapsed() < 2000:
+            QtTest.QTest.qWait(1)
+        self.assertTrue(predicate(), 'Qt integration timed out')
+
+    def layer(self, name):
+        obj = Layer(name, self.app)
+        self.app.collection.append(obj)
+        self.assertEqual(obj.builds, 2)
+        return obj
+
+    def select(self, obj):
+        self.app.collection.set_exclusive_active(obj.obj_options['name'])
+
+    def assert_properties(self, obj):
+        self.assertIs(self.app.collection.get_active(), obj)
+        self.assertIs(self.window.properties_scroll_area.widget(), obj.ui)
+        self.assertEqual(obj.ui.text(), obj.obj_options['name'])
+
+    def test_select_then_click_properties_tab_populates_selected_ui(self):
+        first, second = self.layer('first'), self.layer('second')
+        self.select(first)
+        tab = self.window.notebook.tabBar()
+        QtTest.QTest.mouseClick(tab, QtCore.Qt.MouseButton.LeftButton, pos=tab.tabRect(1).center())
+        self.assert_properties(first)
+        self.select(second)
+        self.assert_properties(second)
+
+    def test_tree_arrow_navigation_uses_real_main_gui_handler(self):
+        first, second = self.layer('first'), self.layer('second')
+        self.select(first)
+        self.window.notebook.setCurrentWidget(self.window.properties_tab)
+        tree = self.app.collection.view
+        self.window.activateWindow()
+        tree.setFocus()
+        self.wait_for(lambda: tree.hasFocus())
+        QtTest.QTest.keyClick(tree, QtCore.Qt.Key.Key_Down)
+        self.assert_properties(second)
+        QtTest.QTest.keyClick(tree, QtCore.Qt.Key.Key_Up)
+        self.assert_properties(first)
+
+    def test_double_click_and_native_return_enter_populate_ui(self):
+        first, second = self.layer('first'), self.layer('second')
+        tree = self.app.collection.view
+        group = self.app.collection.index(0, 0, QtCore.QModelIndex())
+        index = self.app.collection.index(0, 0, group)
+        tree.expand(group)
+        self.select(first)
+        QtTest.QTest.qWait(1)
+        QtTest.QTest.mouseClick(tree.viewport(), QtCore.Qt.MouseButton.LeftButton,
+                              pos=tree.visualRect(index).center())
+        QtTest.QTest.mouseDClick(tree.viewport(), QtCore.Qt.MouseButton.LeftButton,
+                               pos=tree.visualRect(index).center())
+        self.wait_for(lambda: self.window.notebook.currentWidget() is self.window.properties_tab)
+        self.assert_properties(first)
+        for key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            with self.subTest(key=key):
+                self.window.notebook.setCurrentWidget(self.window.project_tab)
+                self.select(second)
+                tree.setCurrentIndex(self.app.collection.index(1, 0, group))
+                self.window.activateWindow()
+                tree.setFocus()
+                self.wait_for(lambda: tree.hasFocus())
+                QtTest.QTest.keyClick(tree, key)
+                self.wait_for(lambda: self.window.notebook.currentWidget() is self.window.properties_tab)
+                self.assert_properties(second)
+
+    def test_worker_to_timer_insertion_preserves_selection_and_both_builds(self):
+        first, second = Layer('first', self.app), Layer('second', self.app)
+        self.window.notebook.setCurrentWidget(self.window.properties_tab)
+        batch = ObjectLoadBatch(self.app.app_obj, 1)
+        self.batches.append(batch)
+        proceed = threading.Event()
+        self.addCleanup(proceed.set)
+
+        def create():
+            batch.batch_event.emit('created', (first, False, True, None, []))
+            if not proceed.wait(2):
+                raise RuntimeError('test did not release worker')
+            batch.batch_event.emit('created', (second, False, True, None, []))
+
+        worker = threading.Thread(target=lambda: batch.run(create, []), daemon=True)
+        worker.start()
+        self.wait_for(lambda: batch.integrated == 1)
+        self.select(first)
+        self.assert_properties(first)
+        proceed.set()
+        self.wait_for(lambda: batch.completed)
+        worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertFalse(batch.failed)
+        self.assert_properties(first)
+        self.assertGreaterEqual(first.builds, 2)
+        self.assertEqual(second.builds, 2)
+        self.assertTrue(all(thread is QtCore.QThread.currentThread()
+                            for thread in first.build_threads + second.build_threads))
+        self.assertFalse(self.app.app_obj.load_batches)
+        self.app.on_zoom_fit.assert_not_called()
+
+    def test_cli_project_waits_for_real_appobject_gui_insertion_without_progress(self):
+        from appHandlers.appIO import appIO
+
+        self.app.options['units'] = 'MM'
+        self.app.main_thread = QtCore.QThread.currentThread()
+        self.app.inform_shell = Mock()
+        self.app.splash = None
+        self.app.app_units = 'MM'
+        self.app.new_project_signal = Mock()
+        self.app.proc_container = SimpleNamespace(new=lambda text: nullcontext())
+        self.app.file_opened = Mock()
+        self.app.should_we_save = True
+        self.app.block_autosave = True
+        tasks = []
+        self.app.worker_task = SimpleNamespace(emit=tasks.append)
+        io = appIO(self.app)
+        project = {'objs': [{'kind': 'gerber', 'obj_options': {'name': 'cli_layer', 'plot': False}}]}
+        with patch('appObjects.AppObject.GerberObject', Layer):
+            io.restore_project_objects(project, 'cli.FlatPrj', True, False)
+            batch = io.findChildren(ObjectLoadBatch)[0]
+            self.assertIs(batch.parent(), io)
+            self.assertIsNone(batch.progress)
+            self.assertEqual(tasks[0]['params'], [])
+            worker = threading.Thread(target=tasks[0]['fcn'])
+            worker.start()
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(self.app.collection.get_list(), [])
+        self.app.file_opened.emit.assert_not_called()
+        self.assertTrue(self.app.block_autosave)
+        self.wait_for(lambda: batch.completed)
+        self.assertFalse(batch.failed)
+        obj = self.app.collection.get_by_name('cli_layer')
+        self.assertIsInstance(obj, Layer)
+        self.assertEqual(obj.builds, 2)
+        self.assertTrue(all(thread is QtCore.QThread.currentThread() for thread in obj.build_threads))
+        self.assertEqual(self.app.all_objects_list, [obj])
+        self.app.file_opened.emit.assert_called_once_with('project', 'cli.FlatPrj')
+        self.assertFalse(self.app.block_autosave)
+        self.assertFalse(self.app.should_we_save)
+        self.app.on_zoom_fit.assert_not_called()
+
+
+if __name__ == '__main__':
+    unittest.main()

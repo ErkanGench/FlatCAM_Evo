@@ -7,7 +7,7 @@
 # Modified by Marius Stanciu (2020)                         #
 # ###########################################################
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtWidgets
 
 from appObjects.CNCJobObject import CNCJobObject
 from appObjects.DocumentObject import DocumentObject
@@ -18,6 +18,8 @@ from appObjects.ScriptObject import ScriptObject
 
 import time
 import traceback
+import threading
+from collections import deque
 from copy import deepcopy
 
 # FlatCAM Translation
@@ -28,6 +30,161 @@ import builtins
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
+
+
+_object_load_context = threading.local()
+
+
+class ObjectLoadBatch(QtCore.QObject):
+    """Count worker, GUI insertion and plot completions independently."""
+
+    batch_event = QtCore.pyqtSignal(str, object)
+
+    def __init__(self, owner, jobs, finished=None, parent=None, interactive=True):
+        super().__init__(parent if parent is not None else owner)
+        self.owner = owner
+        self.app = parent.app if parent is not None else owner.app
+        self.interactive = interactive
+        self.load_context = owner.load_context if interactive else _object_load_context
+        self.jobs = jobs
+        self.total = jobs
+        self.pending = deque()
+        self.plots = 0
+        self.plotted = False
+        self.integrated = 0
+        self.last = None
+        self.auto_select = False
+        self.selection_changed = False
+        self.failed = False
+        self.completed = False
+        self.finished = finished
+        connection = QtCore.Qt.ConnectionType.QueuedConnection if interactive else QtCore.Qt.ConnectionType.AutoConnection
+        self.batch_event.connect(self.on_event, type=connection)
+        self.timer = QtCore.QTimer(self)
+        self.timer.setInterval(10)
+        self.timer.timeout.connect(self.integrate_next)
+        self.progress = None
+        if not interactive:
+            # CLI/no-plot restoration still counts queued AppObject insertions,
+            # but does not require a GUI presentation or a QObject factory.
+            return
+        self.selection_model = self.app.collection.view.selectionModel()
+        self.selection_model.selectionChanged.connect(self.on_selection_changed)
+        self.progress = QtWidgets.QProgressDialog(_("Loading..."), "", 0, jobs, self.app.ui)
+        self.progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        self.progress.setCancelButton(None)
+        self.progress.setAutoClose(False)
+        self.progress.setAutoReset(False)
+        self.progress.show()
+        owner.load_batches.add(self)
+
+    def on_selection_changed(self, *args):
+        self.selection_changed = True
+
+    def run(self, fcn, params):
+        previous = getattr(self.load_context, 'batch', None)
+        self.load_context.batch = self
+        try:
+            result = fcn(*params)
+            if result == 'fail':
+                self.batch_event.emit('error', 'Batch object creation failed.')
+            return result
+        except Exception:
+            self.batch_event.emit('error', traceback.format_exc())
+        finally:
+            self.load_context.batch = previous
+            self.batch_event.emit('done', None)
+
+    def on_event(self, event, value):
+        if event == 'created':
+            self.pending.append(value)
+            self.timer.start()
+        elif event == 'done':
+            self.jobs -= 1
+            if self.progress is not None:
+                self.progress.setValue(self.total - self.jobs)
+            if not self.jobs and self.progress is not None:
+                # Parsing can finish before queued GUI insertions and plots.
+                self.progress.setRange(0, 0)
+        elif event == 'plotted':
+            self.plots -= 1
+            self.plotted = True
+        elif event == 'error':
+            self.failed = True
+            self.app.log.error(value)
+        self.check_finished()
+
+    def integrate_next(self):
+        if not self.pending:
+            self.timer.stop()
+            self.check_finished()
+            return
+        args = self.pending.popleft()
+        obj, plot, auto_select, callback, params = args
+        obj._load_batch = self
+        try:
+            self.owner.on_object_created(*args)
+            self.last = obj
+            self.auto_select = self.auto_select or auto_select
+        except Exception:
+            self.failed = True
+            self.app.log.error(traceback.format_exc())
+        finally:
+            del obj._load_batch
+            self.integrated += 1
+            if self.progress is not None:
+                self.progress.setLabelText('%s %d' % (_("Loading..."), self.integrated))
+            # Both existing UI builds are intentional. Restore the selected UI
+            # after insertion without changing the user's tree selection.
+            try:
+                if self.app.collection.get_active() is not None:
+                    self.app.on_notebook_tab_changed()
+            except Exception:
+                self.failed = True
+                self.app.log.error(traceback.format_exc())
+        self.check_finished()
+
+    def check_finished(self):
+        if self.completed or self.jobs or self.pending or self.plots:
+            return
+        self.completed = True
+        self.timer.stop()
+        if not self.interactive:
+            try:
+                if self.finished is not None:
+                    self.finished(self.failed)
+            finally:
+                self.deleteLater()
+            return
+        self.selection_model.selectionChanged.disconnect(self.on_selection_changed)
+        try:
+            self.app.all_objects_list = self.app.collection.get_list()
+            if self.last is not None and not self.selection_changed and (
+                    self.auto_select or self.app.ui.notebook.currentWidget() is self.app.ui.properties_tab):
+                self.app.collection.set_all_inactive()
+                self.app.collection.set_active(self.last.obj_options['name'])
+            self.app.on_notebook_tab_changed()
+            if self.plotted:
+                self.app.on_zoom_fit()
+        except Exception:
+            self.failed = True
+            self.app.log.error(traceback.format_exc())
+        finally:
+            try:
+                if self.finished is not None:
+                    self.finished(self.failed)
+            finally:
+                # Project completion registers its source while this batch is
+                # still active, so register_recent defers its write as well.
+                self.owner.load_batches.discard(self)
+                try:
+                    if not self.owner.load_batches:
+                        self.app.regFK.register_keywords()
+                        self.app.collection.on_collection_updated(None, 'append', None)
+                        self.app.flush_recent_items()
+                finally:
+                    self.progress.close()
+                    self.deleteLater()
 
 
 class AppObject(QtCore.QObject):
@@ -50,6 +207,8 @@ class AppObject(QtCore.QObject):
         super(AppObject, self).__init__()
         self.app = app
         self.inform = app.inform
+        self.load_context = _object_load_context
+        self.load_batches = set()
 
         # signals that are emitted when object state changes
         self.object_created.connect(self.on_object_created)
@@ -221,6 +380,14 @@ class AppObject(QtCore.QObject):
         # ############################################################################################################
         obj.moveToThread(self.app.main_thread)
 
+        batch = getattr(self.load_context, 'batch', None)
+        if batch is not None:
+            if return_value == 'drill_gx2':
+                callback = self.app.edit_class.convert_any2excellon
+                callback_params = [name]
+            batch.batch_event.emit('created', (obj, obj_plot, obj_autoselected, callback, callback_params))
+            return "defective" if return_value == "defective" else obj
+
         if return_value == 'drill_gx2':
             self.object_created.emit(obj, obj_plot, obj_autoselected,
                                      self.app.edit_class.convert_any2excellon,
@@ -261,7 +428,9 @@ class AppObject(QtCore.QObject):
         self.app.collection.append(obj)
 
         # after adding the object to the collection always update the list of objects that are in the collection
-        self.app.all_objects_list = self.app.collection.get_list()
+        batch = getattr(obj, '_load_batch', None)
+        if batch is None or not batch.interactive:
+            self.app.all_objects_list = self.app.collection.get_list()
 
         # self.app.inform.emit('[selected] %s created & selected: %s' %
         #                  (str(obj.kind).capitalize(), str(obj.obj_options['name'])))
@@ -323,7 +492,9 @@ class AppObject(QtCore.QObject):
             except Exception as e:
                 self.app.log.error("AppObject.new_object() -> setting colors error. %s" % str(e))
 
-        if auto_select or self.app.ui.notebook.currentWidget() is self.app.ui.properties_tab:
+        if batch is not None:
+            pass
+        elif auto_select or self.app.ui.notebook.currentWidget() is self.app.ui.properties_tab:
             # select the just opened object but deselect the previous ones
             self.app.collection.set_all_inactive()
             self.app.collection.set_active(obj.obj_options["name"])
@@ -349,7 +520,8 @@ class AppObject(QtCore.QObject):
                 t1 = time.time()  # DEBUG
                 msg = "%f seconds adding object and plotting." % (t1 - t0)
                 self.app.log.debug(msg)
-                self.object_plotted.emit(t_obj)
+                if batch is None:
+                    self.object_plotted.emit(t_obj)
 
                 if t_obj.kind == 'gerber' and self._app_option("gerber_buffering") != 'full' and \
                         self._app_option("gerber_delayed_buffering"):
@@ -358,7 +530,20 @@ class AppObject(QtCore.QObject):
         # Send to worker
         # self.worker.add_task(worker_task, [self])
         if plot is True:
-            self.app.worker_task.emit({'fcn': plotting_task, 'params': [obj]})
+            if batch is None:
+                self.app.worker_task.emit({'fcn': plotting_task, 'params': [obj]})
+            else:
+                batch.plots += 1
+
+                def batch_plotting_task(t_obj):
+                    try:
+                        plotting_task(t_obj)
+                    except Exception:
+                        batch.batch_event.emit('error', traceback.format_exc())
+                    finally:
+                        batch.batch_event.emit('plotted', None)
+
+                self.app.worker_task.emit({'fcn': batch_plotting_task, 'params': [obj]})
 
         if callback is not None:
             # callback(*callback_params)

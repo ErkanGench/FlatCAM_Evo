@@ -166,6 +166,7 @@ class FCVisibleProcessContainer(FCProcessContainer, QtCore.QObject):
 
         self.text_to_display_in_activity = ''
         self.new_text = ' '
+        self._clear_text = False
 
         # Coalescing timer for UI updates - lives on main thread only
         self._update_timer = QtCore.QTimer(self)
@@ -210,20 +211,18 @@ class FCVisibleProcessContainer(FCProcessContainer, QtCore.QObject):
 
         if procs_count == 0:
             self.new_text = ''
+            self._clear_text = False
             self.view.set_idle()
             self.idle_flag.emit()
 
         elif procs_count == 1:
-            self.view.set_busy(self.text_to_display_in_activity + self.new_text)
+            text = self.new_text if self._clear_text else self.text_to_display_in_activity + self.new_text
+            self.view.set_busy(text)
         else:
             self.view.set_busy("%d %s" % (procs_count, _("processes running.")))
 
     def update_view_text(self, new_text, clear=False):
         # this has to be called after the method 'new' inherited by this class is called with a string text as param
         self.new_text = new_text
-        # Use thread-safe method to get procs count
-        if self.get_procs_count() == 1:
-            if clear is False:
-                self.view.set_busy(self.text_to_display_in_activity + self.new_text, no_movie=True)
-            else:
-                self.view.set_busy(self.new_text, no_movie=True)
+        self._clear_text = clear
+        self._update_requested.emit()

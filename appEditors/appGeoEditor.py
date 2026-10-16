@@ -216,7 +216,7 @@ class AppGeoEditor(QtCore.QObject):
         self.app.ui.geo_paint_menuitem.triggered.connect(lambda: self.select_tool("paint"))
         self.app.ui.geo_buffer_menuitem.triggered.connect(lambda: self.select_tool("buffer"))
         self.app.ui.geo_simplification_menuitem.triggered.connect(lambda: self.select_tool("simplification"))
-        self.app.ui.geo_transform_menuitem.triggered.connect(self.transform_tool.run)
+        self.app.ui.geo_transform_menuitem.triggered.connect(lambda: self.transform_tool.run())
 
         self.app.ui.geo_delete_menuitem.triggered.connect(self.on_delete_btn)
         self.app.ui.geo_union_menuitem.triggered.connect(self.union)

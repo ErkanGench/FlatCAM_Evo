@@ -4136,7 +4136,7 @@ class AppGerberEditor(QtCore.QObject):
         self.app.ui.grb_add_eraser_menuitem.triggered.connect(self.on_eraser)
         self.app.ui.grb_add_markarea_menuitem.triggered.connect(self.on_markarea)
 
-        self.app.ui.grb_transform_menuitem.triggered.connect(self.transform_tool.run)
+        self.app.ui.grb_transform_menuitem.triggered.connect(lambda: self.transform_tool.run())
 
         self.app.ui.grb_copy_menuitem.triggered.connect(self.on_copy_button)
         self.app.ui.grb_delete_menuitem.triggered.connect(self.on_delete_btn)

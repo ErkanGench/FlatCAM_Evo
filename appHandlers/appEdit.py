@@ -3,6 +3,7 @@ from PyQt6 import QtCore, QtGui
 
 from appObjects.ObjectCollection import GeometryObject, GerberObject, ExcellonObject
 from appGUI.GUIElements import DialogBoxChoice
+from appHandlers.appObjectOps import _finish_origin_move
 
 from copy import deepcopy
 from shapely import MultiPolygon, Polygon, LinearRing, LineString, Point, unary_union
@@ -18,6 +19,8 @@ if '_' not in builtins.__dict__:
 
 
 class appEditor(QtCore.QObject):
+    custom_origin_finished = QtCore.pyqtSignal(object)
+
     def __init__(self, app):
         super(appEditor, self).__init__()
 
@@ -32,6 +35,7 @@ class appEditor(QtCore.QObject):
         self.collection = self.app.collection
         self.app_obj = self.app.app_obj
         self.decimals = self.app.decimals
+        self.custom_origin_finished.connect(self._on_custom_origin_finished)
 
     def build_geometry_tool_table(self):
         """
@@ -640,7 +644,7 @@ class appEditor(QtCore.QObject):
         :return:
         """
 
-        obj_list = self.collection.get_selected()
+        obj_list = tuple(self.collection.get_selected())
 
         if not obj_list:
             self.inform.emit('[ERROR_NOTCL] %s' % _("Failed. No object(s) selected..."))
@@ -666,71 +670,54 @@ class appEditor(QtCore.QObject):
         else:
             return
 
+        result = {'updates': [], 'error': None, 'refreshed': False, 'threaded': use_thread is True}
+
         def worker_task():
-            with self.app.proc_container.new('%s ...' % _("Custom Origin")):
+            try:
+                with self.app.proc_container.new('%s ...' % _("Custom Origin")):
+                    bounds = [obj.bounds() for obj in obj_list]
+                    x0 = min(bound[0] for bound in bounds)
+                    y0 = min(bound[1] for bound in bounds)
+                    x1 = max(bound[2] for bound in bounds)
+                    y1 = max(bound[3] for bound in bounds)
 
-                xminlist = []
-                yminlist = []
-                xmaxlist = []
-                ymaxlist = []
+                    if location_point == 'bl':
+                        location = (x0, y0)
+                    elif location_point == 'tl':
+                        location = (x0, y1)
+                    elif location_point == 'br':
+                        location = (x1, y0)
+                    elif location_point == 'tr':
+                        location = (x1, y1)
+                    else:
+                        # center
+                        cx = x0 + abs((x1 - x0) / 2)
+                        cy = y0 + abs((y1 - y0) / 2)
+                        location = (cx, cy)
 
-                # first get a bounding box to fit all
-                for obj in obj_list:
-                    xmin, ymin, xmax, ymax = obj.bounds()
-                    xminlist.append(xmin)
-                    yminlist.append(ymin)
-                    xmaxlist.append(xmax)
-                    ymaxlist.append(ymax)
-
-                # get the minimum x,y for all objects selected
-                x0 = min(xminlist)
-                y0 = min(yminlist)
-                x1 = max(xmaxlist)
-                y1 = max(ymaxlist)
-
-                if location_point == 'bl':
-                    location = (x0, y0)
-                elif location_point == 'tl':
-                    location = (x0, y1)
-                elif location_point == 'br':
-                    location = (x1, y0)
-                elif location_point == 'tr':
-                    location = (x1, y1)
-                else:
-                    # center
-                    cx = x0 + abs((x1 - x0) / 2)
-                    cy = y0 + abs((y1 - y0) / 2)
-                    location = (cx, cy)
-
-                for obj in obj_list:
-                    obj.offset((-location[0], -location[1]))
-                    self.app_obj.object_changed.emit(obj)
-
-                    # Update the object bounding box options
-                    a, b, c, d = obj.bounds()
-                    obj.obj_options['xmin'] = a
-                    obj.obj_options['ymin'] = b
-                    obj.obj_options['xmax'] = c
-                    obj.obj_options['ymax'] = d
-
-                    # make sure to update the Offset field in Properties Tab
-                    try:
-                        obj.set_offset_values()
-                    except AttributeError:
-                        # not all objects have this attribute
-                        pass
-
-                for obj in obj_list:
-                    obj.plot()
-                self.app.plotcanvas.fit_view()
-
-                for obj in obj_list:
-                    obj.regenerate_source()
-
-                self.inform.emit('[success] %s...' % _('Origin set'))
+                    for obj in obj_list:
+                        if obj.offset((-location[0], -location[1])) == 'fail':
+                            raise ValueError('Object movement failed')
+                        result['updates'].append((obj, obj.bounds()))
+                    for obj in obj_list:
+                        obj.plot()
+                    for obj in obj_list:
+                        obj.regenerate_source()
+            except Exception as error:
+                self.log.exception('Custom Origin failed')
+                result['error'] = str(error)
+            finally:
+                self.custom_origin_finished.emit(result)
 
         if use_thread is True:
             self.worker_task.emit({'fcn': worker_task, 'params': []})
         else:
             worker_task()
         self.app.should_we_save = True
+
+    def _on_custom_origin_finished(self, result):
+        try:
+            _finish_origin_move(self.app, result, self._on_custom_origin_finished)
+        except Exception as error:
+            self.log.exception('Custom Origin GUI refresh failed')
+            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed."), str(error)))

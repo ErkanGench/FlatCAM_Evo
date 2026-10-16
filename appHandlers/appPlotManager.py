@@ -15,9 +15,12 @@ if '_' not in builtins.__dict__:
 class AppPlotManager(QtCore.QObject):
     """Handler for plot visibility and rendering."""
 
+    plot_finished = QtCore.pyqtSignal(object, object)
+
     def __init__(self, app):
         super().__init__()
         self.app = app
+        self.plot_finished.connect(self.on_plot_finished)
 
         # Facades for App attributes used by handler methods
         self.log = app.log
@@ -278,6 +281,11 @@ class AppPlotManager(QtCore.QObject):
 
         self.worker_task.emit({'fcn': worker_task, 'params': [obj]})
 
+    def on_plot_finished(self, invocation, obj):
+        invocation['remaining'] -= 1
+        if invocation['remaining'] == 0 and invocation['fit']:
+            self.app_obj.object_plotted.emit(obj)
+
     def plot_all(self, fit_view=True, muted=False, use_thread=True):
         """
         Re-generates all plots from all objects.
@@ -295,11 +303,11 @@ class AppPlotManager(QtCore.QObject):
         if muted is not True:
             self.inform[str, bool].emit('%s...' % _("Redrawing all objects"), False)
 
-        for plot_obj in obj_collection:
-            if plot_obj.obj_options['plot'] is False:
-                continue
+        plot_objects = [obj for obj in obj_collection if obj.obj_options['plot'] is not False]
+        invocation = {'remaining': len(plot_objects), 'fit': fit_view is True}
 
-            def worker_task(obj):
+        def worker_task(obj):
+            try:
                 with self.proc_container.new("Plotting"):
                     if obj.kind == 'cncjob':
                         try:
@@ -309,9 +317,10 @@ class AppPlotManager(QtCore.QObject):
                         obj.plot(kind=self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind")), dia=dia)
                     else:
                         obj.plot()
-                    if fit_view is True:
-                        self.app_obj.object_plotted.emit(obj)
+            finally:
+                self.plot_finished.emit(invocation, obj)
 
+        for plot_obj in plot_objects:
             if use_thread is True:
                 # Send to worker
                 self.worker_task.emit({'fcn': worker_task, 'params': [plot_obj]})

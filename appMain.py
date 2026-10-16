@@ -2551,7 +2551,7 @@ class App(QtCore.QObject):
             # is not printed over and over on the shell
             if msg != '' and shell_echo is True:
                 self.shell_message(msg)
-        QtWidgets.QApplication.processEvents()
+        # QtWidgets.QApplication.processEvents()
 
     def info_shell(self, msg, new_line=True):
         """
@@ -2658,6 +2658,12 @@ class App(QtCore.QObject):
         if len(self.recent_projects) > self.options.get('global_recent_limit', self.defaults.get('global_recent_limit')):  # Limit reached
             self.recent_projects.pop()
 
+        if self.app_obj.load_batches:
+            return
+        self.flush_recent_items()
+
+    def flush_recent_items(self):
+        """Persist and rebuild recent items once after batch integration."""
         try:
             with open(os.path.join(self.data_path, 'recent.json'), 'w') as f:
                 json.dump(self.recent, f, default=to_dict, indent=2, sort_keys=True)

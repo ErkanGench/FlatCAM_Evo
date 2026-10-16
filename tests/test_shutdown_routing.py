@@ -1,0 +1,129 @@
+"""User Exit actions share the guarded window-close and lifecycle path."""
+
+import ast
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+from appGUI.MainGUI import MainGUI
+from appGUI.GUIElements import AppSystemTray
+from appHandlers.appLifecycle import AppLifecycle
+from appHandlers.appSignalConnector import AppSignalConnector
+
+
+@pytest.fixture(scope='module')
+def qt_app():
+    return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+
+class CloseWindow(QtWidgets.QMainWindow):
+    final_save = QtCore.pyqtSignal()
+    closeEvent = MainGUI.closeEvent
+
+
+@pytest.fixture
+def shutdown(qt_app, monkeypatch):
+    window = CloseWindow()
+    window.lock_action = QtGui.QAction(window)
+    window.show_text_action = QtGui.QAction(window)
+    window.splitter = SimpleNamespace(sizes=lambda: [120])
+    window.on_toggle_gui = Mock()
+    app = Mock(ui=window, resource_location='', save_in_progress=False,
+               should_we_save=True, _check_in_progress=False, _check_queued=False)
+    app._update_operation_active.return_value = False
+    app.collection.get_list.return_value = [object()]
+    window.app = app
+    lifecycle = AppLifecycle(app)
+    lifecycle.quit_application = Mock()
+    final_save = Mock(side_effect=lifecycle.final_save)
+    app.final_save = lambda: final_save()
+    window.final_save.connect(app.final_save)
+    settings = Mock()
+    monkeypatch.setattr('appGUI.MainGUI.QSettings', Mock(return_value=settings))
+    action = QtGui.QAction('Exit', window)
+    editor = QtGui.QAction('Exit Editor', window)
+    editor.setMenuRole(QtGui.QAction.MenuRole.NoRole)
+    connector = AppSignalConnector(app)
+    connector.ui = Mock(close=window.close, menufile_exit=action, menueditok=editor)
+    connector.connect_editmenu_signals()
+    window.show()
+    yield SimpleNamespace(window=window, app=app, lifecycle=lifecycle, action=action,
+                          editor=editor, settings=settings, connector=connector, final_save=final_save)
+    window.hide()
+    window.deleteLater()
+
+
+@pytest.mark.parametrize('entry', ['file', 'tray'])
+@pytest.mark.parametrize('state', ['checking', 'queued', 'operation', 'saving'])
+def test_user_exit_blocks_before_settings_and_project_prompt(shutdown, entry, state):
+    s = shutdown
+    s.final_save.assert_not_called()  # Registration must not call close eagerly.
+    s.app.should_we_save = False  # A bypass must fail an assertion, not open a modal dialog.
+    if state == 'checking':
+        s.app._check_in_progress = True
+    elif state == 'queued':
+        s.app._check_queued = True
+    elif state == 'operation':
+        s.app._update_operation_active.return_value = True
+    else:
+        s.app.save_in_progress = True
+    tray = AppSystemTray(s.app, QtGui.QIcon(), s.window) if entry == 'tray' else None
+    action = tray.contextMenu().actions()[-1] if tray else s.action
+    action.trigger()
+    assert s.window.isVisible()
+    s.final_save.assert_not_called()
+    s.settings.setValue.assert_not_called()
+    s.lifecycle.quit_application.assert_not_called()
+    assert s.app.inform.emit.called
+
+
+@pytest.mark.parametrize('entry', ['file', 'tray'])
+def test_unsaved_project_cancel_keeps_window_open_after_settings_saved(shutdown, entry):
+    s = shutdown
+    dialogs = []
+
+    def cancel_dialog():
+        dialog = QtWidgets.QApplication.activeModalWidget()
+        assert isinstance(dialog, QtWidgets.QMessageBox)
+        # The real lifecycle constructs and executes the real message box.
+        keys = {call.args[0] for call in s.settings.setValue.call_args_list}
+        dialogs.append(keys)
+        cancel = next(button for button in dialog.buttons() if
+                      dialog.buttonRole(button) == QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        cancel.click()
+
+    tray = AppSystemTray(s.app, QtGui.QIcon(), s.window) if entry == 'tray' else None
+    action = tray.contextMenu().actions()[-1] if tray else s.action
+    QtCore.QTimer.singleShot(0, cancel_dialog)
+    action.trigger()
+    assert len(dialogs) == 1
+    assert dialogs[0] == {'saved_gui_state', 'toolbar_lock', 'menu_show_text',
+                          'window_geometry', 'splitter_left'}
+    assert s.window.isVisible()
+    s.final_save.assert_called_once_with()
+    s.lifecycle.quit_application.assert_not_called()
+    s.app.f_handlers.on_file_save_project_as.assert_not_called()
+    s.app.trayIcon.hide.assert_not_called()
+
+
+def test_editor_exit_still_finishes_editing_without_closing(shutdown):
+    shutdown.editor.trigger()
+    shutdown.app.on_editing_finished.assert_called_once_with()
+    assert shutdown.editor.menuRole() == QtGui.QAction.MenuRole.NoRole
+    shutdown.final_save.assert_not_called()
+    assert shutdown.window.isVisible()
+
+
+def test_obsolete_ctrl_q_noop_is_removed():
+    path = Path(__file__).resolve().parents[1] / 'appGUI' / 'MainGUI.py'
+    tree = ast.parse(path.read_text(encoding='utf-8'))
+    handler = next(node for node in ast.walk(tree) if
+                   isinstance(node, ast.FunctionDef) and node.name == 'keyPressEvent')
+    noops = [node for node in ast.walk(handler) if isinstance(node, ast.If) and
+             'Key_Q' in ast.unparse(node.test) and len(node.body) == 1 and
+             isinstance(node.body[0], ast.Pass)]
+    # The unmodified, unbound Q key remains; only the Ctrl+Q branch is obsolete.
+    assert len(noops) == 1

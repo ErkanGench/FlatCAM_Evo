@@ -102,8 +102,9 @@ class EventSensitiveListView(QtWidgets.QTreeView):
     #     print("target = %s" % target)
 
     def keyPressEvent(self, event):
-        # super(EventSensitiveListView, self).keyPressEvent(event)
-        # print(QtGui.QKeySequence(event.key()).toString())
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            super().keyPressEvent(event)
+            return
         self.keyPressed.emit(event.key())
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -642,7 +643,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # ############################################################################################################
         # update the KeyWords list with the name of the file
         # ############################################################################################################
-        self.app.regFK.prepend_keyword(name)
+        self.app.regFK.prepend_keyword(name, update=not bool(getattr(self.app.app_obj, 'load_batches', None)))
 
         # ############################################################################################################
         # ############################# Set the Object UI (Properties Tab) ###########################################
@@ -1148,6 +1149,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         :param old_name:    the old name of the object before the action that triggered this slot happened
         :return:            None
         """
+        if state == 'append' and getattr(self.app.app_obj, 'load_batches', None):
+            return
+
         icon_files = {
             "gerber": self.app.resource_location + "/flatcam_icon16.png",
             "excellon": self.app.resource_location + "/drill16.png",

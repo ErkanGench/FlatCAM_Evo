@@ -1310,7 +1310,7 @@ SIGNAL_ACTIONS = {
         "popmenu_move popmenu_move2origin popmenu_properties"
     ).split(),
     "connect_tools_signals_to_toolbar": (
-        "drill_btn mill_btn level_btn isolation_btn follow_btn ncc_btn paint_btn cutout_btn panelize_btn film_btn "
+        "drill_btn mill_btn isolation_btn ncc_btn paint_btn cutout_btn panelize_btn film_btn "
         "dblsided_btn align_btn copperfill_btn markers_tool_btn punch_btn calculators_btn"
     ).split(),
     "connect_toolbar_signals": (
@@ -1363,7 +1363,7 @@ SIGNAL_EXPECTED_CALLS = {
     "menufileexportpref": expected_call("f_handlers", "on_export_preferences"),
     "menufileimportpref": expected_call("f_handlers", "on_import_preferences"),
     # Edit menu
-    "menufile_exit": expected_call("app", "final_save"),
+    "menufile_exit": expected_call("ui", "close"),
     "menueditedit": expected_call("app", "on_editing_start"),
     "menueditok": expected_call("app", "on_editing_finished"),
     "menuedit_join2geo": expected_call("edit_class", "on_edit_join"),
@@ -1453,9 +1453,7 @@ SIGNAL_EXPECTED_CALLS = {
     # Plugin toolbar
     "drill_btn": expected_call("drilling_tool", "run", toggle=True),
     "mill_btn": expected_call("milling_tool", "run", toggle=True),
-    "level_btn": expected_call("levelling_tool", "run", toggle=True),
     "isolation_btn": expected_call("isolation_tool", "run", toggle=True),
-    "follow_btn": expected_call("follow_tool", "run", toggle=True),
     "ncc_btn": expected_call("ncclear_tool", "run", toggle=True),
     "paint_btn": expected_call("paint_tool", "run", toggle=True),
     "cutout_btn": expected_call("cutout_tool", "run", toggle=True),
@@ -1528,6 +1526,7 @@ class TestSignalConnector(AppTestCase):
             recorder = Recorder((name,), target="ui", sink=route_log)
             return getattr(recorder, name)
 
+        ui.close = ui_route("close")
         ui.on_full_screen_toggled = ui_route("on_full_screen_toggled")
         ui.on_toggle_plotarea = ui_route("on_toggle_plotarea")
         ui.on_toggle_notebook = ui_route("on_toggle_notebook")
