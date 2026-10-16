@@ -13,6 +13,8 @@ self._grbl_init_state() in __init__. It must also have the hook
 _grbl_set_ui_connected(connected) and the signal grbl_port_closed_sig.
 """
 
+import math
+import re
 import time
 import threading
 
@@ -32,6 +34,7 @@ from appPlugins.Common.grbl_protocol import (
     grbl_report_scale,
     parse_grbl_setting,
     parse_grbl_status_state,
+    parse_grbl_status_report,
     grbl_modes_confirmed,
 )
 from appPlugins.Common.levelling_interp import match_nearest_point
@@ -39,6 +42,208 @@ from appPlugins.Common.levelling_interp import match_nearest_point
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
+
+
+# the size of the GRBL serial receive buffer (GRBL 1.1 on an ATmega328P)
+GRBL_RX_BUFFER = 127
+# LINE_BUFFER_SIZE of GRBL 1.1: the longest line GRBL accepts, with the line end
+GRBL_MAX_LINE = 80
+
+_GCODE_WORD_RE = re.compile(r'([A-Za-z])\s*([+-]?(?:\d+\.?\d*|\.\d+))')
+_GCODE_COMMENT_RE = re.compile(r'\([^)]*\)')
+
+
+def validate_stream_lines(lines, rx_size=GRBL_RX_BUFFER):
+    """
+    :param lines:   list of str, no line ends.
+    :param rx_size: the receive buffer size of GRBL.
+    :return: the index of the first line that is longer than min(rx_size, GRBL_MAX_LINE)
+        bytes (encoded, with the line end), or None if all lines fit.
+    """
+    limit = min(rx_size, GRBL_MAX_LINE)
+    for index, line in enumerate(lines):
+        if len((line + '\n').encode('utf-8')) > limit:
+            return index
+    return None
+
+
+def dwell_seconds(line):
+    """
+    :param line: 1 line of G-Code.
+    :return: the P value of a G4 line (GRBL reads P as seconds), else 0.0.
+    """
+    text = _GCODE_COMMENT_RE.sub('', line or '').split(';')[0]
+    words = _GCODE_WORD_RE.findall(text)
+    if not any(letter.upper() == 'G' and float(value) == 4.0 for letter, value in words):
+        return 0.0
+    for letter, value in words:
+        if letter.upper() == 'P':
+            seconds = float(value)
+            return seconds if math.isfinite(seconds) and seconds > 0.0 else 0.0
+    return 0.0
+
+
+def stream_lines(lines, write, readline, rx_size=GRBL_RX_BUFFER, check_mode=False,
+                 on_progress=None, on_line=None, poll_status=False, poll_interval=0.2,
+                 on_status=None, clock=time.monotonic, stall_timeout=30.0):
+    """
+    Send `lines` to GRBL with the character-counting protocol: a new line
+    is written only while the bytes of the lines in flight (each line + '\\n')
+    fit in the GRBL receive buffer. Each 'ok' or 'error:N' frees the oldest
+    line. Runs in a worker thread; it reads no widgets, and it never touches
+    a port: all I/O goes through `write` and `readline`.
+
+    Without polling, the streamer does not see motion, so a long move can
+    time out. The sender always passes poll_status=True. Also, the streamer
+    sees a stop request only in `write`, so it sees a stop while it polls.
+
+    :param lines:        list of str, no line ends, no empty lines.
+    :param write:        callable(data: bytes) -> 'ok', 'cancelled', 'port_error' or 'stale'.
+        The streamer calls it for each job line and for each b'?'. On any status
+        but 'ok', the streamer returns that status at once and writes nothing more.
+    :param readline:     callable() -> bytes, 1 line (or a part of it, or b'' on a read timeout).
+        An exception (serial.SerialException, OSError) gives 'port_error'.
+    :param rx_size:      the receive buffer size of GRBL.
+    :param check_mode:   True in $C mode: an error does not stop the stream, it is counted.
+    :param on_progress:  callable(done, total), after each acknowledged line.
+    :param on_line:      callable(text), for each job line written and each reply line read
+        (not for '?' and not for status reports).
+    :param poll_status:  True to send '?' every poll_interval s.
+    :param on_status:    callable(text), for each status report line.
+    :param clock:        callable() -> seconds (monotonic).
+    :param stall_timeout: seconds without progress while lines are in flight -> 'timeout'.
+        Only these events are progress: an 'ok' or 'error:N'; a status report with the
+        state Hold, Door, Jog or Home; a Run report whose position is not the same as in
+        the last report. An Idle report or an unchanged Run report is not progress.
+        A G4 line gets dwell_seconds(line) more seconds, 1 time for that line: with
+        poll_status=True when a status report shows Idle while the G4 is the oldest line
+        in flight, else when the G4 becomes the oldest line in flight.
+    :return: dict: 'status' ('finished', 'error', 'alarm', 'timeout', 'port_error',
+        'cancelled', 'stale' or 'line_too_long'), 'done' (acknowledged lines),
+        'errors' (list of (line index, reply text)), 'last_text' (the last reply line),
+        'in_flight' (lines written but not acknowledged) and, for 'line_too_long',
+        'line_index'.
+    """
+    total = len(lines)
+    in_flight = []          # (line index, byte count) of the lines written but not acknowledged
+    used = 0
+    sent = 0
+    done = 0
+    errors = []
+    buf = b''
+    last_text = ''
+    last_progress = clock()
+    last_position = None    # the position of the last status report
+    dwell_index = None      # the line that got its dwell extension
+    dwell_until = None
+    next_poll = clock()
+
+    def result(status, **extra):
+        res = {'status': status, 'done': done, 'errors': errors, 'last_text': last_text,
+               'in_flight': len(in_flight)}
+        res.update(extra)
+        return res
+
+    def arm_dwell():
+        # the extension of a G4 line: 1 time for that line
+        nonlocal dwell_index, dwell_until
+        if in_flight and in_flight[0][0] != dwell_index:
+            seconds = dwell_seconds(lines[in_flight[0][0]])
+            if seconds > 0.0:
+                dwell_index = in_flight[0][0]
+                dwell_until = clock() + seconds + stall_timeout
+
+    bad_index = validate_stream_lines(lines, rx_size)
+    if bad_index is not None:
+        return result('line_too_long', line_index=bad_index)
+
+    while done < total:
+        # write while the next line fits
+        while sent < total:
+            data = (lines[sent] + '\n').encode('utf-8')
+            if used + len(data) > rx_size:
+                break
+            try:
+                status = write(data)
+            except (serial.SerialException, OSError):
+                return result('port_error')
+            if status != 'ok':
+                return result(status)
+            in_flight.append((sent, len(data)))
+            used += len(data)
+            if on_line is not None:
+                on_line(lines[sent])
+            sent += 1
+        if not poll_status:
+            arm_dwell()
+
+        if poll_status and clock() >= next_poll:
+            try:
+                status = write(b'?')
+            except (serial.SerialException, OSError):
+                return result('port_error')
+            if status != 'ok':
+                return result(status)
+            next_poll = clock() + poll_interval
+
+        try:
+            chunk = readline()
+        except (serial.SerialException, OSError):
+            return result('port_error')
+        if chunk:
+            buf += chunk
+        while b'\n' in buf:
+            raw, buf = buf.split(b'\n', 1)
+            text = raw.decode('utf-8', errors='replace').strip()
+            if not text:
+                continue
+            if text.startswith('<'):
+                if on_status is not None:
+                    on_status(text)
+                report = parse_grbl_status_report(text)
+                if report is None:
+                    continue
+                position = report.get('mpos', report.get('wpos'))
+                state = report['state']
+                if state in ('Hold', 'Door', 'Jog', 'Home'):
+                    last_progress = clock()
+                elif state == 'Run' and position is not None and position != last_position:
+                    last_progress = clock()
+                elif state == 'Idle' and poll_status:
+                    arm_dwell()
+                if position is not None:
+                    last_position = position
+                continue
+            last_text = text
+            if on_line is not None:
+                on_line(text)
+            lowered = text.lower()
+            if lowered.startswith('alarm:'):
+                return result('alarm')
+            if lowered == 'ok' or lowered.startswith('error:'):
+                if not in_flight:
+                    continue
+                index, size = in_flight.pop(0)
+                used -= size
+                done += 1
+                last_progress = clock()
+                if dwell_index == index:
+                    dwell_index = None
+                    dwell_until = None
+                if lowered.startswith('error:'):
+                    errors.append((index, text))
+                    if not check_mode:
+                        return result('error')
+                if on_progress is not None:
+                    on_progress(done, total)
+
+        if in_flight:
+            deadline = last_progress + stall_timeout
+            if dwell_until is not None and dwell_until > deadline:
+                deadline = dwell_until
+            if clock() > deadline:
+                return result('timeout')
+    return result('finished')
 
 
 class _GrblProbeAbort(Exception):
