@@ -18,12 +18,10 @@ from appGUI.GUIElements import (
     FCComboBox,
     FCCheckBox,
     FCJog,
-    RadioSet,
     FCDoubleSpinner,
     FCSpinner,
     FCFileSaveDialog,
     FCDetachableTab,
-    FCTable,
     FCZeroAxes,
     FCSliderWithDoubleSpinner,
     FCEntry,
@@ -46,6 +44,7 @@ from appEditors.appTextEditor import AppTextEditor
 from camlib import CNCjob
 
 from appPlugins.Common.levelling_interp import match_nearest_point
+from appPlugins.Common.levelling_ui import build_probe_points_ui
 from appPlugins.Common.levelling_core import LevellingCoreMixin, _AlContext, _iter_polygons, VORONOI_ENABLED, MAX_AVOID_TRIES
 from appPlugins.Common.grbl_protocol import (
     parse_grbl_probe_output,
@@ -2206,210 +2205,7 @@ class LevelUI:
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
         # self.tools_box.addWidget(separator_line)
 
-        # Autolevelling
-        self.al_frame = QtWidgets.QFrame()
-        self.al_frame.setContentsMargins(0, 0, 0, 0)
-        self.tools_box.addWidget(self.al_frame)
-
-        self.al_box = QtWidgets.QVBoxLayout()
-        self.al_box.setContentsMargins(0, 0, 0, 0)
-        self.al_frame.setLayout(self.al_box)
-        self.al_frame.setDisabled(True)
-
-        grid0 = GLay(v_spacing=5, h_spacing=3)
-        self.al_box.addLayout(grid0)
-
-        self.al_title = FCLabel('%s' % _("Probe Points Table"), bold=True)
-        self.al_title.setToolTip(_("Generate GCode that will obtain the height map"))
-
-        self.show_al_table = FCCheckBox(_("Show"))
-        self.show_al_table.setToolTip(_("Toggle the display of the Probe Points table."))
-        self.show_al_table.setChecked(True)
-
-        hor_lay = QtWidgets.QHBoxLayout()
-        hor_lay.addWidget(self.al_title)
-        hor_lay.addStretch()
-        hor_lay.addWidget(self.show_al_table, alignment=QtCore.Qt.AlignmentFlag.AlignRight)
-
-        grid0.addLayout(hor_lay, 0, 0, 1, 2)
-
-        # #############################################################################################################
-        # Tool Table Frame
-        # #############################################################################################################
-        tt_frame = FCFrame()
-        self.al_box.addWidget(tt_frame)
-
-        # Grid Layout
-        tool_grid = GLay(v_spacing=5, h_spacing=3, c_stretch=[0, 1])
-        tt_frame.setLayout(tool_grid)
-
-        # Probe Points table
-        self.al_probe_points_table = FCTable()
-        self.al_probe_points_table.setColumnCount(3)
-        self.al_probe_points_table.setColumnWidth(0, 20)
-        self.al_probe_points_table.setHorizontalHeaderLabels(['#', _('X-Y Coordinates'), _('Height')])
-
-        tool_grid.addWidget(self.al_probe_points_table, 0, 0, 1, 2)
-
-        # Plot Probe Points
-        self.plot_probing_pts_cb = FCCheckBox(_("Plot probing points"))
-        self.plot_probing_pts_cb.setToolTip(
-            _("Plot the probing points in the table.\n"
-              "If a Voronoi method is used then\n"
-              "the Voronoi areas are also plotted.")
-        )
-        tool_grid.addWidget(self.plot_probing_pts_cb, 2, 0, 1, 2)
-
-        # Avoid Excellon holes
-        self.avoid_exc_holes_cb = FCCheckBox(_("Avoid Excellon holes"))
-        self.avoid_exc_holes_cb.setToolTip(
-            _("When active, the user cannot add probe points over a drill hole.")
-        )
-        tool_grid.addWidget(self.avoid_exc_holes_cb, 4, 0, 1, 2)
-
-        # Avoid Excellon holes Size
-        self.avoid_exc_holes_size_label = FCLabel('%s:' % _("Avoid Step"))
-        self.avoid_exc_holes_size_label.setToolTip(
-            _("The incremental size to move to the side, to avoid an Excellon hole.")
-        )
-
-        self.avoid_exc_holes_size_entry = FCDoubleSpinner()
-        self.avoid_exc_holes_size_entry.set_precision(self.decimals)
-        self.avoid_exc_holes_size_entry.set_range(0.0001, 99999.0000)
-
-        tool_grid.addWidget(self.avoid_exc_holes_size_label, 6, 0)
-        tool_grid.addWidget(self.avoid_exc_holes_size_entry, 6, 1, 1, 1)
-
-        # #############################################################################################################
-        # ############### Probe GCode Generation ######################################################################
-        # #############################################################################################################
-        self.probe_gc_label = FCLabel('%s' % _("Parameters"), color='blue', bold=True)
-        self.probe_gc_label.setToolTip(
-            _("Will create a GCode which will be sent to the controller,\n"
-              "either through a file or directly, with the intent to get the height map\n"
-              "that is to modify the original GCode to level the cutting height.")
-        )
-        self.al_box.addWidget(self.probe_gc_label)
-
-        tp_frame = FCFrame()
-        self.al_box.addWidget(tp_frame)
-
-        # Grid Layout
-        param_grid = GLay(v_spacing=5, h_spacing=3)
-        tp_frame.setLayout(param_grid)
-
-        # Probe Diameter
-        self.probe_tip_dia_label = FCLabel('%s:' % _("Probe Tip Dia"))
-        self.probe_tip_dia_label.setToolTip(
-            _("The probe tip diameter.")
-        )
-        self.probe_tip_dia_entry = FCDoubleSpinner()
-        self.probe_tip_dia_entry.set_precision(self.decimals)
-        self.probe_tip_dia_entry.set_range(0.0000, 10.0000)
-
-        param_grid.addWidget(self.probe_tip_dia_label, 0, 0)
-        param_grid.addWidget(self.probe_tip_dia_entry, 0, 1)
-
-        # Travel Z Probe
-        self.ptravelz_label = FCLabel('%s:' % _("Probe Z travel"))
-        self.ptravelz_label.setToolTip(
-            _("The safe Z for probe travelling between probe points.")
-        )
-        self.ptravelz_entry = FCDoubleSpinner()
-        self.ptravelz_entry.set_precision(self.decimals)
-        self.ptravelz_entry.set_range(0.0000, 10000.0000)
-
-        param_grid.addWidget(self.ptravelz_label, 2, 0)
-        param_grid.addWidget(self.ptravelz_entry, 2, 1)
-
-        # Probe depth
-        self.pdepth_label = FCLabel('%s:' % _("Probe Z depth"))
-        self.pdepth_label.setToolTip(
-            _("The maximum depth that the probe is allowed\n"
-              "to probe. Negative value, in current units.")
-        )
-        self.pdepth_entry = FCDoubleSpinner()
-        self.pdepth_entry.set_precision(self.decimals)
-        self.pdepth_entry.set_range(-910000.0000, 0.0000)
-
-        param_grid.addWidget(self.pdepth_label, 4, 0)
-        param_grid.addWidget(self.pdepth_entry, 4, 1)
-
-        # Probe feedrate
-        self.feedrate_probe_label = FCLabel('%s:' % _("Probe Feedrate"))
-        self.feedrate_probe_label.setToolTip(
-           _("The feedrate used while the probe is probing.")
-        )
-        self.feedrate_probe_entry = FCDoubleSpinner()
-        self.feedrate_probe_entry.set_precision(self.decimals)
-        self.feedrate_probe_entry.set_range(0, 910000.0000)
-
-        param_grid.addWidget(self.feedrate_probe_label, 6, 0)
-        param_grid.addWidget(self.feedrate_probe_entry, 6, 1)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        param_grid.addWidget(separator_line, 8, 0, 1, 2)
-
-        # AUTOLEVELL MODE
-        al_mode_lbl = FCLabel('%s' % _("Mode"), bold=True)
-        al_mode_lbl.setToolTip(_("Choose a mode for height map generation.\n"
-                                 "- Manual: will pick a selection of probe points by clicking on canvas\n"
-                                 "- Grid: will automatically generate a grid of probe points"))
-
-        self.al_mode_radio = RadioSet(
-            [
-                {'label': _('Manual'), 'value': 'manual'},
-                {'label': _('Grid'), 'value': 'grid'}
-            ])
-        param_grid.addWidget(al_mode_lbl, 10, 0)
-        param_grid.addWidget(self.al_mode_radio, 10, 1)
-
-        # AUTOLEVELL METHOD
-        self.al_method_lbl = FCLabel('%s:' % _("Method"))
-        self.al_method_lbl.setToolTip(_("Choose a method for approximation of heights from autolevelling data.\n"
-                                        "- Voronoi: will generate a Voronoi diagram\n"
-                                        "- Bilinear: will use bilinear interpolation. Usable only for grid mode.\n"
-                                        "- Bicubic: smooth surface through the grid. Needs at least 4 rows and 4 columns."))
-
-        self.al_method_radio = RadioSet(
-            [
-                {'label': _('Voronoi'), 'value': 'v'},
-                {'label': _('Bilinear'), 'value': 'b'},
-                {'label': _('Bicubic'), 'value': 'c'}
-            ])
-        self.al_method_lbl.setDisabled(True)
-        self.al_method_radio.setDisabled(True)
-        self.al_method_radio.set_value('v')
-
-        param_grid.addWidget(self.al_method_lbl, 12, 0)
-        param_grid.addWidget(self.al_method_radio, 12, 1)
-
-        # ## Columns
-        self.al_columns_entry = FCSpinner()
-        self.al_columns_entry.setMinimum(2)
-
-        self.al_columns_label = FCLabel('%s:' % _("Columns"))
-        self.al_columns_label.setToolTip(
-            _("The number of grid columns.")
-        )
-        param_grid.addWidget(self.al_columns_label, 14, 0)
-        param_grid.addWidget(self.al_columns_entry, 14, 1)
-
-        # ## Rows
-        self.al_rows_entry = FCSpinner()
-        self.al_rows_entry.setMinimum(2)
-
-        self.al_rows_label = FCLabel('%s:' % _("Rows"))
-        self.al_rows_label.setToolTip(
-            _("The number of grid rows.")
-        )
-        param_grid.addWidget(self.al_rows_label, 16, 0)
-        param_grid.addWidget(self.al_rows_entry, 16, 1)
-
-        self.al_add_button = FCButton(_("Add Probe Points"))
-        self.al_box.addWidget(self.al_add_button)
+        build_probe_points_ui(self, self.app, self.tools_box)
 
         # #############################################################################################################
         # Controller Frame
@@ -2803,14 +2599,6 @@ class LevelUI:
 
         self.al_box.addLayout(height_lay)
 
-        self.import_heights_button = FCButton(_("Import Height Map"))
-        self.import_heights_button.setToolTip(
-            _("Import the file that has the Z heights\n"
-              "obtained through probing and then apply this data\n"
-              "over the original GCode therefore\n"
-              "doing autolevelling.")
-        )
-        self.al_box.addWidget(self.import_heights_button)
 
         # self.h_gcode_button.hide()
         # self.import_heights_button.hide()
@@ -2832,10 +2620,7 @@ class LevelUI:
         # ############################ FINISHED GUI ###################################
         # #############################################################################
 
-        GLay.set_common_column_size([tool_grid, param_grid], 0)
-
-        self.plot_probing_pts_cb.stateChanged.connect(self.on_plot_points_changed)
-        self.avoid_exc_holes_cb.stateChanged.connect(self.on_avoid_exc_holes_changed)
+        GLay.set_common_column_size([self.tool_grid, self.param_grid], 0)
 
     def confirmation_message(self, accepted, minval, maxval):
         if accepted is False:
