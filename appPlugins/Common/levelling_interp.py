@@ -409,7 +409,7 @@ _SUBPROGRAM_CALL_RE = re.compile(
     r'|REPEAT|ENDREPEAT|BREAK|CONTINUE)\b|(?<![A-Z])M\s*0*98(?![\d.]))')
 
 
-def new_levelling_state(arc_segment=1.0, units=None, map_bounds=None):
+def new_levelling_state(arc_segment=1.0, units=None, map_bounds=None, home_wcs=None):
     """
     Create a fresh modal G-code state for use with level_gcode_line.
 
@@ -430,6 +430,9 @@ def new_levelling_state(arc_segment=1.0, units=None, map_bounds=None):
     :param map_bounds: (xmin, ymin, xmax, ymax) of the probe points, or None.
         A Z zero change after a contact probe inside these bounds re-references
         the map to the probed point (see _note_z_zero()); with None it can not.
+    :param home_wcs: the WCS of the height map as in `_WCS_G_CODES` (the G number,
+        e.g. 54.0), or None: the first WCS word of the program declares it. If it
+        is given, `state['home_wcs']` and `state['wcs']` are set to it.
     :return: dict with modal X/Y/Z position, modal motion G code, and the
         counters `arcs` (arc moves that were not compensated),
         `relative` (G91 G1 moves that were not compensated),
@@ -473,7 +476,7 @@ def new_levelling_state(arc_segment=1.0, units=None, map_bounds=None):
     #   (minus the new Z value), subtracted from every offset; 0.0 at the start
     # probe_xy: the X/Y of the last contact probe move, until the next line that moves
     # map_bounds: (xmin, ymin, xmax, ymax) of the probe points, or None
-    return {'X': None, 'Y': None, 'Z': None, 'G': 0, 'arcs': 0, 'abs': True, 'relative': 0,
+    state = {'X': None, 'Y': None, 'Z': None, 'G': 0, 'arcs': 0, 'abs': True, 'relative': 0,
             'plane': 17, 'arc_abs': False, 'inverse_feed': False, 'applied': 0.0,
             'known': set(), 'arc_segment': float(arc_segment), 'arcs_split': 0, 'unparsed': 0,
             'unknown': 0, 'g_unknown': False, 'frame': 0,
@@ -481,6 +484,10 @@ def new_levelling_state(arc_segment=1.0, units=None, map_bounds=None):
             'moved': False, 'shifted': False, 'cutter_comp': False, 'cutter': 0,
             'cycle': False, 'cycles': 0, 'z_ref': 0.0, 'probe_xy': None,
             'map_bounds': tuple(map_bounds) if map_bounds is not None else None}
+    if home_wcs is not None:
+        state['home_wcs'] = home_wcs
+        state['wcs'] = home_wcs
+    return state
 
 
 def _mask_comments(line):

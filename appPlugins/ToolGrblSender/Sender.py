@@ -21,6 +21,7 @@ from appPlugins.Common.levelling_core import LevellingCoreMixin
 from appPlugins.Common.grbl_protocol import (
     parse_grbl_status_state, parse_grbl_setting, parse_grbl_active_wcs, grbl_reply_error, probe_timeout_s,
     parse_grbl_status_report, work_position)
+from appPlugins.Common.gcode_segment import split_long_moves, _words, _g_key
 from appPlugins.ToolGrblSender import SenderGen
 from appPlugins.ToolGrblSender.SenderGrbl import GrblClientMixin, stream_lines, validate_stream_lines
 from appPlugins.ToolGrblSender.SenderUI import GrblSenderUI
@@ -97,6 +98,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         )
         self._al_init_state()
         self._grbl_init_state()
+        # the GRBL frame (WCS, work offset, report in inches) that the height map is bound to
+        self._al_map_frame = None
+        self._al_map_imported = False
 
         # the stream job: the lines that the sender streams, and the height-map
         # generation that they were levelled with (None: not levelled)
@@ -985,10 +989,29 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 'safety_generation' in result and
                 result['safety_generation'] != self._grbl_safety_generation)
 
-    def _al_on_height_map_ready(self, target_obj):
-        # the levelled job belongs to the old map; T16 makes it again before the next Start
+    def _al_on_height_map_ready(self, target_obj, result=None):
+        # the levelled job belongs to the old map; the next Start makes it again
         self.job_map_generation = None
+        # bind the map to the GRBL frame of the probe; an imported map has no frame yet
+        if result is not None and result.get('kind') == 'probe':
+            self._al_map_frame = result.get('frame')
+            self._al_map_imported = False
+        else:
+            self._al_map_frame = None
+            self._al_map_imported = True
         self.app.inform.emit('[success] %s' % _("The height map is ready."))
+
+    @staticmethod
+    def _tlo_line(lines):
+        """:return: the index of the first line with G43, G43.1 or G49, or None."""
+        for index, line in enumerate(lines):
+            if any(letter == 'G' and _g_key(value) in ('43.0', '43.1', '49.0') for letter, value in _words(line)):
+                return index
+        return None
+
+    def _al_arc_segment(self, target_obj):
+        """The longest chord of 1 piece of a split arc: a preference of the sender."""
+        return float(self.app.options.get("tools_grbl_arc_segment", 0.5))
 
     # ------------------------------------------------------------------
     # Run control. T16 replaces build_job() with the levelled job and the write callable
@@ -1026,8 +1049,95 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.job_map_generation = None
         return bool(self.job_lines)
 
-    def on_start(self):
+    def build_levelled_job(self):
+        """
+        Make self.job_lines from the selected CNCJob, with the height map applied.
+        GUI thread. Steps: clean -> refuse a tool length change -> split long G1
+        (only if the job is not segmented) -> level (level_gcode_line also splits
+        the arcs; the strict mode refuses the moves that it can not compensate).
+
+        The WCS of the levelling is the one of the bound frame (`_al_map_frame`). A map
+        that is not bound yet (an imported map) has none: then the first WCS word of the
+        program declares it.
+
+        :return: True if the job has lines.
+        """
         if not self.build_job():
+            return False
+        tlo_index = self._tlo_line(self.job_lines)
+        if tlo_index is not None:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % (
+                _("The program changes the tool length offset (line %d). A levelled job can not do this. "
+                  "Remove it, or make a new height map after the change.") % self.job_line_numbers[tlo_index]))
+            return False
+        target = self._target()
+        ctx = self._al_capture_context()
+        snapshot = self._al_capture_apply_input(target, units=ctx.units, require_segmented=False)
+        if snapshot is None:
+            return False
+        lines = self.job_lines
+        if SenderGen.needs_segmentation(target):
+            seg_len = float(self.app.options.get("tools_grbl_seg_len", 1.0))
+            lines, count = split_long_moves(lines, seg_len, decimals=target.coords_decimals)
+            if count:
+                self.app.inform.emit('%s: %d' % (_("Long G1 moves split for the levelling"), count))
+        home_wcs = None
+        if self._al_map_frame is not None:
+            # the frame holds the WCS as GRBL names it ('G54'); the levelling state wants the G number
+            home_wcs = float(str(self._al_map_frame[0])[1:])
+        proxy = SenderGen.job_proxy(target, lines)
+        diagnostics = []
+        result = self.autolevell_gcode(proxy, self.ui.al_method_radio.get_value(), snapshot=snapshot,
+                                       diagnostics=diagnostics, home_wcs=home_wcs, strict=True)
+        if result is None:
+            return False
+        for warning in diagnostics:
+            self.app.inform.emit(warning)
+        job_lines = [line for line in result['job'].splitlines() if line.strip()]
+        bad_index = validate_stream_lines(job_lines)
+        if bad_index is not None:
+            self.job_lines = []
+            self.job_line_numbers = []
+            self.app.inform.emit('[ERROR_NOTCL] %s' % (
+                _("Line %d of the levelled G-code is longer than GRBL accepts. The job was not made.") %
+                (bad_index + 1)))
+            return False
+        self.job_lines = job_lines
+        # the levelled lines have no 1:1 map to the lines of the G-code text
+        self.job_line_numbers = []
+        self.job_map_generation = self._al_generation
+        return bool(self.job_lines)
+
+    def build_stream_job(self):
+        """The job for Start and Save: levelled if 'Level the G-code' is checked."""
+        if self.ui.autolevel_cb.get_value() is True:
+            return self.build_levelled_job()
+        if not self.build_job():
+            return False
+        if self.app.options.get("tools_grbl_arc_mode", 'split') == 'split':
+            target = self._target()
+            new_lines, count, source_index, unsplit = SenderGen.split_arcs(
+                self.job_lines, target.units, float(self.app.options.get("tools_grbl_arc_segment", 0.5)),
+                decimals=target.coords_decimals)
+            if unsplit:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % (
+                    _("This arc can not be split (plane, frame or position not known). Line %d.") %
+                    self.job_line_numbers[unsplit[0]]))
+                self.job_lines = []
+                self.job_line_numbers = []
+                return False
+            self.job_lines = new_lines
+            self.job_line_numbers = [self.job_line_numbers[i] for i in source_index]
+            if count:
+                self.app.inform.emit('%s: %d' % (_("Arc moves split into line moves"), count))
+        return True
+
+    def on_start(self):
+        if self.ui.autolevel_cb.get_value() is True:
+            # T16b replaces this refusal with the 2 phases of a levelled Start
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Levelled streaming is not available yet."))
+            return
+        if not self.build_stream_job():
             return
         # The check box is a request for this Start only. Read it 1 time, here, in the GUI thread.
         check_mode = self.ui.check_mode_cb.get_value() is True
@@ -1263,8 +1373,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def on_save_levelled_gcode(self):
         # always make the job again: the lines of an earlier Start can be old
-        # <- T16 replaces build_job() with build_stream_job()
-        if not self.build_job():
+        if not self.build_stream_job():
             return
         _filter_ = "G-Code Files (*.nc *.gcode *.cnc *.tap);;All Files (*.*)"
         try:

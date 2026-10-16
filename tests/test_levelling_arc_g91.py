@@ -769,7 +769,9 @@ class TestCoordinateSystemLoss(unittest.TestCase):
 class TestToolPassesArcSegment(unittest.TestCase):
     def tool_and_target(self, gcode, units='MM', **target_attrs):
         from tests.test_levelling_audit import make_audit_tool
-        tool = make_audit_tool(units=units)
+        from appPlugins.ToolLevelling import ToolLevelling
+        # the seg_x / seg_y rule is the one of the mixin; the GRBL Sender has its own arc segment
+        tool = make_audit_tool(units=units, cls=ToolLevelling)
         tool._al_prepare_interp = MagicMock(return_value=True)
         tool._al_offset_fn = lambda x, y: 0.5
         tool._al_decimals = 4

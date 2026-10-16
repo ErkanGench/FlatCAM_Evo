@@ -27,7 +27,7 @@ def make_stream_tool(fake, source=None, check_mode=False):
     tool._last_wco = None
     tool._stream_result = {}
     target = SimpleNamespace(kind='cncjob', source_file=source if source is not None else gcode(10),
-                             obj_options={'name': 'job'})
+                             obj_options={'name': 'job'}, units='MM', coords_decimals=4)
     tool.app.collection.get_by_name.return_value = target
     tool.ui.check_mode_cb.get_value.return_value = check_mode
     # the GUI slot runs at once, so the messages of the end of the job can be checked

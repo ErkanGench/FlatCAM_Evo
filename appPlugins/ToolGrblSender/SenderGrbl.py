@@ -1063,7 +1063,9 @@ class GrblClientMixin:
             return False
 
         self.app.inform.emit('%s' % _("Finished probing. Doing the autolevelling."))
-        self.al_result_ready_sig.emit(dict(evidence, kind='probe', heights=staged))
+        # the frame of the map: the WCS, the work offset and the report units of GRBL ($13)
+        frame = (active_wcs, offset, report_setting == 1.0)
+        self.al_result_ready_sig.emit(dict(evidence, kind='probe', heights=staged, frame=frame))
         return True
 
     def _al_check_probe_reply(self, command, text, expected_key, points, tol, offset, scale):

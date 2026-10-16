@@ -16,7 +16,7 @@ import copy
 import re
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from shapely.ops import unary_union
@@ -465,7 +465,7 @@ def test_grbl_full_journey(sender_env, method, fixture):
     for v in env.tool.al_voronoi_geo_storage.values():
         assert v['height'] == pytest.approx(PLANE(v['point'].x, v['point'].y), abs=1e-4)
     assert env.tool._grbl_op is None
-    env.tool._al_on_height_map_ready.assert_called_once_with(env.objects[env.source_name])
+    env.tool._al_on_height_map_ready.assert_called_once_with(env.objects[env.source_name], ANY)
 
 
 def test_grbl_failed_probe_makes_no_levelled_job(sender_env):

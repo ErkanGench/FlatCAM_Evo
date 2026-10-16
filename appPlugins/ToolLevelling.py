@@ -792,7 +792,7 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
         self.ui.h_gcode_button.setDisabled(not enabled)
         self.ui.view_h_gcode_button.setDisabled(not enabled)
 
-    def _al_on_height_map_ready(self, target_obj):
+    def _al_on_height_map_ready(self, target_obj, result=None):
         self.apply_autolevel(target_obj=target_obj)
 
 

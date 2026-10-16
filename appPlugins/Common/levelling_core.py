@@ -205,6 +205,9 @@ class LevellingCoreMixin:
         self.solid_geo = None
         self._al_target_name = None
         self._al_target_obj = None
+        # the GRBL frame that the map is bound to (used by the GRBL Sender only)
+        self._al_map_frame = None
+        self._al_map_imported = False
         self._al_bump_generation()
         self.ui.al_probe_points_table.setRowCount(0)
         shapes = getattr(self, 'probing_shapes', None)
@@ -1143,7 +1146,8 @@ class LevellingCoreMixin:
 
         return True
 
-    def autolevell_gcode(self, target_obj, al_method, snapshot=None, diagnostics=None):
+    def autolevell_gcode(self, target_obj, al_method, snapshot=None, diagnostics=None,
+                         home_wcs=None, strict=False):
         """
         Apply the probed height map (self.al_voronoi_geo_storage) to each
         of a CNCJob object's per-tool G-code texts
@@ -1165,6 +1169,11 @@ class LevellingCoreMixin:
         :param snapshot:    optional validated (points, units, grid tolerance).
         :param diagnostics: optional list receiving the coverage warning for later
                              GUI-thread publication; otherwise emit it directly.
+        :param home_wcs:    the WCS of the height map as a G number (54.0 for G54), or
+                             None: the first WCS word of the program declares it.
+        :param strict:      if True, a program with any move that was not compensated
+                             (arcs, relative, unparsed, unknown, frame, cutter, cycles)
+                             gives 1 error and None.
         :return:             {tooluid: levelled G-code text} for every tool
                               in target_obj.tools, or None on error.
         :rtype:              dict | None
@@ -1181,7 +1190,7 @@ class LevellingCoreMixin:
                           max(p[0] for p in map_points), max(p[1] for p in map_points))
         state = new_levelling_state(arc_segment=self._al_arc_segment(target_obj),
                                     units=getattr(target_obj, 'units', None),
-                                    map_bounds=map_bounds)
+                                    map_bounds=map_bounds, home_wcs=home_wcs)
         state['outside'] = 0
         if map_points:
             tol = snapshot[2] if snapshot is not None else self._al_grid_tolerance()
@@ -1211,6 +1220,17 @@ class LevellingCoreMixin:
             if trailing_newline:
                 text += '\n'
             result[tooluid] = text
+
+        if strict:
+            counts = [(_("arcs"), state['arcs']), (_("relative moves"), state['relative']),
+                      (_("unparsed lines"), state['unparsed']), (_("unknown position or mode"), state['unknown']),
+                      (_("other frame or work origin"), state['frame']),
+                      (_("cutter compensation"), state['cutter']), (_("canned cycles"), state['cycles'])]
+            if any(count > 0 for _name, count in counts):
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (
+                    _("The G-code has moves that can not be height-compensated"),
+                    ', '.join('%s %d' % (name, count) for name, count in counts if count > 0)))
+                return None
 
         if state['arcs'] > 0:
             self.app.inform.emit(
@@ -1388,7 +1408,7 @@ class LevellingCoreMixin:
         self.show_probing_geo_sig.emit(True, True)
         # probe and both import kinds reach this point only with a complete, valid height map
         if kind in ('probe', 'import', 'import_points'):
-            self._al_on_height_map_ready(result['context'].target_obj)
+            self._al_on_height_map_ready(result['context'].target_obj, result)
 
     def on_show_al_table(self, state):
         self.ui.al_probe_points_table.show() if state else self.ui.al_probe_points_table.hide()
@@ -1645,6 +1665,10 @@ class LevellingCoreMixin:
         """:return: True if the operation that made `result` was stopped or replaced."""
         return False
 
-    def _al_on_height_map_ready(self, target_obj):
-        """Called after a probe or an import gave a complete and valid height map."""
+    def _al_on_height_map_ready(self, target_obj, result=None):
+        """
+        Called after a probe or an import gave a complete and valid height map.
+
+        :param result: the result dict of _on_al_result_ready(); a probe result has 'frame'.
+        """
         pass

@@ -1,5 +1,6 @@
 """Optional live GRBL precision probing regressions."""
 import unittest
+from unittest.mock import ANY
 import test_levelling_audit as audit
 from test_levelling_audit import FakeGrbl, emitted, run_worker
 
@@ -54,7 +55,7 @@ class TestPrecisionProbing(unittest.TestCase):
         self.assertNotIn('G91', commands)
         self.assertTrue(tool.al_heights_valid)
         self.assertEqual([v['height'] for v in tool.al_voronoi_geo_storage.values()], [-0.12, -0.12])
-        tool._al_on_height_map_ready.assert_called_once_with(target)
+        tool._al_on_height_map_ready.assert_called_once_with(target, ANY)
         self.assertEqual(sum(c.args[0]['kind'] == 'probe'
                              for c in tool.al_result_ready_sig.emit.call_args_list), 1)
         self.assertEqual(commands[-2:], ['G0 Z2.0000', 'G4 P0'])

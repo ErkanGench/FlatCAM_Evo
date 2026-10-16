@@ -1,6 +1,6 @@
 """S4 result ordering and units contracts. Run each pytest node separately."""
 import threading
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from PyQt6 import QtWidgets
@@ -190,7 +190,7 @@ def test_released_current_probe_publishes_atomically_on_gui_thread():
     drain_results()
     assert seen == [(True, {1: 0.1, 2: 0.2})]
     assert tool.al_heights_valid
-    tool._al_on_height_map_ready.assert_called_once_with(tool._al_target_obj)
+    tool._al_on_height_map_ready.assert_called_once_with(tool._al_target_obj, ANY)
 
 
 def test_import_worker_uses_captured_units_without_mutating_shared_units(tmp_path):

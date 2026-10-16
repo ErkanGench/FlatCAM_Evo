@@ -14,7 +14,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import serial
 from PyQt6 import QtWidgets
@@ -1272,7 +1272,7 @@ class TestGrblProbeRun(unittest.TestCase):
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['height'], -0.1)
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['height'], 0.2)
         self.assertTrue(tool.al_heights_valid)
-        tool._al_on_height_map_ready.assert_called_once_with(target)
+        tool._al_on_height_map_ready.assert_called_once_with(target, ANY)
         self.assertIsNone(tool._grbl_op)
         self.assertIsNone(tool._grbl_recovery)
         self.assertEqual(self._after_last_probe(fake), ['G0 Z2.0000', 'G4 P0'])
