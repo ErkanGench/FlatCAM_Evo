@@ -625,6 +625,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     }
                 }
 
+                # every pass is added to the result; assigning inside the loop kept only the last pass
+                all_passes_geo = []
                 for nr_pass in range(passes):
                     iso_offset = dia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * dia)
 
@@ -637,10 +639,12 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                         if plot:
                             app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                         return 'fail'
-                    geo_obj.solid_geometry = flatten_shapely_geometry(geom)
+                    all_passes_geo += flatten_shapely_geometry(geom)
 
-                    # update the geometry in the tools
-                    geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
+                geo_obj.solid_geometry = all_passes_geo
+
+                # update the geometry in the tools
+                geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
 
                 # detect if solid_geometry is empty
                 empty_cnt = 0
