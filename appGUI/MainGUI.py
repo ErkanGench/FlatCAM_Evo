@@ -400,7 +400,10 @@ class MainGUI(QtWidgets.QMainWindow):
         self.menufile_exit = QtGui.QAction(
             QtGui.QIcon(self.app.resource_location + '/power16.png'),
             '%s\t%s' % (_('Exit'), ''), self)
-        # exitAction.setShortcut('Ctrl+Q')
+        # QuitRole + the standard Quit shortcut: on macOS they route the application menu's Quit item and Cmd+Q to this
+        # action (Cmd+Q is Qt's Ctrl+Q, and the key handler below treats it as a no-op, so it was swallowed)
+        self.menufile_exit.setMenuRole(QtGui.QAction.MenuRole.QuitRole)
+        self.menufile_exit.setShortcut(QtGui.QKeySequence(QtGui.QKeySequence.StandardKey.Quit))
         # exitAction.setStatusTip('Exit application')
         self.menufile.addAction(self.menufile_exit)
 
@@ -420,6 +423,9 @@ class MainGUI(QtWidgets.QMainWindow):
         # adjust the initial state of the menu entries related to the editor
         self.menueditedit.setDisabled(False)
         self.menueditok.setDisabled(True)
+        # 'Exit Editor' starts with 'Exit', so Qt's text heuristic gives it QuitRole on macOS. It is disabled outside
+        # the editors and the application menu's Quit item then showed that disabled state. It is not a quit action.
+        self.menueditok.setMenuRole(QtGui.QAction.MenuRole.NoRole)
 
         # ############################ EDIT -> CONVERSION ######################################################
         # Separator
