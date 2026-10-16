@@ -793,6 +793,158 @@ class GrblClientMixin:
                 self._grbl_failure_locked(op, 'timeout')
         return False
 
+    def _grbl_abort_stream_locked(self, op, reason, text=''):
+        """
+        A stream of `op` failed with lines in GRBL: hold, latch recovery. Caller holds the lock.
+        It does nothing if `op` is cancelled, failed or replaced, or if a newer safety epoch
+        exists (a Stop or a Reset of the user owns the recovery state then).
+
+        It never changes _grbl_stream_dirty: only a confirmed completion or the reset banner do.
+
+        :param reason: 'port_error', 'timeout', 'error', 'alarm' or 'line_too_long'.
+        :param text:   the last reply line of GRBL.
+        :return: True if this call (or the failure latch inside it) latched the recovery.
+        """
+        if (self._grbl_op is not op or op.cancel.is_set() or op.failed
+                or op.safety_generation != self._grbl_safety_generation):
+            return False
+        self._grbl_failure_locked(op, reason, text)
+        if op.failed:
+            return True
+        try:
+            op.port.write(b'!')
+        except (serial.SerialException, OSError) as err:
+            self.app.log.error("ToolGrblSender._grbl_abort_stream_locked() -> %s" % str(err))
+        self._grbl_recovery = 'needs_reset'
+        self._grbl_reset_pending = False
+        self._grbl_safety_generation += 1
+        op.failed = True
+        return True
+
+    def _grbl_commit_success_locked(self, op):
+        """
+        Make a success final. Caller holds the lock.
+
+        :return: True if `op` still owns the port, is not cancelled or failed, and no newer
+            safety epoch exists. Then the stream epoch is clean.
+        """
+        if (self._grbl_op is not op or op.cancel.is_set() or op.failed
+                or op.safety_generation != self._grbl_safety_generation):
+            return False
+        self._grbl_stream_dirty = False
+        return True
+
+    def _grbl_begin_reset_epoch_locked(self, port):
+        """
+        The receive boundary of a reset: everything received before it belongs to the old
+        controller epoch. Caller holds the lock.
+
+        :return: True if the receive buffer of the port was cleared.
+        """
+        self._grbl_rx_buffer = b''
+        self._grbl_rx_port = port
+        try:
+            port.reset_input_buffer()
+        except (serial.SerialException, OSError) as err:
+            self.app.log.error("ToolGrblSender._grbl_begin_reset_epoch_locked() -> %s" % str(err))
+            return False
+        return True
+
+    def _grbl_post_reset_state(self, op, timeout=2.0):
+        """
+        Read the machine state after a confirmed reset. Not _grbl_query_status: that one sends the
+        report text to _grbl_failure_locked, which takes '<Alarm|...>' as a new alarm. After a reset
+        with the homing lock, Alarm is the expected state.
+
+        :return: the state word of the first status report, or None (an ALARM:N line, a timeout,
+            a port error or a stop; the failure is latched where it applies).
+        """
+        with self._grbl_op_lock:
+            if not self._grbl_active_locked(op):
+                return None
+            port = self.grbl_ser_port
+            try:
+                port.write(b'?')
+            except (serial.SerialException, OSError) as err:
+                self.app.log.error("ToolGrblSender._grbl_post_reset_state() -> %s" % str(err))
+                self._grbl_failure_locked(op, 'port_error')
+                return None
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._grbl_op_lock:
+                if not self._grbl_active_locked(op, port):
+                    return None
+            try:
+                chunk = b'' if b'\n' in self._grbl_rx_buffer else port.readline()
+            except (serial.SerialException, OSError) as err:
+                self.app.log.error("ToolGrblSender._grbl_post_reset_state() -> %s" % str(err))
+                with self._grbl_op_lock:
+                    self._grbl_failure_locked(op, 'port_error')
+                return None
+            with self._grbl_op_lock:
+                if not self._grbl_active_locked(op, port):
+                    return None
+                self._grbl_rx_buffer += chunk or b''
+                while b'\n' in self._grbl_rx_buffer:
+                    raw_line, self._grbl_rx_buffer = self._grbl_rx_buffer.split(b'\n', 1)
+                    line = raw_line.decode('utf-8', errors='replace').strip()
+                    if line.lower().startswith('alarm:'):
+                        self._grbl_failure_locked(op, 'error', line)
+                        return None
+                    if line.startswith('<'):
+                        return parse_grbl_status_state(line)
+                    # '[MSG:...]' and 'ok' lines are ignored
+
+        with self._grbl_op_lock:
+            if self._grbl_active_locked(op, port):
+                self._grbl_failure_locked(op, 'timeout')
+        return None
+
+    def _grbl_exit_check_mode(self, op):
+        """
+        Leave the check mode of GRBL with $C. GRBL resets when it leaves the check mode, so this is
+        a reset epoch: the banner confirms it. Call it only after a complete validation.
+
+        :return: 'idle' (recovery is clear), 'alarm' (GRBL is in alarm after the reset: it needs
+            Home; the recovery stays 'needs_home') or 'failed' (the caller must not commit).
+        """
+        with self._grbl_op_lock:
+            if not self._grbl_active_locked(op):
+                return 'failed'
+            port = op.port
+            if not self._grbl_begin_reset_epoch_locked(port):
+                self._grbl_failure_locked(op, 'port_error')
+                return 'failed'
+            self._grbl_safety_generation += 1
+            op.safety_generation = self._grbl_safety_generation
+            self._grbl_reset_pending = True
+            self._grbl_recovery = 'needs_reset'
+            self._grbl_reply_pending = False
+            try:
+                port.write(b'$C\n')
+            except (serial.SerialException, OSError) as err:
+                self.app.log.error("ToolGrblSender._grbl_exit_check_mode() -> %s" % str(err))
+                self._grbl_failure_locked(op, 'port_error')
+                return 'failed'
+
+        # [MSG:Disabled] and ok come before the banner: _grbl_confirm_reset ignores them
+        if not self._grbl_confirm_reset(op):
+            return 'failed'
+        state = self._grbl_post_reset_state(op)
+        with self._grbl_op_lock:
+            if (self._grbl_op is not op or op.cancel.is_set() or op.failed
+                    or op.safety_generation != self._grbl_safety_generation):
+                return 'failed'
+            if state == 'Idle':
+                # check mode made no motion, and GRBL keeps its position at a reset in Idle
+                self._grbl_recovery = None
+                return 'idle'
+            if state == 'Alarm':
+                return 'alarm'
+            self._grbl_failure_locked(op, 'probe_invalid')
+            return 'failed'
+
     def _grbl_probe_run(self, op, context, points, tol, travel_z, depth, probe_fr, units_cmd, probe_timeout):
         """
         Probe every point. Runs in a worker thread and reads no widgets.

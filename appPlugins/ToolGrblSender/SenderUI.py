@@ -412,7 +412,7 @@ class GrblSenderUI:
         self.unlock_button = FCButton(_("Unlock"))
         self.unlock_button.setToolTip(_("Send $X: clear the alarm lock."))
         self.check_mode_cb = FCCheckBox(_("Check mode"))
-        self.check_mode_cb.setToolTip(_("Send $C: GRBL reads the G-code but does not move."))
+        self.check_mode_cb.setToolTip(_("GRBL reads the G-code of the next Start but does not move (check mode for 1 job)."))
         run_grid.addWidget(self.unlock_button, 1, 0, 1, 2)
         run_grid.addWidget(self.check_mode_cb, 1, 2, 1, 2)
 

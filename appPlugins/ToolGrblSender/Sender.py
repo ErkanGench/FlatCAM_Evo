@@ -14,13 +14,15 @@ import serial.tools.list_ports
 
 from appTool import AppTool
 from defaults import AppDefaults
-from appGUI.GUIElements import VerticalScrollArea
+from appGUI.GUIElements import VerticalScrollArea, FCFileSaveDialog
 from camlib import CNCjob
 
 from appPlugins.Common.levelling_core import LevellingCoreMixin
 from appPlugins.Common.grbl_protocol import (
-    parse_grbl_status_state, parse_grbl_setting, parse_grbl_active_wcs, grbl_reply_error, probe_timeout_s)
-from appPlugins.ToolGrblSender.SenderGrbl import GrblClientMixin
+    parse_grbl_status_state, parse_grbl_setting, parse_grbl_active_wcs, grbl_reply_error, probe_timeout_s,
+    parse_grbl_status_report, work_position)
+from appPlugins.ToolGrblSender import SenderGen
+from appPlugins.ToolGrblSender.SenderGrbl import GrblClientMixin, stream_lines, validate_stream_lines
 from appPlugins.ToolGrblSender.SenderUI import GrblSenderUI
 
 import gettext
@@ -75,7 +77,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     stream_progress_sig = QtCore.pyqtSignal(int, int)
     # a parsed status report (dict) from a worker
     status_report_sig = QtCore.pyqtSignal(object)
-    # 'finished', 'stopped' or 'error' from the stream worker
+    # how the stream worker ended: 'finished', 'stopped', 'check_passed', ... (see _on_stream_ended)
     stream_ended_sig = QtCore.pyqtSignal(str)
     # a text line for the console, from any thread
     console_line_sig = QtCore.pyqtSignal(str)
@@ -101,7 +103,12 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.job_lines = []
         self.job_map_generation = None
         self.job_target_name = None
+        # the line number in the G-code text of each line of job_lines (for the messages)
+        self.job_line_numbers = []
         self.view3d = None
+        self._last_wco = None
+        # what the stream worker tells the GUI thread with stream_ended_sig: {'done', 'last_text', 'errors'}
+        self._stream_result = {}
 
         self.ui = GrblSenderUI(layout=self.layout, app=self.app)
         self.pluginName = self.ui.pluginName
@@ -247,7 +254,6 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.resume_button.clicked.connect(lambda: self._grbl_realtime(b'~'))
         self.ui.stop_button.clicked.connect(self.on_stream_stop)
         self.ui.unlock_button.clicked.connect(self.on_unlock)
-        self.ui.check_mode_cb.toggled.connect(self.on_check_mode)
         self.ui.save_levelled_button.clicked.connect(self.on_save_levelled_gcode)
         for (name, text), (btn, byte) in self.ui.ov_buttons.items():
             btn.clicked.connect(lambda checked=False, b=byte: self._grbl_realtime(b))
@@ -985,14 +991,299 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.app.inform.emit('[success] %s' % _("The height map is ready."))
 
     # ------------------------------------------------------------------
-    # Stubs: T08 (console), T13 (run control) and T16 (levelled job) replace them
+    # Run control. T16 replaces build_job() with the levelled job and the write callable
     # ------------------------------------------------------------------
-    def on_start(self):
-        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Not available yet."))
-    on_stream_stop = on_unlock = on_save_levelled_gcode = on_start
+    def _target(self):
+        return self.app.collection.get_by_name(self.ui.object_combo.get_value())
 
-    def on_check_mode(self, checked):
-        self.on_start()
+    def build_job(self):
+        """
+        Make self.job_lines from the selected CNCJob.
+
+        :return: True if the job has lines, and each line fits in the GRBL receive buffer.
+        """
+        target = self._target()
+        if not self._is_supported_target(target):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Select a CNCJob object."))
+            return False
+        text = getattr(target, 'source_file', '') or ''
+        if not text.strip():
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The CNCJob has no G-code. Use Update in the CNCJob UI."))
+            return False
+        numbered = SenderGen.clean_lines_numbered(text)
+        lines = [line for _number, line in numbered]
+        bad_index = validate_stream_lines(lines)
+        if bad_index is not None:
+            self.job_lines = []
+            self.job_line_numbers = []
+            self.app.inform.emit('[ERROR_NOTCL] %s' % (
+                _("Line %d of the G-code is longer than GRBL accepts. The job was not made.") %
+                numbered[bad_index][0]))
+            return False
+        self.job_lines = lines
+        self.job_line_numbers = [number for number, _line in numbered]
+        self.job_target_name = target.obj_options['name']
+        self.job_map_generation = None
+        return bool(self.job_lines)
+
+    def on_start(self):
+        if not self.build_job():
+            return
+        # The check box is a request for this Start only. Read it 1 time, here, in the GUI thread.
+        check_mode = self.ui.check_mode_cb.get_value() is True
+        poll_ms = int(self.app.options.get("tools_grbl_status_ms", 200))
+        op = self._grbl_reserve('stream', motion=True)
+        if op is None:
+            return
+        lines = list(self.job_lines)
+        numbers = list(self.job_line_numbers)
+
+        def worker_task():
+            how = 'error'
+            try:
+                how = self._grbl_stream_run(op, lines, numbers, check_mode, poll_ms / 1000.0)
+            except (serial.SerialException, OSError) as err:
+                self.app.log.error("ToolGrblSender.on_start() -> %s" % str(err))
+                how = self._grbl_stream_crashed(op, 'port_error')
+            except Exception as err:
+                self.app.log.error("ToolGrblSender.on_start() -> %s" % str(err))
+                how = self._grbl_stream_crashed(op, 'error')
+            finally:
+                # the operation is released after the status map; the GUI hears about it after the release
+                self._grbl_release(op)
+                self.stream_ended_sig.emit(how)
+
+        self.ui.start_button.setDisabled(True)
+        self.ui.progress_bar.setValue(0)
+        self.app.inform.emit('%s: %d' % (_("Streaming lines"), len(lines)))
+        self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+
+    def _grbl_stream_crashed(self, op, reason):
+        """An exception ended the stream worker: stop the stream. Stop or Reset of the user keep their state."""
+        with self._grbl_op_lock:
+            if op.cancel.is_set():
+                return 'stopped'
+            self._grbl_abort_stream_locked(op, reason)
+        return reason
+
+    def _grbl_stream_io(self, op):
+        """
+        The 2 callables that the pure streamer uses. All port access of the stream goes through them.
+
+        :return: (write, readline)
+        """
+        def write(data):
+            with self._grbl_op_lock:
+                if op.cancel.is_set():
+                    return 'cancelled'
+                if not self._grbl_active_locked(op):
+                    return 'port_error'
+                try:
+                    count = op.port.write(data)
+                except (serial.SerialException, OSError) as err:
+                    self.app.log.error("ToolGrblSender.write() -> %s" % str(err))
+                    return 'port_error'
+                return 'ok' if count is None or count == len(data) else 'port_error'
+
+        def readline():
+            with self._grbl_op_lock:
+                if not self._grbl_active_locked(op):
+                    return b''
+            return op.port.readline()
+
+        return write, readline
+
+    def _grbl_stream_run(self, op, lines, numbers, check_mode, poll_interval):
+        """
+        The stream worker under 1 operation (a worker thread; it reads no widgets).
+
+        :param numbers:       the line number in the G-code text of each line of `lines`.
+        :param check_mode:    True if the user asked for check mode for this job.
+        :param poll_interval: seconds between 2 status requests.
+        :return: `how`: 'finished', 'check_passed', 'check_passed_needs_home', 'check_failed',
+            'check_exit_failed', 'stopped', 'incomplete', 'rejected' (nothing was sent), 'stale', or
+            the name of a failure ('port_error', 'timeout', 'error', 'alarm', 'line_too_long').
+            It is final: the success values are set only after the commit of A5.3.
+        """
+        self._stream_result = {}
+        port = op.port
+
+        # 1. GRBL must be Idle
+        state = parse_grbl_status_state(self._grbl_query_status(op))
+        if state != 'Idle':
+            return self._grbl_start_refused(op, state)
+
+        # 2. <- T16 (A5.4 step 2.2): a levelled job compares the live frame ($G, $#, $13) with the
+        #    bound frame here. GRBL runs $# only in Idle, so this step comes before $C.
+
+        # The stream epoch is dirty from the first write: until a confirmed completion or the reset
+        # banner, GRBL can hold lines (and their ok replies) of this job.
+        with self._grbl_op_lock:
+            if not self._grbl_active_locked(op):
+                return 'stopped' if op.cancel.is_set() else 'incomplete'
+            self._grbl_stream_dirty = True
+
+        # 3. check mode for this job
+        if check_mode:
+            how = self._grbl_enter_check_mode(op)
+            if how is not None:
+                return how
+
+        # old data in the receive buffer is not a reply to the job
+        with self._grbl_op_lock:
+            text, status = self._grbl_prepare_locked(op, port)
+            if status is not None:
+                if status == 'cancelled' or op.cancel.is_set():
+                    return 'stopped'
+                self._grbl_abort_stream_locked(op, status, text)
+                return status
+
+        # 4. stream
+        write, readline = self._grbl_stream_io(op)
+        res = stream_lines(
+            lines, write, readline, check_mode=check_mode,
+            on_progress=lambda d, t: self.stream_progress_sig.emit(d, t),
+            on_line=self.console_line_sig.emit,
+            poll_status=True, poll_interval=poll_interval,
+            on_status=lambda line: self.status_report_sig.emit(parse_grbl_status_report(line)))
+        status = res['status']
+
+        def source_number(index):
+            return numbers[index] if 0 <= index < len(numbers) else index + 1
+
+        failed_index = res['errors'][-1][0] if res['errors'] else res['done']
+        self._stream_result = {
+            'done': res['done'],
+            'last_text': res['last_text'],
+            'line': source_number(res.get('line_index', failed_index)),
+            'errors': [source_number(index) for index, _text in res['errors']],
+        }
+
+        # the status map of A5.2 step 6
+        if status == 'finished':
+            return self._grbl_stream_finish(op, res, check_mode)
+        if status == 'cancelled':
+            return 'stopped'
+        if status == 'stale':
+            # T16: the levelled Start request is old; GRBL got no job line
+            return 'stale'
+        with self._grbl_op_lock:
+            if op.cancel.is_set():
+                # Stop or Reset already owns the recovery state
+                return 'stopped'
+            self._grbl_abort_stream_locked(op, status, res['last_text'])
+        return status
+
+    def _grbl_start_refused(self, op, state):
+        """GRBL is not Idle at the start of the stream worker. Nothing was written to GRBL."""
+        if op.cancel.is_set():
+            return 'stopped'
+        if state is None:
+            # the status query failed; it latched the failure where it applies
+            with self._grbl_op_lock:
+                self._grbl_abort_stream_locked(op, 'timeout')
+            return 'timeout'
+        if state == 'Check':
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                "GRBL is in check mode. Send $C in the console, or press Reset."))
+            return 'rejected'
+        text = '%s: %s.' % (_("GRBL must be Idle to start the job. State"), state)
+        with self._grbl_op_lock:
+            latched = self._grbl_recovery is not None
+        if latched:
+            text += ' ' + self._grbl_recovery_text()
+        self.app.inform.emit('[ERROR_NOTCL] %s' % text)
+        return 'rejected'
+
+    def _grbl_enter_check_mode(self, op):
+        """
+        Send $C for this job. GRBL must answer [MSG:Enabled] and then report the state Check.
+
+        :return: None if GRBL is in check mode, else the `how` that ends the job (the abort is done).
+        """
+        text, status = self._grbl_transact(op, '$C', timeout=5.0)
+        if status == 'cancelled':
+            return 'stopped'
+        if status == 'ok' and '[msg:enabled]' in (text or '').lower():
+            state = parse_grbl_status_state(self._grbl_query_status(op))
+            if state == 'Check':
+                return None
+            how = 'check_exit_failed'       # GRBL said Enabled: it can be in check mode
+        elif status == 'ok' or status == 'error':
+            how = 'error'                   # GRBL refused $C, or answered something else
+        else:
+            how = 'check_exit_failed'       # no answer: GRBL can be in check mode
+        with self._grbl_op_lock:
+            if op.cancel.is_set():
+                return 'stopped'
+            self._grbl_abort_stream_locked(op, status if status in ('timeout', 'port_error') else 'error', text)
+        return how
+
+    def _grbl_stream_finish(self, op, res, check_mode):
+        """
+        The streamer acknowledged all lines. That does not mean that the job is done: wait for Idle
+        (normal mode) or leave the check mode (A5.5). `how` is final only here.
+        """
+        if check_mode:
+            # only a complete validation leaves the check mode by $C
+            with self._grbl_op_lock:
+                if op.cancel.is_set():
+                    return 'stopped'
+                if op.failed:
+                    return 'incomplete'
+            exit_state = self._grbl_exit_check_mode(op)
+            with self._grbl_op_lock:
+                if exit_state == 'failed':
+                    return 'check_exit_failed'
+                if not self._grbl_commit_success_locked(op):
+                    return 'stopped'
+                if res['errors']:
+                    return 'check_failed'
+                return 'check_passed' if exit_state == 'idle' else 'check_passed_needs_home'
+
+        idle = self._grbl_wait_idle(op)
+        with self._grbl_op_lock:
+            if idle:
+                return 'finished' if self._grbl_commit_success_locked(op) else 'stopped'
+            if op.cancel.is_set():
+                return 'stopped'
+            self._grbl_abort_stream_locked(op, 'timeout')
+        return 'incomplete'
+
+    def on_stream_stop(self):
+        """Stop: feed hold now; the stream worker stops writing. Then GRBL needs Reset and Home."""
+        self.on_grbl_stop()
+
+    def on_unlock(self):
+        def task(op):
+            text, status = self._grbl_transact(op, '$X', timeout=5.0)
+            if status != 'ok':
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Unlock failed"), text or status))
+        self._grbl_start_op('unlock', task)
+
+    def on_save_levelled_gcode(self):
+        # always make the job again: the lines of an earlier Start can be old
+        # <- T16 replaces build_job() with build_stream_job()
+        if not self.build_job():
+            return
+        _filter_ = "G-Code Files (*.nc *.gcode *.cnc *.tap);;All Files (*.*)"
+        try:
+            filename, _f = FCFileSaveDialog.get_saved_filename(
+                caption=_("Save levelled G-code"),
+                directory=self.app.get_last_save_folder() + '/' + str(self.job_target_name) + '_levelled',
+                ext_filter=_filter_)
+        except TypeError:
+            filename, _f = FCFileSaveDialog.get_saved_filename(caption=_("Save levelled G-code"), ext_filter=_filter_)
+        if not filename:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Export cancelled ..."))
+            return
+        try:
+            with open(filename, 'w') as f:
+                f.write('\n'.join(self.job_lines) + '\n')
+        except (FileNotFoundError, PermissionError) as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not save the file"), str(err)))
+            return
+        self.app.inform.emit('[success] %s: %s' % (_("Saved"), filename))
 
     def _grbl_realtime(self, data):
         with self._grbl_op_lock:
@@ -1001,13 +1292,62 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Not connected to a GRBL controller."))
 
     def _on_stream_progress(self, done, total):
-        pass
+        self.ui.progress_bar.setValue(int(done * 100 / total) if total else 0)
 
     def _on_status_report(self, report):
-        pass
+        if report is None:
+            return
+        if 'wco' in report:
+            self._last_wco = report['wco']
+        pos = work_position(report, getattr(self, '_last_wco', None))
+        text = report['state']
+        if pos is not None:
+            text += '   X %.3f  Y %.3f  Z %.3f' % pos
+        self.ui.status_label.setText(text)
+        if 'ov' in report:
+            self.ui.ov_values_label.setText('F: %d%%  R: %d%%  S: %d%%' % report['ov'])
+        if self.view3d is not None and pos is not None:
+            self.view3d.set_tool_position(pos)
 
     def _on_stream_ended(self, how):
-        pass
+        """
+        Slot of stream_ended_sig (GUI thread). Only 'finished' and 'check_passed' are a success.
+
+        :param how: see _grbl_stream_run().
+        """
+        self.ui.start_button.setDisabled(False)
+        result = self._stream_result or {}
+        errors = result.get('errors', [])
+        recovery = (' ' + self._grbl_recovery_text()) if self._grbl_recovery is not None else ''
+
+        if how == 'finished':
+            self.ui.progress_bar.setValue(100)
+            self.app.inform.emit('[success] %s' % _("The job finished."))
+        elif how == 'check_passed':
+            self.ui.progress_bar.setValue(100)
+            self.app.inform.emit('[success] %s' % _("Check mode: GRBL found no error."))
+        elif how == 'check_passed_needs_home':
+            self.ui.progress_bar.setValue(100)
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "Check mode: GRBL found no error. GRBL is in alarm after the reset. Press Home."))
+        elif how == 'check_failed':
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (
+                _("Check mode: GRBL found errors on the lines"), ', '.join(str(n) for n in errors[:20])))
+        elif how == 'check_exit_failed':
+            text = _("Could not leave check mode.") + recovery
+            if errors:
+                text += ' %s: %s' % (_("Errors on the lines"), ', '.join(str(n) for n in errors[:20]))
+            self.app.inform.emit('[ERROR_NOTCL] %s' % text)
+        elif how == 'rejected':
+            # the worker told why; nothing was sent
+            pass
+        elif how == 'stopped':
+            self.app.inform.emit('[WARNING_NOTCL] %s%s' % (_("The job was stopped."), recovery))
+        elif how in ('error', 'alarm'):
+            self.app.inform.emit('[ERROR_NOTCL] %s %d: %s.%s' % (
+                _("GRBL stopped the job at line"), result.get('line', 0), result.get('last_text', ''), recovery))
+        else:
+            self.app.inform.emit('[ERROR_NOTCL] %s%s' % (_("The job did not finish."), recovery))
 
     def _console(self):
         """:return: the GrblConsole in the dock (made at the first call)."""
