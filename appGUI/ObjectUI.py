@@ -1425,6 +1425,14 @@ class CNCObjectUI(ObjectUI):
             _("Generate CNC Code with auto-levelled paths.")
         )
         self.custom_box.addWidget(self.autolevel_button)
+
+        # GRBL Sender - streams the G-code to a GRBL controller, with optional autolevelling
+        self.grbl_sender_button = FCButton(_('GRBL Sender'), bold=True)
+        self.grbl_sender_button.setIcon(QtGui.QIcon(self.app.resource_location + '/level32.png'))
+        self.grbl_sender_button.setToolTip(
+            _("Send the CNC Code to a GRBL controller.")
+        )
+        self.custom_box.addWidget(self.grbl_sender_button)
         # self.autolevel_button.setDisabled(True)
         # self.autolevel_button.setToolTip("DISABLED. Work in progress!")
 

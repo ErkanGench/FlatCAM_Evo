@@ -1155,6 +1155,12 @@ class AppUIActions(QtCore.QObject):
             pass
 
         try:
+            # clear the possible drawn probing shapes for GRBL Sender Plugin
+            self.app.grbl_sender_tool.probing_shapes.clear(update=True)
+        except AttributeError:
+            pass
+
+        try:
             # clean possible tool shapes for Isolation, NCC, Paint, Punch Gerber Plugins
             if self.app.tool_shapes is not None:
                 self.app.tool_shapes.clear(update=True)

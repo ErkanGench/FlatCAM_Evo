@@ -505,6 +505,7 @@ class App(QtCore.QObject):
         self.drilling_tool = None
         self.milling_tool = None
         self.levelling_tool = None
+        self.grbl_sender_tool = None
         self.optimal_tool = None
         self.transform_tool = None
         self.report_tool = None
@@ -1831,6 +1832,10 @@ class App(QtCore.QObject):
         self.levelling_tool.install(icon=QtGui.QIcon(self.resource_location + '/level32.png'),
                                     pos=self.ui.menuoptions_experimental, separator=True)
 
+        self.grbl_sender_tool = ToolGrblSender(self)
+        self.grbl_sender_tool.install(icon=QtGui.QIcon(self.resource_location + '/level32.png'),
+                                      pos=self.ui.menu_plugins, before=self.sub_tool.menuAction, separator=True)
+
         self.copper_thieving_tool = ToolCopperThieving(self)
         self.copper_thieving_tool.install(icon=QtGui.QIcon(self.resource_location + '/copperfill32.png'),
                                           pos=self.ui.menu_plugins)
@@ -1907,6 +1912,7 @@ class App(QtCore.QObject):
             self.drilling_tool,
             self.milling_tool,
             self.levelling_tool,
+            self.grbl_sender_tool,
 
             self.optimal_tool,
             self.transform_tool,

@@ -572,6 +572,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         self.ui.snippets_cb.toggled.connect(self.on_update_source_file)
 
         self.ui.autolevel_button.clicked.connect(lambda: self.app.levelling_tool.run(toggle=True))
+        self.ui.grbl_sender_button.clicked.connect(lambda: self.app.grbl_sender_tool.run(toggle=True))
 
         # ###################################### END Signal connections ###############################################
         # #############################################################################################################

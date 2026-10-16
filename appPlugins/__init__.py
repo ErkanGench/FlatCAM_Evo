@@ -27,6 +27,7 @@ from appPlugins.ToolFollow import ToolFollow
 from appPlugins.ToolDrilling import ToolDrilling
 from appPlugins.ToolMilling import ToolMilling
 from appPlugins.ToolLevelling import ToolLevelling
+from appPlugins.ToolGrblSender.Sender import ToolGrblSender
 
 from appPlugins.ToolOptimal import ToolOptimal
 
