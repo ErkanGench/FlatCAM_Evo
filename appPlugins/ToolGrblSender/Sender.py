@@ -236,6 +236,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.com_search_button.clicked.connect(self.on_grbl_search_ports)
         self.ui.add_bd_button.clicked.connect(self.on_grbl_add_baudrate)
         self.ui.del_bd_button.clicked.connect(self.on_grbl_delete_baudrate_grbl)
+        self.ui.baudrates_list_combo.currentTextChanged.connect(self.on_baudrate_changed)
         self.ui.controller_reset_button.clicked.connect(self.on_grbl_reset)
         self.ui.com_connect_button.clicked.connect(self.on_grbl_connect)
         self.ui.grbl_send_button.clicked.connect(self.on_grbl_send_command)
@@ -348,6 +349,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         # Fill Form fields
         self.to_form()
         self.on_grbl_search_ports(muted=True)
+        self._restore_baudrate(app_defaults)
 
         self.ui.plot_probing_pts_cb.set_value(
             self.app.options.get(
@@ -679,6 +681,23 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if int(new_bd) >= 40 and self.ui.baudrates_list_combo.findText(new_bd) == -1:
             self.ui.baudrates_list_combo.addItem(new_bd)
             self.ui.baudrates_list_combo.setCurrentText(new_bd)
+
+    def _restore_baudrate(self, app_defaults):
+        """Select the saved baud rate in the combo; a custom rate that is not in the list is added."""
+        baudrate = str(self.app.options.get(
+            "tools_grbl_baudrate",
+            app_defaults.get("tools_grbl_baudrate", AppDefaults.factory_defaults.get("tools_grbl_baudrate"))))
+        combo = self.ui.baudrates_list_combo
+        if not baudrate.isdigit():
+            return
+        if combo.findText(baudrate) == -1:
+            combo.addItem(baudrate)
+        combo.setCurrentText(baudrate)
+
+    def on_baudrate_changed(self, text):
+        # keep the selected baud rate, so the next session starts with it
+        if text and text.isdigit():
+            self.app.options["tools_grbl_baudrate"] = text
 
     def on_grbl_delete_baudrate_grbl(self):
         current_idx = self.ui.baudrates_list_combo.currentIndex()

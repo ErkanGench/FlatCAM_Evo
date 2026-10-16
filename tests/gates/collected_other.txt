@@ -377,6 +377,10 @@ tests/test_grbl_segment.py::TestSplitStateRules::test_units_change_makes_positio
 tests/test_grbl_segment.py::TestSplitStateRules::test_unknown_g_makes_position_unknown
 tests/test_grbl_segment.py::TestSplitStateRules::test_wcs_change_makes_position_unknown
 tests/test_grbl_segment.py::TestSplitStateRules::test_words_keep_decimal_g
+tests/test_grbl_sender_construct.py::TestBaudratePersists::test_added_rate_is_saved
+tests/test_grbl_sender_construct.py::TestBaudratePersists::test_custom_rate_is_added_and_selected
+tests/test_grbl_sender_construct.py::TestBaudratePersists::test_saved_rate_is_selected
+tests/test_grbl_sender_construct.py::TestBaudratePersists::test_selection_is_saved
 tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_construct
 tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_populate
 tests/test_grbl_sender_gen.py::TestCleanLines::test_keeps_order

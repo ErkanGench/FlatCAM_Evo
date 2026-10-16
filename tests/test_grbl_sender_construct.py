@@ -57,5 +57,42 @@ class TestGrblSenderConstruct(unittest.TestCase):
             tool._populate_tool_ui()
 
 
+class TestBaudratePersists(unittest.TestCase):
+
+    def populate(self, app):
+        tool = ToolGrblSender(app)
+        with patch('appPlugins.Common.levelling_core.ShapeCollection'):
+            tool._populate_tool_ui()
+        return tool
+
+    def test_saved_rate_is_selected(self):
+        app = make_app()
+        app.options["tools_grbl_baudrate"] = '57600'
+        tool = self.populate(app)
+        self.assertEqual(tool.ui.baudrates_list_combo.currentText(), '57600')
+
+    def test_custom_rate_is_added_and_selected(self):
+        app = make_app()
+        app.options["tools_grbl_baudrate"] = '256000'
+        tool = self.populate(app)
+        combo = tool.ui.baudrates_list_combo
+        self.assertEqual(combo.currentText(), '256000')
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())].count('256000'), 1)
+
+    def test_selection_is_saved(self):
+        app = make_app()
+        tool = self.populate(app)
+        tool.ui.baudrates_list_combo.setCurrentText('9600')
+        self.assertEqual(app.options["tools_grbl_baudrate"], '9600')
+
+    def test_added_rate_is_saved(self):
+        app = make_app()
+        tool = self.populate(app)
+        # 250000 is not in the default list, so the button adds it
+        tool.ui.new_baudrate_entry.set_value(250000)
+        tool.on_grbl_add_baudrate()
+        self.assertEqual(app.options["tools_grbl_baudrate"], '250000')
+
+
 if __name__ == '__main__':
     unittest.main()
