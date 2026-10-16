@@ -276,6 +276,12 @@ tests/test_grbl_bicubic.py::TestBicubic::test_nonuniform_not_supported
 tests/test_grbl_bicubic.py::TestBicubic::test_plane_exact_at_border
 tests/test_grbl_bicubic.py::TestBicubic::test_plane_is_exact
 tests/test_grbl_bicubic.py::TestBicubic::test_supported_needs_4x4
+tests/test_grbl_protocol.py::TestStatusReport::test_hold_substate
+tests/test_grbl_protocol.py::TestStatusReport::test_idle_wpos
+tests/test_grbl_protocol.py::TestStatusReport::test_not_a_report
+tests/test_grbl_protocol.py::TestStatusReport::test_run_mpos_fs_ov
+tests/test_grbl_protocol.py::TestStatusReport::test_work_position_from_wco
+tests/test_grbl_protocol.py::TestStatusReport::test_work_position_unknown
 tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_construct
 tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_populate
 tests/test_grid_zoom.py::TestGridZoom::test_grid_lines_remain_continuous_when_rotated_at_maximum_zoom

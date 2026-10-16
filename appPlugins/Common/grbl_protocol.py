@@ -234,3 +234,72 @@ def grbl_modes_confirmed(gc_text, units_cmd):
         return False
     words = m.group(1).split()
     return units_cmd in words and 'G90' in words and 'G94' in words
+
+
+def parse_grbl_status_report(line):
+    """
+    Parse a GRBL 1.1 status report, for example
+    '<Run|MPos:1.000,2.000,-0.500|FS:500,10000|Ov:100,100,100|WCO:0.000,0.000,0.000>'.
+
+    :param line: 1 line of text.
+    :return: dict with 'state' (str), and if they are in the report: 'mpos' and
+        'wpos' (tuples of 3 floats), 'wco' (tuple of 3 floats), 'feed' and
+        'spindle' (floats), 'ov' (tuple of 3 ints: feed, rapid, spindle),
+        'buffer' (tuple of 2 ints: planner blocks, RX bytes available),
+        'line' (int); None if `line` is not a status report.
+    """
+    text = (line or '').strip()
+    if not (text.startswith('<') and text.endswith('>')):
+        return None
+    fields = text[1:-1].split('|')
+    if not fields or not fields[0]:
+        return None
+    report = {'state': fields[0].split(':')[0]}
+
+    def floats(value, count):
+        parts = value.split(',')
+        if len(parts) != count:
+            raise ValueError(value)
+        result = tuple(float(p) for p in parts)
+        if not all(math.isfinite(v) for v in result):
+            raise ValueError(value)
+        return result
+
+    try:
+        for field in fields[1:]:
+            key, _sep, value = field.partition(':')
+            if key == 'MPos':
+                report['mpos'] = floats(value, 3)
+            elif key == 'WPos':
+                report['wpos'] = floats(value, 3)
+            elif key == 'WCO':
+                report['wco'] = floats(value, 3)
+            elif key == 'FS':
+                report['feed'], report['spindle'] = floats(value, 2)
+            elif key == 'F':
+                report['feed'] = floats(value, 1)[0]
+            elif key == 'Ov':
+                report['ov'] = tuple(int(v) for v in floats(value, 3))
+            elif key == 'Bf':
+                report['buffer'] = tuple(int(v) for v in floats(value, 2))
+            elif key == 'Ln':
+                report['line'] = int(value)
+    except ValueError:
+        return None
+    return report
+
+
+def work_position(report, last_wco=None):
+    """
+    :param report:   a dict from parse_grbl_status_report().
+    :param last_wco: the last WCO seen (GRBL sends WCO only in some reports).
+    :return: (x, y, z) work position, or None if it can not be computed.
+    """
+    if report is None:
+        return None
+    if 'wpos' in report:
+        return report['wpos']
+    wco = report.get('wco', last_wco)
+    if 'mpos' in report and wco is not None:
+        return tuple(m - o for m, o in zip(report['mpos'], wco))
+    return None
