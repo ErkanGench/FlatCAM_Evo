@@ -111,6 +111,7 @@ class AppDefaults:
         "global_appearance": 'default',
         "global_dark_canvas": False,
         "global_theme": 'default',
+        "global_custom_titlebar": True,
 
         "global_layout": "compact",
         "global_hover_shape": False,

@@ -69,6 +69,15 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         grid0.addWidget(self.appearance_radio, 1, 0, 1, 3)
         grid0.addWidget(self.dark_canvas_cb, 2, 0, 1, 3)
 
+        # Custom Title Bar
+        self.custom_titlebar_cb = FCCheckBox('%s' % _('Custom Title Bar'))
+        self.custom_titlebar_cb.setToolTip(
+            _("Use the customized title bar with the hamburger menu and panel toggle.\n"
+              "When unchecked, use the operating system's title bar and the original menu.\n"
+              "Changing this option requires an application restart.")
+        )
+        grid0.addWidget(self.custom_titlebar_cb, 3, 0, 1, 3)
+
         # self.theme_button = FCButton(_("Apply Theme"))
         # self.theme_button.setToolTip(
         #     _("Select a theme for FlatCAM.\n"

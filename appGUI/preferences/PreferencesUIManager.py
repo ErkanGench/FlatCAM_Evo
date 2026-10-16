@@ -87,6 +87,7 @@ class PreferencesUIManager(QtCore.QObject):
             # General GUI Preferences
             "global_appearance": self.ui.general_pref_form.general_gui_group.appearance_radio,
             "global_dark_canvas": self.ui.general_pref_form.general_gui_group.dark_canvas_cb,
+            "global_custom_titlebar": self.ui.general_pref_form.general_gui_group.custom_titlebar_cb,
             "global_layout": self.ui.general_pref_form.general_gui_group.layout_combo,
             "global_hover_shape": self.ui.general_pref_form.general_gui_group.hover_cb,
             "global_selection_shape": self.ui.general_pref_form.general_gui_group.selection_cb,
@@ -1163,11 +1164,14 @@ class PreferencesUIManager(QtCore.QObject):
         should_restart = False
         appearance_new_val = self.ui.general_pref_form.general_gui_group.appearance_radio.get_value()
         dark_canvas_new_val = self.ui.general_pref_form.general_gui_group.dark_canvas_cb.get_value()
+        custom_titlebar = self._pref("global_custom_titlebar")
+        custom_titlebar_new_val = self.ui.general_pref_form.general_gui_group.custom_titlebar_cb.get_value()
 
         ge = self._pref("global_graphic_engine")
         ge_val = self.ui.general_pref_form.general_app_group.ge_radio.get_value()
 
-        if appearance_new_val != appearance or ge != ge_val or dark_canvas_new_val != dark_canvas:
+        if (appearance_new_val != appearance or ge != ge_val or dark_canvas_new_val != dark_canvas or
+                custom_titlebar_new_val != custom_titlebar):
             msgbox = FCMessageBox(parent=self.ui)
             title = _("Application will restart")
             txt = _("Are you sure you want to continue?")
@@ -1207,6 +1211,12 @@ class PreferencesUIManager(QtCore.QObject):
                     should_restart = True
                 else:
                     self.ui.general_pref_form.general_app_group.ge_radio.set_value(ge)
+
+            if custom_titlebar_new_val != custom_titlebar:
+                if response == bt_yes:
+                    should_restart = True
+                else:
+                    self.ui.general_pref_form.general_gui_group.custom_titlebar_cb.set_value(custom_titlebar)
 
         # #############################################################################################################
         # ############################  Here is done the actual preferences updates  ##################################

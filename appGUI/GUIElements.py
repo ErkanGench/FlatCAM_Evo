@@ -3318,6 +3318,16 @@ class FCLabel(QtWidgets.QLabel):
     def restore_stylesheet(self):
         self.setStyleSheet(self.default_stylesheet)
 
+    def setText(self, text):
+        if isinstance(text, str):
+            text = re.sub(
+                r'(<[^>]*?(?<![\w-])color\s*(?:=\s*["\']?|:\s*))(blue|#0000ff|#00f)(?=[\s;"\'/>])',
+                lambda match: match.group(1) + self.patching_text_color(match.group(2)),
+                text,
+                flags=re.IGNORECASE
+            )
+        super(FCLabel, self).setText(text)
+
     @property
     def color(self):
         return self._color

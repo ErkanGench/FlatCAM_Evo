@@ -12,9 +12,8 @@
 # ##########################################################
 from PyQt6.QtCore import QSettings
 
-import platform
-
 from appGUI.GUIElements import *
+from appGUI.TitleBar import TitleBar
 from appDatabase import _database_option
 
 from appGUI.preferences.cncjob.CNCJobPreferencesUI import CNCJobPreferencesUI
@@ -35,6 +34,7 @@ from appObjects.ObjectCollection import EventSensitiveListView
 
 import subprocess
 import os
+import platform
 import sys
 import gettext
 import appTranslation as fcTranslate
@@ -56,7 +56,7 @@ class MainGUI(QtWidgets.QMainWindow):
     # similar colors safe for use on Dark theme
     # 'input_color': (light_color, dark_color),
     theme_safe_colors = {
-        "blue": "#1F80FF",
+        "blue": "#66B3FF",
         "brown": "#CC9966",
         "darkgreen": "#008015",
         "darkorange": "darkorange",
@@ -79,26 +79,27 @@ class MainGUI(QtWidgets.QMainWindow):
         :return: similar color better suited for dark or light theme
         """
 
-        if color in self.theme_safe_colors:
+        normalized_color = color.lower() if isinstance(color, str) else color
+        if normalized_color in ('#0000ff', '#00f'):
+            normalized_color = 'blue'
+
+        if normalized_color in self.theme_safe_colors:
             if _database_option(self.app, 'global_theme') in ['default', 'light']:
                 return color
             else:
-                return self.theme_safe_colors[color]
+                return self.theme_safe_colors[normalized_color]
         else:
             return color
 
     # https://www.w3.org/TR/SVG11/types.html#ColorKeywords
     def __init__(self, app):
         super(MainGUI, self).__init__()
-        # self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
 
         self.app = app
         self.decimals = self.app.decimals
 
         FCLabel.patching_text_color = self.theme_safe_color
         FCButton.patching_text_color = self.theme_safe_color
-
-        # self.setWindowFlags(QtCore.Qt.WindowType.FramelessWindowHint)
 
         # Divine icon pack by Ipapun @ finicons.com
 
@@ -113,7 +114,7 @@ class MainGUI(QtWidgets.QMainWindow):
         # #######################################################################
         # ###################### Menu BUILDING ##################################
         # #######################################################################
-        self.menu = self.menuBar()
+        self.menu = QtWidgets.QMenuBar(self)
 
         self.menu_toggle_nb = QtGui.QAction(
             QtGui.QIcon(self.app.resource_location + '/notebook32.png'), _("Toggle Panel"))
@@ -1018,46 +1019,48 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################################################################
 
         # ## TOOLBAR INSTALLATION ###
+        self.setIconSize(self.iconSize() * 0.8)
+        toolbar_style = "QToolBar{spacing:2px;padding:1px;} QToolBar > QToolButton{padding:2px;}"
         self.toolbarfile = QtWidgets.QToolBar(_('File Toolbar'))
         self.toolbarfile.setObjectName('File_TB')
-        self.toolbarfile.setStyleSheet("QToolBar{spacing:0px;}")
+        self.toolbarfile.setStyleSheet(toolbar_style)
         self.addToolBar(self.toolbarfile)
 
         self.toolbaredit = QtWidgets.QToolBar(_('Edit Toolbar'))
         self.toolbaredit.setObjectName('Edit_TB')
-        self.toolbaredit.setStyleSheet("QToolBar{spacing:0px;}")
+        self.toolbaredit.setStyleSheet(toolbar_style)
         self.addToolBar(self.toolbaredit)
 
         self.toolbarview = QtWidgets.QToolBar(_('View Toolbar'))
         self.toolbarview.setObjectName('View_TB')
-        self.toolbarview.setStyleSheet("QToolBar{spacing:0px;}")
+        self.toolbarview.setStyleSheet(toolbar_style)
         self.addToolBar(self.toolbarview)
 
         self.toolbarshell = QtWidgets.QToolBar(_('Shell Toolbar'))
         self.toolbarshell.setObjectName('Shell_TB')
-        self.toolbarshell.setStyleSheet("QToolBar{spacing:0px;}")
+        self.toolbarshell.setStyleSheet(toolbar_style)
         self.addToolBar(self.toolbarshell)
 
         self.toolbarplugins = QtWidgets.QToolBar(_('Plugin Toolbar'))
         self.toolbarplugins.setObjectName('Plugins_TB')
-        self.toolbarplugins.setStyleSheet("QToolBar{spacing:0px;}")
+        self.toolbarplugins.setStyleSheet(toolbar_style)
         self.addToolBar(self.toolbarplugins)
 
         self.exc_edit_toolbar = QtWidgets.QToolBar(_('Excellon Editor Toolbar'))
         self.exc_edit_toolbar.setObjectName('ExcEditor_TB')
-        self.exc_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+        self.exc_edit_toolbar.setStyleSheet(toolbar_style)
         self.addToolBar(self.exc_edit_toolbar)
 
         self.addToolBarBreak()
 
         self.geo_edit_toolbar = QtWidgets.QToolBar(_('Geometry Editor Toolbar'))
         self.geo_edit_toolbar.setObjectName('GeoEditor_TB')
-        self.geo_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+        self.geo_edit_toolbar.setStyleSheet(toolbar_style)
         self.addToolBar(self.geo_edit_toolbar)
 
         self.grb_edit_toolbar = QtWidgets.QToolBar(_('Gerber Editor Toolbar'))
         self.grb_edit_toolbar.setObjectName('GrbEditor_TB')
-        self.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+        self.grb_edit_toolbar.setStyleSheet(toolbar_style)
         self.addToolBar(self.grb_edit_toolbar)
 
         # ### INFOBAR TOOLBARS ###################################################
@@ -1191,17 +1194,11 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/drill32.png'), _("Drilling"))
         self.mill_btn = self.toolbarplugins.addAction(
             QtGui.QIcon(self.app.resource_location + '/milling_tool32.png'), _("Milling"))
-        self.level_btn = self.toolbarplugins.addAction(
-            QtGui.QIcon(self.app.resource_location + '/level32.png'), _("Levelling"))
-        self.level_btn.setDisabled(True)
-        self.level_btn.setToolTip("DISABLED. Work in progress!")
 
         self.toolbarplugins.addSeparator()
 
         self.isolation_btn = self.toolbarplugins.addAction(
             QtGui.QIcon(self.app.resource_location + '/iso32.png'), _("Isolation"))
-        self.follow_btn = self.toolbarplugins.addAction(
-            QtGui.QIcon(self.app.resource_location + '/follow32.png'), _("Follow"))
         self.ncc_btn = self.toolbarplugins.addAction(
             QtGui.QIcon(self.app.resource_location + '/ncc32.png'), _("NCC"))
         self.paint_btn = self.toolbarplugins.addAction(
@@ -1224,8 +1221,6 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/align32.png'), _("Align"))
         # self.sub_btn = self.toolbarplugins.addAction(
         #     QtGui.QIcon(self.app.resource_location + '/sub32.png'), _("Subtract Tool"))
-
-        self.toolbarplugins.addSeparator()
 
         # self.extract_btn = self.toolbarplugins.addAction(
         #     QtGui.QIcon(self.app.resource_location + '/extract32.png'), _("Extract"))
@@ -2020,6 +2015,7 @@ class MainGUI(QtWidgets.QMainWindow):
                                                  icon_kind=_database_option(self.app, "global_activity_icon"),
                                                  replot_callback=self.app.on_toolbar_replot)
         self.infobar.addWidget(self.activity_view)
+        self.compact_infobar()
 
         # disabled
         # self.progress_bar = QtWidgets.QProgressBar()
@@ -2040,11 +2036,8 @@ class MainGUI(QtWidgets.QMainWindow):
         self.app_icon.addFile(self.app.resource_location + '/app256.png', QtCore.QSize(256, 256))
         self.setWindowIcon(self.app_icon)
 
-        self.setWindowTitle('FlatCAM Evo %s %s - %s' %
-                            (self.app.version,
-                             ('BETA' if self.app.beta else ''),
-                             platform.architecture()[0])
-                            )
+        self.build_titlebar()
+        self.set_ui_title('')
 
         self.filename = ""
         self.units = ""
@@ -2256,6 +2249,16 @@ class MainGUI(QtWidgets.QMainWindow):
             # self.app.plotcanvas.native.setParent(tab_detached)
             # self.app.plotcanvas.freeze()
 
+    def build_titlebar(self):
+        self.title_bar = None
+        self.title_toolbar = None
+        if _database_option(self.app, 'global_custom_titlebar'):
+            self.title_bar = TitleBar(self, self.menu, self.menu_toggle_nb)
+            self.title_toolbar = self.title_bar.toolbar
+            self.setMenuWidget(self.title_bar)
+        else:
+            self.setMenuBar(self.menu)
+
     def set_ui_title(self, name):
         """
         Sets the title of the main window.
@@ -2263,13 +2266,23 @@ class MainGUI(QtWidgets.QMainWindow):
         :param name: String that store the project path and project name
         :return: None
         """
-        engine = "3D" if self.app.use_3d_engine else "2D"
-        title = (
-            f"FlatCAM Evo {self.app.version} "
-            f"{'BETA' if self.app.beta else ''} - {platform.architecture()[0]} - "
-            f"[{engine}]    {name}"
-        )
-        self.setWindowTitle(title)
+        if self.title_bar is None:
+            use_3d_engine = getattr(self.app, 'use_3d_engine',
+                                    _database_option(self.app, 'global_graphic_engine') == '3D')
+            engine = "3D" if use_3d_engine else "2D"
+            title = (
+                f"FlatCAM Evo {self.app.version} "
+                f"{'BETA' if self.app.beta else ''} - {platform.architecture()[0]} - "
+                f"[{engine}]    {name}"
+            )
+            self.setWindowTitle(title)
+            return
+
+        if not name or name == _("New Project - Not saved"):
+            name = _("Untitled")
+        self.title_bar.project_title = name
+        self.setWindowTitle('FlatCAM Evo %s' % self.app.version)
+        self.title_bar.update_title()
 
     def on_toggle_gui(self):
         if self.isHidden():
@@ -2308,6 +2321,40 @@ class MainGUI(QtWidgets.QMainWindow):
 
         self.plot_tab_area.set_detachable(val=checked)
         self.app.defaults["global_tabs_detachable"] = checked
+
+    def compact_infobar(self):
+        """Reduce status-bar spacing without shrinking its fonts or clipping text."""
+        self.infobar.ensurePolished()
+        QtCore.QCoreApplication.sendEvent(self.infobar, QtCore.QEvent(QtCore.QEvent.Type.LayoutRequest))
+        target_height = round(self.infobar.sizeHint().height() * 0.75)
+        self.infobar.setStyleSheet("""
+            QStatusBar QLineEdit {
+                padding-top: 0px; padding-bottom: 0px;
+                margin-top: 0px; margin-bottom: 0px;
+                min-height: 0px;
+            }
+        """)
+        for toolbar in (self.delta_coords_toolbar, self.coords_toolbar,
+                        self.grid_toolbar, self.status_toolbar):
+            toolbar.setStyleSheet("""
+                QToolBar { spacing: 0px; padding: 0px; margin: 0px; border: 0px; }
+                QToolBar QToolButton { padding: 0px; margin: 0px; border: 0px; }
+                QToolBar QCheckBox { padding: 0px; margin: 0px; border: 0px; }
+                QToolBar QCheckBox::indicator { margin: 0px; width: 16px; height: 16px; }
+            """)
+            toolbar.setIconSize(QtCore.QSize(16, 16))
+            toolbar.setMaximumHeight(16777215)
+        self.units_label.setMargin(0)
+        self.activity_view.icon.setFixedSize(16, 16)
+        self.activity_view.icon.setScaledContents(True)
+        self.activity_view.movie.setScaledSize(QtCore.QSize(16, 16))
+        for label in self.status_toolbar.findChildren(QtWidgets.QLabel):
+            if not label.pixmap().isNull():
+                label.setFixedSize(16, 16)
+                label.setScaledContents(True)
+        # Refresh Qt's cached child sizes before choosing a clipping-safe minimum.
+        QtCore.QCoreApplication.sendEvent(self.infobar, QtCore.QEvent(QtCore.QEvent.Type.LayoutRequest))
+        self.infobar.setMinimumHeight(max(target_height, self.infobar.minimumSizeHint().height()))
 
     def build_infobar_context_menu(self):
         for toolbar, callback in ((self.delta_coords_toolbar, self.toggle_delta_coords),
@@ -2500,17 +2547,12 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/drill32.png'), _("Drilling"))
         self.mill_btn = self.toolbarplugins.addAction(
             QtGui.QIcon(self.app.resource_location + '/milling_tool32.png'), _("Milling"))
-        self.level_btn = self.toolbarplugins.addAction(
-            QtGui.QIcon(self.app.resource_location + '/level32.png'), _("Levelling"))
-        self.level_btn.setDisabled(True)
-        self.level_btn.setToolTip("DISABLED. Work in progress!")
 
         self.toolbarplugins.addSeparator()
 
         self.isolation_btn = self.toolbarplugins.addAction(
             QtGui.QIcon(self.app.resource_location + '/iso32.png'), _("Isolation"))
-        self.follow_btn = self.toolbarplugins.addAction(
-            QtGui.QIcon(self.app.resource_location + '/follow32.png'), _("Follow"))
+
         self.ncc_btn = self.toolbarplugins.addAction(
             QtGui.QIcon(self.app.resource_location + '/ncc32.png'), _("NCC"))
         self.paint_btn = self.toolbarplugins.addAction(
@@ -2533,8 +2575,6 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/align32.png'), _("Align"))
         # self.sub_btn = self.toolbarplugins.addAction(
         #     QtGui.QIcon(self.app.resource_location + '/sub32.png'), _("Subtract"))
-
-        self.toolbarplugins.addSeparator()
 
         # self.extract_btn = self.toolbarplugins.addAction(
         #     QtGui.QIcon(self.app.resource_location + '/extract32.png'), _("Extract"))
@@ -2848,7 +2888,10 @@ class MainGUI(QtWidgets.QMainWindow):
             # Clear the list
             self.hidden_toolbars = []
 
-            # the additions are made to correct the restoration of the geometry of the window
+            # Leave fullscreen before restoring Qt's normal-window geometry.
+            self.showNormal()
+            # Native state changes must finish before setting the restore rectangle.
+            QtCore.QCoreApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
             self.setGeometry(
                 self.x_pos,
                 self.y_pos + self.titlebar_height,
@@ -2856,8 +2899,8 @@ class MainGUI(QtWidgets.QMainWindow):
                 self.height
             )
 
-            # exit FullScreen mode
-            self.showNormal()
+            if self._fullscreen_maximized:
+                self.showMaximized()
 
             return
 
@@ -2869,15 +2912,15 @@ class MainGUI(QtWidgets.QMainWindow):
                 toolbar.setVisible(False)
 
         self.original_window_flags = self.windowFlags()
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint)      # noqa
+        self._fullscreen_maximized = self.isMaximized()
+        current_geometry = self.normalGeometry() if self._fullscreen_maximized else self.geometry()
 
         # save the current geometry
-        current_geometry = self.geometry()
         self.x_pos = current_geometry.x()
         self.y_pos = current_geometry.y()
         self.width = current_geometry.width()
         self.height = current_geometry.height()
-        self.titlebar_height = self.app.qapp.style().pixelMetric(QtWidgets.QStyle.PixelMetric.PM_TitleBarHeight)
+        self.titlebar_height = 0
 
         # activate FullScreen
         self.app.ui.showFullScreen()
@@ -5241,8 +5284,13 @@ class ShortcutsTab(QtWidgets.QWidget):
                        """ % _("Editor Shortcut list")
 
         # GEOMETRY EDITOR SHORTCUT LIST
+        shortcut_heading_color = (
+            MainGUI.theme_safe_colors['blue']
+            if self.palette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
+            else 'blue'
+        )
         geo_sh_messages = """
-        <strong><span style="color:#0000ff">%s</span></strong><br>
+        <strong><span style="color:%s">%s</span></strong><br>
         <table border="0" cellpadding="0" cellspacing="0" style="width:283px">
                 <tbody>
                     <tr height="20">
@@ -5393,6 +5441,7 @@ class ShortcutsTab(QtWidgets.QWidget):
             </table>
             <br>
         """ % (
+            shortcut_heading_color,
             _("GEOMETRY EDITOR"),
             _('A'), _("Draw an Arc"),
             _('B'), _("Buffer Tool"),

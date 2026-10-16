@@ -285,6 +285,7 @@ class ShapeCollectionVisual(CompoundVisual):
 
         self.data = {}
         self.last_key = -1
+        self._top_keys = set()
         
         # Dirty flag to track whether buffers need rebuilding
         self._dirty = True
@@ -302,11 +303,14 @@ class ShapeCollectionVisual(CompoundVisual):
         self._meshes = [MeshVisual() for _ in range(0, layers)]
         # self._lines = [LineVisual(antialias=True) for _ in range(0, layers)]
         self._lines = [LineVisual(antialias=True) for _ in range(0, layers)]
+        self._top_mesh = MeshVisual()
+        self._top_line = LineVisual(antialias=True)
 
         self._line_width = linewidth
         self._triangulation = triangulation
 
         visuals_ = [self._lines[i // 2] if i % 2 else self._meshes[i // 2] for i in range(0, layers * 2)]
+        visuals_.extend([self._top_mesh, self._top_line])
 
         CompoundVisual.__init__(self, visuals_, **kwargs)
 
@@ -320,6 +324,11 @@ class ShapeCollectionVisual(CompoundVisual):
         for lne in self._lines:
             pass
             lne.set_gl_state(blend=True)
+
+        # Selected objects are an overlay, independent of their normal plotting layer.
+        self._top_mesh.set_gl_state(blend=True, depth_test=False,
+                                    cull_face=(self.fc_options or {}).get("global_backface_culling", True))
+        self._top_line.set_gl_state(blend=True, depth_test=False)
 
         self.freeze()
 
@@ -477,6 +486,7 @@ class ShapeCollectionVisual(CompoundVisual):
         # Remove data
         if key in self.data:
             del self.data[key]
+        self._top_keys.discard(key)
 
         # Mark buffers as dirty
         self._dirty = True
@@ -492,6 +502,7 @@ class ShapeCollectionVisual(CompoundVisual):
         """
         self.last_key = -1
         self.data.clear()
+        self._top_keys.clear()
         
         # Mark buffers as dirty
         self._dirty = True
@@ -501,7 +512,7 @@ class ShapeCollectionVisual(CompoundVisual):
 
     def move_to_top(self, keys):
         """
-        Move the shapes to the end of the data, so they are drawn over the other shapes of the same layer.
+        Move the shapes to the foreground, above every normal plotting layer.
         The shapes keep their keys and their buffers; there is no new tessellation.
 
         :param keys:    list of shape keys, in the order to draw them
@@ -511,9 +522,9 @@ class ShapeCollectionVisual(CompoundVisual):
         if not keys:
             return False
 
-        # the shapes are already on top if they are the last ones in the data
+        # Foreground membership matters even when these are already the last shapes.
         key_set = set(keys)
-        if set(itertools.islice(reversed(self.data), len(keys))) == key_set:
+        if self._top_keys == key_set and set(itertools.islice(reversed(self.data), len(keys))) == key_set:
             return False
 
         # Lock sub-visuals updates; a key that is deleted and set again goes to the end of the dict
@@ -521,6 +532,7 @@ class ShapeCollectionVisual(CompoundVisual):
         try:
             moved = [(k, self.data.pop(k)) for k in keys]
             self.data.update(moved)
+            self._top_keys = key_set
         finally:
             self.update_lock.release()
 
@@ -571,9 +583,11 @@ class ShapeCollectionVisual(CompoundVisual):
             else:
                 new_line_color = None
 
-        mesh_colors_chunks = [[] for _ in range(len(self._meshes))]     # Face colors chunks
-        line_colors_chunks = [[] for _ in range(len(self._meshes))]     # Line colors chunks
-        line_pts_chunks = [[] for _ in range(len(self._lines))]         # Vertices for line chunks
+        meshes = self._meshes + [self._top_mesh]
+        lines = self._lines + [self._top_line]
+        mesh_colors_chunks = [[] for _ in meshes]     # Face colors chunks
+        line_colors_chunks = [[] for _ in lines]     # Line colors chunks
+        line_pts_chunks = [[] for _ in lines]         # Vertices for line chunks
 
         # Lock sub-visuals updates
         self.update_lock.acquire(True)
@@ -582,11 +596,12 @@ class ShapeCollectionVisual(CompoundVisual):
         if indexes is None:
             for k, data in list(self.data.items()):
                 if data['visible'] and 'line_pts' in data:
+                    layer = len(self._meshes) if k in self._top_keys else data['layer']
                     if new_mesh_color and new_mesh_color != '':
                         dim_mesh_tris = (len(data['mesh_tris']) // 3)
                         if dim_mesh_tris != 0:
                             try:
-                                mesh_colors_chunks[data['layer']].append(np.tile(mesh_color_rgba, (dim_mesh_tris, 1)))
+                                mesh_colors_chunks[layer].append(np.tile(mesh_color_rgba, (dim_mesh_tris, 1)))
                                 self.data[k]['face_color'] = new_mesh_color
                                 # Invalidate cached rgba
                                 data['face_color_rgba'] = mesh_color_rgba
@@ -599,8 +614,8 @@ class ShapeCollectionVisual(CompoundVisual):
                         dim_line_pts = (len(data['line_pts']))
                         if dim_line_pts != 0:
                             try:
-                                line_pts_chunks[data['layer']].append(data['line_pts'])
-                                line_colors_chunks[data['layer']].append(np.tile(line_color_rgba, (dim_line_pts, 1)))
+                                line_pts_chunks[layer].append(data['line_pts'])
+                                line_colors_chunks[layer].append(np.tile(line_color_rgba, (dim_line_pts, 1)))
                                 self.data[k]['color'] = new_line_color
                                 # Invalidate cached rgba
                                 data['color_rgba'] = line_color_rgba
@@ -611,6 +626,7 @@ class ShapeCollectionVisual(CompoundVisual):
         else:
             for k, data in list(self.data.items()):
                 if data['visible'] and 'line_pts' in data:
+                    layer = len(self._meshes) if k in self._top_keys else data['layer']
                     dim_mesh_tris = (len(data['mesh_tris']) // 3)
                     dim_line_pts = (len(data['line_pts']))
 
@@ -618,7 +634,7 @@ class ShapeCollectionVisual(CompoundVisual):
                         if new_mesh_color and new_mesh_color != '':
                             if dim_mesh_tris != 0:
                                 try:
-                                    mesh_colors_chunks[data['layer']].append(np.tile(mesh_color_rgba, (dim_mesh_tris, 1)))
+                                    mesh_colors_chunks[layer].append(np.tile(mesh_color_rgba, (dim_mesh_tris, 1)))
                                     self.data[k]['face_color'] = new_mesh_color
                                     # Invalidate cached rgba
                                     data['face_color_rgba'] = mesh_color_rgba
@@ -629,8 +645,8 @@ class ShapeCollectionVisual(CompoundVisual):
                         if new_line_color and new_line_color != '':
                             if dim_line_pts != 0:
                                 try:
-                                    line_pts_chunks[data['layer']].append(data['line_pts'])
-                                    line_colors_chunks[data['layer']].append(np.tile(line_color_rgba, (dim_line_pts, 1)))
+                                    line_pts_chunks[layer].append(data['line_pts'])
+                                    line_colors_chunks[layer].append(np.tile(line_color_rgba, (dim_line_pts, 1)))
                                     self.data[k]['color'] = new_line_color
                                     # Invalidate cached rgba
                                     data['color_rgba'] = line_color_rgba
@@ -644,18 +660,18 @@ class ShapeCollectionVisual(CompoundVisual):
                                 # Use cached rgba value if available
                                 if 'face_color_rgba' not in data:
                                     data['face_color_rgba'] = Color(data['face_color']).rgba
-                                mesh_colors_chunks[data['layer']].append(np.tile(data['face_color_rgba'], (dim_mesh_tris, 1)))
+                                mesh_colors_chunks[layer].append(np.tile(data['face_color_rgba'], (dim_mesh_tris, 1)))
                             except Exception as e:
                                 print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
                                       "Create mesh colors --> Data error. %s" % str(e))
 
                         if dim_line_pts != 0:
                             try:
-                                line_pts_chunks[data['layer']].append(data['line_pts'])
+                                line_pts_chunks[layer].append(data['line_pts'])
                                 # Use cached rgba value if available
                                 if 'color_rgba' not in data:
                                     data['color_rgba'] = Color(data['color']).rgba
-                                line_colors_chunks[data['layer']].append(np.tile(data['color_rgba'], (dim_line_pts, 1)))
+                                line_colors_chunks[layer].append(np.tile(data['color_rgba'], (dim_line_pts, 1)))
                             except Exception as e:
                                 print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
                                       "Create line colors --> Data error. %s" % str(e))
@@ -667,7 +683,7 @@ class ShapeCollectionVisual(CompoundVisual):
 
         # Updating meshes
         if new_mesh_color and new_mesh_color != '':
-            for i, mesh in enumerate(self._meshes):
+            for i, mesh in enumerate(meshes):
                 if len(mesh_colors[i]) > 0:
                     try:
                         mesh._meshdata.set_face_colors(colors=mesh_colors[i])
@@ -678,7 +694,7 @@ class ShapeCollectionVisual(CompoundVisual):
 
         # Updating lines
         if new_line_color and new_line_color != '':
-            for i, line in enumerate(self._lines):
+            for i, line in enumerate(lines):
                 if len(line_pts[i]) > 0:
                     line.visible = True
                     try:
@@ -701,27 +717,29 @@ class ShapeCollectionVisual(CompoundVisual):
         # Skip if nothing has changed
         if not self._dirty:
             return
-        
+
+        meshes = self._meshes + [self._top_mesh]
+        lines = self._lines + [self._top_line]
         # Optimized: Phase 1 - Collect references (O(1) per shape)
-        layer_line_pts_chunks = [[] for _ in range(len(self._lines))]
-        layer_mesh_verts_chunks = [[] for _ in range(len(self._meshes))]
-        layer_mesh_tris_chunks = [[] for _ in range(len(self._meshes))]
-        layer_mesh_colors_chunks = [[] for _ in range(len(self._meshes))]
-        layer_line_colors_chunks = [[] for _ in range(len(self._lines))]
+        layer_line_pts_chunks = [[] for _ in lines]
+        layer_mesh_verts_chunks = [[] for _ in meshes]
+        layer_mesh_tris_chunks = [[] for _ in meshes]
+        layer_mesh_colors_chunks = [[] for _ in meshes]
+        layer_line_colors_chunks = [[] for _ in lines]
         
         # Track cumulative vertex counts per layer for mesh_tris offsets
         # mesh_tris contains triangle indices into mesh_vertices.
         # When merging multiple shapes, indices must be offset by the
         # cumulative vertex count of all previously merged shapes.
-        layer_vert_counts = [0] * len(self._meshes)
+        layer_vert_counts = [0] * len(meshes)
 
         # Lock sub-visuals updates
         self.update_lock.acquire(True)
 
         # Collect shape buffers
-        for data in list(self.data.values()):
+        for key, data in list(self.data.items()):
             if data['visible'] and 'line_pts' in data:
-                layer = data['layer']
+                layer = len(self._meshes) if key in self._top_keys else data['layer']
                 layer_line_pts_chunks[layer].append(data['line_pts'])
                 layer_line_colors_chunks[layer].append(data['line_colors'])
 
@@ -738,17 +756,18 @@ class ShapeCollectionVisual(CompoundVisual):
         def _concat(chunks, empty_shape, dtype):
             return np.concatenate(chunks) if chunks else np.empty(empty_shape, dtype=dtype)
 
-        line_pts = [_concat(layer_line_pts_chunks[i], (0, 2), np.float32) for i in range(len(self._lines))]
-        line_colors = [_concat(layer_line_colors_chunks[i], (0, 4), np.float32) for i in range(len(self._lines))]
-        mesh_vertices = [_concat(layer_mesh_verts_chunks[i], (0, 2), np.float32) for i in range(len(self._meshes))]
-        mesh_tris = [_concat(layer_mesh_tris_chunks[i], (0,), np.uint32) for i in range(len(self._meshes))]
-        mesh_colors = [_concat(layer_mesh_colors_chunks[i], (0, 4), np.float32) for i in range(len(self._meshes))]
+        line_pts = [_concat(layer_line_pts_chunks[i], (0, 2), np.float32) for i in range(len(lines))]
+        line_colors = [_concat(layer_line_colors_chunks[i], (0, 4), np.float32) for i in range(len(lines))]
+        mesh_vertices = [_concat(layer_mesh_verts_chunks[i], (0, 2), np.float32) for i in range(len(meshes))]
+        mesh_tris = [_concat(layer_mesh_tris_chunks[i], (0,), np.uint32) for i in range(len(meshes))]
+        mesh_colors = [_concat(layer_mesh_colors_chunks[i], (0, 4), np.float32) for i in range(len(meshes))]
 
         # Set GPU state once, outside the mesh loop (Step 1a optimization)
         set_state(polygon_offset_fill=False)
 
         # Updating meshes
-        for i, mesh in enumerate(self._meshes):
+        for i, mesh in enumerate(meshes):
+            mesh.visible = len(mesh_vertices[i]) > 0
             if len(mesh_vertices[i]) > 0:
                 mesh.set_data(
                     vertices=mesh_vertices[i],
@@ -761,7 +780,7 @@ class ShapeCollectionVisual(CompoundVisual):
             mesh._bounds_changed()
 
         # Updating lines
-        for i, line in enumerate(self._lines):
+        for i, line in enumerate(lines):
             if len(line_pts[i]) > 0:
                 line.visible = True
                 line.set_data(

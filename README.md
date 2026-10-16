@@ -23,6 +23,7 @@ OpenGL canvas, many new plugins and a Tcl scripting shell for automation.
 
 - [What FlatCAM Evo does](#what-flatcam-evo-does)
 - [Main features](#main-features)
+- [Screenshots](#screenshots)
 - [Installation](#installation)
 - [Quick start: isolate and drill a board](#quick-start-isolate-and-drill-a-board)
 - [Object types](#object-types)
@@ -83,6 +84,31 @@ The program keeps all objects of a job in 1 **project** file (`.FlatPrj`).
 - **Tools Database** for your tools and their cutting parameters.
 - **Light and dark themes**, a fast **OpenGL (VisPy)** canvas or a compatible **matplotlib** canvas, and
   translations in 9 languages.
+
+---
+
+## Screenshots
+
+### Main Application
+
+<img src="assets/images/app.png" width="850" alt="FlatCAM Evo Main Interface">
+
+### PCB Preview
+
+<img src="assets/images/pcb_preview.png" width="850" alt="PCB Gerber Viewer">
+
+### PCB Isolation / Engraving
+
+<img src="assets/images/isolation.png" width="850" alt="PCB Isolation / Engraving">
+
+### PCB Non Copper Clearing
+
+<img src="assets/images/ncc.png" width="850" alt="PCB Non Copper Clearing">
+<img src="assets/images/ncc_gcode.png" width="850" alt="PCB Non Copper Clearing - Result">
+
+### PCB Paint a Gerber
+
+<img src="assets/images/paint_cncjob.png" width="850" alt="PCB Paint a Gerber object">
 
 ---
 

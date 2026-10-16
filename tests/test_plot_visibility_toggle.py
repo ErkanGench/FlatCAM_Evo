@@ -10,6 +10,7 @@ import sys
 import os
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from shapely.geometry import Polygon
 
@@ -96,15 +97,77 @@ class TestMoveToTop(unittest.TestCase):
 
     def test_draw_order_follows_data_order(self):
         self.big.move_to_top()
-        # the last mesh vertices of layer 1 are the vertices of the moved group
+        # Selected shapes draw after every normal layer.
         last = self.collection.data[self.big._indexes[-1]]['mesh_vertices']
-        vertices = self.collection._meshes[1].mesh_data.get_vertices()
+        vertices = self.collection._top_mesh.mesh_data.get_vertices()
         self.assertTrue((vertices[-len(last):, :2] == last).all())
 
     def test_no_change_if_already_on_top(self):
+        self.assertTrue(self.collection.move_to_top(self.small._indexes))
         self.assertFalse(self.collection.move_to_top(self.small._indexes))
         self.assertTrue(self.collection.move_to_top(self.big._indexes))
         self.assertFalse(self.collection.move_to_top(self.big._indexes))
+
+    def test_foreground_overrides_layers_and_restores_previous_group(self):
+        from appGUI.VisPyVisuals import ShapeGroup
+        paint = ShapeGroup(self.collection)
+        paint.add(shape=_square(0), color='blue', face_color='blue', layer=2)
+        self.big.move_to_top()
+        self.assertIs(self.collection._subvisuals[-2], self.collection._top_mesh)
+        self.assertIs(self.collection._subvisuals[-1], self.collection._top_line)
+        self.assertEqual(len(self.collection._top_mesh.mesh_data.get_vertices()), 12)
+        paint.move_to_top()
+        self.assertEqual(len(self.collection._top_mesh.mesh_data.get_vertices()), 4)
+        self.assertEqual(len(self.collection._meshes[1].mesh_data.get_vertices()), 20)
+        self.assertTrue(all(self.collection.data[k]['layer'] == 1 for k in self.big._indexes))
+        paint.visible = False
+        self.assertFalse(self.collection._top_line.visible)
+        self.assertFalse(self.collection._top_mesh.visible)
+
+    def test_foreground_colors_follow_updates(self):
+        self.big.move_to_top()
+        self.collection.update_color(new_mesh_color='blue', new_line_color='blue', indexes=self.big._indexes)
+        colors = self.collection._top_mesh.mesh_data.get_face_colors()
+        self.assertTrue((colors == [0, 0, 1, 1]).all())
+        self.assertTrue((self.collection._top_line.color == [0, 0, 1, 1]).all())
+
+    def test_clear_does_not_promote_reused_keys(self):
+        self.big.move_to_top()
+        self.collection.clear()
+        _add_squares(self.small, 1)
+        self.collection.redraw()
+        self.assertFalse(self.collection._top_mesh.visible)
+        self.assertTrue(self.collection._meshes[1].visible)
+
+
+class TestSelectionRedraw(unittest.TestCase):
+
+    def test_visible_object_types_are_brought_to_top(self):
+        from appHandlers.appPlotManager import AppPlotManager
+        for kind in ('gerber', 'geometry', 'cncjob', 'excellon'):
+            with self.subTest(kind=kind):
+                obj = SimpleNamespace(kind=kind, obj_options={'plot': True},
+                                      bring_to_top=Mock(return_value=True), plot=Mock())
+                manager = SimpleNamespace(collection=SimpleNamespace(
+                    get_selected=lambda: [obj], get_active=lambda: obj), worker_task=Mock())
+                AppPlotManager.gerber_redraw(manager)
+                manager.worker_task.emit.assert_called_once()
+                task = manager.worker_task.emit.call_args[0][0]
+                task['fcn'](*task['params'])
+                obj.bring_to_top.assert_called_once()
+                obj.plot.assert_not_called()
+
+    def test_partial_plot_is_rebuilt_then_brought_to_top(self):
+        from appHandlers.appPlotManager import AppPlotManager
+        obj = SimpleNamespace(kind='cncjob', obj_options={'plot': True},
+                              bring_to_top=Mock(side_effect=[False, True]), plot=Mock())
+        manager = SimpleNamespace(collection=SimpleNamespace(
+            get_selected=lambda: [obj], get_active=lambda: obj), worker_task=Mock())
+        AppPlotManager.gerber_redraw(manager)
+        task = manager.worker_task.emit.call_args[0][0]
+        task['fcn'](*task['params'])
+        obj.plot.assert_called_once_with(visible=True)
+        self.assertEqual(obj.bring_to_top.call_count, 2)
 
 
 class TestShowPlottedShapes(unittest.TestCase):

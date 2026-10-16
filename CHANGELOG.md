@@ -8,6 +8,41 @@ CHANGELOG for FlatCAM Evo beta
 
 =================================================
 
+16.10.2026
+
+GUI:
+
+- optional custom title bar with a hamburger menu and a panel toggle button; the project name is shown in the title bar instead of the window title; the operating system title bar is used when the preference is off (the preference is on by default and requires a restart)
+- the toolbars use smaller icons and tighter spacing; the status bar is compacted without shrinking its fonts or clipping the coordinate entries
+- the dark-theme blue text is lighter (#66B3FF); inline blue HTML colors in labels (status bar messages, plugin parameter headings, help text) are mapped through the theme color so they stay readable on a dark background
+- fixed: leaving Fullscreen restored the normal-window geometry before the native state finished changing; the window now leaves fullscreen first, then restores the saved rectangle, and a maximized window goes back to maximized
+
+Canvas:
+
+- the HUD text uses CPU glyph rendering instead of GPU; object culling state could corrupt the GPU font atlas and erase the coordinates display after drawing large shapes
+- the selected object is drawn in a foreground overlay above every normal plotting layer; the overlay works for Gerber, Geometry, CNCJob and Excellon objects; the shapes keep their original layer and cached geometry, and the previous selection is restored when a new one is made
+- a partial plot (bring_to_top returns False) is rebuilt and then brought to the foreground
+
+Toolbar:
+
+- the disabled Levelling and Follow buttons are removed from the Plugins toolbar
+
+Preferences:
+
+- the 'Custom Title Bar' checkbox in Preferences (General / GUI) turns the custom title bar on or off; changing it prompts for a restart
+
+Tcl:
+
+- fixed: open_gerber without a filename raised an unhandled error; it now reports the missing argument
+
+README:
+
+- added a Screenshots section with images of the main interface, the PCB preview, isolation, NCC clearing, NCC G-code and Paint
+
+Version:
+
+- the version is 1.0
+
 15.10.2026
 
 Levelling Tool:

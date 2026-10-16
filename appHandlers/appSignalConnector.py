@@ -212,10 +212,8 @@ class AppSignalConnector(QtCore.QObject):
 
         self.ui.drill_btn.triggered.connect(lambda: self.app.drilling_tool.run(toggle=True))
         self.ui.mill_btn.triggered.connect(lambda: self.app.milling_tool.run(toggle=True))
-        self.ui.level_btn.triggered.connect(lambda: self.app.levelling_tool.run(toggle=True))
 
         self.ui.isolation_btn.triggered.connect(lambda: self.app.isolation_tool.run(toggle=True))
-        self.ui.follow_btn.triggered.connect(lambda: self.app.follow_tool.run(toggle=True))
         self.ui.ncc_btn.triggered.connect(lambda: self.app.ncclear_tool.run(toggle=True))
         self.ui.paint_btn.triggered.connect(lambda: self.app.paint_tool.run(toggle=True))
 

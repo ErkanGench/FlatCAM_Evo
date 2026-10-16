@@ -164,7 +164,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         # setup HUD
 
         # TEXT HUD
-        self.text_hud = Text('', color=self.text_hud_color, method='gpu', anchor_x='left', parent=None)
+        # Generate glyphs on the CPU; object culling state can corrupt GPU font atlases.
+        self.text_hud = Text('', color=self.text_hud_color, method='cpu', anchor_x='left', parent=None)
         self.text_hud.order = 2
         # RECT HUD
         self.rect_hud = Rectangle(width=10, height=10, radius=[5, 5, 5, 5], center=(20, 20),
@@ -175,7 +176,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         self.on_update_text_hud()
 
         # cursor text t obe attached to mouse cursor in Editors
-        self.text_cursor = Text('', color=self.text_hud_color, method='gpu', anchor_x='left', parent=None)
+        self.text_cursor = Text('', color=self.text_hud_color, method='cpu', anchor_x='left', parent=None)
 
         # draw a rectangle made out of 4 lines on the canvas to serve as a hint for the work area
         # all CNC have a limited workspace

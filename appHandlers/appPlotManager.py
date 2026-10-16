@@ -262,20 +262,19 @@ class AppPlotManager(QtCore.QObject):
         self.clear_pool()
 
     def gerber_redraw(self):
-        # the Gerber redraw should work only if there is only one object of type Gerber and active in the selection
-        sel_gerb_objs = [o for o in self.collection.get_selected() if o.kind == 'gerber' and o.obj_options['plot']]
-        if len(sel_gerb_objs) > 1:
+        # Keep the existing selection-redraw entry point for all plotted object types.
+        if len(self.collection.get_selected()) != 1:
             return
 
         obj = self.collection.get_active()
-        if not obj or (obj.obj_options['plot'] is False or obj.kind != 'gerber'):
-            # we don't replot something that is disabled or if it is not Gerber type
+        if not obj or not obj.obj_options['plot'] or obj.kind not in ('gerber', 'geometry', 'cncjob', 'excellon'):
             return
 
         def worker_task(plot_obj):
             # change only the draw order; a new plot of a big object takes a long time
             if not plot_obj.bring_to_top():
                 plot_obj.plot(visible=True)
+                plot_obj.bring_to_top()
 
         self.worker_task.emit({'fcn': worker_task, 'params': [obj]})
 

@@ -218,9 +218,9 @@ class App(QtCore.QObject):
             cmd_line_shellvar = arg
 
     # ################################### Version and VERSION DATE ##################################################
-    version = "Unstable"
-    # version = 1.0
-    version_date = "2026/5/01"
+    # version = "Unstable"
+    version = 1.0
+    version_date = "2026/10/16"
     beta = True
 
     # current date now

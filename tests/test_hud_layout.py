@@ -98,6 +98,34 @@ class TestHudLayout(unittest.TestCase):
         self.assertEqual(len(lines), 4)
         self.assertTrue(all(line.index('[') == lines[0].index('[') for line in lines))
 
+    def test_hud_glyphs_survive_objects_drawn_before_first_use(self):
+        from shapely.geometry import box
+
+        reference = self.make_canvas(True, 16)
+        reference.on_update_text_hud(dx=-44.0, dy=48.0, x=-44.0, y=48.0)
+        reference.render()
+        shapes = reference.new_shape_collection()
+        shapes.add(shape=box(-1000, -1000, 1000, 1000), color='red', face_color='red', update=True)
+        expected = reference.render()[:, :, :3].min(axis=2) > 180
+        self.assertGreater(expected.sum(), 100)
+
+        for hud_initially_visible in (False, True):
+            with self.subTest(hud_initially_visible=hud_initially_visible):
+                canvas = self.make_canvas(True, 16)
+                canvas.on_update_text_hud(dx=-44.0, dy=40.0, x=-44.0, y=40.0)
+                canvas.on_toggle_hud(state=hud_initially_visible, silent=True)
+                canvas.render()
+                shapes = canvas.new_shape_collection()
+                shapes.add(shape=box(-1000, -1000, 1000, 1000), color='red', face_color='red', update=True)
+                canvas.render()
+                canvas.on_update_text_hud(dx=-44.0, dy=48.0, x=-44.0, y=48.0)
+                canvas.on_toggle_hud(state=True, silent=True)
+                self.assertIn('48.0', canvas.text_hud.text[1])
+                for frame in range(2):
+                    actual = canvas.render()[:, :, :3].min(axis=2) > 180
+                    np.testing.assert_array_equal(actual, expected,
+                                                  err_msg='Object rendering must not erase HUD glyphs')
+
     def test_legacy_hud_uses_the_configured_point_size_and_aligned_columns(self):
         canvas = self.make_canvas(True, 8)
         plot = SimpleNamespace(app=canvas.fcapp, rect_hud_color='#80808040', text_hud_color='white')
