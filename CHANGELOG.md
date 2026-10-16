@@ -6,6 +6,26 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo beta
 
+17.10.2026
+
+GRBL Sender:
+
+- new GRBL Sender plugin: a GRBL console dock, the GRBL Sender button in the CNCJob UI and the GRBL preferences; the selected baud rate is kept between sessions
+- the G-code is streamed with the character-counting protocol; the GRBL status report is parsed; run control, overrides and check mode are available during a job
+- a job that is not segmented is segmented before it is streamed
+- a levelled job is made from the G-code with the height map: long G1 moves are split so the autolevelling follows the surface; the height map is bound to the GRBL work frame
+
+Levelling Tool:
+
+- GRBL probing and streaming moved from the Levelling Tool to the GRBL Sender; the Levelling Tool keeps the height map and the autolevelling
+- added the bicubic height-map method
+- the probe grid is probed in snake order, so the head does not return to the start of each row
+
+Plot 3D:
+
+- the Plot 3D tab shows the toolpath, the tool and the height map of the GRBL job
+- the 3D toolpath shows the line index of each move
+
 16.10.2026
 
 Rendering and compatibility:
