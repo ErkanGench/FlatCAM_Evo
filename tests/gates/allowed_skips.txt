@@ -1,0 +1,2 @@
+# Format: <test id>  # <reason>   (one per line; blank and # lines are ignored)
+# Tests that may be skipped or xfailed although the baseline does not say so.

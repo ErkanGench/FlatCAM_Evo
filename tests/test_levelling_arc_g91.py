@@ -17,8 +17,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from appPlugins import levelling_interp as li
-from appPlugins.levelling_interp import level_gcode_line, new_levelling_state
+from appPlugins.Common import levelling_interp as li
+from appPlugins.Common.levelling_interp import level_gcode_line, new_levelling_state
 
 DEC = 4
 TOL = 10 ** -DEC

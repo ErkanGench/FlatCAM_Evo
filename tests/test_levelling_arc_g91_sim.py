@@ -49,7 +49,7 @@ import re
 import unittest
 from types import SimpleNamespace
 
-from appPlugins.levelling_interp import level_gcode_line, new_levelling_state
+from appPlugins.Common.levelling_interp import level_gcode_line, new_levelling_state
 
 DEC = 4
 TWO_PI = 2.0 * math.pi

@@ -53,7 +53,7 @@ from appEditors.appTextEditor import AppTextEditor
 
 from camlib import CNCjob
 
-from appPlugins.levelling_interp import (
+from appPlugins.Common.levelling_interp import (
     build_bilinear_grid,
     bilinear_offset,
     nearest_offset,

@@ -24,7 +24,7 @@ from shapely import Point, box
 from shapely.ops import unary_union
 
 from appPlugins.ToolLevelling import ToolLevelling
-from appPlugins.levelling_interp import parse_grbl_probe_output, parse_height_map_line
+from appPlugins.Common.levelling_interp import parse_grbl_probe_output, parse_height_map_line
 
 
 def plane(x, y):
@@ -1254,7 +1254,7 @@ class TestApplyAutolevel(unittest.TestCase):
         self.assertEqual(obj.used_tools, target.used_tools)
 
     def test_apply_uses_captured_grid_tolerance(self):
-        from appPlugins.levelling_interp import build_bilinear_grid
+        from appPlugins.Common.levelling_interp import build_bilinear_grid
 
         target = make_apply_target({1: 'G1 X0 Y0 Z-0.1\n'})
         tool = make_tool(storage=self.storage)

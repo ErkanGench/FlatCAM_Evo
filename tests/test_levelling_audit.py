@@ -28,7 +28,7 @@ import appPlugins.ToolLevelling  # noqa: F401
 # so take the module itself from sys.modules
 tl_module = sys.modules['appPlugins.ToolLevelling']
 from appPlugins.ToolLevelling import ToolLevelling
-from appPlugins import levelling_interp as li
+from appPlugins.Common import levelling_interp as li
 
 
 def make_audit_tool(units='MM', storage=None, heights_valid=False):

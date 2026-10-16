@@ -44,7 +44,7 @@ try:
 
     from appParsers.ParseGerber import Gerber
     from appPlugins.ToolLevelling import ToolLevelling
-    from appPlugins.levelling_interp import parse_grbl_work_offset
+    from appPlugins.Common.levelling_interp import parse_grbl_work_offset
     import camlib
 
     # appParsers.ParseGerber.Gerber.__init__() itself does a *lazy*

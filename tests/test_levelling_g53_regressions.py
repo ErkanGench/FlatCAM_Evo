@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
 
-from appPlugins.levelling_interp import level_gcode_line, new_levelling_state
+from appPlugins.Common.levelling_interp import level_gcode_line, new_levelling_state
 
 
 class TestG53Regressions(unittest.TestCase):
