@@ -469,6 +469,16 @@ class LevellingCoreMixin:
                 new_x += dx
             new_y += dy
 
+        # snake order: reverse every 2nd row, so the probe moves to the next point
+        # of the row and does not go back across the board
+        row_values = sorted({p[1] for p in points})
+        snake = []
+        for row_idx, y_val in enumerate(row_values):
+            row_pts = [p for p in points if p[1] == y_val]
+            row_pts.sort(key=lambda p: p[0], reverse=bool(row_idx % 2))
+            snake.extend(row_pts)
+        points = snake
+
         pt_id = 0
         vor_pts_list = []
         bl_pts_list = []
