@@ -4,12 +4,13 @@ import threading
 import unittest
 from contextlib import nullcontext
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from PyQt6 import QtCore, QtWidgets, QtTest
 
 from appGUI.MainGUI import MainGUI
 from appHandlers.appUIActions import AppUIActions
+from appHandlers.appObjectOps import AppObjectOps
 from appObjects.AppObject import AppObject, ObjectLoadBatch
 from appObjects.ObjectCollection import ObjectCollection
 
@@ -104,7 +105,6 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.actions = SimpleNamespace(app=self.app, ui=self.window)
         self.app.on_notebook_tab_changed = lambda: AppUIActions.on_notebook_tab_changed(self.actions)
         self.app.setup_default_properties_tab = self.show_default
-        self.signals.status.connect(self.app.collection.on_collection_updated)
         self.window.notebook.currentChanged.connect(self.app.on_notebook_tab_changed)
         layout = QtWidgets.QHBoxLayout(self.window)
         layout.addWidget(self.app.collection.view)
@@ -147,6 +147,18 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.assertIs(self.window.properties_scroll_area.widget(), obj.ui)
         self.assertEqual(obj.ui.text(), obj.obj_options['name'])
 
+    def test_bulk_selection_works_without_object_menu_entries(self):
+        self.app.inform = MagicMock()
+        collection = self.app.collection
+        collection.on_objects_selection(True)
+        collection.on_objects_selection(False)
+        first, second = self.layer('first'), self.layer('second')
+        collection.on_objects_selection(True)
+        self.assertEqual(collection.get_selected(), [first, second])
+        collection.on_objects_selection(False)
+        self.assertEqual(collection.get_selected(), [])
+        self.assertEqual(self.window.menuobjects.actions(), [])
+
     def test_select_then_click_properties_tab_populates_selected_ui(self):
         first, second = self.layer('first'), self.layer('second')
         self.select(first)
@@ -155,6 +167,132 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.assert_properties(first)
         self.select(second)
         self.assert_properties(second)
+
+    def test_bulk_delete_detaches_rows_before_cleanup_and_redraws_once(self):
+        collection = self.app.collection
+        objects = [self.layer(str(i)) for i in range(12)]
+        survivor = objects[5]
+        selected = [obj for obj in objects if obj is not survivor]
+        self.window.plot_tab_area = QtWidgets.QTabWidget()
+        self.app.plotcanvas = Mock()
+        self.app.tool_shapes = Mock()
+        self.app.delete_selection_shape = Mock()
+        self.app.exc_areas = Mock()
+        self.app.defaults.report_usage = Mock()
+        self.app.setup_default_properties_tab = Mock(wraps=self.show_default)
+        removed = QtTest.QSignalSpy(collection.rowsRemoved)
+        statuses = QtTest.QSignalSpy(self.signals.status)
+        persistent = QtCore.QPersistentModelIndex(collection.index(
+            5, 0, collection.index(0, 0, QtCore.QModelIndex())))
+        for obj in selected:
+            obj.mark_shapes_storage = Mock()
+            obj.mark_shapes = Mock()
+            obj.clear = Mock(side_effect=lambda update=False: self.assertEqual(collection.get_list(), [survivor]))
+            obj.delete = Mock()
+            tab = QtWidgets.QWidget()
+            tab.setObjectName(obj.obj_options['name'] + '_editor_tab')
+            self.window.plot_tab_area.addTab(tab, obj.obj_options['name'])
+            collection.set_active(obj.obj_options['name'])
+
+        AppObjectOps(self.app).on_delete(force_deletion=True)
+
+        self.assertEqual(collection.get_list(), [survivor])
+        self.assertEqual(collection.get_selected(), [])
+        self.assertTrue(persistent.isValid())
+        self.assertEqual(persistent.row(), 0)
+        self.assertEqual(len(removed), 2)
+        self.assertEqual(len(statuses), len(selected))
+        self.assertEqual(self.window.plot_tab_area.count(), 0)
+        self.app.plotcanvas.redraw.assert_called_once_with()
+        self.app.tool_shapes.clear.assert_called_once_with(update=True)
+        self.app.setup_default_properties_tab.assert_called_once_with()
+        self.app.regFK.register_keywords.assert_called_once_with(self.app.regFK.myKeywords)
+        self.assertEqual(self.app.all_objects_list, [survivor])
+        self.assertTrue(self.app.should_we_save)
+        for obj in selected:
+            obj.clear.assert_called_once_with()
+            obj.delete.assert_called_once_with()
+            obj.mark_shapes.clear.assert_called_once_with(update=False)
+            self.assertFalse(obj.mark_shapes.enabled)
+
+    def test_bulk_delete_mixed_groups_preserves_remaining_selection(self):
+        collection = self.app.collection
+        survivor = self.layer('survivor')
+        deleted = []
+        for kind in ('gerber', 'geometry', 'cncjob'):
+            obj = Layer(kind, self.app)
+            obj.kind = kind
+            collection.append(obj)
+            obj.clear = Mock()
+            obj.delete = Mock(side_effect=lambda obj=obj: obj.obj_options.clear())
+            deleted.append(obj)
+        self.window.plot_tab_area = QtWidgets.QTabWidget()
+        self.app.plotcanvas = Mock()
+        self.select(survivor)
+        collection.set_active('geometry')
+        removed = QtTest.QSignalSpy(collection.rowsRemoved)
+
+        collection.delete_objects(deleted)
+
+        self.assertEqual(collection.get_list(), [survivor])
+        self.assertEqual(collection.get_selected(), [survivor])
+        self.assertEqual(len(removed), 3)
+        self.app.plotcanvas.redraw.assert_called_once_with()
+        for obj in deleted:
+            obj.clear.assert_called_once_with()
+            obj.delete.assert_called_once_with()
+
+    def test_bulk_delete_legacy_cnc_cleanup_and_empty_autohide(self):
+        objects = []
+        for name in ('first', 'second'):
+            obj = Layer(name, self.app)
+            obj.kind = 'cncjob'
+            self.app.collection.append(obj)
+            obj.shapes = Mock()
+            obj.annotation = Mock()
+            obj.text_col = Mock()
+            obj.probing_shapes = Mock()
+            obj.clear = Mock()
+            obj.delete = Mock()
+            objects.append(obj)
+        annotations = [obj.annotation for obj in objects]
+        text_cols = [obj.text_col for obj in objects]
+        self.app.collection.set_all_active()
+        self.window.plot_tab_area = QtWidgets.QTabWidget()
+        self.app.plotcanvas = Mock()
+        self.app.tool_shapes = None
+        self.app.delete_selection_shape = Mock()
+        self.app.exc_areas = Mock()
+        self.app.defaults.report_usage = Mock()
+        self.app.options['global_project_autohide'] = True
+        self.app.use_3d_engine = False
+        self.app.setup_default_properties_tab = Mock(wraps=self.show_default)
+
+        AppObjectOps(self.app).on_delete(force_deletion=True)
+
+        self.assertEqual(self.app.collection.get_list(), [])
+        self.assertEqual(self.app.plotcanvas.figure.delaxes.call_count, 2)
+        self.app.plotcanvas.auto_adjust_axes.assert_called_once_with()
+        self.app.plotcanvas.redraw.assert_not_called()
+        self.app.exc_areas.clear_shapes.assert_called_once_with()
+        self.window.splitter.setSizes.assert_called_once_with([0, 1])
+        self.app.setup_default_properties_tab.assert_called_once_with()
+        for obj, annotation, text_col in zip(objects, annotations, text_cols):
+            annotation.clear.assert_called_once_with(update=False)
+            obj.probing_shapes.clear.assert_called_once_with(update=True)
+            self.assertFalse(text_col.enabled)
+            self.assertFalse(hasattr(obj, 'annotation'))
+            self.assertFalse(hasattr(obj, 'text_col'))
+
+    def test_delete_confirmation_cancel_does_not_remove_objects(self):
+        first, second = self.layer('first'), self.layer('second')
+        self.app.collection.set_all_active()
+        self.app.defaults.report_usage = Mock()
+        with patch('appGUI.GUIElements.FCMessageBox') as message_box:
+            AppObjectOps(self.app).on_delete()
+        message_box.return_value.exec.assert_called_once_with()
+        self.assertEqual(self.app.collection.get_list(), [first, second])
+        self.assertEqual(self.app.collection.get_selected(), [first, second])
 
     def test_tree_arrow_navigation_uses_real_main_gui_handler(self):
         first, second = self.layer('first'), self.layer('second')

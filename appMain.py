@@ -1454,8 +1454,9 @@ class App(QtCore.QObject):
         # portability changed signal
         self.ui.general_pref_form.general_app_group.portability_cb.stateChanged.connect(self.on_portable_checked)
 
-        # Object list
-        self.object_status_changed.connect(self.collection.on_collection_updated)
+        # Object selection
+        self.ui.menuobjects_selall.triggered.connect(lambda: self.collection.on_objects_selection(True))
+        self.ui.menuobjects_unselall.triggered.connect(lambda: self.collection.on_objects_selection(False))
 
         # when there are arguments at application startup this get launched
         self.args_at_startup[list].connect(self.on_startup_args)

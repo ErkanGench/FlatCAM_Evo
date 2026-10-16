@@ -180,7 +180,6 @@ class ObjectLoadBatch(QtCore.QObject):
                 try:
                     if not self.owner.load_batches:
                         self.app.regFK.register_keywords()
-                        self.app.collection.on_collection_updated(None, 'append', None)
                         self.app.flush_recent_items()
                 finally:
                     self.progress.close()

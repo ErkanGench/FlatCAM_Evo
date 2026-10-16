@@ -176,6 +176,7 @@ def normalized_signature(owner, method_name):
 
 
 ACTION_NAMES = """
+    menuobjects_selall menuobjects_unselall
     menufilenewproject menufilenewgeo menufilenewgrb menufilenewexc menufilenewdoc
     menufileopengerber menufileopenexcellon menufileopengcode menufileopenproject menufileopenconfig
     menufilenewscript menufileopenscript menufileopenscriptexample menufilerunscript
@@ -312,9 +313,13 @@ class CollectionStub:
 
     def __init__(self):
         self.updates = []
+        self.selections = []
 
     def on_collection_updated(self, *args):
         self.updates.append(args)
+
+    def on_objects_selection(self, state):
+        self.selections.append(state)
 
     @staticmethod
     def get_active():
@@ -616,7 +621,10 @@ class TestControlledAppStartup(unittest.TestCase):
         app.ui.hud_label.clicked.emit()
         self.assertEqual(app.plotcanvas.hud_toggles, 1)
         app.object_status_changed.emit(object(), 'append', 'object')
-        self.assertEqual(len(app.collection.updates), 1)
+        self.assertEqual(app.collection.updates, [])
+        app.ui.menuobjects_selall.trigger()
+        app.ui.menuobjects_unselall.trigger()
+        self.assertEqual(app.collection.selections, [True, False])
         self.assertEqual(app.trayIcon.show_count, 1)
         app.worker_task.emit({'fcn': ARG, 'params': []})
         self.assertEqual(app.workers.tasks, [{'fcn': ARG, 'params': []}])

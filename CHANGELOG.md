@@ -19,6 +19,7 @@ GUI:
 - fixed: Return and Enter in the project tree open the selected object's Properties through the native tree activation; object insertion keeps both existing Properties UI builds and restores the selected object's UI
 - File / Exit and the system tray Exit now use the guarded window-close path; updater and save guards run before settings are saved, and cancelling the unsaved-project prompt keeps the window open; the native Quit shortcut and Exit Editor remain separate
 - worker progress messages are coalesced on the GUI thread instead of updating widgets from worker threads
+- the Objects menu no longer rebuilds a per-object entry list on every collection change; Select All and Deselect All remain connected once at startup
 
 File loading:
 
@@ -31,6 +32,7 @@ Object operations:
 - fixed: Move2Origin and Custom Origin menu actions passed Qt's unchecked state as use_thread=False; menu actions now keep worker execution enabled and snapshot the selected objects before dispatch
 - origin moves perform geometry, plotting and source regeneration in the worker; bounds, offset fields and selection overlays refresh on the GUI thread after completion; a busy 3D plot lock retries the camera fit without blocking the interface
 - Replot actions and the Geometry and Gerber editor Transform actions discard Qt's checked argument so command defaults are preserved; added a source guard and real Qt regression checks for these signal connections
+- deleting multiple selected objects removes tree rows in contiguous backward ranges before cleanup, then refreshes autocomplete, canvas and tabs once instead of per-object; single-object deletion keeps its original path
 
 Canvas:
 

@@ -934,19 +934,22 @@ class AppObjectOps(QtCore.QObject):
                 if self.app.collection.get_active():
                     self.log.debug("App.on_delete()")
 
-                    for obj_active in self.app.collection.get_selected():
+                    selected = list(self.app.collection.get_selected())
+                    bulk = len(selected) > 1
+                    clear_tool_shapes = False
+                    for obj_active in selected:
                         if obj_active.kind == 'gerber':
                             obj_active.mark_shapes_storage.clear()
-                            obj_active.mark_shapes.clear(update=True)
+                            obj_active.mark_shapes.clear(update=not bulk)
                             obj_active.mark_shapes.enabled = False
                             if self.app.tool_shapes is not None:
-                                self.app.tool_shapes.clear(update=True)
+                                clear_tool_shapes = True
 
                         elif obj_active.kind == 'cncjob':
                             try:
                                 obj_active.text_col.enabled = False
                                 del obj_active.text_col
-                                obj_active.annotation.clear(update=True)
+                                obj_active.annotation.clear(update=not bulk)
                                 del obj_active.annotation
                                 obj_active.probing_shapes.clear(update=True)
                             except AttributeError as e:
@@ -955,9 +958,27 @@ class AppObjectOps(QtCore.QObject):
                                                                        str(e))
                                 )
 
-                    selected = list(self.app.collection.get_selected())
-                    for ob in selected:
-                        self.delete_first_selected(ob)
+                    if clear_tool_shapes:
+                        self.app.tool_shapes.clear(update=True)
+
+                    if bulk:
+                        names = [ob.obj_options['name'] for ob in selected]
+                        if not self.app.use_3d_engine:
+                            for ob in selected:
+                                if ob.obj_options['plot']:
+                                    try:
+                                        self.app.plotcanvas.figure.delaxes(ob.shapes.axes)
+                                    except Exception as e:
+                                        self.log.error("App.on_delete() --> %s" % str(e))
+                        self.app.collection.delete_objects(selected)
+                        if not self.app.use_3d_engine:
+                            self.app.plotcanvas.auto_adjust_axes()
+                        self.app.setup_default_properties_tab()
+                        for name in names:
+                            self.inform.emit('%s: %s' % (_("Object deleted"), name))
+                    else:
+                        for ob in selected:
+                            self.delete_first_selected(ob)
 
                     # make sure that the selection shape is deleted, too
                     self.app.delete_selection_shape()
