@@ -15,7 +15,6 @@ Rendering and compatibility:
 - retired global_graphic_engine is automatically discarded on settings load/import and acceptance of project settings; subsequent saves omit it. The compatibility key global_graphic_engine_3d_no_mp is preserved. Its checkbox is now labelled 'Disable parallel shape processing': it selects synchronous processing, not another renderer.
 - raised ezdxf to >=1.4.5 and removed the Matplotlib requirement. DXF TEXT and ATTRIB use the modern fontTools-based text path without Matplotlib (checked with Arial); upstream MTEXT and ATTDEF still produce empty geometry, unchanged.
 
-
 16.10.2026
 
 GUI:
