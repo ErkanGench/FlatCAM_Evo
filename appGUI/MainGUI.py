@@ -2216,7 +2216,13 @@ class MainGUI(QtWidgets.QMainWindow):
     def on_pref_tabbar_clicked(self, idx, color=None):
         self.set_pref_tab_area_tab_default_text_color()
         if color is None:
-            self.pref_tab_area.tabBar().setTabTextColor(idx, QtGui.QColor('green'))
+            if self.app.qapp.styleSheet():
+                self.pref_tab_area.tabBar().setTabTextColor(idx, QtGui.QColor('green'))
+            else:
+                # The Default theme has no stylesheet: the selected tab is drawn with the system highlight as
+                # background and green text was unreadable on it.
+                self.pref_tab_area.tabBar().setTabTextColor(
+                    idx, self.pref_tab_area.palette().color(QtGui.QPalette.ColorRole.HighlightedText))
         else:
             self.pref_tab_area.tabBar().setTabTextColor(idx, color)
 

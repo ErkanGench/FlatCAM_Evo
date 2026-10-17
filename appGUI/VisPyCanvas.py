@@ -53,7 +53,11 @@ class VisPyCanvas(scene.SceneCanvas):
         if (theme == 'default' or theme == 'light') and not dark_canvas:
             theme_color = Color('#FFFFFF')
             tick_color = Color('#000000')
-            back_color = str(QPalette().color(QPalette.ColorRole.Window).name())
+            window_color = QPalette().color(QPalette.ColorRole.Window)
+            back_color = str(window_color.name())
+            if window_color.lightness() < 128:
+                # a dark window (Qt could not follow the theme): black ticks and numbers would not be readable
+                tick_color = Color('gray')
         else:
             if theme not in ['default', 'light']:
                 theme_color = Color('#202124')
