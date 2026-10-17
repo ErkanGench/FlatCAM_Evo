@@ -886,6 +886,8 @@ class App(QtCore.QObject):
         # Cache theme for use in _setup_gui (avoids passing theme as parameter)
         self._current_theme = theme
 
+        self._apply_color_scheme(theme)
+
         self.app_units = self.options.get("units", self.defaults.get("units"))
         self.default_units = self.defaults.get("units")
         self.decimals = int(self.options.get('units_precision', self.defaults.get('units_precision')))
@@ -1542,6 +1544,24 @@ class App(QtCore.QObject):
             self.defaults.old_defaults_found = False
 
     # ######################################### INIT FINISHED  #######################################################
+
+    def _apply_color_scheme(self, theme):
+        """
+        The 'default' and 'light' themes use colors made for a light window (black text, black ruler ticks, dark blue
+        headings ...) and the 'dark' theme colors made for a dark one. Without this the Qt palette and, on macOS, the
+        native widgets follow the operating system instead of the theme: with the OS in dark mode the Default theme
+        showed dark blue headings and dark project items on a dark window and the Light theme had black ruler ticks on
+        a dark gray plot border.
+
+        :param theme: 'default', 'light' or 'dark' (what 'auto' resolved to)
+        :return: None
+        """
+
+        style_hints = self.qapp.styleHints()
+        if not hasattr(style_hints, 'setColorScheme'):
+            # Qt before 6.8 cannot be told
+            return
+        style_hints.setColorScheme(QtCore.Qt.ColorScheme.Dark if theme == 'dark' else QtCore.Qt.ColorScheme.Light)
 
     @staticmethod
     def copy_and_overwrite(from_path, to_path):

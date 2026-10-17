@@ -8,6 +8,10 @@ CHANGELOG for FlatCAM Evo beta
 
 17.10.2026
 
+GUI:
+
+- fixed: the Default and Light themes were unreadable when the operating system was in dark mode (dark blue headings, black project items and black ruler ticks on a dark window; the selected preferences tab had green text on the system highlight): Qt's color scheme now follows the theme (Default and Light are light, Dark is dark, Auto follows the operating system); needs Qt 6.8 or newer, with an older Qt the ruler ticks of the plot canvas still switch to gray on a dark window
+
 GRBL Sender:
 
 - new GRBL Sender plugin: a GRBL console dock, the GRBL Sender button in the CNCJob UI and the GRBL preferences; the selected baud rate is kept between sessions
