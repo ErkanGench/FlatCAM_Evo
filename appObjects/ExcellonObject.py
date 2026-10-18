@@ -21,6 +21,7 @@ import itertools
 import numpy as np
 from copy import deepcopy
 
+import shapely
 from shapely import LineString
 
 import gettext
@@ -776,20 +777,40 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
 
         excellon_parts = []
 
-        def ndec_format(value):
-            """
-            Format 1 coordinate without the decimal point, by the Excellon CNC-7 rules. The sign stays in front.
-            LZ: the leading zeros are written and the reader adds the trailing zeros, so the whole part is
-            padded to 'whole' digits.
-            TZ: the trailing zeros are written and the reader counts 'fract' decimals from the right, so there
-            is no padding (a trailing padding would multiply the value).
-            """
-            formatted = "{:.{dec}f}".format(value, dec=fract)
-            sign = '-' if formatted.startswith('-') else ''
-            int_part, __, dec_part = formatted.lstrip('-').partition('.')
-            if e_zeros == 'LZ':
-                int_part = int_part.rjust(whole, '0')
-            return sign + int_part + dec_part
+        # 'ndec' formats a coordinate without the decimal point, by the Excellon CNC-7 rules. The sign stays in front.
+        # LZ: the leading zeros are written and the reader adds the trailing zeros, so the whole part is
+        # padded to 'whole' digits (the forced '+' sign makes the padding width the same for both signs).
+        # TZ: the trailing zeros are written and the reader counts 'fract' decimals from the right, so there
+        # is no padding (a trailing padding would multiply the value).
+        # All the lines of a tool are formatted with one '%' operation; the dot and the '+' sign are removed after.
+        if form != 'dec' and e_zeros == 'LZ':
+            num_fmt = '%%+0%d.%df' % (whole + 1 + (fract + 1 if fract > 0 else 0), fract)
+        else:
+            num_fmt = '%%.%df' % fract
+
+        def lines_code(line_fmt, coords):
+            # coords: one row of values for each line, in the order of the line_fmt fields
+            if len(coords) == 0:
+                return ''
+            text = (line_fmt * len(coords)) % tuple((coords * factor).ravel().tolist())
+            if form == 'dec':
+                return text
+            text = text.replace('.', '')
+            return text.replace('+', '') if e_zeros == 'LZ' else text
+
+        def point_coords(points):
+            coords = shapely.get_coordinates(points)
+            if len(coords) != len(points):
+                raise ValueError('only Point geometry can be exported')
+            return coords
+
+        drill_fmt = 'X%sY%s\n' % (num_fmt, num_fmt)
+        if slot_type == 'routing':
+            slot_fmt = 'G00X%sY%s\nM15\nG01X%sY%s\nM16\n' % (num_fmt, num_fmt, num_fmt, num_fmt)
+        elif slot_type == 'drilling':
+            slot_fmt = 'X%sY%sG85X%sY%s\nG05\n' % (num_fmt, num_fmt, num_fmt, num_fmt)
+        else:
+            slot_fmt = None
 
         # store here if the file has slots, return 1 if any slots, 0 if only drills
         slots_in_file = 0
@@ -813,20 +834,11 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
             for tool in self.tools:
                 excellon_parts.append('T0%s\n' % str(tool) if int(tool) < 10 else 'T%s\n' % str(tool))
 
-                for drill in self.tools[tool]['drills']:
-                    if form == 'dec':
-                        try:
-                            drill_x = drill.x * factor
-                            drill_y = drill.y * factor
-                            excellon_parts.append("X{:.{dec}f}Y{:.{dec}f}\n".format(drill_x, drill_y, dec=fract))
-                        except Exception as e:
-                            self.app.log.error('ExcellonObject.export_excellon() drills "dec" -> %s' % str(e))
-                    else:
-                        try:
-                            excellon_parts.append("X{xform}Y{yform}\n".format(xform=ndec_format(drill.x * factor),
-                                                                          yform=ndec_format(drill.y * factor)))
-                        except Exception as e:
-                            self.app.log.error('ExcellonObject.export_excellon() drills "%s" -> %s' % (e_zeros, str(e)))
+                try:
+                    excellon_parts.append(lines_code(drill_fmt, point_coords(self.tools[tool]['drills'])))
+                except Exception as e:
+                    self.app.log.error('ExcellonObject.export_excellon() drills "%s" -> %s' % (
+                        'dec' if form == 'dec' else e_zeros, str(e)))
 
         # slots processing
         if has_slots:
@@ -838,42 +850,16 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
                 else:
                     excellon_parts.append('T' + str(tool) + '\n')
 
-                for slot in self.tools[tool]['slots']:
-                    if form == 'dec':
-                        try:
-                            start_slot_x = slot[0].x * factor
-                            start_slot_y = slot[0].y * factor
-                            stop_slot_x = slot[1].x * factor
-                            stop_slot_y = slot[1].y * factor
-                            if slot_type == 'routing':
-                                excellon_parts.append("G00X{:.{dec}f}Y{:.{dec}f}\nM15\n".format(start_slot_x,
-                                                                                           start_slot_y,
-                                                                                           dec=fract))
-                                excellon_parts.append("G01X{:.{dec}f}Y{:.{dec}f}\nM16\n".format(stop_slot_x,
-                                                                                           stop_slot_y,
-                                                                                           dec=fract))
-                            elif slot_type == 'drilling':
-                                excellon_parts.append("X{:.{dec}f}Y{:.{dec}f}G85X{:.{dec}f}Y{:.{dec}f}\nG05\n".format(
-                                    start_slot_x, start_slot_y, stop_slot_x, stop_slot_y, dec=fract
-                                ))
-                        except Exception as err:
-                            self.app.log.error('ExcellonObject.export_excellon() slots "dec" -> %s' % str(err))
-                    else:
-                        try:
-                            start_x = ndec_format(slot[0].x * factor)
-                            start_y = ndec_format(slot[0].y * factor)
-                            stop_x = ndec_format(slot[1].x * factor)
-                            stop_y = ndec_format(slot[1].y * factor)
-
-                            if slot_type == 'routing':
-                                excellon_parts.append("G00X{xstart}Y{ystart}\nM15\n".format(xstart=start_x, ystart=start_y))
-                                excellon_parts.append("G01X{xstop}Y{ystop}\nM16\n".format(xstop=stop_x, ystop=stop_y))
-                            elif slot_type == 'drilling':
-                                excellon_parts.append("X{xstart}Y{ystart}G85X{xstop}Y{ystop}\nG05\n".format(
-                                    xstart=start_x, ystart=start_y, xstop=stop_x, ystop=stop_y
-                                ))
-                        except Exception as err:
-                            self.app.log.error('ExcellonObject.export_excellon() slots "%s" -> %s' % (e_zeros, str(err)))
+                slots = self.tools[tool]['slots']
+                if slot_fmt is None or not slots:
+                    continue
+                try:
+                    starts = point_coords([slot[0] for slot in slots])
+                    stops = point_coords([slot[1] for slot in slots])
+                    excellon_parts.append(lines_code(slot_fmt, np.hstack((starts, stops))))
+                except Exception as err:
+                    self.app.log.error('ExcellonObject.export_excellon() slots "%s" -> %s' % (
+                        'dec' if form == 'dec' else e_zeros, str(err)))
 
         if not has_drills and not has_slots:
             self.app.log.debug("ExcellonObject.export_excellon() --> Excellon Object is empty: no drills, no slots.")

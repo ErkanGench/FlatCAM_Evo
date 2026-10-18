@@ -43,11 +43,14 @@ Move Tool:
 - a queued move keeps its own object list; an empty object list does not move the current selection
 - the move marks the project as changed
 - the outline of the objects during the drag is drawn 1 time for each mouse move
+- more than 1 selected object is moved in parallel threads (up to 1 thread for each CPU core); the plot and the source regeneration stay sequential because the canvas is not thread-safe; a failed object does not stop the move of the other objects and the first error is shown
+- the debug log shows the time of the offset, the plot and the source regeneration of each move
 
 Gerber and Excellon:
 
 - a Gerber move translates the geometry of each aperture in 1 batch instead of 1 element at a time
 - an Excellon move translates the existing hole and slot outlines and does not buffer every drill again
+- the Gerber and Excellon source regeneration (after a move, a transform or an edit) formats a full path or all the holes of a tool in 1 operation instead of 1 coordinate at a time; the output is byte-identical; Gerber export 3.6x faster (0.542 s to 0.151 s for 4000 traces of 50 points), Excellon export 3.9x faster (0.112 s to 0.029 s for 40000 drills)
 
 Gerber Editor:
 

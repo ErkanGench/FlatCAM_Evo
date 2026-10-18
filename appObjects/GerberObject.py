@@ -1185,39 +1185,66 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         """
         self.app.log.debug("GerberObject.export_gerber() --> Generating the Gerber code from the selected Gerber file")
 
-        def tz_format(x, y, fac):
-            x_c = x * fac
-            y_c = y * fac
+        # 'T': the whole part is left padded with zeros to 'whole' digits and the sign stays in front of the padding
+        # (the forced '+' sign makes the padding width the same for positive and negative values).
+        # 'L': no padding; with the leading zeros omitted the reader takes the last 'fract' digits as the decimals,
+        # so trailing zeros added here would multiply the coordinate.
+        # A whole path is formatted with one '%' operation; the decimal dot and the '+' sign are removed after.
+        if g_zeros == 'T':
+            num_fmt = '%%+0%d.%df' % (whole + 1 + (fract + 1 if fract > 0 else 0), fract)
+        else:
+            num_fmt = '%%.%df' % fract
+        move_fmt = 'X%sY%sD02*\n' % (num_fmt, num_fmt)
+        draw_fmt = 'X%sY%sD01*\n' % (num_fmt, num_fmt)
+        flash_fmt = 'X%sY%sD03*\n' % (num_fmt, num_fmt)
 
-            x_form = "{:.{dec}f}".format(x_c, dec=fract)
-            y_form = "{:.{dec}f}".format(y_c, dec=fract)
+        def clean(text):
+            text = text.replace('.', '')
+            return text.replace('+', '') if g_zeros == 'T' else text
 
-            # extract whole part and decimal part
-            x_form = x_form.partition('.')
-            y_form = y_form.partition('.')
+        def flash_code(point):
+            return clean(flash_fmt % (point.x * factor, point.y * factor))
 
-            # left padd the 'whole' part with zeros; the sign stays in front of the padding
-            x_sign, x_digits = ('-', x_form[0][1:]) if x_form[0].startswith('-') else ('', x_form[0])
-            y_sign, y_digits = ('-', y_form[0][1:]) if y_form[0].startswith('-') else ('', y_form[0])
-            x_whole = x_sign + x_digits.rjust(whole, '0')
-            y_whole = y_sign + y_digits.rjust(whole, '0')
+        def path_code(coords, skip_repeated=True):
+            # first command is a move with pen-up D02 at the beginning of the geo
+            coords = np.asarray(coords, dtype=float)
+            if skip_repeated and len(coords) > 1:
+                keep = np.ones(len(coords), dtype=bool)
+                keep[1:] = np.any(coords[1:] != coords[:-1], axis=1)
+                coords = coords[keep]
+            flat = (coords[:, :2] * factor).ravel().tolist()
+            return clean((move_fmt + draw_fmt * (len(coords) - 1)) % tuple(flat))
 
-            # restore the coordinate padded in the left with 0 and added the decimal part
-            # without the decinal dot
-            x_form = x_whole + x_form[2]
-            y_form = y_whole + y_form[2]
-            return x_form, y_form
+        def region_code(parts, geo_elem, where):
+            # the elements of the 0 aperture and of the AM and P apertures are written as regions
+            if 'solid' in geo_elem:
+                geo = geo_elem['solid']
+                if not geo.is_empty and not isinstance(geo, (LineString, MultiLineString, Point)):
+                    parts.append('G36*\n')
+                    parts.append(path_code(geo.exterior.coords, skip_repeated=False))
+                    parts.append('D02*\nG37*\n')
 
-        def lz_format(x, y, fac):
-            x_c = x * fac
-            y_c = y * fac
-
-            # no padding: with the leading zeros omitted the reader takes the last 'fract' digits as the decimals,
-            # so trailing zeros added here would multiply the coordinate
-            x_form = "{:.{dec}f}".format(x_c, dec=fract).replace('.', '')
-            y_form = "{:.{dec}f}".format(y_c, dec=fract).replace('.', '')
-
-            return x_form, y_form
+                    clear_list = list(geo.interiors)
+                    if clear_list:
+                        parts.append('%LPC*%\n')
+                        for clear_geo in clear_list:
+                            parts.append('G36*\n')
+                            parts.append(path_code(clear_geo.coords))
+                            parts.append('D02*\nG37*\n')
+                        parts.append('%LPD*%\n')
+                elif isinstance(geo, (LineString, MultiLineString, Point)):
+                    try:
+                        if not geo.is_empty:
+                            parts.append(flash_code(geo) if isinstance(geo, Point) else path_code(geo.coords))
+                    except Exception as e:
+                        self.app.log.error(
+                            "FlatCAMObj.GerberObject.export_gerber() 'follow' for %s --> %s" % (where, str(e)))
+            if 'clear' in geo_elem:
+                geo = geo_elem['clear']
+                if not geo.is_empty:
+                    parts.append('%LPC*%\nG36*\n')
+                    parts.append(path_code(geo.exterior.coords))
+                    parts.append('D02*\nG37*\n%LPD*%\n')
 
         # Gerber code is stored here
         gerber_parts = []
@@ -1227,149 +1254,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
             if 0 in self.tools:
                 if 'geometry' in self.tools[0]:
                     for geo_elem in self.tools[0]['geometry']:
-                        if 'solid' in geo_elem:
-                            geo = geo_elem['solid']
-                            if not geo.is_empty and not isinstance(geo, LineString) and \
-                                    not isinstance(geo, MultiLineString) and not isinstance(geo, Point):
-                                gerber_parts.append('G36*\n')
-                                geo_coords = list(geo.exterior.coords)
-                                # first command is a move with pen-up D02 at the beginning of the geo
-                                if g_zeros == 'T':
-                                    x_formatted, y_formatted = tz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-                                else:
-                                    x_formatted, y_formatted = lz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-                                for coord in geo_coords[1:]:
-                                    if g_zeros == 'T':
-                                        x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                       yform=y_formatted))
-                                    else:
-                                        x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                       yform=y_formatted))
-                                gerber_parts.append('D02*\n')
-                                gerber_parts.append('G37*\n')
-
-                                clear_list = list(geo.interiors)
-                                if clear_list:
-                                    gerber_parts.append('%LPC*%\n')
-                                    for clear_geo in clear_list:
-                                        gerber_parts.append('G36*\n')
-                                        geo_coords = list(clear_geo.coords)
-
-                                        # first command is a move with pen-up D02 at the beginning of the geo
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-
-                                        prev_coord = geo_coords[0]
-                                        for coord in geo_coords[1:]:
-                                            if coord != prev_coord:
-                                                if g_zeros == 'T':
-                                                    x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-                                                else:
-                                                    x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-                                            prev_coord = coord
-
-                                        gerber_parts.append('D02*\n')
-                                        gerber_parts.append('G37*\n')
-                                    gerber_parts.append('%LPD*%\n')
-                            elif isinstance(geo, LineString) or isinstance(geo, MultiLineString) or \
-                                    isinstance(geo, Point):
-                                try:
-                                    if not geo.is_empty:
-                                        if isinstance(geo, Point):
-                                            if g_zeros == 'T':
-                                                x_formatted, y_formatted = tz_format(geo.x, geo.y, factor)
-                                                gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-                                            else:
-                                                x_formatted, y_formatted = lz_format(geo.x, geo.y, factor)
-                                                gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-                                        else:
-                                            geo_coords = list(geo.coords)
-                                            # first command is a move with pen-up D02 at the beginning of the geo
-                                            if g_zeros == 'T':
-                                                x_formatted, y_formatted = tz_format(
-                                                    geo_coords[0][0], geo_coords[0][1], factor)
-                                                gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-                                            else:
-                                                x_formatted, y_formatted = lz_format(
-                                                    geo_coords[0][0], geo_coords[0][1], factor)
-                                                gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-
-                                            prev_coord = geo_coords[0]
-                                            for coord in geo_coords[1:]:
-                                                if coord != prev_coord:
-                                                    if g_zeros == 'T':
-                                                        x_formatted, y_formatted = tz_format(coord[0], coord[1],
-                                                                                             factor)
-                                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                            xform=x_formatted,
-                                                            yform=y_formatted))
-                                                    else:
-                                                        x_formatted, y_formatted = lz_format(coord[0], coord[1],
-                                                                                             factor)
-                                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                            xform=x_formatted,
-                                                            yform=y_formatted))
-                                                prev_coord = coord
-
-                                            # gerber_code += "D02*\n"
-                                except Exception as e:
-                                    self.app.log.error(
-                                        "FlatCAMObj.GerberObject.export_gerber() 'follow' for 0 aperture --> %s" %
-                                        str(e))
-                        if 'clear' in geo_elem:
-                            geo = geo_elem['clear']
-                            if not geo.is_empty:
-                                gerber_parts.append('%LPC*%\n')
-                                gerber_parts.append('G36*\n')
-                                geo_coords = list(geo.exterior.coords)
-                                # first command is a move with pen-up D02 at the beginning of the geo
-                                if g_zeros == 'T':
-                                    x_formatted, y_formatted = tz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-                                else:
-                                    x_formatted, y_formatted = lz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-
-                                prev_coord = geo_coords[0]
-                                for coord in geo_coords[1:]:
-                                    if coord != prev_coord:
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                    prev_coord = coord
-
-                                gerber_parts.append('D02*\n')
-                                gerber_parts.append('G37*\n')
-                                gerber_parts.append('%LPD*%\n')
+                        region_code(gerber_parts, geo_elem, '0 aperture')
         except Exception as e:
             self.app.log.error("FlatCAMObj.GerberObject.export_gerber() 0 aperture --> %s" % str(e))
 
@@ -1379,150 +1264,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
             elif self.tools[apid]['type'] in ['AM', 'P']:
                 if 'geometry' in self.tools[apid]:
                     for geo_elem in self.tools[apid]['geometry']:
-                        if 'solid' in geo_elem:
-                            geo = geo_elem['solid']
-                            if not geo.is_empty and not isinstance(geo, LineString) and \
-                                    not isinstance(geo, MultiLineString) and not isinstance(geo, Point):
-                                gerber_parts.append('G36*\n')
-                                geo_coords = list(geo.exterior.coords)
-                                # first command is a move with pen-up D02 at the beginning of the geo
-                                if g_zeros == 'T':
-                                    x_formatted, y_formatted = tz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-                                else:
-                                    x_formatted, y_formatted = lz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-                                for coord in geo_coords[1:]:
-                                    if g_zeros == 'T':
-                                        x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                       yform=y_formatted))
-                                    else:
-                                        x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                       yform=y_formatted))
-                                gerber_parts.append('D02*\n')
-                                gerber_parts.append('G37*\n')
-
-                                clear_list = list(geo.interiors)
-                                if clear_list:
-                                    gerber_parts.append('%LPC*%\n')
-                                    for clear_geo in clear_list:
-                                        gerber_parts.append('G36*\n')
-                                        geo_coords = list(clear_geo.coords)
-
-                                        # first command is a move with pen-up D02 at the beginning of the geo
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-
-                                        prev_coord = geo_coords[0]
-                                        for coord in geo_coords[1:]:
-                                            if coord != prev_coord:
-                                                if g_zeros == 'T':
-                                                    x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                        xform=x_formatted,
-                                                        yform=y_formatted))
-                                                else:
-                                                    x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                        xform=x_formatted,
-                                                        yform=y_formatted))
-                                            prev_coord = coord
-
-                                        gerber_parts.append('D02*\n')
-                                        gerber_parts.append('G37*\n')
-                                    gerber_parts.append('%LPD*%\n')
-                            elif isinstance(geo, LineString) or isinstance(geo, MultiLineString) or \
-                                    isinstance(geo, Point):
-                                try:
-                                    if not geo.is_empty:
-                                        if isinstance(geo, Point):
-                                            if g_zeros == 'T':
-                                                x_formatted, y_formatted = tz_format(geo.x, geo.y, factor)
-                                                gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-                                            else:
-                                                x_formatted, y_formatted = lz_format(geo.x, geo.y, factor)
-                                                gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-                                        else:
-                                            geo_coords = list(geo.coords)
-                                            # first command is a move with pen-up D02 at the beginning of the geo
-                                            if g_zeros == 'T':
-                                                x_formatted, y_formatted = tz_format(
-                                                    geo_coords[0][0], geo_coords[0][1], factor)
-                                                gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-                                            else:
-                                                x_formatted, y_formatted = lz_format(
-                                                    geo_coords[0][0], geo_coords[0][1], factor)
-                                                gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-
-                                            prev_coord = geo_coords[0]
-                                            for coord in geo_coords[1:]:
-                                                if coord != prev_coord:
-                                                    if g_zeros == 'T':
-                                                        x_formatted, y_formatted = tz_format(coord[0], coord[1],
-                                                                                             factor)
-                                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                            xform=x_formatted,
-                                                            yform=y_formatted))
-                                                    else:
-                                                        x_formatted, y_formatted = lz_format(coord[0], coord[1],
-                                                                                             factor)
-                                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                            xform=x_formatted,
-                                                            yform=y_formatted))
-                                                prev_coord = coord
-
-                                            # gerber_code += "D02*\n"
-                                except Exception as e:
-                                    self.app.log.error(
-                                        "FlatCAMObj.GerberObject.export_gerber() 'follow' for AM --> %s" % str(e))
-                        if 'clear' in geo_elem:
-                            geo = geo_elem['clear']
-                            if not geo.is_empty:
-                                gerber_parts.append('%LPC*%\n')
-                                gerber_parts.append('G36*\n')
-                                geo_coords = list(geo.exterior.coords)
-                                # first command is a move with pen-up D02 at the beginning of the geo
-                                if g_zeros == 'T':
-                                    x_formatted, y_formatted = tz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-                                else:
-                                    x_formatted, y_formatted = lz_format(geo_coords[0][0], geo_coords[0][1], factor)
-                                    gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                   yform=y_formatted))
-
-                                prev_coord = geo_coords[0]
-                                for coord in geo_coords[1:]:
-                                    if coord != prev_coord:
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                    prev_coord = coord
-
-                                gerber_parts.append('D02*\n')
-                                gerber_parts.append('G37*\n')
-                                gerber_parts.append('%LPD*%\n')
+                        region_code(gerber_parts, geo_elem, 'AM')
             else:
                 gerber_parts.append('D%s*\n' % str(apid))
                 if 'geometry' in self.tools[apid]:
@@ -1532,42 +1274,9 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                                 geo = geo_elem['follow']
                                 if not geo.is_empty:
                                     if isinstance(geo, Point):
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(geo.x, geo.y, factor)
-                                            gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(geo.x, geo.y, factor)
-                                            gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
+                                        gerber_parts.append(flash_code(geo))
                                     else:
-                                        geo_coords = list(geo.coords)
-                                        # first command is a move with pen-up D02 at the beginning of the geo
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-
-                                        prev_coord = geo_coords[0]
-                                        for coord in geo_coords[1:]:
-                                            if coord != prev_coord:
-                                                if g_zeros == 'T':
-                                                    x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-                                                else:
-                                                    x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-                                            prev_coord = coord
-
-                                        # gerber_code += "D02*\n"
+                                        gerber_parts.append(path_code(geo.coords))
                         except Exception as e:
                             self.app.log.error(
                                 "FlatCAMObj.GerberObject.export_gerber() 'follow' normal aperture--> %s" % str(e))
@@ -1579,99 +1288,13 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                                 geo = geo_elem['clear']
                                 if not geo.is_empty:
                                     if isinstance(geo, Point):
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(geo.x, geo.y, factor)
-                                            gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(geo.x, geo.y, factor)
-                                            gerber_parts.append("X{xform}Y{yform}D03*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
+                                        gerber_parts.append(flash_code(geo))
                                     elif isinstance(geo, Polygon):
-                                        geo_coords = list(geo.exterior.coords)
-                                        # first command is a move with pen-up D02 at the beginning of the geo
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-
-                                        prev_coord = geo_coords[0]
-                                        for coord in geo_coords[1:]:
-                                            if coord != prev_coord:
-                                                if g_zeros == 'T':
-                                                    x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-                                                else:
-                                                    x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-
-                                            prev_coord = coord
-
+                                        gerber_parts.append(path_code(geo.exterior.coords))
                                         for geo_int in geo.interiors:
-                                            geo_coords = list(geo_int.coords)
-                                            # first command is a move with pen-up D02 at the beginning of the geo
-                                            if g_zeros == 'T':
-                                                x_formatted, y_formatted = tz_format(
-                                                    geo_coords[0][0], geo_coords[0][1], factor)
-                                                gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-                                            else:
-                                                x_formatted, y_formatted = lz_format(
-                                                    geo_coords[0][0], geo_coords[0][1], factor)
-                                                gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                               yform=y_formatted))
-
-                                            prev_coord = geo_coords[0]
-                                            for coord in geo_coords[1:]:
-                                                if coord != prev_coord:
-                                                    if g_zeros == 'T':
-                                                        x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                            xform=x_formatted,
-                                                            yform=y_formatted))
-                                                    else:
-                                                        x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                                        gerber_parts.append("X{xform}Y{yform}D01*\n".format(
-                                                            xform=x_formatted,
-                                                            yform=y_formatted))
-
-                                                prev_coord = coord
+                                            gerber_parts.append(path_code(geo_int.coords))
                                     else:
-                                        geo_coords = list(geo.coords)
-                                        # first command is a move with pen-up D02 at the beginning of the geo
-                                        if g_zeros == 'T':
-                                            x_formatted, y_formatted = tz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-                                        else:
-                                            x_formatted, y_formatted = lz_format(
-                                                geo_coords[0][0], geo_coords[0][1], factor)
-                                            gerber_parts.append("X{xform}Y{yform}D02*\n".format(xform=x_formatted,
-                                                                                           yform=y_formatted))
-
-                                        prev_coord = geo_coords[0]
-                                        for coord in geo_coords[1:]:
-                                            if coord != prev_coord:
-                                                if g_zeros == 'T':
-                                                    x_formatted, y_formatted = tz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-                                                else:
-                                                    x_formatted, y_formatted = lz_format(coord[0], coord[1], factor)
-                                                    gerber_parts.append("X{xform}Y{yform}D01*\n".format(xform=x_formatted,
-                                                                                                   yform=y_formatted))
-
-                                            prev_coord = coord
-                                        # gerber_code += "D02*\n"
+                                        gerber_parts.append(path_code(geo.coords))
                                     gerber_parts.append('%LPD*%\n')
                         except Exception as e:
                             self.app.log.error("FlatCAMObj.GerberObject.export_gerber() 'clear' --> %s" % str(e))

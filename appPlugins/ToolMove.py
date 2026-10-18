@@ -10,6 +10,9 @@ from appTool import AppTool
 from appGUI.VisPyVisuals import ShapeCollection
 
 import logging
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 
 from shapely import Polygon
@@ -199,32 +202,59 @@ class ToolMove(AppTool):
 
         result = {'updates': [], 'error': None}
 
+        def offset_one(sel_obj):
+            error = None
+            try:
+                if sel_obj.offset((dx, dy)) == 'fail':
+                    error = 'Object movement failed'
+            except Exception as err:
+                self.app.log.exception('ToolMove.move_handler()')
+                error = str(err)
+            try:
+                bounds = sel_obj.bounds()
+            except Exception as err:
+                self.app.log.exception('ToolMove.move_handler() bounds')
+                return None, error or str(err)
+            return bounds, error
+
         def job_move(app_obj):
             with self.app.proc_container.new('%s...' % _("Moving")):
-                moved = []
-                try:
-                    for sel_obj in obj_list:
-                        moved.append(sel_obj)
-                        try:
-                            status = sel_obj.offset((dx, dy))
-                        finally:
-                            result['updates'].append((sel_obj, sel_obj.bounds()))
-                        if status == 'fail':
-                            raise ValueError('Object movement failed')
-                except Exception as err:
-                    app_obj.app.log.exception('ToolMove.move_handler()')
-                    result['error'] = str(err)
+                # The vectorized Shapely calls of offset() release the GIL, so the objects move in parallel.
+                # Each object owns its geometry; plot() stays sequential because the canvas is not thread-safe.
+                t_start = time.perf_counter()
+                if len(obj_list) == 1:
+                    offset_results = [offset_one(obj_list[0])]
+                else:
+                    workers = min(len(obj_list), os.cpu_count() or 1)
+                    with ThreadPoolExecutor(max_workers=workers) as executor:
+                        offset_results = list(executor.map(offset_one, obj_list))
+                t_offset = time.perf_counter() - t_start
+
+                for sel_obj, (bounds, error) in zip(obj_list, offset_results):
+                    if bounds is not None:
+                        result['updates'].append((sel_obj, bounds))
+                    if error is not None and result['error'] is None:
+                        result['error'] = error
 
                 # Plot before exporting, and refresh even a partially moved object on failure.
-                for sel_obj in moved:
+                t_plot = t_source = 0.0
+                for sel_obj in obj_list:
                     try:
+                        t_start = time.perf_counter()
                         sel_obj.plot()
+                        t_plot += time.perf_counter() - t_start
                         if sel_obj.kind in ('gerber', 'excellon'):
-                            if sel_obj.regenerate_source() is False:
+                            t_start = time.perf_counter()
+                            regenerated = sel_obj.regenerate_source()
+                            t_source += time.perf_counter() - t_start
+                            if regenerated is False:
                                 raise ValueError('Source regeneration failed')
                     except Exception as err:
                         app_obj.app.log.exception('ToolMove.move_handler() refresh')
                         result['error'] = str(err)
+
+                app_obj.app.log.debug("ToolMove.move_handler() %d objects: offset %.3fs, plot %.3fs, source %.3fs" %
+                                      (len(obj_list), t_offset, t_plot, t_source))
 
             app_obj.move_finished.emit(result)
 
