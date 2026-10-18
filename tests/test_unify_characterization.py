@@ -629,6 +629,15 @@ def save_and_load(app, objects, tmp_path):
     return proj, restored
 
 
+def test_saved_project_has_only_project_options(tmp_path):
+    from defaults import is_project_key
+    app = make_app()
+    proj, _restored = save_and_load(app, [], tmp_path)
+    assert 'units' in proj['options']
+    assert 'global_save_compressed' not in proj['options']
+    assert all(is_project_key(key) for key in proj['options'])
+
+
 def assert_same_tools(old, new, kind):
     assert sorted(old) == sorted(new)
     for key, tool in old.items():

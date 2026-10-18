@@ -34,28 +34,31 @@ def test_settings_migration(tmp_path, engine):
     assert 'global_graphic_engine' not in AppOptions(version='test').baseline
 
 
-@pytest.mark.parametrize('cli,accept', [(False, True), (False, False), (True, True)])
-def test_project_settings_import(cli, accept):
+@pytest.mark.parametrize('cli', [False, True])
+def test_project_open_loads_only_project_options(cli):
     from PyQt6 import QtWidgets
     from appHandlers.appIO import appIO
 
     qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    defaults = AppDefaults(beta=False)
+    defaults['global_appearance'] = 'light'
     app = MagicMock()
-    app.options = {'existing': 1}
+    app.defaults = defaults
+    app.options = AppOptions(version='test', baseline=defaults, defaults=defaults)
     app.resource_location = 'assets/resources'
     handler = SimpleNamespace(app=app, on_file_new_project=MagicMock())
-    project = {'objs': [], 'options': {'global_graphic_engine': '2D',
-                                     'global_graphic_engine_3d_no_mp': True, 'unrelated': 9}}
+    project = {'objs': [], 'options': {'global_graphic_engine': '2D', 'global_appearance': 'dark',
+                                     'gerber_bboxmargin': 0.75}}
     with patch('appHandlers.appIO.FCMessageBox') as message:
-        yes, no = object(), object()
-        message.return_value.addButton.side_effect = [yes, no]
-        message.return_value.clickedButton.return_value = yes if accept else no
         assert appIO._restore_project_handler(handler, project, 'board.FlatPrj',
                                              True, True, cli, False) is True
-    expected = {'existing': 1}
-    if accept:
-        expected.update(global_graphic_engine_3d_no_mp=True, unrelated=9)
-    assert app.options == expected
+    message.assert_not_called()
+    assert defaults['global_appearance'] == 'light'
+    assert app.options['global_appearance'] == 'light'
+    assert app.options['gerber_bboxmargin'] == 0.75
+    assert app.options['gerber_bboxrounded'] == defaults['gerber_bboxrounded']
+    assert 'global_graphic_engine' not in list(defaults)
+    assert app.preferencesUiManager.defaults_write_form.called is (not cli)
     assert project['options']['global_graphic_engine'] == '2D'
 
 

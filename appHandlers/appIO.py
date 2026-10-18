@@ -8,6 +8,7 @@ from appEditors.appGerberEditor import AppGerberEditor
 
 from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox, add_case_variants
 from camlib import to_dict, dict2obj, ET, ParseError
+from defaults import project_options
 from appParsers.ParseHPGL2 import HPGL2
 from appParsers.ParseGerber import Gerber
 
@@ -1799,8 +1800,9 @@ class appIO(QtCore.QObject):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
             return
 
-        # Load in the options from the chosen file
-        self.options.load(filename=filename, inform=self.inform, baseline=self.app.defaults)
+        # Load in the options from the chosen file. The application settings go into the defaults.
+        self.options.load(filename=filename, inform=self.inform, baseline=self.app.defaults, include_app_keys=True)
+        self.app.preferencesUiManager.defaults_write_form()
 
         self.app.preferencesUiManager.on_preferences_edited()
         self.inform.emit('[success] %s: %s' % (_("Imported Defaults from"), filename))
@@ -2965,37 +2967,11 @@ class appIO(QtCore.QObject):
         else:
             self.on_file_new_project()
 
+        # Project options. The application settings in the file are ignored.
+        self.app.options.load_project(proj_dict['options'])
         if not run_from_arg or not cli or from_tcl is False:
-            msgbox = FCMessageBox(parent=self.app.ui)
-            title = _("Import Settings")
-            txt = _("Do you want to import the loaded project settings?")
-            msgbox.setWindowTitle(title)  # taskbar still shows it
-            msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
-            msgbox.setText('<b>%s</b>' % title)
-            msgbox.setInformativeText(txt)
-            msgbox.setIconPixmap(QtGui.QPixmap(self.app.resource_location + '/import.png'))
-
-            bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
-            bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
-            # bt_cancel = msgbox.addButton(_('Cancel'), QtWidgets.QMessageBox.ButtonRole.RejectRole)
-
-            msgbox.setDefaultButton(bt_yes)
-            msgbox.exec()
-            response = msgbox.clickedButton()
-
-            if response == bt_yes:
-                # self.app.defaults.update(self.app.options)
-                # self.app.preferencesUiManager.save_defaults()
-                # Project options
-                self.app.options.update({k: v for k, v in proj_dict['options'].items()
-                                         if k != 'global_graphic_engine'})
-            if response == bt_no:
-                pass
-        else:
-            # Load by default new options when not using GUI
-            # Project options
-            self.app.options.update({k: v for k, v in proj_dict['options'].items()
-                                     if k != 'global_graphic_engine'})
+            # Show the options of the loaded project in the Preferences form.
+            self.app.preferencesUiManager.defaults_write_form()
 
         self.app.project_filename = filename
 
@@ -3153,7 +3129,8 @@ class appIO(QtCore.QObject):
             except Exception as e:
                 self.log.error("save_project() --> There was no active object. Skipping read_form. %s" % str(e))
 
-            app_options = {k: v for k, v in self.app.options.items()}
+            # Only the project keys go into the project file. The application settings stay in the defaults.
+            app_options = project_options(self.app.options)
             d = {
                 "objs":             [obj.to_dict() for obj in self.app.collection.get_list()],
                 "options":          app_options,
