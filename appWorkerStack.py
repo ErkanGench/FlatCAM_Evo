@@ -119,6 +119,12 @@ class WorkerStack(QtCore.QObject):
         if self._pending_count == 0 and self._deferred_tasks:
             self._flush_deferred()
 
+    def pending_count(self):
+        """
+        Return the number of tasks that are queued or run now, including the deferred low priority tasks.
+        """
+        return self._pending_count + len(self._deferred_tasks)
+
     def _flush_deferred(self):
         """Dispatch all deferred LOW tasks. Called only when no normal/high tasks remain."""
         tasks = self._deferred_tasks[:]
