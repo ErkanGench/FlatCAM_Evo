@@ -4,6 +4,7 @@ from PyQt6 import QtWidgets     # noqa
 from dataclasses import dataclass, field
 
 from copy import deepcopy
+from math import cos, pi
 import numpy as np
 
 import traceback
@@ -733,6 +734,103 @@ class NccGen:
             self.app.inform_shell.emit('%s %s' % (_('Polygon could not be cleared. Location:'), str(coords)))
             return None
 
+    def final_cleanup(self, output, tools_storage, domains, name, settings=None, source=None):
+        """Use residuals as targets, but the original offset/margin domain for cutter safety."""
+        eligible = [uid for uid in domains if tools_storage[uid]['data'].get('tools_ncc_final_cleanup', False)]
+        if not eligible:
+            return
+        if self.app.abort_flag:
+            raise grace
+        uid = min(eligible, key=lambda key: tools_storage[key]['tooldia'])
+        tool = tools_storage[uid]
+        dia = float(tool['tooldia'])
+        if dia <= 0:
+            return
+        domain = unary_union(flatten_shapely_geometry(domains[uid]))
+        if source is not None and source.kind == 'gerber':
+            # Even a negative Tcl offset must not turn useful Gerber copper into a
+            # cleanup target. Positive clearance remains encoded in the original domain.
+            domain = domain.difference(ncc_gerber_copper(source))
+        if domain.is_empty:
+            return
+        data = tool['data'] if settings is None else dict(tool['data'], **settings)
+        radius = dia / 2
+        steps = max(16, self.circle_steps)
+        # Circumscribed buffers contain the real circular cutter, not just an inscribed
+        # polygon. Numerical guard is inward only; clearance is never relaxed.
+        guard = max(dia * 1e-9, np.finfo(float).eps * max(abs(v) for v in domain.bounds) * 32)
+        safe_radius = radius / cos(pi / (4 * steps)) + guard
+        centers = domain.buffer(-safe_radius, quad_segs=steps)
+        sweeps = []
+        for previous in output.tools.values():
+            for path in flatten_shapely_geometry(previous.get('solid_geometry', [])):
+                if self.app.abort_flag:
+                    raise grace
+                sweeps.append(path.buffer(float(previous['tooldia']) / 2, quad_segs=steps))
+        residual = domain.difference(unary_union(sweeps))
+        paths = []
+        # Expansion supplies already-cleared room to straddle thin targets. The original
+        # domain still constrains every complete sweep, including generated connectors.
+        workspace = residual.buffer(dia, quad_segs=steps).intersection(domain)
+        candidates = []
+        for pol in flatten_shapely_geometry(workspace):
+            QtWidgets.QApplication.processEvents()
+            if self.app.abort_flag:
+                raise grace
+            if not isinstance(pol, Polygon) or pol.is_empty:
+                continue
+            result = self.clear_polygon_worker(
+                pol=pol, tooldia=2 * safe_radius,
+                ncc_method=data.get('tools_ncc_method', 0),
+                ncc_overlap=float(data.get('tools_ncc_overlap', 40)) / 100,
+                ncc_connect=data.get('tools_ncc_connect', False),
+                ncc_contour=True, prog_plot=False)
+            if result == 'fail':
+                raise grace
+            if result:
+                candidates.extend(result)
+        # A thin target can collapse even inside a larger workspace's inward contours.
+        # Its own boundary is a useful center path when it lies in the safe domain.
+        candidates.extend(flatten_shapely_geometry(residual.boundary.intersection(centers)))
+        candidates.extend(flatten_shapely_geometry(centers.boundary.intersection(
+            residual.buffer(radius, quad_segs=steps))))
+        tolerance = float(self.app.options.get('global_tolerance', 0.005))
+        if self.app.units.upper() == 'IN':
+            tolerance /= 25.4
+        for candidate in candidates:
+            QtWidgets.QApplication.processEvents()
+            if self.app.abort_flag:
+                raise grace
+            for path in flatten_shapely_geometry(candidate.intersection(centers)):
+                if not isinstance(path, (LineString, LinearRing)) or path.is_empty:
+                    continue
+                simplified = path.simplify(tolerance) if tolerance > 0 else path
+                if domain.covers(simplified.buffer(safe_radius, quad_segs=steps)):
+                    path = simplified
+                elif not domain.covers(path.buffer(safe_radius, quad_segs=steps)):
+                    continue
+                swept = path.buffer(radius, quad_segs=steps)
+                if swept.intersection(residual).area <= guard * guard:
+                    continue
+                paths.append(path)
+                residual = residual.difference(swept)
+        if self.app.abort_flag:
+            raise grace
+        if paths:
+            standard = list(output.tools.get(uid, {}).get('solid_geometry', []))
+            tool['solid_geometry'] = standard + paths
+            tool['data']['output_object_name'] = name
+            tool['ncc_cleanup_start'] = len(standard)
+            # Keep the cleanup-bearing tool last even with ascending/custom tool order.
+            tools_storage[uid] = tools_storage.pop(uid)
+            output.tools.pop(uid, None)
+            output.tools[uid] = dict(tool)
+        output.ncc_cleanup_residual = residual
+        self.app.poly_not_cleared = not residual.is_empty
+        if not residual.is_empty:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                'Final cleanup finished. Some residual copper could not be cleared with this tool.'))
+
     def clear_ncc_area_selection_option(self, areas_to_clear_list: list[Polygon | MultiPolygon]):
         self.app.log.info("NCCGen.clear_ncc_area_selection_option() --> Clearing the designated areas(s).")
 
@@ -840,6 +938,10 @@ class NccGen:
             self.app.inform.emit(f'[ERROR_NOTCL] {_("Failed.")}')
             return 'fail'
 
+        for value in params.tools_storage.values():
+            if value['tooldia'] in params.sorted_clear_tools:
+                value.pop('ncc_cleanup_start', None)
+
         def _generate_clear_object_worker(
                 output_geo_object: "GeometryObject",
                 app_obj: "App",
@@ -899,6 +1001,7 @@ class NccGen:
             # Source, isolation tools, margin and boundary stay fixed in this generation.
             # First preparation also installs isolation paths in the output object.
             prepared_areas = {}
+            cleanup_domains = {}
             for tool in params.sorted_clear_tools:
                 self.app.log.debug("Starting geometry processing for tool: %s" % str(tool))
                 if self.app.abort_flag:
@@ -959,6 +1062,8 @@ class NccGen:
                 if area == "fail":
                     self.app.log.debug("Failed to create empty area for this tool.")
                     continue
+
+                cleanup_domains[tool_uid] = area
 
                 tool_empty_area = flatten_shapely_geometry(area)
                 if not tool_empty_area:
@@ -1051,6 +1156,9 @@ class NccGen:
                             break
                 else:
                     self.app.log.debug("There are no geometries in the cleared polygon.")
+
+            self.final_cleanup(output_geo_object, params.tools_storage, cleanup_domains, output_object_name,
+                               source=cleared_object)
 
             # ----------------------------------------------------
             # clean the progressive plotted shapes if it was used
@@ -1213,6 +1321,9 @@ class NccGen:
 
             if area == 'fail':
                 return 'fail'
+
+            cleanup_domains = {uid: area for uid, value in params.tools_storage.items()
+                               if value['tooldia'] in clear_tooldia_list}
 
             # for testing purposes ----------------------------------
             # for po in area.geoms:
@@ -1408,6 +1519,9 @@ class NccGen:
                 #     new_area = [area.buffer(tool * ncc_overlap)]
                 # area = unary_union(area)
 
+            self.final_cleanup(output_geo_object, params.tools_storage, cleanup_domains, output_object_name,
+                               dict(tools_ncc_connect=ncc_connect, tools_ncc_contour=ncc_contour),
+                               source=cleared_object)
             output_geo_object.multigeo = True
             output_geo_object.obj_options["tools_mill_tooldia"] = '0.0'
 
@@ -1603,6 +1717,10 @@ class NccGen:
 
         if not sorted_tools:
             return 'fail'
+
+        for value in tools_storage.values():
+            if value['tooldia'] in sorted_tools:
+                value.pop('ncc_cleanup_start', None)
 
         # ##############################################################################################################
         # Prepare non-copper polygons. Create the bounding box area from which the copper features will be subtracted ##
@@ -2019,6 +2137,13 @@ class NccGen:
                 else:
                     app_obj.log.debug("There are no geometries in the cleared polygon.")
 
+            cleanup_domains = {uid: empty for uid, value in tools_storage.items()
+                               if value['tooldia'] in sorted_tools}
+            self.final_cleanup(geometry_obj_output, tools_storage, cleanup_domains, name,
+                               dict(tools_ncc_method=ncc_method,
+                                    tools_ncc_overlap=overlap * 100 if overlap is not None else 40,
+                                    tools_ncc_connect=connect, tools_ncc_contour=contour), source=ncc_obj)
+
             # delete tools with empty geometry
             # look for keys in the tools_storage dict that have 'solid_geometry' values empty
             for uid, uid_val in list(tools_storage.items()):
@@ -2278,6 +2403,9 @@ class NccGen:
 
             area = empty.buffer(0)
 
+            cleanup_domains = {uid: area for uid, value in tools_storage.items()
+                               if value['tooldia'] in sorted_tools}
+
             app_obj.log.debug("NCC Tool. Finished calculation of 'empty' area.")
             app_obj.inform.emit("NCC Tool. Finished calculation of 'empty' area.")
 
@@ -2466,6 +2594,10 @@ class NccGen:
                         else:
                             app_obj.log.debug("There are no geometries in the cleared polygon.")
 
+            self.final_cleanup(geometry_obj_output, tools_storage, cleanup_domains, name,
+                               dict(tools_ncc_method=ncc_method,
+                                    tools_ncc_overlap=overlap * 100 if overlap is not None else 40,
+                                    tools_ncc_connect=connect, tools_ncc_contour=contour), source=ncc_obj)
             geometry_obj_output.multigeo = True
             geometry_obj_output.obj_options["tools_mill_tooldia"] = str(tool)
 

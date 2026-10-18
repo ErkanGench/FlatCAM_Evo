@@ -156,6 +156,10 @@ NCC Tool:
 - fixed: the rest machining tooltip said "next bigger tool" instead of "next smaller tool"
 - the Milling tool makes the CNC jobs of the selected tools in the visible row order of the tool table, so the NCC order and a manual reorder are kept
 - two optimizations were tested and rejected: batched scan-line intersections were slower, and the removal of all the shrinking buffer unions changed the geometry
+- new "Final cleanup" option for each tool (default Off), in the NCC tool, the NCC preferences and the Tools Database: after the clearing, the smallest selected tool with the option on clears the reachable residual copper; its paths can cross areas that are already cleared, but the full cutter sweep stays in the original offset and margin area, so the copper clearance and the boundary are kept; the cutter is computed as a circumscribed polygon; with Gerber sources the copper is always removed from the cleanup area, also with a negative Tcl offset
+- the cleanup paths are added after the standard paths of that tool, the tool is moved to the end of the tool order, and the CNC job keeps this path order (no path optimization for this tool); a warning tells when residual copper stays
+- Final cleanup works in the GUI and in Tcl, for normal clearing and rest machining; old Tools Databases load with the option Off, so the current preference does not enable a new cut
+- measured on the real board (same setup as above, Final cleanup on for all tools, median of 3 runs): rest machining 1.52 s to 18.46 s (12x slower), 798 cleanup paths, the residual stock 176.42 mm2 to 165.07 mm2 (11.35 mm2 more copper removed); normal clearing 0.90 s to 8.43 s (9x slower), 22 cleanup paths, the residual stock does not change (163.59 mm2); the most of the residual is in gaps that are narrower than the smallest tool; the sweep over copper and outside the boundary does not change in all 4 cases (0.014 mm2 normal, 0.011 mm2 rest, 0 mm2 outside)
 
 Tcl:
 
@@ -183,6 +187,7 @@ Tests:
 - new unit tests for the image tracing; the gate list records the renamed Plot 3D zoom test
 - new unit tests for the Move Tool, the multiple projects (ProjectContext, ProjectManager, project combobox, File New, Open, Save and Save As, exit, Tcl commands) and the split of application settings and project options; the gate list records the removed autosave tests
 - new unit tests for the project file: plain and Zstandard round trip with both Zstandard backends, legacy LZMA load, inf/nan cleanup, level clamp and a failed save that keeps the old file
+- new unit tests for the NCC Final cleanup: re-crossing of cleared stock, default Off, negative offset on Gerber copper, the offset and boundary limits in mm and inch, a gap that no tool can enter, abort, Tcl, unsafe connectors, holes and multipart areas; the Tools Database round trip, old databases and the tool form and preferences
 - new unit tests for the Tcl commands (tests/test_tcl_audit_*.py, 100 tests): the result contract, cutting, CNC generation, geometry, transforms and regressions
 - new unit tests for the NCC Tool (tests/test_ncc_followups.py and tests/test_ncc_rest_machining.py): preparation cache, simplification safety, rest machining, isolation parity, redraw throttle and the board benchmarks (pytest -k benchmark -s)
 

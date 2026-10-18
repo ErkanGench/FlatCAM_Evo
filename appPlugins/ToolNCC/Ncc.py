@@ -137,6 +137,7 @@ class ToolNcc(Geometry, AppTool):
             "tools_ncc_method":         self.ui.method_combo,
             "tools_ncc_connect":        self.ui.connect_cb,
             "tools_ncc_contour":        self.ui.contour_cb,
+            "tools_ncc_final_cleanup":  self.ui.final_cleanup_cb,
             "tools_ncc_offset_choice":  self.ui.offset_choice_cb,
             "tools_ncc_offset_value":   self.ui.offset_entry,
             "tools_ncc_milling_type":   self.ui.milling_type_radio,
@@ -150,6 +151,7 @@ class ToolNcc(Geometry, AppTool):
             "n_method":         "tools_ncc_method",
             "n_connect":        "tools_ncc_connect",
             "n_contour":        "tools_ncc_contour",
+            "n_final_cleanup":  "tools_ncc_final_cleanup",
             "n_offset":         "tools_ncc_offset_choice",
             "n_offset_value":   "tools_ncc_offset_value",
             "n_milling_type":   "tools_ncc_milling_type",
@@ -382,6 +384,7 @@ class ToolNcc(Geometry, AppTool):
             "tools_ncc_method":         self.ui.method_combo,
             "tools_ncc_connect":        self.ui.connect_cb,
             "tools_ncc_contour":        self.ui.contour_cb,
+            "tools_ncc_final_cleanup":  self.ui.final_cleanup_cb,
             "tools_ncc_offset_choice":  self.ui.offset_choice_cb,
             "tools_ncc_offset_value":   self.ui.offset_entry,
             "tools_ncc_milling_type":   self.ui.milling_type_radio,
@@ -439,6 +442,8 @@ class ToolNcc(Geometry, AppTool):
         self.ui.contour_cb.set_value(self.app.options.get(
             "tools_ncc_contour",
             app_defaults.get("tools_ncc_contour", AppDefaults.factory_defaults.get("tools_ncc_contour"))))
+        self.ui.final_cleanup_cb.set_value(self.app.options.get(
+            "tools_ncc_final_cleanup", app_defaults.get("tools_ncc_final_cleanup", False)))
         self.ui.offset_choice_cb.set_value(self.app.options.get(
             "tools_ncc_offset_choice",
             app_defaults.get("tools_ncc_offset_choice", AppDefaults.factory_defaults.get("tools_ncc_offset_choice"))))
@@ -494,6 +499,7 @@ class ToolNcc(Geometry, AppTool):
 
         # init the working variables
         self.default_data.clear()
+        self.default_data['tools_ncc_final_cleanup'] = self.ui.final_cleanup_cb.get_value()
         kind = 'geometry'
         for option in self.app.options:
             if option.find(kind + "_") == 0:
@@ -783,6 +789,7 @@ class ToolNcc(Geometry, AppTool):
         self.blockSignals(False)
 
     def storage_to_form(self, dict_storage):
+        dict_storage.setdefault('tools_ncc_final_cleanup', False)
         for form_key in self.form_fields:
             for storage_key in dict_storage:
                 if form_key == storage_key:

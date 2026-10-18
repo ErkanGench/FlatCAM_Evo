@@ -178,6 +178,56 @@ class LifecycleChecks(DatabaseCase):
 
 
 class EditorChecks(DatabaseCase):
+    def test_ncc_final_cleanup_roundtrip_and_old_database(self):
+        from appDatabase import load_tools_database
+        old = record(5)
+        old['data'].pop('tools_ncc_final_cleanup')
+        self.app.options = dict(self.app.options, tools_ncc_final_cleanup=True)
+        db = self.database({'1': old})
+        self.assertIs(db.db_tool_dict['1']['data']['tools_ncc_final_cleanup'], False)
+        db.ui.tree_widget.setCurrentItem(db.ui.tree_widget.topLevelItem(0))
+        db.ui.ncc_final_cleanup_cb.set_value(True)
+        self.assertIs(db.db_tool_dict['1']['data']['tools_ncc_final_cleanup'], True)
+        self.assertTrue(db.on_save_tools_db(silent=True))
+        loaded = load_tools_database(str(self.path), self.app.options)
+        self.assertIs(loaded['1']['data']['tools_ncc_final_cleanup'], True)
+        db.ui.ncc_final_cleanup_cb.set_value(False)
+        self.assertIs(db.db_tool_dict['1']['data']['tools_ncc_final_cleanup'], False)
+        self.assertEqual([], self.slot_errors)
+
+    def test_ncc_final_cleanup_tool_form_and_preferences(self):
+        from PyQt6 import QtGui
+        from appPlugins.ToolNCC.Ncc import ToolNcc
+        from appPlugins.ToolNCC.NccUI import NccUI
+        from appGUI.preferences.tools.ToolsNCCPrefGroupUI import ToolsNCCPrefGroupUI
+        self.app.collection = QtGui.QStandardItemModel()
+        parent = QtWidgets.QWidget()
+        self.addCleanup(parent.deleteLater)
+        ui = NccUI(QtWidgets.QVBoxLayout(parent), self.app)
+        pref = ToolsNCCPrefGroupUI(self.app)
+        self.addCleanup(pref.deleteLater)
+        self.assertFalse(ui.final_cleanup_cb.get_value())
+        self.assertFalse(pref.ncc_final_cleanup_cb.get_value())
+        ui.tools_table.setRowCount(1)
+        ui.tools_table.setItem(0, 3, QtWidgets.QTableWidgetItem('1'))
+        ui.tools_table.selectAll()
+        holder = SimpleNamespace(
+            ui=ui, app=self.app, blockSignals=lambda value: None,
+            form_fields={'tools_ncc_final_cleanup': ui.final_cleanup_cb},
+            name2option={'n_final_cleanup': 'tools_ncc_final_cleanup'},
+            ncc_tools={1: {'data': {'tools_ncc_final_cleanup': False}}},
+            sender=lambda: ui.final_cleanup_cb)
+        ui.final_cleanup_cb.set_value(True)
+        ToolNcc.form_to_storage(holder)
+        self.assertTrue(holder.ncc_tools[1]['data']['tools_ncc_final_cleanup'])
+        ToolNcc.storage_to_form(holder, {})
+        self.assertFalse(ui.final_cleanup_cb.get_value())
+        pref.ncc_final_cleanup_cb.set_value(True)
+        ToolNcc.storage_to_form(holder, {'tools_ncc_final_cleanup': pref.ncc_final_cleanup_cb.get_value()})
+        self.assertTrue(ui.final_cleanup_cb.get_value())
+        ui.on_rest_machining_check(True)
+        self.assertFalse(ui.final_cleanup_cb.isHidden())
+
     def test_normalization_preserves_input_and_repairs_aliases(self):
         import appDatabase
         normalize = getattr(appDatabase, 'normalize_tools_database', None)

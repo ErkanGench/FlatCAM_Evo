@@ -586,6 +586,7 @@ class AppDefaults:
         "tools_ncc_connect": True,
         "tools_ncc_contour": True,
         "tools_ncc_rest": False,
+        "tools_ncc_final_cleanup": False,
         "tools_ncc_offset_choice": False,
         "tools_ncc_offset_value": 0.0000,
         "tools_ncc_ref": 0,     # ITSELF

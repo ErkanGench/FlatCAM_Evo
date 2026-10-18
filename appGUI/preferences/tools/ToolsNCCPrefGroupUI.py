@@ -238,6 +238,14 @@ class ToolsNCCPrefGroupUI(OptionsGroupUI):
 
         tool_grid.addWidget(self.ncc_contour_cb, 6, 1)
 
+        self.ncc_final_cleanup_cb = FCCheckBox(_("Final cleanup"))
+        self.ncc_final_cleanup_cb.setToolTip(
+            _("After clearing, use the smallest selected tool with Final cleanup enabled\n"
+              "to remove reachable residual copper. May cross cleared areas, but preserves\n"
+              "copper clearance and the clearing boundary. Default: Off.")
+        )
+        tool_grid.addWidget(self.ncc_final_cleanup_cb, 7, 0, 1, 2)
+
         # ## NCC Offset choice
         self.ncc_choice_offset_cb = FCCheckBox('%s' % _("Offset"))
         self.ncc_choice_offset_cb.setToolTip(

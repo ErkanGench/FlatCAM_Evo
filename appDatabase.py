@@ -126,6 +126,8 @@ def normalize_tools_database(records, defaults):
                 raise ValueError('data: expected a dictionary')
 
             data = tool['data']
+            # Old databases must not enable a new cutting operation via current preferences.
+            data.setdefault('tools_ncc_final_cleanup', False)
             data['tool_target'] = _database_enum(data.get('tool_target'), target_labels, 'data.tool_target')
 
             if 'job' in data:
@@ -894,6 +896,15 @@ class ToolsDB2UI:
 
         self.grid2.addWidget(self.ncc_offset_spinner, 19, 1)
 
+        self.ncc_final_cleanup_cb = FCCheckBox(_("Final cleanup"))
+        self.ncc_final_cleanup_cb.setObjectName("gdb_n_final_cleanup")
+        self.ncc_final_cleanup_cb.setToolTip(
+            _("After clearing, use the smallest selected tool with Final cleanup enabled\n"
+              "to remove reachable residual copper. May cross cleared areas, but preserves\n"
+              "copper clearance and the clearing boundary. Default: Off.")
+        )
+        self.grid2.addWidget(self.ncc_final_cleanup_cb, 20, 0, 1, 2)
+
         # ###########################################################################
         # ############### Paint UI form #############################################
         # ###########################################################################
@@ -1604,6 +1615,7 @@ class ToolsDB2(QtWidgets.QWidget):
             "tools_ncc_method":         self.ui.ncc_method_combo,
             "tools_ncc_connect":        self.ui.ncc_connect_cb,
             "tools_ncc_contour":        self.ui.ncc_contour_cb,
+            "tools_ncc_final_cleanup":  self.ui.ncc_final_cleanup_cb,
             "tools_ncc_offset_choice":  self.ui.ncc_choice_offset_cb,
             "tools_ncc_offset_value":   self.ui.ncc_offset_spinner,
 
@@ -1686,6 +1698,7 @@ class ToolsDB2(QtWidgets.QWidget):
             "gdb_n_method":         "tools_ncc_method",
             "gdb_n_connect":        "tools_ncc_connect",
             "gdb_n_contour":        "tools_ncc_contour",
+            "gdb_n_final_cleanup":  "tools_ncc_final_cleanup",
             "gdb_n_offset":         "tools_ncc_offset_choice",
             "gdb_n_offset_value":   "tools_ncc_offset_value",
             "gdb_n_milling_type":   "tools_ncc_milling_type",
@@ -2106,6 +2119,7 @@ class ToolsDB2(QtWidgets.QWidget):
             "tools_ncc_method":          _database_option(self.app, "tools_ncc_method"),
             "tools_ncc_connect":         _database_option(self.app, "tools_ncc_connect"),
             "tools_ncc_contour":         _database_option(self.app, "tools_ncc_contour"),
+            "tools_ncc_final_cleanup":   _database_option(self.app, "tools_ncc_final_cleanup"),
             "tools_ncc_offset_choice":  _database_option(self.app, "tools_ncc_offset_choice"),
             "tools_ncc_offset_value":   float(_database_option(self.app, "tools_ncc_offset_value")),
 

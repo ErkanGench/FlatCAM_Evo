@@ -4090,7 +4090,12 @@ class CNCjob(Geometry):
 
         locations = list(geo_storage.keys())
 
-        if opt_type == 'M':
+        if 'ncc_cleanup_start' in tools[tool]:
+            # Final NCC cleanup depends on the standard paths running first. Preserve
+            # the validated sequence (including equal start points) and its geometry.
+            optimized_path = [(geo.coords[0], geo) for geo in temp_solid_geometry]
+            self.tolerance = 0.0
+        elif opt_type == 'M':
             # if there are no locations then go to the next tool
             if not locations:
                 return 'fail'

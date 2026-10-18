@@ -81,6 +81,196 @@ def generate(gen, source, tools, iso=()):
     gen.ncc_handler(source, tools, list(iso), run_threaded=False)
 
 
+@pytest.mark.parametrize('rest', [False, True])
+def test_final_cleanup_recrosses_cleared_stock_and_keeps_standard_paths(rest):
+    gen, output, source, tools, _, _ = generator(rest=rest)
+    domain = box(0, 0, 10, 6)
+    source.solid_geometry = []
+    gen.compute_area_to_clear = Mock(return_value=(MultiPolygon([domain]), 0))
+    # Standard clearing leaves an isolated 0.1-wide strip, narrower than every cutter.
+    standard = [LineString([(x, 0.25), (x, 5.75)])
+                for x in (0.25, 0.7, 1.15, 1.6, 2.05, 2.5, 2.95, 3.4, 3.85,
+                          4.3, 4.75, 5.35, 5.8, 6.25, 6.7, 7.15, 7.6, 8.05, 8.5, 8.95, 9.4, 9.75)]
+    tools = tools[-1:]
+    gen.ncc_tools = {3: gen.ncc_tools[3]}
+    gen.clear_polygon_worker = Mock(return_value=standard)
+    generate(gen, source, tools)
+    off = list(output.tools[3]['solid_geometry'])
+    assert off == standard
+    gen.ncc_tools[3]['data']['tools_ncc_final_cleanup'] = True
+    gen.clear_polygon_worker = Mock(side_effect=lambda **kw: standard if kw['pol'].equals(domain)
+                                    else NccGen.clear_polygon_worker(gen, **kw))
+    generate(gen, source, tools)
+    paths = output.tools[3]['solid_geometry']
+    assert paths[:len(off)] == off
+    assert len(paths) > len(off)
+    before = unary_union([p.buffer(0.25) for p in off])
+    after = unary_union([p.buffer(0.25) for p in paths])
+    target = box(5.01, 1, 5.09, 5)
+    assert target.difference(before).area > 0.3
+    assert target.difference(after).area < 0.01
+    assert after.difference(domain).area < 1e-10
+    gen.ncc_tools[3]['data']['tools_ncc_final_cleanup'] = False
+    gen.clear_polygon_worker = Mock(return_value=standard)
+    generate(gen, source, tools)
+    assert output.tools[3]['solid_geometry'] == standard
+    assert 'ncc_cleanup_start' not in output.tools[3]
+
+
+def test_final_cleanup_default_is_off():
+    from defaults import AppDefaults
+    assert AppDefaults.factory_defaults['tools_ncc_final_cleanup'] is False
+
+
+def test_final_cleanup_never_exposes_useful_copper_with_negative_offset():
+    gen, output, _, _, _, _ = generator()
+    copper = Point(2.5, 2.5).buffer(0.7)
+    source = SimpleNamespace(kind='gerber', solid_geometry=[copper])
+    # A negative offset can expose useful copper in the ordinary clearing domain.
+    domain = box(0, 0, 5, 5).difference(copper.buffer(-0.3))
+    gen.ncc_tools[3]['data']['tools_ncc_final_cleanup'] = True
+    gen.final_cleanup(output, gen.ncc_tools, {3: domain}, 'protected', source=source)
+    paths = output.tools[3]['solid_geometry']
+    assert paths
+    assert all(path.buffer(0.25, quad_segs=256).intersection(copper).area < 1e-12 for path in paths)
+
+
+@pytest.mark.parametrize('rest', [False, True])
+@pytest.mark.parametrize('units', ['MM', 'IN'])
+def test_final_cleanup_board_sweeps_respect_copper_offset_boundary(rest, units):
+    gen, output, source, tools, boundary, copper = generator(rest=rest, units=units,
+                                                           offsets=(0.1, 0.1, 0.1))
+    factor = 1 if units == 'MM' else 1 / 25.4
+    gen.ui.rest_offset_choice_cb.get_value = lambda: True
+    gen.ui.rest_offset_entry.get_value = lambda: 0.1 * factor
+    for tool in gen.ncc_tools.values():
+        tool['data']['tools_ncc_final_cleanup'] = True
+    generate(gen, source, tools)
+    smallest = output.tools[3]
+    assert list(output.tools)[-1] == 3
+    cleanup = smallest['solid_geometry'][smallest.get('ncc_cleanup_start', len(smallest['solid_geometry'])):]
+    # Normal clearing can already have swept every reachable target on this board.
+    if rest:
+        assert cleanup
+    swept = unary_union([path.buffer(tools[-1] / 2, quad_segs=256) for path in cleanup])
+    assert swept.difference(boundary).area < 1e-10 * factor**2
+    assert swept.intersection(copper.buffer(0.1 * factor)).area < 1e-10 * factor**2
+    assert output.ncc_cleanup_residual.area > 0
+
+
+def test_final_cleanup_inaccessible_gap_no_path_and_abort():
+    gen, output, _, _, _, _ = generator()
+    domain = box(0, 0, 0.2, 4)  # Cannot admit the 0.5 tool, even from above.
+    tools = {3: gen.ncc_tools[3]}
+    tools[3]['data']['tools_ncc_final_cleanup'] = True
+    gen.final_cleanup(output, tools, {3: domain}, 'gap')
+    assert output.tools == {}
+    assert output.ncc_cleanup_residual.equals(domain)
+    gen.app.abort_flag = True
+    with pytest.raises(camlib.grace):
+        gen.final_cleanup(output, tools, {3: box(0, 0, 5, 5)}, 'abort')
+
+
+@pytest.mark.parametrize('rest', [False, True])
+def test_final_cleanup_tcl_uses_tool_setting_and_final_tool_sweeps(rest):
+    gen, output, source, tools, boundary, _ = generator(rest=rest)
+    gen.app.app_obj = gen.parent_tool
+    gen.parent_tool.flatten_list = lambda paths: [p for group in paths for p in group]
+    gen.ncc_tools = {3: gen.ncc_tools[3]}
+    gen.ncc_tools[3]['data']['tools_ncc_final_cleanup'] = True
+    gen.clear_copper_tcl(
+        source, ncc_tooldia=tools[-1:], margin=0, has_offset=False, offset=0,
+        select_method=1, areas_to_clear_list=[boundary], overlap=0.2,
+        connect=False, contour=True, order=2, method=0, rest=rest, run_threaded=False)
+    assert output.tools
+    domain = boundary.difference(unary_union(source.solid_geometry))
+    swept = unary_union([path.buffer(0.25, quad_segs=32)
+                         for path in output.tools[3]['solid_geometry']])
+    # This includes the final standard tool and any cleanup, even with no next rest tool.
+    assert output.ncc_cleanup_residual.symmetric_difference(domain.difference(swept)).area < 1e-8
+
+
+def test_final_cleanup_rejects_unsafe_connectors_and_preserves_holes_and_multipart():
+    gen, output, _, _, _, _ = generator()
+    domain = unary_union([box(0, 0, 5, 5).difference(Point(2.5, 2.5).buffer(0.7)),
+                          box(8, 0, 13, 5)])
+    tools = {3: gen.ncc_tools[3]}
+    tools[3]['data']['tools_ncc_final_cleanup'] = True
+    # A candidate's centerline fits in the domain, but its cutter hits the hole.
+    unsafe = LineString([(1, 1.75), (4, 1.75)])
+    gen.clear_polygon_worker = Mock(return_value=[unsafe])
+    gen.final_cleanup(output, tools, {3: domain}, 'islands')
+    paths = output.tools[3]['solid_geometry']
+    assert not any(path.equals(unsafe) for path in paths)
+    assert all(domain.covers(path.buffer(0.25, quad_segs=256)) for path in paths)
+    assert domain.difference(output.ncc_cleanup_residual).area > 0
+
+
+def test_final_cleanup_chooses_smallest_enabled_selected_tool_and_adds_no_path_tool():
+    gen, output, _, _, _, _ = generator()
+    gen.ncc_tools[1]['data']['tools_ncc_final_cleanup'] = True
+    gen.ncc_tools[2]['data']['tools_ncc_final_cleanup'] = True
+    # Tool 3 is smaller but disabled; tool 2 had no standard paths.
+    domain = box(0, 0, 10, 10)
+    gen.final_cleanup(output, gen.ncc_tools, {uid: domain for uid in gen.ncc_tools}, 'empty')
+    assert list(output.tools) == [2]
+    assert output.tools[2]['ncc_cleanup_start'] == 0
+    assert output.tools[2]['solid_geometry']
+
+
+def test_final_cleanup_mm_in_equivalence_and_event_cancellation():
+    normalized = []
+    for units, factor in [('MM', 1), ('IN', 1 / 25.4)]:
+        gen, output, _, _, _, _ = generator(units=units)
+        gen.ncc_tools[3]['data']['tools_ncc_final_cleanup'] = True
+        domain = scale(box(0, 0, 5, 4), xfact=factor, yfact=factor, origin=(0, 0))
+        gen.final_cleanup(output, gen.ncc_tools, {3: domain}, 'units')
+        normalized.append(scale(output.ncc_cleanup_residual, xfact=1/factor, yfact=1/factor, origin=(0, 0)))
+    assert normalized[0].symmetric_difference(normalized[1]).area < 1e-8
+    gen.app.abort_flag = False
+    def abort():
+        gen.app.abort_flag = True
+    with patch.object(camlib.QtWidgets.QApplication, 'processEvents', side_effect=abort):
+        with pytest.raises(camlib.grace):
+            gen.final_cleanup(output, gen.ncc_tools, {3: domain}, 'cancel')
+
+
+def test_final_cleanup_cnc_preserves_appended_order_without_resimplifying():
+    from defaults import AppDefaults
+    from test_unify_regressions_0b import make_app
+    job = camlib.CNCjob(make_app())
+    job.obj_options = {'name': 'cleanup'}
+    job.doformat = Mock(return_value='')
+    job.create_gcode_single_pass = Mock(return_value='cut\n')
+    data = dict(AppDefaults.factory_defaults)
+    data.update(tools_mill_tooldia=0.5, tools_mill_offset_value=0,
+                tools_mill_optimization_type='R', tools_mill_multidepth=False)
+    standard = LineString([(10, 0), (12, 0)])
+    cleanup = LineString([(0, 0), (1, 0)])  # RTree would choose this one first.
+    tools = {1: {'data': data, 'solid_geometry': [standard, cleanup], 'ncc_cleanup_start': 1}}
+    assert job.geometry_tool_gcode_gen(1, tools, (0, 0), (0, 0), 0.1) != 'fail'
+    calls = job.create_gcode_single_pass.call_args_list
+    assert [call.args[0] for call in calls] == [standard, cleanup]
+    assert all(call.args[4] == 0 for call in calls)
+
+
+def test_final_cleanup_board_benchmark():
+    timings = {}
+    for rest in (False, True):
+        for enabled in (False, True):
+            elapsed = []
+            for _ in range(3):
+                gen, output, source, tools, _, _ = generator(rest=rest)
+                for tool in gen.ncc_tools.values():
+                    tool['data']['tools_ncc_final_cleanup'] = enabled
+                start = perf_counter()
+                generate(gen, source, tools)
+                elapsed.append(perf_counter() - start)
+                assert output.tools
+            timings['%s_%s' % ('rest' if rest else 'normal', 'on' if enabled else 'off')] = median(elapsed)
+    print('FINAL_CLEANUP_BENCHMARK ' + json.dumps(timings, sort_keys=True))
+
+
 def test_normal_preparation_reused_only_for_equivalent_offsets():
     gen, output, source, tools, _, _ = generator(offsets=(0.1, 0.2, 0.1))
     gen.compute_area_to_clear = Mock(wraps=gen.compute_area_to_clear)

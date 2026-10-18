@@ -414,6 +414,15 @@ class NccUI:
         )
         par_grid.addWidget(self.contour_cb, 10, 1)
 
+        self.final_cleanup_cb = FCCheckBox(_("Final cleanup"))
+        self.final_cleanup_cb.setObjectName("n_final_cleanup")
+        self.final_cleanup_cb.setToolTip(
+            _("After clearing, use the smallest selected tool with Final cleanup enabled\n"
+              "to remove reachable residual copper. May cross cleared areas, but preserves\n"
+              "copper clearance and the clearing boundary. Default: Off.")
+        )
+        par_grid.addWidget(self.final_cleanup_cb, 11, 0, 1, 2)
+
         # ## Offset choice
         self.offset_choice_cb = FCCheckBox('%s' % _("Offset"))
         self.offset_choice_cb.setObjectName("n_offset")
@@ -641,6 +650,7 @@ class NccUI:
             self.margin_entry.setEnabled(False)
             self.connect_cb.setEnabled(False)
             self.contour_cb.setEnabled(False)
+            self.final_cleanup_cb.setEnabled(False)
             self.offset_choice_cb.setEnabled(False)
             self.offset_entry.setEnabled(False)
         else:
@@ -655,6 +665,7 @@ class NccUI:
             self.margin_entry.setEnabled(True)
             self.connect_cb.setEnabled(True)
             self.contour_cb.setEnabled(True)
+            self.final_cleanup_cb.setEnabled(True)
             self.offset_choice_cb.setEnabled(True)
             self.offset_entry.setEnabled(True)
 

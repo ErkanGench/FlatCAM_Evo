@@ -107,6 +107,7 @@ class HPGL2:
             "tools_ncc_contour":        self._get_app_option("tools_ncc_contour"),
             "tools_ncc_overlap":        self._get_app_option("tools_ncc_overlap"),
             "tools_ncc_rest":           self._get_app_option("tools_ncc_rest"),
+            "tools_ncc_final_cleanup":  self._get_app_option("tools_ncc_final_cleanup"),
             "tools_ncc_ref":            self._get_app_option("tools_ncc_ref"),
             "tools_ncc_offset_choice":  self._get_app_option("tools_ncc_offset_choice"),
             "tools_ncc_offset_value":   self._get_app_option("tools_ncc_offset_value"),

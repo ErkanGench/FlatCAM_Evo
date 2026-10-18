@@ -478,6 +478,7 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_ncc_connect":         self.ui.plugin_eng_pref_form.tools_ncc_group.ncc_connect_cb,
             "tools_ncc_contour":         self.ui.plugin_eng_pref_form.tools_ncc_group.ncc_contour_cb,
             "tools_ncc_rest":            self.ui.plugin_eng_pref_form.tools_ncc_group.ncc_rest_cb,
+            "tools_ncc_final_cleanup":   self.ui.plugin_eng_pref_form.tools_ncc_group.ncc_final_cleanup_cb,
             "tools_ncc_offset_choice":  self.ui.plugin_eng_pref_form.tools_ncc_group.ncc_choice_offset_cb,
             "tools_ncc_offset_value":   self.ui.plugin_eng_pref_form.tools_ncc_group.ncc_offset_spinner,
             "tools_ncc_ref":             self.ui.plugin_eng_pref_form.tools_ncc_group.select_combo,
