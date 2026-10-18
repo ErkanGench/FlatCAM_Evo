@@ -159,7 +159,7 @@ class TestSelectionRedraw(unittest.TestCase):
 
     def test_partial_plot_is_rebuilt_then_brought_to_top(self):
         from appHandlers.appPlotManager import AppPlotManager
-        obj = SimpleNamespace(kind='cncjob', obj_options={'plot': True},
+        obj = SimpleNamespace(kind='geometry', obj_options={'plot': True},
                               bring_to_top=Mock(side_effect=[False, True]), plot=Mock())
         manager = SimpleNamespace(collection=SimpleNamespace(
             get_selected=lambda: [obj], get_active=lambda: obj), worker_task=Mock())
@@ -168,6 +168,22 @@ class TestSelectionRedraw(unittest.TestCase):
         task['fcn'](*task['params'])
         obj.plot.assert_called_once_with(visible=True)
         self.assertEqual(obj.bring_to_top.call_count, 2)
+
+    def test_cncjob_selection_rebuild_preserves_the_plot_filter(self):
+        from appHandlers.appPlotManager import AppPlotManager
+        for kind in ('all', 'cut', 'travel'):
+            with self.subTest(kind=kind):
+                obj = SimpleNamespace(kind='cncjob', obj_options={'plot': True},
+                                      ui=SimpleNamespace(cncplot_method_combo=Mock(
+                                          get_value=Mock(return_value=kind))),
+                                      bring_to_top=Mock(side_effect=[False, True]), plot=Mock())
+                manager = SimpleNamespace(collection=SimpleNamespace(
+                    get_selected=lambda: [obj], get_active=lambda: obj), worker_task=Mock())
+                AppPlotManager.gerber_redraw(manager)
+                task = manager.worker_task.emit.call_args[0][0]
+                task['fcn'](*task['params'])
+                obj.plot.assert_called_once_with(visible=True, kind=kind)
+                self.assertEqual(obj.bring_to_top.call_count, 2)
 
 
 class TestShowPlottedShapes(unittest.TestCase):

@@ -664,7 +664,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         self.read_form()
         self.on_plot_kind_change(dia=self.ui.tooldia_entry.get_value())
 
-    def on_plot_kind_change(self, dia=None):
+    def on_plot_kind_change(self, *args, dia=None):
         kind = self.ui.cncplot_method_combo.get_value()
 
         def worker_task():
@@ -1383,9 +1383,8 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                             self.plot2(tooldia=dia_plot, obj=self, visible=visible, gcode_parsed=gcode_parsed,
                                        kind=kind)
             self.shapes.redraw()
-            if dia is None:
-                self._full_plot_kind = kind
-                self.mark_full_plot()
+            self._full_plot_kind = kind
+            self.mark_full_plot()
         except (ObjectDeleted, AttributeError) as err:
             self.app.log.debug("CNCJobObject.plot() --> %s" % str(err))
             self.shapes.clear(update=True)

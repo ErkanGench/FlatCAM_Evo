@@ -161,7 +161,10 @@ class AppPlotManager(QtCore.QObject):
                     # obj.obj_options['plot'] = True
                     # only change the visibility if the shapes of the last full plot are still on the canvas
                     if isinstance(plot_obj, CNCJobObject):
-                        kind = self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind"))
+                        try:
+                            kind = plot_obj.ui.cncplot_method_combo.get_value()
+                        except AttributeError:
+                            kind = self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind"))
                         if not plot_obj.show_plotted_shapes(True, kind=kind):
                             plot_obj.plot(visible=True, kind=kind)
                     elif not plot_obj.show_plotted_shapes(True):
@@ -219,7 +222,10 @@ class AppPlotManager(QtCore.QObject):
                     # obj.obj_options['plot'] = True
                     # only change the visibility if the shapes of the last full plot are still on the canvas
                     if isinstance(plot_obj, CNCJobObject):
-                        kind = self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind"))
+                        try:
+                            kind = plot_obj.ui.cncplot_method_combo.get_value()
+                        except AttributeError:
+                            kind = self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind"))
                         if not plot_obj.show_plotted_shapes(False, kind=kind):
                             plot_obj.plot(visible=False, kind=kind)
                     elif not plot_obj.show_plotted_shapes(False):
@@ -279,7 +285,14 @@ class AppPlotManager(QtCore.QObject):
         def worker_task(plot_obj):
             # change only the draw order; a new plot of a big object takes a long time
             if not plot_obj.bring_to_top():
-                plot_obj.plot(visible=True)
+                if plot_obj.kind == 'cncjob':
+                    try:
+                        kind = plot_obj.ui.cncplot_method_combo.get_value()
+                    except AttributeError:
+                        kind = self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind"))
+                    plot_obj.plot(visible=True, kind=kind)
+                else:
+                    plot_obj.plot(visible=True)
                 plot_obj.bring_to_top()
 
         self.worker_task.emit({'fcn': worker_task, 'params': [obj]})

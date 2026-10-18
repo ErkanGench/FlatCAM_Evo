@@ -101,3 +101,79 @@ def test_partial_plot_is_not_kept_as_the_full_plot():
     job._full_plot_sig = (5, 1, 9)
     job.on_plot_cb_click_table()
     assert job._full_plot_sig is None
+
+
+@pytest.mark.parametrize('kind', ['all', 'cut', 'travel'])
+def test_plot_kind_signal_keeps_a_reusable_full_plot(kind):
+    from appObjects.AppObjectTemplate import FlatCAMObj
+
+    job, _ = make_job('geometry', [('0.8000', '1', FakeCheckBox(True))])
+    job.ui.cncplot_method_combo.get_value.return_value = kind
+    job.multitool = True
+    job.used_tools = [1]
+    job.app.dec_format = round
+    job.mark_full_plot = Mock()
+    job.plot = CNCJobObject.plot.__get__(job)
+    job.on_plot_kind_change(kind)
+    task = job.app.worker_task.emit.call_args[0][0]
+    with patch.object(FlatCAMObj, 'plot', return_value=True):
+        task['fcn'](*task['params'])
+    assert job.plot2.call_args.kwargs['kind'] == kind
+    job.mark_full_plot.assert_called_once()
+    assert job._full_plot_kind == kind
+
+
+def test_update_plot_preserves_the_explicit_diameter():
+    job, _ = make_job('geometry', [])
+    job.read_form = Mock()
+    job.ui.tooldia_entry = Mock(get_value=Mock(return_value=0.6))
+    job.on_updateplot_button_click()
+    task = job.app.worker_task.emit.call_args[0][0]
+    task['fcn'](*task['params'])
+    job.plot.assert_called_once_with(kind='all', dia=0.6)
+
+
+@pytest.mark.parametrize('kind', ['geometry', 'excellon'])
+@pytest.mark.parametrize('multitool', [False, True])
+def test_first_disable_reuses_a_plot_with_an_explicit_diameter(kind, multitool):
+    from appObjects.AppObjectTemplate import FlatCAMObj
+
+    job, _ = make_job(kind, [('0.8000', '1', FakeCheckBox(True))])
+    job.multitool = multitool
+    job.used_tools = [1]
+    job.app.dec_format = round
+    job.shapes._indexes = [1]
+    job.shapes._collection.data = {1: {}}
+    with patch.object(FlatCAMObj, 'plot', return_value=True):
+        CNCJobObject.plot(job, dia=0.6)
+    job.show_plotted_shapes = CNCJobObject.show_plotted_shapes.__get__(job)
+    job.obj_options['plot'] = False
+    job.ui.plot_cb.setChecked(False)
+    job.on_plot_cb_click()
+    job.plot.assert_not_called()
+    assert job.shapes.visible is False
+
+
+@pytest.mark.parametrize('visible', [False, True])
+@pytest.mark.parametrize('kind', ['cut', 'travel'])
+def test_project_plot_toggle_reuses_the_objects_selected_filter(kind, visible):
+    from appHandlers.appPlotManager import AppPlotManager
+
+    job, _ = make_job('geometry', [], plot=not visible)
+    job.ui.plot_cb = Mock()
+    job.set_form_item = Mock()
+    job.ui.cncplot_method_combo.get_value.return_value = kind
+    job.shapes._indexes = [1]
+    job.shapes._collection.data = {1: {}}
+    job.mark_full_plot()
+    job._full_plot_kind = kind
+    job.show_plotted_shapes = CNCJobObject.show_plotted_shapes.__get__(job)
+    manager = SimpleNamespace(app=job.app, log=job.app.log, options={'cncjob_plot_kind': 'all'},
+                              defaults=job.app.defaults, collection=Mock(), worker_task=job.app.worker_task,
+                              proc_container=job.app.proc_container)
+    toggle = AppPlotManager.enable_plots if visible else AppPlotManager.disable_plots
+    toggle(manager, [job])
+    task = manager.worker_task.emit.call_args[0][0]
+    task['fcn'](*task['params'])
+    job.plot.assert_not_called()
+    assert job.shapes.visible is visible

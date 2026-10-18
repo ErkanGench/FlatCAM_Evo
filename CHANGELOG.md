@@ -97,6 +97,12 @@ Solder Paste Tool:
 - a selected paste geometry restores its nozzle settings; the controller and calibration changes apply to the next CNC job without a new geometry; the integer fields are saved; the project keeps the paste role and the preprocessor, and older projects get them from the tool data
 - fixed: unused or empty nozzles do not stop the CNC job and do not change the source object; the CNC object combobox used the geometry widget; the G-code header units come from the job; the job can be aborted
 
+CNCJob Plot:
+
+- fixed: the project plot toggle and the redraw on selection use the plot filter of the CNC job (All, Cut, Travel) instead of the cncjob_plot_kind default; before, they plotted again or showed the wrong filter
+- fixed: on_plot_kind_change does not take the combobox value as the tool diameter
+- fixed: a plot with a tool diameter (Update Plot) is marked as the full plot, so a later visibility toggle uses it again
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -107,6 +113,7 @@ Tests:
 - new unit tests for the Cutout regressions (tests/test_cutout_regressions.py) and the panel checks
 - new unit tests for the Film tool (tests/test_film.py)
 - new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
+- new unit tests for the CNC job plot filter and the visibility toggle
 
 18.10.2026
 
