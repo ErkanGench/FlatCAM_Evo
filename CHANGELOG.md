@@ -83,6 +83,16 @@ Image Import:
 - the Chromium download dialog is removed; if vtracer is not installed, the plugin loads and Tracing shows how to install it
 - fixed: the Custom options of the old engine had no effect
 
+Preferences:
+
+- the application settings are kept only in the application preferences; the project options are kept in the project
+- a project file saves only the project options (Tools parameters, units and some Gerber, Excellon and Geometry parameters); an old project file still opens and its application settings are ignored
+- removed the "Import Settings" question on project open; the project options of the file are always loaded
+- a new project gets its options from the preferences and not from the Preferences form
+- the Preferences window shows the project options of the active project; a save writes a changed project option to the project and to the preferences
+- fixed: a save of the Preferences copied all the preferences into the project options
+- Import Preferences writes the application settings of the file into the preferences
+
 Tests:
 
 - new unit tests for the GCode sender workflow, console, restart, simulation, audit fixes, icon colors, layout changes and plugin object creation
