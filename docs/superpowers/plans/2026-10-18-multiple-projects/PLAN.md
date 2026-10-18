@@ -461,6 +461,30 @@ class TestProjectManagerCore(unittest.TestCase):
         manager.activate.assert_not_called()
         self.assertIs(app.collection, second.collection)
 
+    def test_switch_without_visuals_keeps_the_saved_views(self):
+        # on exit the app saves inactive projects with visuals=False; the canvas keeps the view of the first project
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        second.view_rect = 'view-B'
+        manager._get_view_rect = Mock(return_value='view-A')
+        manager.switch(second, visuals=False)
+        manager.switch(first, visuals=False)
+        self.assertEqual(second.view_rect, 'view-B')
+        self.assertEqual(first.view_rect, 'view-A')
+        self.assertIs(manager.displayed, first)
+
+    def test_visual_switch_releases_the_displayed_project(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        third = manager.add_context('Board_C')
+        manager.switch(second, visuals=False)
+        manager.switch(third)
+        # the canvas showed the first project, so its shapes are released, not the ones of the second project
+        manager.deactivate.assert_called_once_with(first)
+        self.assertIs(manager.displayed, third)
+
     def test_switch_to_active_does_nothing(self):
         app, manager = make_manager()
         self.assertTrue(manager.switch(manager.active))
@@ -575,6 +599,9 @@ class ProjectManager(QtCore.QObject):
         first = ProjectContext(name=self.default_name(), collection=app.collection)
         self.contexts = [first]
         self.active = first
+        # the project that the canvas shows. It is not always the active project: a switch with visuals=False
+        # (used on exit) changes the active project but not the canvas.
+        self.displayed = first
         self.stack.addWidget(first.collection.view)
         self.stack.setCurrentWidget(first.collection.view)
 
@@ -672,7 +699,10 @@ class ProjectManager(QtCore.QObject):
         ctx.options = deepcopy(project_options(self.app.options))
         ctx.filename = self.app.project_filename
         ctx.should_we_save = self.app.should_we_save
-        ctx.view_rect = self._get_view_rect()
+        # the canvas shows the view of the displayed project; after a switch with visuals=False that is another
+        # project, and its view must not go into this context
+        if ctx is self.displayed:
+            ctx.view_rect = self._get_view_rect()
 
     def _load(self, ctx):
         """
@@ -706,16 +736,18 @@ class ProjectManager(QtCore.QObject):
             return False
 
         self.capture()
-        old = self.active
         if visuals:
             self.before_switch()
-            self.deactivate(old)
+            # release the project that the canvas shows; after a switch with visuals=False it is not the active one
+            if self.displayed is not None:
+                self.deactivate(self.displayed)
 
         self.active = ctx
         self._load(ctx)
 
         if visuals:
             self.activate(ctx)
+            self.displayed = ctx
 
         self.projects_changed.emit()
         self.update_title()
@@ -746,7 +778,7 @@ class ProjectManager(QtCore.QObject):
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (15 tests).
+Expected: `OK` (17 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -810,6 +842,17 @@ class TestProjectManagerLifecycle(unittest.TestCase):
         app.should_we_save = True
         self.assertTrue(manager.is_dirty(manager.active))
         self.assertEqual(manager.dirty_contexts(), [manager.active])
+
+    def test_saved_project_with_all_objects_deleted_is_dirty(self):
+        # the deletion of all the objects of a saved project is a change that must be saved
+        app, manager = make_manager()
+        app.should_we_save = True
+        self.assertFalse(manager.is_dirty(manager.active))
+        app.project_filename = os.path.join('folder', 'Project_1.FlatPrj')
+        self.assertTrue(manager.is_dirty(manager.active))
+        # so the GUI close asks and the Tcl close needs -force
+        self.assertFalse(manager.close(manager.active))
+        self.assertTrue(manager.close(manager.active, force=True))
 
     def test_close_inactive_project(self):
         app, manager = make_manager()
@@ -920,8 +963,15 @@ Add this block to the class `ProjectManager`, directly after the method `update_
         return True
 
     def is_dirty(self, ctx):
+        """
+        True if the project has unsaved changes. A project with a file is dirty when its flag is set, also when it
+        is empty: the deletion of all its objects is a change. A project without a file and without objects has
+        nothing to save, the same rule as the exit of the app with 1 project (AppLifecycle.final_save).
+        """
         flag = self.app.should_we_save if ctx is self.active else ctx.should_we_save
-        return bool(flag) and bool(ctx.collection.get_list())
+        if not flag:
+            return False
+        return bool(ctx.collection.get_list()) or self.filename_of(ctx) is not None
 
     def dirty_contexts(self):
         return [ctx for ctx in self.contexts if self.is_dirty(ctx)]
@@ -961,6 +1011,8 @@ Add this block to the class `ProjectManager`, directly after the method `update_
         """
         if ctx in self.contexts:
             self.contexts.remove(ctx)
+        if self.displayed is ctx:
+            self.displayed = None
 
         for obj in ctx.collection.get_list():
             try:
@@ -1016,7 +1068,7 @@ Add this block to the class `ProjectManager`, directly after the method `update_
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (30 tests).
+Expected: `OK` (33 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1278,7 +1330,7 @@ with this block:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (37 tests). The tests of Tasks 3 and 4 still pass because they replace these methods with `Mock`.
+Expected: `OK` (40 tests). The tests of Tasks 3 and 4 still pass because they replace these methods with `Mock`.
 
 - [ ] **Step 5: Commit**
 
@@ -1715,7 +1767,7 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (51 tests).
+Expected: `OK` (54 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1797,7 +1849,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (54 tests).
+Expected: `OK` (57 tests).
 
 Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_titlebar.py"`
 Expected: `OK`.
@@ -2287,10 +2339,16 @@ rtk git commit -m "feat(projects): File New and File Open add a project to the P
 
 ---
 
-### Task 10: Save and Save As use the project name
+### Task 10: Save and Save As use the project name and change the state only after a good save
+
+Today `on_file_save_project` and `on_file_save_project_as` (`appHandlers/appIO.py:1406-1476`) queue the save in a worker and then, at once, clear `should_we_save`, emit `file_saved` and set `project_filename`. If the write fails, the project looks saved. A later close then does not ask to save.
+
+After this task, both callbacks queue `_save_project_task`. That task runs `save_project()` (which returns `True` or `False` since Task 6) and emits `project_save_done`. Only the handler of that signal changes the state, on the GUI thread, and only after a good save: the file name, the project name (`adopt_filename`), the dirty flag, `file_opened`, `file_saved` and the title. A failed save keeps the old state.
+
+A project switch can not happen between the queue of the save and its end: `is_busy()` counts the queued worker task (Task 3).
 
 **Files:**
-- Modify: `appHandlers/appIO.py`: `on_file_save_project` (about line 1405), `on_file_save_project_as` (about line 1428)
+- Modify: `appHandlers/appIO.py`: the signals at the top of the class `appIO` (about line 69-73), `__init__` (about line 96), `on_file_save_project` (about line 1406), `on_file_save_project_as` (about line 1429)
 - Test: `tests/test_projects_appio.py` (add tests)
 
 - [ ] **Step 1: Write the failing tests**
@@ -2299,6 +2357,13 @@ In `tests/test_projects_appio.py`, add this class before `if __name__ == '__main
 
 ```python
 class TestSave(AppIOTestBase):
+    def run_queued_save(self, ok):
+        """Run the queued save task with a save_project() that returns ok."""
+        from unittest.mock import patch
+        task = self.tasks[-1]
+        with patch.object(appIO, 'save_project', return_value=ok):
+            task['fcn'](*task['params'])
+
     def test_save_after_rename_writes_the_new_file(self):
         self.app.project_filename = self.path('Board_A.FlatPrj')
         self.projects.save_target.return_value = self.path('Board_B.FlatPrj')
@@ -2306,8 +2371,30 @@ class TestSave(AppIOTestBase):
         self.io.on_file_save_project()
 
         self.assertEqual(self.tasks[-1]['params'][0], self.path('Board_B.FlatPrj'))
+        # nothing changes before the save ends
+        self.assertEqual(self.app.project_filename, self.path('Board_A.FlatPrj'))
+        self.assertTrue(self.app.should_we_save)
+        self.projects.adopt_filename.assert_not_called()
+        self.app.file_saved.emit.assert_not_called()
+
+        self.run_queued_save(True)
+
         self.assertEqual(self.app.project_filename, self.path('Board_B.FlatPrj'))
         self.projects.adopt_filename.assert_called_once_with(self.path('Board_B.FlatPrj'))
+        self.assertFalse(self.app.should_we_save)
+        self.app.file_saved.emit.assert_called_once_with('project', self.path('Board_B.FlatPrj'))
+
+    def test_failed_save_keeps_the_old_state(self):
+        self.app.project_filename = self.path('Board_A.FlatPrj')
+        self.projects.save_target.return_value = self.path('Board_B.FlatPrj')
+
+        self.io.on_file_save_project()
+        self.run_queued_save(False)
+
+        self.assertEqual(self.app.project_filename, self.path('Board_A.FlatPrj'))
+        self.projects.adopt_filename.assert_not_called()
+        self.assertTrue(self.app.should_we_save)
+        self.app.file_saved.emit.assert_not_called()
 
     def test_save_after_rename_asks_before_overwrite(self):
         self.app.project_filename = self.path('Board_A.FlatPrj')
@@ -2336,8 +2423,27 @@ class TestSave(AppIOTestBase):
                    return_value=(chosen, '')) as dialog:
             self.io.on_file_save_project_as()
         self.assertEqual(dialog.call_args.kwargs['directory'], '%s/%s' % (self.directory.name, 'Board_A'))
+        self.assertIsNone(self.app.project_filename)
+
+        self.run_queued_save(True)
+
         self.assertEqual(self.app.project_filename, chosen)
         self.projects.adopt_filename.assert_called_once_with(chosen)
+        self.assertFalse(self.app.should_we_save)
+
+    def test_failed_save_as_keeps_the_old_state(self):
+        from unittest.mock import patch
+        self.projects.active = SimpleNamespace(name='Board_A')
+        with patch('appHandlers.appIO.FCFileSaveDialog.get_saved_filename',
+                   return_value=(self.path('Chosen.FlatPrj'), '')):
+            self.io.on_file_save_project_as()
+
+        self.run_queued_save(False)
+
+        self.assertIsNone(self.app.project_filename)
+        self.projects.adopt_filename.assert_not_called()
+        self.assertTrue(self.app.should_we_save)
+        self.app.file_saved.emit.assert_not_called()
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2345,50 +2451,96 @@ class TestSave(AppIOTestBase):
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"`
 Expected: failures in `TestSave`.
 
-- [ ] **Step 3: Change `on_file_save_project`**
+- [ ] **Step 3: Add the save task and its result signal**
 
-In `appHandlers/appIO.py`, in `on_file_save_project`, find:
+In `appHandlers/appIO.py`:
 
-```python
-        self.log.debug("on_file_save_project()")
-
-        if self.app.project_filename is None:
-            self.on_file_save_project_as()
-        else:
-```
-
-Replace it with:
+1. After the line `    project_objects_requested = QtCore.pyqtSignal(object, str, object, bool)` (in the class `appIO`), add:
 
 ```python
-        self.log.debug("on_file_save_project()")
-
-        # after a rename, the project is saved as '<new name>.FlatPrj' in the same folder; the old file stays
-        projects = getattr(self.app, 'projects', None)
-        if projects is not None and self.app.project_filename is not None:
-            target = projects.save_target()
-            if target and not same_path(target, self.app.project_filename):
-                if os.path.exists(target) and not projects.ask_yes_no(
-                        _("Overwrite"), '%s: %s\n%s' % (_("The file already exists"), target,
-                                                        _("Do you want to overwrite it?"))):
-                    self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
-                    return
-                self.app.project_filename = target
-                projects.adopt_filename(target)
-
-        if self.app.project_filename is None:
-            self.on_file_save_project_as()
-        else:
+    # emitted by the save task of File -> Save and Save As: filename, success, make_copy
+    project_save_done = QtCore.pyqtSignal(str, bool, bool)
 ```
 
-At the top of `appHandlers/appIO.py`, after the line `from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox, add_case_variants`, add:
+2. In `__init__`, after the line `        self.project_objects_requested.connect(self.restore_project_objects)`, add:
+
+```python
+        self.project_save_done.connect(self._on_project_save_done)
+```
+
+3. At the top of the file, after the line `from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox, add_case_variants`, add:
 
 ```python
 from appObjects.ProjectContext import same_path
 ```
 
-- [ ] **Step 4: Change `on_file_save_project_as`**
+4. Before the method `on_file_save_project`, add these 2 methods:
 
-In `on_file_save_project_as`, find:
+```python
+    def _save_project_task(self, filename, quit_action=False, silent=False, make_copy=False):
+        """
+        The worker task of File -> Save and File -> Save As. The state of the project changes only in
+        _on_project_save_done(), on the GUI thread, after the result is known.
+        """
+        ok = self.save_project(filename, quit_action=quit_action, silent=silent) is True
+        self.project_save_done.emit(str(filename), ok, bool(make_copy))
+
+    def _on_project_save_done(self, filename, ok, make_copy):
+        """
+        Change the state of the project after a save. After a failed save, the project keeps its file name,
+        its name and its unsaved changes.
+        """
+        if not ok:
+            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The project was not saved"), filename))
+            return
+
+        if self.app.options.get("global_open_style", self.app.defaults.get("global_open_style")) is False:
+            self.app.file_opened.emit("project", filename)
+        self.app.file_saved.emit("project", filename)
+
+        if not make_copy:
+            self.app.project_filename = filename
+            projects = getattr(self.app, 'projects', None)
+            if projects is not None:
+                projects.adopt_filename(filename)
+
+        self.app.ui.set_ui_title(name=self.app.project_filename)
+        self.app.should_we_save = False
+```
+
+- [ ] **Step 4: Change `on_file_save_project`**
+
+Replace the whole body of `on_file_save_project`, from the line `        self.log.debug("on_file_save_project()")` to the last line of the method `        self.app.should_we_save = False`, with:
+
+```python
+        self.log.debug("on_file_save_project()")
+
+        target = self.app.project_filename
+        # after a rename, the project is saved as '<new name>.FlatPrj' in the same folder; the old file stays
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None and target is not None:
+            new_target = projects.save_target()
+            if new_target and not same_path(new_target, target):
+                if os.path.exists(new_target) and not projects.ask_yes_no(
+                        _("Overwrite"), '%s: %s\n%s' % (_("The file already exists"), new_target,
+                                                        _("Do you want to overwrite it?"))):
+                    self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+                    return
+                target = new_target
+
+        if target is None:
+            self.on_file_save_project_as()
+            return
+
+        # the file name, the dirty flag and the title change in _on_project_save_done(), after a good save
+        self.worker_task.emit({'fcn': self._save_project_task, 'params': [target, False, silent]})
+```
+
+Note: the old code passed `silent` as the second positional argument of `save_project`, which is `quit_action`. The new code passes `quit_action=False` and `silent` in the right places.
+
+- [ ] **Step 5: Change `on_file_save_project_as`**
+
+1. Find:
 
 ```python
         filter_ = "FlatCAM Project .FlatPrj (*.FlatPrj);; All Files (*.*)"
@@ -2419,31 +2571,29 @@ Replace it with:
             )
 ```
 
-In the same method, find:
+2. Replace the end of the method, from the line `        if use_thread is True:` to the last line `        self.app.should_we_save = False`, with:
 
 ```python
-        if not make_copy:
-            self.app.project_filename = filename
+        # the file name, the dirty flag and the title change in _on_project_save_done(), after a good save
+        if use_thread is True:
+            self.worker_task.emit({'fcn': self._save_project_task,
+                                   'params': [filename, quit_action, False, make_copy]})
+        else:
+            self._save_project_task(filename, quit_action, False, make_copy)
 ```
 
-Replace it with:
-
-```python
-        if not make_copy:
-            self.app.project_filename = filename
-            if projects is not None:
-                projects.adopt_filename(filename)
-```
-
-- [ ] **Step 5: Run the tests and see them pass**
+- [ ] **Step 6: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"`
-Expected: `OK` (8 tests).
+Expected: `OK` (10 tests).
 
 Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_load_cleanup.py"`
 Expected: `OK`.
 
-- [ ] **Step 6: Commit**
+Also run: `.venv/Scripts/python.exe -m pytest tests/test_app_handler_characterization.py tests/test_app_refactor_characterization.py -q`
+Expected: all pass. If a test there expects `should_we_save` to be `False` at once after `on_file_save_project`, report it. Do not change it without a report: that test checks the old behavior that this task removes.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 rtk git add appHandlers/appIO.py tests/test_projects_appio.py
@@ -2556,7 +2706,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (58 tests).
+Expected: `OK` (61 tests).
 
 Also run: `.venv/Scripts/python.exe -m pytest tests/test_shutdown_routing.py -q`
 Expected: all tests pass, 0 failed.
@@ -3005,6 +3155,9 @@ The agent can not do these checks. Copy the list into the final report:
 12. Open the Geometry Editor on an object. Use File > New Project. The status bar shows "Close the editor first." and the editor stays open with its changes.
 13. Open a CNCJob and edit its G-code in the CNC editor. Save the edit. Switch to another project and back. The edited G-code is still there.
 14. Make the project folder read-only. Close the project and choose Save. The save fails, the project stays open and it still has unsaved changes.
+15. With the folder still read-only, rename the project and use File > Save. The status bar shows "The project was not saved". The combobox and the title keep the old file. Close the project: the app asks to save.
+16. Open a saved project. Delete all its objects. Close the project: the app asks to save. In Tcl, `close_project <name>` gives an error; `close_project <name> -force 1` closes it.
+17. Make changes in 2 projects. Zoom project B to a different view, then show project A. Close the app, save B, and press Cancel at the question about A. Show project B: its zoom is the same as before.
 12. Check the RAM in Task Manager: open a big project, add a second project and switch to it. The RAM of the app goes down or stays the same. It does not double.
 
 ---

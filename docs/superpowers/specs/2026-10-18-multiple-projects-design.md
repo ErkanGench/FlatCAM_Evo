@@ -37,7 +37,7 @@ Holds the state of 1 project:
 | `options` | The project keys of the project (`defaults.project_options`). The application settings are in `app.defaults` and are the same for all projects. |
 | `should_we_save` | The dirty flag. |
 | `all_objects_list` | The project copy of `app.all_objects_list`. |
-| `view_rect` | The canvas view rectangle when the project was last active. |
+| `view_rect` | The canvas view rectangle when the project was last shown on the canvas. A switch with `visuals=False` (exit) does not change the canvas, so it does not change this value. `ProjectManager.displayed` is the project that the canvas shows. |
 
 ### `ProjectManager` (new file `appHandlers/appProjects.py`)
 
@@ -153,6 +153,12 @@ The title bar shows the name of the active project.
 - **A project with a file, name not equal to the file basename (after a rename):** Save
   writes `<same folder>/<name>.FlatPrj`. The old file stays on disk. `filename` changes
   to the new file. If the new file already exists, the app asks before it overwrites it.
+- **Every save (Save, Save As, close, exit):** the file name, the project name, the dirty
+  flag, the "file saved" notification and the title change only after `save_project()`
+  returns `True`. A failed or cancelled save keeps the old state.
+
+A project is dirty if its flag is set and it has objects or a file. So a saved project
+whose objects are all deleted is dirty. An empty project without a file is not dirty.
 
 ### Settings
 
@@ -203,6 +209,9 @@ New commands:
 - A switch is refused while `is_busy()` returns `True`, while a task is queued in the
   worker stack and while an editor is open.
 - A failed save stops a close: the project stays and keeps its unsaved changes.
+- A failed File > Save or Save As keeps the file name, the name and the dirty flag.
+- A saved project with all objects deleted is dirty.
+- A switch with `visuals=False` (exit) does not change the saved view of any project.
 - `appIO.save_project()` returns `False` for a real write failure and `True` for a good save.
 
 Option B test:
