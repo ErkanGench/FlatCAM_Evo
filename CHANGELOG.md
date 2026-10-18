@@ -62,6 +62,18 @@ Milling and Drilling Tools:
 - fixed: the buffer of the drills and slots is computed for each tool; a changed widget value is applied 1 time to all the selected tools
 - the Excellon paint keeps only the paths and not the RTree index of each feature; abort is checked before each clearing step; the polishing keeps the captured steps and stops on abort
 
+Cutout Tool:
+
+- new gap engine: the automatic and rectangular gaps are cut by distance along each contour, at fixed anchors for each gap mode (LR and TB in the middle, 2LR and 2TB at the quarters, 4, 8); if a contour cannot hold the gap count and the gap width, the operation fails with a message
+- fixed: a manual gap cuts the exact length along the clicked path, also on bends and on the seam of a closed path; the preview, the click result and the cut are the same
+- fixed: the mouse bite holes follow the margin rows with the correct spacing; rectangular mouse bites do not change the milling path; panels with more than 1 row keep all the paths; each manual panel has its own tool data
+- fixed: Drill Cut works with multipart, open and closed paths; bad pitch or diameter values stop the operation
+- the values are checked before the job starts: the tool diameter must be finite and not 0; the mouse bite diameter plus spacing must give a positive step; Cut Z must be negative; Thin Depth must be 0 or between Cut Z and 0; a Thin Depth of 0 keeps a full bridge and makes no thin gap tool
+- fixed: a job that cannot succeed shows "Cutout gaps failed: ..." or "Mouse bite gaps failed: ..." and makes no object
+- fixed: a queued job uses the values from the time of the click; Cancel of a manual session restores the selection shapes; the queued mouse bite drills do not go to the next session
+- fixed: a large rectangular margin keeps all 4 gaps; the flatten keeps the holes in nested collections; Reset does not add a second selection slot
+- new tooltips for the gap size, Thin Depth, the mouse bite spacing (edge to edge) and the gap modes
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -69,6 +81,7 @@ Tests:
 - new unit tests for the PDF import: winding rules, nested q/Q transforms, the Gerber round trip with holes and islands, the drill filter and the duplicates, the stream order of the first page, filters that are not supported and encrypted files
 - new unit tests for the Final paint, the Paint simplification, the Paint performance and the bounded insets (tests/test_shrink_offsets.py); the Tools Database tests check the Final paint
 - new unit tests for the signal lifecycle of the Milling and Drilling tools (tests/test_milling_lifecycle.py)
+- new unit tests for the Cutout regressions (tests/test_cutout_regressions.py) and the panel checks
 
 18.10.2026
 

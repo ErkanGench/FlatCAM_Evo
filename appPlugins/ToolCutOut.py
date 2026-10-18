@@ -24,10 +24,9 @@ try:
 except ImportError:
     from numpy import inf as Inf
 
-from shapely import Polygon, MultiPolygon, box, Point, LineString, MultiLineString, LinearRing
+from shapely import Polygon, MultiPolygon, GeometryCollection, box, Point, LineString, MultiLineString, LinearRing
 import shapely
-from shapely.ops import unary_union, linemerge, polygonize_full
-from shapely.affinity import rotate
+from shapely.ops import unary_union, linemerge, polygonize_full, substring
 
 
 import gettext
@@ -66,6 +65,302 @@ class CutoutResult:
         self.failed = False
 
 
+def _valid_mouse_bite_step(mb_dia, mb_spacing):
+    try:
+        mb_dia = float(mb_dia)
+        step = mb_dia + float(mb_spacing)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(mb_dia) and mb_dia > 0 and math.isfinite(step) and step > 0
+
+
+def _validate_thin_depth(gap_type, gaps, cutz, thin_depth):
+    """Validate Thin-gap depths at the user-facing scheduling/mutation boundary."""
+    if gap_type != 1 or str(gaps).lower() == 'none':
+        return
+    try:
+        cutz = float(cutz)
+        thin_depth = float(thin_depth)
+    except (TypeError, ValueError):
+        raise ValueError(_("Cut Z and Thin Depth must be finite values."))
+    if not math.isfinite(cutz) or cutz >= 0:
+        raise ValueError(_("Cut Z must be a finite negative value for Thin gaps."))
+    if thin_depth == 0:
+        return
+    if not math.isfinite(thin_depth) or not (cutz < thin_depth < 0):
+        raise ValueError(_("Thin Depth must be zero or satisfy Cut Z < Thin Depth < 0."))
+
+
+def _sample_path(path, step):
+    points = []
+    length = path.length
+    distance = 0.0
+    while distance < length:
+        points.append(path.interpolate(distance))
+        distance += step
+
+    if not path.is_closed:
+        points.append(path.interpolate(length))
+    return points
+
+
+def _cutout_paths(geometry):
+    """Return every linear contour in nested cutout geometry."""
+    if geometry is None:
+        return []
+    if isinstance(geometry, (LineString, LinearRing)):
+        return [geometry]
+    if isinstance(geometry, Polygon):
+        return [geometry.exterior, *geometry.interiors]
+    if isinstance(geometry, (MultiPolygon, MultiLineString, GeometryCollection)):
+        paths = []
+        for part in geometry.geoms:
+            paths.extend(_cutout_paths(part))
+        return paths
+    if isinstance(geometry, (list, tuple)):
+        paths = []
+        for part in geometry:
+            paths.extend(_cutout_paths(part))
+        return paths
+    try:
+        paths = []
+        for part in geometry:
+            paths.extend(_cutout_paths(part))
+        return paths
+    except TypeError:
+        return []
+
+
+def _cutout_anchor_points(path, gaps):
+    mode = str(gaps).lower()
+    if mode == 'none':
+        return []
+    if mode not in {'lr', 'tb', '2lr', '2tb', '4', '8'}:
+        raise ValueError(_("Gaps value is not supported."))
+
+    xmin, ymin, xmax, ymax = path.bounds
+    xmid = (xmin + xmax) / 2.0
+    ymid = (ymin + ymax) / 2.0
+    xquarter = (xmin + xmid) / 2.0
+    xthreequarter = (xmid + xmax) / 2.0
+    yquarter = (ymin + ymid) / 2.0
+    ythreequarter = (ymid + ymax) / 2.0
+
+    lr = [(xmin, ymid), (xmax, ymid)]
+    tb = [(xmid, ymin), (xmid, ymax)]
+    two_lr = [(xmin, yquarter), (xmax, yquarter),
+              (xmin, ythreequarter), (xmax, ythreequarter)]
+    two_tb = [(xquarter, ymin), (xquarter, ymax),
+              (xthreequarter, ymin), (xthreequarter, ymax)]
+
+    if mode == 'lr':
+        return lr
+    if mode == 'tb':
+        return tb
+    if mode == '2lr':
+        return two_lr
+    if mode == '2tb':
+        return two_tb
+    return two_lr + two_tb if mode == '8' else lr + tb
+
+
+def _cutout_substring(path, start, end):
+    part = substring(path, start, end)
+    return None if part.is_empty or part.length <= 1e-9 else part
+
+
+def _cutout_intervals(path, cut_diameter, gaps, gap_length):
+    """Split a contour into cutter paths and exact arclength gap paths."""
+    cut_diameter = abs(float(cut_diameter))
+    gap_length = float(gap_length)
+    cut_diameter = abs(cut_diameter)
+    if not math.isfinite(cut_diameter) or cut_diameter == 0:
+        raise ValueError(_("Tool diameter must be a positive finite number."))
+    if not math.isfinite(gap_length) or gap_length <= 0:
+        raise ValueError(_("Gap width must be a positive finite number."))
+
+    anchors = _cutout_anchor_points(path, gaps)
+    if not anchors:
+        return [path], []
+
+    length = float(path.length)
+    if length <= 1e-9 or len(anchors) * gap_length >= length - 1e-9:
+        raise ValueError(_("Requested gaps do not fit on the selected contour."))
+
+    closed = bool(path.is_closed)
+    intervals = []
+    centers = []
+    for anchor in anchors:
+        center = float(path.project(Point(anchor)))
+        centers.append(center)
+        start = center - gap_length / 2.0
+        end = center + gap_length / 2.0
+        if not closed:
+            if start < -1e-9 or end > length + 1e-9:
+                raise ValueError(_("Requested gap does not fit on the selected open contour."))
+            intervals.append([(max(0.0, start), min(length, end))])
+            continue
+
+        start %= length
+        end = start + gap_length
+        if end <= length + 1e-9:
+            intervals.append([(start, min(length, end))])
+        else:
+            intervals.append([(start, length), (0.0, end - length)])
+
+    tolerance = 1e-9
+    for index, center in enumerate(centers):
+        for previous in centers[:index]:
+            distance = abs(center - previous)
+            if closed:
+                distance = min(distance, length - distance)
+            if distance <= gap_length + tolerance:
+                raise ValueError(_("Requested gaps overlap or touch on the selected contour."))
+
+    for index, current in enumerate(intervals):
+        for previous in intervals[:index]:
+            for current_start, current_end in current:
+                for previous_start, previous_end in previous:
+                    if min(current_end, previous_end) - max(current_start, previous_start) >= -tolerance:
+                        raise ValueError(_("Requested gaps overlap or touch on the selected contour."))
+
+    ranges = sorted(part for interval in intervals for part in interval)
+    merged = []
+    for start, end in ranges:
+        if merged and start <= merged[-1][1] + tolerance:
+            raise ValueError(_("Requested gaps overlap or touch on the selected contour."))
+        merged.append((start, end))
+
+    gap_parts = []
+    for interval in intervals:
+        parts = [_cutout_substring(path, start, end) for start, end in interval]
+        gap_parts.extend(part for part in parts if part is not None)
+
+    cut_ranges = []
+    cursor = 0.0
+    for start, end in merged:
+        if start > cursor + tolerance:
+            cut_ranges.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < length - tolerance:
+        cut_ranges.append((cursor, length))
+
+    cut_parts = []
+    for start, end in cut_ranges:
+        part = _cutout_substring(path, start, end)
+        if part is not None:
+            cut_parts.append(part)
+    if not cut_parts:
+        raise ValueError(_("Requested gaps would remove the complete contour."))
+    return cut_parts, gap_parts
+
+
+def _manual_gap_geometry(geometry, position, cut_diameter, gap_width):
+    """Return the selected contour, its gap interval, and cutter footprint."""
+    paths = _cutout_paths(geometry)
+    if not paths:
+        raise ValueError(_("No contour is available for a manual gap."))
+
+    try:
+        cut_diameter = float(cut_diameter)
+        gap_width = float(gap_width)
+    except (TypeError, ValueError):
+        raise ValueError(_("Tool diameter and gap width must be finite values."))
+    cut_diameter = abs(cut_diameter)
+    if not math.isfinite(cut_diameter) or cut_diameter == 0:
+        raise ValueError(_("Tool diameter must be a positive finite number."))
+    if not math.isfinite(gap_width) or gap_width < 0:
+        raise ValueError(_("Gap width must be a non-negative finite number."))
+
+    point = Point(position)
+    selected = min(paths, key=point.distance)
+    center = float(selected.project(point))
+    gap_length = gap_width + cut_diameter
+    if not math.isfinite(gap_length) or gap_length <= 0 or gap_length >= selected.length - 1e-9:
+        raise ValueError(_("Requested manual gap does not fit on the selected contour."))
+
+    # A manual interval is centered at the projected click, not an axis-aligned square.
+    start = center - gap_length / 2.0
+    if selected.is_closed:
+        if start < 0:
+            parts = [_cutout_substring(selected, start + selected.length, selected.length),
+                     _cutout_substring(selected, 0.0, center + gap_length / 2.0)]
+        elif start + gap_length > selected.length:
+            parts = [_cutout_substring(selected, start, selected.length),
+                     _cutout_substring(selected, 0.0, start + gap_length - selected.length)]
+        else:
+            parts = [_cutout_substring(selected, start, start + gap_length)]
+        parts = [part for part in parts if part is not None]
+        gap_line = unary_union(parts)
+    else:
+        if start < -1e-9 or start + gap_length > selected.length + 1e-9:
+            raise ValueError(_("Requested manual gap does not fit on the selected contour."))
+        gap_line = _cutout_substring(selected, max(0.0, start), min(selected.length, start + gap_length))
+    if gap_line is None or gap_line.is_empty:
+        raise ValueError(_("Requested manual gap does not fit on the selected contour."))
+    return selected, gap_line, gap_line.buffer(cut_diameter / 2.0, cap_style='flat')
+
+
+def _manual_subtract_selected(geometry, selected, gap_line, expected_gap_length=None):
+    def complement(path):
+        ranges = []
+        for part in _cutout_paths(gap_line):
+            if part.is_empty or part.length <= 1e-9:
+                continue
+            start = float(path.project(Point(part.coords[0])))
+            end = float(path.project(Point(part.coords[-1])))
+            if path.is_closed and end < start - 1e-9:
+                ranges.append((start, path.length))
+                ranges.append((0.0, end))
+            else:
+                ranges.append((start, min(end, path.length)))
+        if not ranges:
+            raise ValueError(_("Could not map the manual gap to the selected contour."))
+
+        ranges.sort()
+        merged = []
+        for start, end in ranges:
+            if merged and start <= merged[-1][1] + 1e-9:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+
+        parts = []
+        cursor = 0.0
+        for start, end in merged:
+            if start > cursor + 1e-9:
+                part = _cutout_substring(path, cursor, start)
+                if part is not None:
+                    parts.append(part)
+            cursor = max(cursor, end)
+        if cursor < path.length - 1e-9:
+            part = _cutout_substring(path, cursor, path.length)
+            if part is not None:
+                parts.append(part)
+        if expected_gap_length is not None:
+            try:
+                expected = float(expected_gap_length)
+            except (TypeError, ValueError):
+                raise ValueError(_("Manual gap length must be a finite value."))
+            removed = sum(end - start for start, end in merged)
+            if not math.isfinite(expected) or abs(removed - expected) > 1e-6:
+                raise ValueError(_("Could not map the manual gap to the selected contour."))
+        return parts
+
+    paths = _cutout_paths(geometry)
+    result = []
+    selected_used = False
+    for path in paths:
+        if not selected_used and path.equals(selected):
+            result.extend(complement(path))
+            selected_used = True
+        else:
+            result.append(path)
+    if not selected_used:
+        raise ValueError(_("Could not find the selected contour for the manual gap."))
+    return unary_union(result)
+
+
 def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, convex_box, gap_type, thin_entry,
                           mb_dia, mb_spacing, handler, inner_active=False, inner_gaps=False):
     """
@@ -76,6 +371,13 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
     :param inner_gaps:   with inner_active: gaps, thin gaps and mouse bites also on the inner contours
     :return:             CutoutResult
     """
+    result = CutoutResult()
+    has_mouse_bites = gap_type == 2     # "mouse bytes"
+    if has_mouse_bites and not _valid_mouse_bite_step(mb_dia, mb_spacing):
+        result.errors.append(_("Mouse bite diameter and spacing must produce a positive finite step."))
+        result.failed = True
+        return result
+
     if inner_active:
         return _inner_contour_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, convex_box, gap_type, thin_entry,
                                     mb_dia, mb_spacing, handler, inner_gaps)
@@ -84,8 +386,7 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
     gaps_solid_geo = []
     mouse_bites_geo = []
     holes = []
-    result = CutoutResult()
-    has_mouse_bites = gap_type == 2     # "mouse bytes"
+    geometry_rows = []
 
     # real gapsize has to be bigger because it will be made less by the cutting tool diameter
     gapsize = gapsize + abs(cut_dia)
@@ -141,6 +442,7 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
             solid_geo, rest_geo = handler(geo, abs(cut_dia), gaps, gapsize, margin)
         except Exception as err:
             log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
+            result.errors.append(_("Cutout gaps failed: %s") % str(err))
             result.failed = True
             return result
 
@@ -173,11 +475,15 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
                     else:
                         geom_struct = unary_union(buff_geo_ext.interiors)
 
+            if cutout_obj.kind == 'geometry':
+                geometry_rows.append(geom_struct)
+
             try:
                 c_geo, r_geo = handler(geom_struct, abs(cut_dia), gaps, gapsize, margin)
             except Exception as err:
                 log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
-                result.errors.append(_("Failed."))
+                result.errors.append(_("Cutout gaps failed: %s") % str(err))
+                result.failed = True
                 continue
 
             solid_geo += c_geo
@@ -218,13 +524,19 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
                 if isinstance(mb_object_geo, MultiPolygon):
                     x0, y0, x1, y1 = mb_object_geo.bounds
                     mb_object_geo = box(x0, y0, x1, y1)
-                geo_buf = mb_object_geo.buffer(0.0000001)
-                mb_geo = geo_buf.exterior
+                mb_geo = geo
 
-            __, rest_geo = handler(mb_geo, abs(cut_dia), gaps, gapsize, margin)
+            try:
+                __, rest_geo = handler(mb_geo, abs(cut_dia), gaps, gapsize, margin)
+            except Exception as err:
+                result.errors.append(_("Mouse bite gaps failed: %s") % str(err))
+                result.failed = True
+                return result
             mouse_bites_geo = rest_geo
         else:
             mb_object_geo = flatten_shapely_geometry(mb_object_geo)
+            if cutout_obj.kind == 'geometry':
+                mb_object_geo = geometry_rows
             for mb_geom_struct in mb_object_geo:
                 if cutout_obj.kind == 'gerber':
                     if margin >= 0:
@@ -234,7 +546,12 @@ def freeform_cutout_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conv
                         mb_geom_struct = mb_geom_struct.buffer(-margin + mb_buff_val)
                         mb_geom_struct = mb_geom_struct.interiors
 
-                __, mb_r_geo = handler(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin)
+                try:
+                    __, mb_r_geo = handler(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin)
+                except Exception as err:
+                    result.errors.append(_("Mouse bite gaps failed: %s") % str(err))
+                    result.failed = True
+                    return result
                 mouse_bites_geo += mb_r_geo
 
         # list of Shapely Points to mark the drill points centers
@@ -466,6 +783,11 @@ def _inner_contour_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conve
                          mb_dia, mb_spacing, handler, inner_gaps):
     """freeform_cutout_paths for a board outline source whose inner contours are cut too."""
     result = CutoutResult()
+    if gap_type == 2 and not _valid_mouse_bite_step(mb_dia, mb_spacing):
+        result.errors.append(_("Mouse bite diameter and spacing must produce a positive finite step."))
+        result.failed = True
+        return result
+
     gerber = cutout_obj.kind == 'gerber'
     source_kind = 'gerber' if gerber else 'geometry'
     gapsize = gapsize + abs(cut_dia)
@@ -500,7 +822,8 @@ def _inner_contour_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conve
                 c_geo, r_geo = handler(path, abs(cut_dia), gaps, gapsize, margin)
             except Exception as err:
                 log.error("Cutout.on_freeform_cutout() -> %s" % str(err))
-                result.errors.append(_("Failed."))
+                result.errors.append(_("Cutout gaps failed: %s") % str(err))
+                result.failed = True
                 continue
             if contour.side == 'inner' and not c_geo:
                 skipped += 1
@@ -533,7 +856,12 @@ def _inner_contour_paths(cutout_obj, kind, cut_dia, margin, gaps, gapsize, conve
         mb_paths = offset_contours(cut_with_gaps, margin, mb_dia / 2.0, source_kind)
         for contour_paths in mb_paths:
             for path in contour_paths:
-                __, mb_r_geo = handler(path, abs(cut_dia), gaps, gapsize, margin)
+                try:
+                    __, mb_r_geo = handler(path, abs(cut_dia), gaps, gapsize, margin)
+                except Exception as err:
+                    result.errors.append(_("Mouse bite gaps failed: %s") % str(err))
+                    result.failed = True
+                    return result
                 mouse_bites_geo += mb_r_geo
         for line in mouse_bites_geo:
             calc_len = 0
@@ -564,6 +892,7 @@ class CutOut(AppTool):
         self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
+        self.app.proj_selection_changed.connect(self.on_object_selection_changed)
 
         self.cutting_gapsize = 0.0
         self.cutting_dia = 0.0
@@ -763,8 +1092,6 @@ class CutOut(AppTool):
         self.ui.man_geo_creation_btn.clicked.connect(self.on_manual_geo)
         self.ui.man_gaps_creation_btn.clicked.connect(self.on_manual_gap_click)
         self.ui.drillcut_btn.clicked.connect(self.on_drill_cut_click)
-
-        self.app.proj_selection_changed.connect(self.on_object_selection_changed)
 
         self.ui.reset_button.clicked.connect(self.set_tool_ui)
 
@@ -1225,9 +1552,10 @@ class CutOut(AppTool):
             return
 
         cut_dia = self.ui.dia.get_value()
-        if 0 in {cut_dia}:
+        if not math.isfinite(cut_dia) or cut_dia == 0:
             self.app.inform.emit('[WARNING_NOTCL] %s' %
                                  _("Tool Diameter is zero value. Change it to a positive real number."))
+            return
 
         try:
             kind = self.ui.obj_kind_combo.get_value()
@@ -1248,6 +1576,27 @@ class CutOut(AppTool):
                                    "Fill in a correct value and retry."))
             return
 
+        gapsize = self.ui.gapsize.get_value()
+        convex_box = self.ui.convex_box_cb.get_value()
+        gap_type = self.ui.gaptype_combo.get_value()
+        thin_entry = self.ui.thin_depth_entry.get_value()
+        mb_dia = self.ui.mb_dia_entry.get_value()
+        mb_spacing = self.ui.mb_spacing_entry.get_value()
+        cutz = self.ui.cutz_entry.get_value()
+        multidepth = self.ui.mpass_cb.get_value()
+        depthperpass = self.ui.maxdepth_entry.get_value()
+        cut_tool_dict = deepcopy(self.cut_tool_dict)
+        has_mouse_bites = gap_type == 2     # "mouse bytes"
+        try:
+            _validate_thin_depth(gap_type, gaps, cutz, thin_entry)
+        except ValueError as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            return
+        if has_mouse_bites and not _valid_mouse_bite_step(mb_dia, mb_spacing):
+            self.app.inform.emit('[ERROR_NOTCL] %s' %
+                                 _("Mouse bite diameter and spacing must produce a positive finite step."))
+            return
+
         with self.app.proc_container.new("Generating Cutout ..."):
             formatted_name = cutout_obj.obj_options["name"].rpartition('.')[0]
             if formatted_name != '':
@@ -1256,8 +1605,6 @@ class CutOut(AppTool):
                 outname = "%s_cutout" % cutout_obj.obj_options["name"]
 
             self.app.collection.promise(outname)
-
-            has_mouse_bites = True if self.ui.gaptype_combo.get_value() == 2 else False     # "mouse bytes"
 
             inner_active = self.inner_active()
             inner_gaps = bool(self.ui.inner_gaps_cb.get_value()) and inner_active
@@ -1268,10 +1615,8 @@ class CutOut(AppTool):
 
             def job_thread(app_obj):
                 result = freeform_cutout_paths(
-                    cutout_obj, kind, cut_dia, margin, gaps, self.ui.gapsize.get_value(),
-                    self.ui.convex_box_cb.get_value(), self.ui.gaptype_combo.get_value(),
-                    self.ui.thin_depth_entry.get_value(), self.ui.mb_dia_entry.get_value(),
-                    self.ui.mb_spacing_entry.get_value(), self.any_cutout_handler,
+                    cutout_obj, kind, cut_dia, margin, gaps, gapsize,
+                    convex_box, gap_type, thin_entry, mb_dia, mb_spacing, self.any_cutout_handler,
                     inner_active=inner_active, inner_gaps=inner_gaps)
                 for message in result.errors:
                     self.app.inform.emit('[ERROR_NOTCL] %s' % message)
@@ -1284,34 +1629,32 @@ class CutOut(AppTool):
                 solid_geo = result.solid_geo
                 gaps_solid_geo = result.gaps_solid_geo
                 holes = result.holes
-                mb_dia = self.ui.mb_dia_entry.get_value()
-
                 def geo_init(geo_obj, app_object):
                     geo_obj.multigeo = True
                     geo_obj.solid_geometry = deepcopy(solid_geo)
 
-                    geo_obj.tools[1] = deepcopy(self.cut_tool_dict)
+                    geo_obj.tools[1] = deepcopy(cut_tool_dict)
                     geo_obj.tools[1]['tooldia'] = str(abs(cut_dia))
                     geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
 
                     geo_obj.tools[1]['data']['name'] = outname
                     geo_obj.tools[1]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.tools[1]['data']['tools_mill_cutz'] = self.ui.cutz_entry.get_value()
+                    geo_obj.tools[1]['data']['tools_mill_cutz'] = cutz
 
-                    geo_obj.tools[1]['data']['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
-                    geo_obj.tools[1]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
+                    geo_obj.tools[1]['data']['tools_mill_multidepth'] = multidepth
+                    geo_obj.tools[1]['data']['tools_mill_depthperpass'] = depthperpass
 
                     # if there are "thin gaps"
                     if gaps_solid_geo:
-                        geo_obj.tools[99] = deepcopy(self.cut_tool_dict)
+                        geo_obj.tools[99] = deepcopy(cut_tool_dict)
                         geo_obj.tools[99]['tooldia'] = str(abs(cut_dia))
                         geo_obj.tools[99]['solid_geometry'] = gaps_solid_geo
 
                         geo_obj.tools[99]['data']['name'] = outname
                         geo_obj.tools[99]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                        geo_obj.tools[99]['data']['tools_mill_cutz'] = self.ui.thin_depth_entry.get_value()
-                        geo_obj.tools[99]['data']['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
-                        geo_obj.tools[99]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
+                        geo_obj.tools[99]['data']['tools_mill_cutz'] = thin_entry
+                        geo_obj.tools[99]['data']['tools_mill_multidepth'] = multidepth
+                        geo_obj.tools[99]['data']['tools_mill_depthperpass'] = depthperpass
                         # plot this tool in a different color
                         geo_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
 
@@ -1322,9 +1665,9 @@ class CutOut(AppTool):
                     geo_obj.obj_options['ymax'] = ymax
 
                     geo_obj.obj_options['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.obj_options['tools_mill_cutz'] = self.ui.cutz_entry.get_value()
-                    geo_obj.obj_options['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
-                    geo_obj.obj_options['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
+                    geo_obj.obj_options['tools_mill_cutz'] = cutz
+                    geo_obj.obj_options['tools_mill_multidepth'] = multidepth
+                    geo_obj.obj_options['tools_mill_depthperpass'] = depthperpass
 
                 def excellon_init(exc_obj, app_o):
                     if not holes:
@@ -1343,7 +1686,7 @@ class CutOut(AppTool):
                     exc_obj.obj_options['ymax'] = ymax
 
                 try:
-                    if self.ui.gaptype_combo.get_value() == 2:  # "mouse bytes"
+                    if gap_type == 2:  # "mouse bytes"
                         ret = self.new_object('excellon', outname_exc, excellon_init,
                                               source=cutout_obj, autoselected=False)
                         if ret == 'fail':
@@ -1366,99 +1709,16 @@ class CutOut(AppTool):
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
     def any_cutout_handler(self, geom, cut_diameter, gaps, gapsize, margin):
-        r_temp_geo = []
-        initial_geo = deepcopy(geom)
+        paths = _cutout_paths(geom)
+        if not paths:
+            raise ValueError(_("No contour is available for automatic gaps."))
 
-        # Get min and max data for each object as we just cut rectangles across X or Y
-        xxmin, yymin, xxmax, yymax = CutOut.recursive_bounds(geom)
-        px = 0.5 * (xxmax - xxmin) + xxmin  # center X
-        py = 0.5 * (yymax - yymin) + yymin  # center Y
-        lenx = (xxmax - xxmin) + (margin * 2)
-        leny = (yymax - yymin) + (margin * 2)
-
-        if gaps.lower() != 'none':
-            if gaps == '8' or gaps in ['2LR', '2lr']:
-                points = (
-                    xxmin - (gapsize + cut_diameter),  # botleft_x
-                    py - (gapsize / 2) + leny / 4,  # botleft_y
-                    xxmax + (gapsize + cut_diameter),  # topright_x
-                    py + (gapsize / 2) + leny / 4  # topright_y
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                r_temp_geo.append(
-                    self.intersect_geo(initial_geo, box(points[0], points[1], points[2], points[3]))
-                )
-
-                points = (
-                    xxmin - (gapsize + cut_diameter),
-                    py - (gapsize / 2) - leny / 4,
-                    xxmax + (gapsize + cut_diameter),
-                    py + (gapsize / 2) - leny / 4
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                r_temp_geo.append(
-                    self.intersect_geo(initial_geo, box(points[0], points[1], points[2], points[3]))
-                )
-
-            if gaps == '8' or gaps in ['2TB', '2tb']:
-                points = (
-                    px - (gapsize / 2) + lenx / 4,
-                    yymin - (gapsize + cut_diameter),
-                    px + (gapsize / 2) + lenx / 4,
-                    yymax + (gapsize + cut_diameter)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                r_temp_geo.append(
-                    self.intersect_geo(initial_geo, box(points[0], points[1], points[2], points[3]))
-                )
-
-                points = (
-                    px - (gapsize / 2) - lenx / 4,
-                    yymin - (gapsize + cut_diameter),
-                    px + (gapsize / 2) - lenx / 4,
-                    yymax + (gapsize + cut_diameter)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                r_temp_geo.append(
-                    self.intersect_geo(initial_geo, box(points[0], points[1], points[2], points[3]))
-                )
-
-            if gaps == '4' or gaps in ['LR', 'lr']:
-                points = (
-                    xxmin - (gapsize + cut_diameter),
-                    py - (gapsize / 2),
-                    xxmax + (gapsize + cut_diameter),
-                    py + (gapsize / 2)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                r_temp_geo.append(
-                    self.intersect_geo(initial_geo, box(points[0], points[1], points[2], points[3]))
-                )
-
-            if gaps == '4' or gaps in ['TB', 'tb']:
-                points = (
-                    px - (gapsize / 2),
-                    yymin - (gapsize + cut_diameter),
-                    px + (gapsize / 2),
-                    yymax + (gapsize + cut_diameter)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                r_temp_geo.append(
-                    self.intersect_geo(initial_geo, box(points[0], points[1], points[2], points[3]))
-                )
-
-        try:
-            # for g in geom:
-            #     proc_geometry.append(g)
-            work_geom = geom.geoms if isinstance(geom, (MultiPolygon, MultiLineString)) else geom
-            proc_geometry = [g for g in work_geom if not g.is_empty]
-        except TypeError:
-            # proc_geometry.append(geom)
-            proc_geometry = [geom]
-
-        r_temp_geo = CutOut.flatten(r_temp_geo)
-        rest_geometry = [g for g in r_temp_geo if g and not g.is_empty]
-
+        proc_geometry = []
+        rest_geometry = []
+        for path in paths:
+            cut_parts, gap_parts = _cutout_intervals(path, cut_diameter, gaps, gapsize)
+            proc_geometry.extend(cut_parts)
+            rest_geometry.extend(gap_parts)
         return proc_geometry, rest_geometry
 
     def on_rectangular_cutout(self):
@@ -1478,9 +1738,10 @@ class CutOut(AppTool):
             return
 
         cut_dia_val = float(self.ui.dia.get_value())
-        if 0 in {cut_dia_val}:
+        if not math.isfinite(cut_dia_val) or cut_dia_val == 0:
             self.app.inform.emit('[ERROR_NOTCL] %s' %
                                  _("Tool Diameter is zero value. Change it to a positive real number."))
+            return
 
         try:
             kind = self.ui.obj_kind_combo.get_value()
@@ -1508,6 +1769,19 @@ class CutOut(AppTool):
         gap_type_val = self.ui.gaptype_combo.get_value()
         thin_entry_val = self.ui.thin_depth_entry.get_value()
         has_mouse_bites_val = True if self.ui.gaptype_combo.get_value() == 2 else False  # "mouse bytes"
+        if has_mouse_bites_val and not _valid_mouse_bite_step(mb_dia_val, mb_spacing_val):
+            self.app.inform.emit('[ERROR_NOTCL] %s' %
+                                 _("Mouse bite diameter and spacing must produce a positive finite step."))
+            return
+        cut_tool_dict = deepcopy(self.cut_tool_dict)
+        cutz = self.ui.cutz_entry.get_value()
+        multidepth = self.ui.mpass_cb.get_value()
+        depthperpass = self.ui.maxdepth_entry.get_value()
+        try:
+            _validate_thin_depth(gap_type_val, gaps_val, cutz, thin_entry_val)
+        except ValueError as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            return
 
         formatted_name = cutout_obj.obj_options["name"].rpartition('.')[0]
         outname = "%s_cutout" % formatted_name if formatted_name != '' else "%s_cutout" % cutout_obj.obj_options["name"]
@@ -1523,6 +1797,19 @@ class CutOut(AppTool):
                 solid_geo = []
                 gaps_solid_geo = []
                 mouse_bites_geo = []
+                rectangular_rows = []
+
+                def rectangular_paths(*args, include_gaps=False):
+                    try:
+                        return self_c.rect_cutout_handler(*args, include_gaps=include_gaps)
+                    except ValueError as err:
+                        app_obj.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                        return None
+
+                if has_mouse_bites and not _valid_mouse_bite_step(mb_dia, mb_spacing):
+                    app_obj.inform.emit('[ERROR_NOTCL] %s' %
+                                        _("Mouse bite diameter and spacing must produce a positive finite step."))
+                    return "fail"
 
                 mb_buff_val = mb_dia / 2.0
 
@@ -1571,7 +1858,10 @@ class CutOut(AppTool):
                             geo = unary_union(buff_geo_ext.interiors)
 
                     # w_gapsize = gapsize - abs(cut_dia)
-                    solid_geo = self.rect_cutout_handler(geo, abs(cut_dia), gaps, gapsize, margin, xmin, ymin, xmax, ymax)
+                    solid_geo = rectangular_paths(geo, abs(cut_dia), gaps, gapsize, margin,
+                                                   xmin, ymin, xmax, ymax)
+                    if solid_geo is None:
+                        return "fail"
 
                     if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
                         gaps_solid_geo = self_c.subtract_geo(geo, deepcopy(solid_geo))
@@ -1593,8 +1883,13 @@ class CutOut(AppTool):
                                 buff_geo_ext = geo_ext.buffer(-margin)
                                 geom_struct = unary_union(buff_geo_ext.interiors)
 
-                            c_geo = self.rect_cutout_handler(geom_struct, abs(cut_dia), gaps, gapsize, margin,
-                                                             xmin, ymin, xmax, ymax)
+                            if cutout_obj.kind == 'geometry':
+                                rectangular_rows.append(geom_struct)
+
+                            c_geo = rectangular_paths(geom_struct, abs(cut_dia), gaps, gapsize, margin,
+                                                      xmin, ymin, xmax, ymax)
+                            if c_geo is None:
+                                return "fail"
                             solid_geo += c_geo
                             if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
                                 try:
@@ -1610,8 +1905,10 @@ class CutOut(AppTool):
 
                             geom_struct = geom_struct.buffer(margin + abs(cut_dia / 2))
 
-                            c_geo = self.rect_cutout_handler(geom_struct, abs(cut_dia), gaps, gapsize, margin,
-                                                             xmin, ymin, xmax, ymax)
+                            c_geo = rectangular_paths(geom_struct, abs(cut_dia), gaps, gapsize, margin,
+                                                      xmin, ymin, xmax, ymax)
+                            if c_geo is None:
+                                return "fail"
                             solid_geo += c_geo
                             if gap_type == 1 and thin_entry != 0:   # "Thin gaps"
                                 try:
@@ -1654,28 +1951,30 @@ class CutOut(AppTool):
                             else:
                                 mb_geo = mb_geo.buffer(margin - mb_buff_val)
                         else:
-                            mb_geo = mb_geo.buffer(0.0000001)
+                            mb_geo = geo
 
-                        mb_solid_geo = self.rect_cutout_handler(mb_geo, abs(cut_dia), gaps, gapsize, margin,
-                                                                xmin, ymin, xmax, ymax)
+                        mb_result = rectangular_paths(mb_geo, abs(cut_dia), gaps, gapsize, margin,
+                                                      xmin, ymin, xmax, ymax, include_gaps=True)
+                        if mb_result is None:
+                            return "fail"
 
-                        mouse_bites_geo = self_c.subtract_geo(mb_geo, mb_solid_geo)
+                        __, mouse_bites_geo = mb_result
                     else:
                         if cutout_obj.kind == 'geometry':
                             mb_object_geo = flatten_shapely_geometry(mb_object_geo)
+                            mb_object_geo = rectangular_rows
                             for mb_geom_struct in mb_object_geo:
                                 mb_geom_struct = unary_union(mb_geom_struct)
                                 xmin, ymin, xmax, ymax = mb_geom_struct.bounds
                                 mb_geom_struct = box(xmin, ymin, xmax, ymax)
 
-                                c_geo = self.rect_cutout_handler(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin,
-                                                                 xmin, ymin, xmax, ymax)
-                                solid_geo += c_geo
+                                mb_result = rectangular_paths(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin,
+                                                              xmin, ymin, xmax, ymax, include_gaps=True)
+                                if mb_result is None:
+                                    return "fail"
 
-                                try:
-                                    mouse_bites_geo += self_c.subtract_geo(mb_geom_struct, c_geo)
-                                except TypeError:
-                                    mouse_bites_geo.append(self_c.subtract_geo(mb_geom_struct, c_geo))
+                                __, mb_gaps = mb_result
+                                mouse_bites_geo += mb_gaps
                         elif cutout_obj.kind == 'gerber' and margin >= 0:
                             mb_object_geo = flatten_shapely_geometry(mb_object_geo)
                             for mb_geom_struct in mb_object_geo:
@@ -1684,14 +1983,13 @@ class CutOut(AppTool):
                                 mb_geom_struct = box(xmin, ymin, xmax, ymax)
                                 mb_geom_struct = mb_geom_struct.buffer(margin + mb_buff_val)
 
-                                c_geo = self.rect_cutout_handler(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin,
-                                                                 xmin, ymin, xmax, ymax)
-                                solid_geo += c_geo
+                                mb_result = rectangular_paths(mb_geom_struct, abs(cut_dia), gaps, gapsize, margin,
+                                                              xmin, ymin, xmax, ymax, include_gaps=True)
+                                if mb_result is None:
+                                    return "fail"
 
-                                try:
-                                    mouse_bites_geo += self_c.subtract_geo(mb_geom_struct, c_geo)
-                                except TypeError:
-                                    mouse_bites_geo.append(self_c.subtract_geo(mb_geom_struct, c_geo))
+                                __, mb_gaps = mb_result
+                                mouse_bites_geo += mb_gaps
                         elif cutout_obj.kind == 'gerber' and margin < 0:
                             app_obj.log.error("Rectangular cutout with negative margin is not possible.")
                             msg2 = '[ERROR_NOTCL] %s' % _("Failed.")
@@ -1700,7 +1998,9 @@ class CutOut(AppTool):
 
                     # list of Shapely Points to mark the drill points centers
                     holes = []
-                    for line in mouse_bites_geo:
+                    if mouse_bites_geo:
+                        mouse_bites_geo = linemerge(unary_union(mouse_bites_geo))
+                    for line in _cutout_paths(mouse_bites_geo):
                         calc_len = 0
                         while calc_len <= line.length:
                             holes.append(line.interpolate(calc_len))
@@ -1710,26 +2010,26 @@ class CutOut(AppTool):
                     geo_obj.multigeo = True
                     geo_obj.solid_geometry = deepcopy(solid_geo)
 
-                    geo_obj.tools[1] = deepcopy(self_c.cut_tool_dict)
+                    geo_obj.tools[1] = deepcopy(cut_tool_dict)
                     geo_obj.tools[1]['tooldia'] = str(abs(cut_dia))
                     geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
 
                     geo_obj.tools[1]['data']['name'] = outname
                     geo_obj.tools[1]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.tools[1]['data']['tools_mill_cutz'] = self_c.ui.cutz_entry.get_value()
-                    geo_obj.tools[1]['data']['tools_mill_multidepth'] = self_c.ui.mpass_cb.get_value()
-                    geo_obj.tools[1]['data']['tools_mill_depthperpass'] = self_c.ui.maxdepth_entry.get_value()
+                    geo_obj.tools[1]['data']['tools_mill_cutz'] = cutz
+                    geo_obj.tools[1]['data']['tools_mill_multidepth'] = multidepth
+                    geo_obj.tools[1]['data']['tools_mill_depthperpass'] = depthperpass
 
                     if gaps_solid_geo:
-                        geo_obj.tools[99] = deepcopy(self_c.cut_tool_dict)
+                        geo_obj.tools[99] = deepcopy(cut_tool_dict)
                         geo_obj.tools[99]['tooldia'] = str(abs(cut_dia))
                         geo_obj.tools[99]['solid_geometry'] = gaps_solid_geo
 
                         geo_obj.tools[99]['data']['name'] = outname
                         geo_obj.tools[99]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                        geo_obj.tools[99]['data']['tools_mill_cutz'] = self_c.ui.thin_depth_entry.get_value()
-                        geo_obj.tools[99]['data']['tools_mill_multidepth'] = self_c.ui.mpass_cb.get_value()
-                        geo_obj.tools[99]['data']['tools_mill_depthperpass'] = self_c.ui.maxdepth_entry.get_value()
+                        geo_obj.tools[99]['data']['tools_mill_cutz'] = thin_entry
+                        geo_obj.tools[99]['data']['tools_mill_multidepth'] = multidepth
+                        geo_obj.tools[99]['data']['tools_mill_depthperpass'] = depthperpass
                         geo_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
 
                     xmin, ymin, xmax, ymax = CutOut.recursive_bounds(geo_obj.solid_geometry)
@@ -1739,9 +2039,9 @@ class CutOut(AppTool):
                     geo_obj.obj_options['ymax'] = ymax
 
                     geo_obj.obj_options['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.obj_options['tools_mill_cutz'] = self_c.ui.cutz_entry.get_value()
-                    geo_obj.obj_options['tools_mill_multidepth'] = self_c.ui.mpass_cb.get_value()
-                    geo_obj.obj_options['tools_mill_depthperpass'] = self_c.ui.maxdepth_entry.get_value()
+                    geo_obj.obj_options['tools_mill_cutz'] = cutz
+                    geo_obj.obj_options['tools_mill_multidepth'] = multidepth
+                    geo_obj.obj_options['tools_mill_depthperpass'] = depthperpass
 
                 def excellon_init(exc_obj, app_o):
                     if not holes:
@@ -1759,7 +2059,7 @@ class CutOut(AppTool):
                     exc_obj.obj_options['ymax'] = e_ymax
 
                 try:
-                    if self_c.ui.gaptype_combo.get_value() == 2:  # "mouse bytes"
+                    if gap_type == 2:  # "mouse bytes"
                         ret = self_c.new_object('excellon', outname_exc, excellon_init,
                                                 source=cutout_obj, autoselected=False)
                         if ret == 'fail':
@@ -1787,80 +2087,30 @@ class CutOut(AppTool):
                     ]
                 })
 
-    def rect_cutout_handler(self, geom, cut_dia, gaps, gapsize, margin, xmin, ymin, xmax, ymax):
-        px = (0.5 * (xmax - xmin)) + xmin  # center X
-        py = (0.5 * (ymax - ymin)) + ymin  # center Y
-        lenx = (xmax - xmin) + (margin * 2)
-        leny = (ymax - ymin) + (margin * 2)
+    def rect_cutout_handler(self, geom, cut_dia, gaps, gapsize, margin, xmin, ymin, xmax, ymax,
+                            include_gaps=False):
+        paths = _cutout_paths(geom)
+        if not paths:
+            raise ValueError(_("No contour is available for rectangular gaps."))
 
-        # we need to make sure that the cutting polygon extends enough so it intersects the target
-        # for that we need to add the cutting dia to gapsize in the corners that matter
-        if gaps.lower() != 'none':
-            if gaps == '8' or gaps in ['2LR', '2lr']:
-                points = (
-                    xmin - (gapsize + cut_dia),         # botleft_x     = X_MIN
-                    py - (gapsize / 2) + leny / 4,      # botleft_y     = Y_MIN
-                    xmax + (gapsize + cut_dia),         # topright_x    = X_MAX
-                    py + (gapsize / 2) + leny / 4       # topright_y    = Y_MAX
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                points = (
-                    xmin - (gapsize + cut_dia),
-                    py - (gapsize / 2) - leny / 4,
-                    xmax + (gapsize + cut_dia),
-                    py + (gapsize / 2) - leny / 4
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-
-            if gaps == '8' or gaps in ['2TB', '2tb']:
-                points = (
-                    px - (gapsize / 2) + lenx / 4,
-                    ymin - (gapsize + cut_dia),
-                    px + (gapsize / 2) + lenx / 4,
-                    ymax + (gapsize + cut_dia)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-                points = (
-                    px - (gapsize / 2) - lenx / 4,
-                    ymin - (gapsize + cut_dia),
-                    px + (gapsize / 2) - lenx / 4,
-                    ymax + (gapsize + cut_dia)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-
-            if gaps == '4' or gaps in ['LR', 'lr']:
-                points = (
-                    xmin - (gapsize + cut_dia),
-                    py - (gapsize / 2),
-                    xmax + (gapsize + cut_dia),
-                    py + (gapsize / 2)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-
-            if gaps == '4' or gaps in ['TB', 'tb']:
-                points = (
-                    px - (gapsize / 2),
-                    ymin - (gapsize + cut_dia),
-                    px + (gapsize / 2),
-                    ymax + (gapsize + cut_dia)
-                )
-                geom = self.subtract_poly_from_geo(geom, points)
-
-        try:
-            # for g in geom:
-            #     proc_geometry.append(g)
-            work_geom = geom.geoms if isinstance(geom, (MultiPolygon, MultiLineString)) else geom
-            proc_geometry = [g for g in work_geom if not g.is_empty]
-        except TypeError:
-            # proc_geometry.append(geom)
-            proc_geometry = [geom]
-        return proc_geometry
+        proc_geometry = []
+        rest_geometry = []
+        for path in paths:
+            cut_parts, gap_parts = _cutout_intervals(path, cut_dia, gaps, gapsize)
+            proc_geometry.extend(cut_parts)
+            rest_geometry.extend(gap_parts)
+        return (proc_geometry, rest_geometry) if include_gaps else proc_geometry
 
     def on_drill_cut_click(self):
 
         margin = self.ui.drill_margin_entry.get_value()
         pitch = self.ui.drill_pitch_entry.get_value()
         drill_dia = self.ui.drill_dia_entry.get_value()
+
+        if not all(math.isfinite(value) and value > 0 for value in (pitch, drill_dia)):
+            self.app.inform.emit('[WARNING_NOTCL] %s %s' %
+                                 (_("Failed."), _("Drill pitch and diameter must be positive finite values.")))
+            return
 
         name = self.ui.drillcut_object_combo.currentText()
 
@@ -1877,46 +2127,21 @@ class CutOut(AppTool):
                                  _("There is no object selected for Cutout.\nSelect one and try again."))
             return
 
-        cut_geo_solid = unary_union(obj.solid_geometry)
-
         drill_list = []
-        try:
-            for geo in cut_geo_solid:
-                if isinstance(geo, LineString):
-                    cut_geo = geo.parallel_offset(margin, side='left')
-                elif isinstance(geo, Polygon):
-                    cut_geo = geo.buffer(margin).exterior
-                else:
-                    self.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Failed."), _("Could not add drills.")))
-                    return
-
-                geo_length = cut_geo.length
-
-                dist = 0
-                while dist <= geo_length:
-                    drill_list.append(cut_geo.interpolate(dist))
-                    dist += pitch
-
-                if dist < geo_length:
-                    drill_list.append(Point(list(cut_geo.coords)[-1]))
-        except TypeError:
-            if isinstance(cut_geo_solid, LineString):
-                cut_geo = cut_geo_solid.parallel_offset(margin, side='left')
-            elif isinstance(cut_geo_solid, Polygon):
-                cut_geo = cut_geo_solid.buffer(margin).exterior
+        cut_geo_solid = unary_union(obj.solid_geometry)
+        for geo in flatten_shapely_geometry(cut_geo_solid):
+            if isinstance(geo, LineString):
+                offset_geo = geo.parallel_offset(margin, side='left')
+            elif isinstance(geo, Polygon):
+                offset_geo = geo.buffer(margin)
             else:
-                self.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Failed."), _("Could not add drills.")))
-                return
+                continue
 
-            geo_length = cut_geo.length
-
-            dist = 0
-            while dist <= geo_length:
-                drill_list.append(cut_geo.interpolate(dist))
-                dist += pitch
-
-            if dist < geo_length:
-                drill_list.append(Point(list(cut_geo.coords)[-1]))
+            for path in flatten_shapely_geometry(offset_geo):
+                if isinstance(path, Polygon):
+                    path = path.exterior
+                if isinstance(path, LineString) and not path.is_empty:
+                    drill_list.extend(_sample_path(path, pitch))
 
         if not drill_list:
             self.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Failed."), _("Could not add drills.")))
@@ -1959,19 +2184,36 @@ class CutOut(AppTool):
                                  (_("Geometry object for manual cutout not found"), self.man_cutout_obj))
             return
 
-        self.app.inform.emit(_("Click on the selected geometry object perimeter to create a bridge gap ..."))
-        self.app.geo_editor.tool_shape.enabled = True
-
-        self.manual_solid_geo = deepcopy(self.flatten(self.man_cutout_obj.solid_geometry))
-
-        self.cutting_dia = self.ui.dia.get_value()
-        if 0 in {self.cutting_dia}:
+        self.cutting_dia = abs(self.ui.dia.get_value())
+        if not math.isfinite(self.cutting_dia) or self.cutting_dia == 0:
             self.app.inform.emit('[ERROR_NOTCL] %s' %
                                  _("Tool Diameter is zero value. Change it to a positive real number."))
             return
 
+        mb_dia = None
+        mb_spacing = None
         if self.ui.gaptype_combo.get_value() == 2:  # "mouse bytes"
             mb_dia = self.ui.mb_dia_entry.get_value()
+            mb_spacing = self.ui.mb_spacing_entry.get_value()
+            if not _valid_mouse_bite_step(mb_dia, mb_spacing):
+                self.app.inform.emit('[ERROR_NOTCL] %s' %
+                                     _("Mouse bite diameter and spacing must produce a positive finite step."))
+                return
+
+        try:
+            _validate_thin_depth(
+                self.ui.gaptype_combo.get_value(), True,
+                self.ui.cutz_entry.get_value(), self.ui.thin_depth_entry.get_value())
+        except ValueError as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            return
+
+        self.app.inform.emit(_("Click on the selected geometry object perimeter to create a bridge gap ..."))
+        self.app.geo_editor.tool_shape.enabled = True
+        self.mb_manual_cuts[:] = []
+        self.manual_solid_geo = deepcopy(self.flatten(self.man_cutout_obj.solid_geometry))
+
+        if self.ui.gaptype_combo.get_value() == 2:  # "mouse bytes"
             b_dia = (self.cutting_dia / 2.0) - (mb_dia / 2.0)
             # flaten manual geometry
             unified_man_geo = unary_union(self.manual_solid_geo)
@@ -2016,6 +2258,10 @@ class CutOut(AppTool):
                     "global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
             self.app.on_cursor_type(val="big")
 
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.old_selection_state = self.app.options.get(
+            "global_selection_shape", app_defaults.get(
+                "global_selection_shape", AppDefaults.factory_defaults.get("global_selection_shape")))
         self.app.options['global_selection_shape'] = False
         # disable the notebook until finished
         self.app.ui.notebook.setDisabled(True)
@@ -2030,22 +2276,45 @@ class CutOut(AppTool):
         # use the snapped position as reference
         snapped_pos = self.app.geo_editor.snap(click_pos[0], click_pos[1])
 
-        cut_poly = self.cutting_geo(pos=(snapped_pos[0], snapped_pos[1]))
+        try:
+            selected_path, gap_line, cut_poly = _manual_gap_geometry(
+                self.man_cutout_obj.solid_geometry,
+                (snapped_pos[0], snapped_pos[1]),
+                self.ui.dia.get_value(),
+                self.ui.gapsize.get_value())
+        except ValueError as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            return
+
+        try:
+            _validate_thin_depth(
+                self.ui.gaptype_combo.get_value(), True,
+                self.ui.cutz_entry.get_value(), self.ui.thin_depth_entry.get_value())
+        except ValueError as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            return
+
+        try:
+            expected_gap_length = abs(float(self.ui.dia.get_value())) + float(self.ui.gapsize.get_value())
+            new_solid_geometry = _manual_subtract_selected(
+                self.man_cutout_obj.solid_geometry, selected_path, gap_line,
+                expected_gap_length=expected_gap_length)
+        except (TypeError, ValueError) as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            return
 
         gap_type = self.ui.gaptype_combo.get_value()
         gaps_solid_geo = None
         if gap_type == 1 and self.ui.thin_depth_entry.get_value() != 0:     # "Thin gaps"
-            gaps_solid_geo = self.intersect_geo(self.manual_solid_geo, cut_poly)
+            gaps_solid_geo = gap_line
 
         if gap_type == 2:   # "Mouse Bytes"
-            rests_geo = self.intersect_geo(self.mb_manual_solid_geo, cut_poly)
-            if isinstance(rests_geo, list):
-                self.mb_manual_cuts += rests_geo
-            else:
-                self.mb_manual_cuts.append(rests_geo)
+            mb_paths = _cutout_paths(self.mb_manual_solid_geo)
+            if mb_paths:
+                mb_path = min(mb_paths, key=Point(snapped_pos).distance)
+                self.mb_manual_cuts.extend(_cutout_paths(mb_path.intersection(cut_poly)))
 
         # first subtract geometry for the total solid_geometry
-        new_solid_geometry = self.subtract_geo(self.man_cutout_obj.solid_geometry, cut_poly)
         try:
             new_solid_geometry = linemerge(new_solid_geometry)
         except ValueError:
@@ -2065,11 +2334,11 @@ class CutOut(AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("No tool in the Geometry object."))
             return
 
-        dia = self.ui.dia.get_value()
+        dia = abs(self.ui.dia.get_value())
         if gaps_solid_geo:
             if 99 not in self.man_cutout_obj.tools:
                 self.man_cutout_obj.tools.update({
-                    99: self.cut_tool_dict
+                    99: deepcopy(self.cut_tool_dict)
                 })
                 self.man_cutout_obj.tools[99]['tooldia'] = str(dia)
                 self.man_cutout_obj.tools[99]['solid_geometry'] = [gaps_solid_geo]
@@ -2118,10 +2387,14 @@ class CutOut(AppTool):
 
         margin = float(self.ui.margin.get_value())
         convex_box = self.ui.convex_box_cb.get_value()
+        shape_type = self.ui.cutout_shape_cb.get_value()
+        cutz = self.ui.cutz_entry.get_value()
+        multidepth = self.ui.mpass_cb.get_value()
+        depthperpass = self.ui.maxdepth_entry.get_value()
+        cut_tool_dict = deepcopy(self.cut_tool_dict)
 
         def geo_init(geo_obj, app_obj):
             geo_union = unary_union(cutout_obj.solid_geometry)
-            shape_type = self.ui.cutout_shape_cb.get_value()    # True means rectangular shape
 
             if convex_box:
                 geo = geo_union.convex_hull
@@ -2162,7 +2435,7 @@ class CutOut(AppTool):
                         geo_obj.solid_geometry = geo.exterior
                     elif isinstance(geo, MultiPolygon):
                         solid_geo = []
-                        for poly in geo:
+                        for poly in geo.geoms:
                             solid_geo.append(poly.exterior)
                         geo_obj.solid_geometry = deepcopy(solid_geo)
                 else:
@@ -2170,23 +2443,23 @@ class CutOut(AppTool):
                         geo_obj.solid_geometry = geo.envelope.exterior
                     elif isinstance(geo, MultiPolygon):
                         solid_geo = []
-                        for poly in geo:
+                        for poly in geo.geoms:
                             solid_geo.append(poly.envelope.exterior)
-                        geo_obj.solid_geometry = deepcopy(unary_union(solid_geo).exterior)
+                        geo_obj.solid_geometry = deepcopy(solid_geo)
 
             geo_obj.multigeo = True
 
             geo_obj.tools.update({
-                1: self.cut_tool_dict
+                1: deepcopy(cut_tool_dict)
             })
             geo_obj.tools[1]['tooldia'] = str(dia)
             geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
 
             geo_obj.tools[1]['data']['name'] = outname
             geo_obj.tools[1]['data']['tools_mill_tooldia'] = str(dia)
-            geo_obj.tools[1]['data']['tools_mill_cutz'] = self.ui.cutz_entry.get_value()
-            geo_obj.tools[1]['data']['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
-            geo_obj.tools[1]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
+            geo_obj.tools[1]['data']['tools_mill_cutz'] = cutz
+            geo_obj.tools[1]['data']['tools_mill_multidepth'] = multidepth
+            geo_obj.tools[1]['data']['tools_mill_depthperpass'] = depthperpass
 
         outname = cutout_obj.obj_options["name"] + "_cutout"
         self.new_object('geometry', outname, geo_init, source=cutout_obj, autoselected=False)
@@ -2194,19 +2467,16 @@ class CutOut(AppTool):
     def cutting_geo(self, pos):
         self.cutting_dia = float(self.ui.dia.get_value())
         self.cutting_gapsize = float(self.ui.gapsize.get_value())
-
-        offset = self.cutting_dia / 2 + self.cutting_gapsize / 2
-
-        # cutting area definition
-        orig_x = pos[0]
-        orig_y = pos[1]
-        xmin = orig_x - offset
-        ymin = orig_y - offset
-        xmax = orig_x + offset
-        ymax = orig_y + offset
-
-        cut_poly = box(xmin, ymin, xmax, ymax)
-        return cut_poly
+        try:
+            __, __, cut_poly = _manual_gap_geometry(
+                self.man_cutout_obj.solid_geometry,
+                pos,
+                self.cutting_dia,
+                self.cutting_gapsize)
+            return cut_poly
+        except (AttributeError, TypeError, ValueError) as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            return GeometryCollection()
 
     # To be called after clicking on the plot.
     def on_mouse_click_release(self, event):
@@ -2261,21 +2531,30 @@ class CutOut(AppTool):
 
             # mouse bytes
             if self.ui.gaptype_combo.get_value() == 2:  # "mouse bytes"
+                mb_dia = self.ui.mb_dia_entry.get_value()
+                mb_spacing = self.ui.mb_spacing_entry.get_value()
+                if not _valid_mouse_bite_step(mb_dia, mb_spacing):
+                    self.app.inform.emit('[ERROR_NOTCL] %s' %
+                                         _("Mouse bite diameter and spacing must produce a positive finite step."))
+                    self.mb_manual_cuts[:] = []
+                    self.app.ui.notebook.setDisabled(False)
+                    return
+
                 with self.app.proc_container.new("Generating Excellon ..."):
-                    outname_exc = self.man_cutout_obj.obj_options["name"] + "_mouse_bites"
+                    manual_source = self.man_cutout_obj
+                    manual_cuts = deepcopy(self.mb_manual_cuts)
+                    outname_exc = manual_source.obj_options["name"] + "_mouse_bites"
                     self.app.collection.promise(outname_exc)
+                    self.mb_manual_cuts[:] = []
 
                     def job_thread(app_obj):
                         # list of Shapely Points to mark the drill points centers
                         holes = []
-                        mb_dia = self.ui.mb_dia_entry.get_value()
-                        mb_spacing = self.ui.mb_spacing_entry.get_value()
-                        for line in self.mb_manual_cuts:
+                        for line in manual_cuts:
                             calc_len = 0
                             while calc_len <= line.length:
                                 holes.append(line.interpolate(calc_len))
                                 calc_len += mb_dia + mb_spacing
-                        self.mb_manual_cuts[:] = []
 
                         def excellon_init(exc_obj, app_o):
                             if not holes:
@@ -2293,7 +2572,7 @@ class CutOut(AppTool):
                             exc_obj.obj_options['ymax'] = ymax
 
                         ret = self.new_object('excellon', outname_exc, excellon_init,
-                                              source=self.man_cutout_obj, autoselected=False)
+                                              source=manual_source, autoselected=False)
                         if ret == 'fail':
                             app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
 
@@ -2336,55 +2615,7 @@ class CutOut(AppTool):
 
         self.x_pos, self.y_pos = snap_x, snap_y
 
-        # #################################################
-        # ### This section makes the cutting geo to #######
-        # ### rotate if it intersects the target geo ######
-        # #################################################
         cut_geo = self.cutting_geo(pos=(snap_x, snap_y))
-        man_geo = self.man_cutout_obj.solid_geometry
-
-        def get_angle(geo):
-            line = cut_geo.intersection(geo)
-
-            try:
-                pt1_x = line.coords[0][0]
-                pt1_y = line.coords[0][1]
-                pt2_x = line.coords[1][0]
-                pt2_y = line.coords[1][1]
-                dx = pt1_x - pt2_x
-                dy = pt1_y - pt2_y
-
-                if dx == 0 or dy == 0:
-                    angle = 0
-                else:
-                    radian = math.atan(dx / dy)
-                    angle = radian * 180 / math.pi
-            except Exception:
-                angle = 0
-            return angle
-
-        r_man_geo = man_geo.geoms if isinstance(man_geo, (MultiPolygon, MultiLineString)) else man_geo
-        try:
-            rot_angle = 0
-            for geo_el in r_man_geo:
-                if isinstance(geo_el, Polygon):
-                    work_geo = geo_el.exterior
-                    rot_angle = get_angle(geo=work_geo) if cut_geo.intersects(work_geo) else 0
-                else:
-                    rot_angle = get_angle(geo=geo_el) if cut_geo.intersects(geo_el) else 0
-
-                if rot_angle != 0:
-                    break
-        except TypeError:
-            if isinstance(r_man_geo, Polygon):
-                work_geo = r_man_geo.exterior
-                rot_angle = get_angle(geo=work_geo) if cut_geo.intersects(work_geo) else 0
-            else:
-                rot_angle = get_angle(geo=r_man_geo) if cut_geo.intersects(r_man_geo) else 0
-
-        # rotate only if there is an angle to rotate to
-        if rot_angle != 0:
-            cut_geo = rotate(cut_geo, -rot_angle)
 
         # Remove any previous utility shape
         self.app.geo_editor.tool_shape.clear(update=True)
@@ -2431,6 +2662,7 @@ class CutOut(AppTool):
                     self.app.on_cursor_type(val=self.old_cursor_type)
                 # restore selection
                 self.app.options['global_selection_shape'] = self.old_selection_state
+                self.mb_manual_cuts[:] = []
 
             # Remove any previous utility shape
             self.app.geo_editor.tool_shape.clear(update=True)
@@ -2503,7 +2735,7 @@ class CutOut(AppTool):
         :param geometry: Shapely type or list or a list of lists of such.
         """
         flat_geo = []
-        work_geo = geometry.geoms if isinstance(geometry, (MultiPolygon, MultiLineString)) else geometry
+        work_geo = geometry.geoms if isinstance(geometry, (MultiPolygon, MultiLineString, GeometryCollection)) else geometry
         try:
             for geo in work_geo:
                 if geo:
@@ -2511,7 +2743,7 @@ class CutOut(AppTool):
         except TypeError:
             if isinstance(work_geo, Polygon) and not work_geo.is_empty:
                 flat_geo.append(work_geo.exterior)
-                CutOut.flatten(geometry=work_geo.interiors)
+                flat_geo += CutOut.flatten(geometry=work_geo.interiors)
             elif not work_geo.is_empty:
                 flat_geo.append(work_geo)
 
@@ -2684,8 +2916,10 @@ class CutoutUI:
         self.type_obj_combo_label = FCLabel('%s:' % _("Type"))
         self.type_obj_combo_label.setToolTip(
             _("Specify the type of object to be cutout.\n"
-              "It can be of type: Gerber or Geometry.\n"
-              "What is selected here will dictate the kind\n"
+               "It can be of type: Gerber or Geometry.\n"
+               "Geometry paths are already machining centerlines and receive no radius compensation.\n"
+               "Gerber outlines receive cutter-radius compensation.\n"
+               "What is selected here will dictate the kind\n"
               "of objects that will populate the 'Object' combobox.")
         )
 
@@ -2877,6 +3111,7 @@ class CutoutUI:
         self.gapsize_label = FCLabel('%s:' % _("Size"))
         self.gapsize_label.setToolTip(
             _("The size of the bridge gaps in the cutout\n"
+              "is the remaining bridge width on straight sections, measured along contour.\n"
               "used to keep the board connected to\n"
               "the surrounding material (the one \n"
               "from which the PCB is cutout).")
@@ -2915,8 +3150,8 @@ class CutoutUI:
         # Thin gaps Depth
         self.thin_depth_label = FCLabel('%s:' % _("Depth"))
         self.thin_depth_label.setToolTip(
-            _("The depth until the milling is done\n"
-              "in order to thin the gaps.")
+            _("Thin Depth is a negative Z depth, not remaining material thickness.\n"
+              "Use Cut Z < Thin Depth < 0. Zero leaves a full-thickness bridge and creates no thin-gap tool.")
         )
         self.thin_depth_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.thin_depth_entry.set_precision(self.decimals)
@@ -2941,7 +3176,8 @@ class CutoutUI:
         # Mouse Bites Holes Spacing
         self.mb_spacing_label = FCLabel('%s:' % _("Spacing"))
         self.mb_spacing_label.setToolTip(
-            _("The spacing between drill holes when doing mouse bites.")
+            _("Edge-to-edge spacing between mouse-bite holes.\n"
+              "Center pitch equals drill diameter plus this spacing.")
         )
         self.mb_spacing_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.mb_spacing_entry.set_precision(self.decimals)
@@ -2983,6 +3219,9 @@ class CutoutUI:
         self.gaps_label.setToolTip(
             _("Number of gaps used for the Automatic cutout.\n"
               "There can be maximum 8 bridges/gaps.\n"
+              "LR/TB use left-right or top-bottom center anchors; 2LR/2TB use quarter anchors.\n"
+              "4 means two LR plus two TB gaps; 8 means four LR plus four TB gaps.\n"
+              "Each contour must fit the exact count and width or the operation fails.\n"
               "The choices are:\n"
               "- None  - no gaps\n"
               "- lr    - left + right\n"

@@ -148,6 +148,8 @@ def configure(tool, name, params):
     ui.gapsize.set_value(params['gapsize'])
     ui.gaptype_combo.set_value(params['gap_type'])
     ui.thin_depth_entry.set_value(params['thin'])
+    if params['gap_type'] == 1:
+        ui.cutz_entry.set_value(-1.6)
     ui.mb_dia_entry.set_value(params['mb_dia'])
     ui.mb_spacing_entry.set_value(params['mb_spacing'])
     ui.convex_box_cb.set_value(params['convex'])
@@ -204,10 +206,121 @@ def load_golden(case):
     return json.loads(golden_path(case).read_text())
 
 
+PANEL_CASES = {'panel_gerber', 'slot_panel', 'clearance_panel', 'region_cutout_panel',
+               'mouse_bites_panel_gerber'}
+PANEL_FULL_CONTOURS = {
+    'panel_gerber': 3,
+    'slot_panel': 2,
+    'clearance_panel': 1,
+    'region_cutout_panel': 1,
+    'mouse_bites_panel_gerber': 3,
+}
+GAP_COUNTS = {'lr': 2, 'tb': 2, '2lr': 4, '2tb': 4, '4': 4, '8': 8}
+
+
+def _linework(values):
+    return [shapely.from_wkt(value) for value in values]
+
+
+def _expected_holes(rows, params):
+    expected = []
+    gap_length = params['gapsize'] + abs(params['dia']) - abs(params['dia']) / 2.0
+    for row in rows:
+        __, removed = _cutout_intervals(row, abs(params['dia']), params['gaps'], gap_length)
+        for line in removed:
+            distance = 0.0
+            while distance <= line.length:
+                expected.append(line.interpolate(distance))
+                distance += params['mb_dia'] + params['mb_spacing']
+    return expected
+
+
+def _assert_panel_output(tool, case, source, overrides, full, actual):
+    params = dict(BASE)
+    params.update(overrides)
+    full_paths = flat(unary_union(_linework(full['solid_geo'])))
+    actual_paths = flat(unary_union(_linework(actual['solid_geo'])))
+    assert full_paths and actual_paths
+    assert len(full_paths) == PANEL_FULL_CONTOURS[case]
+
+    expected_cut = []
+    expected_gaps = []
+    for path in full_paths:
+        cut, gaps = _cutout_intervals(
+            path, abs(params['dia']), params['gaps'],
+            params['gapsize'] + abs(params['dia']))
+        expected_cut.extend(cut)
+        expected_gaps.extend(gaps)
+
+    full_union = unary_union(full_paths)
+    actual_union = unary_union(actual_paths)
+    expected_union = unary_union(expected_cut)
+    expected_removed = sum(gap.length for gap in expected_gaps)
+    expected_removed_independent = (
+        PANEL_FULL_CONTOURS[case] * GAP_COUNTS[str(params['gaps']).lower()] *
+        (params['gapsize'] + abs(params['dia'])))
+    assert expected_removed == pytest.approx(expected_removed_independent, abs=2e-6)
+    assert full_union.length - actual_union.length == pytest.approx(expected_removed, abs=2e-6)
+    assert actual_union.hausdorff_distance(expected_union) < 2e-6
+    assert actual_union.difference(full_union.buffer(2e-6)).length < 2e-6
+    assert expected_union.difference(actual_union.buffer(2e-6)).length < 2e-6
+
+    if overrides.get('gap_type') == 2:
+        source_obj = load_source(tool.test_app, source)
+        if source_obj.kind == 'gerber':
+            rows = []
+            for geometry in flat(cutout_module.gerber_cutout_geometry(source_obj, False)):
+                rows.append(geometry.buffer(params['margin'] + params['mb_dia'] / 2.0).exterior)
+        else:
+            rows = [path.buffer(params['margin']).exterior for path in full_paths]
+        expected_holes = _expected_holes(rows, params)
+        actual_holes = [shapely.from_wkt(value) for value in actual['holes']]
+        assert actual_holes
+        assert len(actual_holes) == len(expected_holes)
+        assert max(point.distance(expected) for point in actual_holes for expected in [min(expected_holes, key=point.distance)]) < 2e-6
+        assert max(expected.distance(actual) for expected in expected_holes for actual in [min(actual_holes, key=expected.distance)]) < 2e-6
+    else:
+        assert not actual['holes']
+
+
 def check_golden(tool, case):
     source, overrides = CASES[case]
+    full = run_case(tool, source, dict(overrides, gaps='None', gap_type=0)) if case in PANEL_CASES else None
     got = run_case(tool, source, overrides)
-    assert got == load_golden(case), case
+    expected = load_golden(case)
+    if got == expected:
+        return
+
+    if case in PANEL_CASES:
+        _assert_panel_output(tool, case, source, overrides, full, got)
+        return
+
+    if case == 'mouse_bites_geometry':
+        params = dict(BASE)
+        params.update(overrides)
+        source_geo = unary_union(load_source(tool.test_app, source).solid_geometry)
+        row = source_geo.buffer(params['margin']).exterior
+        actual_holes = [shapely.from_wkt(value) for value in got['holes']]
+        expected_holes = _expected_holes([row], params)
+        assert actual_holes
+        assert len(actual_holes) == len(expected_holes)
+        assert max(point.distance(expected) for point in actual_holes for expected in [min(expected_holes, key=point.distance)]) < 2e-6
+        assert max(expected.distance(actual) for expected in expected_holes for actual in [min(actual_holes, key=expected.distance)]) < 2e-6
+
+    # Arclength splitting changes WKT ordering and multipart boundaries while preserving the
+    # machined geometry. Keep exact drill coordinates and reject real geometry changes.
+    if case != 'mouse_bites_geometry':
+        assert sorted(got['holes']) == sorted(expected['holes']), case
+    for key in ('solid_geo', 'gaps_solid_geo'):
+        got_union = unary_union([shapely.from_wkt(value) for value in got[key]])
+        expected_union = unary_union([shapely.from_wkt(value) for value in expected[key]])
+        if got_union.is_empty or expected_union.is_empty:
+            assert got_union.is_empty and expected_union.is_empty, '%s: %s' % (case, key)
+            continue
+        assert got_union.length == pytest.approx(expected_union.length, abs=2e-6), '%s: %s' % (case, key)
+        assert got_union.hausdorff_distance(expected_union) < 2e-6, '%s: %s' % (case, key)
+        assert got_union.difference(expected_union.buffer(2e-6)).length < 2e-6, '%s: %s' % (case, key)
+        assert expected_union.difference(got_union.buffer(2e-6)).length < 2e-6, '%s: %s' % (case, key)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -249,7 +362,7 @@ from shapely.geometry import LineString  # noqa: E402
 from shapely.ops import unary_union  # noqa: E402
 
 import appPlugins.ToolCutOut as cutout_module  # noqa: E402
-from appPlugins.ToolCutOut import freeform_cutout_paths, offset_contours, outline_contours  # noqa: E402
+from appPlugins.ToolCutOut import _cutout_intervals, freeform_cutout_paths, offset_contours, outline_contours  # noqa: E402
 
 NO_GAPS = {'gaps': 'None'}
 # a small slot needs a small tool and small gaps
