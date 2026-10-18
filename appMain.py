@@ -98,6 +98,8 @@ from appObjects.ObjectCollection import (
     ScriptObject,
     DocumentObject,
 )
+from appHandlers.appProjects import ProjectManager
+from appGUI.ProjectSelector import ProjectSelector
 from appObjects.AppObject import AppObject
 
 # App Parsing files
@@ -1121,14 +1123,17 @@ class App(QtCore.QObject):
 
         # #################################### SETUP OBJECT COLLECTION ##############################################
         self.collection = ObjectCollection(app=self)
-        self.ui.project_tab_layout.addWidget(self.collection.view)
+        # ### Adjust tabs width ## ##
+        self.collection.view.setMinimumWidth(290)
+
+        # the Project tab can hold more than 1 project; the manager keeps app.collection on the active one
+        self.projects = ProjectManager(app=self)
+        self.project_selector = ProjectSelector(self.projects)
+        self.ui.project_tab_layout.addWidget(self.project_selector)
+        self.ui.project_tab_layout.addWidget(self.projects.stack)
 
         self.app_obj = AppObject(app=self)
 
-        # ### Adjust tabs width ## ##
-        # self.collection.view.setMinimumWidth(self.ui.options_scroll_area.widget().sizeHint().width() +
-        #     self.ui.options_scroll_area.verticalScrollBar().sizeHint().width())
-        self.collection.view.setMinimumWidth(290)
         self.log.debug("Finished creating Object Collection.")
 
         # ######################################## SETUP 3D Area ####################################################

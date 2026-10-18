@@ -1,0 +1,96 @@
+from PyQt6 import QtCore, QtWidgets
+
+# App Translation
+import gettext
+import appTranslation as fcTranslate
+import builtins
+
+fcTranslate.apply_language('strings')
+if '_' not in builtins.__dict__:
+    _ = gettext.gettext
+
+
+class ProjectCombo(QtWidgets.QComboBox):
+    """
+    A combobox that does not open while a background task runs.
+    """
+
+    def __init__(self, manager, parent=None):
+        super().__init__(parent)
+        self.manager = manager
+
+    def showPopup(self):
+        if self.manager.is_busy():
+            self.manager.inform_busy()
+            return
+        super().showPopup()
+
+
+class ProjectSelector(QtWidgets.QWidget):
+    """
+    The 'Project:' label and combobox above the Project tab tree. A right-click on the combobox opens the
+    project commands.
+    """
+
+    def __init__(self, manager, parent=None):
+        super().__init__(parent)
+        self.manager = manager
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.label = QtWidgets.QLabel('%s:' % _("Project"))
+        self.combo = ProjectCombo(manager)
+        self.combo.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        self.combo.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+
+        layout.addWidget(self.label)
+        layout.addWidget(self.combo, stretch=1)
+
+        self.combo.activated.connect(self.on_activated)
+        self.combo.customContextMenuRequested.connect(self.on_menu_request)
+        self.manager.projects_changed.connect(self.refresh)
+
+        self.refresh()
+
+    def refresh(self):
+        self.combo.blockSignals(True)
+        self.combo.clear()
+        self.combo.addItems(self.manager.names())
+        self.combo.setCurrentIndex(self.manager.contexts.index(self.manager.active))
+        self.combo.blockSignals(False)
+
+    def on_activated(self, index):
+        if 0 <= index < len(self.manager.contexts):
+            self.manager.switch(self.manager.contexts[index])
+        # if the switch is refused, show the active project again
+        self.refresh()
+
+    def build_menu(self):
+        menu = QtWidgets.QMenu(self)
+        new_action = menu.addAction(_("New Project"))
+        open_action = menu.addAction(_("Open Project..."))
+        rename_action = menu.addAction(_("Rename Project..."))
+        close_action = menu.addAction(_("Close Project"))
+
+        new_action.triggered.connect(lambda: self.manager.new())
+        open_action.triggered.connect(lambda: self.manager.app.f_handlers.on_file_open_project())
+        rename_action.triggered.connect(self.on_rename)
+        close_action.triggered.connect(lambda: self.manager.request_close(self.manager.active))
+        return menu
+
+    def on_menu_request(self, pos):
+        if self.manager.is_busy():
+            self.manager.inform_busy()
+            return
+        menu = self.build_menu()
+        menu.exec(self.combo.mapToGlobal(pos))
+
+    def on_rename(self):
+        ctx = self.manager.active
+        name, ok = QtWidgets.QInputDialog.getText(self, _("Rename Project"), _("New name:"), text=ctx.name)
+        if not ok:
+            return
+        if not self.manager.rename(ctx, name):
+            self.manager.app.inform.emit('[ERROR_NOTCL] %s' %
+                                         _("The name is empty, not valid or used by another project."))
