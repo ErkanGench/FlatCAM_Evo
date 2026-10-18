@@ -206,7 +206,7 @@ ACTION_NAMES = """
     popmenu_move popmenu_move2origin popmenu_properties
     drill_btn mill_btn isolation_btn ncc_btn paint_btn cutout_btn panelize_btn film_btn
     dblsided_btn align_btn copperfill_btn markers_tool_btn punch_btn calculators_btn
-    file_open_btn file_save_btn file_open_gerber_btn file_open_excellon_btn clear_plot_btn replot_btn
+    file_open_gerber_btn file_open_excellon_btn clear_plot_btn replot_btn
     zoom_fit_btn zoom_in_btn zoom_out_btn editor_start_btn copy_btn delete_btn distance_btn origin_btn jmp_btn
     locate_btn shell_btn new_script_btn open_script_btn run_script_btn menu_plugins_shell
 """.split()

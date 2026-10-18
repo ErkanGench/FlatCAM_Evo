@@ -3570,7 +3570,7 @@ rtk git commit -m "docs(changelog): add the multiple projects in the Project tab
 
 The agent can not do these checks. Copy the list into the final report:
 
-1. Start the app. The Project tab shows `Project: [Project_1]` above the tree.
+1. Start the app. The Project tab shows the combobox `[Project_1]`, without a label, above the tree. The right-click menu items have icons. The File toolbar has no Open and Save buttons.
 2. Open a Gerber. Right-click on the combobox. Select New Project. The tree is empty and the canvas is empty. The title bar shows `Project_2`.
 3. Select `Project_1` in the combobox. The Gerber shows again on the canvas, with the same zoom as before.
 4. Select the Gerber and open the Properties tab. The Properties UI shows.

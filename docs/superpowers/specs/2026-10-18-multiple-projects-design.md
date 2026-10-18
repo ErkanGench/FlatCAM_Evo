@@ -71,7 +71,9 @@ Because `switch` changes `app.collection`, the 817 existing call sites keep work
 
 ### Project tab
 
-- A row with the label `Project:` and a combobox goes above the object tree.
+- A combobox, without a label, goes above the object tree. Its right-click menu items have icons.
+- The File toolbar has no Open and Save buttons. The project commands are in the File menu and in the
+  menu of the combobox.
 - Below the row, a `QStackedWidget` holds 1 tree view for each collection. A switch
   changes only the visible page.
 - All the connections to `collection.view` (for example in `appSignalConnector` and

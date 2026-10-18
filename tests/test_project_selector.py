@@ -14,7 +14,8 @@ class FakeManager(QtCore.QObject):
         super().__init__()
         self.contexts = [SimpleNamespace(name='Board_A'), SimpleNamespace(name='Board_B')]
         self.active = self.contexts[0]
-        self.app = SimpleNamespace(inform=Mock(), f_handlers=SimpleNamespace(on_file_open_project=Mock()))
+        self.app = SimpleNamespace(inform=Mock(), f_handlers=SimpleNamespace(on_file_open_project=Mock()),
+                                   resource_location='assets/resources')
         self.busy = False
         self.switch = Mock(side_effect=self._switch)
         self.new = Mock()

@@ -1,4 +1,4 @@
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 # App Translation
 import gettext
@@ -28,8 +28,7 @@ class ProjectCombo(QtWidgets.QComboBox):
 
 class ProjectSelector(QtWidgets.QWidget):
     """
-    The 'Project:' label and combobox above the Project tab tree. A right-click on the combobox opens the
-    project commands.
+    The project combobox above the Project tab tree. A right-click on the combobox opens the project commands.
     """
 
     def __init__(self, manager, parent=None):
@@ -39,12 +38,11 @@ class ProjectSelector(QtWidgets.QWidget):
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.label = QtWidgets.QLabel('%s:' % _("Project"))
         self.combo = ProjectCombo(manager)
         self.combo.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        self.combo.setToolTip(_("The active project. Right-click for the project commands."))
         self.combo.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
 
-        layout.addWidget(self.label)
         layout.addWidget(self.combo, stretch=1)
 
         self.combo.activated.connect(self.on_activated)
@@ -68,10 +66,11 @@ class ProjectSelector(QtWidgets.QWidget):
 
     def build_menu(self):
         menu = QtWidgets.QMenu(self)
-        new_action = menu.addAction(_("New Project"))
-        open_action = menu.addAction(_("Open Project..."))
-        rename_action = menu.addAction(_("Rename Project..."))
-        close_action = menu.addAction(_("Close Project"))
+        res = self.manager.app.resource_location
+        new_action = menu.addAction(QtGui.QIcon(res + '/file16.png'), _("New Project"))
+        open_action = menu.addAction(QtGui.QIcon(res + '/folder16.png'), _("Open Project..."))
+        rename_action = menu.addAction(QtGui.QIcon(res + '/edit_file16.png'), _("Rename Project..."))
+        close_action = menu.addAction(QtGui.QIcon(res + '/delete_file16.png'), _("Close Project"))
 
         new_action.triggered.connect(lambda: self.manager.new())
         open_action.triggered.connect(lambda: self.manager.app.f_handlers.on_file_open_project())

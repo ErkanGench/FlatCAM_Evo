@@ -1106,13 +1106,7 @@ class MainGUI(QtWidgets.QMainWindow):
         self.file_open_excellon_btn = self.toolbarfile.addAction(
             QtGui.QIcon(self.app.resource_location + '/open_excellon32.png'), _("Excellon"))
         self.file_open_excellon_btn.setToolTip(_("Open a Excellon file."))
-        self.toolbarfile.addSeparator()
-        self.file_open_btn = self.toolbarfile.addAction(
-            QtGui.QIcon(self.app.resource_location + '/folder32.png'), _("Open"))
-        self.file_open_btn.setToolTip(_("Open a project."))
-        self.file_save_btn = self.toolbarfile.addAction(
-            QtGui.QIcon(self.app.resource_location + '/save_as.png'), _("Save"))
-        self.file_save_btn.setToolTip(_("Save the current project."))
+        # the project commands are in the File menu and in the menu of the project combobox
 
         # ########################################################################
         # ########################## Edit Toolbar# ###############################
@@ -2473,13 +2467,7 @@ class MainGUI(QtWidgets.QMainWindow):
         self.file_open_excellon_btn = self.toolbarfile.addAction(
             QtGui.QIcon(self.app.resource_location + '/open_excellon32.png'), _("Excellon"))
         self.file_open_excellon_btn.setToolTip(_("Open a Excellon file."))
-        self.toolbarfile.addSeparator()
-        self.file_open_btn = self.toolbarfile.addAction(
-            QtGui.QIcon(self.app.resource_location + '/folder32.png'), _("Open"))
-        self.file_open_btn.setToolTip(_("Open a project."))
-        self.file_save_btn = self.toolbarfile.addAction(
-            QtGui.QIcon(self.app.resource_location + '/save_as.png'), _("Save"))
-        self.file_save_btn.setToolTip(_("Save the current project."))
+        # the project commands are in the File menu and in the menu of the project combobox
 
         # ########################################################################
         # ######################### Edit Toolbar #################################

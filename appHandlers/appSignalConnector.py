@@ -254,9 +254,6 @@ class AppSignalConnector(QtCore.QObject):
         # Toolbar
 
         # File Toolbar Signals
-        # ui.file_new_btn.triggered.connect(self.on_file_new_project)
-        self.ui.file_open_btn.triggered.connect(lambda: self.app.f_handlers.on_file_open_project())
-        self.ui.file_save_btn.triggered.connect(lambda: self.app.f_handlers.on_file_save_project())
         self.ui.file_open_gerber_btn.triggered.connect(lambda: self.app.f_handlers.on_file_open_gerber())
         self.ui.file_open_excellon_btn.triggered.connect(lambda: self.app.f_handlers.on_file_open_excellon())
 

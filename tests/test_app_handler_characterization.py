@@ -1311,7 +1311,7 @@ SIGNAL_ACTIONS = {
         "dblsided_btn align_btn copperfill_btn markers_tool_btn punch_btn calculators_btn"
     ).split(),
     "connect_toolbar_signals": (
-        "file_open_btn file_save_btn file_open_gerber_btn file_open_excellon_btn clear_plot_btn replot_btn "
+        "file_open_gerber_btn file_open_excellon_btn clear_plot_btn replot_btn "
         "zoom_fit_btn zoom_in_btn zoom_out_btn editor_start_btn editor_exit_btn copy_btn delete_btn distance_btn "
         "origin_btn jmp_btn locate_btn shell_btn new_script_btn open_script_btn run_script_btn"
     ).split(),
@@ -1463,8 +1463,6 @@ SIGNAL_EXPECTED_CALLS = {
     "punch_btn": expected_call("punch_tool", "run", toggle=True),
     "calculators_btn": expected_call("calculator_tool", "run", toggle=True),
     # Main toolbar
-    "file_open_btn": expected_call("f_handlers", "on_file_open_project"),
-    "file_save_btn": expected_call("f_handlers", "on_file_save_project"),
     "file_open_gerber_btn": expected_call("f_handlers", "on_file_open_gerber"),
     "file_open_excellon_btn": expected_call("f_handlers", "on_file_open_excellon"),
     "clear_plot_btn": expected_call("app", "clear_plots"),

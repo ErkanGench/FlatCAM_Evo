@@ -74,7 +74,7 @@ def test_ui_layout_activation_and_restoration(layout_app, index, layout):
         else QtCore.Qt.ToolBarArea.TopToolBarArea)
     assert app.ui.toolbarview.isHidden() == (layout == 'minimal')
     assert app.ui.geo_edit_toolbar.isHidden() == (layout == 'minimal')
-    assert app.ui.file_open_btn in app.ui.toolbarfile.actions()
+    assert app.ui.file_open_gerber_btn in app.ui.toolbarfile.actions()
     app.connect_toolbar_signals.assert_called_once_with()
     app.connect_editors_toolbar_signals.assert_called_once_with()
     app.log.error.assert_not_called()

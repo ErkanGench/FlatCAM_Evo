@@ -382,8 +382,24 @@ class ProjectManager(QtCore.QObject):
                 obj.clear(update=False)
             except Exception as err:
                 self.app.log.error("ProjectManager.deactivate() --> %s" % str(err))
+            # the Gerber marks and the CNCJob annotations are in their own collections; plotcanvas.redraw() does not
+            # draw them again, so they are cleared with an update
+            if obj.kind == 'gerber':
+                # the mark checkboxes stay in the Properties UI; uncheck them so that they match the canvas
+                try:
+                    for row in range(obj.ui.apertures_table.rowCount()):
+                        mark_cb = obj.ui.apertures_table.cellWidget(row, 5)
+                        if mark_cb is not None:
+                            mark_cb.set_value(False)
+                    obj.clear_mark_all()
+                except AttributeError:
+                    pass
             try:
-                obj.mark_shapes.clear(update=False)
+                obj.mark_shapes.clear(update=True)
+            except AttributeError:
+                pass
+            try:
+                obj.annotation.clear(update=True)
             except AttributeError:
                 pass
             # forces a full plot when the project is active again

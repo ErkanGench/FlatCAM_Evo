@@ -394,7 +394,8 @@ class TestProjectManagerVisuals(unittest.TestCase):
         manager.deactivate(manager.active)
 
         gerber.clear.assert_called_once_with(update=False)
-        gerber.mark_shapes.clear.assert_called_once_with(update=False)
+        # the marks are in their own collection, which plotcanvas.redraw() does not draw again
+        gerber.mark_shapes.clear.assert_called_once_with(update=True)
         self.assertIsNone(gerber._full_plot_sig)
         # the Properties UI stays; set_ui() is not safe to run again
         self.assertIs(gerber.ui, gerber_ui)
@@ -403,6 +404,26 @@ class TestProjectManagerVisuals(unittest.TestCase):
         self.assertIsNotNone(script.ui)
         app.setup_default_properties_tab.assert_called_once_with()
         app.plotcanvas.redraw.assert_called_once_with()
+
+    def test_deactivate_removes_the_annotations_and_the_marks_from_the_canvas(self):
+        cncjob = make_object('cncjob')
+        cncjob.annotation = Mock()
+        gerber = make_object('gerber', with_ui=False)
+        mark_cb = Mock()
+        gerber.ui = SimpleNamespace(apertures_table=Mock(rowCount=Mock(return_value=2),
+                                                         cellWidget=Mock(return_value=mark_cb)))
+        gerber.clear_mark_all = Mock()
+        app, manager = self.make([cncjob, gerber])
+
+        manager.deactivate(manager.active)
+
+        # the annotations are in their own text collection: the clear must redraw it
+        cncjob.annotation.clear.assert_called_once_with(update=True)
+        # the mark checkboxes of the Properties UI match the canvas
+        self.assertEqual(mark_cb.set_value.call_count, 2)
+        mark_cb.set_value.assert_called_with(False)
+        gerber.clear_mark_all.assert_called_once_with()
+        gerber.mark_shapes.clear.assert_called_once_with(update=True)
 
     def test_activate_plots_and_does_not_rebuild_the_ui(self):
         gerber = make_object('gerber')
