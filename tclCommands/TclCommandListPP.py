@@ -47,5 +47,4 @@ class TclCommandListPP(TclCommand):
         :param unnamed_args:
         :return:
         """
-        ret_val = list(self.app.preprocessors.keys())
-        return str(ret_val)
+        return tuple(self.app.preprocessors.keys())

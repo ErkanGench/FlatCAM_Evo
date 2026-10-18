@@ -68,7 +68,7 @@ class TclCommandSetPath(TclCommand):
         """
 
         if 'path' not in args:
-            return "Failed. The Tcl command set_path was used but no path argument was provided."
+            self.raise_tcl_error('A directory path is required.')
         else:
             path = str(args['path']).replace('\\', '/')
 
@@ -82,29 +82,23 @@ class TclCommandSetPath(TclCommand):
                     str(path),
                     "is a path to file and not a directory as expected.")
                 self.app.inform_shell.emit(msg)
-                return "Failed. The Tcl command set_path was used but it was not a directory."
+                self.raise_tcl_error('The provided path is not a directory.')
 
             if 'create' in args:
-                option = args['create'].capitalize()
-                try:
-                    eval_option = eval(option)
-                except NameError:
-                    eval_option = False
+                eval_option = self.parse_bool(args['create'])
 
                 if eval_option:
                     self.app.inform_shell.emit("Path not found, let's create it.")
-                    os.mkdir(path)
+                    os.makedirs(path, exist_ok=True)
                 else:
-                    return "Failed. The Tcl command set_path has options but could not be recognized: -create %s." % \
-                        str(args['create'])
+                    self.raise_tcl_error('The provided directory does not exist.')
             else:
                 msg = '[ERROR] %s: %s, %s' % (
                     "The provided path", str(path), "do not exist. Check for typos.")
                 self.app.inform_shell.emit(msg)
-                return "Failed. The Tcl command set_path was used but it does not exist."
+                self.raise_tcl_error('The provided directory does not exist.')
 
-        cd_command = 'cd %s' % path
-        self.app.shell.exec_command(cd_command, no_echo=False)
+        self.app.shell.tcl.call('cd', path)
         self.app.options["global_tcl_path"] = str(path)
         msg = '[success] %s: %s' % ("Relative path set to", str(path))
         self.app.inform_shell.emit(msg)

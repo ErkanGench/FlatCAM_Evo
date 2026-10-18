@@ -82,6 +82,7 @@ class TclCommandScale(TclCommand):
             return "fail"
 
         # calculate the bounds
+        objects = {}
         minx_lst = []
         miny_lst = []
         maxx_lst = []
@@ -91,6 +92,9 @@ class TclCommandScale(TclCommand):
             if obj is None or obj == '':
                 self.app.log.error("Object not found: %s" % name)
                 return "fail"
+            if obj.kind not in ('geometry', 'gerber', 'excellon'):
+                self.raise_tcl_error('Only Gerber, Excellon and Geometry objects can be scaled.')
+            objects[name] = obj
             a, b, c, d = obj.bounds()
             minx_lst.append(a)
             miny_lst.append(b)
@@ -103,7 +107,7 @@ class TclCommandScale(TclCommand):
 
         for name in obj_names:
             try:
-                obj_to_scale = self.app.collection.get_by_name(name)
+                obj_to_scale = objects[name]
             except Exception as e:
                 self.app.log.error("TclCommandCopperScale.execute() --> %s" % str(e))
                 self.app.log.error("Could not retrieve object: %s" % name)
@@ -129,8 +133,8 @@ class TclCommandScale(TclCommand):
                     point = (c_x, c_y)
                 else:
                     try:
-                        point = eval(str(args['origin']))
-                        if not isinstance(point, tuple):
+                        point = self.parse_coords(args['origin'])
+                        if not isinstance(point, (tuple, list)) or len(point) != 2:
                             self.app.log.error("The -origin value is not a tuple in format e.g 3.32,4.5")
                             return "fail"
                     except Exception as e:

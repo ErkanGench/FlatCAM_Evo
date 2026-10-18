@@ -65,36 +65,29 @@ class TclCommandAddAperture(TclCommandSignaled):
         try:
             obj = self.app.collection.get_by_name(str(name))
         except Exception:
-            return "Could not retrieve object: %s" % name
+            self.raise_tcl_error("Could not retrieve object: %s" % name)
         if obj is None:
-            return "Object not found: %s" % name
+            self.raise_tcl_error("Object not found: %s" % name)
         if obj.kind != 'gerber':
-            return 'Expected Gerber, got %s %s.' % (name, type(obj))
+            self.raise_tcl_error('Expected Gerber, got %s %s.' % (name, type(obj)))
 
-        obj_apertures_keys = list(obj.tools.keys())
+        obj_apertures_keys = {int(ap) for ap in obj.tools}
         if 'apid' in args:
             new_apid = args['apid']
         else:
-            ap_list = [int(ap) for ap in obj_apertures_keys]
-            max_ap = max(ap_list)
-            # we can't have aperture ID's between 0 an 10
-            new_apid = 10 if max_ap == 0 else (max_ap + 1)
+            new_apid = max(10, max(obj_apertures_keys, default=9) + 1)
 
-        if str(new_apid) in obj_apertures_keys:
-            return "The aperture is already used. Try another 'apid' parameter value."
+        if new_apid < 10:
+            self.raise_tcl_error('Aperture ID must be at least 10.')
+        if new_apid in obj_apertures_keys:
+            self.raise_tcl_error("The aperture is already used. Try another 'apid' parameter value.")
 
-        if 'type' in args:
-            try:
-                # if it's a string using the quotes
-                new_type = eval(args['type'])
-            except NameError:
-                # if it's a string without quotes
-                new_type = args['type']
-        else:
-            new_type = 'C'
+        new_type = args.get('type', 'C').strip("'\"").upper()
         if new_type == 'C':
             new_size = args['size'] if 'size' in args else 0.6
-            obj.tools[str(new_apid)] = {
+            if not math.isfinite(new_size) or new_size <= 0:
+                self.raise_tcl_error('Aperture size must be positive and finite.')
+            obj.tools[new_apid] = {
                 'type': new_type,
                 'size': new_size,
                 'geometry': []
@@ -102,9 +95,11 @@ class TclCommandAddAperture(TclCommandSignaled):
         elif new_type in ['R', 'O']:
             new_width = args['width'] if 'width' in args else 0.0
             new_height = args['height'] if 'height' in args else 0.0
+            if not all(math.isfinite(v) and v > 0 for v in (new_width, new_height)):
+                self.raise_tcl_error('Aperture width and height must be positive and finite.')
             new_size = math.sqrt(new_width ** 2 + new_height ** 2) if new_width > 0 and new_height > 0 else 0
 
-            obj.tools[str(new_apid)] = {
+            obj.tools[new_apid] = {
                 'type': new_type,
                 'size': new_size,
                 'width': new_width,
@@ -112,6 +107,4 @@ class TclCommandAddAperture(TclCommandSignaled):
                 'geometry': []
             }
         else:
-            return 'The supported aperture types are: C=circular, R=rectangular, O=oblong'
-
-        print(obj.tools)
+            self.raise_tcl_error('The supported aperture types are: C=circular, R=rectangular, O=oblong')

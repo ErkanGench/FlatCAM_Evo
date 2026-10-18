@@ -1163,7 +1163,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                             f.write(line)
             except FileNotFoundError:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("No such file or directory"))
-                return
+                return 'fail'
             except PermissionError:
                 self.app.inform.emit(
                     '[WARNING] %s' % _("Permission denied, saving not possible.\n"

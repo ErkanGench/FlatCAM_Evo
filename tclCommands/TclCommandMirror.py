@@ -67,7 +67,10 @@ class TclCommandMirror(TclCommandSignaled):
             self.app.log.error("Missing objects to be offset. Exiting.")
             return "fail"
 
+        if str(args.get('axis', 'X')).upper() not in ('X', 'Y'):
+            self.raise_tcl_error('Mirror axis must be X or Y.')
         # calculate the bounds
+        objects = {}
         minx_lst = []
         miny_lst = []
         maxx_lst = []
@@ -77,6 +80,9 @@ class TclCommandMirror(TclCommandSignaled):
             if obj is None or obj == '':
                 self.app.log.error("Object not found: %s" % name)
                 return "fail"
+            if obj.kind not in ('geometry', 'gerber', 'excellon'):
+                self.raise_tcl_error('Only Gerber, Excellon and Geometry objects can be mirrored.')
+            objects[name] = obj
             a, b, c, d = obj.bounds()
             minx_lst.append(a)
             miny_lst.append(b)
@@ -90,7 +96,7 @@ class TclCommandMirror(TclCommandSignaled):
         for name in obj_names:
             # Get source object.
             try:
-                obj = self.app.collection.get_by_name(str(name))
+                obj = objects[name]
             except Exception:
                 self.app.log.error("Could not retrieve object: %s" % name)
                 return "fail"
@@ -145,7 +151,9 @@ class TclCommandMirror(TclCommandSignaled):
                     x, y = (c_x, c_y)
                 else:
                     try:
-                        origin_val = eval(args['origin'])
+                        origin_val = self.parse_coords(args['origin'])
+                        if len(origin_val) != 2:
+                            self.raise_tcl_error('Origin requires exactly two coordinates.')
                         x = float(origin_val[0])
                         y = float(origin_val[1])
                     except KeyError:

@@ -47,22 +47,7 @@ class TclCommandNew(TclCommand):
         :return: None or exception
         """
 
-        reset_tcl = True
-        if 'reset' in args:
-            if args['reset']:
-                try:
-                    reset_tcl = bool(eval(str(args['reset'])))
-                except NameError:
-                    if args['reset'].lower() == 'false':
-                        reset_tcl = False
+        reset_tcl = self.parse_bool(args.get('reset', True))
+        keep_scripts = self.parse_bool(args.get('keep_scripts', False))
 
-        keep_scripts = False
-        if 'keep_scripts' in args:
-            if args['keep_scripts']:
-                try:
-                    keep_scripts = bool(eval(str(args['keep_scripts'])))
-                except NameError:
-                    if args['keep_scripts'].lower() == 'true':
-                        keep_scripts = True
-
-        self.app.f_handlers.on_file_new_project(cli=True, reset_tcl=reset_tcl, keep_scripts=keep_scripts)
+        return self.app.f_handlers.on_file_new_project(cli=True, reset_tcl=reset_tcl, keep_scripts=keep_scripts)

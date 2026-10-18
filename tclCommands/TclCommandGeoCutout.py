@@ -2,6 +2,7 @@ from tclCommands.TclCommand import TclCommandSignaled
 
 import logging
 import collections
+import math
 from copy import deepcopy
 from shapely.ops import unary_union
 from shapely import Polygon, LineString, LinearRing, MultiPolygon, MultiLineString
@@ -73,7 +74,7 @@ class TclCommandGeoCutout(TclCommandSignaled):
                      "      delete BCu_margin_iso\n" +
                      "\n" +
                      "      #finally cut holding gaps\n" +
-                     "      geocutout BCu_margin_iso_exterior -dia 3 -gapsize 0.6 -gaps 4 -outname cutout_geo\n"]
+                     "      geoc BCu_margin_iso_exterior -dia 3 -gapsize 0.6 -gaps 4 -outname cutout_geo\n"]
     }
 
     flat_geometry = []
@@ -176,11 +177,14 @@ class TclCommandGeoCutout(TclCommandSignaled):
             self.app.log.error("Could not retrieve object: %s" % name)
             return "fail"
 
-        if 0 in {dia}:
+        if cutout_obj is None or cutout_obj.kind not in ('geometry', 'gerber'):
+            self.raise_tcl_error('Expected an existing Gerber or Geometry object: %s' % name)
+        if not all(math.isfinite(v) for v in (dia, margin, gapsize)) or dia <= 0 or gapsize < 0:
             self.app.log.warning(
                 "[WARNING] %s" % _("Tool Diameter is zero value. Change it to a positive real number."))
             return "fail"
 
+        gaps = str(gaps).upper()
         if str(gaps).lower() not in ['none', 'lr', 'tb', '2lr', '2tb', '4', '8']:
             self.app.log.warning('[WARNING] %s' %
                                  _("Gaps value can be only one of: 'none', 'lr', 'tb', '2lr', '2tb', 4 or 8.\n"
@@ -194,8 +198,8 @@ class TclCommandGeoCutout(TclCommandSignaled):
         cutout_obj.obj_options['xmax'] = xmax
         cutout_obj.obj_options['ymax'] = ymax
 
-        px = 0.5 * (xmin + xmax) + margin
-        py = 0.5 * (ymin + ymax) + margin
+        px = 0.5 * (xmin + xmax)
+        py = 0.5 * (ymin + ymax)
         lenghtx = (xmax - xmin) + (margin * 2)
         lenghty = (ymax - ymin) + (margin * 2)
 
@@ -288,7 +292,7 @@ class TclCommandGeoCutout(TclCommandSignaled):
 
         ret = self.app.app_obj.new_object('geometry', outname, geo_init, plot=False)
         if ret == 'fail':
-            msg = "Could not create a geo-cutout Geometry object from a %s object." % cutout_obj.kind.capialize()
+            msg = "Could not create a geo-cutout Geometry object from a %s object." % cutout_obj.kind.capitalize()
             self.app.log.error(msg)
             return "fail"
         else:

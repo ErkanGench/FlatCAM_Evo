@@ -59,4 +59,4 @@ class TclCommandOpenExcellon(TclCommandSignaled):
 
         args['plot'] = False
         args['from_tcl'] = True
-        self.app.f_handlers.open_excellon(filename, **args)
+        return self.app.f_handlers.open_excellon(filename, **args)

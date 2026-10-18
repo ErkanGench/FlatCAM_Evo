@@ -65,12 +65,17 @@ class TclCommandOffset(TclCommand):
             self.app.log.error("Missing objects to be offset. Exiting.")
             return "fail"
 
+        objects = []
         for name in obj_names:
             obj = self.app.collection.get_by_name(str(name))
             if obj is None or obj == '':
                 self.app.log.error("Object not found: %s" % name)
                 return "fail"
+            if obj.kind not in ('geometry', 'gerber', 'excellon'):
+                self.raise_tcl_error('Only Gerber, Excellon and Geometry objects can be offset.')
+            objects.append(obj)
 
+        for obj in objects:
             obj.offset((x, y))
 
             try:

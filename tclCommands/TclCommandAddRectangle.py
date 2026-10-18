@@ -56,6 +56,8 @@ class TclCommandAddRectangle(TclCommandSignaled):
         y0 = args['y0']
         x1 = args['x1']
         y1 = args['y1']
+        if not all(math.isfinite(v) for v in (x0, y0, x1, y1)) or x0 == x1 or y0 == y1:
+            self.raise_tcl_error('Rectangle coordinates must be finite and define a non-zero area.')
 
         if unnamed_args:
             self.raise_tcl_error(
@@ -64,10 +66,10 @@ class TclCommandAddRectangle(TclCommandSignaled):
         try:
             obj = self.app.collection.get_by_name(str(name))
         except Exception:
-            return "Could not retrieve object: %s" % name
+            self.raise_tcl_error("Could not retrieve object: %s" % name)
         if obj is None:
-            return "Object not found: %s" % name
+            self.raise_tcl_error("Object not found: %s" % name)
         if obj.kind != 'geometry':
             self.raise_tcl_error('Expected Geometry, got %s %s.' % (name, type(obj)))
 
-        obj.add_polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+        return self.check_result(obj.add_polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]))

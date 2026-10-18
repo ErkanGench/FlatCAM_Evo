@@ -75,7 +75,7 @@ class TclCommandSetOrigin(TclCommand):
 
         loc = []
         if 'auto' in args:
-            if bool(args['auto']) is True:
+            if self.parse_bool(args['auto']):
                 objs = self.app.collection.get_list()
                 minx, miny, __, ___ = get_bounds(objs)
 
@@ -85,10 +85,9 @@ class TclCommandSetOrigin(TclCommand):
                 loc = [0, 0]
         elif 'loc' in args:
             try:
-                location = [float(eval(coord)) for coord in str(args['loc']).split(",") if coord != '']
-            except AttributeError as e:
-                self.app.log.debug("TclCommandSetOrigin.execute --> %s" % str(e))
-                location = (0, 0)
+                location = self.parse_coords(args['loc'])
+            except (ValueError, SyntaxError, TypeError) as e:
+                self.raise_tcl_error('Invalid origin coordinates: %s' % e)
 
             if len(location) != 2:
                 self.raise_tcl_error('%s: %s' % (
@@ -104,13 +103,23 @@ class TclCommandSetOrigin(TclCommand):
             else:
                 object_name = args['obj_name']
                 obj = self.app.collection.get_by_name(object_name)
+                if obj is None or obj.kind not in ('geometry', 'gerber', 'excellon'):
+                    self.raise_tcl_error('Origin object not found or unsupported: %s' % object_name)
                 minx, miny, __, ___ = get_bounds([obj])
 
                 loc.append(location[0] - minx)
                 loc.append(location[1] - miny)
                 obj.offset((loc[0], loc[1]))
+                self.app.app_obj.object_changed.emit(obj)
+                obj.obj_options.update(zip(('xmin', 'ymin', 'xmax', 'ymax'), obj.bounds()))
+                try:
+                    obj.set_offset_values()
+                except AttributeError:
+                    pass
+                obj.regenerate_source()
+                self.app.should_we_save = True
                 msg = '[success] Tcl %s %s %s: %s' % (
-                    _("Done."), _("Offsetting..."), object_name, '{0:.4f}, {0:.4f}'.format(loc[0], loc[1]))
+                    _("Done."), _("Offsetting..."), object_name, '{0:.4f}, {1:.4f}'.format(loc[0], loc[1]))
                 self.app.inform_shell.emit(msg)
                 return
         else:
@@ -118,5 +127,5 @@ class TclCommandSetOrigin(TclCommand):
 
         self.app.on_set_zero_click(event=None, location=loc, noplot=True, use_thread=False)
         msg = '[success] Tcl %s: %s' % (_('Origin set by offsetting all loaded objects with '),
-                                        '{0:.4f}, {0:.4f}'.format(loc[0], loc[1]))
+                                        '{0:.4f}, {1:.4f}'.format(loc[0], loc[1]))
         self.app.inform_shell.emit(msg)

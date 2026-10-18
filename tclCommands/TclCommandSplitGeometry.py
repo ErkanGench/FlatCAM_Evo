@@ -51,13 +51,14 @@ class TclCommandSplitGeometry(TclCommand):
 
         obj: GeometryObject = self.app.collection.get_by_name(
             str(args['source_name']))
-        if obj is None:
-            return "Object not found: %s" % args['source_name']
+        if obj is None or obj.kind != 'geometry':
+            self.raise_tcl_error('Expected an existing Geometry object: %s' % args['source_name'])
 
         for uid in list(obj.tools.keys()):
             def initialize(new_obj, app):
                 new_obj.multigeo = True
-                new_obj.tools[uid] = deepcopy(obj.tools[uid])
+                new_obj.tools = {uid: deepcopy(obj.tools[uid])}
+                new_obj.solid_geometry = deepcopy(obj.tools[uid]['solid_geometry'])
             name = "{0}_tool_{1}".format(args['source_name'], uid)
-            self.app.app_obj.new_object(
-                "geometry", name, initialize, plot=False)
+            self.check_result(self.app.app_obj.new_object(
+                "geometry", name, initialize, plot=False))

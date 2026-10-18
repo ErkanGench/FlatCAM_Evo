@@ -53,7 +53,7 @@ class TclCommandMillSlots(TclCommandSignaled):
                             'As a precaution you can enclose them with quotes.'),
             ('tooldia', 'Diameter of the milling tool (example: 0.1).'),
             ('outname', 'Name of object to be created holding the milled geometries.'),
-            ('use_thread', 'If to use multithreading: True (1) or False (0).'),
+            ('use_thread', 'Accepted for compatibility. This command runs in its existing worker and waits for creation.'),
             ('diatol', 'Tolerance. Percentange (0.0 ... 100.0) within which dias in milled_dias will be judged to be '
                        'the same as the ones in the tools from the Excellon object. E.g: if in milled_dias we have a '
                        'diameter with value 1.0, in the Excellon we have a tool with dia = 1.05 and we set a tolerance '
@@ -84,25 +84,26 @@ class TclCommandMillSlots(TclCommandSignaled):
         if 'outname' not in args:
             args['outname'] = name + "_mill_slots"
 
+        if obj is None or obj.kind != 'excellon':
+            self.raise_tcl_error('Expected an existing Excellon object: %s' % name)
         if 'use_thread' in args:
-            try:
-                par = args['use_thread'].capitalize()
-            except AttributeError:
-                par = args['use_thread']
-            args['use_thread'] = bool(eval(par))
-        else:
-            args['use_thread'] = False
+            self.parse_bool(args['use_thread'])
+        args['use_thread'] = False
+        args.setdefault('tooldia', self._app_option('tools_mill_tooldia'))
+        if args['tooldia'] is None or not math.isfinite(float(args['tooldia'])) or float(args['tooldia']) <= 0:
+            self.raise_tcl_error('Milling diameter must be positive and finite.')
+        args['tooldia'] = float(args['tooldia'])
 
         # units = self.app.app_units.upper()
         try:
             if 'milled_dias' in args and args['milled_dias'] != 'all':
                 diameters = [x.strip() for x in args['milled_dias'].split(",")]
-                nr_diameters = len(diameters)
+                matched_diameters = set()
 
                 req_tools = set()
                 for tool in obj.tools:
                     for req_dia in diameters:
-                        obj_dia_form = float('%.*f' % (obj.decimals, float(obj.tools[tool]["C"])))
+                        obj_dia_form = float('%.*f' % (obj.decimals, float(obj.tools[tool]["tooldia"])))
                         req_dia_form = float('%.*f' % (obj.decimals, float(req_dia)))
 
                         if 'diatol' in args:
@@ -112,13 +113,13 @@ class TclCommandMillSlots(TclCommandSignaled):
                             tolerance = 1.0 if tolerance > 1.0 else tolerance
                             if math.isclose(obj_dia_form, req_dia_form, rel_tol=tolerance):
                                 req_tools.add(tool)
-                                nr_diameters -= 1
+                                matched_diameters.add(req_dia)
                         else:
                             if obj_dia_form == req_dia_form:
                                 req_tools.add(tool)
-                                nr_diameters -= 1
+                                matched_diameters.add(req_dia)
 
-                if nr_diameters > 0:
+                if not diameters or len(matched_diameters) != len(set(diameters)):
                     self.raise_tcl_error("One or more tool diameters of the slots to be milled passed to the "
                                          "TclCommand are not actual tool diameters in the Excellon object.")
 

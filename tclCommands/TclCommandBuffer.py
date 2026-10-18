@@ -87,6 +87,8 @@ class TclCommandBuffer(TclCommand):
             self.raise_tcl_error("%s: %s" % (_("Could not retrieve object"), name))
             return "Could not retrieve object: %s" % name
 
+        if obj_to_buff is None:
+            self.raise_tcl_error('Object not found: %s' % name)
         if obj_to_buff.kind not in ['geometry', 'excellon', 'gerber']:
             self.app.log.error("%s: %s %s" % ("The object", name, "can be only of type Geometry, Gerber or Excellon."))
             self.raise_tcl_error(
@@ -106,9 +108,11 @@ class TclCommandBuffer(TclCommand):
                 join = "mitre"
             elif args['join'] in ['bevel', 'Bevel', '3', 3]:
                 join = "bevel"
-            else:
+            elif str(args['join']).lower() in ('round', '1'):
                 join = "round"
-        factor = bool(eval(str(args['factor']).capitalize())) if 'factor' in args else None
+            else:
+                self.raise_tcl_error('Join must be round, mitre/square, bevel, or 1/2/3.')
+        factor = self.parse_bool(args['factor']) if 'factor' in args else None
 
         if obj_to_buff.buffer(distance, join, factor, only_exterior=True) == 'fail':
             # the object is not changed; the buffer method told the user why

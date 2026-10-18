@@ -1,4 +1,5 @@
 import collections
+import math
 from tclCommands.TclCommand import TclCommandSignaled
 
 from shapely import Point
@@ -39,7 +40,7 @@ class TclCommandAlignDrillGrid(TclCommandSignaled):
     ])
 
     # array of mandatory options for current Tcl command: required = {'name','outname'}
-    required = ['gridx', 'gridy', 'columns', 'rows']
+    required = ['dia', 'gridx', 'gridy', 'columns', 'rows']
 
     # structured help for current command, args needs to be ordered
     help = {
@@ -50,11 +51,11 @@ class TclCommandAlignDrillGrid(TclCommandSignaled):
             ('gridoffsetx', 'Move grid  from origin.'),
             ('gridy', 'Grid size in Y axis.'),
             ('gridoffsety', 'Move grid  from origin.'),
-            ('colums', 'Number of grid holes on X axis.'),
+            ('columns', 'Number of grid holes on X axis.'),
             ('rows', 'Number of grid holes on Y axis.'),
             ('outname', 'Name of the object to create.')
         ]),
-        'examples': ['aligndrillgrid -rows 2 -columns 2 -gridoffsetx 10 -gridoffsety 10 -gridx 2.54 -gridy 5.08']
+        'examples': ['aligndrillgrid -dia 0.8 -rows 2 -columns 2 -gridoffsetx 10 -gridoffsety 10 -gridx 2.54 -gridy 5.08']
     }
 
     def execute(self, args, unnamed_args):
@@ -67,6 +68,9 @@ class TclCommandAlignDrillGrid(TclCommandSignaled):
         :return: None or exception
         """
 
+        if unnamed_args or any(args.get(key) is None or not math.isfinite(args[key]) or args[key] <= 0
+                               for key in ('dia', 'gridx', 'gridy', 'rows', 'columns')):
+            self.raise_tcl_error('Diameter, grid spacing, rows and columns must be positive finite values.')
         if 'outname' in args:
             outname = args['outname']
         else:
@@ -116,4 +120,4 @@ class TclCommandAlignDrillGrid(TclCommandSignaled):
             init_obj.regenerate_source(name=outname)
 
         # Create the new object
-        self.app.app_obj.new_object("excellon", outname, aligndrillgrid_init_me, plot=False)
+        self.check_result(self.app.app_obj.new_object("excellon", outname, aligndrillgrid_init_me, plot=False))

@@ -1,6 +1,7 @@
 from tclCommands.TclCommand import TclCommand
 
 import collections
+import math
 import logging
 
 import gettext
@@ -21,6 +22,7 @@ class TclCommandPaint(TclCommand):
 
     # Array of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['paint']
+    valueless_options = frozenset({'all'})
 
     description = '%s %s' % ("--", "Paint polygons in the specified object by covering them with toolpaths.")
 
@@ -52,7 +54,7 @@ class TclCommandPaint(TclCommand):
     # structured help for current command, args needs to be ordered
     help = {
         'main': "Paint polygons in the specified object by covering them with toolpaths.\n"
-                "Can use only one of the parameters: 'all', 'box', 'single'.",
+                "Defaults to all polygons. Use either -single or -box to restrict selection, not both.",
         'args': collections.OrderedDict([
             ('name', 'Name of the source Geometry object. String.'),
             ('tooldia', 'Diameter of the tools to be used. Can be a comma separated list of diameters.\n'
@@ -68,7 +70,8 @@ class TclCommandPaint(TclCommand):
             ('method', 'Algorithm for painting. Can be: "standard", "seed", "lines", "laser_lines", "combo".'),
             ('connect', 'Draw lines to minimize tool lifts. True (1) or False (0)'),
             ('contour', 'Cut around the perimeter of the painting. True (1) or False (0)'),
-            ('all', 'If used, paint all polygons in the object.'),
+            ('all', 'Optional compatibility flag; bare -all is accepted. Its value is ignored, even False. '
+                    'All polygons are painted by default unless -single or -box is used; -all overrides neither.'),
             ('box', 'name of the object to be used as paint reference. String.'),
             ('single', 'Value is in format x,y or (x,y). Example: 2.0,1.1\n'
                        'If used will paint a single polygon specified by "x" and "y" values.\n'
@@ -100,6 +103,10 @@ class TclCommandPaint(TclCommand):
             self.raise_tcl_error("%s: %s" % (_("Could not retrieve object"), name))
             return "fail"
 
+        if obj is None or obj.kind not in ('geometry', 'gerber'):
+            self.raise_tcl_error('Expected an existing Geometry or Gerber object: %s' % name)
+        if 'single' in args and 'box' in args:
+            self.raise_tcl_error('Use either -single or -box, not both.')
         if 'tooldia' in args:
             tooldia = str(args['tooldia'])
         else:
@@ -114,6 +121,10 @@ class TclCommandPaint(TclCommand):
             order = args['order']
         else:
             order = str(self._app_option("tools_paint_order"))
+        orders = {'no': 0, 'fwd': 1, 'rev': 2, '0': 0, '1': 1, '2': 2}
+        if str(order).lower() not in orders:
+            self.raise_tcl_error('Order must be no, fwd or rev.')
+        order = orders[str(order).lower()]
 
         if 'offset' in args:
             offset = float(args['offset'])
@@ -138,25 +149,25 @@ class TclCommandPaint(TclCommand):
                 self.app.log.error(msg)
                 return "fail"
         else:
-            method = str(self._app_option("tools_paint_method"))
+            method = int(self._app_option("tools_paint_method"))
 
         if 'connect' in args:
             try:
                 par = args['connect'].capitalize()
             except AttributeError:
                 par = args['connect']
-            connect = bool(eval(par))
+            connect = self.parse_bool(par)
         else:
-            connect = bool(eval(str(self._app_option("tools_paint_connect"))))
+            connect = self.parse_bool(self._app_option('tools_paint_connect'))
 
         if 'contour' in args:
             try:
                 par = args['contour'].capitalize()
             except AttributeError:
                 par = args['contour']
-            contour = bool(eval(par))
+            contour = self.parse_bool(par)
         else:
-            contour = bool(eval(str(self._app_option("tools_paint_contour"))))
+            contour = self.parse_bool(self._app_option('tools_paint_contour'))
 
         if 'outname' in args:
             outname = args['outname']
@@ -172,9 +183,11 @@ class TclCommandPaint(TclCommand):
             select = 0      # _("All")
 
         try:
-            tools = [float(eval(dia)) for dia in tooldia.split(",") if dia != '']
+            tools = [float(dia) for dia in tooldia.split(",") if dia.strip()]
         except AttributeError:
             tools = [float(tooldia)]
+        if not tools or any(not math.isfinite(dia) or dia <= 0 for dia in tools) or not 0 <= overlap < 100:
+            self.raise_tcl_error('Tool diameters must be positive and finite; overlap must be in [0, 100).')
         # store here the default data for Geometry Data
         default_data = self.app.options.copy()
         default_data.update({
@@ -213,8 +226,11 @@ class TclCommandPaint(TclCommand):
             return "fail"
 
         # Paint all polygons in the painted object
+        if self.app.paint_tool.gen is None:
+            from appPlugins.ToolPaint.PaintGen import PaintGen
+            self.app.paint_tool.gen = PaintGen(self.app.paint_tool)
         if select == 0:     # 'all' in args
-            self.app.paint_tool.paint_poly_all(obj=obj,
+            return self.app.paint_tool.gen.paint_poly_all(obj=obj,
                                                tooldia=tooldia,
                                                order=order,
                                                method=method,
@@ -231,7 +247,7 @@ class TclCommandPaint(TclCommand):
                                      (_("Expected a tuple value like -single 3.2,0.1."), str(args['single'])))
                 return "fail"
             else:
-                coords_xy = [float(eval(a)) for a in args['single'].split(",") if a != '']
+                coords_xy = self.parse_coords(args['single'])
 
                 if coords_xy and len(coords_xy) != 2:
                     self.raise_tcl_error('%s Got: %s' %
@@ -241,7 +257,7 @@ class TclCommandPaint(TclCommand):
             x = coords_xy[0]
             y = coords_xy[1]
 
-            ret_val = self.app.paint_tool.paint_poly(obj=obj,
+            ret_val = self.app.paint_tool.gen.paint_poly(obj=obj,
                                                      inside_pt=[x, y],
                                                      tooldia=tooldia,
                                                      order=order,
@@ -253,7 +269,7 @@ class TclCommandPaint(TclCommand):
             if ret_val == 'fail':
                 self.app.log.error("Could not find a Polygon at the specified location.")
                 return "fail"
-            return
+            return ret_val
 
         # Paint all polygons found within the box object from the the painted object
         if select == 3:     # 'box' in args
@@ -273,7 +289,9 @@ class TclCommandPaint(TclCommand):
                 self.raise_tcl_error("%s: %s" % (_("Could not retrieve object"), name))
                 return "fail"
 
-            self.app.paint_tool.paint_poly_ref(obj=obj,
+            if box_obj is None or box_obj.kind not in ('geometry', 'gerber'):
+                self.raise_tcl_error('Reference object not found or unsupported: %s' % box_name)
+            return self.app.paint_tool.gen.paint_poly_ref(obj=obj,
                                                sel_obj=box_obj,
                                                tooldia=tooldia,
                                                order=order,

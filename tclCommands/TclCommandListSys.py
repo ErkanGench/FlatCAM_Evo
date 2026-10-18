@@ -44,6 +44,7 @@ class TclCommandListSys(TclCommand):
                 "Main categories start with: gerber or excellon or geometry or cncjob or global.\n"
                 "Note: Use 'get_sys system variable' to get the value and 'set_sys system variable value' to set it.\n",
         'args': collections.OrderedDict([
+            ('selection', 'Optional system-variable name prefix to filter the list.'),
         ]),
         'examples': ['list_sys',
                      'list_sys ser',
@@ -60,8 +61,6 @@ class TclCommandListSys(TclCommand):
         """
         if 'selection' in args:
             argument = args['selection']
-            return str([k for k in self.app.options.keys() if str(k).startswith(str(argument))])
+            return tuple(k for k in self.app.options.keys() if str(k).startswith(str(argument)))
         else:
-            ret_val = list(self.app.options.keys())
-            return str(ret_val)
-            # return str([*self.app.options])
+            return tuple(self.app.options.keys())

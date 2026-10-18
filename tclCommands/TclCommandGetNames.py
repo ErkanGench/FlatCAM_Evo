@@ -13,6 +13,7 @@ class TclCommandGetNames(TclCommand):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['get_names']
+    returns_value = True
 
     description = '%s %s' % ("--", "Return to TCL the list of the project objects names "
                                    "as a string with names separated by the '\\n' char.")

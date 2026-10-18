@@ -343,7 +343,7 @@ class AppObject(QtCore.QObject):
         self.app.log.debug(msg)
         self.app.inform_shell.emit(msg)
 
-        if return_value == 'fail':
+        if return_value == 'fail' or return_value is False:
             self.app.log.debug("Object (%s) parsing and/or geometry creation failed." % kind)
             return "fail"
 
@@ -610,7 +610,8 @@ class AppObject(QtCore.QObject):
             new_obj.source_file = ''
             new_obj.solid_geometry = []
 
-        self.new_object('excellon', outname, obj_init, plot=False)
+        if self.new_object('excellon', outname, obj_init, plot=False) == 'fail':
+            return 'fail'
 
     def new_geometry_object(self, new_name=None):
         """
@@ -652,7 +653,8 @@ class AppObject(QtCore.QObject):
             new_obj.solid_geometry = []
             new_obj.source_file = ''
 
-        self.new_object('geometry', outname, initialize, plot=False)
+        if self.new_object('geometry', outname, initialize, plot=False) == 'fail':
+            return 'fail'
 
     def new_gerber_object(self, new_name=None):
         """
@@ -682,7 +684,8 @@ class AppObject(QtCore.QObject):
             except KeyError:
                 pass
 
-        self.new_object('gerber', outname, initialize, plot=False)
+        if self.new_object('gerber', outname, initialize, plot=False) == 'fail':
+            return 'fail'
 
     def new_script_object(self, new_name=None):
         """

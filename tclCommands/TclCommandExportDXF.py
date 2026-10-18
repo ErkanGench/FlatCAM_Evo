@@ -65,4 +65,4 @@ class TclCommandExportDXF(TclCommand):
         else:
             filename = args['filename']
 
-        self.app.f_handlers.export_dxf(obj_name=source_obj_name, filename=filename, local_use=None, use_thread=False)
+        return self.app.f_handlers.export_dxf(obj_name=source_obj_name, filename=filename, local_use=None, use_thread=False)

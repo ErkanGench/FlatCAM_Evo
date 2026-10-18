@@ -531,7 +531,7 @@ class FCShell(TermWidget):
             error = "no error provided"
 
         if isinstance(error, Exception):
-            exc_type, exc_value, exc_traceback = error_info
+            exc_type, exc_value, exc_traceback = error_info or (type(error), error, error.__traceback__)
             if not isinstance(error, self.TclErrorException):
                 show_trace = 1
             else:
@@ -552,8 +552,7 @@ class FCShell(TermWidget):
         else:
             text = error
 
-        text = text.replace('[', '\\[').replace('"', '\\"')
-        self.tcl.eval('return -code error "%s"' % text)
+        self.tcl.call('error', str(text))
 
     def raise_tcl_error(self, text):
         """
@@ -563,9 +562,7 @@ class FCShell(TermWidget):
         :return: raise exception
         """
 
-        # self.display_tcl_error(text)
-        self.tcl_error_signal.emit(text, None)
-        # raise self.TclErrorException(text)
+        raise self.TclErrorException(text)
 
     class TclErrorException(Exception):
         """

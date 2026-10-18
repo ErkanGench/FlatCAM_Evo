@@ -64,17 +64,17 @@ class TclCommandJoinExcellon(TclCommand):
         objs = []
         for obj_n in obj_names:
             obj = self.app.collection.get_by_name(str(obj_n))
-            if obj is None:
+            if obj is None or obj.kind != 'excellon':
                 self.app.log.error("Object not found: %s" % obj_n)
                 return "fail"
             else:
                 objs.append(obj)
 
         def initialize(obj_, app):
-            ExcellonObject.merge(objs, obj_, decimals=self.app.decimals, log=app.log)
+            return ExcellonObject.merge(objs, obj_, decimals=self.app.decimals, log=app.log)
 
         if objs and len(objs) >= 2:
-            self.app.app_obj.new_object("excellon", outname, initialize, plot=False)
+            self.check_result(self.app.app_obj.new_object("excellon", outname, initialize, plot=False))
         else:
             self.app.log.error(
                 "No Excellon objects to be joined or less than two Excellon objects specified for merging.")

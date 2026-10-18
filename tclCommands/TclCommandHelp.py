@@ -47,7 +47,7 @@ class TclCommandHelp(TclCommand):
 
     # structured help for current command, args needs to be ordered
     help = {
-        'main': "Returns to TCL the value for the entered system variable.",
+        'main': "Shows available Tcl commands or help for a named command.",
         'args': collections.OrderedDict([
             ('name', 'Name of a Tcl Command for which to display the Help.'),
         ]),
@@ -66,7 +66,7 @@ class TclCommandHelp(TclCommand):
         if 'name' in args:
             name = args['name']
             if name not in self.app.shell.tcl_commands_storage:
-                return "Unknown command: %s" % name
+                self.raise_tcl_error("Unknown command: %s" % name)
 
             help_for_command = self.app.shell.tcl_commands_storage[name]["help"] + '\n\n'
             self.app.shell.append_output(help_for_command)

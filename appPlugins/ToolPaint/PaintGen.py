@@ -522,6 +522,7 @@ class PaintGen:
         :return: None
         """
 
+        proc = None
         if run_threaded:
             proc = self.app.proc_container.new('%s...' % _("Working"))
         else:
@@ -539,6 +540,10 @@ class PaintGen:
 
         sorted_paint_tools = self._parse_tool_diameters(tooldia)
         if sorted_paint_tools == 'fail':
+            if proc is not None:
+                proc.done()
+            else:
+                self.app.proc_container.view.set_idle()
             return 'fail'
 
         def job_thread(app_instance, proc):
@@ -573,16 +578,20 @@ class PaintGen:
                     )
             except grace:
                 app_instance.log.debug("PaintGen.paint_handler.job_thread() -> Graceful exit.")
+                ret = 'fail'
             except Exception as err:
                 app_instance.log.debug(f"PaintGen.paint_handler.job_thread() -> Exception: {str(err)}")
                 traceback.print_stack()
                 ret = 'fail'
             finally:
-                proc.done()
+                if proc is not None:
+                    proc.done()
+                else:
+                    app_instance.proc_container.view.set_idle()
 
             if ret == 'fail':
                 self.app.inform.emit('[ERROR] %s' % _("Failed."))
-                return
+                return 'fail'
 
             self.app.inform.emit('[success] %s' % _("Done."))
 
@@ -590,7 +599,7 @@ class PaintGen:
             self.app.collection.promise(params.output_object_name)
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app, proc]})
         else:
-            job_thread(app_instance=self.app, proc=proc)
+            return job_thread(app_instance=self.app, proc=proc)
 
     def _create_params(self, order, method, rest, outname, tools_storage, run_threaded):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
@@ -1018,7 +1027,7 @@ class PaintGen:
             self.app.inform.emit('[WARNING] %s' % _('No polygon found.'))
             return "fail"
 
-        self.paint_handler(
+        return self.paint_handler(
             obj,
             polygon_list,
             tooldia=tooldia,
@@ -1117,9 +1126,9 @@ class PaintGen:
         if not painted_area:
             self.app.log.warning('No polygon found.')
             self.app.inform.emit('[WARNING] %s' % _('No polygon found.'))
-            return
+            return 'fail'
 
-        self.paint_handler(
+        return self.paint_handler(
             obj,
             painted_area,
             tooldia=tooldia,
@@ -1260,7 +1269,7 @@ class PaintGen:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("No object available."))
             return
 
-        self.paint_poly_area_worker(
+        return self.paint_poly_area_worker(
             painted_object=obj,
             areas_to_paint=sel_rect,
             tooldia=tooldia,

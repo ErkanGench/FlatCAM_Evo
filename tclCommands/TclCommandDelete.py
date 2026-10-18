@@ -13,6 +13,7 @@ class TclCommandDelete(TclCommand):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['delete', 'del']
+    valueless_options = frozenset({'f'})
 
     description = '%s %s' % ("--", "Deletes the given object. If no name is given will delete all objects.")
 
@@ -69,7 +70,7 @@ class TclCommandDelete(TclCommand):
                         par = args['f'].capitalize()
                     except AttributeError:
                         par = args['f']
-                    is_forced = bool(eval(par))
+                    is_forced = self.parse_bool(par)
             except KeyError:
                 is_forced = True
 
@@ -80,10 +81,10 @@ class TclCommandDelete(TclCommand):
                 self.app.collection.set_active(str(obj_name))
                 self.app.on_delete(force_deletion=is_forced)
             except Exception as e:
-                return "Command failed: %s" % str(e)
+                self.raise_tcl_error("Command failed: %s" % str(e))
         else:
             try:
                 self.app.collection.set_all_active()
                 self.app.on_delete(force_deletion=is_forced)
             except Exception as e:
-                return "Command failed: %s" % str(e)
+                self.raise_tcl_error("Command failed: %s" % str(e))

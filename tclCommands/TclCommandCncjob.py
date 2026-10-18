@@ -18,6 +18,9 @@ class TclCommandCncjob(TclCommandSignaled):
 
     # array of all command aliases, to be able use  old names for backward compatibility (add_poly, add_polygon)
     aliases = ['cncjob']
+    # Bare feature options use defaults; startz/spindlespeed also support an explicit None sentinel.
+    valueless_options = frozenset({'dpp', 'toolchangez', 'dwelltime', 'extracut_length',
+                                   'startz', 'spindlespeed'})
 
     description = '%s %s' % ("--", "Generates a CNC Job object from a Geometry Object.")
 
@@ -64,26 +67,32 @@ class TclCommandCncjob(TclCommandSignaled):
             ('feedrate', 'Moving speed on X-Y plane when cutting.'),
             ('feedrate_z', 'Moving speed on Z plane when cutting.'),
             ('feedrate_rapid', 'Rapid moving at speed when cutting.'),
-            ('extracut_length', 'The value for extra cnccut over the first point in path,in the job end; float'),
-            ('dpp', 'If present then use multidepth cnc cut. Height of one layer for multidepth. Positive value.'),
-            ('toolchangez', 'Z distance for toolchange (example: 30.0).\n'
-                            'If used in the command then a toolchange event will be included in gcode'),
+            ('extracut_length', 'Extra cut length past the first point of the path. Enables extra cutting; '
+                               'bare -extracut_length uses 0.0, not the configured extra length.'),
+            ('dpp', 'Positive depth per pass. Enables multidepth cutting; bare -dpp uses application '
+                    'tools_mill_depthperpass.'),
+            ('toolchangez', 'Z distance for toolchange (example: 30.0). Enables toolchange; '
+                            'bare -toolchangez uses application tools_mill_toolchangez.'),
             ('toolchangexy', 'The X,Y coordinates at Toolchange event in format (x, y) (example: (30.0, 15.2) or '
                              'without parenthesis like: 0.3,1.0). WARNING: no spaces allowed in the value.'),
-            ('startz', 'Height before the first move.'),
+            ('startz', 'Height before the first move. Bare -startz preserves None; '
+                       'omitting the option uses application tools_mill_startz.'),
             ('endz', 'Height where the last move will park.'),
             ('endxy', 'The X,Y coordinates at job end in format (x, y) (example: (2.0, 1.2) or without parenthesis'
                       'like: 0.3,1.0). WARNING: no spaces allowed in the value.'),
-            ('spindlespeed', 'Speed of the spindle in rpm (example: 4000).'),
-            ('dwelltime', 'Time to pause to allow the spindle to reach the full speed.\n'
-                          'If it is not used in command then it will not be included'),
+            ('spindlespeed', 'Spindle speed in rpm (example: 4000). Bare or omitted -spindlespeed uses None '
+                            'for nonlaser preprocessors. Laser preprocessors use -las_power, default 0.0, instead.'),
+            ('dwelltime', 'Spindle startup pause time. Enables dwell; bare -dwelltime uses object '
+                          'tools_mill_dwelltime with application fallback. If the option is omitted, '
+                          'application tools_mill_dwell and tools_mill_dwelltime are used.'),
             ('outname', 'Name of the resulting Geometry object.'),
             ('las_power', 'Used with "laser" preprocessors. Set the laser power when cutting'),
             ('las_min_pwr', 'Used with "laser" preprocessors. Set the laser power when not cutting, travelling'),
             ('pp', 'Name of the Geometry preprocessor. No quotes, case sensitive'),
             ('muted', 'It will not put errors in the Shell. Can be True (1) or False (0)')
         ]),
-        'examples': ['cncjob geo_name -dia 0.5 -z_cut -1.8 -dpp 0.6 -z_move 2 -feedrate 120 -pp default']
+        'examples': ['cncjob geo_name -dia 0.5 -z_cut -1.8 -dpp 0.6 -z_move 2 -feedrate 120 -pp default',
+                     'cncjob geo_name -dpp -toolchangez -dwelltime -extracut_length -startz -spindlespeed']
     }
 
     def execute(self, args, unnamed_args):
@@ -103,7 +112,7 @@ class TclCommandCncjob(TclCommandSignaled):
                 par = args['muted'].capitalize()
             except AttributeError:
                 par = args['muted']
-            muted = bool(eval(par))
+            muted = self.parse_bool(par)
         else:
             muted = False
 
@@ -133,26 +142,26 @@ class TclCommandCncjob(TclCommandSignaled):
                 self.raise_tcl_error('Expected GeometryObject, got %s %s.' % (str(name), type(obj)))
                 return "fail"
             else:
-                return
+                return 'fail'
 
-        args["dia"] = args["dia"] if "dia" in args and args["dia"] else self._app_option("tools_mill_tooldia")
+        args["dia"] = args.get('dia', self._app_option('tools_mill_tooldia'))
 
-        args["z_cut"] = args["z_cut"] if "z_cut" in args and args["z_cut"] else self._app_option("tools_mill_cutz")
-        args["z_move"] = args["z_move"] if "z_move" in args and args["z_move"] else \
+        args["z_cut"] = args["z_cut"] if "z_cut" in args else self._app_option("tools_mill_cutz")
+        args["z_move"] = args["z_move"] if "z_move" in args else \
             self._app_option("tools_mill_travelz")
 
         args["pp"] = args["pp"] if "pp" in args and isinstance(args["pp"], str) else \
             self._app_option("tools_mill_ppname_g")
 
-        args["feedrate"] = args["feedrate"] if "feedrate" in args and args["feedrate"] else \
+        args["feedrate"] = args["feedrate"] if "feedrate" in args else \
             self._app_option("tools_mill_feedrate")
 
         if 'laser' in args["pp"] and "feedrate_z" not in args:
             args["feedrate_z"] = args["feedrate"]
         else:
-            args["feedrate_z"] = args["feedrate_z"] if "feedrate_z" in args and args["feedrate_z"] else \
+            args["feedrate_z"] = args["feedrate_z"] if "feedrate_z" in args else \
                 self._app_option("tools_mill_feedrate_z")
-        args["feedrate_rapid"] = args["feedrate_rapid"] if "feedrate_rapid" in args and args["feedrate_rapid"] else \
+        args["feedrate_rapid"] = args["feedrate_rapid"] if "feedrate_rapid" in args else \
             self._app_option("tools_mill_feedrate_rapid")
 
         if "extracut_length" in args:
@@ -175,9 +184,9 @@ class TclCommandCncjob(TclCommandSignaled):
             args["multidepth"] = self._app_option("tools_mill_multidepth")
             args["dpp"] = self._app_option("tools_mill_depthperpass")
 
-        args["startz"] = args["startz"] if "startz" in args and args["startz"] else \
+        args["startz"] = args["startz"] if "startz" in args else \
             self._app_option("tools_mill_startz")
-        args["endz"] = args["endz"] if "endz" in args and args["endz"] else self._app_option("tools_mill_endz")
+        args["endz"] = args["endz"] if "endz" in args else self._app_option("tools_mill_endz")
 
         if "endxy" in args and args["endxy"]:
             args["endxy"] = args["endxy"]
@@ -186,14 +195,13 @@ class TclCommandCncjob(TclCommandSignaled):
                 args["endxy"] = str(self._app_option("tools_mill_endxy"))
             else:
                 args["endxy"] = '0, 0'
-        if len(eval(args["endxy"])) != 2:
+        if len(self.parse_coords(args["endxy"])) != 2:
             self.raise_tcl_error("The entered value for 'endxy' needs to have the format x,y or "
                                  "in format (x, y) - no spaces allowed. But always two comma separated values.")
 
         # Spindle speed
         if 'laser' not in args["pp"]:
-            args["spindlespeed"] = (args["spindlespeed"] if "spindlespeed" in args and
-                                                            args["spindlespeed"] != 0 else None)
+            args["spindlespeed"] = args.get('spindlespeed')
         else:
             args["spindlespeed"] = args["las_power"] if "las_power" in args else 0.0
 
@@ -203,7 +211,8 @@ class TclCommandCncjob(TclCommandSignaled):
         if 'dwelltime' in args:
             args["dwell"] = True
             if args['dwelltime'] is None:
-                args["dwelltime"] = float(obj.obj_options["dwelltime"])
+                args["dwelltime"] = float(obj.obj_options.get(
+                    'tools_mill_dwelltime', self._app_option('tools_mill_dwelltime')))
             else:
                 args["dwelltime"] = float(args['dwelltime'])
         else:
@@ -227,12 +236,13 @@ class TclCommandCncjob(TclCommandSignaled):
                 args["toolchangexy"] = str(self._app_option("tools_mill_toolchangexy"))
             else:
                 args["toolchangexy"] = '0, 0'
-        if len(eval(args["toolchangexy"])) != 2:
+        if len(self.parse_coords(args["toolchangexy"])) != 2:
             self.raise_tcl_error("The entered value for 'toolchangexy' needs to have the format x,y or "
                                  "in format (x, y) - no spaces allowed. But always two comma separated values.")
             return "fail"
 
         args.pop('name', None)
+        args.pop('muted', None)
 
         for arg in args:
             if arg == "toolchange_xy" or arg == "spindlespeed" or arg == "startz":
@@ -249,7 +259,7 @@ class TclCommandCncjob(TclCommandSignaled):
                         return "fail"
 
         if not obj.multigeo:
-            obj.generatecncjob(use_thread=False, plot=False, **args)
+            return self.check_result(obj.generatecncjob(use_thread=False, plot=False, **args))
         else:
             # Update the local_tools_dict values with the args value
             local_tools_dict = deepcopy(obj.tools)
@@ -257,7 +267,7 @@ class TclCommandCncjob(TclCommandSignaled):
             for tool_uid in list(local_tools_dict.keys()):
                 if 'data' in local_tools_dict[tool_uid]:
                     local_tools_dict[tool_uid]['data']['seg_x'] = self._app_option('geometry_seg_x')
-                    local_tools_dict[tool_uid]['data']['seg_y'] = self._app_option('geometry_seg_x')
+                    local_tools_dict[tool_uid]['data']['seg_y'] = self._app_option('geometry_seg_y')
                     local_tools_dict[tool_uid]['data']['tools_mill_tooldia'] = args["dia"]
                     local_tools_dict[tool_uid]['data']['tools_mill_cutz'] = args["z_cut"]
                     local_tools_dict[tool_uid]['data']['tools_mill_travelz'] = args["z_move"]
@@ -285,7 +295,7 @@ class TclCommandCncjob(TclCommandSignaled):
                     local_tools_dict[tool_uid]['data']['tools_mill_min_power'] = args['las_min_pwr']
                     local_tools_dict[tool_uid]['data']['tools_mill_ppname_g'] = args["pp"]
 
-            self.app.milling_tool.generate_cnc_job_handler(
+            return self.check_result(self.app.milling_tool.generate_cnc_job_handler(
                 geo_obj=obj,
                 outname=args['outname'],
                 tools_dict=local_tools_dict,
@@ -293,5 +303,5 @@ class TclCommandCncjob(TclCommandSignaled):
                 toolchange=args["toolchange"],
                 use_thread=False,
                 plot=False,
-                from_tcl=True)
+                from_tcl=True))
             # self.raise_tcl_error('The object is a multi-geo geometry which is not supported in cncjob Tcl Command')

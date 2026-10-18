@@ -1,7 +1,7 @@
 import collections
 from tclCommands.TclCommand import TclCommand
 
-from shapely.ops import unary_union
+from shapely import box
 
 import gettext
 import appTranslation as fcTranslate
@@ -78,14 +78,7 @@ class TclCommandBbox(TclCommand):
             args['margin'] = float(self._app_option("gerber_bboxmargin"))
         margin = args['margin']
 
-        if 'rounded' in args:
-            try:
-                par = args['rounded'].capitalize()
-            except AttributeError:
-                par = args['rounded']
-            rounded = bool(eval(par))
-        else:
-            rounded = bool(eval(self._app_option("gerber_bboxrounded")))
+        rounded = self.parse_bool(args.get('rounded', self._app_option('gerber_bboxrounded')))
 
         args.pop('name', None)
 
@@ -94,12 +87,11 @@ class TclCommandBbox(TclCommand):
                 # assert geo_obj.kind == 'geometry'
 
                 # Bounding box with rounded corners
-                geo = unary_union(obj.solid_geometry)
-                bounding_box = geo.envelope.buffer(float(margin))
+                bounding_box = box(*obj.bounds()).buffer(float(margin))
                 if not rounded:  # Remove rounded corners
                     bounding_box = bounding_box.envelope
                 geo_obj.solid_geometry = bounding_box
 
-            self.app.app_obj.new_object("geometry", args['outname'], geo_init, plot=False)
+            self.check_result(self.app.app_obj.new_object("geometry", args['outname'], geo_init, plot=False))
         except Exception as e:
-            return "Operation failed: %s" % str(e)
+            self.raise_tcl_error("Operation failed: %s" % str(e))

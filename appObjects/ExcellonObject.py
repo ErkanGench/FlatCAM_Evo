@@ -972,7 +972,9 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
             # Send to worker
             self.app.worker_task.emit({'fcn': geo_thread, 'params': [self.app]})
         else:
-            self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+            result = self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+            if result == 'fail' or result is False:
+                return False, 'Failed to create milling geometry.'
 
         return True, ""
 
@@ -1095,7 +1097,9 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
             # Send to worker
             self.app.worker_task.emit({'fcn': geo_thread, 'params': [self.app]})
         else:
-            self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+            result = self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+            if result == 'fail' or result is False:
+                return False, 'Failed to create milling geometry.'
 
         return True, ""
 

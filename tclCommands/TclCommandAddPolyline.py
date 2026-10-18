@@ -59,4 +59,6 @@ class TclCommandAddPolyline(TclCommandSignaled):
         nr_points = int(len(unnamed_args) / 2)
         points = [[float(unnamed_args[2*i]), float(unnamed_args[2*i+1])] for i in range(nr_points)]
 
-        obj.add_polyline(points)
+        if len(set(tuple(p) for p in points)) < 2 or not all(math.isfinite(v) for p in points for v in p):
+            self.raise_tcl_error('A polyline requires at least two distinct finite coordinate pairs.')
+        return self.check_result(obj.add_polyline(points))

@@ -2451,9 +2451,12 @@ class appIO(QtCore.QObject):
                 return parse_ret_val
 
         self.log.debug("open_gerber()")
+        if from_tcl and not os.path.exists(filename):
+            filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')),
+                                    os.path.basename(filename.replace('\\', '/')))
         if not os.path.exists(filename):
             self.inform.emit('[ERROR_NOTCL] %s. %s' % (filename, _("File no longer available.")))
-            return
+            return 'fail' if from_tcl else None
 
         with self.app.proc_container.new('%s...' % _("Opening")):
             # Object name
@@ -2468,10 +2471,11 @@ class appIO(QtCore.QObject):
                             '!!! CHECK THE FILE !!! --- SOME copper features (pads, traces etc) ARE MISSING !!!\n'
                             '!!! CHECK THE FILE !!! --- SOME copper features (pads, traces etc) ARE MISSING !!!\n')
                 self.inform.emit(message)
-                return
+                return 'fail' if from_tcl else None
             if ret_val == 'fail':
                 if from_tcl:
-                    filename = self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')) + '/' + name
+                    filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')),
+                                            os.path.basename(filename.replace('\\', '/')))
                     ret_val = self.app.app_obj.new_object("gerber", name, obj_init, autoselected=False, plot=plot)
                 if ret_val == 'fail':
                     self.inform.emit('[ERROR_NOTCL] %s' % _('Open Gerber failed. Probable not a Gerber file.'))
@@ -2498,9 +2502,12 @@ class appIO(QtCore.QObject):
 
         self.log.debug("open_excellon()")
 
+        if from_tcl and not os.path.exists(filename):
+            filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')),
+                                    os.path.basename(filename.replace('\\', '/')))
         if not os.path.exists(filename):
             self.inform.emit('[ERROR_NOTCL] %s. %s' % (filename, _("File no longer available.")))
-            return
+            return 'fail' if from_tcl else None
 
         # How the object should be initialized
         def obj_init(excellon_obj, app_obj):
@@ -2539,12 +2546,13 @@ class appIO(QtCore.QObject):
             ret_val = self.app.app_obj.new_object("excellon", name, obj_init, autoselected=False, plot=plot)
             if ret_val == 'fail':
                 if from_tcl:
-                    filename = self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')) + '/' + name
+                    filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')),
+                                            os.path.basename(filename.replace('\\', '/')))
                     ret_val = self.app.app_obj.new_object("excellon", name, obj_init, autoselected=False, plot=plot)
                 if ret_val == 'fail':
                     self.inform.emit('[ERROR_NOTCL] %s' %
                                      _('Open Excellon file failed. Probable not an Excellon file.'))
-                    return
+                    return 'fail'
 
             # Register recent file
             self.app.file_opened.emit("excellon", filename)
@@ -2566,9 +2574,12 @@ class appIO(QtCore.QObject):
         """
         self.log.debug("open_gcode()")
 
+        if from_tcl and not os.path.exists(filename):
+            filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')),
+                                    os.path.basename(filename.replace('\\', '/')))
         if not os.path.exists(filename):
             self.inform.emit('[ERROR_NOTCL] %s' % _("File no longer available."))
-            return
+            return 'fail' if from_tcl else None
 
         # How the object should be initialized
         def obj_init(job_obj, app_obj_: "appMain.App"):
@@ -2666,7 +2677,8 @@ class appIO(QtCore.QObject):
             ret_val = self.app.app_obj.new_object("cncjob", name, obj_init, autoselected=False, plot=plot)
             if ret_val == 'fail':
                 if from_tcl:
-                    filename = self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')) + '/' + name
+                    filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')),
+                                            os.path.basename(filename.replace('\\', '/')))
                     ret_val = self.app.app_obj.new_object("cncjob", name, obj_init, autoselected=False, plot=plot)
                 if ret_val == 'fail':
                     self.inform.emit('[ERROR_NOTCL] %s' %

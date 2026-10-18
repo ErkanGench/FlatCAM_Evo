@@ -77,14 +77,7 @@ class TclCommandNregions(TclCommand):
             args['margin'] = float(self._app_option("gerber_noncoppermargin"))
         margin = float(args['margin'])
 
-        if 'rounded' in args:
-            try:
-                par = args['rounded'].capitalize()
-            except AttributeError:
-                par = args['rounded']
-            rounded = bool(eval(par))
-        else:
-            rounded = bool(eval(self._app_option("gerber_noncopperrounded")))
+        rounded = self.parse_bool(args.get('rounded', self._app_option('gerber_noncopperrounded')))
 
         args.pop('name', None)
 
@@ -100,9 +93,6 @@ class TclCommandNregions(TclCommand):
                 non_copper = bounding_box.difference(geo)
                 geo_obj.solid_geometry = non_copper
 
-            self.app.app_obj.new_object("geometry", args['outname'], geo_init, plot=False)
+            self.check_result(self.app.app_obj.new_object("geometry", args['outname'], geo_init, plot=False))
         except Exception as e:
-            return "Operation failed: %s" % str(e)
-
-        # in the end toggle the visibility of the origin object so we can see the generated Geometry
-        self.app.collection.get_by_name(name).ui.plot_cb.toggle()
+            self.raise_tcl_error("Operation failed: %s" % str(e))

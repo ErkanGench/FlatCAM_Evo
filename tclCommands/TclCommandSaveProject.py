@@ -1,9 +1,9 @@
-from tclCommands.TclCommand import TclCommandSignaled
+from tclCommands.TclCommand import TclCommand
 
 import collections
 
 
-class TclCommandSaveProject(TclCommandSignaled):
+class TclCommandSaveProject(TclCommand):
     """
     Tcl shell command to save the application project to file.
     """
@@ -50,4 +50,4 @@ class TclCommandSaveProject(TclCommandSignaled):
         :return: None or exception
         """
 
-        self.app.f_handlers.save_project(args['filename'], from_tcl=True)
+        return self.app.f_handlers.save_project(args['filename'], from_tcl=True)

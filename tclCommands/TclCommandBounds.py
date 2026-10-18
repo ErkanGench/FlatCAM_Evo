@@ -67,13 +67,14 @@ class TclCommandBounds(TclCommand):
                     _("Expected a list of objects names separated by comma. Got"), str(args['objects'])))
                 return 'fail'
         else:
-            self.raise_tcl_error('%s: %s:' % (
-                _("Expected a list of objects names separated by comma. Got"), str(args['objects'])))
+            self.raise_tcl_error('Expected a list of object names separated by comma.')
             return 'fail'
 
         result_list = []
         for name in obj_list:
             obj = self.app.collection.get_by_name(name)
+            if obj is None:
+                self.raise_tcl_error('Object not found: %s' % name)
 
             xmin, ymin, xmax, ymax = obj.bounds()
             result_list.append([xmin, ymin, xmax, ymax])

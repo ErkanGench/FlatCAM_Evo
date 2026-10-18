@@ -63,7 +63,7 @@ class TclCommandOpenSVG(TclCommandSignaled):
             # if geo_obj.kind != 'geometry' or geo_obj.kind != 'gerber':
             #     self.raise_tcl_error('Expected Geometry or Gerber, got %s %s.' % (outname, type(geo_obj)))
 
-            geo_obj.import_svg(filename, obj_type, units=units)
+            return geo_obj.import_svg(filename, obj_type, units=units)
 
         filename = args['filename']
 
@@ -87,12 +87,12 @@ class TclCommandOpenSVG(TclCommandSignaled):
             # Object creation
             ret_val = self.app.app_obj.new_object(obj_type, outname, obj_init, plot=False)
             if ret_val == 'fail':
-                filename = self._app_option('global_tcl_path') + '/' + outname
+                filename = self._app_option('global_tcl_path') + '/' + args['filename'].replace('\\', '/').split('/')[-1]
                 ret_val = self.app.app_obj.new_object(obj_type, outname, obj_init, plot=False)
-                self.app.shell.append_output(
-                    "No path provided or path is wrong. Using the default Path... \n")
                 if ret_val == 'fail':
-                    return "Failed. The OpenSVG command was used but could not open the SVG file"
+                    return 'fail'
+            if ret_val is False:
+                return 'fail'
 
             # Register recent file
             self.app.file_opened.emit("svg", filename)

@@ -46,4 +46,4 @@ class TclCommandVersion(TclCommand):
         :return:
         """
 
-        self.app.version_check()
+        return str(self.app.version)

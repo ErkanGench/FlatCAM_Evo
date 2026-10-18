@@ -1,4 +1,5 @@
 import collections
+import math
 from tclCommands.TclCommand import TclCommandSignaled
 
 from shapely import Point
@@ -39,7 +40,7 @@ class TclCommandAlignDrill(TclCommandSignaled):
     ])
 
     # array of mandatory options for current Tcl command: required = {'name','outname'}
-    required = ['name', 'axis']
+    required = ['name', 'axis', 'dia']
 
     # structured help for current command, args needs to be ordered
     help = {
@@ -84,28 +85,39 @@ class TclCommandAlignDrill(TclCommandSignaled):
         try:
             obj = self.app.collection.get_by_name(str(name))
         except Exception:
-            return "Could not retrieve object: %s" % name
+            self.raise_tcl_error("Could not retrieve object: %s" % name)
 
         if obj is None:
-            return "Object not found: %s" % name
+            self.raise_tcl_error("Object not found: %s" % name)
 
         if obj.kind != "geometry" and obj.kind != 'gerber' and obj.kind != 'excellon':
-            return "ERROR: Only Gerber, Geometry and Excellon objects can be used."
+            self.raise_tcl_error("Only Gerber, Geometry and Excellon objects can be used.")
 
         # Axis
         try:
             axis = args['axis'].upper()
         except KeyError:
-            return "ERROR: Specify -axis X or -axis Y"
+            self.raise_tcl_error('Specify -axis X or -axis Y')
+        if axis not in ('X', 'Y'):
+            self.raise_tcl_error('Specify -axis X or -axis Y')
+        if unnamed_args or args.get('dia') is None or not math.isfinite(args['dia']) or args['dia'] <= 0:
+            self.raise_tcl_error('A positive finite diameter is required, with no extra positional arguments.')
 
         if not ('holes' in args or ('grid' in args and 'gridoffset' in args)):
-            return "ERROR: Specify -holes or -grid with -gridoffset "
+            self.raise_tcl_error('Specify -holes or -grid with -gridoffset')
 
         if 'holes' in args:
             try:
-                holes = eval("[" + args['holes'] + "]")
-            except KeyError:
-                return "ERROR: Wrong -holes format (X1,Y1),(X2,Y2)"
+                holes = self.parse_coords('[' + args['holes'] + ']')
+                if not holes or any(len(h) != 2 or not all(math.isfinite(float(v)) for v in h) for h in holes):
+                    raise ValueError('Expected finite coordinate pairs')
+            except (ValueError, TypeError, SyntaxError) as err:
+                self.raise_tcl_error('Wrong -holes format (X1,Y1),(X2,Y2): %s' % err)
+        else:
+            if 'box' not in args or 'minoffset' not in args:
+                self.raise_tcl_error('Grid alignment requires -box and -minoffset.')
+            if args['grid'] <= 0 or not math.isfinite(args['grid']) or args['minoffset'] < 0:
+                self.raise_tcl_error('Grid must be positive and finite; minoffset must be non-negative.')
 
         xscale, yscale = {"X": (1.0, -1.0), "Y": (-1.0, 1.0)}[axis]
 
@@ -142,28 +154,18 @@ class TclCommandAlignDrill(TclCommandSignaled):
 
                 # This will align hole to given aligngridoffset and minimal offset from pcb, based on selected axis
                 if axis == "X":
-                    firstpoint = args['gridoffset']
-
-                    while (xmin - args['minoffset']) < firstpoint:
-                        firstpoint = firstpoint - args['grid']
-
-                    lastpoint = args['gridoffset']
-
-                    while (xmax + args['minoffset']) > lastpoint:
-                        lastpoint = lastpoint + args['grid']
+                    firstpoint = args['gridoffset'] + math.floor(
+                        (xmin - args['minoffset'] - args['gridoffset']) / args['grid']) * args['grid']
+                    lastpoint = args['gridoffset'] + math.ceil(
+                        (xmax + args['minoffset'] - args['gridoffset']) / args['grid']) * args['grid']
 
                     localholes = (firstpoint, axisoffset), (lastpoint, axisoffset)
 
                 else:
-                    firstpoint = args['gridoffset']
-
-                    while (ymin - args['minoffset']) < firstpoint:
-                        firstpoint = firstpoint - args['grid']
-
-                    lastpoint = args['gridoffset']
-
-                    while (ymax + args['minoffset']) > lastpoint:
-                        lastpoint = lastpoint + args['grid']
+                    firstpoint = args['gridoffset'] + math.floor(
+                        (ymin - args['minoffset'] - args['gridoffset']) / args['grid']) * args['grid']
+                    lastpoint = args['gridoffset'] + math.ceil(
+                        (ymax + args['minoffset'] - args['gridoffset']) / args['grid']) * args['grid']
 
                     localholes = (axisoffset, firstpoint), (axisoffset, lastpoint)
 
@@ -173,17 +175,10 @@ class TclCommandAlignDrill(TclCommandSignaled):
                     drills.append(point)
                     drills.append(point_mirror)
 
-            # populate init_obj.solid_geometry
-            init_obj.create_geometry()
-
-            # populate init_obj.tools dict
-            init_obj.tools = {
-                1: {
-                    'tooldia':          tooldia,
-                    'drills':           deepcopy(drills),
-                    'solid_geometry':   init_obj.solid_geometry
-                }
-            }
+            init_obj.tools = {}
+            init_obj.add_tool(tooldia, drills=drills)
+            if init_obj.create_geometry() == 'fail':
+                return 'fail'
 
             init_obj.regenerate_source(name=outname)
 
@@ -192,20 +187,20 @@ class TclCommandAlignDrill(TclCommandSignaled):
             try:
                 box = self.app.collection.get_by_name(args['box'])
             except Exception:
-                return "Could not retrieve object box: %s" % args['box']
+                self.raise_tcl_error("Could not retrieve object box: %s" % args['box'])
 
             if box is None:
-                return "Object box not found: %s" % args['box']
+                self.raise_tcl_error("Object box not found: %s" % args['box'])
 
             try:
                 xmin, ymin, xmax, ymax = box.bounds()
                 px = 0.5 * (xmin + xmax)
                 py = 0.5 * (ymin + ymax)
 
-                obj.app.app_obj.new_object("excellon", outname, alligndrill_init_me, plot=False)
+                self.check_result(self.app.app_obj.new_object("excellon", outname, alligndrill_init_me, plot=False))
 
             except Exception as e:
-                return "Operation failed: %s" % str(e)
+                self.raise_tcl_error("Operation failed: %s" % str(e))
 
         else:
             try:
@@ -213,13 +208,13 @@ class TclCommandAlignDrill(TclCommandSignaled):
             except KeyError:
                 dist = 0.0
             except ValueError:
-                return "Invalid distance: %s" % args['dist']
+                self.raise_tcl_error("Invalid distance: %s" % args['dist'])
 
             try:
                 px = dist
                 py = dist
-                obj.app.app_obj.new_object("excellon", outname, alligndrill_init_me, plot=False)
+                self.check_result(self.app.app_obj.new_object("excellon", outname, alligndrill_init_me, plot=False))
             except Exception as e:
-                return "Operation failed: %s" % str(e)
+                self.raise_tcl_error("Operation failed: %s" % str(e))
 
         return 'Ok. Align Drills Excellon object created'

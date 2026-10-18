@@ -3646,6 +3646,7 @@ class ToolMilling(Geometry, AppTool):
                                           source=source_obj, from_tcl=from_tcl, plot=plot, autoselected=True)
             if ret_val != 'fail':
                 self.app.inform.emit('[success] %s: %s' % (_("CNCjob created"), outname))
+            return 'fail' if ret_val == 'fail' or ret_val is False else None
 
     def on_pp_changed(self):
         current_pp = self.ui.pp_geo_name_cb.get_value()

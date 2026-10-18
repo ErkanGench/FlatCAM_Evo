@@ -778,26 +778,30 @@ class Geometry(object):
         :param points: The vertices of the polygon.
         :return: none
         """
-        if self.solid_geometry is None:
-            self.solid_geometry = []
-
-        # pathonly should be allways True, otherwise polygons are not subtracted
-        flat_geometry = self.flatten(pathonly=True)
-        self.app.log.debug("%d paths" % len(flat_geometry))
-
         if not isinstance(points, Polygon):
             polygon = Polygon(points)
         else:
             polygon = points
-        toolgeo = unary_union(polygon)
-        diffs = []
-        for target in flat_geometry:
-            if isinstance(target, LineString) or isinstance(target, LineString) or isinstance(target, MultiLineString):
-                diffs.append(target.difference(toolgeo))
-            else:
-                self.app.log.warning("Not implemented.")
+        if not polygon.is_valid or polygon.is_empty:
+            return 'fail'
 
-        self.solid_geometry = unary_union(diffs)
+        def subtract(geometry):
+            # Preserve path subtraction: polygons become exterior and interior paths, not filled areas.
+            paths = self.flatten(geometry=geometry, pathonly=True)
+            return unary_union([path.difference(polygon) for path in paths
+                                if isinstance(path, (LineString, LinearRing, MultiLineString))])
+
+        if getattr(self, 'multigeo', False) and self.tools:
+            updated = {uid: [subtract(tool.get('solid_geometry', []))] for uid, tool in self.tools.items()}
+            for uid, geometry in updated.items():
+                self.tools[uid]['solid_geometry'] = geometry
+            self.solid_geometry = unary_union([g for geometry in updated.values() for g in geometry])
+        else:
+            self.solid_geometry = subtract(self.solid_geometry if self.solid_geometry is not None else [])
+            for tool in self.tools.values():
+                tool['solid_geometry'] = [self.solid_geometry]
+        if hasattr(self, 'obj_options'):
+            self.obj_options.update(zip(('xmin', 'ymin', 'xmax', 'ymax'), self.bounds()))
 
     def bounds(self, flatten=False):
         """
@@ -2435,7 +2439,16 @@ class Geometry(object):
 
         :return: None
         """
-        self.solid_geometry = [unary_union(self.solid_geometry)]
+        if getattr(self, 'multigeo', False) and self.tools:
+            for tool in self.tools.values():
+                tool['solid_geometry'] = [unary_union(self.flatten(tool.get('solid_geometry', [])))]
+            self.solid_geometry = [unary_union([g for tool in self.tools.values() for g in tool['solid_geometry']])]
+        else:
+            self.solid_geometry = [unary_union(self.flatten())]
+            for tool in self.tools.values():
+                tool['solid_geometry'] = list(self.solid_geometry)
+        if hasattr(self, 'obj_options'):
+            self.obj_options.update(zip(('xmin', 'ymin', 'xmax', 'ymax'), self.bounds()))
 
     def export_svg(self, scale_stroke_factor=0.00,
                    scale_factor_x=None, scale_factor_y=None,
@@ -4312,7 +4325,7 @@ class CNCjob(Geometry):
         # #############################################################################################################
         all_tools = []
         for tool_as_key, v in list(self.exc_tools.items()):
-            all_tools.append((int(tool_as_key), float(v['tooldia'])))
+            all_tools.append((tool_as_key, float(v['tooldia'])))
 
         if order == 'fwd':
             sorted_tools = sorted(all_tools, key=lambda t1: t1[1])
@@ -4324,17 +4337,15 @@ class CNCjob(Geometry):
         if tools == "all":
             selected_tools = [i[0] for i in all_tools]  # we get an array of ordered tools
         else:
-            selected_tools = eval(tools)
-            if not isinstance(selected_tools, (list, tuple)):
+            selected_tools = [item.strip(" '\"[]()") for item in tools.split(',')] if isinstance(tools, str) else tools
+            if not isinstance(selected_tools, (list, tuple, set)):
                 selected_tools = [selected_tools]
 
         # Create a sorted list of selected tools from the sorted_tools list
-        tools = [
-            i
-            for i, j in sorted_tools
-            for k in selected_tools
-            if i == k
-        ]
+        selected_tools = {str(tool) for tool in selected_tools}
+        tools = [tool for tool, diameter in sorted_tools if str(tool) in selected_tools]
+        if not tools:
+            return 'fail'
 
         self.app.log.debug("Tools sorted are: %s" % str(tools))
 

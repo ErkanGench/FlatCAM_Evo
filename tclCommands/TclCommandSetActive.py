@@ -51,4 +51,4 @@ class TclCommandSetActive(TclCommand):
         try:
             self.app.collection.set_active(str(obj_name))
         except Exception as e:
-            return "Command failed: %s" % str(e)
+            self.raise_tcl_error("Command failed: %s" % str(e))

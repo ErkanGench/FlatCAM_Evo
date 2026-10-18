@@ -1,5 +1,4 @@
 from tclCommands.TclCommand import *
-from copy import deepcopy
 from shapely import Point
 
 
@@ -30,7 +29,7 @@ class TclCommandAddSlot(TclCommandSignaled):
     ])
 
     # array of mandatory options for current Tcl command: required = {'name','outname'}
-    required = ['name']
+    required = ['name', 'dia', 'startx', 'starty', 'stopx', 'stopy']
 
     # structured help for current command, args needs to be ordered
     help = {
@@ -65,28 +64,26 @@ class TclCommandAddSlot(TclCommandSignaled):
         try:
             obj = self.app.collection.get_by_name(str(name))
         except Exception:
-            return "Could not retrieve object: %s" % name
+            self.raise_tcl_error("Could not retrieve object: %s" % name)
         if obj is None:
-            return "Object not found: %s" % name
+            self.raise_tcl_error("Object not found: %s" % name)
         if obj.kind != 'excellon':
-            return 'Expected Excellon, got %s %s.' % (name, type(obj))
+            self.raise_tcl_error('Expected Excellon, got %s %s.' % (name, type(obj)))
 
-        if 'dia' not in args:
-            return "Failed. The -dia parameter is missing and it is required."
-        if 'startx' not in args:
-            return "Failed. The -startx parameter is missing and it is required."
-        if 'starty' not in args:
-            return "Failed. The -starty parameter is missing and it is required."
-        if 'stopx' not in args:
-            return "Failed. The -stopx parameter is missing and it is required."
-        if 'stopy' not in args:
-            return "Failed. The -stopy parameter is missing and it is required."
+        for key in self.required:
+            if key not in args or args[key] is None:
+                self.raise_tcl_error('Missing required value: %s' % key)
 
         new_dia = args['dia']
         slot_start_x = args['startx']
         slot_start_y = args['starty']
         slot_stop_x = args['stopx']
         slot_stop_y = args['stopy']
+        if new_dia <= 0 or not all(math.isfinite(v) for v in (
+                new_dia, slot_start_x, slot_start_y, slot_stop_x, slot_stop_y)):
+            self.raise_tcl_error('Diameter must be positive and coordinates must be finite.')
+        if (slot_start_x, slot_start_y) == (slot_stop_x, slot_stop_y):
+            self.raise_tcl_error('A slot requires distinct start and stop coordinates.')
 
         dia_tool_dict = {diam['tooldia']: tool for tool, diam in list(obj.tools.items())}
 
@@ -115,11 +112,11 @@ class TclCommandAddSlot(TclCommandSignaled):
             tools_sorted = sorted(obj.tools.items(), key=lambda x: x[1]['tooldia'])
             for idx, tool in enumerate(tools_sorted, start=1):
                 new_tools[idx] = tool[1]
-            obj.tools = deepcopy(new_tools)
+            obj.tools = new_tools
         elif new_dia in list(dia_tool_dict.keys()):
             if new_slot not in obj.tools[dia_tool_dict[new_dia]]['slots']:
                 obj.tools[dia_tool_dict[new_dia]]['slots'].append(new_slot)
             else:
-                return "Slot with the given coordinates is already in the object."
+                return TclCommandFailure('Slot with the given coordinates is already in the object.')
 
-        obj.create_geometry()
+        return obj.create_geometry()

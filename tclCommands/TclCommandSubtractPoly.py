@@ -53,8 +53,8 @@ class TclCommandSubtractPoly(TclCommandSignaled):
 
         obj_name = args['name']
 
-        if len(unnamed_args) % 2 != 0:
-            return "Incomplete coordinate."
+        if len(unnamed_args) < 6 or len(unnamed_args) % 2 != 0:
+            self.raise_tcl_error('A polygon requires at least three coordinate pairs.')
 
         points = [
             [float(unnamed_args[2 * i]), float(unnamed_args[2 * i + 1])] for i in range(int(len(unnamed_args) / 2))
@@ -63,8 +63,10 @@ class TclCommandSubtractPoly(TclCommandSignaled):
         try:
             obj = self.app.collection.get_by_name(str(obj_name))
         except Exception:
-            return "Could not retrieve object: %s" % obj_name
+            self.raise_tcl_error("Could not retrieve object: %s" % obj_name)
         if obj is None:
-            return "Object not found: %s" % obj_name
+            self.raise_tcl_error("Object not found: %s" % obj_name)
+        if obj.kind != 'geometry':
+            self.raise_tcl_error('Expected a Geometry object: %s' % obj_name)
 
-        obj.subtract_polygon(points)
+        return obj.subtract_polygon(points)

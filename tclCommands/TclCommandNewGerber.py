@@ -59,4 +59,4 @@ class TclCommandNewGerber(TclCommandSignaled):
         else:
             name = 'new_grb'
 
-        self.app.app_obj.new_gerber_object(new_name=name)
+        return self.app.app_obj.new_gerber_object(new_name=name)

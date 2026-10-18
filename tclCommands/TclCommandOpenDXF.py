@@ -69,9 +69,9 @@ class TclCommandOpenDXF(TclCommandSignaled):
         def obj_init(geo_obj, app_obj):
 
             if obj_type == "geometry":
-                geo_obj.import_dxf_as_geo(filename, units=units, text_mode=text_mode)
+                return geo_obj.import_dxf_as_geo(filename, units=units, text_mode=text_mode)
             elif obj_type == "gerber":
-                geo_obj.import_dxf_as_gerber(filename, units=units, text_mode=text_mode)
+                return geo_obj.import_dxf_as_gerber(filename, units=units, text_mode=text_mode)
             else:
                 return "fail"
 
@@ -108,12 +108,14 @@ class TclCommandOpenDXF(TclCommandSignaled):
             # Object creation
             ret_val = self.app.app_obj.new_object(obj_type, outname, obj_init, plot=False)
             if ret_val == 'fail':
-                filename = self._app_option('global_tcl_path') + '/' + outname
+                filename = self._app_option('global_tcl_path') + '/' + args['filename'].replace('\\', '/').split('/')[-1]
                 ret_val = self.app.app_obj.new_object(obj_type, outname, obj_init, plot=False)
 
                 if ret_val == 'fail':
                     self.app.log.error("Failed. The OpenDXF command was used but could not open the DXF file")
                     return "fail"
+            if ret_val is False:
+                return 'fail'
 
             # Register recent file
             self.app.file_opened.emit("dxf", filename)

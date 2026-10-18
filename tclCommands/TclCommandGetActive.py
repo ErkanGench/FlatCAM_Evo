@@ -14,6 +14,7 @@ class TclCommandGetActive(TclCommand):
 
     # List of all command aliases, to be able to use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['get_active']
+    returns_value = True
 
     description = '%s %s' % ("--", "Gets the active (selected) application object name.")
 
@@ -44,7 +45,7 @@ class TclCommandGetActive(TclCommand):
         :return:
         """
 
-        try:
-            return self.app.collection.get_active().options['name']
-        except Exception as e:
-            return "Command failed: %s" % str(e)
+        obj = self.app.collection.get_active()
+        if obj is None:
+            self.raise_tcl_error('No active object.')
+        return obj.obj_options['name']

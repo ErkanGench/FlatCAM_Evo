@@ -60,9 +60,9 @@ class TclCommandFollow(TclCommandSignaled):
 
         args.pop('name', None)
         try:
-            obj.follow_geo(**args)
+            return obj.follow_geo(**args)
         except Exception as e:
-            return "Operation failed: %s" % str(e)
+            self.raise_tcl_error("Operation failed: %s" % str(e))
 
         # in the end toggle the visibility of the origin object so we can see the generated Geometry
         # self.app.collection.get_by_name(name).ui.plot_cb.toggle()

@@ -20,14 +20,10 @@ def parse_bool(value):
     Safe parse of a Tcl boolean option: True / False for 1/0, true/false, yes/no, on/off, t/f, y/n (any case),
     None for anything else. (The option used to go through eval().)
     """
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in ('1', 'true', 'yes', 'on', 't', 'y'):
-        return True
-    if text in ('0', 'false', 'no', 'off', 'f', 'n'):
-        return False
-    return None
+    try:
+        return TclCommand.parse_bool(value)
+    except ValueError:
+        return None
 
 
 class TclCommandPanelize(TclCommand):
@@ -107,6 +103,9 @@ class TclCommandPanelize(TclCommand):
         if obj is None:
             self.app.log.error("Object not found: %s" % name)
             return "fail"
+        if obj.kind not in ('geometry', 'gerber', 'excellon'):
+            self.app.log.error('Unsupported object kind for panelize: %s' % obj.kind)
+            return 'fail'
 
         if 'box' in args:
             boxname = args['box']
@@ -206,28 +205,39 @@ class TclCommandPanelize(TclCommand):
                 obj_fin.regenerate_source(name=outname)
 
             if obj.kind == 'excellon':
-                self.app.app_obj.new_object("excellon", outname, job_init_excellon, plot=False, autoselected=True)
+                return self.app.app_obj.new_object("excellon", outname, job_init_excellon, plot=False, autoselected=True)
             elif obj.kind == 'geometry':
-                self.app.app_obj.new_object("geometry", outname, job_init_geometry, plot=False, autoselected=True)
+                return self.app.app_obj.new_object("geometry", outname, job_init_geometry, plot=False, autoselected=True)
             else:
-                self.app.app_obj.new_object("gerber", outname, job_init_gerber, plot=False, autoselected=True)
+                return self.app.app_obj.new_object("gerber", outname, job_init_gerber, plot=False, autoselected=True)
 
         if threaded is True:
-            self.app.proc_container.new('%s...' % _("Working"))
+            proc = self.app.proc_container.new('%s...' % _("Working"))
 
             def job_thread(app_obj):
                 try:
-                    panelize_handler()
+                    result = panelize_handler()
+                    if result == 'fail' or result is False:
+                        app_obj.collection.promises.discard(outname)
+                        app_obj.inform.emit('[ERROR_NOTCL] Panelize failed: %s' % outname)
+                        return
                     app_obj.inform.emit('[success] %s' % _("Done."))
                 except Exception as err:
                     app_obj.log.error('TclCommandPanelize.execute.job_thread() -> %s' % str(err))
+                    app_obj.collection.promises.discard(outname)
+                    app_obj.inform.emit('[ERROR_NOTCL] Panelize failed: %s' % err)
                     return
+                finally:
+                    proc.done()
 
             self.app.collection.promise(outname)
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
             try:
-                panelize_handler()
+                result = panelize_handler()
+                if result == 'fail' or result is False:
+                    return 'fail'
                 self.app.inform.emit('[success] %s' % _("Done."))
             except Exception as ee:
                 self.app.log.error('TclCommandPanelize.execute() non-threaded -> %s' % str(ee))
+                return 'fail'

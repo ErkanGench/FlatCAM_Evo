@@ -73,7 +73,7 @@ class TclCommandWriteGCode(TclCommandSignaled):
                 par = args['muted'].capitalize()
             except AttributeError:
                 par = args['muted']
-            muted = bool(eval(par))
+            muted = self.parse_bool(par)
         else:
             muted = False
 
@@ -98,14 +98,16 @@ class TclCommandWriteGCode(TclCommandSignaled):
             obj = self.app.collection.get_by_name(str(obj_name))
         except Exception:
             if muted is False:
-                return "Could not retrieve object: %s" % obj_name
+                self.raise_tcl_error("Could not retrieve object: %s" % obj_name)
             else:
                 return "fail"
 
+        if obj is None or obj.kind != 'cncjob':
+            self.raise_tcl_error('Expected an existing CNCJob object: %s' % obj_name)
         try:
-            obj.export_gcode(str(filename), str(preamble), str(postamble), from_tcl=True)
+            return obj.export_gcode(str(filename), str(preamble), str(postamble), from_tcl=True)
         except Exception as e:
             if muted is False:
-                return "Operation failed: %s" % str(e)
+                self.raise_tcl_error("Operation failed: %s" % str(e))
             else:
-                return
+                return 'fail'

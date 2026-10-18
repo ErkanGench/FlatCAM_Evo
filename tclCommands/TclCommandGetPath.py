@@ -30,6 +30,7 @@ class TclCommandGetPath(TclCommand):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['get_path']
+    returns_value = True
 
     description = '%s %s' % ("--", "Get the default Tcl Shell folder path.")
 

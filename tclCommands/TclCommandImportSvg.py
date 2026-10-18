@@ -64,7 +64,7 @@ class TclCommandImportSvg(TclCommandSignaled):
             if not isinstance(geo_obj, Geometry):
                 self.raise_tcl_error('Expected Geometry or Gerber, got %s %s.' % (outname, type(geo_obj)))
 
-            geo_obj.import_svg(filename)
+            return geo_obj.import_svg(filename, obj_type, units=self.app.app_units.upper())
 
         filename = args['filename']
 
@@ -84,7 +84,9 @@ class TclCommandImportSvg(TclCommandSignaled):
         with self.app.proc_container.new('%s...' % _("Importing")):
 
             # Object creation
-            self.app.app_obj.new_object(obj_type, outname, obj_init, plot=False)
+            result = self.app.app_obj.new_object(obj_type, outname, obj_init, plot=False)
+            if result == 'fail' or result is False:
+                return 'fail'
 
             # Register recent file
             self.app.file_opened.emit("svg", filename)

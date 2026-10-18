@@ -2,6 +2,7 @@
 from tclCommands.TclCommand import TclCommand
 
 import collections
+import math
 from copy import deepcopy
 
 from shapely import box
@@ -120,6 +121,12 @@ class TclCommandCutout(TclCommand):
             self.app.log.debug("Could not retrieve object: %s" % name)
             return "fail"
 
+        if cutout_obj is None or cutout_obj.kind not in ('geometry', 'gerber'):
+            self.raise_tcl_error('Expected an existing Gerber or Geometry object: %s' % name)
+        if not all(math.isfinite(v) for v in (dia_par, margin_par, gapsize_par)) or dia_par <= 0 or gapsize_par < 0:
+            self.raise_tcl_error('Diameter must be positive, gap size non-negative, and numeric options finite.')
+        gaps_par = gaps_par.upper()
+
         def geo_init_me(geo_obj, app_obj):
             geo_obj.multigeo = True
             solid_geo = []
@@ -141,11 +148,12 @@ class TclCommandCutout(TclCommand):
                         geom_struct = geom_struct_buff.interiors
 
                 if type_par == 'rect':
-                    solid_geo = self.app.cutout_tool.rect_cutout_handler(
+                    component_geo = self.app.cutout_tool.rect_cutout_handler(
                         geom_struct, dia_par, gaps_par, gapsize, margin_par, xmin, ymin, xmax, ymax)
                 else:
-                    solid_geo, r_geo = self.app.cutout_tool.any_cutout_handler(
+                    component_geo, r_geo = self.app.cutout_tool.any_cutout_handler(
                         geom_struct, dia_par, gaps_par, gapsize, margin_par)
+                solid_geo.extend(flatten_shapely_geometry(component_geo))
 
             if not solid_geo:
                 self.app.log.debug("TclCommandCutout.geo_init_me() -> Empty solid geometry.")

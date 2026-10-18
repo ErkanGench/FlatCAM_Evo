@@ -13,6 +13,7 @@ class TclCommandCloseProject(TclCommand):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['close_project']
+    valueless_options = frozenset({'force'})
 
     description = '%s %s' % ("--", "Closes and removes a project. Without a name, it closes the active project.")
 
@@ -67,7 +68,7 @@ class TclCommandCloseProject(TclCommand):
         is_forced = False
         if 'force' in args:
             value = args['force']
-            is_forced = value is None or str(value).strip().lower() in ('1', 'true', 'yes')
+            is_forced = value is None or self.parse_bool(value)
 
         if projects.is_dirty(ctx) and not is_forced:
             self.raise_tcl_error('%s: %s. %s' % ("The project has unsaved changes", ctx.name,

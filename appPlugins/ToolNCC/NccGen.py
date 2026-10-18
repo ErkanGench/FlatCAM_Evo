@@ -2492,23 +2492,21 @@ class NccGen:
         def job_thread(app_obj):
             try:
                 if rest_machining_choice is True:
-                    app_obj.app_obj.new_object("geometry", name, gen_clear_area_rest, plot=plot)
+                    result = app_obj.app_obj.new_object("geometry", name, gen_clear_area_rest, plot=plot)
                 else:
-                    app_obj.app_obj.new_object("geometry", name, gen_clear_area, plot=plot)
+                    result = app_obj.app_obj.new_object("geometry", name, gen_clear_area, plot=plot)
+                if result == 'fail' or result is False:
+                    return 'fail'
             except grace:
-                if run_threaded:
-                    proc.done()
-                return
+                return 'fail'
             except Exception:
+                traceback.print_stack()
+                return 'fail'
+            finally:
                 if run_threaded:
                     proc.done()
-                traceback.print_stack()
-                return
-
-            if run_threaded:
-                proc.done()
-            else:
-                app_obj.proc_container.view.set_idle()
+                else:
+                    app_obj.proc_container.view.set_idle()
 
         if run_threaded:
             # Promise object with the new name
@@ -2517,7 +2515,7 @@ class NccGen:
             # Background
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
-            job_thread(app_obj=self.app)
+            return job_thread(app_obj=self.app)
 
     def _compute_area_to_clear_handler(self, target, boundary=None):
         """

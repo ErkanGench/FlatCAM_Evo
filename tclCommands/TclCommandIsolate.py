@@ -82,9 +82,9 @@ class TclCommandIsolate(TclCommandSignaled):
                 par = args['combine'].capitalize()
             except AttributeError:
                 par = args['combine']
-            args['combine'] = bool(eval(str(par)))
+            args['combine'] = self.parse_bool(par)
         else:
-            args['combine'] = bool(eval(str(self._app_option("tools_iso_combine_passes"))))
+            args['combine'] = self.parse_bool(self._app_option('tools_iso_combine_passes'))
 
         obj = self.app.collection.get_by_name(name)
         if obj is None:
@@ -96,4 +96,4 @@ class TclCommandIsolate(TclCommandSignaled):
             return "fail"
 
         args.pop('name', None)
-        obj.isolate(plot=False, **args)
+        return obj.isolate(plot=False, **args)

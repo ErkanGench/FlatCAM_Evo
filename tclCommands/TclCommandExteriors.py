@@ -66,4 +66,5 @@ class TclCommandExteriors(TclCommandSignaled):
             geo_obj.solid_geometry = obj_exteriors
 
         obj_exteriors = obj.get_exteriors()
-        self.app.app_obj.new_object('geometry', outname, geo_init, plot=False)
+        result = self.app.app_obj.new_object('geometry', outname, geo_init, plot=False)
+        return 'fail' if result == 'fail' or result is False else None

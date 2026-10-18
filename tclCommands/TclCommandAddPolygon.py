@@ -1,4 +1,5 @@
 from tclCommands.TclCommand import *
+from shapely import Polygon
 
 
 class TclCommandAddPolygon(TclCommandSignaled):
@@ -59,16 +60,20 @@ class TclCommandAddPolygon(TclCommandSignaled):
 
         if 'p_coords' in args:
             try:
-                points = list(eval(args['p_coords']))
+                if unnamed_args:
+                    self.raise_tcl_error('Use either -p_coords or positional coordinates, not both.')
+                points = list(self.parse_coords(args['p_coords']))
             except Exception as err:
-                self.app.log.error("TclCommandAddPolygon.execute() -> %s" % str(err))
-                return
-
-            obj.add_polygon(points)
-        elif len(unnamed_args) % 2 != 0:
-            self.raise_tcl_error("Incomplete coordinates.")
-
+                self.raise_tcl_error('Invalid polygon coordinates: %s' % err)
+        else:
+            if len(unnamed_args) % 2 != 0:
+                self.raise_tcl_error("Incomplete coordinates.")
             nr_points = int(len(unnamed_args) / 2)
             points = [[float(unnamed_args[2*i]), float(unnamed_args[2*i+1])] for i in range(nr_points)]
-
-            obj.add_polygon(points)
+        if len(points) < 3 or any(len(p) != 2 for p in points):
+            self.raise_tcl_error('A polygon requires at least three coordinate pairs.')
+        points = [(float(x), float(y)) for x, y in points]
+        polygon = Polygon(points)
+        if not all(math.isfinite(v) for p in points for v in p) or not polygon.is_valid or polygon.area == 0:
+            self.raise_tcl_error('Polygon coordinates must form a valid non-degenerate polygon.')
+        return self.check_result(obj.add_polygon(points))

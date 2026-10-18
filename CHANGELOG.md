@@ -146,6 +146,21 @@ Project file:
 Tcl:
 
 - fixed: set_sys changes the preference through app.defaults, so the new value is also used by the active project
+- a command that fails raises a Tcl error: a 'fail' or False result, or a TclCommandFailure text, stops the script; the commands that return a value (get_active, get_names, get_path, get_sys, list_projects) still return it
+- the object factories and the tools return 'fail' to the Tcl command on a failure: new Gerber, Excellon and Geometry objects, Gerber isolation and follow, Geometry and Excellon CNC jobs, NCC, Paint, Milling, the G-Code export and the preferences save
+- no eval() on script input: the values are read with ast.literal_eval, TclCommand.parse_bool and TclCommand.parse_coords; NaN and infinite numbers are refused; an option without a value is refused (except the flags that need none); a required argument needs a value
+- the signaled commands (-timeout) keep their state for each call and wait in a QEventLoop with a single-shot timer; a late result of a command that timed out is not taken by the next command; the timeout message says that the queued work is not cancelled
+- open_gerber, open_excellon and open_gcode look for a missing file also in the Tcl path folder
+- subtract_poly and geo_union work only on Geometry objects; they also change the multi-geometry tools and update the bounds
+- cncjob from an Excellon object reads the tool list without eval() and fails when no tool matches
+- the Geometry CNC job uses a value of 0 for the tool diameter, the toolchange Z, the spindle speed, the laser minimum power and the dwell time (a 0 was replaced by the default before)
+- add_aperture: integer aperture codes from 10, a positive and finite size
+- align_drill: -dia is required; the grid holes are computed directly instead of in loops
+- copper_clear: -ref is an alias of -box; exactly one of -all and -box is needed
+- set_origin: updates the bounds and the plot; fixed the Y value in the message
+- set_sys: the new value is converted to the type of the current value
+- the shell reports a Tcl error with tcl.call('error') and FCShell.raise_tcl_error raises TclErrorException
+- fixed: the Gerber follow command used self.options instead of self.obj_options for the name
 
 Tests:
 
@@ -154,6 +169,7 @@ Tests:
 - new unit tests for the image tracing; the gate list records the renamed Plot 3D zoom test
 - new unit tests for the Move Tool, the multiple projects (ProjectContext, ProjectManager, project combobox, File New, Open, Save and Save As, exit, Tcl commands) and the split of application settings and project options; the gate list records the removed autosave tests
 - new unit tests for the project file: plain and Zstandard round trip with both Zstandard backends, legacy LZMA load, inf/nan cleanup, level clamp and a failed save that keeps the old file
+- new unit tests for the Tcl commands (tests/test_tcl_audit_*.py, 100 tests): the result contract, cutting, CNC generation, geometry, transforms and regressions
 
 17.10.2026
 

@@ -54,8 +54,4 @@ class TclCommandQuit(TclCommand):
         :return:
         """
 
-        try:
-            self.app.quit_application(silent=True)
-        except Exception:
-            import os
-            os._exit(0)
+        return self.app.quit_application(silent=True)

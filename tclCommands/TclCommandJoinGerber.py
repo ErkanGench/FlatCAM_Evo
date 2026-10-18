@@ -76,7 +76,7 @@ class TclCommandJoinGerber(TclCommand):
             GerberObject.merge(grb_list=objs, grb_final=obj_, log=self.app.log)
 
         if len(objs) >= 2:
-            self.app.app_obj.new_object("gerber", outname, initialize, plot=False)
+            self.check_result(self.app.app_obj.new_object("gerber", outname, initialize, plot=False))
         else:
             self.app.log.error(
                 "No Gerber objects to be joined or less than two Gerber objects specified for merging.")

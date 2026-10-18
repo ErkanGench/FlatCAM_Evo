@@ -136,6 +136,7 @@ class TclCommandSkew(TclCommand):
             return "fail"
 
         # calculate the bounds
+        objects = {}
         minx_lst = []
         miny_lst = []
         maxx_lst = []
@@ -145,6 +146,9 @@ class TclCommandSkew(TclCommand):
             if obj is None or obj == '':
                 self.app.log.error("Object not found: %s" % name)
                 return "fail"
+            if obj.kind not in ('geometry', 'gerber', 'excellon'):
+                self.raise_tcl_error('Only Gerber, Excellon and Geometry objects can be skewed.')
+            objects[name] = obj
             a, b, c, d = obj.bounds()
             minx_lst.append(a)
             miny_lst.append(b)
@@ -157,7 +161,7 @@ class TclCommandSkew(TclCommand):
 
         for name in obj_names:
             try:
-                obj_to_skew = self.app.collection.get_by_name(name)
+                obj_to_skew = objects[name]
             except Exception as e:
                 self.app.log.error("TclCommandCopperSkew.execute() --> %s" % str(e))
                 self.app.log.error("Could not retrieve object: %s" % name)
@@ -181,8 +185,8 @@ class TclCommandSkew(TclCommand):
                     ref_point = (c_x, c_y)
                 else:
                     try:
-                        ref_point = eval(str(args['origin']))
-                        if not isinstance(ref_point, tuple):
+                        ref_point = self.parse_coords(args['origin'])
+                        if not isinstance(ref_point, (tuple, list)) or len(ref_point) != 2:
                             self.app.log.error("The -origin value is not a tuple in format e.g 3.32,4.5")
                             return "fail"
                     except Exception as e:
@@ -195,11 +199,15 @@ class TclCommandSkew(TclCommand):
             if use_distances:
                 # determination of angle_x
                 height = ymax - ymin
-                angle_x = math.degrees(math.atan(dist_x/height))
+                if dist_x and not height:
+                    self.raise_tcl_error('Cannot skew by X distance with zero height.')
+                angle_x = math.degrees(math.atan(dist_x/height)) if dist_x else 0.0
 
                 # determination of angle_y
                 width = xmax - xmin
-                angle_y = math.degrees(math.atan(dist_y/width))
+                if dist_y and not width:
+                    self.raise_tcl_error('Cannot skew by Y distance with zero width.')
+                angle_y = math.degrees(math.atan(dist_y/width)) if dist_y else 0.0
 
             obj_to_skew.skew(angle_x, angle_y, point=ref_point)
 

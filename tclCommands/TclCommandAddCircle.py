@@ -1,4 +1,5 @@
 import collections
+import math
 from tclCommands.TclCommand import TclCommand
 
 
@@ -55,14 +56,18 @@ class TclCommandAddCircle(TclCommand):
         center_x = args['center_x']
         center_y = args['center_y']
         radius = args['radius']
+        if unnamed_args:
+            self.raise_tcl_error('Too many arguments. Expected name center_x center_y radius.')
+        if not all(math.isfinite(v) for v in (center_x, center_y, radius)) or radius <= 0:
+            self.raise_tcl_error('Circle coordinates must be finite and radius must be positive.')
 
         try:
             obj = self.app.collection.get_by_name(str(name))
         except Exception:
-            return "Could not retrieve object: %s" % name
+            self.raise_tcl_error("Could not retrieve object: %s" % name)
         if obj is None:
-            return "Object not found: %s" % name
+            self.raise_tcl_error("Object not found: %s" % name)
         if obj.kind != 'geometry':
             self.raise_tcl_error('Expected Geometry, got %s %s.' % (name, type(obj)))
 
-        obj.add_circle([float(center_x), float(center_y)], float(radius))
+        return self.check_result(obj.add_circle([float(center_x), float(center_y)], float(radius)))

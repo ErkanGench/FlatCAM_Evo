@@ -50,4 +50,4 @@ class TclCommandSaveSys(TclCommandSignaled):
         :return: None or exception
         """
 
-        self.app.preferencesUiManager.save_defaults(args)
+        return self.app.preferencesUiManager.save_defaults()

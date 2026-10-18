@@ -40,7 +40,10 @@ class TclCommandExportGcode(TclCommandSignaled):
     ])
 
     # dictionary of types from Tcl command, needs to be ordered , this  is  for options  like -optionname value
-    option_types = collections.OrderedDict()
+    option_types = collections.OrderedDict([
+        ('preamble', str),
+        ('postamble', str)
+    ])
 
     # array of mandatory options for current Tcl command: required = {'name','outname'}
     required = ['name']
@@ -67,6 +70,8 @@ class TclCommandExportGcode(TclCommandSignaled):
         """
 
         name = args['name']
+        if unnamed_args:
+            self.raise_tcl_error('Too many arguments. Expected name [preamble] [postamble].')
 
         obj = self.app.collection.get_by_name(name)
         if obj is None:

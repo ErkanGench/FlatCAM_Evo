@@ -663,7 +663,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 #     self.app.proc_container.update_view_text(' %s' % _("Subtracting Geo"))
                 #     geo_obj.solid_geometry = self.area_subtraction(geo_obj.solid_geometry)
 
-            self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot)
+            if self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot) == 'fail':
+                return 'fail'
         else:
             for i in range(passes):
 
@@ -745,7 +746,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     #     self.app.proc_container.update_view_text(' %s' % _("Subtracting Geo"))
                     #     geo_obj.solid_geometry = self.area_subtraction(geo_obj.solid_geometry)
 
-                self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot)
+                if self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot) == 'fail':
+                    return 'fail'
 
     def generate_envelope(self, offset, invert, geometry=None, env_iso_type=2, nr_passes=0):
         # isolation_geometry produces an envelope that is going on the left of the geometry
@@ -793,7 +795,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         """
 
         if outname is None:
-            follow_name = self.options["name"] + "_follow"
+            follow_name = self.obj_options["name"] + "_follow"
         else:
             follow_name = outname
 
@@ -841,9 +843,11 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
             new_obj.tools[1]['data']['name'] = follow_name
 
         try:
-            self.app.app_obj.new_object("geometry", follow_name, follow_init)
+            if self.app.app_obj.new_object("geometry", follow_name, follow_init) == 'fail':
+                return 'fail'
         except Exception as e:
-            return "Operation failed: %s" % str(e)
+            self.app.log.error('Follow operation failed: %s' % str(e))
+            return 'fail'
 
     def on_plot_cb_click(self, *args):
         if self.muted_ui:

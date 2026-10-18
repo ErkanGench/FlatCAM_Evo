@@ -51,4 +51,4 @@ class TclCommandExportGerber(TclCommand):
             args['filename'] = self._app_option("global_last_save_folder") + '/' + args['name']
         # the handler's parameter is called obj_name; passing name= raised TypeError
         args['obj_name'] = args.pop('name')
-        self.app.f_handlers.export_gerber(use_thread=False, **args)
+        return self.app.f_handlers.export_gerber(use_thread=False, **args)

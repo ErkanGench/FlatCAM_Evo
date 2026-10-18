@@ -19,6 +19,8 @@ class TclCommandDrillcncjob(TclCommandSignaled):
 
     # array of all command aliases, to be able use  old names for backward compatibility (add_poly, add_polygon)
     aliases = ['drillcncjob']
+    # These options explicitly handle None by selecting object/application defaults.
+    valueless_options = frozenset({'dpp', 'toolchangez', 'dwelltime', 'drillz', 'startz', 'endz'})
 
     description = '%s %s' % ("--", "Generates a Drill CNC Job object from a Excellon Object.")
 
@@ -62,22 +64,26 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             ('drilled_dias',
              'Comma separated tool diameters of the drills to be drilled (example: 0.6,1.0 or 3.125). '
              'WARNING: No space allowed. Can also take the value "all" which will drill the holes for all tools.'),
-            ('drillz', 'Drill depth into material (example: -2.0).'),
-            ('dpp', 'Progressive drilling into material with a specified step (example: 0.7). Positive value.'),
+            ('drillz', 'Drill depth into material (example: -2.0). Bare or omitted -drillz uses object '
+                       'tools_drill_cutz.'),
+            ('dpp', 'Depth per drilling pass (example: 0.7). Enables multidepth; bare -dpp uses the absolute '
+                    'object tools_drill_depthperpass with application fallback.'),
             ('travelz', 'Travel distance above material (example: 2.0).'),
             ('feedrate_z', 'Drilling feed rate. It is the speed on the Z axis.'),
             ('feedrate_rapid', 'Rapid drilling feed rate.'),
             ('spindlespeed', 'Speed of the spindle in rpm (example: 4000).'),
-            ('toolchangez', 'Z distance for toolchange (example: 30.0).\n'
-                            'If used in the command then a toolchange event will be included in gcode'),
+            ('toolchangez', 'Z distance for toolchange (example: 30.0). Enables toolchange; '
+                            'bare -toolchangez uses object tools_drill_toolchangez.'),
             ('toolchangexy', 'The X,Y coordinates at Toolchange event in format (x, y) (example: (30.0, 15.2) or '
                              'without parenthesis like: 0.3,1.0). WARNING: no spaces allowed in the value.'),
-            ('startz', 'The Z coordinate at job start (example: 30.0).'),
-            ('endz', 'The Z coordinate at job end (example: 30.0).'),
+            ('startz', 'Z coordinate at job start. Bare or omitted -startz uses application tools_drill_startz '
+                       'if truthy, otherwise tools_drill_travelz.'),
+            ('endz', 'Z coordinate at job end. Bare or omitted -endz uses application tools_drill_endz.'),
             ('endxy', 'The X,Y coordinates at job end in format (x, y) (example: (2.0, 1.2) or without parenthesis'
                       'like: 0.3,1.0). WARNING: no spaces allowed in the value.'),
-            ('dwelltime', 'Time to pause to allow the spindle to reach the full speed.\n'
-                          'If it is not used in command then it will not be included'),
+            ('dwelltime', 'Spindle startup pause time. Enables dwell; bare -dwelltime uses application '
+                          'tools_drill_dwelltime. If the option is omitted, application tools_drill_dwell '
+                          'and tools_drill_dwelltime are used.'),
             ('las_power', 'Used with "laser" preprocessors. Set the laser power when cutting'),
             ('las_min_pwr', 'Used with "laser" preprocessors. Set the laser power when not cutting, travelling'),
             ('pp', 'This is the Excellon preprocessor name: case_sensitive, no_quotes'),
@@ -97,7 +103,8 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                      'Usage of -feedrate_rapid matter only when the preprocessor is using it, like -Marlin-.\n',
                      'drillcncjob test.DRL -drillz -1.7 -dpp 0.5 -travelz 2 -feedrate_z 800 -endxy 3,3\n',
                      'drillcncjob test.DRL -drilled_dias "all" -drillz -1.7 -dpp 0.5 -travelz 2 -feedrate_z 800 '
-                     '-endxy 3,3'
+                     '-endxy 3,3',
+                     'drillcncjob test.DRL -dpp -toolchangez -dwelltime -drillz -startz -endz'
                      ]
     }
 
@@ -123,7 +130,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                 par = args['muted'].capitalize()
             except AttributeError:
                 par = args['muted']
-            muted = bool(eval(par))
+            muted = self.parse_bool(par)
         else:
             muted = False
 
@@ -152,7 +159,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             try:
                 if 'drilled_dias' in args and args['drilled_dias'] != 'all':
                     diameters = [x.strip() for x in args['drilled_dias'].split(",") if x != '']
-                    nr_diameters = len(diameters)
+                    matched_diameters = set()
 
                     req_tools = set()
                     for tool in obj.tools:
@@ -167,12 +174,12 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                                 tolerance = 1.0 if tolerance > 1.0 else tolerance
                                 if math.isclose(obj_dia_form, req_dia_form, rel_tol=tolerance):
                                     req_tools.add(str(tool))
-                                    nr_diameters -= 1
+                                    matched_diameters.add(req_dia)
                                     use_tools.append(tool)
                             else:
                                 if obj_dia_form == req_dia_form:
                                     req_tools.add(str(tool))
-                                    nr_diameters -= 1
+                                    matched_diameters.add(req_dia)
                                     use_tools.append(tool)
 
                     if not req_tools:
@@ -181,7 +188,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                             f" diameters are: {diameters}"
                         )
 
-                    if nr_diameters > 0:
+                    if len(matched_diameters) != len(set(diameters)):
                         if muted is False:
                             self.raise_tcl_error("One or more tool diameters of the drills to be drilled passed to the "
                                                  "TclCommand are not actual tool diameters in the Excellon object.")
@@ -212,6 +219,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                 self.app.log.error("Bad tools: %s" % str(e))
                 return "fail"
 
+            use_tools = list(dict.fromkeys(use_tools))
             # populate the information's list for used tools
             if tools == 'all':
                 sort = []
@@ -219,6 +227,8 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                     sort.append((k, v.get('tooldia')))
                 sorted_tools = sorted(sort, key=lambda t1: t1[1])
                 use_tools = [i[0] for i in sorted_tools]
+            if not use_tools:
+                return 'fail'
 
             drillz = args["drillz"] if "drillz" in args and args["drillz"] is not None else \
                 obj.obj_options["tools_drill_cutz"]
@@ -241,7 +251,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                     xy_toolchange = str(self._app_option("tools_drill_toolchangexy"))
                 else:
                     xy_toolchange = '0, 0'
-            if len(eval(xy_toolchange)) != 2:
+            if len(self.parse_coords(xy_toolchange)) != 2:
                 self.raise_tcl_error("The entered value for 'toolchangexy' needs to have the format x,y or "
                                      "in format (x, y) - no spaces allowed. But always two comma separated values.")
                 self.app.log.error("The entered value for 'toolchangexy' needs to have the format x,y or "
@@ -259,7 +269,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                 else:
                     xy_end = '0, 0'
 
-            if len(eval(xy_end)) != 2:
+            if len(self.parse_coords(xy_end)) != 2:
                 self.raise_tcl_error("The entered value for 'xy_end' needs to have the format x,y or "
                                      "in format (x, y) - no spaces allowed. But always two comma separated values.")
                 self.app.log.error("The entered value for 'xy_end' needs to have the format x,y or "
@@ -288,7 +298,8 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                 if args['dpp'] is not None:
                     cnc_job_obj.z_depthpercut = abs(float(args['dpp']))
                 else:
-                    cnc_job_obj.z_depthpercut = abs(float(obj.obj_options["dpp"]))
+                    cnc_job_obj.z_depthpercut = abs(float(obj.obj_options.get(
+                        'tools_drill_depthperpass', self._app_option('tools_drill_depthperpass'))))
             else:
                 cnc_job_obj.multidepth = self._app_option("tools_drill_multidepth")
                 cnc_job_obj.z_depthpercut = self._app_option("tools_drill_depthperpass")
@@ -353,7 +364,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             # end Z
             cnc_job_obj.z_end = float(endz)
             # end X-Y location
-            cnc_job_obj.xy_end = eval(str(xy_end))
+            cnc_job_obj.xy_end = self.parse_coords(xy_end)
             # Excellon optimization
             cnc_job_obj.excellon_optimization_type = opt_type
 
@@ -361,7 +372,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             if ret_val == 'fail':
                 return 'fail'
 
-            cnc_job_obj.source_file = ret_val
+            cnc_job_obj.source_file = ret_val[1] + ret_val[0]
             cnc_job_obj.gc_start = ret_val[1]
 
             total_gcode_parsed = []
@@ -386,10 +397,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
                     total_gcode_parsed += gcode_parsed
                     cnc_job_obj.tools[t_item]['gcode_parsed'] = gcode_parsed
             else:
-                if tools == "all":
-                    first_tool = 1
-                else:
-                    first_tool = use_tools[0]
+                first_tool = cnc_job_obj.tool
 
                 cnc_job_obj.tools[first_tool]['data']['tools_drill_offset'] = \
                     float(cnc_job_obj.tools[first_tool]['offset_z']) + float(drillz)
@@ -408,4 +416,4 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             # cnc_job_obj.gcode_parse()
             cnc_job_obj.create_geometry()
 
-        self.app.app_obj.new_object("cncjob", args['outname'], job_init, plot=False)
+        self.check_result(self.app.app_obj.new_object("cncjob", args['outname'], job_init, plot=False))

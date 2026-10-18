@@ -60,16 +60,16 @@ class TclCommandJoinGeometry(TclCommand):
         objs = []
         for obj_n in obj_names:
             obj = self.app.collection.get_by_name(str(obj_n))
-            if obj is None or obj == '':
+            if obj is None or obj == '' or obj.kind != 'geometry':
                 self.app.log.error("Object not found: %s" % obj_n)
                 return "fail"
             objs.append(obj)
 
         def initialize(obj_, app):
-            GeometryObject.merge(objs, obj_, log=app.log)
+            return GeometryObject.merge(objs, obj_, log=app.log)
 
         if objs and len(objs) >= 2:
-            self.app.app_obj.new_object("geometry", outname, initialize, plot=False)
+            self.check_result(self.app.app_obj.new_object("geometry", outname, initialize, plot=False))
         else:
             self.app.log.error(
                 "No Geometry objects to be joined or less than two Geometry objects specified for merging.")

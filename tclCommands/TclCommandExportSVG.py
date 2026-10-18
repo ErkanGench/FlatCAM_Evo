@@ -64,4 +64,4 @@ class TclCommandExportSVG(TclCommand):
             str_factor = args['scale_stroke_factor']
         else:
             str_factor = 0.0
-        self.app.f_handlers.export_svg(obj_name=source_obj_name, filename=filename, scale_stroke_factor=str_factor)
+        return self.app.f_handlers.export_svg(obj_name=source_obj_name, filename=filename, scale_stroke_factor=str_factor)

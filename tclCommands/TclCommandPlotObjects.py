@@ -20,6 +20,7 @@ class TclCommandPlotObjects(TclCommand):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['plot_objects']
+    valueless_options = frozenset({'plot_status'})
 
     description = '%s %s' % ("--", "Plot a specified list of objects in appGUI.")
 
@@ -42,7 +43,8 @@ class TclCommandPlotObjects(TclCommand):
         'args': collections.OrderedDict([
             ('names', "A list of object names to be plotted separated by comma. Required.\n"
                       "WARNING: no spaces are allowed. If unsure enclose the entire list with quotes."),
-            ('plot_status', 'If to display or not the objects: True (1) or False (0).')
+            ('plot_status', 'Display objects: True (1) or False (0). Bare -plot_status means True; '
+                            'if omitted, objects are plotted by default.')
         ]),
         'examples': ["plot_objects gerber_obj.GRB,excellon_obj.DRL"]
     }
@@ -59,7 +61,7 @@ class TclCommandPlotObjects(TclCommand):
             if args['plot_status'] is None:
                 plot_status = True
             else:
-                plot_status = bool(eval(args['plot_status']))
+                plot_status = self.parse_bool(args['plot_status'])
         else:
             plot_status = True
 
@@ -67,8 +69,10 @@ class TclCommandPlotObjects(TclCommand):
         objs = []
         for name in names:
             obj = self.app.collection.get_by_name(name)
-            obj.obj_options["plot"] = True if plot_status is True else False
+            if obj is None or obj.kind not in ('geometry', 'gerber', 'excellon', 'cncjob'):
+                self.raise_tcl_error('Plot object not found or unsupported: %s' % name)
             objs.append(obj)
 
         for obj in objs:
+            obj.obj_options['plot'] = plot_status
             obj.plot()

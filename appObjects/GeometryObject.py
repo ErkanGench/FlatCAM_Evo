@@ -1045,7 +1045,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
 
         self.app.log.debug("FlatCAMGeometry.GeometryObject.generatecncjob()")
 
-        tooldia = dia if dia else float(self.obj_options["tools_mill_tooldia"])
+        tooldia = dia if dia is not None else float(self.obj_options["tools_mill_tooldia"])
         outname = outname if outname is not None else self.obj_options["name"]
 
         z_cut = z_cut if z_cut is not None else float(self.obj_options["tools_mill_cutz"])
@@ -1075,7 +1075,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             if endxy and endxy != '':
                 endxy = [float(eval(a)) for a in endxy.split(",")]
 
-        toolchangez = toolchangez if toolchangez else float(self.obj_options["tools_mill_toolchangez"])
+        toolchangez = toolchangez if toolchangez is not None else float(self.obj_options["tools_mill_toolchangez"])
 
         toolchangexy = toolchangexy if toolchangexy else self.obj_options["tools_mill_toolchangexy"]
         if isinstance(toolchangexy, str):
@@ -1083,15 +1083,15 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             if toolchangexy and toolchangexy != '':
                 toolchangexy = [float(eval(a)) for a in toolchangexy.split(",")]
 
-        toolchange = toolchange if toolchange else self.obj_options["tools_mill_toolchange"]
+        toolchange = toolchange if toolchange is not None else self.obj_options["tools_mill_toolchange"]
 
         offset = offset if offset else 0.0
 
         # int or None.
-        spindlespeed = spindlespeed if spindlespeed else self.obj_options['tools_mill_spindlespeed']
-        las_min_pwr = las_min_pwr if las_min_pwr else self.obj_options['tools_mill_min_power']
-        dwell = dwell if dwell else self.obj_options["tools_mill_dwell"]
-        dwelltime = dwelltime if dwelltime else float(self.obj_options["tools_mill_dwelltime"])
+        spindlespeed = spindlespeed if spindlespeed is not None else self.obj_options['tools_mill_spindlespeed']
+        las_min_pwr = las_min_pwr if las_min_pwr is not None else self.obj_options['tools_mill_min_power']
+        dwell = dwell if dwell is not None else self.obj_options["tools_mill_dwell"]
+        dwelltime = dwelltime if dwelltime is not None else float(self.obj_options["tools_mill_dwelltime"])
 
         ppname_g = pp if pp else self.obj_options["tools_mill_ppname_g"]
 
@@ -1151,7 +1151,8 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             # Send to worker
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
-            self.app.app_obj.new_object("cncjob", outname, job_init, plot=plot)
+            result = self.app.app_obj.new_object("cncjob", outname, job_init, plot=plot)
+            return 'fail' if result == 'fail' or result is False else None
 
     def scale(self, xfactor, yfactor=None, point=None):
         """

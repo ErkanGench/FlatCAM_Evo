@@ -13,6 +13,7 @@ class TclCommandPlotAll(TclCommandSignaled):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['plot_all']
+    valueless_options = frozenset({'plot_status'})
 
     description = '%s %s' % ("--", "Plots all objects on appGUI.")
 
@@ -34,8 +35,10 @@ class TclCommandPlotAll(TclCommandSignaled):
     help = {
         'main': "Plots all objects on appGUI.",
         'args': collections.OrderedDict([
-            ('plot_status', 'If to display or not the objects: True (1) or False (0).'),
-            ('use_thread', 'If to use multithreading: True (1) or False (0).')
+            ('plot_status', 'Display objects: True (1) or False (0). Bare -plot_status means True; '
+                            'if omitted, objects are plotted by default.'),
+            ('use_thread', 'Accepts True (1) or False (0); a value is required. '
+                           'Plotting runs in the command worker regardless of this value.')
         ]),
         'examples': ['plot_all', 'plot_all -plot_status False']
     }
@@ -53,7 +56,7 @@ class TclCommandPlotAll(TclCommandSignaled):
                 par = args['use_thread'].capitalize()
             except AttributeError:
                 par = args['use_thread']
-            threaded = bool(eval(par))
+            threaded = self.parse_bool(par)
         else:
             threaded = False
 
@@ -67,11 +70,12 @@ class TclCommandPlotAll(TclCommandSignaled):
                         par = args['plot_status'].capitalize()
                     except AttributeError:
                         par = args['plot_status']
-                    plot_status = bool(eval(par))
+                    plot_status = self.parse_bool(par)
             except KeyError:
                 plot_status = True
 
         for obj in self.app.collection.get_list():
             obj.obj_options["plot"] = True if plot_status is True else False
 
-        self.app.plot_all(use_thread=threaded)
+        # Already executed by TclCommandSignaled's worker; don't finish before a nested worker plots.
+        return self.app.plot_all(use_thread=False)

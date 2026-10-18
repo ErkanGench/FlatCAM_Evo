@@ -1,5 +1,4 @@
 from tclCommands.TclCommand import *
-from copy import deepcopy
 from shapely import Point
 
 
@@ -28,7 +27,7 @@ class TclCommandAddDrill(TclCommandSignaled):
     ])
 
     # array of mandatory options for current Tcl command: required = {'name','outname'}
-    required = ['name']
+    required = ['name', 'dia']
 
     # structured help for current command, args needs to be ordered
     help = {
@@ -61,18 +60,20 @@ class TclCommandAddDrill(TclCommandSignaled):
         try:
             obj = self.app.collection.get_by_name(str(name))
         except Exception:
-            return "Could not retrieve object: %s" % name
+            self.raise_tcl_error("Could not retrieve object: %s" % name)
         if obj is None:
-            return "Object not found: %s" % name
+            self.raise_tcl_error("Object not found: %s" % name)
         if obj.kind != 'excellon':
-            return 'Expected Excellon, got %s %s.' % (name, type(obj))
+            self.raise_tcl_error('Expected Excellon, got %s %s.' % (name, type(obj)))
 
         if 'dia' not in args:
-            return "Failed. The -dia parameter is missing and it is required."
+            self.raise_tcl_error('The -dia parameter is required.')
 
         new_dia = args['dia']
         drill_x = 0.0 if 'x' not in args else args['x']
         drill_y = 0.0 if 'y' not in args else args['y']
+        if not all(math.isfinite(v) for v in (new_dia, drill_x, drill_y)) or new_dia <= 0:
+            self.raise_tcl_error('Diameter must be positive and coordinates must be finite.')
 
         # create a dict with the keys the tool dimater value truncated to the nr of decimals use by the app and the
         # value is the tool number
@@ -102,11 +103,11 @@ class TclCommandAddDrill(TclCommandSignaled):
             tools_sorted = sorted(obj.tools.items(), key=lambda x: x[1]['tooldia'])
             for idx, tool in enumerate(tools_sorted, start=1):
                 new_tools[idx] = tool[1]
-            obj.tools = deepcopy(new_tools)
+            obj.tools = new_tools
         elif new_dia in list(dia_tool_dict.keys()):
             if drill_point not in obj.tools[dia_tool_dict[new_dia]]['drills']:
                 obj.tools[dia_tool_dict[new_dia]]['drills'].append(drill_point)
             else:
-                return "Drill with the given coordinates is already in the object."
+                return TclCommandFailure('Drill with the given coordinates is already in the object.')
 
-        obj.create_geometry()
+        return obj.create_geometry()

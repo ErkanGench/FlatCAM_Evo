@@ -20,6 +20,7 @@ class TclCommandGetSys(TclCommand):
 
     # List of all command aliases, to be able use old names for backward compatibility (add_poly, add_polygon)
     aliases = ['get_sys', 'getsys']
+    returns_value = True
 
     description = '%s %s' % ("--", "Returns to TCL the value for the entered system variable.")
 
@@ -58,4 +59,4 @@ class TclCommandGetSys(TclCommand):
         if name in self.app.options:
             return self._app_option(name)
         else:
-            return "The keyword: %s does not exist as a parameter" % str(name)
+            self.raise_tcl_error("The keyword: %s does not exist as a parameter" % str(name))

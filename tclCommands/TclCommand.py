@@ -1,10 +1,15 @@
 import sys
 import re
+import math
+import ast
 
 import abc
 import collections
 from PyQt6 import QtCore
-from contextlib import contextmanager
+
+
+class TclCommandFailure(str):
+    """Legacy Python text result that must be translated to an error at the Tcl boundary."""
 
 
 class TclCommand(object):
@@ -30,6 +35,10 @@ class TclCommand(object):
     # OrderedDict should be like collections.OrderedDict([(key,value),(key2,value2)])
     option_types = collections.OrderedDict()
 
+    # Options allowed without a value; execute receives None for command-specific flag/default handling.
+    # All other options require an explicit value, including boolean options.
+    valueless_options = frozenset()
+
     # List of mandatory options for current Tcl command: required = {'name','outname'}
     required = ['name']
 
@@ -46,6 +55,7 @@ class TclCommand(object):
 
     # Original incoming arguments into command
     original_args = None
+    returns_value = False
 
     def __init__(self, app):
         self.app = app
@@ -80,6 +90,43 @@ class TclCommand(object):
         """
 
         self.app.shell.raise_tcl_error(text)
+        # A shell adapter must never let validation fall through if its error reporter returns.
+        raise ValueError(text)
+
+    @staticmethod
+    def parse_bool(value):
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ('1', 'true', 'yes', 'on', 't', 'y'):
+            return True
+        if text in ('0', 'false', 'no', 'off', 'f', 'n'):
+            return False
+        raise ValueError('Expected a boolean (0/1, true/false, yes/no, on/off), got: %s' % value)
+
+    @staticmethod
+    def parse_coords(value):
+        points = ast.literal_eval(str(value))
+
+        def validate(coords):
+            if not isinstance(coords, (tuple, list)):
+                raise ValueError('Expected numeric coordinates')
+            for item in coords:
+                if isinstance(item, (tuple, list)):
+                    validate(item)
+                elif isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item):
+                    raise ValueError('Expected finite numeric coordinates')
+
+        validate(points)
+        return points
+
+    def check_result(self, result):
+        # None is a successful return for many existing handlers; ordinary text is also a valid result.
+        if isinstance(result, TclCommandFailure):
+            self.raise_tcl_error(str(result))
+        if result is False or (isinstance(result, str) and result == 'fail'):
+            self.raise_tcl_error('Command failed: %s' % self.aliases[0])
+        return result
 
     def get_current_command(self):
         """
@@ -132,6 +179,8 @@ class TclCommand(object):
                 arg_type = self.option_types[help_key]
                 type_name = str(arg_type.__name__)
                 in_command_name = option_symbol + help_key + " <" + type_name + ">"
+                if help_key in self.valueless_options and help_key not in self.required:
+                    in_command_name = option_symbol + help_key + " [<" + type_name + ">]"
 
             else:
                 option_symbol = ''
@@ -144,6 +193,10 @@ class TclCommand(object):
                 else:
                     return '[' + in_command_name + "]"
             else:
+                if help_key in self.option_types:
+                    if help_key in self.required:
+                        return "\t" + in_command_name + ": " + help_text
+                    return "\t[" + in_command_name + ": " + help_text + "]"
                 if help_key in self.required:
                     return "\t" + option_symbol + help_key + " <" + type_name + ">: " + help_text
                 else:
@@ -155,6 +208,11 @@ class TclCommand(object):
         help_string = [self.help['main']]
         for alias in self.aliases:
             help_string.append(get_decorated_command(alias))
+
+        if any(key in self.valueless_options and key not in self.required
+               for key in self.help['args'] if key in self.option_types):
+            help_string.append("[-option [<type>]]: the option may be omitted; when present, "
+                               "its value may also be omitted (bare option). See defaults below.")
 
         for key, value in list(self.help['args'].items()):
             help_string.append(get_decorated_argument(key, value))
@@ -227,6 +285,8 @@ class TclCommand(object):
 
                 try:
                     named_args[key] = arg_type(argument)
+                    if arg_type is float and not math.isfinite(named_args[key]):
+                        raise ValueError('Expected a finite number')
                 except Exception as e:
                     self.raise_tcl_error("Cannot cast named argument '%s' to type %s  with exception '%s'."
                                          % (key, arg_type, str(e)))
@@ -236,25 +296,27 @@ class TclCommand(object):
 
         # check options
         for key in options:
-            if key not in self.option_types and key != 'timeout':
+            if key not in self.option_types and not (key == 'timeout' and isinstance(self, TclCommandSignaled)):
                 self.raise_tcl_error('Unknown parameter: %s' % key)
+            arg_type = int if key == 'timeout' else self.option_types[key]
             try:
-                if key != 'timeout':
-                    # None options are allowed; if None then the defaults are used
-                    # - must be implemented in the Tcl commands
-                    if options[key] is not None:
-                        named_args[key] = self.option_types[key](options[key])
-                    else:
-                        named_args[key] = options[key]
+                if options[key] is None:
+                    if key not in self.valueless_options:
+                        raise ValueError('Missing option value')
+                    named_args[key] = None
                 else:
-                    named_args[key] = int(options[key])
+                    named_args[key] = arg_type(options[key])
+                    if arg_type is float and not math.isfinite(named_args[key]):
+                        raise ValueError('Expected a finite number')
+                if key == 'timeout' and not 0 < named_args[key] <= 2147483647:
+                    raise ValueError('Timeout must be between 1 and 2147483647 milliseconds')
             except Exception as e:
                 self.raise_tcl_error("Cannot cast argument '-%s' to type '%s' with exception '%s'."
-                                     % (key, self.option_types[key], str(e)))
+                                     % (key, arg_type, str(e)))
 
         # check required arguments
         for key in self.required:
-            if key not in named_args:
+            if key not in named_args or named_args[key] is None:
                 self.raise_tcl_error("Missing required argument '%s'." % key)
 
         return named_args, unnamed_args
@@ -269,18 +331,6 @@ class TclCommand(object):
         """
 
         raise unknown_exception
-
-    # def raise_tcl_error(self, text):
-    #     """
-    #     this method  pass exception from python into TCL as error, so we get stacktrace and reason
-    #     :param text: text of error
-    #     :return: raise exception
-    #     """
-    #
-    #     # because of signaling we cannot call error to TCL from here but when task
-    #     # is finished also non-signaled are handled here to better exception
-    #     # handling and  displayed after command is finished
-    #     raise self.app.shell.TclErrorException(text)
 
     def execute_wrapper(self, *args):
         """
@@ -297,7 +347,8 @@ class TclCommand(object):
             self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
             self.original_args = args
             args, unnamed_args = self.check_args(args)
-            return self.execute(args, unnamed_args)
+            result = self.execute(args, unnamed_args)
+            return result if self.returns_value else self.check_result(result)
         except Exception as unknown:
             error_info = sys.exc_info()
             self.log.error("TCL command '%s' failed. Error text: %s" % (str(self), str(unknown)))
@@ -340,19 +391,6 @@ class TclCommandSignaled(TclCommand):
 
     output = None
 
-    def execute_call(self, args, unnamed_args):
-
-        try:
-            self.output = None
-            self.error = None
-            self.error_info = None
-            self.output = self.execute(args, unnamed_args)
-        except Exception as unknown:
-            self.error_info = sys.exc_info()
-            self.error = unknown
-        finally:
-            self.app.shell_command_finished.emit(self)
-
     def execute_wrapper(self, *args):
         """
         Command which is called by tcl console when current commands aliases are hit.
@@ -363,79 +401,61 @@ class TclCommandSignaled(TclCommand):
         :return: None, output text or exception
         """
 
-        @contextmanager
-        def wait_signal(signal, timeout=300000):
-            """Block loop until signal emitted, or timeout (ms) elapses."""
-            loop = QtCore.QEventLoop()
-
-            # Normal termination
-            signal.connect(loop.quit)
-
-            # Termination by exception in thread
-            self.app.thread_exception.connect(loop.quit)
-
-            status = {'timed_out': False}
-
-            def report_quit():
-                status['timed_out'] = True
-                loop.quit()
-
-            yield
-
-            # Temporarily change how exceptions are managed.
-            oeh = sys.excepthook
-            ex = []
-
-            def except_hook(type_, value, traceback_):
-                ex.append(value)
-                oeh(type_, value, traceback_)
-            sys.excepthook = except_hook
-
-            # Terminate on timeout
-            if timeout is not None:
-                time_val = int(timeout)
-                QtCore.QTimer.singleShot(time_val, report_quit)
-
-            # Block
-            loop.exec()
-
-            # Restore exception management
-            sys.excepthook = oeh
-            if ex:
-                raise ex[0]
-
-            if status['timed_out']:
-                self.app.shell.raise_tcl_unknown_error("Operation timed outed! Consider increasing option "
-                                                       "'-timeout <miliseconds>' for command or "
-                                                       "'set_sys global_background_timeout <miliseconds>'.")
-
+        # Each invocation owns its result and completion token, including work that outlives a timeout.
+        state = {'output': None, 'error': None, 'error_info': None, 'finished': False}
+        self.output = self.error = self.error_info = None
         try:
             self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
             self.original_args = args
             args, unnamed_args = self.check_args(args)
-            if 'timeout' in args:
-                passed_timeout = args['timeout']
-                args.pop('timeout', None)
-            else:
-                passed_timeout = self._app_option('global_background_timeout')
+            passed_timeout = args.pop('timeout', self._app_option('global_background_timeout'))
+            if passed_timeout is not None:
+                passed_timeout = int(passed_timeout)
+                if not 0 < passed_timeout <= 2147483647:
+                    self.raise_tcl_error('Timeout must be between 1 and 2147483647 milliseconds')
 
             # set detail for processing, it will be there until next open or close
             self.app.shell.open_processing(self.get_current_command())
 
-            def handle_finished():
-                self.app.shell_command_finished.disconnect(handle_finished)
-                if self.error is not None:
-                    self.raise_tcl_unknown_error(self.error)
+            loop = QtCore.QEventLoop()
+            timer = QtCore.QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(loop.quit)
+
+            def handle_finished(invocation):
+                if invocation is state:
+                    loop.quit()
+
+            def execute_call():
+                try:
+                    state['output'] = self.check_result(self.execute(args, unnamed_args))
+                except Exception as error:
+                    state['error'] = error
+                    state['error_info'] = sys.exc_info()
+                finally:
+                    state['finished'] = True
+                    self.app.shell_command_finished.emit(state)
 
             self.app.shell_command_finished.connect(handle_finished)
-
-            with wait_signal(self.app.shell_command_finished, passed_timeout):
-                # every TclCommandNewObject ancestor  support  timeout as parameter,
-                # but it does not mean anything for child itself
-                # when operation  will be  really long is good  to set it higher then defqault 30s
-                self.app.worker_task.emit({'fcn': self.execute_call, 'params': [args, unnamed_args]})
-
-            return self.output
+            try:
+                if passed_timeout is not None:
+                    timer.start(passed_timeout)
+                self.app.worker_task.emit({'fcn': execute_call, 'params': []})
+                if not state['finished']:
+                    loop.exec()
+                if not state['finished']:
+                    self.raise_tcl_error('Operation timed out. Queued or running work has not been cancelled. '
+                                         'Consider increasing -timeout <milliseconds>.')
+                self.error_info = state['error_info']
+                self.error = state['error']
+                if self.error is not None:
+                    raise self.error
+                self.output = state['output']
+                return self.output
+            finally:
+                timer.stop()
+                self.app.shell_command_finished.disconnect(handle_finished)
+                timer.timeout.disconnect(loop.quit)
 
         except Exception as unknown:
             # if error happens inside thread execution, then pass correct error_info to display

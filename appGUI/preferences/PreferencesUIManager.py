@@ -1337,7 +1337,7 @@ class PreferencesUIManager(QtCore.QObject):
         except Exception as e:
             self.ui.app.log.error("save_defaults() --> Failed to write defaults to file %s" % str(e))
             self.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed to write defaults to file."), str(filename)))
-            return
+            return False
 
         if not silent:
             self.inform.emit('[success] %s' % _("Preferences saved."))
