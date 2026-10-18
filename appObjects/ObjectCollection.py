@@ -284,12 +284,12 @@ class ObjectCollection(QtCore.QAbstractItemModel):
     }
 
     icon_files = {
-        "gerber": "assets/resources/flatcam_icon16.png",
-        "excellon": "assets/resources/drill16.png",
-        "cncjob": "assets/resources/cnc16.png",
-        "geometry": "assets/resources/geometry16.png",
-        "script": "assets/resources/script_new16.png",
-        "document": "assets/resources/notes16_1.png"
+        "gerber": "assets/resources/gerber16_project.png",
+        "excellon": "assets/resources/excellon16_project.png",
+        "cncjob": "assets/resources/cnc16_project.png",
+        "geometry": "assets/resources/geometry16_project.png",
+        "script": "assets/resources/script16_project.png",
+        "document": "assets/resources/notes16_project.png"
     }
 
     # will emit the name of the object that was just selected
