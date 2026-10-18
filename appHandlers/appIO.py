@@ -1073,34 +1073,8 @@ class appIO(QtCore.QObject):
         """
         self.log.debug("on_file_new_click()")
 
-        if self.app.collection.get_list() and self.app.should_we_save:
-            msgbox = FCMessageBox(parent=self.app.ui)
-            title = _("Save changes")
-            txt = _("There are files/objects opened.\n"
-                    "Creating a New project will delete them.\n"
-                    "Do you want to Save the project?")
-            msgbox.setWindowTitle(title)  # taskbar still shows it
-            msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
-            msgbox.setText('<b>%s</b>' % title)
-            msgbox.setInformativeText(txt)
-            msgbox.setIconPixmap(QtGui.QPixmap(self.app.resource_location + '/save_as.png'))
-
-            bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
-            bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
-            bt_cancel = msgbox.addButton(_('Cancel'), QtWidgets.QMessageBox.ButtonRole.RejectRole)
-
-            msgbox.setDefaultButton(bt_yes)
-            msgbox.exec()
-            response = msgbox.clickedButton()
-
-            if response == bt_yes:
-                self.on_file_save_project_as(use_thread=True)
-            elif response == bt_cancel:
-                return
-            elif response == bt_no:
-                self.on_file_new_project(use_thread=True)
-        else:
-            self.on_file_new_project(use_thread=True)
+        # the current project stays open in the Project tab, so there is nothing to save here
+        self.app.projects.new()
 
     def on_file_new_project(self, cli=None, reset_tcl=True, use_thread=None, keep_scripts=True):
         """
@@ -2846,6 +2820,12 @@ class appIO(QtCore.QObject):
             self.inform.emit('[ERROR_NOTCL] %s' % _("File no longer available."))
             return
 
+        # an open from the GUI adds a project to the Project tab; Tcl and the command line replace the active one
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None and not run_from_arg and not cli and not from_tcl:
+            if not projects.prepare_open(project_filename):
+                return
+
         # block auto-saving while a project is loaded
         self._project_autosave_state = self.app.block_autosave
         self.app.block_autosave = True
@@ -2974,6 +2954,9 @@ class appIO(QtCore.QObject):
             self.app.preferencesUiManager.defaults_write_form()
 
         self.app.project_filename = filename
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None:
+            projects.adopt_filename(filename)
 
         # for some reason, setting ui_title does not work when this method is called from Tcl Shell
         # it's because the TclCommand is run in another thread (it inherits TclCommandSignaled)
