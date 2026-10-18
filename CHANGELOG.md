@@ -6,6 +6,63 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo beta
 
+18.10.2026
+
+GUI:
+
+- new Appearance setting (Light or Dark) and Styling setting (Default or Custom): Default uses the Qt widget style without the application stylesheet; Custom applies the stylesheet; changing either needs a restart; the old theme values are migrated
+- new Icons Color preferences: the light and dark icon colors recolor the single-color icon files; mixed-color icons, Project Tab icons and status indicators are not changed; the new colors show after a restart
+- new Object AutoHide and Object Autoswitch preferences: AutoHide hides the source object after a new object is made; Autoswitch shows Properties after a new object is made
+- new Project Tab icons for Gerber, Excellon, CNCJob, Geometry, Script and Document objects
+- the toolbars have no border
+- fixed: the toolbar lock and menu text states are read as booleans from the settings; the menu checks follow the state
+- fixed: the layout selector stored an index instead of a layout name
+- fixed: the compact and minimal layouts restore the saved custom arrangement; the preset is used only when that arrangement is not valid
+- fixed: a rebuilt toolbar follows the menu lock state; the minimal layout stays locked
+- fixed: the Toggle Grid Lines menu action uses grid32.png instead of grid_lines32.png
+- the Drilling tool uses the drill32.png icon
+- the paper size label is shown in tomato color
+
+Objects:
+
+- a tool that makes a new object from a source object passes the AutoHide and Autoswitch options to the new object
+- the options are shown in the tool form under Common Parameters
+
+GCode sender:
+
+- the menu and labels use GCode sender and GCode Console; the object selector is labelled Source Object
+- new Sim button: runs the prepared program with a virtual controller in virtual time; no serial port is used
+- new start line dialog: the program starts at a chosen 1-based line
+- the console highlights the progress line; browsing the console does not replace the stream highlight
+- new Fit View option: fits the GCode bounds in isometric view after the source object is loaded
+- the Show console option is next to the source object selector; the sections collapse when their label is clicked
+- new Plot height map option: shows or hides the height-map surface in Plot 3D; levelling is not changed
+- the probe points avoid the holes of an Excellon object that is selected in the Autolevelling section
+- the job preparation (line numbering and levelling of the lines) is in the SenderGen module
+- fixed: resume is blocked while a recovery is needed, while a reset is pending and for an abandoned job
+- fixed: a new probe point with the placeholder height 0.0 no longer makes a full height map valid
+- fixed: the cached 3D mesh of the height map is cleared when the map data is gone or invalidated
+- the GCode Console has a Program tab and a Console tab; the Program tab shows the acknowledged line count and the lines with errors; the Follow option scrolls with the progress
+- a program line that is selected in the console flashes red in the 3D view
+- the 3D view shows the probe points and the holes of the selected Excellon object
+- when a height map is available, a dialog asks to generate a new map or to use the existing map
+- the 3D preview (with the levelled toolpath) is prepared in a worker thread
+- fixed: a Grbl banner during a stream (unexpected controller reset) stops the stream and asks for a recovery
+- fixed: a connection to the controller is blocked while the simulation is open
+
+Plot 3D:
+
+- new context menu on right click: Toggle Grid and Fit View
+- the grid does not hide the toolpath
+- the camera zooms in closer; after a fit to the toolpath, the camera can zoom out to the full workspace
+- fixed: an empty marker or line visual does not raise an error when the view bounds are calculated
+- the 3D plot area has no margins
+
+Tests:
+
+- new unit tests for the GCode sender workflow, console, restart, simulation, audit fixes, icon colors, layout changes and plugin object creation
+- extended unit tests for the GRBL sender, Plot 3D, levelling audit and theme color scheme; the gate list is updated
+
 17.10.2026
 
 GUI:
