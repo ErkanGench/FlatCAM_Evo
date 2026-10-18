@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import appMain
 from appGUI.MainGUI import MainGUI
-from defaults import AppDefaults
+from defaults import AppDefaults, AppOptions
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -188,7 +188,8 @@ def test_theme_preferences_confirm_revert_and_save(tmp_path, monkeypatch, qapp, 
 
     defaults = AppDefaults(beta=False)
     app = MagicMock(decimals=4, resource_location='assets/resources')
-    app.options = dict(defaults.items())
+    app.options = AppOptions(version='test', baseline=defaults, defaults=defaults)
+    app.options['gerber_bboxmargin'] = 0.123
     monkeypatch.setattr(OptionsGroupUI, 'app', app)
     group = GeneralGUIPrefGroupUI(app)
     ui = MagicMock()
@@ -223,6 +224,7 @@ def test_theme_preferences_confirm_revert_and_save(tmp_path, monkeypatch, qapp, 
     expected = requested if accept else previous
     assert fields[key].get_value() == expected
     assert defaults[key] == app.options[key] == defaults.current_defaults[key] == expected
+    assert app.options['gerber_bboxmargin'] == 0.123
     assert settings.value(key.removeprefix('global_'), previous, type=type(previous)) == expected
     assert app.on_app_restart.call_count == int(accept)
     # A subsequent ordinary Save must neither re-prompt nor resurrect a declined change.

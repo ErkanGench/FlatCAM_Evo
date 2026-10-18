@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 from appGUI.TitleBar import TitleBar
 from appGUI.MainGUI import MainGUI
-from defaults import AppDefaults
+from defaults import AppDefaults, AppOptions
 
 
 class TitleWindow(QtWidgets.QMainWindow):
@@ -607,7 +607,7 @@ class TestTitleBarPreferences(unittest.TestCase):
         app = MagicMock()
         app.decimals = 4
         app.resource_location = 'assets/resources'
-        app.options = dict(defaults.items())
+        app.options = AppOptions(version='test', baseline=defaults, defaults=defaults)
         with patch.object(OptionsGroupUI, 'app', app):
             group = GeneralGUIPrefGroupUI(app)
         self.addCleanup(group.deleteLater)

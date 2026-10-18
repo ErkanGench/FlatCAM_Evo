@@ -4,7 +4,7 @@ from PyQt6.QtCore import QSettings
 
 import os
 
-from defaults import AppDefaults
+from defaults import AppDefaults, is_project_key
 from appGUI.GUIElements import FCMessageBox
 
 import gettext
@@ -767,15 +767,29 @@ class PreferencesUIManager(QtCore.QObject):
         storage = self.defaults if source is None else source
         return storage.get(key, self.defaults.factory_defaults.get(key))
 
+    def _source(self, key):
+        """Return the storage that the Preferences form shows for this key."""
+        if is_project_key(key):
+            return self.ui.app.options
+        return self.defaults
+
     def defaults_read_form(self):
         """
-        Will read all the values in the Preferences GUI and update the defaults dictionary.
+        Will read all the values in the Preferences GUI. An application key is written to the defaults. A project key
+        that is changed is written to the project options and to the defaults.
 
         :return: None
         """
+        options = self.ui.app.options
         for option in self.defaults_form_fields:
             try:
-                self.defaults[option] = self.defaults_form_fields[option].get_value()
+                value = self.defaults_form_fields[option].get_value()
+                if not is_project_key(option):
+                    self.defaults[option] = value
+                elif option not in options or options[option] != value:
+                    # a changed project key goes to the project and becomes the default for new projects
+                    options[option] = value
+                    self.defaults[option] = value
             except Exception as e:
                 self.ui.app.log.error("App.defaults_read_form() --> %s" % str(e))
 
@@ -809,7 +823,7 @@ class PreferencesUIManager(QtCore.QObject):
         :return:                None, it updates GUI elements
         """
 
-        def_dict = self.defaults if defaults_dict is None else defaults_dict
+        def_dict = self._source(field) if defaults_dict is None else defaults_dict
 
         try:
             value = self._pref(field, def_dict)
@@ -833,6 +847,10 @@ class PreferencesUIManager(QtCore.QObject):
 
         :return: None
         """
+        # Show the current values: the active project for the project keys, the defaults for the other keys.
+        if not self.preferences_changed_flag:
+            self.defaults_write_form()
+
         self.init_preferences_gui()
 
         self.pref_connect()
@@ -1237,8 +1255,6 @@ class PreferencesUIManager(QtCore.QObject):
         # update the `defaults` dict from the Preferences UI form
         self.defaults_read_form()
         self.defaults.current_defaults.update(self.defaults)
-        # Apply the `defaults` dict to project options
-        self.ui.app.options.update(self.defaults)
         # #############################################################################################################
 
         self.ui.app.apply_dim_text(self._pref('global_dim_text'))
@@ -1289,7 +1305,8 @@ class PreferencesUIManager(QtCore.QObject):
         """
         self.ui.app.log.debug("on_restore_defaults_preferences()")
         self.defaults.reset_to_factory_defaults()
-        self.defaults_write_form()
+        # show the factory values for all keys; a save writes the changed project keys to the project
+        self.defaults_write_form(source_dict=self.defaults)
         self.on_preferences_edited()
         self.ui.units_label.setText("[mm]")
         self.inform.emit('[success] %s' % _("Preferences default values are restored."))
@@ -1425,9 +1442,9 @@ class PreferencesUIManager(QtCore.QObject):
         # restore stylesheet to default for the statusBar icon
         self.ui.pref_status_label.setStyleSheet("")
 
-        self.defaults_write_form(source_dict=self.defaults.current_defaults)
-
         self.defaults.update(self.defaults.current_defaults)
+
+        self.defaults_write_form()
 
         # Preferences save, update the color of the Preferences Tab text
         for idx in range(self.ui.plot_tab_area.count()):
