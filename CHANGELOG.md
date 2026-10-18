@@ -74,6 +74,15 @@ Cutout Tool:
 - fixed: a large rectangular margin keeps all 4 gaps; the flatten keeps the holes in nested collections; Reset does not add a second selection slot
 - new tooltips for the gap size, Thin Depth, the mouse bite spacing (edge to edge) and the gap modes
 
+Film Tool:
+
+- fixed: the object keeps its position in the box frame; the box and the object are transformed together, with the origin from the box bounds
+- fixed: a length scale on a box with a zero width or height does not divide by zero; a length skew uses the selected reference
+- fixed: the box type used the object combobox; the PDF page size uses the application units instead of mm
+- fixed: a missing object shows a message; the punched film uses the real object name; nested geometry collections get the film color; lines stay without fill; the viewBox and the margin are correct for negative coordinates
+- faster export: the SVG document is made with 1 regex pass instead of an lxml and minidom parse; the punch uses intersects(); the geometry is not deep copied
+- the positive and negative films share the same export code; the GUI values are read before the worker starts; a failure of the worker shows "Failed."
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -82,6 +91,7 @@ Tests:
 - new unit tests for the Final paint, the Paint simplification, the Paint performance and the bounded insets (tests/test_shrink_offsets.py); the Tools Database tests check the Final paint
 - new unit tests for the signal lifecycle of the Milling and Drilling tools (tests/test_milling_lifecycle.py)
 - new unit tests for the Cutout regressions (tests/test_cutout_regressions.py) and the panel checks
+- new unit tests for the Film tool (tests/test_film.py)
 
 18.10.2026
 
