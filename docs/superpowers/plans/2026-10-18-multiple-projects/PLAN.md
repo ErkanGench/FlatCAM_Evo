@@ -3295,7 +3295,7 @@ The agent can not do these checks. Copy the list into the final report:
 16. Open a saved project. Delete all its objects. Close the project: the app asks to save. In Tcl, `close_project <name>` gives an error; `close_project <name> -force 1` closes it.
 17. Make changes in 2 projects. Zoom project B to a different view, then show project A. Close the app, save B, and press Cancel at the question about A. Show project B: its zoom is the same as before.
 18. Open a big project and use File > Save. While the status bar shows "Saving Project ...", delete an object. When the save ends, close the project: the app asks to save.
-12. Check the RAM in Task Manager: open a big project, add a second project and switch to it. The RAM of the app goes down or stays the same. It does not double.
+19. Check the RAM in Task Manager: open a big project, add a second project and switch to it. The RAM of the app goes down or stays the same. It does not double.
 
 ---
 
@@ -3305,3 +3305,5 @@ The agent can not do these checks. Copy the list into the final report:
 - Autosave saves only the active project.
 - The Code Editor tabs of Script and Document objects stay open after a switch.
 - The Tcl commands `new` and `open_project` replace the active project. They do not add a project.
+- An inactive project keeps the Properties UI of its objects, so it uses more RAM than a project that releases it. `set_ui()` must become safe to run 2 times before the UI can be released.
+- The autosave and the Tcl `save_project` command still call `save_project()` directly. They do not use the save completion of Task 10.
