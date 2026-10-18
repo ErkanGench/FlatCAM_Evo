@@ -30,6 +30,15 @@ Objects:
 - a tool that makes a new object from a source object passes the AutoHide and Autoswitch options to the new object
 - the options are shown in the tool form under Common Parameters
 
+Gerber Editor:
+
+- selecting elements updates only the selection colors and reuses the plotted geometry instead of rebuilding the whole board; geometry edits invalidate the cache
+- the shape-to-aperture lookup is cached with the spatial pick index instead of searching the aperture geometry lists after each selection
+- rectangle selection uses the spatial index for enclosing and touching selections; the selection order and modifier-key toggling are preserved
+- bulk selection avoids repeated searches in the selected elements list; rectangle and aperture-table selections also reuse the plotted geometry
+- fixed: repeated aperture-table selections no longer add duplicate elements; rectangle selection synchronizes the aperture rows without firing the table selection handlers
+- added regression tests for cached selection, geometry edits, rectangle selection, selection order, modifier-key toggling and duplicate prevention
+
 GCode sender:
 
 - the menu and labels use GCode sender and GCode Console; the object selector is labelled Source Object

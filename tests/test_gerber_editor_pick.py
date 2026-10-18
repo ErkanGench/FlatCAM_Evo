@@ -802,6 +802,162 @@ class TestTableSync(PickCase):
         self.assertEqual(self.table.receivers(self.table.cellPressed), receivers)
 
 
+class TestBulkSelection(PickCase):
+    def setUp(self):
+        self.a = DrawToolShape({'solid': box(0, 0, 1, 1)})
+        self.b = DrawToolShape({'solid': box(1, 0, 3, 1)})
+        self.far = DrawToolShape({'solid': box(10, 0, 11, 1)})
+        self.ed = make_editor({11: aperture([self.far]), 10: aperture([self.a, self.b])})
+        make_select(self.ed)
+        self.ed.plot_selection = MagicMock()
+
+    def test_rectangle_contains_and_intersects(self):
+        self.ed.draw_selection_area_handler((-0.5, -0.5), (2, 2), True)
+        self.assertEqual(self.ed.selected, [self.a])
+        self.ed.selected = []
+        self.ed.draw_selection_area_handler((2, 2), (-0.5, -0.5), False)
+        self.assertEqual(self.ed.selected, [self.a, self.b])
+        self.assertEqual(self.ed.calls, {'row': 0, 'sel': 0})
+        self.ed.plot_all.assert_not_called()
+        self.assertEqual(float(self.ed.ui.area_entry.get_value()), 3)
+
+    def test_rectangle_preserves_storage_order_and_toggles(self):
+        self.ed.draw_selection_area_handler((-1, -1), (12, 2), True)
+        self.assertEqual(self.ed.selected, [self.far, self.a, self.b])
+        self.ed.selected = [self.b, self.far]
+        self.ed.key = 'Control'
+        self.ed.draw_selection_area_handler((-0.5, -0.5), (2, 2), False)
+        self.assertEqual(self.ed.selected, [self.far, self.a])
+        rows = self.ed.ui.apertures_table.selectionModel().selectedRows()
+        self.assertEqual(sorted(row.row() for row in rows), [0, 1])
+
+    def test_rectangle_uses_warm_index_without_storage_scan(self):
+        class NoScan(list):
+            def __iter__(self):
+                raise AssertionError('Rectangle selection scanned geometry storage')
+
+        self.ed.get_pick_index()
+        for storage in self.ed.storage_dict.values():
+            storage['geometry'] = NoScan(storage['geometry'])
+        self.ed.draw_selection_area_handler((-0.5, -0.5), (2, 2), True)
+        self.assertEqual(self.ed.selected, [self.a])
+
+    def test_rectangle_avoids_selected_list_membership_scans(self):
+        class NoMembershipScan(list):
+            def __contains__(self, item):
+                raise AssertionError('Rectangle selection searched the selection list')
+
+        self.ed.selected = NoMembershipScan([self.far])
+        self.ed.draw_selection_area_handler((-0.5, -0.5), (2, 2), False)
+        self.assertEqual(self.ed.selected, [self.far, self.a, self.b])
+
+    def test_empty_rectangle_clears_stale_aperture_rows(self):
+        self.ed.draw_selection_area_handler((-1, -1), (12, 2), True)
+        self.ed.selected = []
+        self.ed.draw_selection_area_handler((100, 100), (101, 101), True)
+        self.assertEqual(self.ed.selected, [])
+        self.assertEqual(self.ed.ui.apertures_table.selectionModel().selectedRows(), [])
+
+    def test_table_selection_does_not_duplicate_existing_shapes(self):
+        with modifiers(CONTROL):
+            self.ed.on_row_selected(1, 1)
+            self.ed.on_row_selected(1, 1)
+        self.assertEqual(self.ed.selected, [self.a, self.b])
+        table = self.ed.ui.apertures_table
+        with QtCore.QSignalBlocker(table), QtCore.QSignalBlocker(table.selectionModel()):
+            table.selectAll()
+        self.ed.on_table_selection()
+        self.ed.on_table_selection()
+        self.assertEqual(self.ed.selected, [self.a, self.b, self.far])
+        self.ed.plot_all.assert_not_called()
+
+
+class TestSelectionRendering(PickCase):
+    def setUp(self):
+        from appGUI.VisPyVisuals import ShapeCollectionVisual
+
+        gl_state = patch('appGUI.VisPyVisuals.set_state')
+        gl_state.start()
+        self.addCleanup(gl_state.stop)
+        self.a, self.b = pad(0, 0, 1.0), pad(10, 0, 1.0)
+        self.ed = make_editor({10: aperture([self.a]), 11: aperture([self.b])})
+        self.tool = make_select(self.ed)
+        self.ed.get_draw_color = lambda: '#123456FF'
+        self.ed.get_sel_color = lambda: '#ABCDEF'
+        self.ed.shapes = ShapeCollectionVisual(layers=1, fcoptions={})
+        self.ed.plot_all = MagicMock(side_effect=lambda: AppGerberEditor.plot_all(self.ed))
+        self.ed.plot_all()
+        self.keys = list(self.ed.shapes.data)
+        self.ed.plot_all.reset_mock()
+
+    def test_clicks_reuse_geometry_buffers_and_restore_colors(self):
+        buffers = [self.ed.shapes.data[key]['mesh_vertices'] for key in self.keys]
+        with patch('appGUI.VisPyVisuals._update_shape_buffers',
+                   side_effect=AssertionError('Selection rebuilt geometry')):
+            with modifiers(NO_MOD):
+                click(self.ed, 0, 0)
+                self.assertEqual(self.ed.shapes.data[self.keys[0]]['face_color'], '#ABCDEFAF')
+                click(self.ed, 10, 0)
+                self.assertEqual(self.ed.shapes.data[self.keys[0]]['face_color'], '#123456AF')
+                self.assertEqual(self.ed.shapes.data[self.keys[1]]['face_color'], '#ABCDEFAF')
+                click(self.ed, 100, 100)
+                self.assertEqual(self.ed.shapes.data[self.keys[1]]['face_color'], '#123456AF')
+        self.ed.plot_all.assert_not_called()
+        for key, vertices in zip(self.keys, buffers):
+            self.assertIs(self.ed.shapes.data[key]['mesh_vertices'], vertices)
+
+    def test_multiselect_toggles_only_changed_colors(self):
+        with modifiers(CONTROL):
+            click(self.ed, 0, 0)
+            click(self.ed, 10, 0)
+            click(self.ed, 0, 0)
+        self.assertEqual(self.ed.selected, [self.b])
+        self.assertEqual(self.ed.shapes.data[self.keys[0]]['face_color'], '#123456AF')
+        self.assertEqual(self.ed.shapes.data[self.keys[1]]['face_color'], '#ABCDEFAF')
+        self.ed.plot_all.assert_not_called()
+
+    def test_geometry_edit_rebuilds_rendering_before_highlight(self):
+        self.a.geo['solid'] = box(-2, -2, 2, 2)
+        self.ed.touch_geometry()
+        with modifiers(NO_MOD):
+            click(self.ed, 0, 0)
+        self.ed.plot_all.assert_called_once()
+        self.assertEqual(self.ed.shapes.data[self.keys[0]]['mesh_vertices'][:, 0].max(), 2)
+        self.assertEqual(self.ed.shapes.data[self.keys[0]]['face_color'], '#ABCDEFAF')
+
+    def test_aperture_sync_uses_cached_ownership_after_edit(self):
+        class NoMembershipScan(list):
+            def __contains__(self, item):
+                raise AssertionError('Selection scanned aperture geometry')
+
+        self.ed.storage_dict[10]['geometry'] = NoMembershipScan([self.a])
+        self.ed.get_pick_index()
+        self.ed.selected = [self.a]
+        self.tool.after_selection()
+        self.assertEqual(self.tool.sel_aperture, {10})
+        self.ed.storage_dict[10]['geometry'].clear()
+        self.ed.storage_dict[11]['geometry'].append(self.a)
+        self.ed.touch_geometry()
+        self.tool.after_selection()
+        self.assertEqual(self.tool.sel_aperture, {11})
+
+    def test_rectangle_and_table_selection_reuse_geometry_buffers(self):
+        with patch('appGUI.VisPyVisuals._update_shape_buffers',
+                   side_effect=AssertionError('Bulk selection rebuilt geometry')):
+            self.ed.draw_selection_area_handler((-2, -2), (12, 2), True)
+            self.assertEqual(self.ed.selected, [self.a, self.b])
+            with modifiers(NO_MOD):
+                self.ed.on_row_selected(0, 1)
+            self.assertEqual(self.ed.shapes.data[self.keys[1]]['face_color'], '#123456AF')
+            table = self.ed.ui.apertures_table
+            with QtCore.QSignalBlocker(table), QtCore.QSignalBlocker(table.selectionModel()):
+                table.selectAll()
+            self.ed.on_table_selection()
+            for key in self.keys:
+                self.assertEqual(self.ed.shapes.data[key]['face_color'], '#ABCDEFAF')
+        self.ed.plot_all.assert_not_called()
+
+
 class TestSimplifyClick(PickCase):
     def make_tool(self, ed):
         tool = SimplifyEditorGrb.__new__(SimplifyEditorGrb)

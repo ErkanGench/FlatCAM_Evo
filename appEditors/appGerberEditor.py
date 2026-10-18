@@ -3365,15 +3365,13 @@ class SelectEditorGrb(QtCore.QObject, DrawTool):
         # ######################################################################################################
         self.sel_aperture.clear()
 
+        self.draw_app.get_pick_index()
         for shape_s in self.draw_app.selected:
-            for storage in self.draw_app.storage_dict:
-                if shape_s in self.draw_app.storage_dict[storage]['geometry']:
-                    self.sel_aperture.add(storage)
+            self.sel_aperture.update(self.draw_app._shape_apertures.get(shape_s, ()))
 
         self.draw_app.sync_aperture_rows(self.sel_aperture)
 
-        # and plot all
-        self.draw_app.plot_all()
+        self.draw_app.plot_selection()
 
     def clean_up(self):
         self.draw_app.plot_all()
@@ -3934,6 +3932,10 @@ class AppGerberEditor(QtCore.QObject):
         # the pick index: the revision counts the changes of the shapes, see touch_geometry()
         self.geometry_revision = 0
         self._pick_cache = None
+        self._shape_apertures = {}
+        self._rendered_shapes = {}
+        self._rendered_selection = set()
+        self._render_state = None
         # the last click pick, so a repeated click at the same place picks the next shape (pick_cycle_at())
         self.pick_cycle = None
         # the raw (not snapped) position of the last mouse press, in plot units
@@ -5198,6 +5200,10 @@ class AppGerberEditor(QtCore.QObject):
         self.storage_dict.clear()
         self.touch_geometry()
         self._pick_cache = None
+        self._shape_apertures.clear()
+        self._rendered_shapes.clear()
+        self._rendered_selection.clear()
+        self._render_state = None
         self.pick_cycle = None
         self.results.clear()
 
@@ -5684,8 +5690,11 @@ class AppGerberEditor(QtCore.QObject):
             selected_ap_code = int(self.ui.apertures_table.item(row, 1).text())
             self.last_aperture_selected = copy(selected_ap_code)
 
+            selected = set(self.selected)
             for obj in self.storage_dict[selected_ap_code]['geometry']:
-                self.selected.append(obj)
+                if obj not in selected:
+                    self.selected.append(obj)
+                    selected.add(obj)
         except Exception as e:
             self.app.log.error("AppGerberEditor.on_row_selected() --> %s" % str(e))
 
@@ -5721,20 +5730,23 @@ class AppGerberEditor(QtCore.QObject):
 
         self.ui.area_entry.set_value(t_area)
 
-        self.plot_all()
+        self.plot_selection()
 
     def on_table_selection(self):
         # log.debug("AppGerberEditor.on_table_selection() -> %s" % str(inspect.stack()[1][3]))
         selected_rows = self.ui.apertures_table.selectionModel().selectedRows(0)
 
         if len(selected_rows) == self.ui.apertures_table.rowCount():
+            selected = set(self.selected)
             for row in range(self.ui.apertures_table.rowCount()):
                 try:
                     selected_ap_code = int(self.ui.apertures_table.item(row, 1).text())
                     self.last_aperture_selected = copy(selected_ap_code)
 
                     for obj in self.storage_dict[selected_ap_code]['geometry']:
-                        self.selected.append(obj)
+                        if obj not in selected:
+                            self.selected.append(obj)
+                            selected.add(obj)
                 except Exception as e:
                     self.app.log.error("AppGerberEditor.on_row_selected() --> %s" % str(e))
 
@@ -5770,7 +5782,7 @@ class AppGerberEditor(QtCore.QObject):
 
             self.ui.area_entry.set_value(t_area)
 
-            self.plot_all()
+            self.plot_selection()
             return True
         return False
 
@@ -5828,8 +5840,10 @@ class AppGerberEditor(QtCore.QObject):
 
         refs = []
         solids = []
+        self._shape_apertures = {}
         for ap_key in sorted(self.storage_dict, key=aperture_rank):
             for idx, shape in enumerate(self.storage_dict[ap_key].get('geometry', ())):
+                self._shape_apertures.setdefault(shape, set()).add(ap_key)
                 geo = getattr(shape, 'geo', None)
                 if not isinstance(geo, dict):
                     continue
@@ -6195,49 +6209,35 @@ class AppGerberEditor(QtCore.QObject):
         """
 
         poly_selection = Polygon([start_pos, (end_pos[0], start_pos[1]), end_pos, (start_pos[0], end_pos[1])])
-        sel_aperture = set()
-        self.ui.apertures_table.clearSelection()
         self.app.delete_selection_shape()
 
-        for storage in self.storage_dict:
-            for obj in self.storage_dict[storage]['geometry']:
-                if 'solid' in obj.geo:
-                    geometric_data = obj.geo['solid']
-                    if (sel_type is True and poly_selection.contains(geometric_data)) or \
-                            (sel_type is False and poly_selection.intersects(geometric_data)):
-                        if self.key == self.app.options.get(
-                                "global_mselect_key",
-                                self.app.defaults.get(
-                                    "global_mselect_key",
-                                    self.app.defaults.factory_defaults.get("global_mselect_key")
-                                )):
-                            if obj in self.selected:
-                                self.selected.remove(obj)
-                            else:
-                                # add the object to the selected shapes
-                                self.selected.append(obj)
-                                sel_aperture.add(storage)
-                        else:
-                            if obj not in self.selected:
-                                self.selected.append(obj)
-                                sel_aperture.add(storage)
+        tree, refs = self.get_pick_index()
+        # A dict preserves selection order and avoids repeated searches/removals in a growing list.
+        selected = dict.fromkeys(self.selected)
+        toggle = self.key == self.app.options.get(
+            "global_mselect_key",
+            self.app.defaults.get(
+                "global_mselect_key",
+                self.app.defaults.factory_defaults.get("global_mselect_key")
+            ))
+        if tree is not None:
+            predicate = 'contains' if sel_type is True else 'intersects'
+            candidates = tree.query(poly_selection, predicate=predicate)
+            # STRtree results are unordered; keep the original aperture/element order.
+            aperture_order = {ap: index for index, ap in enumerate(self.storage_dict)}
+            for index in sorted(candidates, key=lambda i: (aperture_order[refs[i][0]], refs[i][1])):
+                obj = refs[index][2]
+                if toggle and obj in selected:
+                    del selected[obj]
+                else:
+                    selected[obj] = None
+        self.selected = list(selected)
 
         # #############################################################################################################
         # ##########  select the aperture code of the selected geometry, in the tool table  ###########################
         # #############################################################################################################
-        try:
-            self.ui.apertures_table.cellPressed.disconnect()
-        except Exception as e:
-            self.app.log.error("AppGerberEditor.draw_selection_Area_handler() --> %s" % str(e))
-
-        self.ui.apertures_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
-        for aper in sel_aperture:
-            for row_to_sel in range(self.ui.apertures_table.rowCount()):
-                if str(aper) == self.ui.apertures_table.item(row_to_sel, 1).text():
-                    if row_to_sel not in set(index.row() for index in self.ui.apertures_table.selectedIndexes()):
-                        self.ui.apertures_table.selectRow(row_to_sel)
-                    self.last_aperture_selected = aper
-        self.ui.apertures_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        sel_aperture = {ap for obj in self.selected for ap in self._shape_apertures.get(obj, ())}
+        self.sync_aperture_rows(sel_aperture)
 
         # #############################################################################################################
         # ######################### calculate vertex numbers for all selected shapes ##################################
@@ -6271,8 +6271,7 @@ class AppGerberEditor(QtCore.QObject):
 
         self.ui.area_entry.set_value(t_area)
 
-        self.ui.apertures_table.cellPressed.connect(self.on_row_selected)
-        self.plot_all()
+        self.plot_selection()
 
     def on_canvas_move(self, event):
         """
@@ -6473,6 +6472,24 @@ class AppGerberEditor(QtCore.QObject):
             )
         )
 
+    def plot_selection(self):
+        """Update selection colors without rebuilding the unchanged geometry buffers."""
+        count = sum(len(storage.get('geometry', ())) for storage in self.storage_dict.values())
+        if self._render_state != (self.geometry_revision, count):
+            self.plot_all()
+            return
+
+        selected = set(self.selected)
+        for changed, color in (
+                (self._rendered_selection - selected, self.get_draw_color()),
+                (selected - self._rendered_selection, self.get_sel_color())):
+            indexes = {index for shape in changed for index in self._rendered_shapes.get(shape, ())}
+            if indexes:
+                # Match the alpha applied by plot_shape() to solid geometry.
+                color = color[:7] + 'AF'
+                self.shapes.redraw(indexes=indexes, update_colors=(color, color))
+        self._rendered_selection = selected
+
     def plot_all(self):
         """
         Plots all shapes in the editor.
@@ -6480,7 +6497,10 @@ class AppGerberEditor(QtCore.QObject):
         :return: None
         """
         with self.app.proc_container.new('%s ...' % _("Plotting")):
+            self._render_state = None
+            self._rendered_shapes.clear()
             self.shapes.clear(update=True)
+            selected = set(self.selected)
 
             if len(self.get_sel_color()) == 7:
                 sel_draw_color = self.get_sel_color() + 'FF'
@@ -6501,10 +6521,12 @@ class AppGerberEditor(QtCore.QObject):
                             if geometric_data is None or geometric_data.is_empty:
                                 continue
 
-                            if elem in self.selected:
-                                self.plot_shape(geometry=geometric_data, color=sel_draw_color, linewidth=2)
+                            if elem in selected:
+                                index = self.plot_shape(geometry=geometric_data, color=sel_draw_color, linewidth=2)
                             else:
-                                self.plot_shape(geometry=geometric_data, color=draw_color)
+                                index = self.plot_shape(geometry=geometric_data, color=draw_color)
+                            if index is not None:
+                                self._rendered_shapes.setdefault(elem, []).append(index)
 
             if self.utility:
                 for elem in self.utility:
@@ -6513,30 +6535,32 @@ class AppGerberEditor(QtCore.QObject):
                     continue
 
             self.shapes.redraw()
+            self._rendered_selection = selected
+            count = sum(len(storage.get('geometry', ())) for storage in self.storage_dict.values())
+            self._render_state = (self.geometry_revision, count)
 
     def plot_shape(self, geometry=None, color='#000000FF', linewidth=1):
         """
-        Plots a geometric object or list of objects without rendering. Plotted objects
-        are returned as a list. This allows for efficient/animated rendering.
+        Plots a geometric object without rendering and returns its collection index.
 
         :param geometry:    Geometry to be plotted (Any "Shapely.geom" kind or list of such)
         :param color:       Shape color
         :param linewidth:   Width of lines in # of pixels.
-        :return:            List of plotted elements.
+        :return:            Collection index, or None for a point.
         """
 
         if geometry is None:
             geometry = self.active_tool.geometry
 
         try:
-            self.shapes.add(shape=geometry.geo, color=color, face_color=color, layer=0, tolerance=self.tolerance)
+            return self.shapes.add(shape=geometry.geo, color=color, face_color=color, layer=0, tolerance=self.tolerance)
         except AttributeError:
             if isinstance(geometry, Point):
                 return
             if len(color) == 9:
                 color = color[:7] + 'AF'
 
-            self.shapes.add(shape=geometry, color=color, face_color=color, layer=0, tolerance=self.tolerance)
+            return self.shapes.add(shape=geometry, color=color, face_color=color, layer=0, tolerance=self.tolerance)
 
     def on_shape_complete(self):
         pass
