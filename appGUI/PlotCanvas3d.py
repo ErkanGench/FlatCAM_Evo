@@ -5,7 +5,7 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtGui import QFont, QFontMetricsF, QPalette
 # from PyQt6.QtCore import QSettings
 
@@ -17,6 +17,7 @@ from vispy.scene.cameras.base_camera import BaseCamera
 from vispy.util import keys
 from vispy.util.quaternion import Quaternion
 from vispy.color import Color
+from vispy.visuals.markers import MarkersVisual
 from appGUI.VisPyVisuals import ShapeGroup, ShapeCollection, TextCollection, TextGroup, Cursor, GridLines
 from appGUI.ViewCube import ViewCube
 from vispy.scene.visuals import InfiniteLine, Line, Rectangle, Text, XYZAxis
@@ -117,13 +118,14 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
 
         units_per_mm = 1 / 25.4 if self.fcapp.app_units.upper() == 'IN' else 1
         self.workspace_size = (400 * units_per_mm, 400 * units_per_mm)
-        self.view.camera.minimum_scene_size = 10 * units_per_mm
+        self.view.camera.minimum_scene_size = 10 * units_per_mm / 3
         size = self.workspace_size[0]
 
         self.grid = GridLines(
             parent=self.view.scene, color=grid_color, grid_bounds=(0, size, 0, size), border_width=0
         )
-        self.grid.set_gl_state('translucent', depth_test=True, cull_face=False)
+        # The grid's transparent screen quad must not occlude the toolpath.
+        self.grid.set_gl_state('translucent', depth_test=False, cull_face=False)
         self.workspace_line = Line(
             pos=np.array([(0, 0, 0), (size, 0, 0), (size, size, 0), (0, size, 0), (0, 0, 0)]),
             color=tick_color, width=1.5, parent=self.view.scene
@@ -190,12 +192,61 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
             (dx, dy), (self.workspace_size[0] / 2, self.workspace_size[1] / 2, 0)
         ))
         self.view.events.resize.connect(self.on_view_resize)
+        self.context_menu = self.create_context_menu()
+        self.graph_event_connect('mouse_release', self.on_mouse_release)
 
         # Keep VisPy canvas happy by letting it be "frozen" again.
         self.freeze()
         self.fit_view()
 
         # self.graph_event_connect('mouse_wheel', self.on_mouse_scroll)
+
+    def create_context_menu(self):
+        """Build the default menu; override to supply different actions."""
+        menu = QtWidgets.QMenu(self.native)
+        menu.addAction(_("Toggle Grid"), self.toggle_grid)
+        menu.addAction(_("Fit View"), self.on_fit_view)
+        return menu
+
+    def on_fit_view(self):
+        sender = getattr(self.fcapp, 'grbl_sender_tool', None)
+        view = getattr(sender, 'view3d', None)
+        if view is not None and view.canvas is self:
+            sender.on_fit_view()
+        else:
+            self.view.camera.set_view('iso')
+            self.fit_view()
+
+    def set_context_menu(self, menu):
+        """Replace the current QMenu."""
+        self.context_menu = menu
+
+    def add_context_menu_action(self, text, callback, icon=None):
+        """Add an action with an optional QIcon and return its QAction."""
+        action = self.context_menu.addAction(text)
+        if icon is not None:
+            action.setIcon(icon)
+        action.triggered.connect(callback)
+        return action
+
+    def show_context_menu(self, pos):
+        """Show the menu at a QPoint in native widget coordinates."""
+        self.context_menu.popup(self.native.mapToGlobal(pos))
+
+    def on_mouse_release(self, event):
+        if event.button != 2 or event.handled:
+            return
+        if event.press_event is not None and any(
+                np.linalg.norm(item.pos - event.press_event.pos) >= QtWidgets.QApplication.startDragDistance()
+                for item in event.drag_events()):
+            return
+        self.show_context_menu(QtCore.QPoint(int(event.pos[0]), int(event.pos[1])))
+
+    def toggle_grid(self):
+        """Toggle grid visibility independently of grid snapping."""
+        self.grid.visible = not self.grid.visible
+        self.grid_lines_enabled = self.grid.visible
+        self.update()
 
     def graph_event_connect(self, event_name, callback):
         return getattr(self.events, event_name).connect(callback)
@@ -365,6 +416,12 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
             nodes.extend(node.children)
             if not hasattr(node, 'bounds'):
                 continue
+            # A VisPy Markers visual without data has no bounds and raises in bounds().
+            if isinstance(node, MarkersVisual) and node._data is None:
+                continue
+            # VisPy Line bounds reduce positions without checking for an empty array.
+            if isinstance(node, Line) and node.pos is not None and len(node.pos) == 0:
+                continue
             # VisPy caches bounds separately from live visual data.
             node._bounds_changed()
             limits = [node.bounds(axis) for axis in range(3)]
@@ -379,26 +436,50 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
                 bounds[1] = np.maximum(bounds[1], points.max(axis=0))
         return np.array(list(product(*bounds.T)))
 
-    def fit_view(self, rect=None):
+    def fit_view(self, rect=None, points=None, margin=None):
+        fit_bounds = rect is not None or points is not None
         width, height = self.view.size
         padding = self.axis_padding
-        if min(width, height) <= padding + 20:
+        left, bottom = padding, padding
+        right, top = 20, 20
+        if margin is not None:
+            left = right = width * margin
+            bottom = top = height * margin
+        if width <= left + right or height <= bottom + top:
             return
         camera = self.view.camera
-        points = camera.transform.imap(self._scene_corners(rect))
+        if points is None:
+            points = self._scene_corners(rect)
+        else:
+            points = np.asarray(points)
+            points = points[np.isfinite(points).all(axis=1)]
+            if not len(points):
+                return
+            points = np.array(list(product(*zip(points.min(axis=0), points.max(axis=0)))))
+        points = camera.transform.imap(points)
         points = points[:, :3] / points[:, 3:]
         lower, upper = points.min(axis=0), points.max(axis=0)
         units_per_pixel = max(
-            (upper[0] - lower[0]) / (width - padding - 20),
-            (upper[1] - lower[1]) / (height - padding - 20),
+            (upper[0] - lower[0]) / (width - left - right),
+            (upper[1] - lower[1]) / (height - bottom - top),
             camera.minimum_scene_size / min(width, height)
         )
         center = (lower + upper) / 2
-        center[:2] += (20 - padding) * units_per_pixel / 2
+        center[:2] += np.array((right - left, top - bottom)) * units_per_pixel / 2
         center = camera.transform.map(center)
         camera.center = center[:3] / center[3]
         camera.maximum_scene_size = units_per_pixel * min(width, height)
         camera.scale_factor = camera.maximum_scene_size
+        if fit_bounds:
+            # Fitting a toolpath must still allow zooming out to the full workspace.
+            scene_points = camera.transform.imap(self._scene_corners())
+            scene_points = scene_points[:, :3] / scene_points[:, 3:]
+            scene_size = np.ptp(scene_points, axis=0)
+            camera.maximum_scene_size = max(
+                camera.scale_factor,
+                scene_size[0] / max(1, width - padding - 20) * min(width, height),
+                scene_size[1] / max(1, height - padding - 20) * min(width, height)
+            )
         camera._view_modified = False
 
     def on_view_resize(self, event):

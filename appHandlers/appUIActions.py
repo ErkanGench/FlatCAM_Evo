@@ -1007,6 +1007,7 @@ class AppUIActions(QtCore.QObject):
             return
 
         plot_container_3d = QtWidgets.QVBoxLayout()
+        plot_container_3d.setContentsMargins(0, 0, 0, 0)
         self.app.area_3d_tab.setLayout(plot_container_3d)
 
         try:
