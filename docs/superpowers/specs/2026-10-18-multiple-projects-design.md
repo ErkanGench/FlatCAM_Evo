@@ -181,7 +181,10 @@ applies to all projects.
 
 ### Exit
 
-The app asks about each project that has unsaved changes.
+The app asks about each project that has unsaved changes. To save a project that is not
+active, the exit makes it active without a change of the canvas. If the exit stops for any
+reason (a cancel, a failed save, a pending save, a cancel of the Tools Database question or
+an error), the project that was active before becomes active again.
 
 ## 5. Tcl commands
 
@@ -228,6 +231,8 @@ New commands:
 - An autosave that fires while the exit or close question is open does not start a save.
   The exit does not quit while a save is pending. A cancel of the Tools Database question
   restores the autosave.
+- An exit that saves a project that is not active and then stops makes the first project
+  active again: the active project, the live collection, the tree and the canvas match.
 - `appIO.save_project()` returns `False` for a real write failure and `True` for a good save.
 
 Option B test:

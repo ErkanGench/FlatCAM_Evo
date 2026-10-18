@@ -1738,6 +1738,23 @@ class TestProjectManagerDialogs(unittest.TestCase):
         self.assertEqual(seen, [True])
         # the cancel restores the old state of the autosave
         self.assertFalse(app.block_autosave)
+
+    def test_return_to_restores_the_live_state_also_when_busy(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        self.assertTrue(manager.switch(second, visuals=False))
+        app.workers.pending_count.return_value = 1
+
+        manager.return_to(first)
+
+        self.assertIs(manager.active, first)
+        self.assertIs(app.collection, first.collection)
+        self.assertIs(manager.stack.currentWidget(), first.collection.view)
+        self.assertIs(manager.displayed, first)
+        # the canvas did not change: no visual step runs
+        manager.activate.assert_not_called()
+        manager.deactivate.assert_not_called()
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -1821,6 +1838,21 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
 
     def release_autosave(self, previous):
         self.app.block_autosave = previous
+
+    def return_to(self, ctx):
+        """
+        Make ctx the active project again after an exit that stops. The save of an inactive project during the exit
+        makes it active with switch(visuals=False), so the canvas and the plugins still show ctx. This method puts
+        the live state back to ctx, the same as switch(ctx, visuals=False). It does not check is_busy(): the exit
+        stops in all cases, and the live collection must be the one that the canvas shows.
+        """
+        if ctx is self.active or ctx not in self.contexts:
+            return
+        self.capture()
+        self.active = ctx
+        self._load(ctx)
+        self.projects_changed.emit()
+        self.update_title()
 
     # ------------------------------------------------------------------------------------------------------------
     # Open, close request, save
@@ -1919,7 +1951,7 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (56 tests).
+Expected: `OK` (57 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -2001,7 +2033,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (59 tests).
+Expected: `OK` (60 tests).
 
 Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_titlebar.py"`
 Expected: `OK`.
@@ -2861,7 +2893,7 @@ class TestExitWithProjects(unittest.TestCase):
         start = SimpleNamespace(name='Board_A')
         projects = SimpleNamespace(active=start, dirty_contexts=Mock(return_value=dirty),
                                    ask_save=Mock(), save_context=Mock(return_value=True),
-                                   switch=Mock(return_value=True),
+                                   switch=Mock(return_value=True), return_to=Mock(),
                                    hold_autosave=Mock(return_value=False), release_autosave=Mock())
         app = SimpleNamespace(save_in_progress=False, projects=projects, trayIcon=Mock(),
                               inform=Mock(), log=Mock(), block_autosave=False, should_we_save=False)
@@ -2891,7 +2923,7 @@ class TestExitWithProjects(unittest.TestCase):
         projects.ask_save.return_value = 'cancel'
         lifecycle.final_save()
         lifecycle.quit_application.assert_not_called()
-        projects.switch.assert_called_once_with(start, visuals=False)
+        projects.return_to.assert_called_once_with(start)
 
     def test_failed_save_stops_the_exit(self):
         first = SimpleNamespace(name='A')
@@ -2992,6 +3024,46 @@ class TestExitWithProjects(unittest.TestCase):
         app.should_we_save = True
         lifecycle.save_project_auto()
         app.f_handlers.on_file_save_project.assert_called_once_with()
+
+    def test_refused_quit_after_the_save_of_an_inactive_project_returns_to_the_start_project(self):
+        from types import MethodType
+        from appHandlers.appLifecycle import AppLifecycle
+        QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        # the real ProjectManager: Board_A is active and on the canvas, Board_B is not active and has changes
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        second.filename = 'Board_B.FlatPrj'
+        second.should_we_save = True
+        app.block_autosave = False
+        app.projects = manager
+        app.trayIcon = Mock()
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True),
+                                         on_file_save_project=Mock())
+        manager.ask_save = Mock(return_value='yes')
+        lifecycle = AppLifecycle.__new__(AppLifecycle)
+        lifecycle.app = app
+        lifecycle.inform = app.inform
+        # the real quit_application(); only the answer of the Tools Database question is mocked
+        lifecycle.quit_application = MethodType(AppLifecycle.quit_application, lifecycle)
+        lifecycle._confirm_tools_database = Mock(return_value=False)
+
+        lifecycle.final_save()
+
+        # Board_B is saved, then the quit is refused
+        app.f_handlers.save_project_checked.assert_called_once_with('Board_B.FlatPrj', silent=True)
+        self.assertFalse(second.should_we_save)
+        # the live state is Board_A again, the same project that the canvas shows
+        self.assertIs(manager.active, first)
+        self.assertIs(app.collection, first.collection)
+        self.assertIs(manager.stack.currentWidget(), first.collection.view)
+        self.assertIs(manager.displayed, first)
+        app.trayIcon.hide.assert_not_called()
+        # the autosave runs again
+        self.assertFalse(app.block_autosave)
+        app.should_we_save = True
+        lifecycle.save_project_auto()
+        app.f_handlers.on_file_save_project.assert_called_once_with()
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -3033,8 +3105,6 @@ Replace it with:
                 for ctx in projects.dirty_contexts():
                     answer = projects.ask_save(ctx)
                     if answer == 'cancel' or (answer == 'yes' and not projects.save_context(ctx, visuals=False)):
-                        # the exit stops; show the project that was active before
-                        projects.switch(start, visuals=False)
                         return
                 # check again: the app must not quit while a save is pending
                 if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
@@ -3043,7 +3113,12 @@ Replace it with:
                 quitting = self.quit_application() is True
             finally:
                 if not quitting:
-                    projects.release_autosave(autosave_state)
+                    # the exit stops (a cancel, a failed save, a pending save, a refused quit or an error). The save
+                    # of an inactive project made it active, but the canvas still shows start: make start active
+                    try:
+                        projects.return_to(start)
+                    finally:
+                        projects.release_autosave(autosave_state)
             if quitting:
                 # QApplication.quit() only posts the quit event, so the tray icon is hidden before the app ends
                 try:
@@ -3058,7 +3133,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (68 tests).
+Expected: `OK` (70 tests).
 
 Also run: `.venv/Scripts/python.exe -m pytest tests/test_shutdown_routing.py -q`
 Expected: all tests pass, 0 failed.
@@ -3512,7 +3587,7 @@ The agent can not do these checks. Copy the list into the final report:
 17. Make changes in 2 projects. Zoom project B to a different view, then show project A. Close the app, save B, and press Cancel at the question about A. Show project B: its zoom is the same as before.
 18. Open a big project and use File > Save. While the status bar shows "Saving Project ...", delete an object. When the save ends, close the project: the app asks to save.
 19. Check the RAM in Task Manager: open a big project, add a second project and switch to it. The RAM of the app goes down or stays the same. It does not double.
-20. In Preferences, set the autosave on with the shortest interval. Save a project, then change it. Close the app and wait at the "Save changes" question for more than 1 interval. Answer Yes. The app saves 1 time and quits. Do it again and answer Cancel: the autosave runs again after 1 interval. Open the Tools Database, change a tool, then close the app. Answer the project question, then cancel the Tools Database question: the app stays open and the autosave runs again after 1 interval.
+20. In Preferences, set the autosave on with the shortest interval. Save a project, then change it. Close the app and wait at the "Save changes" question for more than 1 interval. Answer Yes. The app saves 1 time and quits. Do it again and answer Cancel: the autosave runs again after 1 interval. Open the Tools Database, change a tool, then close the app. Answer the project question, then cancel the Tools Database question: the app stays open and the autosave runs again after 1 interval. Do it again with 2 projects: make `Board_A` active and change `Board_B`. At exit, answer Yes for `Board_B`, then cancel the Tools Database question. The combobox, the tree and the canvas all show `Board_A`.
 
 ---
 
