@@ -23,3 +23,41 @@ except ImportError:
     pass
 finally:
     sys.argv = _saved_argv
+
+
+# The GUI tests show real windows. A window with WA_DontShowOnScreen is shown for Qt (visible, laid out, grab()
+# works, the window states change) but it does not appear on the desktop, so the tests do not flash windows.
+# Set FLATCAM_TEST_SHOW_WINDOWS=1 to see the windows.
+_window_filter = None
+
+
+def _install_window_filter():
+    global _window_filter
+    if _window_filter is not None or os.environ.get('FLATCAM_TEST_SHOW_WINDOWS'):
+        return
+    try:
+        from PyQt6 import QtCore, QtWidgets
+    except ImportError:
+        return
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+
+    class HideWindows(QtCore.QObject):
+        def eventFilter(self, obj, event):
+            # Polish comes before the first show of a widget, so the attribute is set in time
+            if event.type() == QtCore.QEvent.Type.Polish and isinstance(obj, QtWidgets.QWidget) and obj.isWindow():
+                obj.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            return False
+
+    _window_filter = HideWindows()
+    app.installEventFilter(_window_filter)
+
+
+def pytest_runtest_setup(item):
+    _install_window_filter()
+
+
+def pytest_runtest_call(item):
+    # unittest runs setUp in the call phase: a QApplication made in setUpClass is here
+    _install_window_filter()

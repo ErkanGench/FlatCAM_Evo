@@ -7,7 +7,11 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qt_isolation  # noqa: E402
 
 from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 from appGUI.TitleBar import TitleBar
@@ -196,6 +200,9 @@ class TestTitleBar(unittest.TestCase):
         self.assertEqual(self.window.notebook_action.icon().cacheKey(), original)
 
     def test_notebook_glyph_matches_hamburger_width_and_lower_edge(self):
+        # the application stylesheet changes restyle every widget of the process
+        if qt_isolation.run_in_clean_process(self):
+            return
         import libs.qdarktheme
         from libs.qdarktheme.themes.dark import stylesheet as dark
         from libs.qdarktheme.themes.light import stylesheet as light
@@ -212,14 +219,18 @@ class TestTitleBar(unittest.TestCase):
                 self.qapp.processEvents()
                 bounds = []
                 for button in (self.bar.menu_button, self.bar.notebook_button):
-                    image = button.grab().toImage()
+                    image = button.grab().toImage().convertToFormat(QtGui.QImage.Format.Format_ARGB32)
                     scale = button.devicePixelRatioF()
-                    points = [(x, y) for x in range(round(4 * scale), image.width() - round(4 * scale))
-                              for y in range(image.height())
-                              if image.pixelColor(x, y) != image.pixelColor(round(3 * scale), y)]
-                    bounds.append(QtCore.QRect(min(x for x, y in points), min(y for x, y in points),
-                                               max(x for x, y in points) - min(x for x, y in points) + 1,
-                                               max(y for x, y in points) - min(y for x, y in points) + 1))
+                    # 1 NumPy compare for the whole image: QImage.pixelColor() for each pixel took about 28 s
+                    bits = image.constBits()
+                    bits.setsize(image.sizeInBytes())
+                    pixels = np.frombuffer(bits, np.uint32).reshape(image.height(), -1)[:, :image.width()]
+                    left = round(4 * scale)
+                    # a pixel is part of the glyph when it differs from the background column at x = 3 * scale
+                    ys, xs = np.nonzero(pixels[:, left:image.width() - left] != pixels[:, [round(3 * scale)]])
+                    xs = xs + left
+                    bounds.append(QtCore.QRect(int(xs.min()), int(ys.min()),
+                                               int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)))
                 hamburger, notebook = bounds
                 self.assertLessEqual(abs(notebook.width() - hamburger.width()), scale)
                 self.assertGreaterEqual(notebook.bottom(), hamburger.bottom())
@@ -421,6 +432,9 @@ class TestTitleBar(unittest.TestCase):
         self.assertTrue(self.bar.menu_button.isVisible())
 
     def test_theme_font_and_narrow_window_layout(self):
+        # the application stylesheet changes restyle every widget of the process
+        if qt_isolation.run_in_clean_process(self):
+            return
         import libs.qdarktheme
         from libs.qdarktheme.themes.dark import stylesheet as dark
         from libs.qdarktheme.themes.light import stylesheet as light

@@ -62,12 +62,15 @@ def boundary_segments(polys):
     return shapely.linestrings(pairs)
 
 
-def max_boundary_distance(polys_a, polys_b, max_segment=None, skip_box=None):
+def max_boundary_distance(polys_a, polys_b, max_segment=None, skip_box=None, within=None):
     """
     Largest distance from a sample point of the boundary of A to the boundary of B and the other way round.
 
     :param max_segment: Boundary segments are split to this length before sampling (None: vertices only).
     :param skip_box: Sample points inside this shapely box are ignored.
+    :param within: When set, the points that are closer than this distance to the other boundary are found with
+                   1 'dwithin' query (cheap, few candidates) and only the other points get a nearest search; the
+                   result is then the largest distance of the other points (0.0 when every point is within).
     """
     worst = 0.0
     for first, second in ((polys_a, polys_b), (polys_b, polys_a)):
@@ -80,6 +83,12 @@ def max_boundary_distance(polys_a, polys_b, max_segment=None, skip_box=None):
         if points.size == 0:
             continue
         tree = STRtree(boundary_segments(second))
+        if within is not None:
+            near = np.zeros(len(points), dtype=bool)
+            near[tree.query(points, predicate='dwithin', distance=within)[0]] = True
+            points = points[~near]
+            if points.size == 0:
+                continue
         _, dist = tree.query_nearest(points, return_distance=True, all_matches=False)
         worst = max(worst, float(dist.max()))
     return worst
@@ -287,7 +296,7 @@ class TestEagle(ClipperTestCase):
         self.assertTrue(MultiPolygon(result).is_valid)
         self.assertEqual(self.outside_box(result), self.outside_box(reference))
         step = 0.1 / 25.4  # 0.1 mm: a step of 0.01 mm gives 1.1 million sample points and takes too long
-        dist = max_boundary_distance(result, reference, max_segment=step, skip_box=self.BOX)
+        dist = max_boundary_distance(result, reference, max_segment=step, skip_box=self.BOX, within=1e-6 / 25.4)
         self.assertLessEqual(dist, 1e-6 / 25.4)
         return result, reference
 

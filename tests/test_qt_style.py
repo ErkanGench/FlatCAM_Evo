@@ -1,4 +1,6 @@
 import ast
+import os
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -6,6 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from PyQt6 import QtCore, QtWidgets
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qt_isolation  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,8 +21,22 @@ class TestQtStyle(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         cls.native_style = cls.app.style().objectName()
+        cls.subprocess_result = None
+        # every test of this class changes the application style: 1 new process for the whole file
+        if qt_isolation.crowded():
+            cls.subprocess_result = qt_isolation.run_pytest(__file__)
+
+    def run_in_subprocess(self):
+        """True when the tests ran in a new process; then this test passes only if that run passed."""
+        if self.subprocess_result is None:
+            return False
+        returncode, output = self.subprocess_result
+        self.assertEqual(returncode, 0, output)
+        return True
 
     def setUp(self):
+        if self.subprocess_result is not None:
+            return
         self.directory = tempfile.TemporaryDirectory()
         self.settings = QtCore.QSettings(
             str(Path(self.directory.name) / 'style.ini'), QtCore.QSettings.Format.IniFormat)
@@ -26,6 +45,8 @@ class TestQtStyle(unittest.TestCase):
         self.app.setProperty('flatcam_style', None)
 
     def tearDown(self):
+        if self.subprocess_result is not None:
+            return
         self.app.setStyleSheet('')
         self.app.setStyle(self.native_style)
         self.app.setProperty('flatcam_style', None)
@@ -42,6 +63,8 @@ class TestQtStyle(unittest.TestCase):
             'QSettings': lambda *args: self.settings})
 
     def test_startup_restores_names_and_handles_legacy_or_invalid_values(self):
+        if self.run_in_subprocess():
+            return
         keys = QtWidgets.QStyleFactory.keys()
         for saved, expected in [('Fusion', 'Fusion'), ('fUsIoN', 'Fusion'),
                                 (str(keys.index('Fusion')), 'Fusion'),
@@ -59,6 +82,8 @@ class TestQtStyle(unittest.TestCase):
                     self.assertEqual(self.settings.value('style').lower(), expected.lower())
 
     def test_preferences_keep_selection_under_stylesheet_and_save_name(self):
+        if self.run_in_subprocess():
+            return
         self.settings.setValue('style', 'Fusion')
         self.startup()
         self.app.setStyleSheet('QWidget { color: white; }')

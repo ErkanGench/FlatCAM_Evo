@@ -10,12 +10,15 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP_DIRS = {'.git', '.venv', 'venv', 'build', 'dist', '__pycache__', 'node_modules', '.worktrees'}
+SKIP_DIRS = {'.git', '.venv', 'venv', 'build', 'dist', '__pycache__', 'node_modules', '.worktrees', 'site-packages'}
 
 
 def source_files():
     for dirpath, dirnames, filenames in os.walk(ROOT):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        # any virtual environment (a folder with pyvenv.cfg, for example .venv_3.13) holds third-party code only:
+        # it had 8627 of the 9228 scanned files
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and not os.path.isfile(os.path.join(dirpath, d, 'pyvenv.cfg'))]
         for name in filenames:
             if name.endswith('.py'):
                 yield Path(dirpath) / name
@@ -31,8 +34,15 @@ def python_310_offenders():
         except SyntaxError as exc:
             offenders.append('%s:%s: %s' % (rel, exc.lineno, exc.msg))
             continue
+        lines = None
         for node in ast.walk(tree):
             if isinstance(node, ast.FormattedValue):
+                # ast.get_source_segment splits the whole file for each call: check first that the lines of the
+                # expression hold a backslash at all (the same result, without a split for each f-string)
+                if lines is None:
+                    lines = source.splitlines()
+                if not any('\\' in line for line in lines[node.value.lineno - 1:node.value.end_lineno]):
+                    continue
                 segment = ast.get_source_segment(source, node.value) or ''
                 if '\\' in segment:
                     offenders.append('%s:%s: backslash in an f-string expression: %s'

@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+import numpy as np
 from PyQt6 import QtWidgets
 from shapely.affinity import scale
 from shapely.geometry import GeometryCollection, box
@@ -130,7 +131,14 @@ class FixtureCase(unittest.TestCase):
         return geometry
 
     def mine(self, name):
-        return _union(self.parsed.layers[name]['solid_geometry']) if name in self.parsed.layers else None
+        # the parsed board does not change during a class: fuse each layer 1 time for all its tests
+        cls = type(self)
+        if '_mine_cache' not in cls.__dict__:
+            cls._mine_cache = {}
+        if name not in cls._mine_cache:
+            cls._mine_cache[name] = (_union(self.parsed.layers[name]['solid_geometry'])
+                                     if name in self.parsed.layers else None)
+        return cls._mine_cache[name]
 
     def ratio(self, name, reference, extra=None):
         mine = self.mine(name)
@@ -143,13 +151,14 @@ class FixtureCase(unittest.TestCase):
                 for point in tool['drills']]
 
     def assert_holes_on_flashes(self, top_film, bottom_film):
-        top, bottom = read_flashes(top_film), read_flashes(bottom_film)
+        top, bottom = np.array(read_flashes(top_film)), np.array(read_flashes(bottom_film))
+        holes = np.array([(point.x, point.y) for group in self.parsed.drill_groups
+                          for _diameter, point in self.holes(group)]).reshape(-1, 2)
         worst = 0.0
-        for group in self.parsed.drill_groups:
-            for _diameter, point in self.holes(group):
-                for flashes in (top, bottom):
-                    distance = min(((fx - point.x) ** 2 + (fy - point.y) ** 2) ** 0.5 for fx, fy in flashes)
-                    worst = max(worst, distance)
+        for flashes in (top, bottom):
+            # distance from each hole to its nearest flash, for all holes at once
+            nearest = np.sqrt(((holes[:, None, :] - flashes[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+            worst = max(worst, float(nearest.max()) if len(nearest) else 0.0)
         self.assertLessEqual(worst, 0.01)
         return worst
 
@@ -240,8 +249,10 @@ class TestAllegro181Board(FixtureCase):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         cls.app = _app()
         cls.parsed = AllegroBrdParser(app=cls.app).parse_file(BOARD_B)
-        cls.films = {name: cls.read_film(FILMS_B_DIR / film) for name, film in FILMS_B.items()}
         cls.all_films = {path.name: cls.read_film(path) for path in sorted(FILMS_B_DIR.glob('*.art'))}
+        # the copper films are in all_films too: each film is parsed and fused 1 time
+        cls.films = {name: cls.all_films[film] if film in cls.all_films else cls.read_film(FILMS_B_DIR / film)
+                     for name, film in FILMS_B.items()}
 
     def test_layers(self):
         self.assertEqual(self.parsed.version, '18.1/24.1')
