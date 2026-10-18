@@ -32,10 +32,14 @@ class appEditor(QtCore.QObject):
         self.options = self.app.options
         self.app_units = self.app.app_units
         self.defaults = self.app.defaults
-        self.collection = self.app.collection
         self.app_obj = self.app.app_obj
         self.decimals = self.app.decimals
         self.custom_origin_finished.connect(self._on_custom_origin_finished)
+
+    @property
+    def collection(self):
+        # the active project can change, so always read the live collection
+        return self.app.collection
 
     def build_geometry_tool_table(self):
         """

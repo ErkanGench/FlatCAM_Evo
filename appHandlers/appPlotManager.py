@@ -26,13 +26,17 @@ class AppPlotManager(QtCore.QObject):
         self.log = app.log
         self.inform = app.inform
         self.options = app.options
-        self.collection = app.collection
         self.worker_task = app.worker_task
         self.plotcanvas = app.plotcanvas
         self.clear_pool = app.clear_pool
         self.app_obj = app.app_obj
         self.defaults = app.defaults
         self.proc_container = app.proc_container
+
+    @property
+    def collection(self):
+        # the active project can change, so always read the live collection
+        return self.app.collection
 
     def _get_gerber_color_list(self):
         color_list = self.options.get(
