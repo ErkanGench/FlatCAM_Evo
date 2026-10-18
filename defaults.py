@@ -110,6 +110,7 @@ class AppDefaults:
         "global_appearance": 'light',
         "global_styling": 'default',
         "global_dark_canvas": False,
+        "global_dim_text": True,
         "global_theme": 'light',
         # the custom title bar is on by default only on Windows; macOS and Linux keep the native window decorations
         "global_custom_titlebar": sys.platform == "win32",

@@ -87,6 +87,7 @@ class PreferencesUIManager(QtCore.QObject):
             "global_appearance": self.ui.general_pref_form.general_gui_group.appearance_radio,
             "global_styling": self.ui.general_pref_form.general_gui_group.styling_combo,
             "global_dark_canvas": self.ui.general_pref_form.general_gui_group.dark_canvas_cb,
+            "global_dim_text": self.ui.general_pref_form.general_gui_group.dim_text_cb,
             "global_custom_titlebar": self.ui.general_pref_form.general_gui_group.custom_titlebar_cb,
             "global_layout": self.ui.general_pref_form.general_gui_group.layout_combo,
             "global_hover_shape": self.ui.general_pref_form.general_gui_group.hover_cb,
@@ -1239,6 +1240,8 @@ class PreferencesUIManager(QtCore.QObject):
         # Apply the `defaults` dict to project options
         self.ui.app.options.update(self.defaults)
         # #############################################################################################################
+
+        self.ui.app.apply_dim_text(self._pref('global_dim_text'))
 
         if save_to_file or should_restart is True:
             self.save_defaults(silent=False)

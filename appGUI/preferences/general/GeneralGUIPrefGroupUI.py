@@ -66,9 +66,18 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
               "even if a dark theme is not selected.")
         )
 
+        # Dim Text
+        self.dim_text_cb = FCCheckBox('%s' % _('Dim text'))
+        self.dim_text_cb.setToolTip(
+            _("Show the GUI text (menus, toolbars, tabs etc) in a darker gray\n"
+              "instead of bright white. Text with its own color is not changed.\n"
+              "It is useful for the Dark theme and it has no effect on the Light theme.")
+        )
+
         grid0.addWidget(self.appearance_label, 0, 0, 1, 2)
         grid0.addWidget(self.appearance_radio, 1, 0, 1, 3)
-        grid0.addWidget(self.dark_canvas_cb, 2, 0, 1, 3)
+        grid0.addWidget(self.dark_canvas_cb, 2, 0)
+        grid0.addWidget(self.dim_text_cb, 2, 1, 1, 2)
 
         # Custom Title Bar
         self.custom_titlebar_cb = FCCheckBox('%s' % _('Custom Title Bar'))

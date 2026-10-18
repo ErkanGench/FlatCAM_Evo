@@ -902,6 +902,8 @@ class App(QtCore.QObject):
             qdarksheet.STYLE_SHEET = dark_style_sheet.D_STYLE_SHEET
             self.qapp.setStyleSheet(libs.qdarktheme.load_stylesheet())
 
+        self.apply_dim_text(self.options.get("global_dim_text", self.defaults.get("global_dim_text")))
+
         # ################################### Set LOG verbosity ######################################################
         if self.options.get("global_log_verbose", self.defaults.get("global_log_verbose")) == 2:
             if self.log.handlers:
@@ -1575,6 +1577,35 @@ class App(QtCore.QObject):
             # Qt before 6.8 cannot be told
             return
         style_hints.setColorScheme(QtCore.Qt.ColorScheme.Dark if theme == 'dark' else QtCore.Qt.ColorScheme.Light)
+
+    def apply_dim_text(self, enabled):
+        """
+        Show the GUI text that has no color of its own in a darker gray instead of the bright white of the Dark theme.
+        Only the base text color changes: the palette text roles and the color of the base 'QWidget' rule of the
+        custom stylesheet. Widgets with their own palette or stylesheet color and the Light theme are not changed.
+
+        :param enabled: True to dim the text, False to restore the theme colors
+        :return: None
+        """
+
+        if not hasattr(self, '_base_palette'):
+            self._base_palette = QtGui.QPalette(self.qapp.palette())
+            self._base_stylesheet = self.qapp.styleSheet()
+
+        palette = QtGui.QPalette(self._base_palette)
+        sheet = self._base_stylesheet
+        if enabled and self._current_theme == 'dark':
+            color = QtGui.QColor('#8c8c8c')
+            for group in (QtGui.QPalette.ColorGroup.Active, QtGui.QPalette.ColorGroup.Inactive):
+                for role in (QtGui.QPalette.ColorRole.WindowText, QtGui.QPalette.ColorRole.Text,
+                             QtGui.QPalette.ColorRole.ButtonText):
+                    palette.setColor(group, role, color)
+            sheet = re.sub(r'(?m)(^QWidget\s*\{[^}]*?\n\s*color:\s*)[^;]+', r'\g<1>%s' % color.name(), sheet,
+                           count=1)
+
+        self.qapp.setPalette(palette)
+        if sheet != self.qapp.styleSheet():
+            self.qapp.setStyleSheet(sheet)
 
     @staticmethod
     def copy_and_overwrite(from_path, to_path):
