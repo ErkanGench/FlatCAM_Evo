@@ -28,7 +28,6 @@ import sys
 import os
 from copy import deepcopy
 import re
-import math
 from shapely.affinity import scale
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
@@ -40,15 +39,15 @@ except ImportError:
     from numpy import inf as Inf
 
 from datetime import datetime
-import simplejson as json
+import json
 
 from appCommon.Common import LoudDict
+from appCommon.ProjectFile import load_project_file, save_project_file
 
 from vispy.gloo.util import _screenshot
 from vispy.io import write_png
 
 import traceback
-import lzma
 from io import StringIO
 
 # App Translation
@@ -2905,43 +2904,17 @@ class appIO(QtCore.QObject):
 
         def parse_worker(prj_filename):
             with self.app.proc_container.new('%s' % _("Parsing...")):
-                # Open and parse an uncompressed Project file
-                try:
-                    f = open(prj_filename, 'r')
-                except IOError:
-                    if from_tcl:
-                        name = prj_filename.split('/')[-1].split('\\')[-1]
-                        prj_filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')), name)
-                        try:
-                            f = open(prj_filename, 'r')
-                        except IOError:
-                            self.log.error("Failed to open project file: %s" % prj_filename)
-                            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open project file"), prj_filename))
-                            return
-                    else:
-                        self.log.error("Failed to open project file: %s" % prj_filename)
-                        self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open project file"), prj_filename))
-                        return
+                if from_tcl and not os.path.isfile(prj_filename):
+                    name = prj_filename.split('/')[-1].split('\\')[-1]
+                    prj_filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')), name)
 
+                # Open and parse a Project file: Zstandard, LZMA (older app versions) or uncompressed
                 try:
-                    d = json.load(f, object_hook=dict2obj)
+                    d = load_project_file(prj_filename, object_hook=dict2obj)
                 except Exception as e:
-                    self.log.debug(
-                        "Failed to parse project file, trying to see if it loads as an LZMA archive: %s because %s" %
-                        (prj_filename, str(e)))
-                    f.close()
-
-                    # Open and parse a compressed Project file
-                    try:
-                        with lzma.open(prj_filename) as f:
-                            file_content = f.read().decode('utf-8')
-                            d = json.loads(file_content, object_hook=dict2obj)
-                    except Exception as e:
-                        self.log.error("Failed to open project file: %s with error: %s" % (prj_filename, str(e)))
-                        self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open project file"), prj_filename))
-                        return
-                finally:
-                    f.close()
+                    self.log.error("Failed to open project file: %s with error: %s" % (prj_filename, str(e)))
+                    self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open project file"), prj_filename))
+                    return
 
                 if not isinstance(d, dict) or not isinstance(d.get('objs'), list) or \
                         not isinstance(d.get('options'), dict):
@@ -3186,106 +3159,34 @@ class appIO(QtCore.QObject):
                 "version":          self.app.version
             }
 
-            if self.app.options.get("global_save_compressed", self.app.defaults.get("global_save_compressed")) is True:
-                try:
-                    # This is the correct way to handle inf/nan
-                    project_as_json = json.dumps(
-                        d,
-                        default=to_dict,
-                        indent=2,
-                        sort_keys=True,
-                        allow_nan=False  # This will raise a ValueError if there are any NaN/Inf values
-                    ).encode('utf-8')
-                except (ValueError, TypeError):
-                    # If we get here, we need to clean the data first
-                    try:
-                        # Clean the data by converting inf/nan to None
-                        def clean_data(obj):
-                            if isinstance(obj, float):
-                                if math.isinf(obj) or math.isnan(obj):
-                                    return None
-                            elif isinstance(obj, dict):
-                                return {k: clean_data(v) for k, v in obj.items()}
-                            elif isinstance(obj, (list, tuple)):
-                                return [clean_data(x) for x in obj]
-                            return obj
+            compressed = self.app.options.get(
+                "global_save_compressed", self.app.defaults.get("global_save_compressed")) is True
+            compression_level = None
+            if compressed:
+                compression_level = int(self.app.options.get(
+                    'global_compression_level', self.app.defaults.get('global_compression_level')))
 
-                        cleaned_d = clean_data(d)
-                        project_as_json = json.dumps(
-                            cleaned_d,
-                            default=to_dict,
-                            indent=2,
-                            sort_keys=True
-                        ).encode('utf-8')
-                    except Exception as e:
-                        self.log.error(
-                            "Failed to serialize file before compression: %s because: %s" % (str(filename), str(e)))
-                        self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                        self.app.save_in_progress = False
-                        return False
+            # the JSON is written as a stream (compressed with Zstandard if requested) to a temporary file
+            # that replaces the project file only after a complete write
+            try:
+                save_project_file(filename, d, default=to_dict, compression_level=compression_level)
+            except PermissionError:
+                self.log.error("Failed to open file for saving: %s", str(filename))
+                self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
+                self.app.save_in_progress = False
+                return False
+            except Exception as e:
+                self.log.error("Failed to save the project file: %s because: %s" % (str(filename), str(e)))
+                self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                self.app.save_in_progress = False
+                return False
 
-                try:
-                    # with lzma.open(filename, "w", preset=int(self.options['global_compression_level'])) as f:
-                    #     # # Write
-                    #     f.write(project_as_json)
-
-                    compressor_obj = lzma.LZMACompressor(preset=int(self.app.options.get('global_compression_level', self.app.defaults.get('global_compression_level'))))
-                    out1 = compressor_obj.compress(project_as_json)
-                    out2 = compressor_obj.flush()
-                    project_zipped = b"".join([out1, out2])
-                except Exception as error_msg:
-                    self.log.error("Failed to save compressed file: %s because: %s" % (str(filename), str(error_msg)))
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    self.app.save_in_progress = False
-                    return False
-
-                if project_zipped == b'':
-                    self.log.error("Failed to save file: %s. Empty binary file.", str(filename))
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    self.app.save_in_progress = False
-                    return False
-                try:
-                    with open(filename, "wb") as f_to_write:
-                        f_to_write.write(project_zipped)
-                except IOError:
-                    self.log.error("Failed to open file for saving: %s", str(filename))
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
-                    self.app.save_in_progress = False
-                    return False
-
+            if compressed:
                 self.inform.emit('[success] %s: %s' % (_("Project saved to"), str(filename)))
             else:
-                # Open file
-                try:
-                    f = open(filename, 'w')
-                except IOError:
-                    self.log.error("Failed to open file for saving: %s", str(filename))
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
-                    self.app.save_in_progress = False
-                    return False
-
-                # Write
-                try:
-                    json.dump(d, f, default=to_dict, indent=2, sort_keys=True)
-                except Exception as e:
-                    self.log.error(
-                        "Failed to serialize file: %s because: %s" % (str(filename), str(e)))
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    f.close()
-                    self.app.save_in_progress = False
-                    return False
-                # a buffered write can fail only when it is flushed, in close()
-                try:
-                    f.close()
-                except Exception as e:
-                    self.log.error("Failed to write file: %s because: %s" % (str(filename), str(e)))
-                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    self.app.save_in_progress = False
-                    return False
-
                 # verification of the saved project: open and parse it
                 try:
-                    with open(filename, 'r') as saved_f:
+                    with open(filename, 'rb') as saved_f:
                         saved_d = json.load(saved_f, object_hook=dict2obj)
                 except Exception:
                     saved_d = None

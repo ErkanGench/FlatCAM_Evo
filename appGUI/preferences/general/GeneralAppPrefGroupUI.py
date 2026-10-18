@@ -293,13 +293,14 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
 
         grid6.addWidget(self.save_type_cb, 0, 0, 1, 2)
 
-        # Project LZMA Comppression Level
+        # Project Zstandard Compression Level
         self.compress_spinner = FCSpinner()
-        self.compress_spinner.set_range(0, 9)
+        self.compress_spinner.set_range(1, 22)
         self.compress_label = FCLabel('%s:' % _('Compression'))
         self.compress_label.setToolTip(
-            _("The level of compression used when saving\n"
-              "a FlatCAM project. Higher value means better compression\n"
+            _("The Zstandard compression level used when saving\n"
+              "a FlatCAM project. The default is 3.\n"
+              "Higher value means better compression\n"
               "but require more RAM usage and more processing time.")
         )
 

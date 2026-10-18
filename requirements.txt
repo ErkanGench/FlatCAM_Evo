@@ -19,7 +19,8 @@ python-dateutil>=2.1
 kiwisolver>=1.1
 six
 dill
-simplejson
+# project compression; Python 3.14 and newer has it in the standard library (compression.zstd)
+zstandard; python_version < "3.14"
 qrcode>=6.1
 
 rtree

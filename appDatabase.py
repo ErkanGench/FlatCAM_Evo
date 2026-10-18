@@ -5,7 +5,7 @@ from appGUI.GUIElements import FCEntry, FCButton, FCDoubleSpinner, FCComboBox, F
 from camlib import to_dict
 
 import sys
-import simplejson as json
+import json
 
 from copy import deepcopy
 from datetime import datetime

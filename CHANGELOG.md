@@ -119,6 +119,17 @@ Preferences:
 - the Preferences window shows the project options of the active project; a save writes a changed project option to the project and to the preferences
 - fixed: a save of the Preferences copied all the preferences into the project options
 - Import Preferences writes the application settings of the file into the preferences
+- the Compression preference sets the Zstandard level (1 to 22, default 3) instead of the LZMA level (0 to 9)
+
+Project file:
+
+- a compressed project is saved with Zstandard (level 3 by default) instead of LZMA; a compressed save of a large project takes about half the time
+- a project compressed with LZMA (older app versions) still opens; the file type is detected from the first bytes of the file
+- the project JSON is written and read as a stream, so the save does not hold the full JSON text and the compressed data in RAM
+- a save writes to a temporary file that replaces the project file only after a complete write; a failed save keeps the old file
+- uses compression.zstd on Python 3.14 and newer, else the zstandard package (new requirement for Python older than 3.14)
+- an uncompressed project file has LF line endings on all platforms
+- replaced simplejson with the standard json module (equal or faster); removed the unused simplejson imports in the plugins; simplejson is no longer a requirement
 
 Tcl:
 
@@ -130,6 +141,7 @@ Tests:
 - extended unit tests for the GRBL sender, Plot 3D, levelling audit and theme color scheme; the gate list is updated
 - new unit tests for the image tracing; the gate list records the renamed Plot 3D zoom test
 - new unit tests for the Move Tool, the multiple projects (ProjectContext, ProjectManager, project combobox, File New, Open, Save and Save As, exit, Tcl commands) and the split of application settings and project options; the gate list records the removed autosave tests
+- new unit tests for the project file: plain and Zstandard round trip with both Zstandard backends, legacy LZMA load, inf/nan cleanup, level clamp and a failed save that keeps the old file
 
 17.10.2026
 

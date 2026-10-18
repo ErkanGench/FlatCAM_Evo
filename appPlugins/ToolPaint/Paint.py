@@ -24,7 +24,6 @@ from appGUI.GUIElements import (
 import logging
 from copy import deepcopy
 import numpy as np
-import simplejson as json
 import sys
 try:
     from numpy import Inf

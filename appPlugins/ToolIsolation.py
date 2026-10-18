@@ -17,7 +17,6 @@ from copy import deepcopy
 from typing import Iterable
 
 import numpy as np
-import simplejson as json
 import sys
 import math
 

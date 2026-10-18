@@ -18,7 +18,6 @@ from camlib import Geometry, flatten_shapely_geometry
 import logging
 from copy import deepcopy
 import numpy as np
-import simplejson as json
 import sys
 import platform
 import re

@@ -5,7 +5,7 @@ import tempfile
 from copy import deepcopy
 from appCommon.Common import LoudDict
 from camlib import to_dict, Geometry
-import simplejson
+import json
 import logging
 import gettext
 import appTranslation as fcTranslate
@@ -927,7 +927,7 @@ class AppDefaults:
         if os.path.isfile(file_path):
             try:
                 with open(file_path, "r") as file:
-                    f_defaults = simplejson.loads(file.read())
+                    f_defaults = json.loads(file.read())
                 if f_defaults == cls.factory_defaults:
                     needs_write = False
             except Exception:
@@ -947,7 +947,7 @@ class AppDefaults:
                                              prefix='.factory_tmp_',
                                              delete=False) as tmp_f:
                 temp_path = tmp_f.name
-                simplejson.dump(cls.factory_defaults, tmp_f,
+                json.dump(cls.factory_defaults, tmp_f,
                                 default=to_dict, indent=2, sort_keys=True)
 
             # Make destination writable for os.replace (Windows read-only guard)
@@ -1029,7 +1029,7 @@ class AppDefaults:
         data = dict(self.defaults)
         data.pop('version', None)
         with open(filename, "w") as file:
-            simplejson.dump(data, file, default=to_dict, indent=2, sort_keys=True)
+            json.dump(data, file, default=to_dict, indent=2, sort_keys=True)
 
     @staticmethod
     def find_legacy_defaults_file(data_path: str, current_version: str) -> str:
@@ -1109,7 +1109,7 @@ class AppDefaults:
 
         # Parse the JSON
         try:
-            defaults = simplejson.loads(options)
+            defaults = json.loads(options)
         except Exception:
             log.error(str(sys.exc_info()[0]))
             inform.emit('[ERROR] %s' % _("Failed to parse defaults file."))
@@ -1353,7 +1353,7 @@ class AppOptions:
 
         # Parse the JSON
         try:
-            options = simplejson.loads(options)
+            options = json.loads(options)
         except Exception:
             # in case the defaults file can't be loaded, show all toolbars
             log.error(str(sys.exc_info()[0]))

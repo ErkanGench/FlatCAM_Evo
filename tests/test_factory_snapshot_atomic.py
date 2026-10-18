@@ -27,14 +27,14 @@ def _write_read_only_snapshot(path, data):
 # -- dump failure with existing read-only snapshot --------------------------
 
 class TestDumpFailurePreservesExisting:
-    """If simplejson.dump raises, the existing read-only snapshot survives intact."""
+    """If json.dump raises, the existing read-only snapshot survives intact."""
 
     def test_existing_bytes_survive_dump_failure(self, tmp_path):
         dest = tmp_path / "factory_defaults.FlatConfig"
         _write_read_only_snapshot(dest, OLD_VALUES)
         original_bytes = dest.read_bytes()
 
-        with patch("defaults.simplejson.dump", side_effect=RuntimeError("disk full")):
+        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
             AppDefaults.save_factory_defaults(str(dest), "2.0")
 
         assert dest.read_bytes() == original_bytes
@@ -44,7 +44,7 @@ class TestDumpFailurePreservesExisting:
         dest = tmp_path / "factory_defaults.FlatConfig"
         _write_read_only_snapshot(dest, OLD_VALUES)
 
-        with patch("defaults.simplejson.dump", side_effect=RuntimeError("disk full")):
+        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
             AppDefaults.save_factory_defaults(str(dest), "2.0")
 
         leftovers = [f for f in tmp_path.iterdir() if f.name.startswith(".factory_tmp")]
@@ -54,7 +54,7 @@ class TestDumpFailurePreservesExisting:
         dest = tmp_path / "factory_defaults.FlatConfig"
         _write_read_only_snapshot(dest, OLD_VALUES)
 
-        with patch("defaults.simplejson.dump", side_effect=RuntimeError("disk full")):
+        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
             AppDefaults.save_factory_defaults(str(dest), "2.0")
 
         mode = dest.stat().st_mode
@@ -105,7 +105,7 @@ class TestMissingDestinationFailure:
     def test_no_destination_after_dump_failure(self, tmp_path):
         dest = tmp_path / "factory_defaults.FlatConfig"
 
-        with patch("defaults.simplejson.dump", side_effect=RuntimeError("disk full")):
+        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
             AppDefaults.save_factory_defaults(str(dest), "2.0")
 
         assert not dest.exists()
@@ -113,7 +113,7 @@ class TestMissingDestinationFailure:
     def test_no_temp_artifacts_after_missing_dest_dump_failure(self, tmp_path):
         dest = tmp_path / "factory_defaults.FlatConfig"
 
-        with patch("defaults.simplejson.dump", side_effect=RuntimeError("disk full")):
+        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
             AppDefaults.save_factory_defaults(str(dest), "2.0")
 
         leftovers = [f for f in tmp_path.iterdir() if f.name.startswith(".factory_tmp")]

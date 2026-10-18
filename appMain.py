@@ -23,7 +23,7 @@ from pathlib import Path
 
 import getopt
 import random
-import simplejson as json
+import json
 import shutil
 import traceback
 import time

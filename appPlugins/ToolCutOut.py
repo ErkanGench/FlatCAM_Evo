@@ -18,7 +18,6 @@ import math
 import logging
 from collections import namedtuple
 from copy import deepcopy
-import simplejson as json
 import sys
 try:
     from numpy import Inf
