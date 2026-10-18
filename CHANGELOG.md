@@ -38,6 +38,10 @@ Gerber Editor:
 - bulk selection avoids repeated searches in the selected elements list; rectangle and aperture-table selections also reuse the plotted geometry
 - fixed: repeated aperture-table selections no longer add duplicate elements; rectangle selection synchronizes the aperture rows without firing the table selection handlers
 - added regression tests for cached selection, geometry edits, rectangle selection, selection order, modifier-key toggling and duplicate prevention
+- fixed: importing shapes by click or rectangle from a Gerber with LPC (clear / negative polarity) features uses the composed copper geometry; clear slots stay empty and later dark islands are preserved when saved, regardless of import order
+- fixed: imported shape records are copied; transforming an imported shape no longer changes the source object's aperture records
+- fixed: regions split into multiple polygons by the eraser can be saved and exported; saving also handles split regions without follow geometry
+- added regression tests for LPC imports, source object isolation after transforms and saving split regions, including Gerber export / reimport checks
 
 GCode sender:
 

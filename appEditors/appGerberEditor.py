@@ -3673,9 +3673,10 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
             # only Gerber objects and only those that are active and not the edited object
             if obj.kind == 'gerber' and obj.obj_options['plot'] is True and \
                     obj.obj_options['name'] != self.draw_app.gerber_obj.obj_options['name']:
-                for apid in obj.tools:
-                    if 'geometry' in obj.tools[apid]:
-                        for geo_el in obj.tools[apid]['geometry']:
+                edit_tools = AppGerberEditor.build_edit_tools(obj.tools, obj.solid_geometry)
+                for apid in edit_tools:
+                    if 'geometry' in edit_tools[apid]:
+                        for geo_el in edit_tools[apid]['geometry']:
                             if 'solid' in geo_el:
                                 solid_geo = geo_el['solid']
                                 if Point(pos).within(solid_geo):
@@ -3687,8 +3688,8 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
                                                                             color=o_color,
                                                                             face_color=f_color,
                                                                             visible=True)
-                                        new_ap_dict = {k: v for k, v in obj.tools[apid].items() if k != 'geometry'}
-                                        new_ap_dict['geometry'] = [DrawToolShape(geo_el)]
+                                        new_ap_dict = {k: v for k, v in edit_tools[apid].items() if k != 'geometry'}
+                                        new_ap_dict['geometry'] = [DrawToolShape(deepcopy(geo_el))]
                                         new_ap_dict['shape_id'] = shape_id
                                         self.sel_storage.append(new_ap_dict)
                                         added_poly_count += 1
@@ -3731,9 +3732,10 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
             # only Gerber objects and only those that are active and not the edited object
             if obj.kind == 'gerber' and obj.obj_options['plot'] is True and \
                     obj.obj_options['name'] != self.draw_app.gerber_obj.obj_options['name']:
-                for apid in obj.tools:
-                    if 'geometry' in obj.tools[apid]:
-                        for geo_el in obj.tools[apid]['geometry']:
+                edit_tools = AppGerberEditor.build_edit_tools(obj.tools, obj.solid_geometry)
+                for apid in edit_tools:
+                    if 'geometry' in edit_tools[apid]:
+                        for geo_el in edit_tools[apid]['geometry']:
                             if 'solid' in geo_el:
                                 solid_geo = geo_el['solid']
                                 if selection_type is True:
@@ -3746,9 +3748,9 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
                                                                                 face_color=face_color,
                                                                                 visible=True)
                                             new_ap_dict = {
-                                                k: v for k, v in obj.tools[apid].items() if k != 'geometry'
+                                                k: v for k, v in edit_tools[apid].items() if k != 'geometry'
                                             }
-                                            new_ap_dict['geometry'] = [DrawToolShape(geo_el)]
+                                            new_ap_dict['geometry'] = [DrawToolShape(deepcopy(geo_el))]
                                             new_ap_dict['shape_id'] = shape_id
                                             self.sel_storage.append(new_ap_dict)
                                             added_poly_count += 1
@@ -3767,9 +3769,9 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
                                                                                 face_color=face_color,
                                                                                 visible=True)
                                             new_ap_dict = {
-                                                k: v for k, v in obj.tools[apid].items() if k != 'geometry'
+                                                k: v for k, v in edit_tools[apid].items() if k != 'geometry'
                                             }
-                                            new_ap_dict['geometry'] = [DrawToolShape(geo_el)]
+                                            new_ap_dict['geometry'] = [DrawToolShape(deepcopy(geo_el))]
                                             new_ap_dict['shape_id'] = shape_id
                                             self.sel_storage.append(new_ap_dict)
                                             added_poly_count += 1
@@ -3802,6 +3804,8 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
 
         for ap_dict in self.sel_storage:
             if ap_dict['type'] == 'REG':
+                # Imported islands may precede their enclosing regions in the selection.
+                self.draw_app.loaded_as_regions = True
                 added_flag = False
                 for storage in list(st_dict.keys()):
                     if st_dict[storage]['type'] == 'REG':
@@ -5564,7 +5568,8 @@ class AppGerberEditor(QtCore.QObject):
                                 follow_buffer.append(deepcopy(new_geo_el['follow']))
                             else:
                                 if 'solid' in geometric_data:
-                                    geo_f = geometric_data['solid'].exterior
+                                    solid = geometric_data['solid']
+                                    geo_f = solid.exterior if isinstance(solid, Polygon) else solid.boundary
                                     new_geo_el['follow'] = geo_f
                                     follow_buffer.append(deepcopy(new_geo_el['follow']))
 
@@ -5581,11 +5586,12 @@ class AppGerberEditor(QtCore.QObject):
             # an object loaded as regions (it had clear features) is saved through the region export too: it keeps
             # the holes and the islands of the regions in any order
             grb_obj.export_as_regions = bool(getattr(self.gerber_obj, 'export_as_regions', False) or
-                                             getattr(self, 'loaded_as_regions', False))
+                                             getattr(self, 'loaded_as_regions', False) or
+                                             any(isinstance(poly, MultiPolygon) for poly in poly_buffer))
 
             follow_buffer = flatten_shapely_geometry(follow_buffer)
 
-            new_poly = MultiPolygon(poly_buffer)
+            new_poly = MultiPolygon(flatten_shapely_geometry(poly_buffer))
             new_poly = new_poly.buffer(0.00000001)
             new_poly = new_poly.buffer(-0.00000001)
             new_poly = flatten_shapely_geometry(new_poly)

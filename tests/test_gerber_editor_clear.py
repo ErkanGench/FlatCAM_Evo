@@ -3,12 +3,14 @@
 
 import re
 from copy import deepcopy
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock
 
-from shapely.geometry import Point
+import pytest
+from shapely.geometry import Point, box
 
-from appEditors.appGerberEditor import AppGerberEditor
+from appEditors.appGerberEditor import AppGerberEditor, EraserEditorGrb, ImportEditorGrb, TransformEditorTool
+from appEditors.grb_plugins.GrbCommon import DrawToolShape
 from appHandlers.appIO import appIO
 from appObjects.GerberObject import GerberObject
 
@@ -114,3 +116,85 @@ class TestEditorSaveWithClear:
         edited = editor_save(app, source, source.tools)
         union = polygon_union(edited.solid_geometry)
         assert union.contains(SLOT), 'the old path is expected to lose the slot'
+
+    @pytest.mark.parametrize('has_follow', [True, False])
+    @pytest.mark.parametrize('loaded_as_regions', [True, False])
+    def test_split_region_can_be_saved(self, app, tmp_path, has_follow, loaded_as_regions):
+        source = make_gerber(app, MIXED_GBR)
+        region = box(0, 0, 10, 10).difference(box(2, 2, 4, 4))
+        record = {'solid': region}
+        if has_follow:
+            record['follow'] = region.exterior
+        draw_app = MagicMock()
+        draw_app.storage_dict = {0: {'type': 'REG', 'size': 0.0, 'geometry': [DrawToolShape(record)]}}
+        eraser = SimpleNamespace(draw_app=draw_app, app=app, destination=(0, 0))
+        eraser.utility_geometry = lambda data: SimpleNamespace(geo=[{'solid': box(5, -1, 6, 11)}])
+        EraserEditorGrb.make(eraser)
+        records = [shape.geo for shape in draw_app.storage_dict[0]['geometry']]
+        assert records[0]['solid'].geom_type == 'MultiPolygon'
+        expected = polygon_union([rec['solid'] for rec in records])
+        edited = editor_save(app, source, {0: {'type': 'REG', 'size': 0.0, 'geometry': records}},
+                             loaded_as_regions=loaded_as_regions)
+        assert_poly_equiv(edited.solid_geometry, expected)
+        again = reparse_gerber(app, edited.source_file, tmp_path)
+        assert_poly_equiv(again.solid_geometry, expected, abs_tol=1e-4)
+
+
+def import_tool(app, source):
+    source.obj_options['plot'] = True
+    app.collection.get_list.return_value = [source]
+    app.tool_shapes = MagicMock()
+    draw_app = MagicMock()
+    draw_app.gerber_obj = SimpleNamespace(obj_options={'name': 'target'})
+    draw_app.storage_dict = {}
+    draw_app.loaded_as_regions = False
+    draw_app.get_sel_color.return_value = '#FF0000'
+    tool = SimpleNamespace(app=app, draw_app=draw_app, sel_storage=[])
+    tool.get_selected_geos = MethodType(ImportEditorGrb.get_selected_geos, tool)
+    tool.get_selected_shape_id = MethodType(ImportEditorGrb.get_selected_shape_id, tool)
+    return tool
+
+
+class TestImportWithClear:
+    def test_clear_slot_is_not_selectable_copper(self, app):
+        source = make_gerber(app, MIXED_GBR)
+        tool = import_tool(app, source)
+        ImportEditorGrb.select_handler(tool, (SLOT.x, SLOT.y))
+        assert not tool.sel_storage
+
+    @pytest.mark.parametrize('selection_type', [True, False])
+    def test_box_import_preserves_clear_and_refilled_areas(self, app, tmp_path, selection_type):
+        source = make_gerber(app, MIXED_GBR)
+        tool = import_tool(app, source)
+        ImportEditorGrb.selection_area_handler(tool, (-100, -100), (100, 100), selection_type)
+        assert tool.sel_storage
+        # Import islands before their enclosing regions, as independent clicks can do.
+        tool.sel_storage.reverse()
+        ImportEditorGrb.import_shapes(tool)
+        tools = {ap: {**value, 'geometry': [shape.geo for shape in value['geometry']]}
+                 for ap, value in tool.draw_app.storage_dict.items()}
+        edited = editor_save(app, source, tools, loaded_as_regions=tool.draw_app.loaded_as_regions)
+        assert_poly_equiv(edited.solid_geometry, source.solid_geometry)
+        again = reparse_gerber(app, edited.source_file, tmp_path)
+        assert_poly_equiv(again.solid_geometry, source.solid_geometry, abs_tol=1e-3)
+
+    @pytest.mark.parametrize('selection', ['click', 'enclose', 'touch'])
+    def test_transforming_import_does_not_change_donor(self, app, selection):
+        source = make_gerber(app, NATIVE_GBR)
+        before = snapshot(source.tools)
+        tool = import_tool(app, source)
+        if selection == 'click':
+            solid = next(rec['solid'] for value in source.tools.values() for rec in value['geometry']
+                         if 'solid' in rec)
+            point = solid.representative_point()
+            ImportEditorGrb.select_handler(tool, (point.x, point.y))
+        else:
+            ImportEditorGrb.selection_area_handler(tool, (-100, -100), (100, 100), selection == 'enclose')
+        assert tool.sel_storage
+        ImportEditorGrb.import_shapes(tool)
+        tool.draw_app.selected = [shape for value in tool.draw_app.storage_dict.values()
+                                  for shape in value['geometry']]
+        original = tool.draw_app.selected[0].geo['solid']
+        TransformEditorTool.on_offset(tool, 'X', 100)
+        assert tool.draw_app.selected[0].geo['solid'].bounds[0] == pytest.approx(original.bounds[0] + 100)
+        assert snapshot(source.tools) == before
