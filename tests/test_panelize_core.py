@@ -62,6 +62,20 @@ class TestGrid:
         assert pc.constrain_grid((0, 0, 10, 10), 3, 3, 5, 5, 100, 30) == (2, 3, True)
         assert pc.constrain_grid((0, 0, 10, 10), 4, 4, 5, 5, 25, 25) == (2, 2, True)
 
+    def test_constrain_cannot_fit_one_board(self):
+        assert pc.constrain_grid((0, 0, 10, 10), 3, 3, 5, 5, 9, 9) == (0, 0, True)
+
+    @pytest.mark.parametrize('bounds', [(float('nan'), 0, 10, 10),
+                                       (float('inf'), float('inf'), -float('inf'), -float('inf'))])
+    def test_grid_rejects_empty_or_nonfinite_bounds(self, bounds):
+        with pytest.raises(ValueError):
+            pc.grid_offsets(bounds, 2, 2, 5, 5)
+
+    def test_merge_lines_honors_abort_without_snapping(self):
+        tools = {1: {'solid_geometry': [LineString([(0, 0), (1, 0)])]}}
+        with pytest.raises(grace):
+            pc.merge_tool_lines(tools, abort=lambda: True)
+
 
 class TestTranslate:
     def test_flat_result_for_nested_lists(self):

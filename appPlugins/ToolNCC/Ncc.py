@@ -27,7 +27,7 @@ from shapely import (
     Polygon,
     MultiPolygon,
 )
-from shapely.ops import unary_union, nearest_points
+from shapely.ops import unary_union
 
 import gettext
 import appTranslation as fcTranslate
@@ -36,7 +36,7 @@ import builtins
 from appPlugins.ToolNCC.NccGen import NccGen
 from appDatabase import load_tools_database
 from defaults import AppDefaults
-from camlib import Geometry, grace, flatten_shapely_geometry
+from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -1146,30 +1146,7 @@ class ToolNcc(Geometry, AppTool):
             msg = ('[ERROR_NOTCL] %s' % _("Too few polygons in the Gerber object to determine distances."))
             return msg, np.inf
 
-        min_dict = {}
-        idx = 1
-        for geo in total_geo:
-            for s_geo in total_geo[idx:]:
-                # minimize the number of distances by not taking into considerations
-                # those that are too small
-                dist = geo.distance(s_geo)
-                dist = float('%.*f' % (decimals, dist))
-                loc_1, loc_2 = nearest_points(geo, s_geo)
-
-                proc_loc = (
-                    (float('%.*f' % (decimals, loc_1.x)), float('%.*f' % (decimals, loc_1.y))),
-                    (float('%.*f' % (decimals, loc_2.x)), float('%.*f' % (decimals, loc_2.y)))
-                )
-
-                if dist in min_dict:
-                    min_dict[dist].append(proc_loc)
-                else:
-                    min_dict[dist] = [proc_loc]
-
-            idx += 1
-
-        min_list = list(min_dict.keys())
-        min_dist = min(min_list)
+        min_dist = min(polygon_gap_pairs(total_geo, decimals))
         min_dist -= 10**-decimals  # make sure that this works for isolation case
 
         return msg, min_dist
@@ -1287,8 +1264,6 @@ class ToolNcc(Geometry, AppTool):
         def job_thread(app_obj):
             with self.app.proc_container.new(_("Checking ...")):
                 try:
-                    old_disp_number = 0
-                    pol_nr = 0
                     app_obj.proc_container.update_view_text(' %d%%' % 0)
                     total_geo = []
 
@@ -1313,42 +1288,8 @@ class ToolNcc(Geometry, AppTool):
                                                    "There are no distances between geometry elements to be found."))
                         return 'fail'
 
-                    geo_len = (geo_len * (geo_len - 1)) / 2
-
-                    min_dict = {}
-                    idx = 1
-                    for geo in total_geo:
-                        for s_geo in total_geo[idx:]:
-                            if self.app.abort_flag:
-                                # graceful abort requested by the user
-                                raise grace
-
-                            # minimize the number of distances by not taking into considerations
-                            # those that are too small
-                            dist = geo.distance(s_geo)
-                            dist = float('%.*f' % (self.decimals, dist))
-                            loc_1, loc_2 = nearest_points(geo, s_geo)
-
-                            proc_loc = (
-                                (float('%.*f' % (self.decimals, loc_1.x)), float('%.*f' % (self.decimals, loc_1.y))),
-                                (float('%.*f' % (self.decimals, loc_2.x)), float('%.*f' % (self.decimals, loc_2.y)))
-                            )
-
-                            if dist in min_dict:
-                                min_dict[dist].append(proc_loc)
-                            else:
-                                min_dict[dist] = [proc_loc]
-
-                            pol_nr += 1
-                            disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
-
-                            if old_disp_number < disp_number <= 100:
-                                app_obj.proc_container.update_view_text(' %d%%' % disp_number)
-                                old_disp_number = disp_number
-                        idx += 1
-
-                    min_list = list(min_dict.keys())
-                    min_dist = min(min_list)
+                    min_dist = min(polygon_gap_pairs(total_geo, self.decimals))
+                    app_obj.proc_container.update_view_text(' %d%%' % 100)
 
                     min_dist_truncated = self.app.dec_format(float(min_dist), self.decimals)
                     self.safe_tooldia = min_dist_truncated

@@ -26,12 +26,13 @@ Contract (all functions)
 """
 
 from copy import deepcopy
+from math import isfinite
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.ops import linemerge, snap, unary_union
 
-from camlib import grace, translate_geometry
+from camlib import grace, new_rtree_index, translate_geometry
 
 Offset = Tuple[float, float]
 
@@ -54,6 +55,8 @@ def grid_offsets(bounds, rows: int, cols: int, spacing_x: float, spacing_y: floa
     :return:          list of (dx, dy), length rows * cols (empty if one of them is not positive)
     """
     xmin, ymin, xmax, ymax = bounds
+    if not all(isfinite(v) for v in (*bounds, spacing_x, spacing_y)) or xmax < xmin or ymax < ymin:
+        raise ValueError("Panelization requires finite, non-empty reference bounds and spacing.")
     step_x = xmax - xmin + spacing_x
     step_y = ymax - ymin + spacing_y
     return [(col * step_x, row * step_y) for row in range(rows) for col in range(cols)]
@@ -68,6 +71,9 @@ def constrain_grid(bounds, rows: int, cols: int, spacing_x: float, spacing_y: fl
     :return: (rows, cols, constrained) where ``constrained`` is True if at least one of them was reduced
     """
     xmin, ymin, xmax, ymax = bounds
+    if not all(isfinite(v) for v in (*bounds, spacing_x, spacing_y, max_width, max_height)) \
+            or xmax < xmin or ymax < ymin:
+        raise ValueError("Panelization requires finite, non-empty reference bounds and constraints.")
     width = xmax - xmin
     height = ymax - ymin
 
@@ -80,9 +86,9 @@ def constrain_grid(bounds, rows: int, cols: int, spacing_x: float, spacing_y: fl
     if panel_x(cols) <= max_width and panel_y(rows) <= max_height:
         return rows, cols, False
 
-    while panel_x(cols) > max_width:
+    while cols > 0 and panel_x(cols) > max_width:
         cols -= 1
-    while panel_y(rows) > max_height:
+    while rows > 0 and panel_y(rows) > max_height:
         rows -= 1
     return rows, cols, True
 
@@ -283,16 +289,19 @@ def panelize_geometry(src_tools: Dict[Any, dict], src_solid, multigeo: bool, off
             new_tool = deepcopy(tool)
         tools[tid] = new_tool
 
+    # Flatten and split the immutable source once, rather than for every copy.
+    source_solid = _split_multi(src_solid)
+    source_tools = {tid: _split_multi(tool.get('solid_geometry')) for tid, tool in src_tools.items()} if multigeo else {}
     solid = []
     for element, (dx, dy) in enumerate(offsets, start=1):
         if multigeo:
-            for tid, tool in src_tools.items():
+            for tid, geometry in source_tools.items():
                 _check_abort(abort)
-                moved = translate_geometry(_split_multi(tool.get('solid_geometry')), dx, dy)
+                moved = translate_geometry(geometry, dx, dy)
                 tools[tid]['solid_geometry'].extend(g for g in moved if not g.is_empty)
 
         _check_abort(abort)
-        solid.extend(_translate_solid(src_solid, (dx, dy), split_multi=True))
+        solid.extend(translate_geometry(source_solid, dx, dy))
         _report(progress, element, 1, 1)
     return tools, solid
 
@@ -360,28 +369,60 @@ def merge_tool_lines(tools: Dict[Any, dict], snap_overlaps: bool = False,
     """
     Path optimization of the multigeo tools of a panel (the cutout fix): in every tool the lines are merged with
     ``linemerge`` and fused with ``unary_union`` so the border shared by 2 neighbour copies is cut once. With
-    ``snap_overlaps`` the lines are first snapped to each other (tolerance 1e-7) so almost-touching paths fuse
-    (quadratic in the number of lines). The tools are changed in place.
+    ``snap_overlaps`` the lines are first snapped to each other (tolerance 1e-7) so almost-touching paths fuse.
+    A dynamic R-tree skips distant pairs while preserving the original snapping order. Dense overlapping bounds
+    still require quadratic work. The tools are changed in place.
     """
     for tool in tools.values():
+        _check_abort(abort)
         lines = []
         other_geo = []
         for geo in tool.get('solid_geometry') or []:
             if isinstance(geo, LineString):
-                lines.append(geo)
+                if not geo.is_empty:
+                    lines.append(geo)
             elif isinstance(geo, MultiLineString):
                 lines.extend(geo.geoms)
             else:
                 other_geo.append(geo)
 
-        if snap_overlaps:
-            for idx, line in enumerate(lines):
-                _check_abort(abort)
-                for idx_s in range(idx + 1, len(lines)):
-                    res = snap(lines[idx_s], line, tolerance=1e-7)
-                    if res and not res.is_empty:
-                        lines[idx_s] = res
+        if snap_overlaps and len(lines) > 1:
+            tolerance = 1e-7
+            bounds = []
+            index = new_rtree_index()
+            try:
+                for idx, line in enumerate(lines):
+                    _check_abort(abort)
+                    bounds.append(line.bounds)
+                    index.insert(idx, bounds[idx])
 
+                pairwise = False
+                for idx, line in enumerate(lines):
+                    _check_abort(abort)
+                    if pairwise:
+                        candidates = range(idx + 1, len(lines))
+                    else:
+                        xmin, ymin, xmax, ymax = bounds[idx]
+                        nearby = index.intersection((xmin - tolerance, ymin - tolerance,
+                                                     xmax + tolerance, ymax + tolerance))
+                        candidates = sorted(candidate for candidate in nearby if candidate > idx)
+                        # ponytail: use the original loop for a dense remainder; its worst case stays quadratic.
+                        pairwise = len(candidates) == len(lines) - idx - 1
+                    for idx_s in candidates:
+                        _check_abort(abort)
+                        res = snap(lines[idx_s], line, tolerance=tolerance)
+                        if res and not res.is_empty:
+                            lines[idx_s] = res
+                            if not pairwise:
+                                new_bounds = res.bounds
+                                if new_bounds != bounds[idx_s]:
+                                    index.delete(idx_s, bounds[idx_s])
+                                    index.insert(idx_s, new_bounds)
+                                    bounds[idx_s] = new_bounds
+            finally:
+                index.close()
+
+        _check_abort(abort)
         fused_lines = linemerge(lines)
         fused_lines = [unary_union(fused_lines)] if not fused_lines.is_empty else []
         tool['solid_geometry'] = fused_lines + other_geo

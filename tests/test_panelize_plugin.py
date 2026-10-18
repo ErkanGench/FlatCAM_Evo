@@ -41,7 +41,7 @@ class Value:
 
 
 def run_plugin(app, src, box_obj=None, rows=2, cols=3, spacing=5.0, panel_type='gerber', optimize=False,
-               constrain=None, before=None, name=None, box_name=None, fail_job=False):
+               constrain=None, before=None, name=None, box_name=None, fail_job=False, reference=None):
     """Returns (created, informs). constrain = (max_x, max_y) switches the constrain option on. before: a list that
     receives the messages shown before the worker task runs (the GUI-thread part)."""
     app.f_handlers = appIO(app)
@@ -75,7 +75,7 @@ def run_plugin(app, src, box_obj=None, rows=2, cols=3, spacing=5.0, panel_type='
     bx_name = (box_obj or src).obj_options['name']
     plugin.ui = SimpleNamespace(
         object_combo=Value(name or src.obj_options['name']), box_combo=Value(box_name or bx_name),
-        reference_radio=Value('bbox' if box_obj is None else 'box'),
+        reference_radio=Value(reference or ('bbox' if box_obj is None else 'object')),
         spacing_columns=Value(spacing), spacing_rows=Value(spacing), rows=Value(rows), columns=Value(cols),
         x_width_entry=Value(constrain[0] if constrain else 0.0), y_height_entry=Value(constrain[1] if constrain else 0.0),
         constrain_cb=Value(bool(constrain)), optimization_cb=Value(optimize), panel_type_radio=Value(panel_type))

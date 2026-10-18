@@ -66,7 +66,7 @@ class Panelize(AppTool):
                     found_idx = idx
                     break
             # show the Tab
-            if not found_idx:
+            if found_idx is None:
                 try:
                     self.app.ui.notebook.addTab(self.app.ui.plugin_tab, _("Plugin"))
                 except RuntimeError:
@@ -82,7 +82,7 @@ class Panelize(AppTool):
                 self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
 
             try:
-                if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName and found_idx:
+                if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName and found_idx is not None:
                     # if the Tool Tab is not focused, focus on it
                     if not self.app.ui.notebook.currentWidget() is self.app.ui.plugin_tab:
                         # focus on Tool Tab
@@ -90,11 +90,12 @@ class Panelize(AppTool):
                     else:
                         # else remove the Tool Tab
                         self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
-                        self.app.ui.notebook.removeTab(2)
+                        self.app.ui.notebook.removeTab(found_idx)
 
                         # if there are no objects loaded in the app then hide the Notebook widget
                         if not self.app.collection.get_list():
                             self.app.ui.splitter.setSizes([0, 1])
+                    return
             except AttributeError:
                 pass
         else:
@@ -104,7 +105,7 @@ class Panelize(AppTool):
         super().run()
         self.set_tool_ui()
 
-        self.app.ui.notebook.setTabText(2, _("Panelization"))
+        self.app.ui.notebook.setTabText(self.app.ui.notebook.indexOf(self.app.ui.plugin_tab), _("Panelization"))
 
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='Alt+Z', **kwargs)
@@ -116,7 +117,9 @@ class Panelize(AppTool):
         self.ui.type_obj_combo.currentIndexChanged.connect(self.on_type_obj_index_changed)
         self.ui.type_box_combo.currentIndexChanged.connect(self.on_type_box_index_changed)
 
-        self.app.proj_selection_changed.connect(self.on_object_selection_changed)
+        if not getattr(self, '_selection_signal_connected', False):
+            self.app.proj_selection_changed.connect(self.on_object_selection_changed)
+            self._selection_signal_connected = True
 
         self.ui.reset_button.clicked.connect(self.set_tool_ui)
 
@@ -191,14 +194,17 @@ class Panelize(AppTool):
         panel_type = self.app.options.get(
             "tools_panelize_panel_type",
             app_defaults.get("tools_panelize_panel_type", AppDefaults.factory_defaults.get("tools_panelize_panel_type")))
-        self.ui.panel_type_radio.set_value(panel_type)
-
-        self.ui.on_panel_type(val=panel_type)
-
         # run once the following so the obj_type attribute is updated in the FCComboBoxes
         # such that the last loaded object is populated in the combo boxes
         self.on_type_obj_index_changed()
         self.on_type_box_index_changed()
+
+        if obj and obj.kind in ('gerber', 'excellon', 'geometry'):
+            self.ui.object_combo.set_value(obj.obj_options['name'])
+        self.ui.panel_type_radio.set_value(panel_type)
+        self.ui.on_panel_type(val=panel_type)
+        if self.ui.type_obj_combo.currentIndex() == 1:
+            self.ui.optimization_cb.setDisabled(True)
 
         self.connect_signals_at_init()
 
@@ -332,23 +338,23 @@ class Panelize(AppTool):
                                  (_("Object not found"), name))
             return
 
-        boxname = self.ui.box_combo.currentText()
+        box_obj = panel_source_obj
+        if self.ui.reference_radio.get_value() == 'object':
+            boxname = self.ui.box_combo.currentText()
+            try:
+                box_obj = self.app.collection.get_by_name(boxname)
+            except Exception as e:
+                self.app.log.error("Panelize.on_panelize() --> %s" % str(e))
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), boxname))
+                return
 
-        try:
-            box_obj = self.app.collection.get_by_name(boxname)
-        except Exception as e:
-            self.app.log.error("Panelize.on_panelize() --> %s" % str(e))
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), boxname))
-            return
+            if box_obj is None:
+                self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (_("No object Box. Using instead"), name))
+                self.ui.reference_radio.set_value('bbox')
+                box_obj = panel_source_obj
 
-        if box_obj is None:
-            self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (_("No object Box. Using instead"), name))
-            self.ui.reference_radio.set_value('bbox')
-
-        if self.ui.reference_radio.get_value() == 'bbox':
-            box_obj = panel_source_obj
-
-        self.outname = name + '_panelized'
+        outname = name + '_panelized'
+        self.outname = outname
 
         spacing_columns = float(self.ui.spacing_columns.get_value())
         spacing_columns = spacing_columns if spacing_columns is not None else 0
@@ -367,21 +373,26 @@ class Panelize(AppTool):
 
         panel_type = str(self.ui.panel_type_radio.get_value())
 
-        if 0 in {columns, rows}:
+        if columns < 1 or rows < 1:
             self.app.inform.emit('[ERROR_NOTCL] %s' %
                                  _("Columns or Rows are zero value. Change them to a positive integer."))
             return
 
-        box_bounds = box_obj.bounds()
-
-        # check if constrain within an area is desired
         constrained = False
-        if self.ui.constrain_cb.isChecked():
-            # adjust the number of columns and/or rows so the panel will fit within the panel constraint area
-            rows, columns, constrained = panelize_core.constrain_grid(
-                box_bounds, rows, columns, spacing_columns, spacing_rows, constrain_dx, constrain_dy)
+        try:
+            box_bounds = box_obj.bounds()
+            if self.ui.constrain_cb.isChecked():
+                rows, columns, constrained = panelize_core.constrain_grid(
+                    box_bounds, rows, columns, spacing_columns, spacing_rows, constrain_dx, constrain_dy)
+                if rows < 1 or columns < 1:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("The reference object does not fit the constrain area."))
+                    return
 
-        offsets = panelize_core.grid_offsets(box_bounds, rows, columns, spacing_columns, spacing_rows)
+            offsets = panelize_core.grid_offsets(box_bounds, rows, columns, spacing_columns, spacing_rows)
+        except (ValueError, TypeError) as e:
+            self.app.log.error("Panelize.on_panelize() --> %s" % str(e))
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(e))
+            return
 
         to_optimize = self.ui.optimization_cb.get_value()
 
@@ -417,7 +428,7 @@ class Panelize(AppTool):
                     obj_fin.zeros = panel_source_obj.zeros
                     obj_fin.units = panel_source_obj.units
                     app_obj.inform.emit('%s' % _("Generating panel ... Adding the source code."))
-                    obj_fin.regenerate_source(name=self.outname)
+                    obj_fin.regenerate_source(name=outname)
                     app_obj.proc_container.update_view_text('')
 
                 def job_init_geometry(new_obj, app_obj):
@@ -460,7 +471,7 @@ class Panelize(AppTool):
 
 
                     app_obj.inform.emit('%s' % _("Generating panel ... Adding the source code."))
-                    new_obj.regenerate_source(name=self.outname)
+                    new_obj.regenerate_source(name=outname)
 
                     # new_obj.solid_geometry = unary_union(obj_fin.solid_geometry)
                     # app_obj.log.debug("Finished creating a unary_union for the panel.")
@@ -491,7 +502,7 @@ class Panelize(AppTool):
 
                     app_obj.inform.emit('%s' % _("Generating panel ... Adding the source code."))
 
-                    new_obj.regenerate_source(name=self.outname)
+                    new_obj.regenerate_source(name=outname)
 
                     # new_obj.solid_geometry = unary_union(new_obj.solid_geometry)
                     # app_obj.log.debug("Finished creating a unary_union for the panel.")
@@ -499,22 +510,28 @@ class Panelize(AppTool):
 
                 self.app.inform.emit('%s: %d' % (_("Generating panel... Spawning copies"), (int(rows * columns))))
                 if panel_source_obj.kind == 'excellon':
-                    self.new_object("excellon", self.outname, job_init_excellon,
+                    return self.new_object("excellon", outname, job_init_excellon,
                                     source=panel_source_obj, plot=True, autoselected=False)
                 else:
                     if panel_type == 'geometry':
-                        self.new_object('geometry', self.outname, job_init_geometry,
+                        return self.new_object('geometry', outname, job_init_geometry,
                                         source=panel_source_obj, plot=True, autoselected=False)
                     if panel_type == 'gerber':
-                        self.new_object('gerber', self.outname, job_init_gerber,
+                        return self.new_object('gerber', outname, job_init_gerber,
                                         source=panel_source_obj, plot=True, autoselected=False)
 
         def job_thread(app_obj):
             with self.app.proc_container.new('%s...' % _("Working")):
                 try:
-                    panelize_worker()
+                    result = panelize_worker()
+                    if result == 'fail' or result is False or result is None:
+                        app_obj.collection.promises.discard(outname)
+                        app_obj.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Panelize failed"), outname))
+                        return
                 except Exception as ee:
                     self.app.log.error(str(ee))
+                    app_obj.collection.promises.discard(outname)
+                    app_obj.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Panelize failed"), str(ee)))
                     return
 
                 # reported after the panel exists, not before the worker ran
@@ -525,7 +542,7 @@ class Panelize(AppTool):
                 else:
                     app_obj.inform.emit('[success] %s' % _("Panel created successfully."))
 
-        self.app.collection.promise(self.outname)
+        self.app.collection.promise(outname)
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
     def reset_fields(self):

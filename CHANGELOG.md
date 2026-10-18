@@ -154,6 +154,24 @@ Project file:
 - an uncompressed project file has LF line endings on all platforms
 - replaced simplejson with the standard json module (equal or faster); removed the unused simplejson imports in the plugins; simplejson is no longer a requirement
 
+Panelize:
+
+- the snap of almost-touching lines (snap overlaps) uses a dynamic R-tree to skip the line pairs that are far apart, instead of a snap of every pair; the snap order is the same and the bounds are updated after a line moves; when all the remaining lines are near each other, the old loop of every pair is used (dense cases stay quadratic); empty lines are skipped and the abort check runs in the loops
+- measured on synthetic lines (median of 3 runs, old to new, the same output): 200 sparse lines 0.086 s to 0.008 s (10x), 800 sparse lines 1.343 s to 0.031 s (43x), 200 dense lines 0.149 s to 0.165 s (no change, the old loop)
+- the source geometry is flattened 1 time, not again for each copy
+- the panel grid refuses infinite or empty reference bounds and spacing, and the row and column limits do not go below 0
+- fixed: the Panelize tool closed its tab when the tab was at index 0, removed tab 2 instead of its own tab and named tab 2 instead of its own tab; a second start does not connect the selection signal again
+- fixed: the tool opens with the selected Gerber, Excellon or Geometry object, and the panel type is set after the object; the optimization is disabled for an Excellon source
+- fixed: with the Bounding Box reference, the box object combobox is not read (a missing box object gave a wrong warning); a constrain area that is too small for 1 copy shows an error; invalid bounds or spacing show an error instead of an exception
+- fixed: a failed panel removes the promised object name and shows "Panelize failed"; each run uses its own output name, so a second run started before the first ends does not rename the first panel
+
+Find Optimal and Check validity:
+
+- the minimum distance between the copper polygons (Isolation and NCC "Check validity" and the optimal tool diameter, the Find Optimal tool) is found with an STRtree instead of a check of every pair (O(n log n), not O(n^2)): the candidate pairs come from the expanded bounding boxes and a prepared 'dwithin' test, and each distance is computed on the parts of the 2 polygons that are clipped to the intersection of their expanded boxes, so a large copper pour does not make each pair slow; the new function is camlib.polygon_gap_pairs()
+- the minimum distance, its frequency and its locations are exact; when more than one point pair is at the minimum distance (parallel edges), a location can be another point on the same edges
+- Find Optimal lists the distances between neighbor polygons only: all the pairs that are closer than the largest distance from a polygon to its nearest polygon, so each polygon has its nearest pair (before: every pair of polygons, also the pairs that are far apart)
+- measured on 4 boards (old check of every pair to new): KiCad F_Cu (106 polygons, 1 pour of 54951 vertices) 22.8 s to 0.76 s (30x), Find Optimal 1.6 s (14x); Pcb39 (216 polygons) 38.0 s to 0.10 s, Find Optimal 0.71 s; eagle (276 polygons) 88.9 s to 1.84 s (48x), Find Optimal 2.97 s (30x); KiCad B_Cu (66 polygons) 4.4 s to 0.25 s; the same minimum distance and number of pairs on all 4 boards
+
 NCC Tool:
 
 - measured on a real board (Easyduino RP2040 front copper, KiCad: 20 x 50.2 mm, 106 copper polygons, 20688 vertices; tools 2, 1 and 0.5 mm; median of 3 runs, geometry generation only): normal clearing 1.6x faster (1.094 s to 0.672 s) and the cutter sweep over copper 89x smaller (1.240 mm2 to 0.014 mm2); rest machining 1.8x slower (0.655 s to 1.206 s) because the residual stock is now exact, but the sweep over copper is 61x smaller (0.668 mm2 to 0.011 mm2) and 74 paths clear the stock instead of 65; the small overlap that remains is the polygonal approximation of the round cutter
@@ -204,6 +222,8 @@ Tests:
 - new unit tests for the image tracing; the gate list records the renamed Plot 3D zoom test
 - new unit tests for the Move Tool, the multiple projects (ProjectContext, ProjectManager, project combobox, File New, Open, Save and Save As, exit, Tcl commands) and the split of application settings and project options; the gate list records the removed autosave tests
 - new unit tests for the project file: plain and Zstandard round trip with both Zstandard backends, legacy LZMA load, inf/nan cleanup, level clamp and a failed save that keeps the old file
+- new unit tests for the Panelize snap: the same output as the old loop, moved bounds, the tolerance limit, empty lines and abort; extended tests for the Panelize plugin fixes; new unit tests for Jump To and Locate (cursor mapping, relative jumps)
+- new unit tests for camlib.polygon_gap_pairs (against a check of every pair: minimum, neighbors, ties, a pad in a hole) and for the Check validity of the Isolation and NCC tools
 - new unit tests for the plot preparation of objects and CNC jobs and for the Gerber marking batch; new benchmark scripts tests/benchmark_object_plot.py and tests/benchmark_gerber_marks.py (with --baseline-ref to measure an old revision)
 - new unit tests for the NCC Final cleanup: re-crossing of cleared stock, default Off, negative offset on Gerber copper, the offset and boundary limits in mm and inch, a gap that no tool can enter, abort, Tcl, unsafe connectors, holes and multipart areas; the Tools Database round trip, old databases and the tool form and preferences
 - new unit tests for the Tcl commands (tests/test_tcl_audit_*.py, 100 tests): the result contract, cutting, CNC generation, geometry, transforms and regressions

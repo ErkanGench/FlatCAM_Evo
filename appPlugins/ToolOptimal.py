@@ -10,13 +10,11 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCEntry, FCTextArea, FCSpinner, OptionalHideInputSection
 from defaults import AppDefaults
-from camlib import grace, flatten_shapely_geometry
+from camlib import grace, flatten_shapely_geometry, polygon_gap_pairs
 
 import logging
-import numpy as np
 
 from shapely import MultiPolygon
-from shapely.ops import nearest_points
 
 import gettext
 import appTranslation as fcTranslate
@@ -236,8 +234,6 @@ class ToolOptimal(AppTool):
         def job_thread(app_obj, plugin_instance):
             app_obj.inform.emit(_("Optimal Tool. Started to search for the minimum distance between copper features."))
             try:
-                old_disp_number = 0
-                pol_nr = 0
                 app_obj.proc_container.update_view_text(' %d%%' % 0)
                 total_geo = []
 
@@ -267,44 +263,12 @@ class ToolOptimal(AppTool):
                                           "There are no distances between geometry elements to be found."))
                     return 'fail'
 
-                geo_len = (geo_len * (geo_len - 1)) / 2
-
-                app_obj.inform.emit(
-                    '%s: %s' % (_("Optimal Tool. Finding the distances between each two elements. Iterations"),
-                                str(geo_len)))
-
-                plugin_instance.min_dict = {}
-                idx = 1
-                for geo in total_geo:
-                    for s_geo in total_geo[idx:]:
-                        if app_obj.abort_flag:
-                            # graceful abort requested by the user
-                            raise grace
-
-                        # minimize the number of distances by not taking into considerations those that are too small
-                        dist = geo.distance(s_geo)
-                        dist = app_obj.dec_format(dist, plugin_instance.decimals)
-                        loc_1, loc_2 = nearest_points(geo, s_geo)
-
-                        proc_loc = (
-                            (app_obj.dec_format(loc_1.x, self.decimals), app_obj.dec_format(loc_1.y, self.decimals)),
-                            (app_obj.dec_format(loc_2.x, self.decimals), app_obj.dec_format(loc_2.y, self.decimals))
-                        )
-
-                        if dist in plugin_instance.min_dict:
-                            plugin_instance.min_dict[dist].append(proc_loc)
-                        else:
-                            plugin_instance.min_dict[dist] = [proc_loc]
-
-                        pol_nr += 1
-                        disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
-
-                        if old_disp_number < disp_number <= 100:
-                            app_obj.proc_container.update_view_text(' %d%%' % disp_number)
-                            old_disp_number = disp_number
-                    idx += 1
-
                 app_obj.inform.emit(_("Optimal Tool. Finding the minimum distance."))
+
+                # The distances between neighbor polygons only (each polygon has at least its nearest polygon); the
+                # minimum distance, its frequency and its locations are exact. A check of every pair is O(n^2).
+                plugin_instance.min_dict = polygon_gap_pairs(total_geo, plugin_instance.decimals, neighbors=True)
+                app_obj.proc_container.update_view_text(' %d%%' % 100)
 
                 min_list = list(plugin_instance.min_dict.keys())
                 min_dist = min(min_list)

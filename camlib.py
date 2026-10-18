@@ -8166,6 +8166,112 @@ def flatten_shapely_geometry(
     return flat_list
 
 
+def polygon_gap_pairs(polygons, decimals, neighbors=False):
+    """
+    Distances between polygons, found with an STRtree instead of a check of every pair (O(n log n), not O(n^2)).
+    The pairs at the minimum distance are exact. The distances are rounded to 'decimals' and the pairs keep the order of
+    a check of every pair (first index, then second index).
+
+    :param polygons:    list of polygons
+    :param decimals:    number of decimals for the distances and the locations
+    :param neighbors:   False: only the pairs at the minimum distance. True: also all the pairs that are closer than the
+                        largest distance from a polygon to its nearest polygon, so each polygon has its nearest pair.
+    :return:            dict {distance: [((x1, y1), (x2, y2)), ...]}, the locations are the nearest points of the pair
+    """
+    geoms = np.empty(len(polygons), dtype=object)
+    geoms[:] = list(polygons)
+    count = len(geoms)
+    if count < 2:
+        return {}
+
+    tree = shapely.STRtree(geoms)
+    # a pair whose distance rounds to the limit can be up to 1 unit of the last decimal farther away
+    pad = 10 ** -decimals
+    bounds = shapely.bounds(geoms)
+    xmin, ymin, xmax, ymax = shapely.total_bounds(geoms)
+    diagonal = np.hypot(xmax - xmin, ymax - ymin)
+    # a prepared polygon tests 'dwithin' with an index of its edges; the large copper pours are the expensive side
+    vertices = shapely.get_num_coordinates(geoms)
+    shapely.prepare(geoms)
+
+    def pairs_within(radius):
+        # the pairs of expanded bounding boxes that intersect (cheap), then 1 'dwithin' test for each pair, with the
+        # polygon that has more vertices as the prepared side
+        boxes = shapely.box(bounds[:, 0] - radius, bounds[:, 1] - radius, bounds[:, 2] + radius, bounds[:, 3] + radius)
+        first, second = tree.query(boxes)
+        keep = first < second
+        first, second = first[keep], second[keep]
+        larger = vertices[first] >= vertices[second]
+        close = shapely.dwithin(np.where(larger, geoms[first], geoms[second]),
+                                np.where(larger, geoms[second], geoms[first]), radius)
+        return first[close], second[close]
+
+    # A check of every pair and query_nearest compute the full distance to the large copper pours (O(vertices^2) in
+    # GEOS). Grow the radius until every polygon (neighbors) or one polygon (minimum) has a partner: then all the pairs
+    # at the limit distance are in the result.
+    radius = pad
+    covered = np.empty(0, dtype=int)
+    while True:
+        first, second = pairs_within(radius)
+        now_covered = np.union1d(first, second)
+        found = now_covered.size == count if neighbors else first.size > 0
+        if found or radius > diagonal:
+            break
+        covered = now_covered
+        radius *= 4
+    if first.size == 0:
+        return {}
+
+    def gaps(first, second, radius):
+        # For a pair closer than 'radius', both nearest points are in the intersection of the 2 bounding boxes expanded
+        # by 'radius'. A polygon is never cut by its own expanded box, and a point that the clip adds on the expanded
+        # box of the other polygon is at least 'radius' away from it, so the distance of the clipped parts is the same.
+        near_first = np.empty(len(first), dtype=object)
+        near_second = np.empty(len(first), dtype=object)
+        for k, (i, j) in enumerate(zip(first, second)):
+            rect = (max(bounds[i][0], bounds[j][0]) - radius, max(bounds[i][1], bounds[j][1]) - radius,
+                    min(bounds[i][2], bounds[j][2]) + radius, min(bounds[i][3], bounds[j][3]) + radius)
+            near_first[k] = shapely.clip_by_rect(geoms[i], *rect)
+            near_second[k] = shapely.clip_by_rect(geoms[j], *rect)
+        return shapely.distance(near_first, near_second), near_first, near_second
+
+    if neighbors:
+        # a polygon with a partner at the previous radius has its nearest polygon closer than radius / 4: the largest
+        # nearest distance belongs to a polygon that found its first partner at the last radius
+        late = ~(np.isin(first, covered) & np.isin(second, covered))
+        exact = gaps(first[late], second[late], radius)[0]
+        nearest = np.full(count, np.inf)
+        np.minimum.at(nearest, first[late], exact)
+        np.minimum.at(nearest, second[late], exact)
+        nearest[covered] = -np.inf
+        limit = nearest.max() + pad
+    else:
+        limit = gaps(first, second, radius)[0].min() + pad
+
+    # the exact distances and the nearest points only for the pairs within the limit, clipped with the limit radius
+    first, second = pairs_within(limit)
+    exact, near_first, near_second = gaps(first, second, limit)
+
+    order = np.lexsort((second, first))
+    first, second, exact = first[order], second[order], exact[order]
+    near_first, near_second = near_first[order], near_second[order]
+    distances = [float('%.*f' % (decimals, d)) for d in exact]
+    selected = [k for k, d in enumerate(exact) if d <= limit]
+    if not neighbors:
+        min_dist = min(distances[k] for k in selected)
+        selected = [k for k in selected if distances[k] == min_dist]
+    distances = [distances[k] for k in selected]
+
+    lines = shapely.shortest_line(near_first[selected], near_second[selected])
+    points = shapely.get_coordinates(lines).reshape(-1, 2, 2)
+    pairs = {}
+    for dist, ((x1, y1), (x2, y2)) in zip(distances, points.tolist()):
+        pairs.setdefault(dist, []).append(
+            ((float('%.*f' % (decimals, x1)), float('%.*f' % (decimals, y1))),
+             (float('%.*f' % (decimals, x2)), float('%.*f' % (decimals, y2)))))
+    return pairs
+
+
 def app_option(app, key, fallback=None):
     """
     Look up an option: app.options first, then app.defaults, then the factory defaults, then ``fallback``.
