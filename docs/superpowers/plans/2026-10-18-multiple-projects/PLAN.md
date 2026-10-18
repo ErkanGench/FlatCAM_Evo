@@ -2868,7 +2868,7 @@ class TestExitWithProjects(unittest.TestCase):
         lifecycle = AppLifecycle.__new__(AppLifecycle)
         lifecycle.app = app
         lifecycle.inform = app.inform
-        lifecycle.quit_application = Mock()
+        lifecycle.quit_application = Mock(return_value=True)
         return lifecycle, projects, start
 
     def test_no_dirty_project_quits(self):
@@ -2971,6 +2971,27 @@ class TestExitWithProjects(unittest.TestCase):
 
         lifecycle.quit_application.assert_not_called()
         lifecycle.inform.emit.assert_called_once()
+
+    def test_cancel_of_the_tools_database_question_restores_the_autosave(self):
+        from types import MethodType
+        from appHandlers.appLifecycle import AppLifecycle
+        lifecycle, projects, start = self.make_lifecycle([])
+        self.use_real_autosave_hold(lifecycle, projects)
+        app = lifecycle.app
+        app.f_handlers = SimpleNamespace(on_file_save_project=Mock())
+        # the real quit_application(); only the answer of the Tools Database question is mocked
+        lifecycle.quit_application = MethodType(AppLifecycle.quit_application, lifecycle)
+        lifecycle._confirm_tools_database = Mock(return_value=False)
+
+        lifecycle.final_save()
+
+        lifecycle._confirm_tools_database.assert_called_once_with()
+        self.assertFalse(app.block_autosave)
+        app.trayIcon.hide.assert_not_called()
+        # the app stays open, so the next autosave must start a save
+        app.should_we_save = True
+        lifecycle.save_project_auto()
+        app.f_handlers.on_file_save_project.assert_called_once_with()
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -3004,7 +3025,8 @@ Replace it with:
         if projects is not None:
             start = projects.active
             # the dialogs below run a nested event loop; the autosave timer must not start a save during them.
-            # After a quit, the autosave stays blocked: quit_application() stops its timer.
+            # quit_application() also asks a question (the Tools Database) and can refuse the quit. Only a quit
+            # that returns True keeps the autosave blocked: quit_application() stops its timer.
             autosave_state = projects.hold_autosave()
             quitting = False
             try:
@@ -3018,15 +3040,16 @@ Replace it with:
                 if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
                     self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
                     return
-                quitting = True
+                quitting = self.quit_application() is True
             finally:
                 if not quitting:
                     projects.release_autosave(autosave_state)
-            try:
-                self.app.trayIcon.hide()
-            except Exception:
-                pass
-            self.quit_application()
+            if quitting:
+                # QApplication.quit() only posts the quit event, so the tray icon is hidden before the app ends
+                try:
+                    self.app.trayIcon.hide()
+                except Exception:
+                    pass
             return
 
         if self.app.should_we_save and self.app.collection.get_list():
@@ -3035,7 +3058,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (67 tests).
+Expected: `OK` (68 tests).
 
 Also run: `.venv/Scripts/python.exe -m pytest tests/test_shutdown_routing.py -q`
 Expected: all tests pass, 0 failed.
@@ -3489,7 +3512,7 @@ The agent can not do these checks. Copy the list into the final report:
 17. Make changes in 2 projects. Zoom project B to a different view, then show project A. Close the app, save B, and press Cancel at the question about A. Show project B: its zoom is the same as before.
 18. Open a big project and use File > Save. While the status bar shows "Saving Project ...", delete an object. When the save ends, close the project: the app asks to save.
 19. Check the RAM in Task Manager: open a big project, add a second project and switch to it. The RAM of the app goes down or stays the same. It does not double.
-20. In Preferences, set the autosave on with the shortest interval. Save a project, then change it. Close the app and wait at the "Save changes" question for more than 1 interval. Answer Yes. The app saves 1 time and quits. Do it again and answer Cancel: the autosave runs again after 1 interval.
+20. In Preferences, set the autosave on with the shortest interval. Save a project, then change it. Close the app and wait at the "Save changes" question for more than 1 interval. Answer Yes. The app saves 1 time and quits. Do it again and answer Cancel: the autosave runs again after 1 interval. Open the Tools Database, change a tool, then close the app. Answer the project question, then cancel the Tools Database question: the app stays open and the autosave runs again after 1 interval.
 
 ---
 
@@ -3501,4 +3524,4 @@ The agent can not do these checks. Copy the list into the final report:
 - The Tcl commands `new` and `open_project` replace the active project. They do not add a project.
 - An inactive project keeps the Properties UI of its objects, so it uses more RAM than a project that releases it. `set_ui()` must become safe to run 2 times before the UI can be released.
 - The Tcl `save_project` command still calls `save_project()` directly (`tclCommands/TclCommandSaveProject.py:53`). It gets the error handling of Task 6, but not the completion of Task 10: it does not change the file name or the dirty flag, the same as today.
-- The autosave calls `on_file_save_project()` (`appLifecycle.py:682`), so it uses the flow of Task 10. After a rename, the autosave writes `<new name>.FlatPrj`, and if that file exists it shows the overwrite question, the same as File > Save. An autosave while a save is pending is refused with the status bar message of Task 10. While the dialogs of a close or an exit are open, the autosave is blocked (`hold_autosave`, Task 6). A cancel restores its old state.
+- The autosave calls `on_file_save_project()` (`appLifecycle.py:682`), so it uses the flow of Task 10. After a rename, the autosave writes `<new name>.FlatPrj`, and if that file exists it shows the overwrite question, the same as File > Save. An autosave while a save is pending is refused with the status bar message of Task 10. While the dialogs of a close or an exit are open, the autosave is blocked (`hold_autosave`, Task 6). This includes the Tools Database question of `quit_application()`. A cancel restores its old state.
