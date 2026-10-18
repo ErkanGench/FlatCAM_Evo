@@ -161,7 +161,11 @@ The title bar shows the name of the active project.
   does not clear it. A failed save sets it back.
 - **1 save at a time:** a File > Save, Save As or autosave is refused while another one is
   pending. `app.project_save_pending` is set when the save is queued and cleared only when
-  the GUI has its result. While it is set, the exit and a project switch wait.
+  the GUI has its result. While it is set, the exit, a project switch and a save from a
+  close or an exit wait. The save of a close or an exit checks this also for the active project.
+- **No autosave in the dialogs:** the questions of a close and of an exit run a nested event
+  loop. The autosave is blocked while they are open. A cancel restores its old state. Before
+  the app quits, it checks again that no save is pending.
 - **An error during a save:** `appIO.save_project_checked()` never raises. An error is a
   failed save: `save_in_progress` is reset and the completion of the save always comes.
 
@@ -220,6 +224,8 @@ New commands:
 - A failed File > Save or Save As keeps the file name, the name and the dirty flag.
 - A saved project with all objects deleted is dirty.
 - A switch with `visuals=False` (exit) does not change the saved view of any project.
+- An autosave that fires while the exit or close question is open does not start a save.
+  The exit does not quit while a save is pending.
 - `appIO.save_project()` returns `False` for a real write failure and `True` for a good save.
 
 Option B test:

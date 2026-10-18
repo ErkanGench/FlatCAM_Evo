@@ -1705,6 +1705,39 @@ class TestProjectManagerDialogs(unittest.TestCase):
 
         self.assertIn(first, manager.contexts)
         self.assertTrue(app.should_we_save)
+
+    def test_save_context_of_the_active_project_waits_for_a_pending_save(self):
+        # switch() returns at once for the active project, so save_context() must check the pending save itself
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.should_we_save = True
+        app.project_save_pending = True
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True))
+
+        self.assertFalse(manager.save_context(manager.active))
+
+        app.f_handlers.save_project_checked.assert_not_called()
+        self.assertTrue(app.should_we_save)
+        app.inform.emit.assert_called_once()
+
+    def test_request_close_blocks_the_autosave_during_the_dialogs(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.should_we_save = True
+        app.block_autosave = False
+        seen = []
+
+        def answer(ctx):
+            # the dialog runs a nested event loop; the autosave timer can fire there
+            seen.append(app.block_autosave)
+            return 'cancel'
+
+        manager.ask_save = Mock(side_effect=answer)
+
+        self.assertFalse(manager.request_close(manager.active))
+
+        self.assertEqual(seen, [True])
+        # the cancel restores the old state of the autosave
+        self.assertFalse(app.block_autosave)
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -1775,6 +1808,20 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
             ext_filter="FlatCAM Project .FlatPrj (*.FlatPrj);; All Files (*.*)")
         return str(filename)
 
+    def hold_autosave(self):
+        """
+        Stop the autosave until release_autosave(). A dialog runs a nested event loop: the autosave timer can fire
+        in it and start a second save.
+
+        :return:    the old state, for release_autosave()
+        """
+        previous = getattr(self.app, 'block_autosave', False)
+        self.app.block_autosave = True
+        return previous
+
+    def release_autosave(self, previous):
+        self.app.block_autosave = previous
+
     # ------------------------------------------------------------------------------------------------------------
     # Open, close request, save
     # ------------------------------------------------------------------------------------------------------------
@@ -1815,11 +1862,16 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
             self.inform_busy()
             return False
         if self.is_dirty(ctx):
-            answer = self.ask_save(ctx)
-            if answer == 'cancel':
-                return False
-            if answer == 'yes' and not self.save_context(ctx):
-                return False
+            # the dialogs run a nested event loop; the autosave timer must not start a save during them
+            autosave_state = self.hold_autosave()
+            try:
+                answer = self.ask_save(ctx)
+                if answer == 'cancel':
+                    return False
+                if answer == 'yes' and not self.save_context(ctx):
+                    return False
+            finally:
+                self.release_autosave(autosave_state)
         return self.close(ctx, force=True)
 
     def save_context(self, ctx, visuals=True):
@@ -1828,6 +1880,11 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
 
         :return:    True if the file is written
         """
+        # switch() returns at once for the active project and skips its busy check; a pending save (for example an
+        # autosave) must end first, else 2 saves overlap
+        if self.is_busy():
+            self.inform_busy()
+            return False
         if not self.switch(ctx, visuals=visuals):
             return False
 
@@ -1862,7 +1919,7 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (54 tests).
+Expected: `OK` (56 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1944,7 +2001,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (57 tests).
+Expected: `OK` (59 tests).
 
 Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_titlebar.py"`
 Expected: `OK`.
@@ -2804,9 +2861,10 @@ class TestExitWithProjects(unittest.TestCase):
         start = SimpleNamespace(name='Board_A')
         projects = SimpleNamespace(active=start, dirty_contexts=Mock(return_value=dirty),
                                    ask_save=Mock(), save_context=Mock(return_value=True),
-                                   switch=Mock(return_value=True))
+                                   switch=Mock(return_value=True),
+                                   hold_autosave=Mock(return_value=False), release_autosave=Mock())
         app = SimpleNamespace(save_in_progress=False, projects=projects, trayIcon=Mock(),
-                              inform=Mock(), log=Mock())
+                              inform=Mock(), log=Mock(), block_autosave=False, should_we_save=False)
         lifecycle = AppLifecycle.__new__(AppLifecycle)
         lifecycle.app = app
         lifecycle.inform = app.inform
@@ -2851,6 +2909,68 @@ class TestExitWithProjects(unittest.TestCase):
         lifecycle.quit_application.assert_not_called()
         projects.dirty_contexts.assert_not_called()
         lifecycle.inform.emit.assert_called_once()
+
+    def use_real_autosave_hold(self, lifecycle, projects):
+        from types import MethodType
+        from appHandlers.appProjects import ProjectManager
+        owner = SimpleNamespace(app=lifecycle.app)
+        projects.hold_autosave = MethodType(ProjectManager.hold_autosave, owner)
+        projects.release_autosave = MethodType(ProjectManager.release_autosave, owner)
+
+    def test_autosave_in_the_exit_dialog_does_not_start_a_save(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        self.use_real_autosave_hold(lifecycle, projects)
+        app = lifecycle.app
+        app.should_we_save = True
+        app.f_handlers = SimpleNamespace(on_file_save_project=Mock())
+
+        def answer_after_autosave(ctx):
+            # the autosave timer fires in the nested event loop of the dialog, then the user answers Yes
+            lifecycle.save_project_auto()
+            return 'yes'
+
+        projects.ask_save.side_effect = answer_after_autosave
+
+        lifecycle.final_save()
+
+        app.f_handlers.on_file_save_project.assert_not_called()
+        projects.save_context.assert_called_once_with(first, visuals=False)
+        lifecycle.quit_application.assert_called_once_with()
+
+    def test_cancel_restores_the_autosave(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        self.use_real_autosave_hold(lifecycle, projects)
+        seen = []
+
+        def answer(ctx):
+            seen.append(lifecycle.app.block_autosave)
+            return 'cancel'
+
+        projects.ask_save.side_effect = answer
+
+        lifecycle.final_save()
+
+        self.assertEqual(seen, [True])
+        self.assertFalse(lifecycle.app.block_autosave)
+        lifecycle.quit_application.assert_not_called()
+
+    def test_exit_does_not_quit_with_a_save_pending_after_the_dialogs(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        projects.ask_save.return_value = 'yes'
+
+        def save_and_leave_pending(ctx, visuals=True):
+            lifecycle.app.project_save_pending = True
+            return True
+
+        projects.save_context.side_effect = save_and_leave_pending
+
+        lifecycle.final_save()
+
+        lifecycle.quit_application.assert_not_called()
+        lifecycle.inform.emit.assert_called_once()
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2883,12 +3003,25 @@ Replace it with:
         projects = getattr(self.app, 'projects', None)
         if projects is not None:
             start = projects.active
-            for ctx in projects.dirty_contexts():
-                answer = projects.ask_save(ctx)
-                if answer == 'cancel' or (answer == 'yes' and not projects.save_context(ctx, visuals=False)):
-                    # the exit stops; show the project that was active before
-                    projects.switch(start, visuals=False)
+            # the dialogs below run a nested event loop; the autosave timer must not start a save during them.
+            # After a quit, the autosave stays blocked: quit_application() stops its timer.
+            autosave_state = projects.hold_autosave()
+            quitting = False
+            try:
+                for ctx in projects.dirty_contexts():
+                    answer = projects.ask_save(ctx)
+                    if answer == 'cancel' or (answer == 'yes' and not projects.save_context(ctx, visuals=False)):
+                        # the exit stops; show the project that was active before
+                        projects.switch(start, visuals=False)
+                        return
+                # check again: the app must not quit while a save is pending
+                if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
+                    self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
                     return
+                quitting = True
+            finally:
+                if not quitting:
+                    projects.release_autosave(autosave_state)
             try:
                 self.app.trayIcon.hide()
             except Exception:
@@ -2902,7 +3035,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (62 tests).
+Expected: `OK` (67 tests).
 
 Also run: `.venv/Scripts/python.exe -m pytest tests/test_shutdown_routing.py -q`
 Expected: all tests pass, 0 failed.
@@ -3356,6 +3489,7 @@ The agent can not do these checks. Copy the list into the final report:
 17. Make changes in 2 projects. Zoom project B to a different view, then show project A. Close the app, save B, and press Cancel at the question about A. Show project B: its zoom is the same as before.
 18. Open a big project and use File > Save. While the status bar shows "Saving Project ...", delete an object. When the save ends, close the project: the app asks to save.
 19. Check the RAM in Task Manager: open a big project, add a second project and switch to it. The RAM of the app goes down or stays the same. It does not double.
+20. In Preferences, set the autosave on with the shortest interval. Save a project, then change it. Close the app and wait at the "Save changes" question for more than 1 interval. Answer Yes. The app saves 1 time and quits. Do it again and answer Cancel: the autosave runs again after 1 interval.
 
 ---
 
@@ -3367,4 +3501,4 @@ The agent can not do these checks. Copy the list into the final report:
 - The Tcl commands `new` and `open_project` replace the active project. They do not add a project.
 - An inactive project keeps the Properties UI of its objects, so it uses more RAM than a project that releases it. `set_ui()` must become safe to run 2 times before the UI can be released.
 - The Tcl `save_project` command still calls `save_project()` directly (`tclCommands/TclCommandSaveProject.py:53`). It gets the error handling of Task 6, but not the completion of Task 10: it does not change the file name or the dirty flag, the same as today.
-- The autosave calls `on_file_save_project()` (`appLifecycle.py:682`), so it uses the flow of Task 10. After a rename, the autosave writes `<new name>.FlatPrj`, and if that file exists it shows the overwrite question, the same as File > Save. An autosave while a save is pending is refused with the status bar message of Task 10.
+- The autosave calls `on_file_save_project()` (`appLifecycle.py:682`), so it uses the flow of Task 10. After a rename, the autosave writes `<new name>.FlatPrj`, and if that file exists it shows the overwrite question, the same as File > Save. An autosave while a save is pending is refused with the status bar message of Task 10. While the dialogs of a close or an exit are open, the autosave is blocked (`hold_autosave`, Task 6). A cancel restores its old state.
