@@ -147,7 +147,8 @@ class TestResponsiveBatch(unittest.TestCase):
         manager.plot_finished.connect(manager.on_plot_finished)
         manager.log = Mock()
         manager.app_obj = SimpleNamespace(object_plotted=Mock())
-        manager.collection = Mock()
+        # the collection property reads app.collection
+        manager.app = SimpleNamespace(collection=Mock())
         objects = [SimpleNamespace(kind='gerber', obj_options={'plot': True}, plot=Mock()) for i in range(3)]
         hidden = SimpleNamespace(obj_options={'plot': False}, plot=Mock())
         manager.collection.get_list.return_value = objects + [hidden]

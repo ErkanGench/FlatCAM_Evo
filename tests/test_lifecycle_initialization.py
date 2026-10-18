@@ -438,6 +438,8 @@ class TestFinalSaveSequence(unittest.TestCase):
         mock_app.should_we_save = False  # Skip save dialog
         mock_app.collection = Mock()
         mock_app.collection.get_list = Mock(return_value=[])  # No objects
+        mock_app.projects = None  # the single project path of final_save
+        mock_app.project_save_pending = False
         mock_app.trayIcon = Mock()
         mock_app.trayIcon.hide = Mock()
         mock_app.autosave_timer = Mock()

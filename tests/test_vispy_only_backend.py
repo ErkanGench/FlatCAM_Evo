@@ -106,7 +106,7 @@ def test_setup_gui_collections_and_failure_cleanup(monkeypatch, failed):
     monkeypatch.setattr(appMain.fcTranslate, 'apply_language', Mock(return_value='English'))
     monkeypatch.setattr(appMain, 'load_preprocessors', Mock(return_value={}))
     for name in ('MainGUI', 'FCShell', 'RegisterFK', 'PreferencesUIManager', 'ObjectCollection',
-                 'AppObject', 'FCVisibleProcessContainer'):
+                 'AppObject', 'FCVisibleProcessContainer', 'ProjectManager', 'ProjectSelector'):
         monkeypatch.setattr(appMain, name, Mock())
     shapes = Mock(side_effect=[Mock(), Mock(), Mock()])
     monkeypatch.setattr(appMain, 'ShapeCollection', shapes)
