@@ -2422,10 +2422,12 @@ class Geometry(object):
         :return:    A dictionary-encoded copy of the object.
         :rtype:     dict
         """
-        # d = {}
-        # for attr in self.ser_attrs:
-        #     d[attr] = getattr(self, attr)
-        return {attr: copy(getattr(self, attr)) for attr in self.ser_attrs}
+        d = {attr: copy(getattr(self, attr)) for attr in self.ser_attrs}
+        if getattr(self, 'special_group', None) == 'solder_paste_tool':
+            d['special_group'] = self.special_group
+            if hasattr(self, 'pp_solderpaste_name'):
+                d['pp_solderpaste_name'] = self.pp_solderpaste_name
+        return d
 
     def from_dict(self, d):
         """
@@ -2442,6 +2444,8 @@ class Geometry(object):
         """
         for attr in self.ser_attrs:
             setattr(self, attr, d[attr])
+        from appCommon.solderpaste import restore_paste_metadata
+        restore_paste_metadata(self, d)
 
     def union(self):
         """
@@ -3078,6 +3082,8 @@ class CNCjob(Geometry):
             return ret
         except Exception:
             self.app.log.error('Exception occurred within a preprocessor: ' + traceback.format_exc())
+            if getattr(self, 'pp_solderpaste_name', None):
+                raise
             return ''
 
     def parse_custom_toolchange_code(self, data):
@@ -5909,6 +5915,12 @@ class CNCjob(Geometry):
 
         self.app.log.debug("Generate_from_solderpaste_geometry()")
 
+        if kwargs.get('data', {}).get('tools_solderpaste_volume_mode', 'Legacy') != 'Legacy':
+            from appCommon.solderpaste import generate_program
+            self.gcode = ''
+            self.gcode = generate_program(self, kwargs, is_first=is_first)
+            return self.gcode
+
         # ## Index first and last points in paths
         # What points to index.
         def get_pts(o):
@@ -5920,6 +5932,7 @@ class CNCjob(Geometry):
             self.app.log.debug("camlib.generate_from_solderpaste_geo() --> No tool in the solderpaste geometry.")
             self.app.inform.emit('[ERROR_NOTCL] %s' %
                                  _("There is no tool data in the SolderPaste geometry."))
+            return 'fail'
 
         # this is the tool diameter, it is used as such to accommodate the preprocessor who need the tool diameter
         # given under the name 'toolC'
@@ -5939,6 +5952,7 @@ class CNCjob(Geometry):
         self.postdata['dwellfwd'] = kwargs['data']['tools_solderpaste_dwellfwd']
         self.postdata['speedrev'] = kwargs['data']['tools_solderpaste_speedrev']
         self.postdata['dwellrev'] = kwargs['data']['tools_solderpaste_dwellrev']
+        self.postdata['mach3_dwell'] = kwargs['data'].get('tools_solderpaste_mach3_dwell', 'Seconds')
         self.postdata['pp_solderpaste_name'] = kwargs['data']['tools_solderpaste_pp']
 
         self.pp_solderpaste_name = kwargs['data']['tools_solderpaste_pp'] if kwargs['data']['tools_solderpaste_pp'] \
@@ -5948,6 +5962,8 @@ class CNCjob(Geometry):
         # ## Flatten the geometry. Only linear elements (no polygons) remain.
         flat_geometry = self.flatten(kwargs['solid_geometry'], pathonly=True)
         self.app.log.debug("%d paths" % len(flat_geometry))
+        if not flat_geometry:
+            return 'fail'
 
         # Create the indexed storage.
         storage = AppRTreeStorage()
@@ -5964,11 +5980,11 @@ class CNCjob(Geometry):
                 storage.insert(geo_shape)
 
         # Initial G-Code
-        self.gcode = ''
+        gcode = []
         if is_first:
-            self.gcode += self.doformat(p.start_code)
-        self.gcode += self.doformat(p.spindle_off_code)
-        self.gcode += self.doformat(p.toolchange_code)
+            gcode.append(self.doformat(p.start_code))
+        gcode.append(self.doformat(p.spindle_off_code))
+        gcode.append(self.doformat(p.toolchange_code))
 
         # ## Iterate over geometry paths getting the nearest each time.
         self.app.log.debug("Starting SolderPaste G-Code...")
@@ -5998,14 +6014,14 @@ class CNCjob(Geometry):
                     # geo.coords = list(geo.coords)[::-1] # Shapely 2.0
                     geo = LineString(list(geo.coords)[::-1])
 
-                self.gcode += self.create_repasted_gcode(geo, p=p, old_point=current_pt)
+                gcode.append(self.create_repasted_gcode(geo, p=p, old_point=current_pt))
                 current_pt = geo.coords[-1]
-                pt, geo = storage.nearest(current_pt)  # Next
 
-                disp_number = int(np.interp(path_count, [0, geo_len], [0, 100]))
+                disp_number = path_count * 100 // geo_len
                 if old_disp_number < disp_number <= 100:
                     self.app.proc_container.update_view_text(' %d%%' % disp_number)
                     old_disp_number = disp_number
+                pt, geo = storage.nearest(current_pt)  # Next
         except StopIteration:  # Nothing found in storage.
             pass
 
@@ -6015,8 +6031,9 @@ class CNCjob(Geometry):
         )
 
         # Finish
-        self.gcode += self.doformat(p.lift_code)
-        self.gcode += self.doformat(p.end_code)
+        gcode.append(self.doformat(p.lift_code))
+        gcode.append(self.doformat(p.end_code))
+        self.gcode = ''.join(gcode)
 
         return self.gcode
 
@@ -6024,15 +6041,9 @@ class CNCjob(Geometry):
         gcode = ''
         path = geometry.coords
 
-        self.coordinates_type = self._app_option("cncjob_coords_type")
-        if self.coordinates_type == "G90":
-            # For Absolute coordinates type G90
-            first_x = path[0][0]
-            first_y = path[0][1]
-        else:
-            # For Incremental coordinates type G91
-            first_x = path[0][0] - old_point[0]
-            first_y = path[0][1] - old_point[1]
+        # Paste preprocessors emit G90, independent of the milling coordinate preference.
+        first_x = path[0][0]
+        first_y = path[0][1]
 
         if isinstance(geometry, LineString) or isinstance(geometry, LinearRing):
             # Move fast to 1st point
@@ -6048,31 +6059,21 @@ class CNCjob(Geometry):
             gcode += self.doformat(p.feedrate_xy_code)
 
             # Cutting...
-            prev_x = first_x
-            prev_y = first_y
             for pt in path[1:]:
-                if self.coordinates_type == "G90":
-                    # For Absolute coordinates type G90
-                    next_x = pt[0]
-                    next_y = pt[1]
-                else:
-                    # For Incremental coordinates type G91
-                    next_x = pt[0] - prev_x
-                    next_y = pt[1] - prev_y
+                next_x = pt[0]
+                next_y = pt[1]
                 gcode += self.doformat(p.linear_code, x=next_x, y=next_y)  # Linear motion to point
-                prev_x = next_x
-                prev_y = next_y
 
             # Up to travelling height.
             gcode += self.doformat(p.spindle_off_code)  # Stop dispensing
             gcode += self.doformat(p.spindle_rev_code)
             gcode += self.doformat(p.down_z_stop_code)
-            gcode += self.doformat(p.spindle_off_code)
             gcode += self.doformat(p.dwell_rev_code)
+            gcode += self.doformat(p.spindle_off_code)
             gcode += self.doformat(p.z_feedrate_code)
             gcode += self.doformat(p.lift_code)
         elif isinstance(geometry, Point):
-            gcode += self.doformat(p.linear_code, x=first_x, y=first_y)  # Move to first point
+            gcode += self.doformat(p.rapid_code, x=first_x, y=first_y)  # Move to first point
 
             gcode += self.doformat(p.feedrate_z_dispense_code)
             gcode += self.doformat(p.down_z_start_code)
@@ -6082,9 +6083,9 @@ class CNCjob(Geometry):
 
             gcode += self.doformat(p.spindle_off_code)  # Stop dispensing
             gcode += self.doformat(p.spindle_rev_code)
-            gcode += self.doformat(p.spindle_off_code)
             gcode += self.doformat(p.down_z_stop_code)
             gcode += self.doformat(p.dwell_rev_code)
+            gcode += self.doformat(p.spindle_off_code)
             gcode += self.doformat(p.z_feedrate_code)
             gcode += self.doformat(p.lift_code)
         return gcode
@@ -6221,6 +6222,15 @@ class CNCjob(Geometry):
 
         command = {}
 
+        if self.pp_solderpaste_name is not None:
+            if gline.strip() in ('(PASTE_ON)', ';PASTE_ON'):
+                return {'Z': 0}
+            if gline.strip() in ('(PASTE_OFF)', ';PASTE_OFF'):
+                return {'Z': 1}
+            dot = re.match(r'^[;(]PASTE_DOT X([+\-\d.]+) Y([+\-\d.]+) D([+\-\d.]+)', gline)
+            if dot:
+                return {'X': float(dot[1]), 'Y': float(dot[2]), '_paste_dot': float(dot[3])}
+
         if 'Roland' in self.pp_excellon_name or 'Roland' in self.pp_geometry_name:
             match_z = re.search(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
             if match_z:
@@ -6336,7 +6346,11 @@ class CNCjob(Geometry):
 
         # Current path: temporary storage until tool is
         # lifted or lowered.
-        if self.obj_options['type'].lower() == "excellon":
+        if self.pp_solderpaste_name is not None:
+            from appCommon.solderpaste import parse_numbers
+            pos_xy = parse_numbers(tool_data.get('tools_solderpaste_xy_toolchange', self.xy_toolchange)
+                                   if tool_data else self.xy_toolchange, count=2, allow_empty=True) or (0, 0)
+        elif self.obj_options['type'].lower() == "excellon":
             if toolchange_xy_drill == '' or toolchange_xy_drill is None:
                 pos_xy = (0, 0)
             else:
@@ -6372,6 +6386,11 @@ class CNCjob(Geometry):
                     return "fail"
 
             gobj = self.codes_split(line)
+
+            if '_paste_dot' in gobj:
+                geometry.append({'geom': Point(gobj['X'], gobj['Y']).buffer(gobj['_paste_dot'] / 2).exterior,
+                                 'kind': ['C', 'S']})
+                continue
 
             # ## Units
             if 'G' in gobj and (gobj['G'] == 20.0 or gobj['G'] == 21.0):

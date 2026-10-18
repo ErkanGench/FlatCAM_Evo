@@ -629,6 +629,7 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_solderpaste_speedrev": self.ui.plugin_pref_form.tools_solderpaste_group.speedrev_entry,
             "tools_solderpaste_dwellrev": self.ui.plugin_pref_form.tools_solderpaste_group.dwellrev_entry,
             "tools_solderpaste_pp": self.ui.plugin_pref_form.tools_solderpaste_group.pp_combo,
+            **self.ui.plugin_pref_form.tools_solderpaste_group.calibration.fields,
 
             # Subtractor Tool
             "tools_sub_close_paths": self.ui.plugin_pref_form.tools_sub_group.close_paths_cb,

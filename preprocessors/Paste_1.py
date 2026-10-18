@@ -7,6 +7,7 @@
 # ##########################################################
 
 from appPreProcessor import AppPreProcTools
+from appCommon.solderpaste import parse_numbers
 
 
 class Paste_1(AppPreProcTools):
@@ -81,13 +82,9 @@ class Paste_1(AppPreProcTools):
         gcode += '\n(XY_TOOLCHANGE: )\n'
         for tool, val in p['tools'].items():
             xy_tc_coords = val['data']["tools_solderpaste_xy_toolchange"]
-            if isinstance(xy_tc_coords, str):
-                temp_val = xy_tc_coords.replace('[', '').replace(']', '')
-                coords_xy = [float(eval(a)) for a in temp_val.split(",") if a != '']
-            else:
-                coords_xy = xy_tc_coords
-
-            xy_coords_formatted = "%.*f, %.*f" % (p.decimals, coords_xy[0], p.decimals, coords_xy[1])
+            coords_xy = parse_numbers(xy_tc_coords, count=2, allow_empty=True)
+            xy_coords_formatted = "%.*f, %.*f" % (p.decimals, coords_xy[0], p.decimals, coords_xy[1]) \
+                if coords_xy else 'Current position'
             gcode += '(Tool: %s -> ' % str(tool) + 'X,Y Toolchange: %s' % xy_coords_formatted + units + ')\n'
 
         gcode += '\n(Spindle Speed FWD: )\n'
@@ -139,11 +136,7 @@ class Paste_1(AppPreProcTools):
         fr_rapids = float(p['fr_rapids'])
         z_toolchange = float(p['z_toolchange'])
 
-        if isinstance(p['xy_toolchange'], str):
-            temp_val = p['xy_toolchange'].replace('[', '').replace(']', '')
-            toolchangexy = [float(eval(a)) for a in temp_val.split(",") if a != '']
-        else:
-            toolchangexy = p['xy_toolchange']
+        toolchangexy = parse_numbers(p['xy_toolchange'], count=2, allow_empty=True) or None
 
         if toolchangexy is not None:
             x_toolchange = toolchangexy[0]
@@ -213,7 +206,7 @@ G01 Z{z_toolchange} F{fr_rapids}
                str(self.feedrate_format % (p.fr_decimals, float(p['frxy'])))
 
     def end_code(self, p):
-        coords_xy = [float(eval(a)) for a in p['xy_end'].split(",") if a != '']
+        coords_xy = parse_numbers(p['xy_end'], count=2, allow_empty=True)
         gcode = ('G01 Z' + self.feedrate_format % (p.fr_decimals, float(p['z_toolchange'])) +
                  'F%s' % str(p['fr_rapids']) + "\n")
 
@@ -231,24 +224,20 @@ G01 Z{z_toolchange} F{fr_rapids}
         return 'G01 F' + str(self.feedrate_format % (p.fr_decimals, float(p['frz_dispense'])))
 
     def spindle_fwd_code(self, p):
-        if p.spindlespeed:
-            return 'M03 S' + str(float(p['speedfwd']))
-        else:
-            return 'M03'
+        return 'M03 S' + str(float(p['speedfwd']))
 
     def spindle_rev_code(self, p):
-        if p.spindlespeed:
-            return 'M04 S' + str(float(p['speedrev']))
-        else:
-            return 'M04'
+        return 'M04 S' + str(float(p['speedrev']))
 
     def spindle_off_code(self, p):
         return 'M05'
 
     def dwell_fwd_code(self, p):
-        if p.dwelltime:
-            return 'G4 P' + str(float(p['dwellfwd']))
+        if p['dwellfwd']:
+            return 'G4 P' + str(float(p['dwellfwd']) * (1000 if p.get('mach3_dwell') == 'Milliseconds' else 1))
+        return ''
 
     def dwell_rev_code(self, p):
-        if p.dwelltime:
-            return 'G4 P' + str(float(p['dwellrev']))
+        if p['dwellrev']:
+            return 'G4 P' + str(float(p['dwellrev']) * (1000 if p.get('mach3_dwell') == 'Milliseconds' else 1))
+        return ''

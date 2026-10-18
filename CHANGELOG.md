@@ -83,6 +83,20 @@ Film Tool:
 - faster export: the SVG document is made with 1 regex pass instead of an lxml and minidom parse; the punch uses intersects(); the geometry is not deep copied
 - the positive and negative films share the same export code; the GUI values are read before the worker starts; a failure of the worker shows "Failed."
 
+Solder Paste Tool:
+
+- new calibrated dispensing: the Dose calculation setting has Thickness (wet paste thickness x pad area), Fixed volume (uL for each pad) and Legacy (the old cycle); the volumes are in uL and mm, also in inch projects
+- new settings tabs, the same in the tool and in Preferences: Hardware (controller, syringe drive Motor with M3/M4 and S or Stepper with an A, B, C or E axis, Rotary or Linear, the Mach3 dwell units, the GRBL $32 mode, the Marlin cold extrusion) and Quantity (thickness, volume, measured flow, dose correction, syringe bore, pitch, gear ratio, plunger feed, prime, retract, slow Z approach)
+- the controllers are Mach3, Mach4, LinuxCNC, GRBL (spindle mode only) and Marlin (linear E axis; the cold extrusion must be confirmed); the Marlin output uses ";" comments
+- new pad placement: Auto, Line, Raster (with overlap %) and Dot (with dot diameter), with a pad margin; the raster strokes share the pad dose by length; the paths do not cross pad holes; rotated pads follow their long axis, also in Legacy
+- the pads include the region apertures, are clipped to the final polarity (clear areas) and the overlapping apertures are merged
+- the settings are checked before the G-code is made: a bad value gives an error and no output; the errors of the preprocessor are shown
+- the nozzle diameters and the XY coordinates are read with ast.literal_eval instead of eval(); an empty toolchange XY means the current position
+- fixed in Paste_1, Paste_GRBL and Paste_Marlin: M03 and M04 always have S; a dwell of 0 writes no G4; the Mach3 dwell can be in milliseconds; the paste jobs always use absolute coordinates (G90)
+- new defaults: Travel Z 2.0 (was 0.1), Toolchange Z 5.0 (was 1.0), preprocessors Paste_1, Paste_GRBL and Paste_Marlin; the new settings default to Mach3 and Thickness 0.1 mm
+- a selected paste geometry restores its nozzle settings; the controller and calibration changes apply to the next CNC job without a new geometry; the integer fields are saved; the project keeps the paste role and the preprocessor, and older projects get them from the tool data
+- fixed: unused or empty nozzles do not stop the CNC job and do not change the source object; the CNC object combobox used the geometry widget; the G-code header units come from the job; the job can be aborted
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -92,6 +106,7 @@ Tests:
 - new unit tests for the signal lifecycle of the Milling and Drilling tools (tests/test_milling_lifecycle.py)
 - new unit tests for the Cutout regressions (tests/test_cutout_regressions.py) and the panel checks
 - new unit tests for the Film tool (tests/test_film.py)
+- new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
 
 18.10.2026
 

@@ -7,6 +7,7 @@
 # ##########################################################
 
 from appPreProcessor import AppPreProcTools
+from appCommon.solderpaste import parse_numbers
 
 
 class Paste_Marlin(AppPreProcTools):
@@ -17,7 +18,7 @@ class Paste_Marlin(AppPreProcTools):
 
     def start_code(self, p):
         units = ' ' + str(p['units']).lower()
-        gcode = '(This preprocessor is used only with the SolderPaste Plugin and with MARLIN-like controllers.)\n\n'
+        gcode = ';This preprocessor is used only with the SolderPaste Plugin and with MARLIN-like controllers.\n\n'
 
         xmin = '%.*f' % (p.coords_decimals, p['obj_options']['xmin'])
         xmax = '%.*f' % (p.coords_decimals, p['obj_options']['xmax'])
@@ -28,7 +29,7 @@ class Paste_Marlin(AppPreProcTools):
         for tool, val in p['tools'].items():
             gcode += ';Tool: %s -> ' % str(tool) + 'Dia: %s' % str(val["tooldia"]) + units + '\n'
 
-        gcode += '\nMARGIN: ;\n'
+        gcode += '\n;MARGIN: \n'
         for tool, val in p['tools'].items():
             gcode += ';Tool: %s -> ' % str(tool) + 'Margin: %s' % str(
                 val['data']["tools_solderpaste_margin"]) + '\n'
@@ -40,12 +41,12 @@ class Paste_Marlin(AppPreProcTools):
 
         gcode += '\n;FEEDRATE RAPIDS: \n'
         for tool, val in p['tools'].items():
-            gcode += '(Tool: %s -> ' % str(tool) + 'Feedrate Rapids: %s' % \
+            gcode += ';Tool: %s -> ' % str(tool) + 'Feedrate Rapids: %s' % \
                      str(val['data']["tools_solderpaste_fr_rapids"]) + units + '/min' + '\n'
 
         gcode += '\n;FEEDRATE Z: \n'
         for tool, val in p['tools'].items():
-            gcode += '(Tool: %s -> ' % str(tool) + 'Feedrate Z: %s' % \
+            gcode += ';Tool: %s -> ' % str(tool) + 'Feedrate Z: %s' % \
                      str(val['data']["tools_solderpaste_frz"]) + units + '/min' + '\n'
 
         gcode += '\n;FEEDRATE Z_DISPENSE: \n'
@@ -81,13 +82,9 @@ class Paste_Marlin(AppPreProcTools):
         gcode += '\n;XY_TOOLCHANGE: \n'
         for tool, val in p['tools'].items():
             xy_tc_coords = val['data']["tools_solderpaste_xy_toolchange"]
-            if isinstance(xy_tc_coords, str):
-                temp_val = xy_tc_coords.replace('[', '').replace(']', '')
-                coords_xy = [float(eval(a)) for a in temp_val.split(",") if a != '']
-            else:
-                coords_xy = xy_tc_coords
-
-            xy_coords_formatted = "%.*f, %.*f" % (p.decimals, coords_xy[0], p.decimals, coords_xy[1])
+            coords_xy = parse_numbers(xy_tc_coords, count=2, allow_empty=True)
+            xy_coords_formatted = "%.*f, %.*f" % (p.decimals, coords_xy[0], p.decimals, coords_xy[1]) \
+                if coords_xy else 'Current position'
             gcode += ';Tool: %s -> ' % str(tool) + 'X,Y Toolchange: %s' % xy_coords_formatted + units + '\n'
 
         gcode += '\n;Spindle Speed FWD: \n'
@@ -107,7 +104,7 @@ class Paste_Marlin(AppPreProcTools):
 
         gcode += '\n;Dwell REV: \n'
         for tool, val in p['tools'].items():
-            gcode += 'Tool: %s -> ' % str(tool) + 'Dwell REV: %s' % str(
+            gcode += ';Tool: %s -> ' % str(tool) + 'Dwell REV: %s' % str(
                 val['data']["tools_solderpaste_dwellrev"]) + units + '\n'
 
         if 'Paste' in p.pp_solderpaste_name:
@@ -117,6 +114,7 @@ class Paste_Marlin(AppPreProcTools):
         gcode += ';Y range: ' + '{: >9s}'.format(ymin) + ' ... ' + '{: >9s}'.format(ymax) + ' ' + units + '\n\n'
 
         gcode += ('G20\n' if p.units.upper() == 'IN' else 'G21\n')
+        gcode += 'G90\n'
         return gcode
 
     def lift_code(self, p):
@@ -137,11 +135,7 @@ class Paste_Marlin(AppPreProcTools):
         fr_rapids = float(p['fr_rapids'])
         z_toolchange = float(p['z_toolchange'])
 
-        if isinstance(p['xy_toolchange'], str):
-            temp_val = p['xy_toolchange'].replace('[', '').replace(']', '')
-            toolchangexy = [float(eval(a)) for a in temp_val.split(",") if a != '']
-        else:
-            toolchangexy = p['xy_toolchange']
+        toolchangexy = parse_numbers(p['xy_toolchange'], count=2, allow_empty=True) or None
 
         if toolchangexy is not None:
             x_toolchange = toolchangexy[0]
@@ -157,8 +151,6 @@ class Paste_Marlin(AppPreProcTools):
 ;Toolchange: START
 G1 Z{z_toolchange} F{fr_rapids}
 G1 X{x_toolchange} Y{y_toolchange} F{fr_rapids}
-T{tool}
-M6    
 ;MSG, Change to Tool with Nozzle Dia = {toolC}
 M0
 G1 Z{z_toolchange} F{fr_rapids}
@@ -173,8 +165,6 @@ G1 Z{z_toolchange} F{fr_rapids}
             gcode = """
 ;Toolchange: START
 G1 Z{z_toolchange} F{fr_rapids}
-T{tool}
-M6    
 ;MSG, Change to Tool with Nozzle Dia = {toolC}
 M0
 G1 Z{z_toolchange} F{fr_rapids}
@@ -211,7 +201,7 @@ G1 Z{z_toolchange} F{fr_rapids}
                str(self.feedrate_format % (p.fr_decimals, float(p['frxy'])))
 
     def end_code(self, p):
-        coords_xy = [float(eval(a)) for a in p['xy_end'].split(",") if a != '']
+        coords_xy = parse_numbers(p['xy_end'], count=2, allow_empty=True)
         gcode = ('G1 Z' + self.feedrate_format % (p.fr_decimals, float(p['z_toolchange'])) +
                  'F%s' % str(p['fr_rapids']) + "\n")
 
@@ -229,24 +219,20 @@ G1 Z{z_toolchange} F{fr_rapids}
         return 'G1 F' + str(self.feedrate_format % (p.fr_decimals, float(p['frz_dispense'])))
 
     def spindle_fwd_code(self, p):
-        if p.spindlespeed:
-            return 'M3 S' + str(float(p['speedfwd']))
-        else:
-            return 'M3'
+        return 'M3 S' + str(float(p['speedfwd']))
 
     def spindle_rev_code(self, p):
-        if p.spindlespeed:
-            return 'M4 S' + str(float(p['speedrev']))
-        else:
-            return 'M4'
+        return 'M4 S' + str(float(p['speedrev']))
 
     def spindle_off_code(self, p):
         return 'M5'
 
     def dwell_fwd_code(self, p):
-        if p.dwelltime:
-            return 'G4 P' + str(float(p['dwellfwd']))
+        if p['dwellfwd']:
+            return 'G4 S' + str(float(p['dwellfwd']))
+        return ''
 
     def dwell_rev_code(self, p):
-        if p.dwelltime:
-            return 'G4 P' + str(float(p['dwellrev']))
+        if p['dwellrev']:
+            return 'G4 S' + str(float(p['dwellrev']))
+        return ''

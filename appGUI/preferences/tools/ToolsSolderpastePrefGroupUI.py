@@ -5,6 +5,8 @@ from appGUI.GUIElements import FCDoubleSpinner, FCSpinner, FCComboBox, Numerical
     FCFrame
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 from appDatabase import _database_option
+from appGUI.SolderPasteSettings import SolderPasteSettings
+from appGUI.GUIElements import FCEntry
 
 import gettext
 import appTranslation as fcTranslate
@@ -47,7 +49,7 @@ class ToolsSolderpastePrefGroupUI(OptionsGroupUI):
               "The value of the diameter has to use the dot decimals separator.\n"
               "Valid values: 0.3, 1.0")
         )
-        self.nozzle_tool_dia_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.nozzle_tool_dia_entry = FCEntry(border_color='#0069A9')
 
         param_grid.addWidget(nozzletdlabel, 0, 0)
         param_grid.addWidget(self.nozzle_tool_dia_entry, 0, 1)
@@ -147,7 +149,7 @@ class ToolsSolderpastePrefGroupUI(OptionsGroupUI):
         param_grid.addWidget(self.z_toolchange_entry, 14, 1)
 
         # X,Y Toolchange location
-        self.xy_toolchange_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.xy_toolchange_entry = FCEntry(border_color='#0069A9')
         self.xy_toolchange_label = FCLabel('%s:' % _("Toolchange X-Y"))
         self.xy_toolchange_label.setToolTip(
             _("The X,Y location for tool (nozzle) change.\n"
@@ -280,4 +282,7 @@ class ToolsSolderpastePrefGroupUI(OptionsGroupUI):
         param_grid.addWidget(pp_label, 34, 0)
         param_grid.addWidget(self.pp_combo, 34, 1)
 
+        self.calibration = SolderPasteSettings(app)
+        self.layout.insertWidget(0, self.calibration)
+        self.calibration.bind_cycle_controls(self)
         self.layout.addStretch(1)

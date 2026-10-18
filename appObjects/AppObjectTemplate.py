@@ -273,6 +273,8 @@ class FlatCAMObj(QtCore.QObject):
                                        "Means that we are loading an old project that don't"
                                        "have all attributes in the latest application version." % str(attr))
                     pass
+        from appCommon.solderpaste import restore_paste_metadata
+        restore_paste_metadata(self, d)
 
     def change_level(self, level):
         """

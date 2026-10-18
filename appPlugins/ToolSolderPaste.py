@@ -16,7 +16,6 @@ from copy import deepcopy
 import re
 
 from shapely import LineString, MultiLineString, Polygon, MultiPolygon, Point
-from shapely.ops import unary_union
 
 from datetime import datetime as dt
 
@@ -25,8 +24,10 @@ import appTranslation as fcTranslate
 import builtins
 
 from appCommon.Common import LoudDict
+from appCommon.solderpaste import parse_numbers, extract_pads, pad_paths, parameters, PREFIX
+from appGUI.SolderPasteSettings import SolderPasteSettings
 
-from camlib import distance
+from camlib import grace
 from appEditors.appTextEditor import AppTextEditor
 
 from io import StringIO
@@ -210,6 +211,7 @@ class SolderPaste(AppTool):
             "tools_solderpaste_dwellrev":       self.ui.dwellrev_entry,
             "tools_solderpaste_pp":             self.ui.pp_combo
         })
+        self.form_fields.update(self.ui.calibration.fields)
 
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         app_option = lambda key: self.app.options.get(
@@ -220,6 +222,9 @@ class SolderPaste(AppTool):
         self.general_form_fields.update({
             "tools_solderpaste_pp": self.ui.pp_combo
         })
+        for name in ('controller', 'drive', 'axis', 'axis_mode', 'volume_mode', 'mach3_dwell',
+                     'grbl_mode', 'marlin_cold'):
+            self.general_form_fields[PREFIX + name] = self.ui.calibration.fields[PREFIX + name]
 
         for option in self.app.options:
             if option.find('tools_') == 0:
@@ -231,9 +236,10 @@ class SolderPaste(AppTool):
 
         # either originally it was a string or not, xy_end will be made string
         dias_option = app_option("tools_solderpaste_tools")
-        dias_option = re.sub(r'[()\[\]]', '', str(dias_option)) if dias_option else None
         try:
-            dias = [float(eval(dia)) for dia in dias_option.split(",") if dia != '']
+            dias = parse_numbers(dias_option)
+            if any(dia <= 0 for dia in dias):
+                raise ValueError('Nozzle diameters must be positive.')
         except Exception as err:
             self.app.log.error("SolderPaste.set_tool_ui() -> nozzle dias -> %s" % str(err))
             self.app.log.error("At least one Nozzle tool diameter needed. "
@@ -263,6 +269,11 @@ class SolderPaste(AppTool):
             if name.partition('_')[0].lower() != 'paste':
                 continue
             self.ui.pp_combo.addItem(name)
+
+        self.ui.pp_combo.set_value(app_option("tools_solderpaste_pp"))
+        self.obj_options['tools_solderpaste_pp'] = self.ui.pp_combo.get_value()
+        for tool in self.tooltable_tools.values():
+            tool['data']['tools_solderpaste_pp'] = self.obj_options['tools_solderpaste_pp']
 
         self.reset_fields()
 
@@ -419,19 +430,25 @@ class SolderPaste(AppTool):
     def ui_connect(self):
         # on any change to the widgets that matter it will be called self.gui_form_to_storage which will save the
         # changes in geometry UI
+        if not hasattr(self, '_storage_slot'):
+            self._storage_slot = lambda: self.form_to_storage()
         for grid in self.ui.tools_box.parentWidget().findChildren(GLay):
             assert isinstance(grid, QtWidgets.QGridLayout)
             for i in range(grid.count()):
                 wdg = grid.itemAt(i).widget()
+                if hasattr(self.ui, 'calibration') and wdg in self.ui.calibration.fields.values():
+                    continue
                 if isinstance(wdg, (FCComboBox, FCComboBox2)):
-                    wdg.currentIndexChanged.connect(self.form_to_storage)
+                    wdg.currentIndexChanged.connect(self._storage_slot)
                 elif isinstance(wdg, FCEntry):
                     wdg.editingFinished.connect(self.form_to_storage)
-                elif isinstance(wdg, FCDoubleSpinner):
-                    wdg.returnPressed.connect(self.form_to_storage)
+                elif isinstance(wdg, (FCDoubleSpinner, FCSpinner)):
+                    wdg.editingFinished.connect(self.form_to_storage)
 
         self.ui.tools_table.itemChanged.connect(self.on_tool_edit)
         self.ui.tools_table.itemSelectionChanged.connect(self.on_row_selection_change)
+        if hasattr(self.ui, 'calibration'):
+            self.ui.calibration.changed.connect(self.form_to_storage)
 
     def ui_disconnect(self):
         # if connected, disconnect the signal from the slot on item_changed as it creates issues
@@ -439,19 +456,21 @@ class SolderPaste(AppTool):
             assert isinstance(grid, QtWidgets.QGridLayout)
             for i in range(grid.count()):
                 wdg = grid.itemAt(i).widget()
+                if hasattr(self.ui, 'calibration') and wdg in self.ui.calibration.fields.values():
+                    continue
                 if isinstance(wdg, (FCComboBox, FCComboBox2)):
                     try:
-                        wdg.currentIndexChanged.disconnect()
+                        wdg.currentIndexChanged.disconnect(self._storage_slot)
                     except (TypeError, AttributeError):
                         pass
                 elif isinstance(wdg, FCEntry):
                     try:
-                        wdg.editingFinished.disconnect()
+                        wdg.editingFinished.disconnect(self.form_to_storage)
                     except (TypeError, AttributeError):
                         pass
-                elif isinstance(wdg, FCDoubleSpinner):
+                elif isinstance(wdg, (FCDoubleSpinner, FCSpinner)):
                     try:
-                        wdg.returnPressed.disconnect()
+                        wdg.editingFinished.disconnect(self.form_to_storage)
                     except (TypeError, AttributeError):
                         pass
 
@@ -464,6 +483,11 @@ class SolderPaste(AppTool):
             self.ui.tools_table.itemSelectionChanged.disconnect(self.on_row_selection_change)
         except (TypeError, AttributeError):
             pass
+        if hasattr(self.ui, 'calibration'):
+            try:
+                self.ui.calibration.changed.disconnect(self.form_to_storage)
+            except (TypeError, AttributeError):
+                pass
 
     def update_comboboxes(self, obj, status):
         """
@@ -512,7 +536,7 @@ class SolderPaste(AppTool):
         """
 
         current_row = self.ui.tools_table.currentRow()
-        if not current_row or current_row < 0:
+        if current_row < 0:
             return
         uid = tooluid if tooluid else int(self.ui.tools_table.item(current_row, 2).text())
         if uid < 0:
@@ -557,6 +581,8 @@ class SolderPaste(AppTool):
         for key in self.form_fields:
             if key in val:
                 self.form_fields[key].set_value(val[key])
+            elif key.startswith(PREFIX) and key in AppDefaults.factory_defaults:
+                self.form_fields[key].set_value(AppDefaults.factory_defaults[key])
 
     def on_tool_add(self, dia=None, muted=None):
         """
@@ -753,11 +779,16 @@ class SolderPaste(AppTool):
             self.obj_to_be_deleted_name = ''
 
     def on_geo_select(self):
-        # if self.geo_obj_combo.currentText().rpartition('_')[2] == 'solderpaste':
-        #     self.gcode_frame.setDisabled(False)
-        # else:
-        #     self.gcode_frame.setDisabled(True)
-        pass
+        obj = self.app.collection.get_by_name(self.ui.geo_obj_combo.currentText())
+        if obj is None or getattr(obj, 'special_group', None) != 'solder_paste_tool':
+            return
+        self.ui_disconnect()
+        self.tooltable_tools = {uid: {'tooldia': tool['tooldia'], 'data': deepcopy(tool['data']),
+                                     'solid_geometry': []} for uid, tool in obj.tools.items()}
+        for tool in self.tooltable_tools.values():
+            tool['data'].setdefault(PREFIX + 'volume_mode', 'Legacy')
+        self.build_ui()
+        self.update_ui(row=0)
 
     def on_cncjob_select(self):
         # if self.cnc_obj_combo.currentText().rpartition('_')[2] == 'solderpaste':
@@ -780,6 +811,7 @@ class SolderPaste(AppTool):
         obj = self.app.collection.get_by_name(name)
         # update the self.obj_options
         self.read_form_to_options()
+        self.form_to_storage()
 
         self.on_create_geo(name=name, work_object=obj)
 
@@ -793,8 +825,9 @@ class SolderPaste(AppTool):
         :return: a Geometry type object
         """
 
-        proc = self.app.proc_container.new('%s...' % _("Working"))
         obj = work_object
+        tooltable_tools = deepcopy(self.tooltable_tools)
+        obj_options = deepcopy(self.obj_options)
 
         # Sort tools in descending order
         sorted_tools = []
@@ -808,56 +841,15 @@ class SolderPaste(AppTool):
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Tools table is empty."))
             return 'fail'
 
-        def flatten(geometry=None, reset=True, pathonly=False):
-            """
-            Creates a list of non-iterable linear geometry objects.
-            Polygons are expanded into its exterior pathonly param if specified.
+        tools_geometry = extract_pads(obj)
 
-            Results are placed in flat_geometry
-
-            :param geometry: Shapely type, list or list of lists of such.
-            :param reset: Clears the contents of self.flat_geometry.
-            :param pathonly: Expands polygons into linear elements from the exterior attribute.
-            """
-
-            if reset:
-                self.flat_geometry = []
-            # ## If iterable, expand recursively.
-            try:
-                work_geo = geometry
-                if isinstance(geometry, (MultiPolygon, MultiLineString)):
-                    work_geo = geometry.geoms
-                for geo in work_geo:
-                    if geo is not None:
-                        flatten(geometry=geo,
-                                reset=False,
-                                pathonly=pathonly)
-
-            # ## Not iterable, do the actual indexing and add.
-            except TypeError:
-                if pathonly and type(geometry) == Polygon:
-                    self.flat_geometry.append(geometry.exterior)
-                else:
-                    self.flat_geometry.append(geometry)
-            return self.flat_geometry
-
-        # get only the solid geometry for pads/flashes
-        tools_geometry = []
-        for ap_id in obj.tools:
-            for geo_el in obj.tools[ap_id]['geometry']:
-                # a clear (LPC) flash has no 'solid': it is not a pad
-                if "solid" in geo_el and "follow" in geo_el and isinstance(geo_el["follow"], Point):
-                    tools_geometry.append(geo_el["solid"])
-
-        # flatten(geometry=obj.solid_geometry, pathonly=True)
-        flatten(tools_geometry, pathonly=True)
-        if not self.flat_geometry:
+        if not tools_geometry:
             self.app.log.debug("Failed due of missing Gerber pads geometry.")
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
             return
 
         def geo_init(geo_obj, app_obj):
-            geo_obj.obj_options.update(self.obj_options)
+            geo_obj.obj_options.update(obj_options)
             geo_obj.solid_geometry = []
 
             geo_obj.tools = {}
@@ -865,21 +857,21 @@ class SolderPaste(AppTool):
             geo_obj.multitool = True
             geo_obj.special_group = 'solder_paste_tool'
 
-            geo = LineString()
-            work_geo = self.flat_geometry
+            work_geo = tools_geometry
             rest_geo = []
             tooluid = 1
 
             for tool in sorted_tools:
-                for uid, vl in self.tooltable_tools.items():
+                for uid, vl in tooltable_tools.items():
                     if float('%.*f' % (self.decimals, float(vl['tooldia']))) == tool:
                         tooluid = int(uid)
                         break
 
                 geo_obj.tools[tooluid] = {}
                 geo_obj.tools[tooluid]['tooldia'] = tool
-                geo_obj.tools[tooluid]['data'] = deepcopy(self.tooltable_tools[tooluid]['data'])
+                geo_obj.tools[tooluid]['data'] = deepcopy(tooltable_tools[tooluid]['data'])
                 geo_obj.tools[tooluid]['solid_geometry'] = []
+                geo_obj.tools[tooluid]['dispense_volumes'] = []
                 geo_obj.tools[tooluid]['type'] = 'SolderPaste'
 
                 geo_obj.tools[tooluid]['data']['tools_mill_offset_type'] = 0  # 'Path'
@@ -891,59 +883,54 @@ class SolderPaste(AppTool):
                 tool_margin = geo_obj.tools[tooluid]['data']['tools_solderpaste_margin']
                 offset = ((tool_margin * tool) * 0.01) + (tool / 2)
 
-                # self.flat_geometry is a list of LinearRings produced by flatten() from the exteriors of the Polygons
-                # We get possible issues if we try to directly use the Polygons, due of possible the interiors,
-                # so we do a hack: get first the exterior in a form of LinearRings and then convert back to Polygon
-                # because intersection does not work on LinearRings
-                for g in work_geo:
-                    # for whatever reason intersection on LinearRings does not work, so we convert back to Polygons
-                    poly = Polygon(g)
-                    x_min, y_min, x_max, y_max = poly.bounds
+                data = geo_obj.tools[tooluid]['data']
+                calibrated = data.get(PREFIX + 'volume_mode', 'Legacy') != 'Legacy'
+                if calibrated:
+                    try:
+                        plan_parameters = parameters(data, self.units, for_geometry=True)
+                    except ValueError as err:
+                        app_obj.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                        return 'fail'
 
-                    diag_1_intersect = LineString([(x_min, y_min), (x_max, y_max)]).intersection(poly)
-                    diag_2_intersect = LineString([(x_min, y_max), (x_max, y_min)]).intersection(poly)
-
-                    if self.units == 'MM':
-                        round_diag_1 = round(diag_1_intersect.length, 1)
-                        round_diag_2 = round(diag_2_intersect.length, 1)
-                    else:
-                        round_diag_1 = round(diag_1_intersect.length, 2)
-                        round_diag_2 = round(diag_2_intersect.length, 2)
-
-                    if round_diag_1 == round_diag_2:
-                        length = distance((x_min, y_min), (x_max, y_min))
-                        h = distance((x_min, y_min), (x_min, y_max))
-
-                        if offset >= length / 2 or offset >= h / 2:
-                            pass
-                        else:
-                            if length > h:
-                                h_half = h / 2
-                                start = [x_min, (y_min + h_half)]
-                                stop = [(x_min + length), (y_min + h_half)]
-                                geo = LineString([start, stop])
-                            else:
-                                l_half = length / 2
-                                start = [(x_min + l_half), y_min]
-                                stop = [(x_min + l_half), (y_min + h)]
-                                geo = LineString([start, stop])
-                    elif round_diag_1 > round_diag_2:
-                        geo = diag_1_intersect
-                    else:
-                        geo = diag_2_intersect
-
-                    offseted_poly = poly.buffer(-offset)
-                    geo = geo.intersection(offseted_poly)
-                    if not geo.is_empty:
+                for poly in work_geo:
+                    if self.app.abort_flag:
+                        raise grace
+                    if calibrated:
                         try:
-                            geo_obj.tools[tooluid]['solid_geometry'].append(geo)
-                        except Exception as e:
-                            self.app.log.error('ToolSolderPaste.on_create_geo() --> %s' % str(e))
-                    else:
-                        rest_geo.append(g)
+                            paths, volumes = pad_paths(poly, tool, plan_parameters, self.units)
+                        except ValueError as err:
+                            app_obj.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                            return 'fail'
+                        if paths:
+                            geo_obj.tools[tooluid]['solid_geometry'].extend(paths)
+                            geo_obj.tools[tooluid]['dispense_volumes'].extend(volumes)
+                        else:
+                            rest_geo.append(poly)
+                        continue
+                    offseted_poly = poly.buffer(-offset)
+                    if offseted_poly.is_empty:
+                        rest_geo.append(poly)
+                        continue
 
-                work_geo = deepcopy(rest_geo)
-                rest_geo[:] = []
+                    # Follow the long axis even for rotated pads. Keep holes when clipping the path.
+                    corners = list(poly.minimum_rotated_rectangle.exterior.coords)
+                    dx = corners[1][0] - corners[0][0]
+                    dy = corners[1][1] - corners[0][1]
+                    if dx * dx + dy * dy < (corners[2][0] - corners[1][0]) ** 2 + \
+                            (corners[2][1] - corners[1][1]) ** 2:
+                        dx = corners[2][0] - corners[1][0]
+                        dy = corners[2][1] - corners[1][1]
+                    cx = (corners[0][0] + corners[2][0]) / 2
+                    cy = (corners[0][1] + corners[2][1]) / 2
+                    geo = LineString([(cx - dx / 2, cy - dy / 2),
+                                      (cx + dx / 2, cy + dy / 2)]).intersection(offseted_poly)
+                    if not geo.is_empty and geo.length > 0:
+                        geo_obj.tools[tooluid]['solid_geometry'].append(geo)
+                    else:
+                        rest_geo.append(poly)
+
+                work_geo = rest_geo
+                rest_geo = []
 
                 if not work_geo:
                     a = 0
@@ -967,23 +954,24 @@ class SolderPaste(AppTool):
                 return 'fail'
 
         if use_thread:
+            proc = self.app.proc_container.new('%s...' % _("Working"))
             def job_thread(app_obj):
                 try:
                     self.new_object("geometry", name + "_solderpaste", geo_init, source=obj)
                 except Exception as e:
                     self.app.log.error("SolderPaste.on_create_geo() --> %s" % str(e))
+                finally:
                     proc.done()
-                    return
-                proc.done()
 
             self.app.inform.emit(_("Generating Solder Paste dispensing geometry..."))
             # Promise object with the new name
-            self.app.collection.promise(name)
+            self.app.collection.promise(name + "_solderpaste")
 
             # Background
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
-            self.new_object("geometry", name + "_solderpaste", geo_init, source=obj)
+            with self.app.proc_container.new('%s...' % _("Working")):
+                return self.new_object("geometry", name + "_solderpaste", geo_init, source=obj)
 
     def on_create_gcode_click(self):
         """
@@ -993,18 +981,19 @@ class SolderPaste(AppTool):
         """
         name = self.ui.geo_obj_combo.currentText()
         obj = self.app.collection.get_by_name(name)
+        self.form_to_storage()
 
         if name == '':
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Geometry object available."))
             return
 
-        if obj.special_group != 'solder_paste_tool':
+        if obj is None or obj.special_group != 'solder_paste_tool':
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Selected object cannot be used."))
             return
 
         a = 0
         for tooluid_key in obj.tools:
-            if obj.tools[tooluid_key]['solid_geometry'] is None:
+            if not obj.tools[tooluid_key]['solid_geometry']:
                 a += 1
         if a == len(obj.tools):
             self.app.inform.emit('[ERROR_NOTCL] %s...' % _('Cancelled.'))
@@ -1026,6 +1015,9 @@ class SolderPaste(AppTool):
         :return:
         """
         obj = workobject
+        current_tools = deepcopy(self.tooltable_tools)
+        geometry_settings = {PREFIX + key for key in ('volume_mode', 'placement', 'thickness',
+                                                     'volume', 'overlap', 'dot_dia', 'margin')}
 
         try:
             xmin = obj.obj_options['xmin']
@@ -1055,8 +1047,16 @@ class SolderPaste(AppTool):
             new_obj.multitool = True
             new_obj.multigeo = True
             # new_obj object is a CNCJob object made from a Geometry object
-            new_obj.tools.clear()
-            new_obj.tools = obj.tools
+            new_obj.tools = {uid: deepcopy(tool) for uid, tool in obj.tools.items()
+                             if tool['solid_geometry']}
+            if not new_obj.tools:
+                app_obj.inform.emit('[ERROR_NOTCL] %s...' % _('Cancelled.'))
+                return 'fail'
+            for uid, tool in new_obj.tools.items():
+                current = current_tools.get(uid)
+                if current and current['tooldia'] == tool['tooldia']:
+                    tool['data'].update({key: value for key, value in current['data'].items()
+                                         if key.startswith(PREFIX) and key not in geometry_settings})
             new_obj.special_group = 'solder_paste_tool'
 
             new_obj.obj_options['xmin'] = xmin
@@ -1064,11 +1064,11 @@ class SolderPaste(AppTool):
             new_obj.obj_options['xmax'] = xmax
             new_obj.obj_options['ymax'] = ymax
 
-            total_gcode = ''
-            for tooluid_key, tooluid_value in new_obj.tools.items():
+            total_gcode = []
+            for index, (tooluid_key, tooluid_value) in enumerate(new_obj.tools.items()):
                 # find the tool_dia associated with the tooluid_key
                 tool_dia = tooluid_value['tooldia']
-                tool_cnc_dict = deepcopy(tooluid_value)
+                tool_cnc_dict = tooluid_value
 
                 new_obj.coords_decimals = app_option("cncjob_coords_decimals")
                 new_obj.fr_decimals = app_option("cncjob_fr_decimals")
@@ -1079,34 +1079,33 @@ class SolderPaste(AppTool):
                 new_obj.obj_options['tool_dia'] = tool_dia
 
                 # ## CREATE GCODE # ##
-                is_first = True if tooluid_key == list(new_obj.tools.keys())[0] else False
-                res = new_obj.generate_gcode_from_solder_paste_geo(is_first=is_first, **tooluid_value)
+                is_first = index == 0
+                try:
+                    res = new_obj.generate_gcode_from_solder_paste_geo(is_first=is_first, **tooluid_value)
+                except grace:
+                    raise
+                except Exception as err:
+                    app_obj.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                    return 'fail'
 
                 if res == 'fail':
                     app_obj.log.debug("SolderPaste.on_create_gcode() --> generate_gcode_from_solderpaste_geo() failed")
                     return 'fail'
                 else:
                     tool_cnc_dict['gcode'] = res
-                total_gcode += res
+                total_gcode.append(res)
 
                 # ## PARSE GCODE # ##
                 tool_cnc_dict['gcode_parsed'] = new_obj.gcode_parse(tool_data=tool_cnc_dict['data'])
 
-                # TODO this serve for bounding box creation only; should be optimized. Using recursive bounds()?
-                tool_cnc_dict['solid_geometry'] = unary_union([geo['geom'] for geo in tool_cnc_dict['gcode_parsed']])
+                # Bounds and plotting accept paths directly; don't node every travel intersection.
+                tool_cnc_dict['solid_geometry'] = [geo['geom'] for geo in tool_cnc_dict['gcode_parsed']]
 
-                # tell gcode_parse from which point to start drawing the lines depending on what kind of
-                # object is the source of gcode
-                # new_obj is a CNCJob made from Geometry object
-                new_obj.tools.update({
-                    tooluid_key: deepcopy(tool_cnc_dict)
-                })
-                tool_cnc_dict.clear()
-
-            used_tools = list(obj.tools.keys())
+            used_tools = list(new_obj.tools.keys())
             new_obj.used_tools = used_tools
 
-            new_obj.source_file = StringIO(total_gcode)
+            new_obj.gcode = ''.join(total_gcode)
+            new_obj.source_file = StringIO(new_obj.gcode)
 
         if use_thread:
             # To be run in separate thread
@@ -1158,8 +1157,10 @@ class SolderPaste(AppTool):
         gcode += '(Name: ' + str(name) + ')\n'
         gcode += '(Type: ' + "G-code from " + str(obj.obj_options['type']) + " for Solder Paste dispenser" + ')\n'
 
-        gcode += '(Units: ' + self.units.upper() + ')\n' + "\n"
+        gcode += '(Units: ' + obj.units.upper() + ')\n' + "\n"
         gcode += '(Created on ' + time_str + ')\n' + '\n'
+        if 'marlin' in (obj.pp_solderpaste_name or '').lower():
+            gcode = gcode.replace('(', ';').replace(')', '')
 
         # obj is a CNCJob object made from an Geometry object
         for tool in obj.tools:
@@ -1202,7 +1203,7 @@ class SolderPaste(AppTool):
         name = self.ui.cnc_obj_combo.currentText()
         obj = self.app.collection.get_by_name(name)
 
-        if obj.special_group != 'solder_paste_tool':
+        if obj is None or obj.special_group != 'solder_paste_tool':
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Selected object cannot be used."))
             return
 
@@ -1231,8 +1232,10 @@ class SolderPaste(AppTool):
         gcode += '(Name: ' + str(name) + ')\n'
         gcode += '(Type: ' + "G-code from " + str(obj.obj_options['type']) + " for Solder Paste dispenser" + ')\n'
 
-        gcode += '(Units: ' + self.units.upper() + ')\n' + "\n"
+        gcode += '(Units: ' + obj.units.upper() + ')\n' + "\n"
         gcode += '(Created on ' + time_str + ')\n' + '\n'
+        if 'marlin' in (obj.pp_solderpaste_name or '').lower():
+            gcode = gcode.replace('(', ';').replace(')', '')
 
         # for CNCJob objects made from Gerber or Geometry objects
         for tool in obj.tools:
@@ -1291,6 +1294,9 @@ class SolderUI:
             _("A plugin to help dispense solder paste on the PCB pads using a CNC machine.")
         )
         self.title_box.addWidget(title_label)
+
+        self.calibration = SolderPasteSettings(app)
+        self.tools_box.addWidget(self.calibration)
 
         # #############################################################################################################
         # Source Object
@@ -1678,6 +1684,7 @@ class SolderUI:
         self.pp_combo = FCComboBox()
         gen_param_grid.addWidget(pp_label, 0, 0)
         gen_param_grid.addWidget(self.pp_combo, 0, 1)
+        self.calibration.bind_cycle_controls(self)
 
         # #############################################################################################################
         # Geometry Frame
@@ -1709,10 +1716,15 @@ class SolderUI:
 
         self.geo_obj_combo.setToolTip(
             _("Geometry Solder Paste object.\n"
-              "The name of the object has to end in:\n"
-              "'_solderpaste' as a protection.")
+              "Selecting geometry restores its nozzle settings.\n"
+              "Regenerate Geometry after changing quantity or placement.\n"
+              "Controller and calibration edits apply when generating CNCJob.")
         )
         geo_grid.addWidget(self.geo_obj_combo, 2, 0, 1, 2)
+        settings_note = FCLabel(_("Regenerate Geometry after quantity or placement changes.\n"
+                                 "Controller and calibration edits apply to the next CNCJob."))
+        settings_note.setWordWrap(True)
+        geo_grid.addWidget(settings_note, 3, 0, 1, 2)
 
         # #############################################################################################################
         # CNCJob Frame
@@ -1740,9 +1752,9 @@ class SolderUI:
         self.cnc_obj_combo.setModel(self.app.collection)
         self.cnc_obj_combo.setRootModelIndex(self.app.collection.index(3, 0, QtCore.QModelIndex()))
         self.cnc_obj_combo.is_last = True
-        self.geo_obj_combo.obj_type = "CNCJob"
+        self.cnc_obj_combo.obj_type = "CNCJob"
 
-        self.geo_obj_combo.setToolTip(
+        self.cnc_obj_combo.setToolTip(
             _("CNCJob Solder paste object.\n"
               "In order to enable the GCode save section,\n"
               "the name of the object has to end in:\n"
