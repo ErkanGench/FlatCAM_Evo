@@ -26,9 +26,17 @@ DXF and SVG Import:
 - the SVG import of simple fills is done in vectorized batches (a test with 20000 elements); the circle resolution follows the circle steps preference
 - the Geometry, Gerber and QR Code imports use the new importers; the unit, viewBox, flip and text code in each caller is removed
 
+Image Import:
+
+- new Load Image button with a status dot (gray: no image, green: loaded, red: failed); the image is loaded and checked with PIL; Import Image is enabled only after a good load
+- the DPI value of the image file is put in the DPI field; if the file has no DPI, the field keeps its value; the minimum DPI is 1
+- fixed: a bad image file clears the last selection and shows an error; Cancel keeps the current selection; the tool resets the loaded file and the status dot when it opens again
+- the trace and the import use the loaded file with the current settings, without a second file dialog; the traced SVG is imported with the new SVG importer
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
+- new unit tests for the Image tool loading (tests/test_image_tool.py)
 
 18.10.2026
 

@@ -11,6 +11,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     RadioSet, FCDoubleSpinner, FCSpinner
 
 from copy import deepcopy
+from PIL import Image
 import numpy as np
 import os
 
@@ -43,6 +44,7 @@ class ToolImage(AppTool):
 
         self.app = app
         self.decimals = self.app.decimals
+        self.filename = None
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -112,10 +114,12 @@ class ToolImage(AppTool):
 
     def connect_signals_at_init(self):
         # ## Signals
+        self.ui.load_button.clicked.connect(self.on_load_image)
         self.ui.import_button.clicked.connect(lambda: self.on_file_importimage())
         self.ui.image_type.activated_custom.connect(self.ui.on_image_type)
 
     def set_tool_ui(self):
+        self.filename = None
         self.clear_ui(self.layout)
         self.ui = ImageUI(layout=self.layout, app=self.app)
         self.add_object_creation_controls(has_source=False)
@@ -145,14 +149,56 @@ class ToolImage(AppTool):
         self.ui.presets_combo.set_value(0)
         self.ui.on_preset_changed(0)
 
+    def on_load_image(self):
+        _filter = "Image Files(*.BMP *.PNG *.JPG *.JPEG);;" \
+                  "Bitmap File (*.BMP);;" \
+                  "PNG File (*.PNG);;" \
+                  "Jpeg File (*.JPG);;" \
+                  "All Files (*.*)"
+        try:
+            filename, _f = QtWidgets.QFileDialog.getOpenFileName(caption=_("Load Image"),
+                                                                 directory=self.app.get_last_folder(), filter=_filter)
+        except TypeError:
+            filename, _f = QtWidgets.QFileDialog.getOpenFileName(caption=_("Load Image"), filter=_filter)
+
+        filename = str(filename)
+        if not filename:
+            self.app.inform.emit(_("Cancelled."))
+            return
+
+        self.filename = None
+        self.ui.import_button.setEnabled(False)
+        try:
+            with Image.open(filename) as image:
+                image.load()
+                image_dpi = image.info.get('dpi', 0)
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as err:
+            self.ui.load_status.color = 'red'
+            self.ui.load_status.setToolTip('%s\n%s' % (filename, str(err)))
+            self.app.log.error("ToolImage.on_load_image() -> %s" % str(err))
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to load image"), str(err)))
+            return
+
+        try:
+            dpi = float(image_dpi[0] if isinstance(image_dpi, (tuple, list)) else image_dpi)
+            if np.isfinite(dpi) and 1 <= round(dpi) <= self.ui.dpi_entry.maximum():
+                self.ui.dpi_entry.set_value(round(dpi))
+        except (TypeError, ValueError, IndexError, OverflowError):
+            pass
+
+        self.filename = filename
+        self.ui.load_status.color = 'green'
+        self.ui.load_status.setToolTip(filename)
+        self.ui.import_button.setEnabled(True)
+
     def on_file_importimage(self, threaded=True):
-        """
-        Callback for menu item File->Import IMAGE.
-
-        :return: None
-        """
-
+        """Create an object from the loaded image using the current parameters."""
         self.app.log.debug("on_file_importimage()")
+
+        filename = self.filename
+        if not filename:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Load an image first."))
+            return
 
         import_mode = self.ui.import_mode_radio.get_value()
         trace_options = PRESETS[PRESET_NAMES[self.ui.presets_combo.get_value()]] \
@@ -162,19 +208,6 @@ class ToolImage(AppTool):
         mode = self.ui.image_type.get_value()
         min_area = self.ui.min_area_entry.get_value()
 
-        _filter = "Image Files(*.BMP *.PNG *.JPG *.JPEG);;" \
-                  "Bitmap File (*.BMP);;" \
-                  "PNG File (*.PNG);;" \
-                  "Jpeg File (*.JPG);;" \
-                  "All Files (*.*)"
-        try:
-            filename, _f = QtWidgets.QFileDialog.getOpenFileName(caption=_("Import IMAGE"),
-                                                                 directory=self.app.get_last_folder(), filter=_filter)
-        except TypeError:
-            filename, _f = QtWidgets.QFileDialog.getOpenFileName(caption=_("Import IMAGE"), filter=_filter)
-
-        filename = str(filename)
-
         mask = [
             self.ui.mask_bw_entry.get_value(),
             self.ui.mask_r_entry.get_value(),
@@ -182,27 +215,24 @@ class ToolImage(AppTool):
             self.ui.mask_b_entry.get_value()
         ]
 
-        if filename == "":
-            self.app.inform.emit(_("Cancelled."))
+        if import_mode == 'trace':
+            # there are thread issues so I process this outside
+            try:
+                svg_text = trace(filename, black_white=(mode == 'black'),
+                                 threshold=self.ui.threshold_entry.get_value(), options=trace_options)
+            except ImportError as err:
+                self.app.log.error("ToolImage.on_file_importimage() -> %s" % str(err))
+                self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                return
         else:
-            if import_mode == 'trace':
-                # there are thread issues so I process this outside
-                try:
-                    svg_text = trace(filename, black_white=(mode == 'black'),
-                                     threshold=self.ui.threshold_entry.get_value(), options=trace_options)
-                except ImportError as err:
-                    self.app.log.error("ToolImage.on_file_importimage() -> %s" % str(err))
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
-                    return
-            else:
-                svg_text = None
-            if threaded is True:
-                self.app.worker_task.emit({'fcn': self.import_image,
-                                           'params': [
-                                               filename, import_mode, type_obj, dpi, mode, mask, svg_text, min_area]
-                                           })
-            else:
-                self.import_image(filename, import_mode, type_obj, dpi, mode, mask, svg_text, min_area)
+            svg_text = None
+        if threaded is True:
+            self.app.worker_task.emit({'fcn': self.import_image,
+                                       'params': [
+                                           filename, import_mode, type_obj, dpi, mode, mask, svg_text, min_area]
+                                       })
+        else:
+            self.import_image(filename, import_mode, type_obj, dpi, mode, mask, svg_text, min_area)
 
     def import_image(self, filename, import_mode='raster', o_type=_("Geometry"), dpi=96, mode='black',
                      mask=None, svg_text=None, min_area=0.0, outname=None, silent=False):
@@ -463,6 +493,16 @@ class ImageUI:
         title_label = FCLabel("%s" % self.pluginName, size=16, bold=True)
         self.layout.addWidget(title_label)
 
+        load_layout = QtWidgets.QHBoxLayout()
+        self.load_button = FCButton(_("Load Image"))
+        self.load_button.setIcon(QtGui.QIcon(self.app.resource_location + '/image32.png'))
+        self.load_button.setToolTip(_("Load and validate an image before importing it."))
+        self.load_status = FCLabel('●', color='gray', size=18)
+        self.load_status.setToolTip(_("No image loaded."))
+        load_layout.addWidget(self.load_button, 1)
+        load_layout.addWidget(self.load_status)
+        self.layout.addLayout(load_layout)
+
         self.param_lbl = FCLabel('%s' % _("Parameters"), color='blue', bold=True)
         self.layout.addWidget(self.param_lbl)
         # #############################################################################################################
@@ -493,9 +533,10 @@ class ImageUI:
 
         # DPI value of the imported image
         self.dpi_entry = FCSpinner()
-        self.dpi_entry.set_range(0, 99999)
+        self.dpi_entry.set_range(1, 99999)
         self.dpi_label = FCLabel('%s:' % _("DPI value"))
-        self.dpi_label.setToolTip(_("Specify a DPI value for the image."))
+        self.dpi_label.setToolTip(_("Specify a DPI value for the image.\n"
+                                   "Loading an image uses its embedded DPI when available."))
         par_grid.addWidget(self.dpi_label, 2, 0)
         par_grid.addWidget(self.dpi_entry, 2, 1, 1, 2)
 
@@ -810,11 +851,12 @@ class ImageUI:
         GLay.set_common_column_size([par_grid, mod_grid, raster_grid, trace_grid, preset_grid, options_grid], 0)
 
         # Buttons
-        self.import_button = FCButton(_("Import image"))
+        self.import_button = FCButton(_("Import Image"))
         self.import_button.setIcon(QtGui.QIcon(self.app.resource_location + '/image32.png'))
         self.import_button.setToolTip(
-            _("Open a image of raster type and then import it in FlatCAM.")
+            _("Import the loaded image as a Gerber or Geometry object.")
         )
+        self.import_button.setEnabled(False)
         self.layout.addWidget(self.import_button)
 
         self.layout.addStretch(1)
