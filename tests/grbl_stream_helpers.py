@@ -33,6 +33,7 @@ def make_stream_tool(fake, source=None, check_mode=False):
                              obj_options={'name': 'job'}, units='MM', coords_decimals=4)
     tool.app.collection.get_by_name.return_value = target
     tool.ui.check_mode_cb.get_value.return_value = check_mode
+    tool._choose_start_line = MagicMock(return_value=1)
     # the GUI slot runs at once, so the messages of the end of the job can be checked
     tool.stream_ended_sig.emit.side_effect = tool._on_stream_ended
     return tool
@@ -144,6 +145,7 @@ def make_levelled_stream_tool(fake, text=JOB, frame=FRAME, imported=False, check
     tool.frame_ready_sig = MagicMock()
     tool.frame_ready_sig.emit.side_effect = lambda req, result: tool._on_frame_ready(req, result)
     tool._confirm_imported_frame = MagicMock(return_value=True)
+    tool._choose_height_map = MagicMock(return_value='existing')
     return tool, target
 
 

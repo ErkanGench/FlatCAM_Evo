@@ -16,6 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 from vispy import scene
+from vispy.gloo.context import FakeCanvas, set_current_canvas
+from appGUI.VisPyVisuals import ShapeCollection
 
 from tests.test_levelling_audit import FakeGrbl, make_audit_tool, sg_module
 from tests.grbl_stream_helpers import make_stream_tool, make_storage, CheckFake
@@ -26,7 +28,11 @@ from appPlugins.ToolGrblSender.SenderView3d import SenderView3d, ACCEPTED_COLOR,
 
 def fake_canvas():
     """A stand-in for the PlotCanvas3d: a real vispy scene node (no GL context needed) and fit_view()."""
-    return SimpleNamespace(view=SimpleNamespace(scene=scene.Node()), fit_view=MagicMock())
+    canvas = SimpleNamespace(view=SimpleNamespace(scene=scene.Node(), camera=MagicMock()), fit_view=MagicMock())
+    canvas.gloo_canvas = FakeCanvas()
+    set_current_canvas(canvas.gloo_canvas)
+    canvas.new_shape_collection = lambda **kwargs: ShapeCollection(parent=canvas.view.scene, **kwargs)
+    return canvas
 
 
 SEGMENTS = [
@@ -78,6 +84,24 @@ class SenderView3dTest(unittest.TestCase):
         self.assertEqual(view.tool._data['a_position'].dtype, np.float32)
         self.assertEqual(tuple(view.tool._data['a_position'][0]), (1.0, 2.0, 3.0))
 
+    def test_manual_selection_is_red_and_not_cumulative(self):
+        view = SenderView3d(fake_canvas())
+        view.set_toolpath(SEGMENTS)
+        view.set_accepted(1)
+        accepted = view.accepted.pos.copy()
+        for index in (2, 0, 1):
+            view.set_selected_line(index)
+            np.testing.assert_allclose(view.selected.pos, SEGMENTS[index][1:3])
+            np.testing.assert_allclose(view.selected.color, (0.9, 0.1, 0.1, 1.0))
+            np.testing.assert_array_equal(view.accepted.pos, accepted)
+        view.set_selected_line(10)
+        self.assertEqual(view.selected.pos.shape, (0, 3))
+        view.set_selected_line(0)
+        view.set_toolpath(SEGMENTS)
+        self.assertEqual(view.selected.pos.shape, (0, 3))
+        view.clear()
+        self.assertIsNone(view.selected.parent)
+
     def test_height_map_faces(self):
         canvas = fake_canvas()
         view = SenderView3d(canvas)
@@ -92,6 +116,34 @@ class SenderView3dTest(unittest.TestCase):
         view.set_height_map(None)
         self.assertIsNone(view.mesh)
         self.assertIsNone(old.parent)
+
+    def test_manual_selection_flashes_and_stops_when_cleared(self):
+        from PyQt6 import QtCore, QtTest
+
+        view = SenderView3d(fake_canvas())
+        self.addCleanup(view.clear)
+        view.set_toolpath(SEGMENTS)
+        view.set_accepted(1)
+        accepted = view.accepted.pos.copy()
+        view.set_selected_line(2)
+        self.assertTrue(view.selected.visible)
+        QtTest.QTest.qWait(550)
+        self.assertFalse(view.selected.visible)
+        QtTest.QTest.qWait(500)
+        self.assertTrue(view.selected.visible)
+        self.assertEqual(view._selection_timer.interval(), 500)
+        self.assertEqual(view._selection_timer.timerType(), QtCore.Qt.TimerType.PreciseTimer)
+        np.testing.assert_array_equal(view.accepted.pos, accepted)
+        view.set_selected_line(0)
+        self.assertTrue(view.selected.visible)
+        view.set_selected_line(None)
+        self.assertFalse(view._selection_timer.isActive())
+        view.set_selected_line(1)
+        view.set_toolpath(SEGMENTS)
+        self.assertFalse(view._selection_timer.isActive())
+        view.set_selected_line(1)
+        view.clear()
+        self.assertFalse(view._selection_timer.isActive())
 
     def test_clear_twice(self):
         canvas = fake_canvas()
@@ -366,6 +418,58 @@ def show_tool(lines, arc_mode):
 
 class ShowIn3dTest(unittest.TestCase):
 
+    def test_fit_view_disabled_preserves_camera_on_reloads(self):
+        tool = show_tool(SPLIT_ARC_JOB, 'send')
+        tool.app.options['tools_gcode_fit_view'] = False
+        for _load in range(2):
+            tool.on_show_3d()
+        tool.app.plotcanvas3d.fit_view.assert_not_called()
+        tool.app.plotcanvas3d.view.camera.set_view.assert_not_called()
+        tool.on_fit_view()
+        tool.app.plotcanvas3d.view.camera.set_view.assert_called_once_with('iso')
+        args = tool.app.plotcanvas3d.fit_view.call_args.kwargs
+        np.testing.assert_equal(args['points'], tool.view3d.path.pos)
+        self.assertEqual(args['margin'], 0.1)
+
+    def test_fit_view_toggle_updates_defaults_and_options(self):
+        tool = show_tool(SPLIT_ARC_JOB, 'send')
+        tool.app.defaults = {}
+        for checked in (False, True):
+            tool.on_fit_view_toggled(checked)
+            self.assertIs(tool.app.options['tools_gcode_fit_view'], checked)
+            self.assertIs(tool.app.defaults['tools_gcode_fit_view'], checked)
+
+    def test_probe_shapes_follow_toggle_refresh_and_reopen(self):
+        tool = show_tool(SPLIT_ARC_JOB, 'send')
+        tool.probing_shapes = ShapeCollection(layers=1)
+        tool.drawing_tolerance = 0.001
+        tool.al_voronoi_geo_storage = make_storage()
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+        tool.ui.probe_tip_dia_entry.get_value.return_value = 0.5
+        tool.ui.plot_probing_pts_cb.get_value.return_value = True
+        tool.on_show_3d()
+        shapes = tool.view3d.probing_shapes
+        self.assertTrue(shapes.data)
+        self.assertEqual(len(shapes.data), len(tool.probing_shapes.data))
+        for key, data in tool.probing_shapes.data.items():
+            for field in ('mesh_vertices', 'mesh_colors', 'line_pts', 'line_colors'):
+                np.testing.assert_equal(data[field], shapes.data[key][field])
+        count = len(shapes.data)
+        tool.show_probing_geo(True, reset=True)
+        self.assertEqual(len(shapes.data), count)
+        tool.show_probing_geo(False)
+        self.assertFalse(shapes.data)
+        tool.show_probing_geo(True)
+        self.assertEqual(len(shapes.data), count)
+        tool.plot_probing_geo(None, False)
+        self.assertFalse(shapes.data)
+        tool.on_show_3d()
+        self.assertEqual(len(shapes.data), count)
+        tool._clear_probe_data()
+        self.assertFalse(shapes.data)
+        tool.view3d.clear()
+        self.assertIsNone(shapes.parent)
+
     def test_send_mode_unsplit_lines_are_grey_chords(self):
         tool = show_tool(ARC_JOB, 'send')
         tool.on_show_3d()
@@ -411,11 +515,23 @@ class ShowIn3dTest(unittest.TestCase):
         tool.on_show_3d()
         self.assertEqual(tool.job_lines, SPLIT_ARC_JOB)
 
+    def test_loaded_toolpath_switches_to_isometric_only_with_moves(self):
+        for lines in (SPLIT_ARC_JOB, ['G21', 'G90']):
+            with self.subTest(lines=lines):
+                tool = show_tool(lines, 'send')
+                tool.on_show_3d()
+                camera = tool.app.plotcanvas3d.view.camera
+                if lines == SPLIT_ARC_JOB:
+                    camera.set_view.assert_called_once_with('iso')
+                else:
+                    camera.set_view.assert_not_called()
+
     def test_failed_build_clears_the_toolpath(self):
         tool = show_tool(SPLIT_ARC_JOB, 'send')
         tool.on_show_3d()
         self.assertTrue(tool.view3d._segments)
-        tool.build_stream_job = MagicMock(return_value=False)
+        tool.app.collection.get_by_name.return_value.source_file = '\n'.join(ARC_JOB)
+        tool.app.options['tools_grbl_arc_mode'] = 'split'
         tool.on_show_3d()
         self.assertEqual(tool.view3d._segments, [])
 
@@ -447,6 +563,244 @@ class ShowIn3dTest(unittest.TestCase):
         tool.al_heights_valid = False
         tool._update_3d_height_map()
         self.assertIsNone(tool.view3d.mesh)
+
+
+class SenderLifecycle3dTest(unittest.TestCase):
+
+    def make_tool(self, source=True):
+        from PyQt6 import QtWidgets
+        from appTool import AppTool
+        from appGUI.GUIElements import FCDetachableTab2
+
+        tool = show_tool(SPLIT_ARC_JOB, 'send')
+        AppTool.__init__(tool, tool.app)
+        tool.pluginName = 'GCode sender'
+        tool.app.plugin_tab_locked = False
+        target = tool.app.collection.get_by_name.return_value
+        tool.app.collection.get_by_name.side_effect = lambda name: target if name == 'job' else None
+        tool.ui.object_combo.get_value.return_value = ''
+        tool.set_tool_ui = MagicMock(side_effect=lambda: tool.ui.object_combo.get_value.configure_mock(
+            return_value='job' if source else ''))
+        tool.show_console_if_wanted = MagicMock()
+        tool.hide_console = MagicMock()
+
+        window = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(window)
+        notebook = QtWidgets.QTabWidget()
+        layout.addWidget(notebook)
+        project, properties, plugin = (QtWidgets.QWidget() for _ in range(3))
+        plugin.setObjectName('plugin_tab')
+        for widget, name in ((project, 'Project'), (properties, 'Properties'), (plugin, 'Plugin')):
+            notebook.addTab(widget, name)
+        scroll = QtWidgets.QScrollArea()
+        QtWidgets.QVBoxLayout(plugin).addWidget(scroll)
+        plots = FCDetachableTab2()
+        layout.addWidget(plots)
+        plots.addTab(QtWidgets.QWidget(), 'Plot Area')
+        tool.app.ui = SimpleNamespace(
+            notebook=notebook, plugin_tab=plugin, properties_tab=properties,
+            plugin_scroll_area=scroll, plot_tab_area=plots, splitter=MagicMock(),
+            grbl_console_dock=QtWidgets.QDockWidget(window))
+        tool.app.plotcanvas3d = None
+
+        def open_tab():
+            if tool.app.plotcanvas3d is None:
+                tool.app.area_3d_tab = QtWidgets.QWidget()
+                tool.app.area_3d_tab.setObjectName('3D_area_tab')
+                plots.addTab(tool.app.area_3d_tab, 'Plot 3D')
+                tool.app.plotcanvas3d = fake_canvas()
+            plots.setCurrentWidget(tool.app.area_3d_tab)
+
+        def closed_tab(name, index):
+            if name == '3D_area_tab':
+                tool.app.plotcanvas3d = None
+
+        tool.app.on_3d_area.side_effect = open_tab
+        plots.tab_closed_signal.connect(closed_tab)
+        window.show()
+        QtWidgets.QApplication.processEvents()
+        self.addCleanup(window.deleteLater)
+        self.addCleanup(window.close)
+        self.addCleanup(tool.on_plugin_cleanup)
+        return tool
+
+    def process_events(self):
+        from PyQt6 import QtWidgets
+        QtWidgets.QApplication.processEvents()
+
+    def test_run_opens_and_loads_source_after_ui_setup(self):
+        tool = self.make_tool()
+        tool.run()
+        self.process_events()
+        self.assertIsNotNone(tool.view3d)
+        self.assertTrue(tool.view3d._segments)
+        self.assertEqual(tool.job_lines, SPLIT_ARC_JOB)
+        self.assertIs(tool.app.ui.plot_tab_area.currentWidget(), tool.app.area_3d_tab)
+
+    def test_run_finishes_before_plotting_is_started(self):
+        tool = self.make_tool()
+        tool.on_show_3d = MagicMock()
+        tool.run()
+        tool.set_tool_ui.assert_called_once()
+        tool.on_show_3d.assert_not_called()
+        self.process_events()
+        tool.on_show_3d.assert_called_once()
+
+    def test_run_reloads_console_before_deferred_preview(self):
+        for source in (True, False):
+            with self.subTest(source=source):
+                tool = self.make_tool(source=source)
+                tool._console = MagicMock()
+                tool.run()
+                tool._console.return_value.set_program.assert_called_once_with(SPLIT_ARC_JOB if source else [])
+
+    def test_close_before_deferred_plot_does_not_reopen_tab(self):
+        tool = self.make_tool()
+        tool.run()
+        tool.on_plugin_cleanup()
+        self.process_events()
+        self.assertIsNone(tool.view3d)
+        tool.app.on_3d_area.assert_not_called()
+
+    def test_replacing_before_deferred_plot_does_not_open_tab(self):
+        from appTool import AppTool
+
+        tool = self.make_tool()
+        tool.run()
+        tool.al_heights_valid = True
+        other = AppTool(tool.app)
+        other.pluginName = 'Other plugin'
+        other.run()
+        self.process_events()
+        self.assertIsNone(tool.view3d)
+        self.assertFalse(tool.al_heights_valid)
+        tool.app.on_3d_area.assert_not_called()
+
+    def test_run_without_source_opens_empty_view_without_error(self):
+        tool = self.make_tool(source=False)
+        tool.run()
+        self.process_events()
+        self.assertIsNotNone(tool.view3d)
+        self.assertEqual(tool.view3d._segments, [])
+        self.assertFalse(any('[ERROR' in str(c) for c in tool.app.inform.emit.call_args_list))
+
+    def test_cleanup_clears_visuals_and_closes_tab_once(self):
+        tool = self.make_tool()
+        tool.run()
+        self.process_events()
+        view = tool.view3d
+        self.assertIsNotNone(view)
+        tool.on_plugin_cleanup()
+        tool.on_plugin_cleanup()
+        self.assertIsNone(tool.view3d)
+        self.assertIsNone(tool.app.plotcanvas3d)
+        self.assertEqual(tool.app.ui.plot_tab_area.count(), 1)
+        self.assertIsNone(view.path.parent)
+        self.assertIsNone(view.accepted.parent)
+        self.assertIsNone(view.tool.parent)
+
+    def test_switching_notebook_pages_keeps_view_open(self):
+        tool = self.make_tool()
+        tool.run()
+        self.process_events()
+        view = tool.view3d
+        self.assertIsNotNone(view)
+        for index in (0, 1, 2):
+            tool.app.ui.notebook.setCurrentIndex(index)
+            self.process_events()
+            self.assertIs(tool.view3d, view)
+            self.assertIs(tool.app.plotcanvas3d, view.canvas)
+
+    def test_switching_notebook_pages_keeps_console_open_until_cleanup(self):
+        from PyQt6 import QtWidgets
+        from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+
+        tool = self.make_tool()
+        dock = QtWidgets.QDockWidget(tool.app.ui.notebook.window())
+        tool.app.ui.grbl_console_dock = dock
+        tool.hide_console = ToolGrblSender.hide_console.__get__(tool)
+        tool.show_console_if_wanted = ToolGrblSender.show_console_if_wanted.__get__(tool)
+        tool._console = MagicMock()
+        tool.app.options['tools_grbl_console_visible'] = True
+        tool.run()
+        self.process_events()
+        self.assertTrue(dock.isVisible())
+
+        for index in (1, 2, 0, 2):
+            tool.app.ui.notebook.setCurrentIndex(index)
+            self.process_events()
+            self.assertTrue(dock.isVisible())
+            self.assertTrue(tool.app.options['tools_grbl_console_visible'])
+
+        tool.on_plugin_cleanup()
+        self.assertFalse(dock.isVisible())
+        self.assertTrue(tool.app.options['tools_grbl_console_visible'])
+
+    def test_replacing_visible_or_hidden_sender_closes_view(self):
+        from PyQt6 import QtWidgets
+        from appTool import AppTool
+
+        for hidden in (False, True):
+            with self.subTest(hidden=hidden):
+                tool = self.make_tool()
+                tool.run()
+                self.process_events()
+                self.assertIsNotNone(tool.view3d)
+                if hidden:
+                    tool.app.ui.notebook.setCurrentWidget(tool.app.ui.properties_tab)
+                    self.process_events()
+                other = AppTool(tool.app)
+                other.pluginName = 'Other plugin'
+                other.run()
+                QtWidgets.QApplication.processEvents()
+                self.assertIsNone(tool.view3d)
+                self.assertIsNone(tool.app.plotcanvas3d)
+
+    def test_toggle_off_closes_view_without_reopening_sender(self):
+        tool = self.make_tool()
+        tool.run()
+        self.process_events()
+        self.assertIsNotNone(tool.view3d)
+        tool.run()
+        self.process_events()
+        self.assertEqual(tool.app.ui.notebook.indexOf(tool.app.ui.plugin_tab), -1)
+        self.assertIsNone(tool.view3d)
+        self.assertIsNone(tool.app.plotcanvas3d)
+        tool.set_tool_ui.assert_called_once()
+
+    def test_reopen_after_cleanup_uses_new_canvas(self):
+        tool = self.make_tool()
+        tool.run()
+        self.process_events()
+        old_view = tool.view3d
+        self.assertIsNotNone(old_view)
+        tool.on_plugin_cleanup()
+        tool.run(toggle=False)
+        self.process_events()
+        self.assertIsNotNone(tool.view3d)
+        self.assertIsNot(tool.view3d.canvas, old_view.canvas)
+        self.assertTrue(tool.view3d._segments)
+
+    def test_cleanup_after_manual_3d_close_keeps_replacement_canvas(self):
+        tool = self.make_tool()
+        tool.run()
+        self.process_events()
+        self.assertIsNotNone(tool.view3d)
+        plots = tool.app.ui.plot_tab_area
+        plots.closeTab(plots.indexOf(tool.app.area_3d_tab))
+        tool.app.on_3d_area()
+        canvas = tool.app.plotcanvas3d
+        tool.on_plugin_cleanup()
+        self.assertIsNone(tool.view3d)
+        self.assertIs(tool.app.plotcanvas3d, canvas)
+        self.assertEqual(plots.count(), 2)
+
+    def test_locked_plugin_tab_does_not_open_3d(self):
+        tool = self.make_tool()
+        tool.app.plugin_tab_locked = True
+        tool.run()
+        tool.app.on_3d_area.assert_not_called()
+        tool.set_tool_ui.assert_not_called()
 
 
 if __name__ == '__main__':

@@ -23,7 +23,7 @@ if '_' not in builtins.__dict__:
 
 
 class GrblSenderUI:
-    pluginName = _("GRBL Sender")
+    pluginName = _("GCode sender")
 
     def __init__(self, layout, app):
         self.app = app
@@ -61,12 +61,28 @@ class GrblSenderUI:
         self.level.setCheckable(True)
         self.title_box.addWidget(self.level)
 
-        self.obj_combo_label = FCLabel('%s' % _("CNCJob"), color='darkorange', bold=True)
+        self.obj_combo_label = FCLabel('%s' % _("Source Object"), color='darkorange', bold=True)
         self.obj_combo_label.setToolTip(
             _("The CNCJob object to send.")
         )
 
-        self.tools_box.addWidget(self.obj_combo_label)
+        self.console_cb = FCCheckBox(_("Show console"))
+        self.console_cb.setToolTip(_("Show or hide the GCode Console dock."))
+
+        self.fit_view_cb = FCCheckBox(_("Fit View"))
+        self.fit_view_cb.setToolTip(_("Fit the GCode bounds in isometric view after loading the source object."))
+
+        obj_hlay = QtWidgets.QHBoxLayout()
+        obj_hlay.addWidget(self.obj_combo_label)
+        obj_hlay.addStretch()
+        obj_hlay.addWidget(self.fit_view_cb)
+        obj_hlay.addWidget(self.console_cb)
+        self.tools_box.addLayout(obj_hlay)
+
+        self.source_frame = QtWidgets.QFrame()
+        source_box = QtWidgets.QVBoxLayout(self.source_frame)
+        source_box.setContentsMargins(0, 0, 0, 0)
+        self.tools_box.addWidget(self.source_frame)
 
         # #############################################################################################################
         # ################################ The object to be Auto-levelled ##############################################
@@ -77,17 +93,13 @@ class GrblSenderUI:
         # self.object_combo.setCurrentIndex(1)
         self.object_combo.is_last = True
 
-        self.tools_box.addWidget(self.object_combo)
-
-        self.console_cb = FCCheckBox(_("Show console"))
-        self.console_cb.setToolTip(_("Show or hide the GRBL console dock."))
-        self.tools_box.addWidget(self.console_cb)
+        source_box.addWidget(self.object_combo)
 
         self.al_toolbar = FCDetachableTab(protect=True)
         self.al_toolbar.setTabsClosable(False)
         self.al_toolbar.useOldIndex(True)
         self.al_toolbar.set_detachable(val=False)
-        self.tools_box.addWidget(self.al_toolbar)
+        source_box.addWidget(self.al_toolbar)
 
         # GRBL Connect TAB
         self.gr_conn_tab = QtWidgets.QWidget()
@@ -411,9 +423,12 @@ class GrblSenderUI:
 
         self.unlock_button = FCButton(_("Unlock"))
         self.unlock_button.setToolTip(_("Send $X: clear the alarm lock."))
+        self.sim_button = FCButton(_("Sim"))
+        self.sim_button.setToolTip(_("Run the program with a virtual controller."))
         self.check_mode_cb = FCCheckBox(_("Check mode"))
         self.check_mode_cb.setToolTip(_("GRBL reads the G-code of the next Start but does not move (check mode for 1 job)."))
-        run_grid.addWidget(self.unlock_button, 1, 0, 1, 2)
+        run_grid.addWidget(self.unlock_button, 1, 0)
+        run_grid.addWidget(self.sim_button, 1, 1)
         run_grid.addWidget(self.check_mode_cb, 1, 2, 1, 2)
 
         self.progress_bar = QtWidgets.QProgressBar()
@@ -455,10 +470,38 @@ class GrblSenderUI:
 
         self.al_group_label = FCLabel('%s' % _("Autolevelling"), color='blue', bold=True)
         self.tools_box.addWidget(self.al_group_label)
+        self.autolevel_frame = QtWidgets.QFrame()
+        autolevel_box = QtWidgets.QVBoxLayout(self.autolevel_frame)
+        autolevel_box.setContentsMargins(0, 0, 0, 0)
+        self.tools_box.addWidget(self.autolevel_frame)
         self.autolevel_cb = FCCheckBox(_("Level the G-code"))
         self.autolevel_cb.setToolTip(_("Apply the height map to the G-code before streaming."))
-        self.tools_box.addWidget(self.autolevel_cb)
-        build_probe_points_ui(self, self.app, self.tools_box)
+        autolevel_box.addWidget(self.autolevel_cb)
+        build_probe_points_ui(self, self.app, autolevel_box)
+        self.tool_grid.removeWidget(self.plot_probing_pts_cb)
+        self.tool_grid.addWidget(self.plot_probing_pts_cb, 2, 0)
+        self.plot_height_map_cb = FCCheckBox(_("Plot height map"))
+        self.plot_height_map_cb.setToolTip(_(
+            "Show or hide the generated height-map surface in Plot 3D.\n"
+            "This also applies to simulated height maps.\n"
+            "Hiding the surface doesn't affect levelling."))
+        self.plot_height_map_cb.setChecked(True)
+        self.tool_grid.addWidget(self.plot_height_map_cb, 2, 1)
+        self.avoid_exc_label = FCLabel('%s:' % _("Excellon Object"))
+        self.avoid_exc_label.setToolTip(_("Avoid holes from this Excellon object when adding probe points."))
+        self.avoid_exc_combo = FCComboBox()
+        self.avoid_exc_combo.setModel(self.app.collection)
+        self.avoid_exc_combo.setRootModelIndex(self.app.collection.index(1, 0, QtCore.QModelIndex()))
+        self.avoid_exc_combo.setCurrentIndex(0)
+        self.avoid_exc_combo.obj_type = "Excellon"
+        self.tool_grid.addWidget(self.avoid_exc_holes_size_label, 8, 0)
+        self.tool_grid.addWidget(self.avoid_exc_holes_size_entry, 8, 1)
+        self.tool_grid.addWidget(self.avoid_exc_label, 5, 0, 1, 2)
+        self.tool_grid.addWidget(self.avoid_exc_combo, 6, 0, 1, 2)
+        self.avoid_exc_label.hide()
+        self.avoid_exc_combo.hide()
+        self.al_frame.setVisible(self.autolevel_cb.isChecked())
+        self.autolevel_cb.toggled.connect(self.al_frame.setVisible)
 
         self.precision_probe_cb = FCCheckBox(_("Precision probing (two touches)"))
         self.precision_probe_cb.setToolTip(_(
@@ -497,6 +540,19 @@ class GrblSenderUI:
         self.tools_box.addWidget(self.reset_button)
 
         GLay.set_common_column_size([self.tool_grid, self.param_grid], 0)
+
+        def toggle_section(collapsed, label, frame, color):
+            frame.setHidden(collapsed)
+            label.color = 'gray' if collapsed else color
+
+        for label, frame in ((self.obj_combo_label, self.source_frame),
+                             (self.run_label, run_frame),
+                             (self.al_group_label, self.autolevel_frame)):
+            label.setCursor(Qt.CursorShape.PointingHandCursor)
+            label.clicked.connect(
+                lambda collapsed, label=label, frame=frame, color=label.color:
+                toggle_section(collapsed, label, frame, color)
+            )
 
     def confirmation_message(self, accepted, minval, maxval):
         if accepted is False:

@@ -119,10 +119,10 @@ def stream_lines(lines, write, readline, rx_size=GRBL_RX_BUFFER, check_mode=Fals
         poll_status=True when a status report shows Idle while the G4 is the oldest line
         in flight, else when the G4 becomes the oldest line in flight.
     :return: dict: 'status' ('finished', 'error', 'alarm', 'timeout', 'port_error',
-        'cancelled', 'stale' or 'line_too_long'), 'done' (acknowledged lines),
+        'cancelled', 'stale', 'line_too_long' or 'unexpected_reset'), 'done' (acknowledged lines),
         'errors' (list of (line index, reply text)), 'last_text' (the last reply line),
         'in_flight' (lines written but not acknowledged) and, for 'line_too_long',
-        'line_index'.
+        'line_index'. 'unexpected_reset' means a Grbl banner was seen mid-stream (controller reset).
     """
     total = len(lines)
     in_flight = []          # (line index, byte count) of the lines written but not acknowledged
@@ -220,6 +220,10 @@ def stream_lines(lines, write, readline, rx_size=GRBL_RX_BUFFER, check_mode=Fals
             lowered = text.lower()
             if lowered.startswith('alarm:'):
                 return result('alarm')
+            if lowered.startswith('grbl '):
+                # An unexpected controller reset mid-stream: the banner discards all pending
+                # replies and leaves Check mode. Stop writing job lines; the caller must recover.
+                return result('unexpected_reset')
             if lowered == 'ok' or lowered.startswith('error:'):
                 if not in_flight:
                     continue
@@ -411,6 +415,9 @@ class GrblClientMixin:
         :param allow_in_recovery: True only for the home cycle, which ends the recovery.
         :return: a _GrblOperation, or None (the user was told why).
         """
+        if self.__dict__.get('_simulation') is not None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Close the simulation first."))
+            return None
         if not self._grbl_port_ready() or self._grbl_close_pending:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Not connected to a GRBL controller."))
             return None
@@ -484,16 +491,18 @@ class GrblClientMixin:
         """Latch alarm/uncertain motion before attempting hold. Caller holds the lock."""
         alarm = any(line.lower().startswith('alarm:') or parse_grbl_status_state(line) == 'Alarm'
                     for line in (text or '').splitlines())
+        unexpected_reset = status != 'handshake' and any(
+            line.lower().startswith('grbl ') for line in (text or '').splitlines())
         uncertain = status in ('timeout', 'port_error', 'probe_invalid')
         if op is not None and (self._grbl_op is not op or op.cancel.is_set() or op.failed):
             return
-        if alarm or status == 'probe_failed' or (uncertain and (op is None or op.motion)):
+        if alarm or unexpected_reset or status == 'probe_failed' or (uncertain and (op is None or op.motion)):
             self._grbl_recovery = 'needs_reset'
             self._grbl_reset_pending = False
             self._grbl_safety_generation += 1
             if op is not None:
                 op.failed = True
-            if uncertain and not alarm:
+            if (uncertain or unexpected_reset) and not alarm:
                 if op is None or self.grbl_ser_port is op.port:
                     self._grbl_write_realtime_locked(b'!')
                 else:
@@ -618,7 +627,7 @@ class GrblClientMixin:
 
         :return: True if the byte was written.
         """
-        if not self._grbl_port_ready():
+        if self.__dict__.get('_simulation') is not None or not self._grbl_port_ready():
             return False
         try:
             self.grbl_ser_port.write(data)

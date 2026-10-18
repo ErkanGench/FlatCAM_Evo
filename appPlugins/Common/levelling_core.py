@@ -216,6 +216,10 @@ class LevellingCoreMixin:
         shapes = getattr(self, 'probing_shapes', None)
         if shapes is not None:
             shapes.clear(update=True)
+        # the 3D view holds a cached mesh; clear it when the data is gone (Sender only)
+        update_3d = getattr(type(self), '_update_3d_height_map', None)
+        if callable(update_3d):
+            update_3d(self)
 
     def _height_map_is_complete(self):
         return bool(self.al_voronoi_geo_storage) and all(
@@ -346,6 +350,12 @@ class LevellingCoreMixin:
 
     def on_add_al_probepoints(self):
         self._release_manual_mouse_events()
+        if self.ui.avoid_exc_holes_cb.get_value() is True:
+            try:
+                self._avoidance_excellon_objects()
+            except ValueError as e:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % str(e))
+                return 'fail'
         # create the solid_geo
 
         loaded_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
@@ -383,14 +393,17 @@ class LevellingCoreMixin:
         else:
             self.on_add_manual_points()
 
+    def _avoidance_excellon_objects(self):
+        return [obj for obj in self.app.collection.get_list()
+                if obj.kind == 'excellon' and obj.obj_options['plot']]
+
     def check_point_over_excellon(self, pol: Polygon, check: bool) -> BaseGeometry:
         if not check:
             return MultiPolygon()
 
         fused_geometries: list[Polygon] = [
             exc_geo
-            for obj_in_collection in self.app.collection.get_list()
-            if obj_in_collection.kind == 'excellon' and obj_in_collection.obj_options['plot']
+            for obj_in_collection in self._avoidance_excellon_objects()
             for exc_geo in _iter_polygons(obj_in_collection.solid_geometry)
             if isinstance(exc_geo, Polygon) and pol.intersects(exc_geo)
         ]
@@ -949,12 +962,16 @@ class LevellingCoreMixin:
 
             # check if chosen point is within an Excellon drill hole geometry
             if check_for_exc_hole is True:
-                for obj_in_collection in self.app.collection.get_list():
-                    if obj_in_collection.kind == 'excellon' and obj_in_collection.obj_options['plot'] is True:
-                        for exc_geo in _iter_polygons(obj_in_collection.solid_geometry):
-                            if probe_pt.within(exc_geo):
-                                self.app.inform.emit(_("Point on an Excellon drill hole. Choose another point."))
-                                return
+                try:
+                    objects = self._avoidance_excellon_objects()
+                except ValueError as e:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % str(e))
+                    return
+                for obj_in_collection in objects:
+                    for exc_geo in _iter_polygons(obj_in_collection.solid_geometry):
+                        if probe_pt.within(exc_geo):
+                            self.app.inform.emit(_("Point on an Excellon drill hole. Choose another point."))
+                            return
 
             int_keys = [int(k) for k in self.al_voronoi_geo_storage.keys()]
             new_id = max(int_keys) + 1 if int_keys else 1
@@ -1334,6 +1351,10 @@ class LevellingCoreMixin:
             self._invalidate_start_requests()
             self._al_bump_generation()
             self.al_heights_valid = False
+            # the 3D view holds a cached mesh; clear it when the map is invalidated (Sender only)
+            update_3d = getattr(type(self), '_update_3d_height_map', None)
+            if callable(update_3d):
+                update_3d(self)
             if units != self.app.app_units.upper():
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _(
                     "The units of the probe points and of the project do not match. Add probe points again."))

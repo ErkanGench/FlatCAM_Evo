@@ -9,9 +9,11 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from PyQt6 import QtWidgets, QtGui
+from PyQt6 import QtWidgets, QtGui, QtCore, QtTest
+from shapely import Point, box
 
 _qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
@@ -48,13 +50,172 @@ class TestGrblSenderConstruct(unittest.TestCase):
 
     def test_construct(self):
         tool = ToolGrblSender(make_app())
-        self.assertEqual(tool.pluginName, 'GRBL Sender')
+        self.assertEqual(tool.pluginName, 'GCode sender')
+
+    def test_section_labels_toggle_visibility_without_changing_controls(self):
+        tool = ToolGrblSender(make_app())
+        ui = tool.ui
+        ui.autolevel_cb.setChecked(True)
+        ui.check_mode_cb.setChecked(True)
+        ui.precision_feed_entry.set_value(12.5)
+        ui.start_button.setEnabled(False)
+        controls = (ui.object_combo, ui.al_toolbar, ui.start_button, ui.check_mode_cb,
+                    ui.autolevel_cb, ui.al_frame, ui.precision_feed_entry)
+        enabled = [widget.isEnabled() for widget in controls]
+        sections = (
+            (ui.obj_combo_label, (ui.object_combo, ui.al_toolbar)),
+            (ui.run_label, (ui.start_button, ui.check_mode_cb)),
+            (ui.al_group_label, (ui.autolevel_cb, ui.al_frame, ui.precision_feed_entry)),
+        )
+        for label, contents in sections:
+            color = label.color
+            self.assertFalse(label.clicked_state)
+            for collapsed in (True, False, True, False):
+                QtTest.QTest.mouseClick(label, QtCore.Qt.MouseButton.LeftButton)
+                self.assertEqual(label.color, 'gray' if collapsed else color)
+                self.assertIn('color="%s"' % label.color, label.text())
+                for other_label, other_contents in sections:
+                    self.assertFalse(other_label.isHidden())
+                    for widget in other_contents:
+                        self.assertEqual(widget.isVisibleTo(ui.tools_frame),
+                                         not (other_label is label and collapsed))
+                self.assertFalse(ui.reset_button.isHidden())
+                self.assertEqual([widget.isEnabled() for widget in controls], enabled)
+                self.assertTrue(ui.autolevel_cb.isChecked())
+                self.assertTrue(ui.check_mode_cb.isChecked())
+                self.assertEqual(ui.precision_feed_entry.get_value(), 12.5)
+
+        QtTest.QTest.mouseClick(ui.al_group_label, QtCore.Qt.MouseButton.LeftButton)
+        ui.autolevel_cb.setChecked(False)
+        ui.autolevel_cb.setChecked(True)
+        self.assertFalse(ui.al_frame.isVisibleTo(ui.tools_frame))
+        QtTest.QTest.mouseClick(ui.al_group_label, QtCore.Qt.MouseButton.LeftButton)
+        self.assertTrue(ui.al_frame.isVisibleTo(ui.tools_frame))
+        ui.autolevel_cb.setChecked(False)
+        for _ in range(2):
+            QtTest.QTest.mouseClick(ui.al_group_label, QtCore.Qt.MouseButton.LeftButton)
+        self.assertTrue(ui.al_frame.isHidden())
 
     def test_populate(self):
         tool = ToolGrblSender(make_app())
         # no GL canvas in the test: the probing shapes are a mock
         with patch('appPlugins.Common.levelling_core.ShapeCollection'):
             tool._populate_tool_ui()
+
+    def test_avoidance_combo_lists_only_excellon_and_follows_checkbox(self):
+        app = make_app()
+        app.collection.setItem(1, QtGui.QStandardItem('Excellon'))
+        app.collection.setItem(3, QtGui.QStandardItem('CNCJob'))
+        app.collection.item(1).appendRow(QtGui.QStandardItem('drills'))
+        app.collection.item(3).appendRow(QtGui.QStandardItem('job'))
+        tool = ToolGrblSender(app)
+        with patch('appPlugins.Common.levelling_core.ShapeCollection'):
+            tool._populate_tool_ui()
+        combo = tool.ui.avoid_exc_combo
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())], ['drills'])
+        for checked in (True, False):
+            tool.ui.avoid_exc_holes_cb.setChecked(checked)
+            for widget in (combo, tool.ui.avoid_exc_label, tool.ui.avoid_exc_holes_size_entry):
+                self.assertEqual(widget.isHidden(), not checked)
+        app.collection.item(1).appendRow(QtGui.QStandardItem('other drills'))
+        self.assertEqual(combo.count(), 2)
+
+    def test_fit_view_state_restores_in_a_new_sender(self):
+        app = make_app()
+        app.defaults = dict(app.options)
+        tool = ToolGrblSender(app)
+        with patch('appPlugins.Common.levelling_core.ShapeCollection'):
+            tool._populate_tool_ui()
+        self.assertTrue(tool.ui.fit_view_cb.isChecked())
+        tool.ui.fit_view_cb.setChecked(False)
+        self.assertFalse(app.defaults['tools_gcode_fit_view'])
+        restarted_app = make_app()
+        restarted_app.options.update(app.defaults)
+        restarted = ToolGrblSender(restarted_app)
+        with patch('appPlugins.Common.levelling_core.ShapeCollection'):
+            restarted._populate_tool_ui()
+        self.assertFalse(restarted.ui.fit_view_cb.isChecked())
+        layout = next(restarted.ui.tools_box.itemAt(i).layout()
+                      for i in range(restarted.ui.tools_box.count())
+                      if restarted.ui.tools_box.itemAt(i).layout() is not None and
+                      restarted.ui.tools_box.itemAt(i).layout().indexOf(restarted.ui.obj_combo_label) >= 0)
+        self.assertIs(layout.itemAt(0).widget(), restarted.ui.obj_combo_label)
+        self.assertIsNotNone(layout.itemAt(1).spacerItem())
+        self.assertIs(layout.itemAt(2).widget(), restarted.ui.fit_view_cb)
+        self.assertIs(layout.itemAt(3).widget(), restarted.ui.console_cb)
+
+
+class TestSelectedExcellonAvoidance(unittest.TestCase):
+
+    def make_tool(self):
+        from tests.test_levelling_audit import make_audit_tool
+
+        tool = make_audit_tool()
+        selected = SimpleNamespace(kind='excellon', obj_options={'plot': False},
+                                   solid_geometry=Point(5, 5).buffer(0.5))
+        other = SimpleNamespace(kind='excellon', obj_options={'plot': True},
+                                solid_geometry=Point(8, 8).buffer(0.5))
+        tool.app.collection.get_list.return_value = [selected, other]
+        tool.app.collection.get_by_name.side_effect = {'drills': selected, 'other': other}.get
+        tool.ui.avoid_exc_combo.get_value.return_value = 'drills'
+        tool.ui.avoid_exc_holes_cb.get_value.return_value = True
+        tool.ui.probe_tip_dia_entry.get_value.return_value = 0.2
+        tool.solid_geo = box(0, 0, 10, 10)
+        tool.mouse_events_connected = True
+        tool.plot_probing_geo = MagicMock()
+        return tool
+
+    def test_only_selected_object_is_checked_even_when_not_plotted(self):
+        tool = self.make_tool()
+        self.assertFalse(tool.check_point_over_excellon(Point(5, 5).buffer(0.1), True).is_empty)
+        self.assertTrue(tool.check_point_over_excellon(Point(8, 8).buffer(0.1), True).is_empty)
+        tool.ui.avoid_exc_combo.get_value.return_value = 'other'
+        self.assertFalse(tool.check_point_over_excellon(Point(8, 8).buffer(0.1), True).is_empty)
+        self.assertTrue(tool.check_point_over_excellon(Point(5, 5).buffer(0.1), True).is_empty)
+        self.assertTrue(tool.check_point_over_excellon(Point(8, 8).buffer(0.1), False).is_empty)
+
+    def test_manual_points_use_selected_object(self):
+        tool = self.make_tool()
+        for xy, expected_count in (((5, 5), 0), ((8, 8), 1)):
+            tool.app.plotcanvas.translate_coords.return_value = xy
+            tool.app.geo_editor.snap.return_value = xy
+            tool.on_mouse_click_release(SimpleNamespace(pos=xy, button=1))
+            self.assertEqual(len(tool.al_voronoi_geo_storage), expected_count)
+
+    def test_grid_points_use_selected_object(self):
+        tool = self.make_tool()
+        tool.ui.avoid_exc_holes_size_entry.get_value.return_value = 0.5
+        tool.ui.al_columns_entry.get_value.return_value = 11
+        tool.ui.al_rows_entry.get_value.return_value = 11
+        tool.ui.al_method_radio.get_value.return_value = 'b'
+        tool.app.dec_format.side_effect = lambda value, decimals: round(value, decimals)
+        tool.generate_bilinear_geometry = MagicMock()
+        tool.probing_gcode = MagicMock(return_value='')
+        tool.on_add_grid_points()
+        points = [(v['point'].x, v['point'].y) for v in tool.al_voronoi_geo_storage.values()]
+        self.assertNotIn((5, 5), points)
+        self.assertIn((8, 8), points)
+
+    def test_missing_or_wrong_object_blocks_generation_and_manual_clicks(self):
+        for name in ('', 'deleted', 'job'):
+            with self.subTest(name=name):
+                tool = self.make_tool()
+                tool.ui.avoid_exc_combo.get_value.return_value = name
+                tool.ui.object_combo.get_value.return_value = 'job'
+                job = SimpleNamespace(kind='cncjob', gcode_parsed=[{'kind': ['C'], 'geom': tool.solid_geo}])
+                tool.app.collection.get_by_name.side_effect = lambda n: job if n == 'job' else None
+                tool.al_voronoi_geo_storage = {1: {'point': Point(1, 1), 'geo': None, 'height': 0.0}}
+                tool.on_add_grid_points = MagicMock()
+                tool.on_add_manual_points = MagicMock()
+                self.assertEqual(tool.on_add_al_probepoints(), 'fail')
+                tool.on_add_grid_points.assert_not_called()
+                tool.on_add_manual_points.assert_not_called()
+                tool.app.plotcanvas.translate_coords.return_value = (5, 5)
+                tool.app.geo_editor.snap.return_value = (5, 5)
+                tool.mouse_events_connected = True
+                tool.on_mouse_click_release(SimpleNamespace(pos=(5, 5), button=1))
+                self.assertEqual(len(tool.al_voronoi_geo_storage), 1)
+                self.assertIn('Excellon', str(tool.app.inform.emit.call_args))
 
 
 class TestBaudratePersists(unittest.TestCase):

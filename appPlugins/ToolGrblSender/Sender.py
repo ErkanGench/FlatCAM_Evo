@@ -6,6 +6,8 @@
 # ##########################################################
 
 import math
+import random
+import time
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 
@@ -14,8 +16,9 @@ import serial.tools.list_ports
 
 from appTool import AppTool
 from defaults import AppDefaults
-from appGUI.GUIElements import VerticalScrollArea, FCFileSaveDialog, FCMessageBox
-from camlib import CNCjob
+from appGUI.GUIElements import (
+    VerticalScrollArea, FCFileSaveDialog, FCMessageBox, FCTextAreaLineNumber, RadioSet, FCSpinner)
+from camlib import CNCjob, flatten_shapely_geometry
 
 from appPlugins.Common.levelling_core import LevellingCoreMixin
 from appPlugins.Common.grbl_protocol import (
@@ -26,7 +29,8 @@ from appPlugins.Common.levelling_interp import build_bilinear_grid
 from appPlugins.ToolGrblSender import SenderGen
 from appPlugins.ToolGrblSender.SenderGrbl import GrblClientMixin, stream_lines, validate_stream_lines
 from appPlugins.ToolGrblSender.SenderUI import GrblSenderUI
-from appPlugins.ToolGrblSender.SenderView3d import SenderView3d
+from appPlugins.ToolGrblSender.SenderSimulation import SimulationDialog, VirtualGrbl
+from appPlugins.ToolGrblSender.SenderView3d import SenderView3d, TOOL_COLOR
 
 import gettext
 import appTranslation as fcTranslate
@@ -38,17 +42,51 @@ if '_' not in builtins.__dict__:
 
 
 class GrblConsole(QtWidgets.QWidget):
-    """The log of the lines sent to GRBL and of its replies, and a command line."""
+    """The prepared program, GRBL acknowledgements, and the command console."""
+
+    program_line_selected = QtCore.pyqtSignal(object)
 
     def __init__(self, tool, parent=None):
         super().__init__(parent)
         self.tool = tool
+        self._selected_lines = set()
+        self._selection_anchor = None
+        self._progress_selections = []
         lay = QtWidgets.QVBoxLayout(self)
-        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QtWidgets.QTabWidget()
+        lay.addWidget(self.tabs)
+        program_tab = QtWidgets.QWidget()
+        program_lay = QtWidgets.QVBoxLayout(program_tab)
+        program_lay.setContentsMargins(0, 0, 0, 0)
+        program_header = QtWidgets.QHBoxLayout()
+        self.program_status = QtWidgets.QLabel()
+        self.program_status.setToolTip(_(
+            "GRBL acknowledged this line. Buffered moves may still be executing."))
+        self.follow_cb = QtWidgets.QCheckBox(_("Follow"))
+        self.follow_cb.setChecked(True)
+        program_header.addWidget(self.program_status, 1)
+        program_header.addWidget(self.follow_cb)
+        program_lay.addLayout(program_header)
+        self.program_area = FCTextAreaLineNumber(theme=tool.app.options.get('global_theme', 'default'))
+        self.program_view = self.program_area.edit
+        self.program_view.setReadOnly(True)
+        self.program_view.setUndoRedoEnabled(False)
+        self.program_view.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self.program_view.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.SystemFont.FixedFont))
+        # Browsing must not replace the stream's line highlight with the text cursor's highlight.
+        self.program_view.cursorPositionChanged.disconnect(self.program_view.highlight)
+        QtWidgets.QApplication.instance().installEventFilter(self)
+        program_lay.addWidget(self.program_area)
+        self.tabs.addTab(program_tab, _("Program"))
+
+        console_tab = QtWidgets.QWidget()
+        console_lay = QtWidgets.QVBoxLayout(console_tab)
+        console_lay.setContentsMargins(0, 0, 0, 0)
         self.log_view = QtWidgets.QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(5000)
-        lay.addWidget(self.log_view)
+        console_lay.addWidget(self.log_view)
         h_lay = QtWidgets.QHBoxLayout()
         self.cmd_entry = QtWidgets.QLineEdit()
         self.cmd_entry.setPlaceholderText(_("Type GRBL command ..."))
@@ -56,9 +94,135 @@ class GrblConsole(QtWidgets.QWidget):
         self.send_btn.setText(_("Send"))
         h_lay.addWidget(self.cmd_entry)
         h_lay.addWidget(self.send_btn)
-        lay.addLayout(h_lay)
+        console_lay.addLayout(h_lay)
+        self.tabs.addTab(console_tab, _("Console"))
         self.cmd_entry.returnPressed.connect(self.on_send)
         self.send_btn.clicked.connect(self.on_send)
+        self.follow_cb.toggled.connect(self._follow_program)
+        self.program_line_selected.connect(lambda index: self.tool.on_program_line_selected(index))
+        self.set_program([])
+
+    def eventFilter(self, obj, event):
+        view = self.__dict__.get('program_view')
+        if view is None:
+            return False
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress and self.isVisible() \
+                and isinstance(obj, QtWidgets.QWidget) \
+                and obj is not self.program_area and not self.program_area.isAncestorOf(obj):
+            self.clear_program_selection()
+        elif event.type() == QtCore.QEvent.Type.MouseButtonRelease and self.isVisible() \
+                and isinstance(obj, QtWidgets.QWidget) \
+                and obj is not self.program_area and not self.program_area.isAncestorOf(obj):
+            # Controls such as Follow can select the progress line in their click handler.
+            QtCore.QTimer.singleShot(0, self.clear_program_selection)
+        elif event.type() == QtCore.QEvent.Type.Hide and obj is self:
+            self.clear_program_selection()
+        if event.type() == QtCore.QEvent.Type.MouseButtonRelease \
+                and event.button() == QtCore.Qt.MouseButton.LeftButton and obj is view.viewport():
+            QtWidgets.QPlainTextEdit.mouseReleaseEvent(self.program_view, event)
+            cursor = view.cursorForPosition(event.position().toPoint())
+            index = cursor.blockNumber()
+            if index >= self._program_count:
+                return True
+            modifiers = event.modifiers()
+            if modifiers & QtCore.Qt.KeyboardModifier.ShiftModifier and self._selection_anchor is not None:
+                first, last = sorted((self._selection_anchor, index))
+                self._selected_lines = set(range(first, last + 1))
+            elif modifiers & QtCore.Qt.KeyboardModifier.ControlModifier:
+                self._selected_lines.symmetric_difference_update({index})
+                self._selection_anchor = index
+            else:
+                self._selected_lines = {index}
+                self._selection_anchor = index
+            if index in self._selected_lines:
+                cursor.select(QtGui.QTextCursor.SelectionType.LineUnderCursor)
+            self.program_view.setTextCursor(cursor)
+            self._highlight_program_selection()
+            self.program_line_selected.emit(
+                next(iter(self._selected_lines)) if len(self._selected_lines) == 1 else set(self._selected_lines))
+            return True
+        # Use Qt's read-only handlers instead of the editor's insertion/comment shortcuts.
+        if obj is view:
+            if event.type() == QtCore.QEvent.Type.KeyPress:
+                QtWidgets.QPlainTextEdit.keyPressEvent(obj, event)
+                return True
+            if event.type() == QtCore.QEvent.Type.ContextMenu:
+                QtWidgets.QPlainTextEdit.contextMenuEvent(obj, event)
+                return True
+        return super().eventFilter(obj, event)
+
+    def clear_program_selection(self):
+        self._selected_lines.clear()
+        self._selection_anchor = None
+        cursor = self.program_view.textCursor()
+        cursor.clearSelection()
+        self.program_view.setTextCursor(cursor)
+        self._highlight_program_selection()
+        if self.tool.view3d is not None:
+            self.tool.view3d.set_selected_line(None)
+
+    def _highlight_program_selection(self):
+        selections = []
+        for index in sorted(self._selected_lines):
+            selection = QtWidgets.QTextEdit.ExtraSelection()
+            selection.cursor = QtGui.QTextCursor(self.program_view.document().findBlockByNumber(index))
+            selection.format.setProperty(QtGui.QTextFormat.Property.FullWidthSelection, True)
+            selection.format.setBackground(self.program_view.palette().highlight())
+            selection.format.setForeground(self.program_view.palette().highlightedText())
+            selections.append(selection)
+        self.program_view.setExtraSelections(selections + self._progress_selections)
+
+    def set_program(self, lines):
+        self.clear_program_selection()
+        self._program_count = len(lines)
+        self.program_view.setPlainText('\n'.join(lines))
+        self.update_progress(0)
+        self.tabs.setCurrentIndex(0)
+
+    def update_progress(self, done, errors=()):
+        self._acknowledged = max(0, min(done, self._program_count))
+        self._program_errors = sorted(set(i for i in errors if 0 <= i < self._program_count))
+        text = '%s: %d / %d' % (_("Acknowledged line"), self._acknowledged, self._program_count)
+        if self._program_errors:
+            text += ' | %s: %s' % (_("Errors on the lines"),
+                                   ', '.join(str(i + 1) for i in self._program_errors[:20]))
+        self.program_status.setText(text)
+
+        selections = []
+        acknowledged = self._acknowledged - 1
+        indexes = [acknowledged] if acknowledged >= 0 and acknowledged not in self._program_errors else []
+        for index in indexes + self._program_errors:
+            selection = QtWidgets.QTextEdit.ExtraSelection()
+            selection.cursor = QtGui.QTextCursor(self.program_view.document().findBlockByNumber(index))
+            selection.format.setProperty(QtGui.QTextFormat.Property.FullWidthSelection, True)
+            if index in self._program_errors:
+                selection.format.setBackground(QtGui.QColor('#c62828'))
+                selection.format.setForeground(QtGui.QColor('white'))
+            else:
+                selection.format.setBackground(self.program_view.palette().highlight())
+                selection.format.setForeground(self.program_view.palette().highlightedText())
+            selections.append(selection)
+        self._progress_selections = selections
+        self._highlight_program_selection()
+        self._program_line = self._program_errors[-1] if self._program_errors else acknowledged
+        if self.tool.__dict__.get('_program_paused') is not True:
+            self._follow_program(self.follow_cb.isChecked())
+
+    def _follow_program(self, checked):
+        self._selected_lines.clear()
+        self._selection_anchor = None
+        self._highlight_program_selection()
+        if self._program_line >= 0:
+            scrollbars = (self.program_view.horizontalScrollBar(), self.program_view.verticalScrollBar())
+            positions = [bar.value() for bar in scrollbars]
+            cursor = QtGui.QTextCursor(self.program_view.document().findBlockByNumber(self._program_line))
+            cursor.select(QtGui.QTextCursor.SelectionType.LineUnderCursor)
+            self.program_view.setTextCursor(cursor)
+            if checked:
+                self.program_view.ensureCursorVisible()
+            else:
+                for bar, position in zip(scrollbars, positions):
+                    bar.setValue(position)
 
     def on_send(self):
         text = self.cmd_entry.text().strip()
@@ -69,6 +233,37 @@ class GrblConsole(QtWidgets.QWidget):
 
     def append(self, text):
         self.log_view.appendPlainText(text)
+
+
+class GrblStartDialog(QtWidgets.QDialog):
+    """Choose a 1-based line in the prepared console program."""
+
+    def __init__(self, line_count, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(_("Start job"))
+        layout = QtWidgets.QVBoxLayout(self)
+        self.start_radio = RadioSet([
+            {'label': _("Beginning"), 'value': 'beginning'},
+            {'label': _("Line"), 'value': 'line'}])
+        self.start_radio.setToolTip(_(
+            "Select from where the job starts:\n"
+            "- Beginning: start from the first line\n"
+            "- Line: start from a custom line"))
+        layout.addWidget(self.start_radio)
+        self.line_entry = FCSpinner()
+        self.line_entry.set_range(1, line_count)
+        self.line_entry.set_value(1)
+        self.line_entry.setToolTip(_("Line number in the GCode program console."))
+        layout.addWidget(self.line_entry)
+        self.start_radio.activated_custom.connect(
+            lambda value: self.line_entry.setVisible(value == 'line'))
+        self.start_radio.set_value('beginning')
+        self.line_entry.hide()
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
 
 
 class _StartRequest:
@@ -82,6 +277,7 @@ class _StartRequest:
         self.map_imported = map_imported
         self.safety_generation = safety_generation
         self.check_mode = check_mode
+        self.start_line = None
 
 
 class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
@@ -99,6 +295,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     stream_ended_sig = QtCore.pyqtSignal(str)
     # a text line for the console, from any thread
     console_line_sig = QtCore.pyqtSignal(str)
+    preview_ready_sig = QtCore.pyqtSignal(object)
+    probe_finished_sig = QtCore.pyqtSignal(object, object)
+    simulation_event_sig = QtCore.pyqtSignal(object, str, object)
 
     def __init__(self, app):
         self.app = app
@@ -127,20 +326,32 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         # the line number in the G-code text of each line of job_lines (for the messages)
         self.job_line_numbers = []
         self.view3d = None
+        self._preview_generation = 0
+        self._probe_start_op = None
+        self._plugin_active = False
         self._last_wco = None
         # what the stream worker tells the GUI thread with stream_ended_sig: {'done', 'last_text', 'errors'}
         self._stream_result = {}
+        self._simulation = None
+        self._controller_state = 'Idle'
 
         self.ui = GrblSenderUI(layout=self.layout, app=self.app)
         self.pluginName = self.ui.pluginName
 
         self._al_core_signals_connected = False
         self.connect_signals_at_init()
+        self.simulation_event_sig.connect(self._on_simulation_event)
+        self._sim_ui_timer = QtCore.QTimer(self)
+        self._sim_ui_timer.setInterval(100)
+        self._sim_ui_timer.timeout.connect(self._update_sim_button)
+        self._sim_ui_timer.start()
 
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='', **kwargs)
 
     def run(self, toggle=True):
+        if self.app.plugin_tab_locked is True:
+            return
         self.app.defaults.report_usage("ToolGrblSender()")
 
         if toggle:
@@ -179,24 +390,28 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                     else:
                         # else remove the Tool Tab
                         self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
-                        self.app.ui.notebook.removeTab(2)
-                        self.hide_console()
+                        self.app.ui.notebook.removeTab(found_idx)
+                        self.on_plugin_cleanup()
 
                         # if there are no objects loaded in the app then hide the Notebook widget
                         if not self.app.collection.get_list():
                             self.app.ui.splitter.setSizes([0, 1])
+                        return
             except AttributeError:
                 pass
         else:
             if self.app.ui.splitter.sizes()[0] == 0:
                 self.app.ui.splitter.setSizes([1, 1])
 
+        self._plugin_active = True
         super().run()
         self.set_tool_ui()
 
-        self.app.ui.notebook.setTabText(2, _("GRBL Sender"))
+        self.app.ui.notebook.setTabText(2, self.pluginName)
 
+        self._reload_console_program(self._target())
         self.show_console_if_wanted()
+        self._schedule_3d_preview()
 
     def connect_signals_at_init(self):
         # the signals of the tool and of the app live as long as the tool;
@@ -213,18 +428,26 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self.stream_ended_sig.connect(self._on_stream_ended)
             self.frame_ready_sig.connect(self._on_frame_ready)
             self.console_line_sig.connect(lambda line: self._console().append(line))
+            self.preview_ready_sig.connect(self._on_preview_ready)
+            self.probe_finished_sig.connect(self._on_probe_finished)
+            self.app.collection.rowsInserted.connect(self._select_available_excellon)
+            self.app.collection.rowsRemoved.connect(self._select_available_excellon)
+            self.app.collection.modelReset.connect(self._select_available_excellon)
             # When object selection on canvas change
             self.app.proj_selection_changed.connect(self.on_object_selection_changed)
             # Cleanup on Graceful exit (CTRL+ALT+X combo key)
-            self.app.cleanup.connect(self.set_tool_ui)
+            self.app.cleanup.connect(self.on_reset_tool)
             self.app.cleanup.connect(self._grbl_disconnect)
             # close the serial port when the application ends
             qt_app = QtWidgets.QApplication.instance()
             if qt_app is not None:
                 qt_app.aboutToQuit.connect(self._grbl_force_close)
+                qt_app.aboutToQuit.connect(lambda: self._simulation.close() if self._simulation else None)
         self.ui.level.toggled.connect(self.on_level_changed)
+        self._select_available_excellon()
 
         self.ui.avoid_exc_holes_cb.toggled.connect(self.on_avoid_exc_holes)
+        self.ui.avoid_exc_combo.currentIndexChanged.connect(self._update_3d_excellon)
 
         self.ui.al_mode_radio.activated_custom.connect(self.on_mode_radio)
         self.ui.al_method_radio.activated_custom.connect(self.on_method_radio)
@@ -232,6 +455,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.precision_feed_entry.valueChanged.connect(self.on_precision_probe_changed)
         self.ui.precision_retract_entry.valueChanged.connect(self.on_precision_probe_changed)
         self.ui.plot_probing_pts_cb.toggled.connect(self.show_probing_geo)
+        self.ui.plot_height_map_cb.toggled.connect(self._update_3d_height_map)
         # GRBL
         self.ui.com_search_button.clicked.connect(self.on_grbl_search_ports)
         self.ui.add_bd_button.clicked.connect(self.on_grbl_add_baudrate)
@@ -269,27 +493,35 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.grbl_save_height_map_button.clicked.connect(self.on_grbl_heightmap_save)
 
         # Reset Tool
-        self.ui.reset_button.clicked.connect(self.set_tool_ui)
+        self.ui.reset_button.clicked.connect(self.on_reset_tool)
 
         self.ui.console_cb.toggled.connect(self.on_console_toggled)
+        self.ui.fit_view_cb.toggled.connect(self.on_fit_view_toggled)
         self.ui.start_button.clicked.connect(self.on_start)
         self.ui.hold_button.clicked.connect(lambda: self._grbl_realtime(b'!'))
-        self.ui.resume_button.clicked.connect(lambda: self._grbl_realtime(b'~'))
+        self.ui.resume_button.clicked.connect(self._on_resume_button)
         self.ui.stop_button.clicked.connect(self.on_stream_stop)
         self.ui.unlock_button.clicked.connect(self.on_unlock)
+        self.ui.sim_button.clicked.connect(self.on_simulation)
         self.ui.save_levelled_button.clicked.connect(self.on_save_levelled_gcode)
         self.ui.view3d_button.clicked.connect(self.on_show_3d)
         for (name, text), (btn, byte) in self.ui.ov_buttons.items():
             btn.clicked.connect(lambda checked=False, b=byte: self._grbl_realtime(b))
 
+    def on_reset_tool(self):
+        self._probe_start_op = None
+        self._clear_probe_data()
+        self.set_tool_ui()
+
     def set_tool_ui(self):
         # closing or resetting the tool while adding manual points must give
         # the canvas events back to the app
+        if self.__dict__.get('_simulation') is not None:
+            self._simulation.close()
+        self._preview_generation = getattr(self, '_preview_generation', 0) + 1
         self._release_manual_mouse_events()
 
         self.units = self.app.app_units.upper()
-        # new probe points carry a placeholder height of 0.0, so a full storage
-        # alone does not make a valid map: keep the flag that a probe or an import set
         self.al_heights_valid = bool(getattr(self, 'al_heights_valid', False)) and \
             self._height_map_is_complete()
         self.clear_ui(self.layout)
@@ -304,6 +536,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         finally:
             self.ui.al_method_radio.blockSignals(method_blocked)
             self.ui.al_mode_radio.blockSignals(mode_blocked)
+        if self.view3d is not None:
+            self._schedule_3d_preview()
 
     def _populate_tool_ui(self):
         # Both radio groups stay blocked, including the initial to_form().
@@ -424,6 +658,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 app_defaults.get("tools_al_avoid_exc_holes", AppDefaults.factory_defaults.get("tools_al_avoid_exc_holes")))
         )
 
+        self.ui.fit_view_cb.set_value(bool(self.app.options.get(
+            "tools_gcode_fit_view", app_defaults.get("tools_gcode_fit_view", True))))
         self.ui.console_cb.set_value(bool(self.app.options.get(
             "tools_grbl_console_visible",
             app_defaults.get("tools_grbl_console_visible", False))))
@@ -433,6 +669,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     def on_object_changed(self):
         # first: a pending levelled Start request is old before the new target is published
         self._invalidate_start_requests()
+        self._preview_generation = getattr(self, '_preview_generation', 0) + 1
+        self._probe_start_op = None
 
         # the job and its toolpath belong to the old object
         self.job_lines = []
@@ -449,7 +687,10 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             target_obj = self.app.collection.get_by_name(obj_name)
         except Exception:
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(obj_name)))
+            self._reload_console_program(None)
             return
+
+        self._reload_console_program(target_obj)
 
         # probe points, heights and probing G-code belong to 1 object (name and
         # identity); forget them when the user selects a different object
@@ -471,6 +712,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 self._on_show_probing_geo_sig(True, True)
         else:
             self.ui.al_frame.setDisabled(True)
+
+        if self.view3d is not None and self._is_supported_target(target_obj):
+            self._schedule_3d_preview()
 
     @staticmethod
     def _is_supported_target(target_obj):
@@ -502,6 +746,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("COM list updated ..."))
 
     def on_grbl_connect(self):
+        if self.__dict__.get('_simulation') is not None:
+            return
         if self._grbl_op is not None or self._grbl_close_pending:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("GRBL is busy. Wait until the running operation stops."))
             return
@@ -670,6 +916,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def _on_grbl_port_closed(self):
         """Slot of grbl_port_closed_sig (GUI thread)."""
+        self._controller_state = 'Idle'
+        self._program_paused = False
         try:
             self._grbl_set_ui_connected(False)
         except (AttributeError, RuntimeError):
@@ -837,6 +1085,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def on_grbl_stop(self):
         """Stop the running operation at once: feed hold, and the machine needs recovery."""
+        if self.__dict__.get('_simulation') is not None:
+            self._simulation.stop()
+            return
         with self._grbl_op_lock:
             self._start_seq += 1
             self._grbl_safety_generation += 1
@@ -854,6 +1105,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             _("Stopped. GRBL is in feed hold."), self._grbl_recovery_text()))
 
     def on_grbl_reset(self):
+        if self.__dict__.get('_simulation') is not None:
+            return
         self._last_wco = None
         with self._grbl_op_lock:
             self._start_seq += 1
@@ -907,6 +1160,73 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             return
         self.app.inform.emit("%s" % (_("GRBL resumed.") if checked is False else _("GRBL paused.")))
 
+    def _on_resume_button(self):
+        """Resume button guard: block cycle-start when recovery is needed or a reset is pending.
+
+        The pause/resume toggle (on_grbl_pause_resume) has the same guard, but the dedicated
+        Resume button bypassed it by calling _grbl_realtime directly. After Stop or an error
+        the stream is dirty and recovery is latched; sending ~ would restart abandoned motion.
+        A healthy Hold->Resume is unaffected: _grbl_recovery is None in that path.
+
+        All safety checks and the write happen in ONE critical section to prevent a worker
+        from latching recovery between the check and the write.
+        """
+        with self._grbl_op_lock:
+            # Recovery latched (needs_reset or needs_home): block resume
+            if self._grbl_recovery is not None:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % self._grbl_recovery_text())
+                return
+            # Reset in progress: block resume
+            if self._grbl_reset_pending:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("A reset is pending. Wait for the banner."))
+                return
+            # Stream dirty but no healthy active operation: abandoned job, block resume
+            if self._grbl_stream_dirty and (self._grbl_op is None or self._grbl_op.cancel.is_set() or self._grbl_op.failed):
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The previous job was abandoned. Press Reset, then Home."))
+                return
+            written = self._grbl_write_realtime_locked(b'~')
+        if not written:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Not connected to a GRBL controller."))
+            return
+        self.app.inform.emit("%s" % _("GRBL resumed."))
+
+    def _select_available_excellon(self, *args):
+        combo = self.ui.avoid_exc_combo
+        root = self.app.collection.index(1, 0, QtCore.QModelIndex())
+        if combo.rootModelIndex() != root:
+            combo.setRootModelIndex(root)
+        if combo.currentIndex() < 0 and combo.count():
+            combo.setCurrentIndex(0)
+        self._update_3d_excellon()
+
+    def on_avoid_exc_holes(self, state):
+        super().on_avoid_exc_holes(state)
+        self.ui.avoid_exc_label.setVisible(bool(state))
+        self.ui.avoid_exc_combo.setVisible(bool(state))
+        self._update_3d_excellon()
+
+    def _update_3d_excellon(self, *args):
+        if self.view3d is None:
+            return
+        shapes = self.view3d.excellon_shapes
+        shapes.clear()
+        if self.ui.avoid_exc_holes_cb.get_value():
+            try:
+                objects = self._avoidance_excellon_objects()
+            except ValueError:
+                objects = []
+            for obj in objects:
+                for geo in flatten_shapely_geometry(obj.solid_geometry):
+                    shapes.add(shape=geo, color=TOOL_COLOR, layer=0)
+        shapes.redraw()
+
+    def _avoidance_excellon_objects(self):
+        name = self.ui.avoid_exc_combo.get_value()
+        obj = self.app.collection.get_by_name(name) if name else None
+        if obj is None or obj.kind != 'excellon':
+            raise ValueError(_("Select an Excellon object to avoid its holes."))
+        return [obj]
+
     def _al_read_probe_inputs(self):
         """
         Read and check the probing parameters (GUI thread).
@@ -935,6 +1255,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         return travel_z, depth, probe_fr
 
     def on_grbl_autolevel(self):
+        self._queue_probe(False)
+
+    def _queue_probe(self, start_after_probe):
         # read every UI value here, in the GUI thread; the worker must not touch widgets
         inputs = self._al_read_probe_inputs()
         if inputs is None:
@@ -957,6 +1280,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if context is None:
             self._grbl_release(op)
             return
+        if start_after_probe:
+            self._probe_start_op = op
+            self.ui.start_button.setDisabled(True)
 
         points = {key: (value['point'].x, value['point'].y) for key, value in self.al_voronoi_geo_storage.items()}
         tol = context.tolerance
@@ -971,9 +1297,23 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                                          units_cmd, probe_timeout)
             finally:
                 self._grbl_release(op)
+                if start_after_probe:
+                    self.probe_finished_sig.emit(op, context)
 
         self.app.inform.emit('%s' % _("Sending probing GCode to the GRBL controller."))
         self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+
+    def _on_probe_finished(self, op, context):
+        if op is not getattr(self, '_probe_start_op', None):
+            self._start_free_button()
+            return
+        self._probe_start_op = None
+        if (op.cancel.is_set() or op.failed or op.safety_generation != self._grbl_safety_generation or
+                not self._al_context_current(context) or not self.al_heights_valid or
+                self.ui.autolevel_cb.get_value() is not True):
+            self._start_free_button()
+            return
+        self._start_levelled(start_line=1)
 
     def _al_read_precision_inputs(self, travel_z, depth, probe_fr):
         """Capture optional fine probing parameters before reserving or moving GRBL."""
@@ -1243,9 +1583,52 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     def on_start(self):
         # the WCO of an earlier session or job is not trusted
         self._last_wco = None
+        if getattr(self, '_probe_start_op', None) is not None:
+            return
+        self._preview_generation = getattr(self, '_preview_generation', 0) + 1
         if self.ui.autolevel_cb.get_value() is True:
-            # a levelled Start has 2 phases: the live frame is read before the job is made (A8.3)
-            self._start_levelled()
+            choice = 'new'
+            if self.al_heights_valid and self._height_map_is_complete():
+                context = self._al_capture_context()
+                seq = getattr(self, '_start_seq', 0)
+                safety_generation = self._grbl_safety_generation
+                choice = self._choose_height_map()
+                if (not self._al_context_current(context) or seq != getattr(self, '_start_seq', 0) or
+                        safety_generation != self._grbl_safety_generation):
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                        "The height map, source object or machine state changed. Press Start again."))
+                    return
+            if choice == 'existing':
+                self._start_levelled()
+            elif choice == 'new':
+                if self.ui.check_mode_cb.get_value() is True:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                        "Check mode needs an existing height map. Probe first or turn off check mode."))
+                    return
+                if not self._is_supported_target(self._target()):
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Select a CNCJob object."))
+                    return
+                if not self.build_job():
+                    return
+                self._console().set_program(self.job_lines)
+                target = self._target()
+                source = target.source_file
+                context = self._al_capture_context()
+                generation = self._grbl_safety_generation
+                start_line = self._choose_start_line(len(self.job_lines))
+                if start_line is None:
+                    return
+                if (not self._al_context_current(context) or generation != self._grbl_safety_generation or
+                        self._target() is not target or target.source_file != source):
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                        "The program or machine state changed while the dialog was open. Press Start again."))
+                    return
+                if start_line != 1:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                        "Starting from a line with auto-levelling needs an existing height map. "
+                        "Probe first, then use the existing map."))
+                    return
+                self._queue_probe(True)
             return
         if not self.build_stream_job():
             return
@@ -1256,6 +1639,22 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if op is None:
             return
         self._start_stream_worker(op, list(self.job_lines), list(self.job_line_numbers), check_mode, poll_ms)
+
+    def _choose_height_map(self):
+        msgbox = FCMessageBox(parent=self.app.ui)
+        msgbox.setWindowTitle(_("Height map"))
+        msgbox.setText(_("A height map is available. Generate a new map or use the existing one?"))
+        msgbox.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        new_button = msgbox.addButton(_('Generate New'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        existing_button = msgbox.addButton(_('Use Existing'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+        cancel_button = msgbox.addButton(_('Cancel'), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        msgbox.setDefaultButton(cancel_button)
+        msgbox.exec()
+        if msgbox.clickedButton() == new_button:
+            return 'new'
+        if msgbox.clickedButton() == existing_button:
+            return 'existing'
+        return 'cancel'
 
     def _start_free_button(self):
         """A levelled Start ended before the stream: the Start button works again (GUI thread)."""
@@ -1294,7 +1693,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             return False
         return all(abs(a - b) <= tolerance for a, b in zip(live[1], bound[1]))
 
-    def _start_levelled(self):
+    def _start_levelled(self, start_line=None):
         """
         Phase 0 of a levelled Start (GUI thread): make the request, ask about an imported map, reserve
         the operation 'frame' and read the live frame in a worker (phase 1). _on_frame_ready() goes on.
@@ -1320,6 +1719,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             safety_generation = self._grbl_safety_generation
         req = _StartRequest(seq, ctx, target, self._al_map_frame, self._al_map_imported,
                             safety_generation, check_mode)
+        req.start_line = start_line
 
         if req.map_imported:
             if not self._confirm_imported_frame():
@@ -1407,13 +1807,67 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         poll_ms = int(self.app.options.get("tools_grbl_status_ms", 200))
         self._start_stream_worker(op, list(self.job_lines), list(self.job_line_numbers), req.check_mode, poll_ms, req)
 
+    def _choose_start_line(self, line_count):
+        dialog = GrblStartDialog(line_count, self.app.ui)
+        try:
+            if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+                return None
+            return dialog.line_entry.get_value() if dialog.start_radio.get_value() == 'line' else 1
+        finally:
+            dialog.deleteLater()
+
     def _start_stream_worker(self, op, lines, numbers, check_mode, poll_ms, req=None):
         """Start the stream worker under the reserved operation `op` (GUI thread). `req`: a levelled Start."""
+        self._console().set_program(lines)
+        target = self._target()
+        source = target.source_file
+        seq = getattr(self, '_start_seq', 0)
+        generation = self._grbl_safety_generation
+        self.ui.start_button.setDisabled(True)
+        start_line = (req.start_line if req is not None and req.start_line is not None
+                      else self._choose_start_line(len(lines)))
+        with self._grbl_op_lock:
+            current = (self._grbl_active_locked(op) and not op.cancel.is_set() and
+                       generation == self._grbl_safety_generation and seq == getattr(self, '_start_seq', 0))
+        if start_line is None or not current or self._target() is not target or target.source_file != source:
+            self._grbl_release(op)
+            self._start_free_button()
+            if op.cancel.is_set():
+                self._stream_result = {}
+                self.stream_ended_sig.emit('stopped')
+            if start_line is not None:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    "The program or machine state changed while the dialog was open. Press Start again."))
+            return
+        restart = None
+        if start_line != 1:
+            try:
+                preamble, resumed = SenderGen.restart_preamble(
+                    lines, start_line, getattr(target, 'z_move', None), target.units, target.coords_decimals)
+                if validate_stream_lines(preamble + resumed) is not None:
+                    raise ValueError(_("The restart preparation exceeds the GRBL line length limit."))
+            except ValueError as err:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                self._grbl_release(op)
+                self._start_free_button()
+                return
+            restart = (preamble, start_line - 1, resumed)
+            self.app.inform.emit('%s: %d' % (_("Starting from program line"), start_line))
+
+        self._program_paused = False
+        self._preview_generation = self.__dict__.get('_preview_generation', 0) + 1
+        if self.view3d is not None:
+            display, indexes, chords = self._display_lines()
+            segments = parse_toolpath(display)
+            if indexes is not None:
+                segments = [(indexes[i], a, b, rapid) for i, a, b, rapid in segments]
+            self.view3d.set_toolpath(segments, chords)
 
         def worker_task():
             how = 'error'
             try:
-                how = self._grbl_stream_run(op, lines, numbers, check_mode, poll_ms / 1000.0, req)
+                how = self._grbl_stream_run(op, lines, numbers, check_mode, poll_ms / 1000.0, req,
+                                            restart=restart)
             except (serial.SerialException, OSError) as err:
                 self.app.log.error("ToolGrblSender.on_start() -> %s" % str(err))
                 how = self._grbl_stream_crashed(op, 'port_error')
@@ -1482,7 +1936,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
         return write, readline
 
-    def _grbl_stream_run(self, op, lines, numbers, check_mode, poll_interval, req=None):
+    def _grbl_stream_run(self, op, lines, numbers, check_mode, poll_interval, req=None, restart=None):
         """
         The stream worker under 1 operation (a worker thread; it reads no widgets).
 
@@ -1490,10 +1944,12 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         :param check_mode:    True if the user asked for check mode for this job.
         :param poll_interval: seconds between 2 status requests.
         :param req:           the _StartRequest of a levelled Start (phase 2 of A8.3), else None.
+        :param restart:       (preamble, zero-based console index, resumed lines), or None for Beginning.
         :return: `how`: 'finished', 'check_passed', 'check_passed_needs_home', 'check_failed',
             'check_exit_failed', 'stopped', 'incomplete', 'rejected' (nothing was sent), 'stale',
             'stale_needs_home' (a stale request: GRBL got no job line), or the name of a failure
-            ('port_error', 'timeout', 'error', 'alarm', 'line_too_long').
+            ('port_error', 'timeout', 'error', 'alarm', 'line_too_long', 'unexpected_reset').
+            'unexpected_reset' means a Grbl banner was seen mid-stream (controller reset).
             It is final: the success values are set only after the commit of A5.3.
         """
         self._stream_result = {}
@@ -1559,24 +2015,38 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
         # 4. stream
         write, readline = self._grbl_stream_io(op, req)
+        preamble, start_index, resumed = restart if restart is not None else ([], 0, lines)
+        prefix_count = len(preamble)
+
+        def program_done(done):
+            # Preparation commands aren't lines of the displayed program.
+            return start_index + done - prefix_count if done > prefix_count else 0
+
         res = stream_lines(
-            lines, write, readline, check_mode=check_mode,
-            on_progress=lambda d, t: self.stream_progress_sig.emit(d, t),
+            preamble + resumed, write, readline, check_mode=check_mode,
+            on_progress=lambda d, t: self.stream_progress_sig.emit(program_done(d), len(lines)),
             on_line=self.console_line_sig.emit,
             poll_status=True, poll_interval=poll_interval,
             on_status=lambda line: self.status_report_sig.emit(parse_grbl_status_report(line)))
         status = res['status']
 
         def source_number(index):
+            index = start_index + max(0, index - prefix_count)
             return numbers[index] if 0 <= index < len(numbers) else index + 1
 
         failed_index = res['errors'][-1][0] if res['errors'] else res['done']
         self._stream_result = {
-            'done': res['done'],
+            'done': program_done(res['done']),
             'last_text': res['last_text'],
             'line': source_number(res.get('line_index', failed_index)),
             'errors': [source_number(index) for index, _text in res['errors']],
+            'error_indices': [start_index + index - prefix_count for index in
+                              ([index for index, _text in res['errors']] +
+                               ([res['line_index']] if status == 'line_too_long' else []))
+                              if index >= prefix_count],
         }
+        if res['errors'] and res['errors'][-1][0] < prefix_count:
+            self._stream_result['last_text'] = '%s: %s' % (_("Restart preparation"), res['last_text'])
 
         # the status map of A5.2 step 6
         if status == 'finished':
@@ -1753,11 +2223,26 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if not written:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Not connected to a GRBL controller."))
 
+    def on_program_line_selected(self, index):
+        """Inspect selected moves while idle or held; running selection follows progress."""
+        if self._grbl_op is not None and self.__dict__.get('_program_paused') is not True:
+            console = self.app.ui.grbl_console_dock.widget()
+            if isinstance(console, GrblConsole):
+                console._follow_program(console.follow_cb.isChecked())
+            return
+        if self.view3d is not None:
+            self.view3d.set_selected_line(index)
+
     def _on_stream_progress(self, done, total):
         self.ui.progress_bar.setValue(int(done * 100 / total) if total else 0)
+        console = self.app.ui.grbl_console_dock.widget()
+        if isinstance(console, GrblConsole):
+            console.update_progress(done)
         if self.view3d is not None:
             # `done` counts stream lines; the segments of the toolpath carry the index of their stream line
             self.view3d.set_accepted(done - 1)
+            if self.__dict__.get('_program_paused') is not True:
+                self.view3d.set_selected_line(None)
 
     def _report_scale(self):
         """
@@ -1777,9 +2262,255 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             return None
         return grbl_report_scale(units, inches)
 
+    def _simulation_available(self):
+        return (self._grbl_op is None and self._probe_start_op is None and
+                not self._grbl_close_pending and not self.__dict__.get('_program_paused', False) and
+                self._controller_state not in ('Run', 'Hold', 'Door', 'Jog', 'Home') and
+                not (self.grbl_ser_port is not None and not self._grbl_connected))
+
+    def _update_sim_button(self):
+        self.ui.sim_button.setEnabled(self._simulation is None and self._simulation_available())
+
+    def on_simulation(self):
+        if self._simulation is not None or not self._simulation_available():
+            return
+        self._simulation = SimulationDialog(self)
+        self._simulation.show()
+        self._update_sim_button()
+
+    def _start_simulation(self):
+        dialog = self._simulation
+        if dialog is None or dialog.running or not self._simulation_available():
+            return
+        autolevel = self.ui.autolevel_cb.get_value() is True
+        if not (self.build_job() if autolevel else self.build_stream_job()):
+            return
+        lines = list(self.job_lines)
+        if not lines:
+            return
+        probe_lines = []
+        points = ()
+        target = self._target()
+        controller = VirtualGrbl()
+        controller.scale = 25.4 if target.units.upper() == 'IN' else 1.0
+        if autolevel:
+            if not self.al_voronoi_geo_storage:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Add probe points before simulating auto-levelling."))
+                return
+            if self._al_data_units != target.units.upper():
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                    "The units of the CNCJob object and of the height map do not match."))
+                return
+            inputs = self._al_read_probe_inputs()
+            if inputs is None:
+                return
+            travel_z, depth, feed = inputs
+            if travel_z * controller.scale <= 0.25:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                    "Simulation probe travel Z must be above the 0.25 mm simulated surface."))
+                return
+            preprocessors = [str(getattr(target, name, '') or '').lower()
+                             for name in ('pp_geometry_name', 'pp_excellon_name')]
+            if (self._tlo_line(lines) is not None or getattr(target, 'pp_solderpaste_name', None) is not None or
+                    any(marker in name for name in preprocessors for marker in ('roland', 'hpgl', 'laser'))):
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("This program can not be height-compensated."))
+                return
+            # ponytail: independent samples model warp; use a spatial surface if smooth warp is needed.
+            points = tuple((v['point'].x, v['point'].y, random.uniform(0.0, 0.25) / controller.scale)
+                           for v in self.al_voronoi_geo_storage.values())
+            if any(not math.isfinite(value) for point in points for value in point):
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The height map contains invalid values."))
+                return
+            if SenderGen.needs_segmentation(target):
+                lines, _count = split_long_moves(
+                    lines, float(self.app.options.get("tools_grbl_seg_len", 1.0)),
+                    decimals=target.coords_decimals)
+            # The leveller keeps interpolation caches on self. Keep simulated data private too.
+            cache_names = ('_al_points', '_al_grid', '_al_decimals', '_al_offset_fn')
+            caches = {name: self.__dict__[name] for name in cache_names if name in self.__dict__}
+            try:
+                result = self.autolevell_gcode(
+                    SenderGen.job_proxy(target, lines), self.ui.al_method_radio.get_value(),
+                    snapshot=(points, target.units.upper(), self._al_grid_tolerance()), strict=True)
+            finally:
+                for name in cache_names:
+                    self.__dict__.pop(name, None)
+                self.__dict__.update(caches)
+            if result is None:
+                return
+            lines = [line for line in result['job'].splitlines() if line.strip()]
+            if validate_stream_lines(lines) is not None:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The levelled G-code has a line longer than GRBL accepts."))
+                return
+            probe_lines = ['G20 G90' if controller.scale == 25.4 else 'G21 G90', 'G0 Z%.6f' % travel_z]
+            for x, y, height in points:
+                controller.probe_heights.append(height * controller.scale)
+                probe_lines.extend(['G0 X%.6f Y%.6f' % (x, y), 'G38.2 Z%.6f F%.6f' % (depth, feed),
+                                    'G0 Z%.6f' % travel_z])
+            probe_lines.append('G0 X0 Y0')
+        if probe_lines:
+            # Only the simulator knows the contact position. Keep real probe parsing conservative.
+            display = list(probe_lines)
+            display[0] = 'G90'
+            display[1] = 'G0 X0 Y0 Z%.6f' % travel_z
+            for i, (_x, _y, height) in enumerate(points):
+                display[3 + 3 * i] = 'G1 Z%.6f' % height
+            segments = parse_toolpath(display, start=(0, 0, 0))
+            # Keep the cutting path visible without accepting it during the probing phase.
+            segments.extend((len(probe_lines) + i, a, b, rapid)
+                            for i, a, b, rapid in parse_toolpath(lines, start=(0, 0, 0)))
+            chords = ()
+        else:
+            display, indexes, chords = self._display_lines()
+            segments = parse_toolpath(display, start=(0, 0, 0))
+            if indexes is not None:
+                segments = [(indexes[i], a, b, rapid) for i, a, b, rapid in segments]
+        dialog.preview = (segments, chords)
+        dialog.height_map = None
+        dialog.progress = 0
+        controller.set_speed(dialog.slider.value())
+        dialog.controller = controller
+        dialog.units = self._target().units.upper()
+        dialog.running = True
+        dialog.start_button.setEnabled(False)
+        dialog.stop_button.setEnabled(True)
+        dialog.pause_button.setEnabled(True)
+        dialog.pause_button.setText(_("Pause"))
+        self._preview_generation += 1
+        self._console().set_program(probe_lines or lines)
+        self.ui.progress_bar.setValue(0)
+        self.ui.start_button.setEnabled(False)
+        self.ui.object_combo.setEnabled(False)
+        if self.view3d is not None:
+            if probe_lines:
+                self.view3d.set_height_map(None)
+            self.view3d.set_toolpath(*dialog.preview)
+            if self.app.options.get("tools_gcode_fit_view", True):
+                self.on_fit_view()
+
+        pending = {}
+        console_lines = []
+        last_update = time.monotonic()
+
+        def flush(force=False):
+            nonlocal last_update
+            now = time.monotonic()
+            # Keep fast simulations from queuing a redraw and selection update for every line.
+            if not force and now - last_update < 0.05:
+                return
+            if console_lines:
+                self.simulation_event_sig.emit(dialog, 'console', '\n'.join(console_lines))
+                console_lines.clear()
+            for kind, value in pending.items():
+                self.simulation_event_sig.emit(dialog, kind, value)
+            pending.clear()
+            last_update = now
+
+        def event(kind, value):
+            if kind == 'console':
+                console_lines.append(value)
+            else:
+                pending[kind] = value
+            flush()
+
+        def worker_task():
+            result = {'status': 'error', 'done': 0}
+            try:
+                if probe_lines:
+                    result = stream_lines(
+                        probe_lines, controller.write, controller.readline, poll_status=True, poll_interval=0.05,
+                        stall_timeout=float('inf'),
+                        on_progress=lambda done, total: event('progress', (done, total)),
+                        on_line=lambda line: event('console', line),
+                        on_status=lambda line: event('status', parse_grbl_status_report(line)))
+                    if result['status'] != 'finished' or controller.cancel.is_set():
+                        if controller.cancel.is_set():
+                            result['status'] = 'cancelled'
+                        return
+                    flush(force=True)
+                    self.simulation_event_sig.emit(dialog, 'program', (lines, points))
+                # The same character-counting streamer as the physical controller, with private I/O.
+                result = stream_lines(
+                    lines, controller.write, controller.readline, poll_status=True, poll_interval=0.05,
+                    stall_timeout=float('inf'),
+                    on_progress=lambda done, total: event('progress', (done, total)),
+                    on_line=lambda line: event('console', line),
+                    on_status=lambda line: event('status', parse_grbl_status_report(line)))
+            except Exception as err:
+                self.app.log.error('G-code simulation -> %s' % str(err))
+                result['last_text'] = str(err)
+            finally:
+                event('position', tuple(controller.position))
+                flush(force=True)
+                self.simulation_event_sig.emit(dialog, 'finished', result)
+
+        self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+
+    def _on_simulation_event(self, dialog, kind, value):
+        if self._simulation is not dialog:
+            return
+        if kind == 'progress':
+            dialog.progress = value[0]
+            self._on_stream_progress(*value)
+        elif kind == 'console':
+            self._console().append(value)
+        elif kind == 'program':
+            lines, points = value
+            dialog.preview = (parse_toolpath(lines, start=(0, 0, 0)), ())
+            dialog.height_map = build_bilinear_grid(points, self._al_grid_tolerance())
+            dialog.progress = 0
+            self._console().set_program(lines)
+            self.ui.progress_bar.setValue(0)
+            if self.view3d is not None:
+                self._update_3d_height_map()
+                self.view3d.set_toolpath(*dialog.preview)
+        elif kind == 'status' and value is not None:
+            self._program_paused = dialog.controller.paused
+            self._on_simulation_event(dialog, 'position', value['mpos'])
+        elif kind == 'position':
+            scale = 1 / 25.4 if dialog.units == 'IN' else 1.0
+            pos = tuple(axis * scale for axis in value)
+            state = _("Paused") if dialog.controller.paused else _("Running")
+            self.ui.status_label.setText(_("Simulation") + ': ' + state +
+                                         '   X %.3f  Y %.3f  Z %.3f' % pos)
+            if self.view3d is not None:
+                self.view3d.set_tool_position(pos)
+        elif kind == 'finished':
+            dialog.running = False
+            dialog.start_button.setEnabled(True)
+            dialog.stop_button.setEnabled(False)
+            dialog.pause_button.setEnabled(False)
+            self._program_paused = False
+            self.ui.start_button.setEnabled(True)
+            self.ui.object_combo.setEnabled(True)
+            status = value['status']
+            text = (_("Finished") if status == 'finished' else
+                    _("Stopped") if status == 'cancelled' else
+                    _("Error") + ': ' + value.get('last_text', status))
+            self.ui.status_label.setText(_("Simulation") + ': ' + text)
+            if dialog.closing:
+                self._close_simulation()
+
+    def _close_simulation(self):
+        if self._simulation is None or self._simulation.running:
+            return
+        self._simulation.deleteLater()
+        self._simulation = None
+        self._update_3d_height_map()
+        self._update_sim_button()
+
     def _on_status_report(self, report):
         if report is None:
             return
+        self._controller_state = report['state'].split(':')[0]
+        was_paused = self.__dict__.get('_program_paused') is True
+        self._program_paused = report['state'].split(':')[0] in ('Hold', 'Door')
+        if was_paused and not self._program_paused and report['state'] == 'Run':
+            if self.view3d is not None:
+                self.view3d.set_selected_line(None)
+            console = self.app.ui.grbl_console_dock.widget()
+            if isinstance(console, GrblConsole):
+                console._follow_program(console.follow_cb.isChecked())
         if 'wco' in report:
             self._last_wco = report['wco']
         pos = work_position(report, getattr(self, '_last_wco', None))
@@ -1799,29 +2530,166 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if self.view3d is not None and pos is not None:
             self.view3d.set_tool_position(pos)
 
+    def show_probing_geo(self, state, reset=False):
+        if self.view3d is not None and (reset or not state):
+            self.view3d.probing_shapes.clear(update=True)
+        super().show_probing_geo(state, reset=reset)
+
+    def add_probing_shape(self, **kwargs):
+        key = super().add_probing_shape(**kwargs)
+        if self.view3d is not None:
+            self.view3d.probing_shapes.add(tolerance=self.drawing_tolerance, layer=0, **kwargs)
+        return key
+
+    def plot_probing_geo(self, geometry, visibility, custom_color=None):
+        super().plot_probing_geo(geometry, visibility, custom_color=custom_color)
+        if self.view3d is not None:
+            if visibility:
+                self.view3d.probing_shapes.redraw()
+            else:
+                self.view3d.probing_shapes.clear(update=True)
+
+    def _schedule_3d_preview(self):
+        self._preview_generation = getattr(self, '_preview_generation', 0) + 1
+        generation = self._preview_generation
+
+        def show_after_load():
+            if generation != self._preview_generation:
+                return
+            self._cleanup_3d_if_inactive()
+            if generation == self._preview_generation:
+                self.on_show_3d()
+
+        QtCore.QTimer.singleShot(0, show_after_load)
+
     def on_show_3d(self):
+        open_3d_tab = getattr(self.app, 'on_3d_area', None)
+        if callable(open_3d_tab):
+            open_3d_tab()
         canvas = getattr(self.app, 'plotcanvas3d', None)
-        if canvas is None:
-            open_3d_tab = getattr(self.app, 'on_3d_area', None)
-            if callable(open_3d_tab):
-                open_3d_tab()
-            canvas = getattr(self.app, 'plotcanvas3d', None)
         if canvas is None:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("The Plot 3D tab is not available."))
             return
         if self.view3d is None or self.view3d.canvas is not canvas:
             self.view3d = SenderView3d(canvas)
-        # always make the job again: the lines of an earlier Start or Save can be old
-        if not self.build_stream_job():
-            self.view3d.set_toolpath([])
+        dialog = self.__dict__.get('_simulation')
+        if dialog is not None and dialog.running:
+            self.view3d.set_toolpath(*dialog.preview)
+            self.view3d.set_accepted(dialog.progress - 1)
+            self._update_3d_height_map()
+            scale = 1 / 25.4 if dialog.units == 'IN' else 1.0
+            self.view3d.set_tool_position(tuple(value * scale for value in dialog.controller.position))
+            if self.app.options.get("tools_gcode_fit_view", True):
+                self.on_fit_view()
             return
-        lines, stream_index, chord_lines = self._display_lines()
-        segments = parse_toolpath(lines)
-        if stream_index is not None:
-            segments = [(stream_index[i], a, b, rapid) for i, a, b, rapid in segments]
-        self.view3d.set_toolpath(segments, chord_lines)
+        self._update_3d_excellon()
+        if self.ui.plot_probing_pts_cb.get_value() and self.al_voronoi_geo_storage:
+            self.show_probing_geo(True, reset=True)
+        else:
+            self.view3d.probing_shapes.clear(update=True)
+        self._preview_generation = getattr(self, '_preview_generation', 0) + 1
+        generation = self._preview_generation
+        target = self._target()
         self._update_3d_height_map()
-        canvas.fit_view()
+        if target is None:
+            self.view3d.set_toolpath([])
+            if self.app.options.get("tools_gcode_fit_view", True):
+                canvas.fit_view()
+            return
+        # Freeze inputs before queuing work. Workers must never read widgets or mutate the stream job.
+        source = getattr(target, 'source_file', '') or ''
+        units, decimals = target.units, target.coords_decimals
+        arc_mode = self.app.options.get("tools_grbl_arc_mode", 'split')
+        arc_segment = float(self.app.options.get("tools_grbl_arc_segment", 0.5))
+        seg_len = float(self.app.options.get("tools_grbl_seg_len", 1.0))
+        segmented = not SenderGen.needs_segmentation(target)
+        method = self.ui.al_method_radio.get_value()
+        level = self.ui.autolevel_cb.get_value() is True and self.al_heights_valid
+        snapshot = self._al_capture_apply_input(target, require_segmented=False) if level else None
+        map_generation = self._al_generation
+        home_wcs = float(str(self._al_map_frame[0])[1:]) if level and self._al_map_frame else None
+        proxy = SenderGen.job_proxy(target, [])
+        proxy.obj_options = dict(target.obj_options)
+        view = self.view3d
+        app = self.app
+
+        def worker_task():
+            result = {'generation': generation, 'target': target, 'source': source,
+                      'map_generation': map_generation, 'view': view, 'levelled': snapshot is not None}
+            try:
+                numbered = SenderGen.clean_lines_numbered(source)
+                job_lines = [line for _number, line in numbered]
+                numbers = [number for number, _line in numbered]
+                if snapshot is not None:
+                    if self._tlo_line(job_lines) is not None:
+                        raise ValueError(_("The program changes the tool length offset. It can not be levelled."))
+                    if not segmented:
+                        job_lines, _count = split_long_moves(job_lines, seg_len, decimals=decimals)
+                    proxy.tools['job']['gcode'] = '\n'.join(job_lines) + '\n'
+                    # Interpolation state is per instance; preview and Start must not share it.
+                    leveler = LevellingCoreMixin()
+                    leveler.app = app
+                    leveler._al_arc_segment = lambda obj: arc_segment
+                    levelled = leveler.autolevell_gcode(proxy, method, snapshot=snapshot,
+                                                       home_wcs=home_wcs, strict=True)
+                    if levelled is None:
+                        raise ValueError(_("Could not prepare the levelled preview."))
+                    job_lines = [line for line in levelled['job'].splitlines() if line.strip()]
+                    numbers = []
+                elif arc_mode == 'split':
+                    job_lines, _count, indexes, unsplit = SenderGen.split_arcs(
+                        job_lines, units, arc_segment, decimals=decimals)
+                    if unsplit:
+                        raise ValueError(_("An arc can not be split for the preview."))
+                    numbers = [numbers[i] for i in indexes]
+                lines, indexes, chords = job_lines, None, ()
+                if snapshot is None and arc_mode != 'split':
+                    lines, _count, indexes, chords = SenderGen.split_arcs(
+                        job_lines, units, arc_segment, decimals=decimals)
+                segments = parse_toolpath(lines)
+                if indexes is not None:
+                    segments = [(indexes[i], a, b, rapid) for i, a, b, rapid in segments]
+                result.update(prepared=SenderView3d.prepare_toolpath(segments, chords),
+                              lines=job_lines, numbers=numbers)
+            except Exception as err:
+                app.log.error("ToolGrblSender.on_show_3d() -> %s" % str(err))
+                result['error'] = str(err)
+            self.preview_ready_sig.emit(result)
+
+        self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+
+    def _on_preview_ready(self, result):
+        if (self._grbl_op is not None or result['generation'] != self._preview_generation or
+                result['view'] is not self.view3d or
+                self.view3d is None or self.view3d.canvas is not getattr(self.app, 'plotcanvas3d', None) or
+                result['map_generation'] != self._al_generation or self._target() is not result['target'] or
+                (getattr(result['target'], 'source_file', '') or '') != result['source']):
+            return
+        if 'error' in result:
+            self.view3d.set_toolpath([])
+            self.app.inform.emit('[ERROR_NOTCL] %s' % result['error'])
+            return
+        self.view3d.set_prepared_toolpath(result['prepared'])
+        if self._grbl_op is None and getattr(self, '_probe_start_op', None) is None:
+            self.job_lines = result['lines']
+            self.job_line_numbers = result['numbers']
+            self.job_target_name = result['target'].obj_options['name']
+            self.job_map_generation = result['map_generation'] if result['levelled'] else None
+            self._console().set_program(self.job_lines)
+        self._update_3d_height_map()
+        if self.app.options.get("tools_gcode_fit_view", True):
+            self.on_fit_view()
+
+    def on_fit_view_toggled(self, checked):
+        self.app.options["tools_gcode_fit_view"] = bool(checked)
+        self.app.defaults["tools_gcode_fit_view"] = bool(checked)
+
+    def on_fit_view(self):
+        if self.view3d is None or not self.view3d._segments:
+            return
+        canvas = self.view3d.canvas
+        canvas.view.camera.set_view('iso')
+        canvas.fit_view(points=self.view3d.path.pos, margin=0.1)
 
     def _display_lines(self):
         """
@@ -1843,6 +2711,15 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     def _update_3d_height_map(self):
         if self.view3d is None:
             return
+        if not self.al_voronoi_geo_storage:
+            self.view3d.probing_shapes.clear(update=True)
+        if not self.ui.plot_height_map_cb.get_value():
+            self.view3d.set_height_map(None)
+            return
+        dialog = self.__dict__.get('_simulation')
+        if dialog is not None:
+            self.view3d.set_height_map(dialog.height_map)
+            return
         if not self.al_heights_valid:
             self.view3d.set_height_map(None)
             return
@@ -1857,6 +2734,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         """
         self.ui.start_button.setDisabled(False)
         result = self._stream_result or {}
+        console = self.app.ui.grbl_console_dock.widget()
+        if isinstance(console, GrblConsole):
+            console.update_progress(result.get('done', 0), result.get('error_indices', []))
         errors = result.get('errors', [])
         recovery = (' ' + self._grbl_recovery_text()) if self._grbl_recovery is not None else ''
 
@@ -1903,18 +2783,29 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             dock.setWidget(GrblConsole(self))
         return dock.widget()
 
+    def _reload_console_program(self, target_obj):
+        # A running stream keeps its own program and acknowledgement indexes.
+        if self.__dict__.get('_simulation') is not None and self._simulation.running:
+            return
+        if self._grbl_op is not None and self._grbl_op.name == 'stream':
+            return
+        text = (getattr(target_obj, 'source_file', '') or '') if self._is_supported_target(target_obj) else ''
+        self._console().set_program([line for _number, line in SenderGen.clean_lines_numbered(text)])
+
     def on_console_toggled(self, checked):
         self.app.options["tools_grbl_console_visible"] = bool(checked)
         if checked:
-            self._console()
-            self.app.ui.grbl_console_dock.show()
+            self.show_console_if_wanted()
         else:
             self.app.ui.grbl_console_dock.hide()
 
     def show_console_if_wanted(self):
         if self.app.options.get("tools_grbl_console_visible", False):
-            self._console()
+            console = self._console()
+            console.tabs.setCurrentIndex(0)
             self.app.ui.grbl_console_dock.show()
+            self.app.ui.grbl_console_dock.raise_()
+            console.program_view.setFocus()
 
     def hide_console(self):
         self.app.ui.grbl_console_dock.hide()
@@ -1924,10 +2815,33 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.on_grbl_send_command()
 
     def on_plugin_cleanup(self):
-        """The Plugin tab closes: hide the console. The option keeps its value."""
+        """Release the sender's Plot 3D tab and hide the console."""
+        if self.__dict__.get('_simulation') is not None:
+            self._simulation.close()
+        self._plugin_active = False
+        self._preview_generation = getattr(self, '_preview_generation', 0) + 1
+        self._probe_start_op = None
+        self._clear_probe_data()
         self.hide_console()
+        view = self.view3d
+        self.view3d = None
+        if view is None or view.canvas is not getattr(self.app, 'plotcanvas3d', None):
+            return
+        view.clear()
+        tabs = self.app.ui.plot_tab_area
+        index = tabs.indexOf(self.app.area_3d_tab)
+        if index >= 0:
+            tabs.closeTab(index)
 
-    def hideEvent(self, event):
-        # another plugin took the Plugin tab, or the tab closed
-        self.hide_console()
-        super().hideEvent(event)
+    def _cleanup_3d_if_inactive(self):
+        ui = self.app.ui
+        if ui.plugin_scroll_area.widget() is not self or ui.notebook.indexOf(ui.plugin_tab) < 0:
+            self.on_plugin_cleanup()
+
+    def event(self, event):
+        result = super().event(event)
+        if event.type() in (QtCore.QEvent.Type.Hide, QtCore.QEvent.Type.ParentChange) and \
+                getattr(self, '_plugin_active', False):
+            # Wait for takeWidget()/removeTab() to finish; hiding a notebook page isn't a close.
+            QtCore.QTimer.singleShot(0, self._cleanup_3d_if_inactive)
+        return result

@@ -8,6 +8,7 @@
 """The visuals of the GRBL Sender in the Plot 3D tab: toolpath, accepted path, tool marker, height map."""
 
 import numpy as np
+from PyQt6 import QtCore
 from vispy import scene
 from vispy.color import Colormap
 
@@ -16,6 +17,7 @@ CUT_COLOR = (0.10, 0.45, 0.90, 1.0)
 # an arc that the sender streams as an arc and the display could not split: drawn as its chord
 CHORD_COLOR = (0.35, 0.35, 0.35, 1.0)
 ACCEPTED_COLOR = (0.10, 0.70, 0.30, 1.0)
+SELECTED_COLOR = (0.90, 0.10, 0.10, 1.0)
 TOOL_COLOR = (0.90, 0.10, 0.10, 1.0)
 
 
@@ -26,7 +28,15 @@ class SenderView3d:
         parent = canvas.view.scene
         self.path = scene.visuals.Line(parent=parent, connect='segments', width=1.5, method='gl')
         self.accepted = scene.visuals.Line(parent=parent, connect='segments', width=2.5, method='gl')
+        self.selected = scene.visuals.Line(parent=parent, connect='segments', width=3.5, method='gl')
+        self.selected.set_gl_state('translucent', depth_test=False)
+        self._selection_timer = QtCore.QTimer(getattr(canvas, 'native', None))
+        self._selection_timer.setInterval(500)
+        self._selection_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
+        self._selection_timer.timeout.connect(self._flash_selection)
         self.tool = scene.visuals.Markers(parent=parent)
+        self.probing_shapes = canvas.new_shape_collection(layers=1)
+        self.excellon_shapes = canvas.new_shape_collection(layers=1)
         self.mesh = None
         self.z_scale = 10.0
         self._segments = []
@@ -37,19 +47,26 @@ class SenderView3d:
         :param chord_lines: the stream line indexes whose segment is the chord of an arc that was not split:
                             they are drawn in the grey CHORD_COLOR.
         """
-        self._segments = list(segments)
+        self.set_prepared_toolpath(self.prepare_toolpath(segments, chord_lines))
+
+    @staticmethod
+    def prepare_toolpath(segments, chord_lines=()):
+        """Build the path buffers in a worker, without accessing the scene."""
+        segments = list(segments)
         chord_lines = set(chord_lines)
-        if not self._segments:
-            self.path.set_data(pos=np.zeros((0, 3), dtype=np.float32))
-            self.set_accepted(-1)
-            return
-        pos = np.array([p for _i, a, b, _r in self._segments for p in (a, b)], dtype=np.float32)
+        pos = np.array([p for _i, a, b, _r in segments for p in (a, b)], dtype=np.float32).reshape(-1, 3)
         colors = np.array(
-            [c for i, _a, _b, r in self._segments
+            [c for i, _a, _b, r in segments
              for c in ((CHORD_COLOR if i in chord_lines else (RAPID_COLOR if r else CUT_COLOR)),) * 2],
-            dtype=np.float32)
+            dtype=np.float32).reshape(-1, 4)
+        return segments, pos, colors
+
+    def set_prepared_toolpath(self, prepared):
+        """Upload prepared buffers on the GUI thread."""
+        self._segments, pos, colors = prepared
         self.path.set_data(pos=pos, color=colors)
-        self.set_accepted(-1)
+        self.accepted.set_data(pos=np.zeros((0, 3), dtype=np.float32))
+        self.set_selected_line(None)
 
     def set_accepted(self, last_line_index):
         """
@@ -62,6 +79,21 @@ class SenderView3d:
             return
         pos = np.array([p for _i, a, b, _r in accepted for p in (a, b)], dtype=np.float32)
         self.accepted.set_data(pos=pos, color=ACCEPTED_COLOR)
+
+    def set_selected_line(self, line_index):
+        """Highlight one program line or a collection of lines, preserving accepted progress."""
+        indexes = {line_index} if line_index is None or isinstance(line_index, int) else set(line_index)
+        pos = np.array([p for i, a, b, _r in self._segments if i in indexes for p in (a, b)],
+                       dtype=np.float32).reshape(-1, 3)
+        self.selected.set_data(pos=pos, color=SELECTED_COLOR)
+        self.selected.visible = True
+        if len(pos):
+            self._selection_timer.start()
+        else:
+            self._selection_timer.stop()
+
+    def _flash_selection(self):
+        self.selected.visible = not self.selected.visible
 
     def set_tool_position(self, xyz):
         self.tool.set_data(pos=np.array([xyz], dtype=np.float32), face_color=TOOL_COLOR, size=10)
@@ -98,7 +130,12 @@ class SenderView3d:
 
     def clear(self):
         """Remove the visuals from the scene. It is safe to call it more than 1 time."""
-        for visual in (self.path, self.accepted, self.tool):
+        self._selection_timer.stop()
+        self.probing_shapes.clear(update=True)
+        self.probing_shapes.parent = None
+        self.excellon_shapes.clear(update=True)
+        self.excellon_shapes.parent = None
+        for visual in (self.path, self.accepted, self.selected, self.tool):
             if visual.parent is not None:
                 visual.parent = None
         self.set_height_map(None)

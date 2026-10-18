@@ -17,7 +17,7 @@ class ToolsGrblSenderPrefGroupUI(OptionsGroupUI):
     def __init__(self, app, parent=None):
         super(ToolsGrblSenderPrefGroupUI, self).__init__(self, parent=parent)
 
-        self.setTitle(str(_("GRBL Sender Plugin")))
+        self.setTitle(str(_("GCode sender Plugin")))
         self.decimals = app.decimals
         self.options = app.options
 

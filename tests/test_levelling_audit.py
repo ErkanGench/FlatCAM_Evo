@@ -45,6 +45,8 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
     tool.app.inform_shell = MagicMock()
     tool.ui = MagicMock()
     tool.ui.plot_probing_pts_cb.get_value.return_value = False
+    tool.ui.avoid_exc_combo.currentIndex.return_value = 0
+    tool.ui.avoid_exc_combo.count.return_value = 0
     tool.units = units
     tool.decimals = 4
     tool.al_voronoi_geo_storage = storage if storage is not None else {}
@@ -87,6 +89,14 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
     tool.console_line_sig = MagicMock()
     tool.job_map_generation = None
     tool.view3d = None
+    tool._preview_generation = 0
+    tool._probe_start_op = None
+    tool.preview_ready_sig = MagicMock()
+    if isinstance(tool, ToolGrblSender):
+        tool.preview_ready_sig.emit.side_effect = tool._on_preview_ready
+    tool.probe_finished_sig = MagicMock()
+    if isinstance(tool, ToolGrblSender):
+        tool.probe_finished_sig.emit.side_effect = tool._on_probe_finished
     tool.stream_progress_sig = MagicMock()
     tool.status_report_sig = MagicMock()
     tool.stream_ended_sig = MagicMock()
@@ -1820,6 +1830,8 @@ class TestPolygonsAndAdd(unittest.TestCase):
         hole = Point(0.0, 0.0).buffer(0.5)
         exc = SimpleNamespace(kind='excellon', obj_options={'plot': True}, solid_geometry=hole)
         tool.app.collection.get_list.return_value = [exc]
+        tool.ui.avoid_exc_combo.get_value.return_value = 'drills'
+        tool.app.collection.get_by_name.return_value = exc
         result = tool.check_point_over_excellon(Point(0.0, 0.0).buffer(0.1), True)
         self.assertFalse(result.is_empty)
 

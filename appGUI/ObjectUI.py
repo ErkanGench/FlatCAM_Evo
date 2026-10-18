@@ -751,7 +751,7 @@ class ExcellonObjectUI(ObjectUI):
         plugins_frame.setLayout(plugins_grid)
 
         # Drilling Tool - will create GCode for drill holes
-        self.drill_button = FCButton(_('Drilling'), bold=True)
+        self.drill_button = FCButton(_("Drilling"), bold=True)
         self.drill_button.setIcon(QtGui.QIcon(self.app.resource_location + '/drilling_tool32.png'))
         self.drill_button.setToolTip(
             _("Generate GCode from the drill holes in an Excellon object.")
@@ -1427,7 +1427,7 @@ class CNCObjectUI(ObjectUI):
         self.custom_box.addWidget(self.autolevel_button)
 
         # GRBL Sender - streams the G-code to a GRBL controller, with optional autolevelling
-        self.grbl_sender_button = FCButton(_('GRBL Sender'), bold=True)
+        self.grbl_sender_button = FCButton(_('GCode sender'), bold=True)
         self.grbl_sender_button.setIcon(QtGui.QIcon(self.app.resource_location + '/level32.png'))
         self.grbl_sender_button.setToolTip(
             _("Send the CNC Code to a GRBL controller.")
