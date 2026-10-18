@@ -55,6 +55,7 @@ class OutcomePlugin(object):
 
     def __init__(self):
         self.outcomes = {}
+        self.subtest_count = 0
 
     def _put(self, node_id, outcome):
         node_id = _norm(node_id)
@@ -67,6 +68,9 @@ class OutcomePlugin(object):
             self._put('%s::<collection>' % report.nodeid, 'collect_error')
 
     def pytest_runtest_logreport(self, report):
+        # pytest 9 counts subtest reports separately, but folds them into their parent's XML case.
+        if report.when == 'call' and hasattr(report, 'context'):
+            self.subtest_count += 1
         if report.when == 'call':
             if report.failed:
                 outcome = 'failed'
@@ -99,8 +103,12 @@ def read_id_list(path):
     return ids
 
 
-def check_junit(junit_path):
-    """Check the JUnit report. Return (error text or None, dict outcome -> count from the report)."""
+def check_junit(junit_path, subtest_count=0):
+    """Check the JUnit report. Return (error text or None, dict outcome -> count from the report).
+
+    :param subtest_count: the number of additional subtest reports recorded by the pytest plugin.
+        They count in the suite total but share their parent's XML case.
+    """
     if not os.path.exists(junit_path):
         return 'the JUnit report does not exist', {}
     try:
@@ -114,10 +122,13 @@ def check_junit(junit_path):
     cases = list(root.iter('testcase'))
     if len(cases) < 1:
         return 'the JUnit report has no test case', {}
-    # pytest 9 counts passed subtests in the `tests` attribute but writes no test case for them,
-    # so the test cases can be fewer than `tests`, never more
+    # A shorter report is valid only when the plugin observed the extra subtest reports.
     if len(cases) > declared:
         return 'the JUnit report has %d test cases but the testsuite says %d' % (len(cases), declared), {}
+    if len(cases) + subtest_count != declared:
+        return ('the JUnit report declares %d tests, has %d test case(s), '
+                'and the plugin recorded %d additional subtest(s)' %
+                (declared, len(cases), subtest_count)), {}
     counts = {}
     for case in cases:
         if case.find('failure') is not None:
@@ -145,7 +156,7 @@ def run_pytest(targets):
     try:
         code = pytest.main(targets + ['-q', '-p', 'no:cacheprovider', '--continue-on-collection-errors',
                                       '--junitxml', junit_path], plugins=[plugin])
-        junit_error, junit_counts = check_junit(junit_path)
+        junit_error, junit_counts = check_junit(junit_path, subtest_count=plugin.subtest_count)
     finally:
         if os.path.exists(junit_path):
             os.remove(junit_path)
