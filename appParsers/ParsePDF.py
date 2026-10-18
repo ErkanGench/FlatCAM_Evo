@@ -11,6 +11,8 @@ from typing import List, Tuple, Dict, Any, Optional
 from appCommon.Common import GracefulException as grace
 
 from shapely import Polygon, LineString, MultiPolygon
+from shapely.affinity import affine_transform
+from shapely.ops import polygonize, unary_union
 
 from copy import copy, deepcopy
 import numpy as np
@@ -27,8 +29,13 @@ class ParsingContext:
     layer_nr: int = 1
     apertures_dict: Dict[str, Any] = field(default_factory=dict)
     clear_apertures_dict: Dict[int, Any] = field(default_factory=lambda: {0: {'size': 0.0, 'type': 'C', 'geometry': []}})
-    old_color: List[Optional[float]] = field(default_factory=lambda: [None, None, None])
-    flag_clear_geo: bool = False
+    # Color of the layer that is currently being built. Layers are routed at paint time,
+    # not when a color operator is seen, so a color change without paint creates no layer.
+    layer_color: Optional[Tuple[float, float, float]] = None
+    # Fill and stroke paint colors have independent polarity. A white fill is a clear fill while
+    # the active stroke may still be black (and the other way around).
+    stroke_clear: bool = False
+    fill_clear: bool = False
     # Track if detection mode allows triggering clear geo
     detection_triggered: bool = False
 
@@ -96,6 +103,8 @@ class PdfParser:
         self.restore_gs_re = re.compile(r'^.*Q.*$')
 
         self.gs = {'transform': [], 'line_width': []}
+        self._geometry_order = 0
+        self.unsupported_features = set()
 
         self.point_to_unit_factor = 0.01388888888
 
@@ -149,22 +158,61 @@ class PdfParser:
             if isinstance(pdf_geo, MultiPolygon):
                 for poly in pdf_geo.geoms:
                     if clear_geo:
-                        new_el = {'clear': poly}
+                        new_el = {'clear': poly, 'order': self._geometry_order}
                     else:
-                        new_el = {'solid': poly, 'follow': poly.exterior}
+                        new_el = {'solid': poly, 'follow': poly.exterior, 'order': self._geometry_order}
+                    self._geometry_order += 1
                     apertures_dict[aperture_id]['geometry'].append(deepcopy(new_el))
             elif isinstance(pdf_geo, Polygon):
                 if clear_geo:
-                    new_el = {'clear': pdf_geo}
+                    new_el = {'clear': pdf_geo, 'order': self._geometry_order}
                 else:
-                    new_el = {'solid': pdf_geo, 'follow': pdf_geo.exterior}
+                    new_el = {'solid': pdf_geo, 'follow': pdf_geo.exterior, 'order': self._geometry_order}
+                self._geometry_order += 1
                 apertures_dict[aperture_id]['geometry'].append(deepcopy(new_el))
             else:
                 if clear_geo:
-                    new_el = {'clear': pdf_geo}
+                    new_el = {'clear': pdf_geo, 'order': self._geometry_order}
                 else:
-                    new_el = {'solid': pdf_geo, 'follow': pdf_geo}
+                    new_el = {'solid': pdf_geo, 'follow': pdf_geo, 'order': self._geometry_order}
+                self._geometry_order += 1
                 apertures_dict[aperture_id]['geometry'].append(deepcopy(new_el))
+
+    @staticmethod
+    def _has_solid_geometry(layer: dict) -> bool:
+        return any('solid' in element for aperture in layer.values()
+                   for element in aperture.get('geometry', []))
+
+    def _route_dark_paint(self, ctx: ParsingContext, color) -> None:
+        """Start a new color layer only when a dark paint actually needs it."""
+        color = tuple(color)
+        if ctx.apertures_dict and ctx.layer_color is not None and ctx.layer_color != color:
+            ctx.object_dict[ctx.layer_nr] = deepcopy(ctx.apertures_dict)
+            ctx.apertures_dict = {}
+            ctx.layer_nr += 1
+            ctx.object_dict[ctx.layer_nr] = {}
+            ctx.layer_color = None
+        if ctx.layer_color is None:
+            ctx.layer_color = color
+
+    def _route_clear_paint(self, ctx: ParsingContext, geometries: list) -> None:
+        """Apply white paint to the colored layers that exist below it, at paint time.
+
+        White is an eraser, not a color layer. The clear records are appended to every
+        existing layer that holds solids, in painter order, so a later dark paint of the
+        same color can restore an island on top of the clear.
+        """
+        layers = []
+        if ctx.apertures_dict and self._has_solid_geometry(ctx.apertures_dict):
+            layers.append(ctx.apertures_dict)
+        for layer_nr, layer in ctx.object_dict.items():
+            if layer_nr != 0 and layer is not ctx.apertures_dict and self._has_solid_geometry(layer):
+                layers.append(layer)
+
+        for layer in layers:
+            if '0' not in layer:
+                layer['0'] = {'size': 0.0, 'type': 'C', 'geometry': []}
+            self._store_geometry(layer, geometries, '0', clear_geo=True)
 
     def parse_pdf(self, pdf_content):
 
@@ -173,172 +221,511 @@ class PdfParser:
         else:
             self.point_to_unit_factor = 1 / 72
 
-        path = {
-            'lines': [],
-            'bezier': [],
-            'rectangle': []
-        }
-
-        subpath = {
-            'lines': [],
-            'bezier': [],
-            'rectangle': []
-        }
-
-        current_subpath = None
-        close_subpath = False
-        start_point = None
-        current_point = None
-        size = 0
-
-        offset_geo = self.DEFAULT_OFFSET[:]
-        scale_geo = self.DEFAULT_SCALE[:]
-
         ctx = ParsingContext()
         ctx.object_dict[ctx.layer_nr] = {}
 
+        # PDF graphics state. The CTM is the full affine matrix [a b c d e f], not just
+        # a scale/offset pair, so rotations and one-axis scales are preserved.
+        state = {
+            'ctm': (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+            'line_width': 0.0,
+            'stroke_color': (0.0, 0.0, 0.0),
+            'fill_color': (0.0, 0.0, 0.0),
+            'stroke_clear': False,
+            'fill_clear': False,
+        }
+        state_stack = []
+
+        # A PDF path is a list of subpaths. Each subpath keeps its own CTM because a path
+        # may be built under one q/Q state and painted under another.
+        path = []
+        current = None
+        current_point = None
+        operands = []
         aperture = self.INITIAL_APERTURE
+        self._geometry_order = 0
+        self.unsupported_features = set()
 
-        line_nr = 0
-        lines = pdf_content.splitlines()
-
-        for pline in lines:
+        for token in self._tokenize_pdf(pdf_content):
             if self.abort_flag:
                 raise grace
 
-            line_nr += 1
-
-            match = self.stroke_color_re.search(pline)
-            if match:
-                color = [float(match.group(1)), float(match.group(2)), float(match.group(3))]
-                ctx = self._handle_stroke_color_change(color, line_nr, ctx)
+            if isinstance(token, float):
+                operands.append(token)
                 continue
 
-            match = self.fill_color_re.search(pline)
-            if match:
-                fill_color = [float(match.group(1)), float(match.group(2)), float(match.group(3))]
-                ctx = self._handle_fill_color_change(fill_color, ctx, line_nr)
-                continue
+            op = token
 
-            match = self.combined_transform_re.search(pline)
-            if match:
-                self._handle_combined_transform(match, line_nr, offset_geo, scale_geo, size)
-                continue
+            if op == 'q':
+                state_stack.append(deepcopy(state))
+            elif op == 'Q':
+                if state_stack:
+                    state = state_stack.pop()
+            elif op == 'cm':
+                if len(operands) >= 6:
+                    state['ctm'] = self._multiply_ctm(tuple(operands[-6:]), state['ctm'])
+            elif op == 'w':
+                if operands:
+                    state['line_width'] = operands[-1]
+            elif op == 'RG':
+                if len(operands) >= 3:
+                    color = tuple(operands[-3:])
+                    ctx = self._handle_stroke_color_change(list(color), 0, ctx)
+                    state['stroke_color'] = color
+                    state['stroke_clear'] = ctx.stroke_clear
+            elif op == 'rg':
+                if len(operands) >= 3:
+                    color = tuple(operands[-3:])
+                    ctx = self._handle_fill_color_change(list(color), ctx, 0)
+                    state['fill_color'] = color
+                    state['fill_clear'] = ctx.fill_clear
+            elif op == 'G':
+                if operands:
+                    gray = operands[-1]
+                    color = (gray, gray, gray)
+                    ctx = self._handle_stroke_color_change(list(color), 0, ctx)
+                    state['stroke_color'] = color
+                    state['stroke_clear'] = ctx.stroke_clear
+            elif op == 'g':
+                if operands:
+                    gray = operands[-1]
+                    color = (gray, gray, gray)
+                    ctx = self._handle_fill_color_change(list(color), ctx, 0)
+                    state['fill_color'] = color
+                    state['fill_clear'] = ctx.fill_clear
+            elif op == 'K':
+                if len(operands) >= 4:
+                    color = self._cmyk_to_rgb(operands[-4:])
+                    ctx = self._handle_stroke_color_change(list(color), 0, ctx)
+                    state['stroke_color'] = color
+                    state['stroke_clear'] = ctx.stroke_clear
+            elif op == 'k':
+                if len(operands) >= 4:
+                    color = self._cmyk_to_rgb(operands[-4:])
+                    ctx = self._handle_fill_color_change(list(color), ctx, 0)
+                    state['fill_color'] = color
+                    state['fill_clear'] = ctx.fill_clear
+            elif op == 'm':
+                if len(operands) >= 2:
+                    point = (operands[-2], operands[-1])
+                    if current is not None:
+                        path.append(current)
+                    current = {'points': [point], 'ctm': state['ctm'], 'closed': False}
+                    current_point = point
+            elif op == 'l':
+                if len(operands) >= 2:
+                    point = (operands[-2], operands[-1])
+                    if current is None:
+                        current = {'points': [current_point or point], 'ctm': state['ctm'], 'closed': False}
+                    current['points'].append(point)
+                    current_point = point
+            elif op == 'c':
+                if len(operands) >= 6:
+                    c1 = (operands[-6], operands[-5])
+                    c2 = (operands[-4], operands[-3])
+                    stop = (operands[-2], operands[-1])
+                    start = current_point or c1
+                    if current is None:
+                        current = {'points': [start], 'ctm': state['ctm'], 'closed': False}
+                    points = self.bezier_to_points(start, c1, c2, stop)
+                    current['points'].extend(points[1:])
+                    current['points'].append(stop)
+                    current_point = stop
+            elif op == 'v':
+                if len(operands) >= 4:
+                    c2 = (operands[-4], operands[-3])
+                    stop = (operands[-2], operands[-1])
+                    start = current_point or c2
+                    if current is None:
+                        current = {'points': [start], 'ctm': state['ctm'], 'closed': False}
+                    points = self.bezier_to_points(start, start, c2, stop)
+                    current['points'].extend(points[1:])
+                    current['points'].append(stop)
+                    current_point = stop
+            elif op == 'y':
+                if len(operands) >= 4:
+                    c1 = (operands[-4], operands[-3])
+                    stop = (operands[-2], operands[-1])
+                    start = current_point or c1
+                    if current is None:
+                        current = {'points': [start], 'ctm': state['ctm'], 'closed': False}
+                    points = self.bezier_to_points(start, c1, stop, stop)
+                    current['points'].extend(points[1:])
+                    current['points'].append(stop)
+                    current_point = stop
+            elif op == 're':
+                if len(operands) >= 4:
+                    x, y, width, height = operands[-4:]
+                    points = [(x, y), (x + width, y), (x + width, y + height), (x, y + height), (x, y)]
+                    if current is not None and current['points']:
+                        path.append(current)
+                    path.append({'points': points, 'ctm': state['ctm'], 'closed': True})
+                    current = None
+                    current_point = (x, y)
+            elif op == 'h':
+                if current is not None:
+                    current['closed'] = True
+                    path.append(current)
+                    current_point = current['points'][0] if current['points'] else current_point
+                    current = None
+            elif op in ('S', 's', 'f', 'F', 'f*', 'F*', 'B', 'B*', 'b', 'b*'):
+                subpaths = list(path)
+                if current is not None and current['points']:
+                    subpaths.append(current)
+                path = []
+                current = None
 
-            match = self.save_gs_re.search(pline)
-            if match:
-                self._save_graphic_state(offset_geo, scale_geo, size, line_nr)
+                if op in ('s', 'b', 'b*'):
+                    for subpath in subpaths:
+                        self._close_subpath_points(subpath)
 
-            match = self.restore_gs_re.search(pline)
-            if match:
-                offset_geo, scale_geo, size = self._restore_graphic_state()
+                even_odd = op in ('f*', 'F*', 'B*', 'b*')
+                if op in ('S', 's'):
+                    aperture = self._stroke_path(
+                        subpaths, state['line_width'], state['stroke_clear'],
+                        state['stroke_color'], ctx, aperture
+                    )
+                elif op in ('f', 'F', 'f*', 'F*'):
+                    self._fill_path(subpaths, even_odd, state['fill_clear'],
+                                    state['fill_color'], ctx)
+                else:
+                    aperture = self._fill_stroke_path(
+                        subpaths, even_odd, state['fill_clear'], state['stroke_clear'],
+                        state['line_width'], state['fill_color'], state['stroke_color'],
+                        ctx, aperture
+                    )
+            elif op in ('W', 'W*'):
+                # Clipping is not represented by FlatCAM geometry. Report it instead of
+                # silently pretending the clipped artwork was imported correctly.
+                if 'clipping' not in self.unsupported_features:
+                    log.warning("parse_pdf() --> clipping path (W/W*) is not supported; clip is ignored.")
+                self.unsupported_features.add('clipping')
+            elif op == 'n':
+                path = []
+                current = None
+            elif op == 'Do':
+                if 'XObject' not in self.unsupported_features:
+                    log.warning("parse_pdf() --> Form/Image XObject (Do) is not supported; content is skipped.")
+                self.unsupported_features.add('XObject')
+            elif op == 'BI':
+                if 'inline image' not in self.unsupported_features:
+                    log.warning("parse_pdf() --> inline image (BI) is not supported; content is skipped.")
+                self.unsupported_features.add('inline image')
 
-            match = self.start_subpath_re.search(pline)
-            if match:
-                close_subpath = False
-                subpath, start_point = self._start_subpath(
-                    match, offset_geo, scale_geo, subpath
-                )
-                current_point = start_point
-                continue
-
-            match = self.draw_line_re.search(pline)
-            if match:
-                subpath, current_point, current_subpath = self._draw_line(
-                    match, offset_geo, scale_geo, subpath
-                )
-                continue
-
-            match = self.draw_arc_3pt_re.search(pline)
-            if match:
-                current_subpath = 'bezier'
-                subpath, current_point = self._draw_bezier_c(
-                    match, offset_geo, scale_geo, subpath, current_point
-                )
-                continue
-
-            match = self.draw_arc_2pt_c1start_re.search(pline)
-            if match:
-                current_subpath = 'bezier'
-                subpath, current_point = self._draw_bezier_v(
-                    match, offset_geo, scale_geo, subpath, current_point
-                )
-                continue
-
-            match = self.draw_arc_2pt_c2stop_re.search(pline)
-            if match:
-                subpath, current_point = self._draw_bezier_y(
-                    match, offset_geo, scale_geo, subpath, current_point
-                )
-                continue
-
-            match = self.rect_re.search(pline)
-            if match:
-                current_subpath = 'rectangle'
-                subpath, current_point = self._draw_rectangle(
-                    match, offset_geo, scale_geo, subpath
-                )
-                continue
-
-            match = self.clip_path_re.search(pline)
-            if match:
-                subpath, close_subpath = self._handle_clip_path(
-                    subpath, path, current_subpath, close_subpath
-                )
-                continue
-
-            match = self.end_subpath_re.search(pline)
-            if match:
-                subpath, close_subpath = self._close_subpath(
-                    subpath, path, current_subpath, start_point
-                )
-                continue
-
-            match = self.strokewidth_re.search(pline)
-            if match:
-                size = float(match.group(1))
-                continue
-
-            match = self.no_op_re.search(pline)
-            if match:
-                subpath['lines'] = []
-                subpath['bezier'] = []
-                subpath['rectangle'] = []
-                continue
-
-            match = self.stroke_path__re.search(pline)
-            if match:
-                applied_size = size * scale_geo[0] * self.point_to_unit_factor
-                self._stroke_path(
-                    path, subpath, current_subpath, applied_size,
-                    line_nr, pline, ctx.apertures_dict, aperture
-                )
-                continue
-
-            match = self.fill_path_re.search(pline)
-            if match:
-                applied_size = size * scale_geo[0] * self.point_to_unit_factor
-                close_subpath = self._fill_path(
-                    path, subpath, current_subpath, applied_size,
-                    start_point, close_subpath, ctx.flag_clear_geo,
-                    ctx.clear_apertures_dict, ctx.apertures_dict
-                )
-                continue
-
-            match = self.fill_stroke_path_re.search(pline)
-            if match:
-                applied_size = size * scale_geo[0] * self.point_to_unit_factor
-                close_subpath = self._fill_stroke_path(
-                    path, subpath, current_subpath, applied_size,
-                    start_point, close_subpath, ctx.flag_clear_geo,
-                    ctx.apertures_dict, aperture
-                )
-                continue
+            operands = []
 
         return self._finalize_object_dict(
             ctx.object_dict, ctx.apertures_dict, ctx.clear_apertures_dict,
             ctx.layer_nr, self.abort_flag
         )
+
+    def _tokenize_pdf(self, content: str):
+        """Yield PDF numbers as floats and operators/names as strings.
+
+        Strings, arrays and dictionaries are skipped as opaque operands. This is what
+        prevents text content such as ``(0 0 m) Tj`` from being interpreted as a path.
+        """
+        index = 0
+        length = len(content)
+        whitespace = ' \t\r\n\f\x00'
+
+        while index < length:
+            char = content[index]
+
+            if char in whitespace:
+                index += 1
+                continue
+
+            if char == '%':
+                newline = content.find('\n', index)
+                index = length if newline < 0 else newline + 1
+                continue
+
+            if char == '(':
+                index = self._skip_literal_string(content, index)
+                continue
+
+            if char == '<':
+                if content.startswith('<<', index):
+                    index = self._skip_dict(content, index)
+                else:
+                    end = content.find('>', index + 1)
+                    index = length if end < 0 else end + 1
+                continue
+
+            if char == '[':
+                index = self._skip_array(content, index)
+                continue
+
+            if char in ']}>':
+                index += 1
+                continue
+
+            if char == '/':
+                end = index + 1
+                while end < length and content[end] not in whitespace + '()<>[]{}/%':
+                    end += 1
+                index = end
+                continue
+
+            end = index
+            while end < length and content[end] not in whitespace + '()<>[]{}/%':
+                end += 1
+            token = content[index:end]
+            index = end
+
+            try:
+                yield float(token)
+            except ValueError:
+                yield token
+                if token == 'BI':
+                    # Inline image data is binary and must not be tokenized as path operators.
+                    image_end = re.search(r'(?<!\S)EI(?!\S)', content[end:])
+                    index = end + image_end.end() if image_end else length
+
+    def _skip_literal_string(self, content: str, index: int) -> int:
+        depth = 1
+        index += 1
+        while index < len(content):
+            char = content[index]
+            if char == '\\':
+                index += 2
+                continue
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+        return index
+
+    def _skip_dict(self, content: str, index: int) -> int:
+        depth = 0
+        while index < len(content):
+            if content.startswith('<<', index):
+                depth += 1
+                index += 2
+                continue
+            if content.startswith('>>', index):
+                depth -= 1
+                index += 2
+                if depth == 0:
+                    return index
+                continue
+            if content[index] == '(':
+                index = self._skip_literal_string(content, index)
+                continue
+            index += 1
+        return index
+
+    def _skip_array(self, content: str, index: int) -> int:
+        depth = 0
+        while index < len(content):
+            if content[index] == '[':
+                depth += 1
+            elif content[index] == ']':
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            elif content[index] == '(':
+                index = self._skip_literal_string(content, index)
+                continue
+            index += 1
+        return index
+
+    @staticmethod
+    def _cmyk_to_rgb(cmyk) -> Tuple[float, float, float]:
+        c, m, y, k = cmyk
+        return (1.0 - c) * (1.0 - k), (1.0 - m) * (1.0 - k), (1.0 - y) * (1.0 - k)
+
+    @staticmethod
+    def _multiply_ctm(first, second) -> Tuple[float, float, float, float, float, float]:
+        """Return the row-vector product first x second for PDF [a b c d e f] matrices."""
+        a1, b1, c1, d1, e1, f1 = first
+        a2, b2, c2, d2, e2, f2 = second
+        return (
+            a1 * a2 + b1 * c2,
+            a1 * b2 + b1 * d2,
+            c1 * a2 + d1 * c2,
+            c1 * b2 + d1 * d2,
+            e1 * a2 + f1 * c2 + e2,
+            e1 * b2 + f1 * d2 + f2,
+        )
+
+    def _transform_point(self, point: Tuple[float, float], ctm) -> Tuple[float, float]:
+        x, y = point
+        a, b, c, d, e, f = ctm
+        return (
+            (a * x + c * y + e) * self.point_to_unit_factor,
+            (b * x + d * y + f) * self.point_to_unit_factor,
+        )
+
+    def _transform_points(self, points: List[Tuple[float, float]], ctm) -> List[Tuple[float, float]]:
+        return [self._transform_point(point, ctm) for point in points]
+
+    def _shapely_ctm(self, ctm) -> List[float]:
+        a, b, c, d, e, f = ctm
+        factor = self.point_to_unit_factor
+        # shapely.affinity order is [a, b, d, e, xoff, yoff] for x' = a*x + b*y + xoff,
+        # y' = d*x + e*y + yoff.
+        return [a * factor, c * factor, b * factor, d * factor, e * factor, f * factor]
+
+    @staticmethod
+    def _close_subpath_points(subpath: dict) -> None:
+        points = subpath['points']
+        if len(points) > 1 and points[0] != points[-1]:
+            points.append(points[0])
+        subpath['closed'] = True
+
+    @staticmethod
+    def _winding_number(point, ring_coords) -> int:
+        """Winding number of a point against one closed ring."""
+        x, y = point
+        winding = 0
+        count = len(ring_coords)
+        for index in range(count):
+            x1, y1 = ring_coords[index]
+            x2, y2 = ring_coords[(index + 1) % count]
+            if y1 <= y:
+                if y2 > y and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) > 0:
+                    winding += 1
+            else:
+                if y2 <= y and (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1) < 0:
+                    winding -= 1
+        return winding
+
+    def _build_fill_geometry(self, subpaths: List[dict], even_odd: bool):
+        """Build one filled geometry from all subpaths using the PDF winding rule."""
+        rings = []
+        for subpath in subpaths:
+            points = self._transform_points(subpath['points'], subpath['ctm'])
+            if len(points) < 3:
+                continue
+            if points[0] != points[-1]:
+                points.append(points[0])
+            try:
+                ring = LineString(points)
+                if not ring.is_empty:
+                    rings.append(ring)
+            except (ValueError, TypeError):
+                continue
+
+        if not rings:
+            return Polygon()
+
+        try:
+            faces = list(polygonize(unary_union(rings)))
+        except Exception:
+            faces = []
+
+        if not faces:
+            # Degenerate/self-intersecting linework: fall back to the per-contour rule.
+            polygons = []
+            for ring in rings:
+                if len(ring.coords) < 4:
+                    continue
+                try:
+                    polygon = Polygon(ring)
+                    if not polygon.is_empty:
+                        polygons.append(polygon)
+                except ValueError:
+                    continue
+            if not polygons:
+                return Polygon()
+            result = polygons[0]
+            for polygon in polygons[1:]:
+                result = result.symmetric_difference(polygon) if even_odd else result.union(polygon)
+            return result
+
+        selected = []
+        for face in faces:
+            point = face.representative_point()
+            winding = 0
+            for ring in rings:
+                winding += self._winding_number((point.x, point.y), ring.coords)
+            if (winding % 2 != 0) if even_odd else (winding != 0):
+                selected.append(face)
+
+        return unary_union(selected) if selected else Polygon()
+
+    def _build_stroke_geometry(self, subpaths: List[dict], line_width: float) -> List:
+        """Build stroke polygons in user space, then apply each subpath's CTM."""
+        geometries = []
+        half_width = float(line_width) / 2.0
+        if half_width <= 0:
+            return geometries
+
+        for subpath in subpaths:
+            points = list(subpath['points'])
+            if len(points) < 2:
+                continue
+            if subpath.get('closed') and points[0] != points[-1]:
+                points.append(points[0])
+            try:
+                geometry = LineString(points).buffer(half_width, resolution=self.step_per_circles)
+                if geometry.is_empty:
+                    continue
+                geometries.append(affine_transform(geometry, self._shapely_ctm(subpath['ctm'])))
+            except (ValueError, TypeError):
+                continue
+
+        return geometries
+
+    def _aperture_size(self, line_width: float, ctm) -> float:
+        a, b, c, d, _, _ = ctm
+        determinant = abs(a * d - b * c)
+        return float(line_width) * (determinant ** 0.5) * self.point_to_unit_factor
+
+    def _store_stroke_geometry(self, geometries: List, clear_geo: bool, ctx: ParsingContext,
+                               aperture: int, applied_size: float, color=None) -> int:
+        if not geometries:
+            return aperture
+
+        if clear_geo:
+            self._route_clear_paint(ctx, geometries)
+            return aperture
+
+        self._route_dark_paint(ctx, color if color is not None else (0.0, 0.0, 0.0))
+
+        if not ctx.apertures_dict:
+            ctx.apertures_dict[str(aperture)] = {
+                'size': round(applied_size, 5),
+                'type': 'C',
+                'geometry': []
+            }
+
+        ap_to_use, aperture = self._find_or_create_aperture(
+            ctx.apertures_dict, applied_size, aperture
+        )
+        self._store_geometry(ctx.apertures_dict, geometries, ap_to_use, clear_geo=clear_geo)
+        return aperture
+
+    def _store_fill_geometry(self, geometry, clear_geo: bool, ctx: ParsingContext,
+                             applied_size: float, color=None) -> None:
+        if geometry.is_empty:
+            return
+
+        if clear_geo:
+            polygons = geometry.geoms if isinstance(geometry, MultiPolygon) else [geometry]
+            for polygon in polygons:
+                ctx.clear_apertures_dict[0]['geometry'].append({
+                    'clear': deepcopy(polygon),
+                    'order': self._geometry_order
+                })
+                self._geometry_order += 1
+            self._route_clear_paint(ctx, [geometry])
+            return
+
+        self._route_dark_paint(ctx, color if color is not None else (0.0, 0.0, 0.0))
+
+        if '0' not in ctx.apertures_dict:
+            ctx.apertures_dict['0'] = {
+                'size': round(applied_size, 5),
+                'type': 'C',
+                'geometry': []
+            }
+        self._store_geometry(ctx.apertures_dict, [geometry], '0', clear_geo=clear_geo)
 
     def _handle_combined_transform(self, match, line_nr: int,
                                     offset_geo: List[float], scale_geo: List[float],
@@ -406,8 +793,8 @@ class PdfParser:
         Returns:
             Tuple of (offset_geo, scale_geo, size)
         """
-        offset_geo = self.DEFAULT_OFFSET[:]
-        scale_geo = self.DEFAULT_SCALE[:]
+        offset_geo: List[float] = [float(value) for value in self.DEFAULT_OFFSET]
+        scale_geo: List[float] = [float(value) for value in self.DEFAULT_SCALE]
         size = 0
 
         try:
@@ -440,26 +827,21 @@ class PdfParser:
             "parse_pdf() --> STROKE Color change on line: %s --> RED=%f GREEN=%f BLUE=%f" %
             (line_nr, color[0], color[1], color[2]))
 
-        if color[0] == ctx.old_color[0] and color[1] == ctx.old_color[1] and color[2] == ctx.old_color[2]:
-            return ctx
-
-        # Check if stroke color change should trigger detection based on mode
+        # Recompute polarity from the color every time. The graphics state stack already
+        # restores the color through q/Q, so a cached "last color" can only go stale.
         if self.hole_detection_mode in [self.DETECT_BOTH, self.DETECT_STROKE_ONLY]:
             ctx.detection_triggered = True
+            ctx.stroke_clear = self._is_white(color)
         else:
             ctx.detection_triggered = False
+            ctx.stroke_clear = False
 
-        if ctx.apertures_dict:
-            ctx.object_dict[ctx.layer_nr] = deepcopy(ctx.apertures_dict)
-            ctx.apertures_dict = {}
-            ctx.layer_nr += 1
-            ctx.object_dict[ctx.layer_nr] = {}
-
-        ctx.old_color = [color[0], color[1], color[2]]
-        # Only set flag_clear_geo to False if detection was triggered
-        if ctx.detection_triggered:
-            ctx.flag_clear_geo = False
         return ctx
+
+    def _is_white(self, color: List[float]) -> bool:
+        return (color[0] == self.WHITE_THRESHOLD and
+                color[1] == self.WHITE_THRESHOLD and
+                color[2] == self.WHITE_THRESHOLD)
 
     def _apply_transform_to_point(self, x: float, y: float,
                                     offset_geo: List[float], scale_geo: List[float]) -> Tuple[float, float]:
@@ -699,17 +1081,14 @@ class PdfParser:
             "parse_pdf() --> FILL Color change on line: %s --> RED=%f GREEN=%f BLUE=%f" %
             (line_nr, fill_color[0], fill_color[1], fill_color[2]))
 
-        # Check if fill color change should trigger detection based on mode
+        # Fill polarity is independent from stroke polarity. A stroke color change
+        # must not clear the active white fill state.
         if self.hole_detection_mode in [self.DETECT_BOTH, self.DETECT_FILL_ONLY]:
             ctx.detection_triggered = True
-            # Only check for white (clear geometry) if detection is triggered
-            if fill_color[0] == self.WHITE_THRESHOLD and fill_color[1] == self.WHITE_THRESHOLD and fill_color[2] == self.WHITE_THRESHOLD:
-                ctx.flag_clear_geo = True
-            else:
-                ctx.flag_clear_geo = False
+            ctx.fill_clear = self._is_white(fill_color)
         else:
             ctx.detection_triggered = False
-            # Don't change flag_clear_geo when fill detection is disabled
+            ctx.fill_clear = False
         return ctx
 
     def bezier_to_points(self, start, c1, c2, stop):
@@ -836,283 +1215,53 @@ class PdfParser:
 
         return path_geo
 
-    def _stroke_path(self, path: dict, subpath: dict, current_subpath: str,
-                     applied_size: float, line_nr: int, pline: str,
-                     apertures_dict: dict, aperture: int) -> None:
-        """Handle 'S' command - Stroke the path.
+    def _stroke_path(self, subpaths: List[dict], line_width: float, clear_stroke: bool,
+                     stroke_color, ctx: ParsingContext, aperture: int) -> int:
+        """Handle 'S'/'s' - stroke every subpath of the current path."""
+        geometries = self._build_stroke_geometry(subpaths, line_width)
+        if not geometries:
+            return aperture
 
-        Args:
-            path: Path dict with lines/bezier/rectangle lists
-            subpath: Current subpath dict
-            current_subpath: Current subpath type
-            applied_size: The stroke size (already scaled)
-            line_nr: Current line number for logging
-            pline: Current line content for logging
-            apertures_dict: Apertures dictionary to store geometry
-            aperture: Current aperture number
+        ctm = subpaths[0]['ctm'] if subpaths else (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        applied_size = self._aperture_size(line_width, ctm)
+        return self._store_stroke_geometry(
+            geometries, clear_stroke, ctx, aperture, applied_size, stroke_color
+        )
+
+    def _fill_path(self, subpaths: List[dict], even_odd: bool, clear_fill: bool,
+                   fill_color, ctx: ParsingContext) -> None:
+        """Handle 'f'/'F'/'f*' - fill every subpath of the current path."""
+        geometry = self._build_fill_geometry(subpaths, even_odd)
+        if geometry.is_empty:
+            return
+
+        ctm = subpaths[0]['ctm'] if subpaths else (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+        applied_size = self._aperture_size(0.0, ctm)
+        self._store_fill_geometry(geometry, clear_fill, ctx, applied_size, fill_color)
+
+    def _fill_stroke_path(self, subpaths: List[dict], even_odd: bool, clear_fill: bool,
+                          clear_stroke: bool, line_width: float, fill_color, stroke_color,
+                          ctx: ParsingContext, aperture: int) -> int:
+        """Handle 'B'/'B*'/'b'/'b*' - fill then stroke the current path.
+
+        Fill and stroke colors are independent, and the fill is always painted first.
         """
-        path_geo = []
-
-        if current_subpath == 'lines':
-            if path['lines']:
-                path_geo = self._apply_line_buffer_to_subpaths(path['lines'], applied_size, 'lines')
-                path['lines'] = []
-            else:
-                path_geo = self._apply_line_buffer_to_subpaths([subpath['lines']], applied_size, 'lines')
-                subpath['lines'] = []
-
-        if current_subpath == 'bezier':
-            if path['bezier']:
-                path_geo = self._apply_line_buffer_to_subpaths(path['bezier'], applied_size, 'bezier')
-                path['bezier'] = []
-            else:
-                path_geo = self._apply_line_buffer_to_subpaths([subpath['bezier']], applied_size, 'bezier')
-                subpath['bezier'] = []
-
-        if current_subpath == 'rectangle':
-            if path['rectangle']:
-                path_geo = self._apply_line_buffer_to_subpaths(path['rectangle'], applied_size, 'rectangle')
-                path['rectangle'] = []
-            else:
-                path_geo = self._apply_line_buffer_to_subpaths([subpath['rectangle']], applied_size, 'rectangle')
-                subpath['rectangle'] = []
-
-        if apertures_dict:
-            try:
-                ap_to_use, aperture = self._find_or_create_aperture(
-                    apertures_dict, applied_size, aperture
-                )
-                self._store_geometry(apertures_dict, path_geo, ap_to_use, clear_geo=False)
-            except Exception as e:
-                log.error(
-                    "line %d: %s ||| PdfParser.parse_pdf() Store Stroke geo -> %s" % (line_nr, pline, str(e))
-                )
-        else:
-            apertures_dict[str(aperture)] = {
-                'size': round(applied_size, 5),
-                'type': 'C',
-                'geometry': []
-            }
-            self._store_geometry(apertures_dict, path_geo, str(aperture), clear_geo=False)
-
-    def _fill_path(self, path: dict, subpath: dict, current_subpath: str,
-                   applied_size: float, start_point: Tuple, close_subpath: bool,
-                   flag_clear_geo: bool, clear_apertures_dict: dict,
-                   apertures_dict: dict) -> bool:
-        """Handle 'f'/'F' command - Fill the path.
-
-        Args:
-            path: Path dict with lines/bezier/rectangle lists
-            subpath: Current subpath dict
-            current_subpath: Current subpath type
-            applied_size: The fill size (already scaled)
-            start_point: Start point of subpath
-            close_subpath: Whether subpath is already closed
-            flag_clear_geo: Flag indicating clear geometry
-            clear_apertures_dict: Clear apertures dictionary
-            apertures_dict: Apertures dictionary to store geometry
-
-        Returns:
-            Updated close_subpath value
-        """
-        path_geo = []
-
-        if current_subpath == 'lines':
-            if path['lines']:
-                path_geo = self._apply_polygon_buffer_to_subpaths(
-                    path['lines'], 'lines', close_subpath
-                )
-                path['lines'] = []
-            else:
-                geo = copy(subpath['lines'])
-                if close_subpath is False:
-                    geo.append(start_point)
-                try:
-                    geo_el = Polygon(geo).buffer(self.BUFFER_EPSILON, resolution=self.step_per_circles)
-                    path_geo.append(geo_el)
-                except ValueError:
-                    pass
-                subpath['lines'] = []
-
-        if current_subpath == 'bezier':
-            geo = []
-            if path['bezier']:
-                path_geo = self._apply_polygon_buffer_to_subpaths(
-                    path['bezier'], 'bezier', close_subpath
-                )
-                path['bezier'] = []
-            else:
-                for b in subpath['bezier']:
-                    geo += self.bezier_to_points(start=b[0], c1=b[1], c2=b[2], stop=b[3])
-                if close_subpath is False:
-                    geo.append(start_point)
-                try:
-                    geo_el = Polygon(geo).buffer(self.BUFFER_EPSILON, resolution=self.step_per_circles)
-                    path_geo.append(geo_el)
-                except ValueError:
-                    pass
-                subpath['bezier'] = []
-
-        if current_subpath == 'rectangle':
-            if path['rectangle']:
-                path_geo = self._apply_polygon_buffer_to_subpaths(
-                    path['rectangle'], 'rectangle', close_subpath
-                )
-                path['rectangle'] = []
-            else:
-                geo = copy(subpath['rectangle'])
-                try:
-                    geo_el = Polygon(geo).buffer(self.BUFFER_EPSILON, resolution=self.step_per_circles)
-                    path_geo.append(geo_el)
-                except ValueError:
-                    pass
-                subpath['rectangle'] = []
-
-        close_subpath = True
-
-        if flag_clear_geo is True:
-            if current_subpath == 'bezier':
-                if path_geo:
-                    try:
-                        for g in path_geo:
-                            new_el = {'clear': g}
-                            clear_apertures_dict[0]['geometry'].append(new_el)
-                    except TypeError:
-                        new_el = {'clear': path_geo}
-                        clear_apertures_dict[0]['geometry'].append(new_el)
-
-            if '0' not in apertures_dict:
-                apertures_dict['0'] = {
-                    'size': applied_size,
-                    'type': 'C',
-                    'geometry': []
-                }
-            self._store_geometry(apertures_dict, path_geo, '0', clear_geo=True)
-        else:
-            if '0' not in apertures_dict:
-                apertures_dict['0'] = {
-                    'size': applied_size,
-                    'type': 'C',
-                    'geometry': []
-                }
-            self._store_geometry(apertures_dict, path_geo, '0', clear_geo=False)
-
-        return close_subpath
-
-    def _fill_stroke_path(self, path: dict, subpath: dict, current_subpath: str,
-                          applied_size: float, start_point: Tuple, close_subpath: bool,
-                          flag_clear_geo: bool, apertures_dict: dict, aperture: int) -> bool:
-        """Handle 'B'/'B*' command - Fill and stroke the path.
-
-        Args:
-            path: Path dict with lines/bezier/rectangle lists
-            subpath: Current subpath dict
-            current_subpath: Current subpath type
-            applied_size: The stroke/fill size (already scaled)
-            start_point: Start point of subpath
-            close_subpath: Whether subpath is already closed
-            flag_clear_geo: Flag indicating clear geometry
-            apertures_dict: Apertures dictionary to store geometry
-            aperture: Current aperture number
-
-        Returns:
-            Updated close_subpath value
-        """
-        path_geo = []
-        fill_geo = []
-
-        if current_subpath == 'lines':
-            if path['lines']:
-                fill_geo = self._apply_polygon_buffer_to_subpaths(
-                    path['lines'], 'lines', close_subpath
-                )
-                path_geo = self._apply_line_buffer_to_subpaths(path['lines'], applied_size, 'lines')
-                path['lines'] = []
-            else:
-                geo = copy(subpath['lines'])
-                if close_subpath is False:
-                    geo.append(start_point)
-                try:
-                    geo_el = Polygon(geo).buffer(self.BUFFER_EPSILON, resolution=self.step_per_circles)
-                    fill_geo.append(geo_el)
-                except ValueError:
-                    pass
-                path_geo = self._apply_line_buffer_to_subpaths([subpath['lines']], applied_size, 'lines')
-                subpath['lines'] = []
-
-        if current_subpath == 'bezier':
-            geo = []
-            if path['bezier']:
-                fill_geo = self._apply_polygon_buffer_to_subpaths(
-                    path['bezier'], 'bezier', close_subpath
-                )
-                path_geo = self._apply_line_buffer_to_subpaths(path['bezier'], applied_size, 'bezier')
-                path['bezier'] = []
-            else:
-                for b in subpath['bezier']:
-                    geo += self.bezier_to_points(start=b[0], c1=b[1], c2=b[2], stop=b[3])
-                if close_subpath is False:
-                    geo.append(start_point)
-                try:
-                    geo_el = Polygon(geo).buffer(self.BUFFER_EPSILON, resolution=self.step_per_circles)
-                    fill_geo.append(geo_el)
-                except ValueError:
-                    pass
-                path_geo = self._apply_line_buffer_to_subpaths([subpath['bezier']], applied_size, 'bezier')
-                subpath['bezier'] = []
-
-        if current_subpath == 'rectangle':
-            if path['rectangle']:
-                fill_geo = self._apply_polygon_buffer_to_subpaths(
-                    path['rectangle'], 'rectangle', close_subpath
-                )
-                path_geo = self._apply_line_buffer_to_subpaths(path['rectangle'], applied_size, 'rectangle')
-                path['rectangle'] = []
-            else:
-                geo = copy(subpath['rectangle'])
-                try:
-                    geo_el = Polygon(geo).buffer(self.BUFFER_EPSILON, resolution=self.step_per_circles)
-                    fill_geo.append(geo_el)
-                except ValueError:
-                    pass
-                path_geo = self._apply_line_buffer_to_subpaths([subpath['rectangle']], applied_size, 'rectangle')
-                subpath['rectangle'] = []
-
-        close_subpath = True
-
-        if apertures_dict:
-            ap_to_use, aperture = self._find_or_create_aperture(
-                apertures_dict, applied_size, aperture
+        fill_geometry = self._build_fill_geometry(subpaths, even_odd)
+        if not fill_geometry.is_empty:
+            ctm = subpaths[0]['ctm'] if subpaths else (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+            self._store_fill_geometry(
+                fill_geometry, clear_fill, ctx, self._aperture_size(0.0, ctm), fill_color
             )
-            self._store_geometry(apertures_dict, path_geo, ap_to_use, clear_geo=False)
-        else:
-            apertures_dict[str(aperture)] = {
-                'size': round(applied_size, 5),
-                'type': 'C',
-                'geometry': []
-            }
-            self._store_geometry(apertures_dict, path_geo, str(aperture), clear_geo=False)
 
-        if flag_clear_geo is True:
-            if 0 not in apertures_dict:
-                apertures_dict[0] = {
-                    'size': round(applied_size, 5),
-                    'type': 'C',
-                    'geometry': []
-                }
-            self._store_geometry(apertures_dict, fill_geo, '0', clear_geo=True)
+        stroke_geometry = self._build_stroke_geometry(subpaths, line_width)
+        if stroke_geometry:
+            ctm = subpaths[0]['ctm'] if subpaths else (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+            aperture = self._store_stroke_geometry(
+                stroke_geometry, clear_stroke, ctx, aperture,
+                self._aperture_size(line_width, ctm), stroke_color
+            )
 
-        else:
-            if '0' not in apertures_dict:
-                apertures_dict['0'] = {
-                    'size': round(applied_size, 5),
-                    'type': 'C',
-                    'geometry': []
-                }
-
-            self._store_geometry(apertures_dict, fill_geo, '0', clear_geo=False)
-
-        return close_subpath
+        return aperture
 
     def _finalize_object_dict(self, object_dict: dict, apertures_dict: dict,
                                clear_apertures_dict: dict, layer_nr: int,

@@ -11,12 +11,13 @@ from appGUI.GUIElements import add_case_variants
 
 import logging
 from copy import deepcopy
+import math
 import os
 import time
 import re
 import traceback
 
-from shapely import Point, MultiPolygon
+from shapely import Point, Polygon
 from shapely.ops import unary_union
 
 import gettext
@@ -35,6 +36,104 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 log = logging.getLogger('base')
+
+
+def _normalize_ap_dict(ap_dict):
+    """PDF parser keys are strings; Gerber tools and Excellon layers use integers."""
+    return {int(key): value for key, value in ap_dict.items()}
+
+
+def _paint_elements(ap_dict):
+    """Return all geometry elements in painter order.
+
+    The parser writes an ``order`` sequence number on every element. When the caller
+    supplies a hand-built dictionary without those numbers, insertion order is used.
+    """
+    elements = []
+    for aperture in ap_dict:
+        elements.extend(ap_dict[aperture].get('geometry', []))
+
+    if any('order' in element for element in elements):
+        elements.sort(key=lambda element: element.get('order', 0))
+    return elements
+
+
+def _replay_paint_order(ap_dict):
+    """Replay solid/clear paint operations instead of subtracting a global clear union.
+
+    The result is the composed geometry: cross-aperture paint order is applied here and
+    the initializer stores it as region-aperture records, so the Gerber export does not
+    need to regroup the original paint operations by aperture.
+    """
+    solid = None
+    follow = []
+    pending_solids = []
+
+    def flush_solids():
+        nonlocal solid, pending_solids
+        if pending_solids:
+            batch = unary_union(pending_solids)
+            solid = batch if solid is None else solid.union(batch)
+            pending_solids = []
+
+    for element in _paint_elements(ap_dict):
+        if 'solid' in element:
+            pending_solids.append(element['solid'])
+        if 'follow' in element:
+            follow.append(element['follow'])
+        if 'clear' in element:
+            flush_solids()
+            if solid is not None:
+                # A clear cuts whatever is below it. Edge-crossing clears are valid and a
+                # fully erased solid stays erased; there is no restore-original fallback.
+                solid = solid.difference(element['clear'])
+
+    flush_solids()
+
+    if solid is None:
+        solid = Polygon()
+    follow_buf = unary_union(follow) if follow else Polygon()
+    return solid, follow_buf
+
+
+def _region_tools(geometry):
+    """Return the composed geometry as region-aperture records.
+
+    A PDF has no Gerber apertures: every paint operation was already composed in painter
+    order by :func:`_replay_paint_order`. Writing that composed geometry as regions keeps
+    holes, islands and stroke widths in the exported source. Polygons are sorted largest
+    first so a later island inside an earlier hole is not erased by the clear interior.
+    """
+    from appParsers.feature_access import normalize_polygonal
+
+    solid = normalize_polygonal(geometry)
+    polygons = [solid] if isinstance(solid, Polygon) else list(solid.geoms)
+    polygons = [polygon for polygon in polygons if not polygon.is_empty]
+    polygons.sort(key=lambda polygon: Polygon(polygon.exterior).area, reverse=True)
+    return {0: {'type': 'REG', 'size': 0,
+                'geometry': [{'solid': polygon} for polygon in polygons]}}
+
+
+def _circular_opening(geometry):
+    """Return ``((x, y), diameter)`` when the geometry is a true circular opening."""
+    if not isinstance(geometry, Polygon) or geometry.is_empty or geometry.interiors:
+        return None
+
+    xmin, ymin, xmax, ymax = geometry.bounds
+    width = xmax - xmin
+    height = ymax - ymin
+    if width <= 0 or height <= 0:
+        return None
+
+    diameter = (width + height) / 2.0
+    if abs(width - height) > diameter * 0.05:
+        return None
+
+    circle_area = math.pi * (diameter / 2.0) ** 2
+    if circle_area <= 0 or abs(geometry.area - circle_area) > circle_area * 0.05:
+        return None
+
+    return ((xmin + xmax) / 2.0, (ymin + ymax) / 2.0), diameter
 
 
 class ToolPDF(AppTool):
@@ -173,6 +272,10 @@ class ToolPDF(AppTool):
                 return
 
             self.pdf_parsed[short_name]['pdf'] = self.parser.parse_pdf(pdf_content=self.pdf_decompressed[short_name])
+            unsupported = getattr(self.parser, 'unsupported_features', set())
+            if unsupported:
+                self.app.inform.emit('[WARNING_NOTCL] %s: %s' %
+                                     (_("Unsupported PDF content"), ', '.join(sorted(unsupported))))
             # we used it, now we delete it
             if self.pdf_decompressed[short_name]:
                 self.pdf_decompressed[short_name] = None
@@ -189,43 +292,60 @@ class ToolPDF(AppTool):
 
     def layer_rendering_as_excellon(self, filename, ap_dict, layer_nr):
         outname = filename.split('/')[-1].split('\\')[-1] + "_%s" % str(layer_nr)
+        ap_dict = _normalize_ap_dict(ap_dict)
 
         # store the points here until reconstitution:
         # keys are diameters and values are list of (x,y) coords
         points = {}
 
         def obj_init(new_obj, app_obj):
-            clear_geo = [geo_el['clear'] for geo_el in ap_dict[0]['geometry']]
+            clear_geo = [geo_el['clear'] for geo_el in ap_dict.get(0, {}).get('geometry', [])
+                         if 'clear' in geo_el]
 
             new_obj.tools = {}
 
-            # First pass: collect all (center, diameter) pairs
-            # Key: rounded center (x, y), Value: (actual_center, diameter)
-            all_holes = {}
-            precision = 2  # Decimal places for center comparison
+            # First pass: collect true circular openings. White rectangles, lines and
+            # other negative artwork stay clears in their Gerber layer and are not drills.
+            all_holes = []
+            units = getattr(self.app, 'app_units', 'MM')
+            tolerance = 0.001 if str(units).upper() == 'MM' else 0.0001
 
             for geo in clear_geo:
-                xmin, ymin, xmax, ymax = geo.bounds
-                center = (((xmax - xmin) / 2) + xmin, ((ymax - ymin) / 2) + ymin)
+                opening = _circular_opening(geo)
+                if opening is None:
+                    continue
 
-                # for drill bits, even in INCH, it's enough 3 decimals
-                correction_factor = 0.974
-                dia = (xmax - xmin) * correction_factor
+                center, dia = opening
                 dia = round(dia, 3)
 
-                # Round center for deduplication
-                center_key = (round(center[0], precision), round(center[1], precision))
-
-                # Keep smaller diameter if center already exists
-                if center_key in all_holes:
-                    existing_dia = all_holes[center_key][1]
-                    if dia < existing_dia:
-                        all_holes[center_key] = (center, dia)
+                # Deduplicate by center distance, not by a rounded bucket: equal
+                # PDF coordinates can land on either side of a bucket boundary.
+                for idx, (other_center, other_dia) in enumerate(all_holes):
+                    if math.hypot(center[0] - other_center[0],
+                                  center[1] - other_center[1]) <= tolerance:
+                        if dia < other_dia:
+                            all_holes[idx] = (center, dia)
+                        break
                 else:
-                    all_holes[center_key] = (center, dia)
+                    all_holes.append((center, dia))
+
+            # An opening that encloses a smaller opening is clearance/antipad
+            # artwork around the real bore, not a drill. Standalone large holes
+            # and adjacent holes are kept.
+            holes = []
+            for center, dia in all_holes:
+                for other_center, other_dia in all_holes:
+                    if other_dia >= dia:
+                        continue
+                    distance = math.hypot(center[0] - other_center[0],
+                                          center[1] - other_center[1])
+                    if distance + other_dia / 2.0 <= dia / 2.0 + tolerance:
+                        break
+                else:
+                    holes.append((center, dia))
 
             # Group by diameter
-            for center_key, (center, dia) in all_holes.items():
+            for center, dia in holes:
                 if dia in points:
                     points[dia].append(center)
                 else:
@@ -267,53 +387,11 @@ class ToolPDF(AppTool):
 
     def layer_rendering_as_gerber(self, filename, ap_dict, layer_nr):
         outname = filename.split('/')[-1].split('\\')[-1] + "_%s" % str(layer_nr)
+        ap_dict = _normalize_ap_dict(ap_dict)
 
         def obj_init(grb_obj, app_obj):
 
-            grb_obj.tools = ap_dict
-
-            poly_buff = []
-            follow_buf = []
-            for ap in grb_obj.tools:
-                for k in grb_obj.tools[ap]:
-                    if k == 'geometry':
-                        for geo_el in ap_dict[ap][k]:
-                            if 'solid' in geo_el:
-                                poly_buff.append(geo_el['solid'])
-                            if 'follow' in geo_el:
-                                follow_buf.append(geo_el['follow'])
-            poly_buff = unary_union(poly_buff)
-
-            if 0 in grb_obj.tools:
-                global_clear_geo = []
-                if 'geometry' in grb_obj.tools[0]:
-                    for geo_el in ap_dict[0]['geometry']:
-                        if 'clear' in geo_el:
-                            global_clear_geo.append(geo_el['clear'])
-
-                if global_clear_geo:
-                    solid = []
-                    for apid in grb_obj.tools:
-                        if 'geometry' in grb_obj.tools[apid]:
-                            for elem in grb_obj.tools[apid]['geometry']:
-                                if 'solid' in elem:
-                                    solid_geo = deepcopy(elem['solid'])
-                                    for clear_geo in global_clear_geo:
-                                        # Make sure that the clear_geo is within the solid_geo otherwise we loose
-                                        # the solid_geometry. We want for clear_geometry just to cut into solid_geometry
-                                        # not to delete it
-                                        if clear_geo.within(solid_geo):
-                                            solid_geo = solid_geo.difference(clear_geo)
-                                        if solid_geo.is_empty:
-                                            solid_geo = elem['solid']
-                                    try:
-                                        for poly in solid_geo:
-                                            solid.append(poly)
-                                    except TypeError:
-                                        solid.append(solid_geo)
-                    poly_buff = deepcopy(MultiPolygon(solid))
-
-            follow_buf = unary_union(follow_buf)
+            poly_buff, follow_buf = _replay_paint_order(ap_dict)
 
             try:
                 poly_buff = poly_buff.buffer(0.0000001)
@@ -324,11 +402,9 @@ class ToolPDF(AppTool):
             except ValueError:
                 pass
 
-            # make the apertures integers if they are not
-            grb_obj.tools = {int(key): value for key, value in grb_obj.tools.items()}
-
             grb_obj.solid_geometry = flatten_shapely_geometry(poly_buff)
             grb_obj.follow_geometry = deepcopy(follow_buf)
+            grb_obj.tools = _region_tools(poly_buff)
             grb_obj.regenerate_source(name=outname)
 
         with self.app.proc_container.new(_("Rendering PDF layer #%d ...") % int(layer_nr)):

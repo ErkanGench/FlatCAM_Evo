@@ -33,10 +33,23 @@ Image Import:
 - fixed: a bad image file clears the last selection and shows an error; Cancel keeps the current selection; the tool resets the loaded file and the status dot when it opens again
 - the trace and the import use the loaded file with the current settings, without a second file dialog; the traced SVG is imported with the new SVG importer
 
+PDF Import:
+
+- new parser of the content stream (ParsePDF.py): it reads the operators token by token and keeps the graphics state with a q/Q stack and the full CTM; rotated, skewed and scaled artwork is imported correctly
+- the fills use the nonzero winding rule (f, F, B, b) and the even-odd rule (f*, F*, B*, b*); holes and islands are correct
+- new CMYK (k, K) and gray (g, G) color operators; the fill color and the stroke color are kept separately
+- a color layer is made only when dark paint is drawn; white paint clears all the layers below it in the painter order; dark paint that comes after can put an island back on a cleared area
+- each geometry element has an order number; the Gerber export replays the solid and clear operations in this order and writes region apertures
+- fixed: a clear area that crosses an edge was ignored; the fallback that restored the original solid is removed
+- the Excellon export uses only circular openings (width, height and area within 5%); duplicates are merged by the distance of the centers (0.001 mm or 0.0001 in); an opening that holds a smaller opening is clearance artwork and is not drilled; the 0.974 diameter factor is removed
+- the Python parser reads the /Contents streams of the first page in their order, instead of all the streams of the file (fonts and images were mixed in); new ASCIIHexDecode and ASCII85Decode filters; clear errors for encrypted files, object streams, /DecodeParms and filters that are not supported
+- clipping paths (W, W*), XObjects (Do) and inline images show a "[WARNING] Unsupported PDF content" message; the pikepdf path also finds them
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
 - new unit tests for the Image tool loading (tests/test_image_tool.py)
+- new unit tests for the PDF import: winding rules, nested q/Q transforms, the Gerber round trip with holes and islands, the drill filter and the duplicates, the stream order of the first page, filters that are not supported and encrypted files
 
 18.10.2026
 
