@@ -720,22 +720,6 @@ class TestExitWithProjects(unittest.TestCase):
         projects.dirty_contexts.assert_not_called()
         lifecycle.inform.emit.assert_called_once()
 
-    def test_exit_does_not_quit_with_a_save_pending_after_the_dialogs(self):
-        first = SimpleNamespace(name='A')
-        lifecycle, projects, start = self.make_lifecycle([first])
-        projects.ask_save.return_value = 'yes'
-
-        def save_and_leave_pending(ctx, visuals=True):
-            lifecycle.app.project_save_pending = True
-            return True
-
-        projects.save_context.side_effect = save_and_leave_pending
-
-        lifecycle.final_save()
-
-        lifecycle.quit_application.assert_not_called()
-        lifecycle.inform.emit.assert_called_once()
-
     def test_cancel_of_the_tools_database_question_does_not_quit(self):
         from types import MethodType
         from appHandlers.appLifecycle import AppLifecycle

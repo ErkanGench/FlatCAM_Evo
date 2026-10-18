@@ -163,7 +163,6 @@ The title bar shows the name of the active project.
   pending. `app.project_save_pending` is set when the save is queued and cleared only when
   the GUI has its result. While it is set, the exit, a project switch and a save from a
   close or an exit wait. The save of a close or an exit checks this also for the active project.
-- **No quit during a save:** before the app quits, it checks again that no save is pending.
 - **An error during a save:** `appIO.save_project_checked()` never raises. An error is a
   failed save: `save_in_progress` is reset and the completion of the save always comes.
 

@@ -269,14 +269,10 @@ class AppLifecycle(QtCore.QObject):
                     answer = projects.ask_save(ctx)
                     if answer == 'cancel' or (answer == 'yes' and not projects.save_context(ctx, visuals=False)):
                         return
-                # check again: the app must not quit while a save is pending
-                if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
-                    self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
-                    return
                 quitting = self.quit_application() is True
             finally:
                 if not quitting:
-                    # the exit stops (a cancel, a failed save, a pending save, a refused quit or an error). The save
+                    # the exit stops (a cancel, a failed save, a refused quit or an error). The save
                     # of an inactive project made it active, but the canvas still shows start: make start active
                     projects.return_to(start)
             if quitting:

@@ -7,7 +7,7 @@ import threading
 import unittest
 from contextlib import nullcontext
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from PyQt6 import QtCore, QtGui, QtWidgets, QtTest
 
@@ -96,6 +96,19 @@ class TestProjectLoadCleanup(unittest.TestCase):
         self.parse('bad project', request_from_worker=True)
         self.wait_for(lambda: len(title_threads) >= 2)
         self.assertEqual(title_threads, [gui_thread, gui_thread])
+
+    def test_bad_project_keeps_the_current_project_and_leaves_no_batch(self):
+        cases = (('not JSON or LZMA', False), ('{}', True), ('[]', False), ('{}', False),
+                 ('{"objs":null,"options":{}}', False), ('{"objs":[null],"options":{}}', False),
+                 ('{"objs":[],"options":[]}', False))
+        for text, unreadable in cases:
+            with self.subTest(text=text, unreadable=unreadable):
+                self.window.set_ui_title.reset_mock()
+                self.parse(text, unreadable=unreadable)
+                # the failure restores the title of the current project on the GUI thread
+                self.wait_for(lambda: self.window.set_ui_title.call_args_list[-1:] == [call(name='previous.FlatPrj')])
+                self.assertEqual(self.app.project_filename, 'previous.FlatPrj')
+                self.assertFalse(self.app.app_obj.load_batches)
 
     def test_empty_project_parses_and_finishes_batch(self):
         from appObjects.AppObject import AppObject
