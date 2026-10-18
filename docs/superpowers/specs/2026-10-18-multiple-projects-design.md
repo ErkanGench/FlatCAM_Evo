@@ -156,6 +156,11 @@ The title bar shows the name of the active project.
 - **Every save (Save, Save As, close, exit):** the file name, the project name, the dirty
   flag, the "file saved" notification and the title change only after `save_project()`
   returns `True`. A failed or cancelled save keeps the old state.
+- **A change during a save:** the dirty flag is cleared when the save is queued, before
+  the worker reads the objects. A change during the save sets it again, and a good save
+  does not clear it. A failed save sets it back.
+- **An error during a save:** `appIO.save_project_checked()` never raises. An error is a
+  failed save: `save_in_progress` is reset and the completion of the save always comes.
 
 A project is dirty if its flag is set and it has objects or a file. So a saved project
 whose objects are all deleted is dirty. An empty project without a file is not dirty.
