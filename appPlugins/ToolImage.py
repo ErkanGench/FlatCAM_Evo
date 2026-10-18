@@ -7,8 +7,8 @@
 
 from PyQt6 import QtWidgets, QtGui
 from appTool import AppTool
-from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
-    FCComboBox2, RadioSet, FCDoubleSpinner, FCSpinner, FCMessageBox
+from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCComboBox2, \
+    RadioSet, FCDoubleSpinner, FCSpinner
 
 from copy import deepcopy
 import numpy as np
@@ -25,9 +25,9 @@ import builtins
 from rasterio import open as rasterio_open
 from rasterio.features import shapes
 
-from svgtrace import trace
-from pyppeteer.chromium_downloader import check_chromium
 from lxml import etree as ET
+
+from appCommon.imagetrace import trace, PRESETS, PRESET_NAMES, CURVE_MODES
 
 from appParsers.ParseSVG import svgparselength, svgparse_viewbox, getsvggeo, getsvgtext
 from defaults import AppDefaults
@@ -141,19 +141,10 @@ class ToolImage(AppTool):
         self.ui.mask_g_entry.set_value(250)
         self.ui.mask_b_entry.set_value(250)
 
-        self.ui.error_lines_entry.set_value(1)
-        self.ui.error_splines_entry.set_value(0)
-        self.ui.path_omit_entry.set_value(8)
-        self.ui.enhance_rangle_cb.set_value(True)
-        self.ui.sampling_combo.set_value(0)
-        self.ui.nr_colors_entry.set_value(16)
-        self.ui.ratio_entry.set_value(0)
-        self.ui.cycles_entry.set_value(3)
-        self.ui.stroke_width_entry.set_value(1.0)
-        self.ui.line_filter_cb.set_value(False)
-        self.ui.rounding_entry.set_value(1)
-        self.ui.blur_radius_entry.set_value(1)
-        self.ui.blur_delta_entry.set_value(20)
+        self.ui.threshold_entry.set_value(128)
+        # the Options start from the selected preset
+        self.ui.presets_combo.set_value(0)
+        self.ui.on_preset_changed(0)
 
     def on_file_importimage(self, threaded=True):
         """
@@ -165,41 +156,12 @@ class ToolImage(AppTool):
         self.app.log.debug("on_file_importimage()")
 
         import_mode = self.ui.import_mode_radio.get_value()
-        trace_options = self.ui.presets_combo.get_value() if self.ui.control_radio.get_value() == 'presets' else \
-            self.get_tracing_options()
+        trace_options = PRESETS[PRESET_NAMES[self.ui.presets_combo.get_value()]] \
+            if self.ui.control_radio.get_value() == 'presets' else self.get_tracing_options()
         type_obj = self.ui.tf_type_obj_combo.get_value()
         dpi = self.ui.dpi_entry.get_value()
         mode = self.ui.image_type.get_value()
         min_area = self.ui.min_area_entry.get_value()
-
-        if import_mode == 'trace':
-            # check if Chromium is present, if not issue a warning
-            res = check_chromium()
-            if res is False:
-                msgbox = FCMessageBox(parent=self.app.ui)
-                title = _("Import warning")
-                txt = _("The tracing require Chromium,\n"
-                        "but it was not detected.\n"
-                        "\n"
-                        "Do you want to download it (about 300MB)?")
-                msgbox.setWindowTitle(title)  # taskbar still shows it
-                msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
-                msgbox.setText('<b>%s</b>' % title)
-                msgbox.setInformativeText(txt)
-                msgbox.setIcon(QtWidgets.QMessageBox.Icon.Warning)
-
-                bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
-                bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
-
-                msgbox.setDefaultButton(bt_yes)
-                msgbox.exec()
-                response = msgbox.clickedButton()
-
-                if response == bt_no:
-                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
-                    return
-                self.app.inform.emit(_("Please be patient. Chromium is being downloaded in the background.\n"
-                                       "The app will resume after it is installed."))
 
         _filter = "Image Files(*.BMP *.PNG *.JPG *.JPEG);;" \
                   "Bitmap File (*.BMP);;" \
@@ -226,7 +188,13 @@ class ToolImage(AppTool):
         else:
             if import_mode == 'trace':
                 # there are thread issues so I process this outside
-                svg_text = trace(filename, blackAndWhite=True if mode == 'black' else False, mode=trace_options)
+                try:
+                    svg_text = trace(filename, black_white=(mode == 'black'),
+                                     threshold=self.ui.threshold_entry.get_value(), options=trace_options)
+                except ImportError as err:
+                    self.app.log.error("ToolImage.on_file_importimage() -> %s" % str(err))
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                    return
             else:
                 svg_text = None
             if threaded is True:
@@ -508,27 +476,15 @@ class ToolImage(AppTool):
         return geos
 
     def get_tracing_options(self):
-        opt_dict = {
-            'ltres': self.ui.error_lines_entry.get_value(),
-            'qtres': self.ui.error_splines_entry.get_value(),
-            'pathomit': self.ui.path_omit_entry.get_value(),
-            'rightangleenhance': self.ui.enhance_rangle_cb.get_value(),
-            'colorsampling': self.ui.sampling_combo.get_value(),
-            'numberofcolors': self.ui.nr_colors_entry.get_value(),
-            'mincolorratio': self.ui.ratio_entry.get_value(),
-            'colorquantcycles': self.ui.cycles_entry.get_value(),
-            'strokewidth': self.ui.stroke_width_entry.get_value(),
-            'linefilter': self.ui.line_filter_cb.get_value(),
-            'roundcoords': self.ui.rounding_entry.get_value(),
-            'blurradius': self.ui.blur_radius_entry.get_value(),
-            'blurdelta': self.ui.blur_delta_entry.get_value()
+        return {
+            'mode': CURVE_MODES[self.ui.curve_combo.get_value()],
+            'filter_speckle': self.ui.speckle_entry.get_value(),
+            'color_precision': self.ui.color_precision_entry.get_value(),
+            'layer_difference': self.ui.layer_diff_entry.get_value(),
+            'corner_threshold': self.ui.corner_entry.get_value(),
+            'length_threshold': self.ui.length_entry.get_value(),
+            'splice_threshold': self.ui.splice_entry.get_value()
         }
-        dict_as_string = '{ '
-        for k, v in opt_dict.items():
-            dict_as_string += "%s:%s, " % (str(k), str(v))
-            # remove last comma and space and add the terminator
-        dict_as_string = dict_as_string[:-2] + ' }'
-        return dict_as_string
 
     def flatten_list(self, obj_list):
         for item in obj_list:
@@ -706,7 +662,7 @@ class ImageUI:
         raster_grid.addWidget(self.mask_b_entry, 8, 1)
 
         # #############################################################################################################
-        # ######################################## Raster Mode ########################################################
+        # ######################################## Tracing Mode #######################################################
         # #############################################################################################################
         # add a frame and inside add a grid box layout.
         self.trace_frame = FCFrame()
@@ -714,6 +670,19 @@ class ImageUI:
 
         trace_grid = GLay(v_spacing=5, h_spacing=3)
         self.trace_frame.setLayout(trace_grid)
+
+        # B/W Threshold
+        self.threshold_lbl = FCLabel('%s:' % _("Threshold"))
+        self.threshold_lbl.setToolTip(
+            _("B/W only.\n"
+              "A pixel darker than this value [0 ... 255] is traced.")
+        )
+        self.threshold_entry = FCSpinner()
+        self.threshold_entry.set_range(0, 255)
+        self.threshold_entry.setSingleStep(1)
+
+        trace_grid.addWidget(self.threshold_lbl, 0, 0)
+        trace_grid.addWidget(self.threshold_entry, 0, 1)
 
         # Options Control Mode
         self.control_lbl = FCLabel('%s:' % _('Control'), color='indigo', bold=True)
@@ -726,8 +695,8 @@ class ImageUI:
             {'label': _("Options"), 'value': 'options'}
         ])
 
-        trace_grid.addWidget(self.control_lbl, 0, 0)
-        trace_grid.addWidget(self.control_radio, 0, 1)
+        trace_grid.addWidget(self.control_lbl, 1, 0)
+        trace_grid.addWidget(self.control_radio, 1, 1)
 
         # --------------------------------------------------
         # Presets Frame
@@ -743,15 +712,16 @@ class ImageUI:
         # Presets
         self.presets_lbl = FCLabel('%s:' % _('Presets'))
         self.presets_lbl.setToolTip(
-            _("Options presets to control the tracing.")
+            _("Options presets to control the tracing.\n"
+              "- Default: straight segments, good for PCB artwork\n"
+              "- Detailed: keeps small features and more colors\n"
+              "- Smooth: curves, for logos and drawings\n"
+              "- Photo: removes noise, for photographs")
         )
 
-        self.presets_combo = FCComboBox()
-        self.presets_combo.addItems([
-            'default', 'posterized1', 'posterized2', 'posterized3', 'curvy', 'sharp', 'detailed', 'smoothed',
-            'grayscale', 'fixedpalette', 'randomsampling1', 'randomsampling2', 'artistic1', 'artistic2', 'artistic3',
-            'artistic4'
-        ])
+        # the order of the items is the order of PRESET_NAMES
+        self.presets_combo = FCComboBox2()
+        self.presets_combo.addItems([_("Default"), _("Detailed"), _("Smooth"), _("Photo")])
         preset_grid.addWidget(self.presets_lbl, 0, 0)
         preset_grid.addWidget(self.presets_combo, 0, 1)
 
@@ -766,184 +736,120 @@ class ImageUI:
         options_grid.setContentsMargins(0, 0, 0, 0)
         self.options_frame.setLayout(options_grid)
 
-        # Error Threshold
-        self.error_lbl = FCLabel('%s' % _("Error Threshold"), bold=True)
-        self.error_lbl.setToolTip(
-            _("Error threshold for straight lines and quadratic splines.")
+        # Curve Fitting
+        self.curve_lbl = FCLabel('%s:' % _("Curve"))
+        self.curve_lbl.setToolTip(
+            _("How the outlines are made.\n"
+              "- Polygon: straight segments\n"
+              "- Spline: smooth curves\n"
+              "- Pixel: the pixel edges, without fitting")
         )
-        options_grid.addWidget(self.error_lbl, 0, 0, 1, 2)
+        # the order of the items is the order of CURVE_MODES
+        self.curve_combo = FCComboBox2()
+        self.curve_combo.addItems([_("Polygon"), _("Spline"), _("Pixel")])
 
-        # Error Threshold for Lines
-        self.error_lines_lbl = FCLabel('%s:' % _("Lines"))
-        self.error_lines_entry = FCDoubleSpinner()
-        self.error_lines_entry.set_precision(self.decimals)
-        self.error_lines_entry.set_range(0, 10)
-        self.error_lines_entry.setSingleStep(0.1)
+        options_grid.addWidget(self.curve_lbl, 0, 0)
+        options_grid.addWidget(self.curve_combo, 0, 1)
 
-        options_grid.addWidget(self.error_lines_lbl, 2, 0)
-        options_grid.addWidget(self.error_lines_entry, 2, 1)
-
-        # Error Threshold for Splines
-        self.error_splines_lbl = FCLabel('%s:' % _("Splines"))
-        self.error_splines_entry = FCDoubleSpinner()
-        self.error_splines_entry.set_precision(self.decimals)
-        self.error_splines_entry.set_range(0, 10)
-        self.error_splines_entry.setSingleStep(0.1)
-
-        options_grid.addWidget(self.error_splines_lbl, 4, 0)
-        options_grid.addWidget(self.error_splines_entry, 4, 1)
-
-        # Enhance Right Angle
-        self.enhance_rangle_cb = FCCheckBox(_("Enhance R Angle"))
-        self.enhance_rangle_cb.setToolTip(
-            _("Enhance right angle corners.")
+        # Filter Speckle
+        self.speckle_lbl = FCLabel('%s:' % _("Filter Speckle"))
+        self.speckle_lbl.setToolTip(
+            _("Patches smaller than this size (in pixels) are discarded.")
         )
-        options_grid.addWidget(self.enhance_rangle_cb, 6, 0, 1, 2)
+        self.speckle_entry = FCSpinner()
+        self.speckle_entry.set_range(0, 128)
+        self.speckle_entry.setSingleStep(1)
+
+        options_grid.addWidget(self.speckle_lbl, 2, 0)
+        options_grid.addWidget(self.speckle_entry, 2, 1)
 
         separator_line = QtWidgets.QFrame()
         separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        options_grid.addWidget(separator_line, 8, 0, 1, 2)
-
-        # Noise Reduction
-        self.noise_lbl = FCLabel('%s' % _("Noise Reduction"), bold=True)
-        options_grid.addWidget(self.noise_lbl, 10, 0, 1, 2)
-
-        # Path Omit
-        self.path_omit_lbl = FCLabel('%s' % _("Path Omit"))
-        self.path_omit_lbl.setToolTip(
-            _("Edge node paths shorter than this will be discarded for noise reduction.")
-        )
-        self.path_omit_entry = FCSpinner()
-        self.path_omit_entry.set_range(0, 9999)
-        self.path_omit_entry.setSingleStep(1)
-
-        options_grid.addWidget(self.path_omit_lbl, 12, 0)
-        options_grid.addWidget(self.path_omit_entry, 12, 1)
-
-        # Line Filter
-        self.line_filter_cb = FCCheckBox(_("Line Filter"))
-        options_grid.addWidget(self.line_filter_cb, 14, 0, 1, 2)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        options_grid.addWidget(separator_line, 16, 0, 1, 2)
+        options_grid.addWidget(separator_line, 4, 0, 1, 2)
 
         # Colors Section
         self.colors_lbl = FCLabel('%s' % _("Colors"), bold=True)
-        options_grid.addWidget(self.colors_lbl, 18, 0, 1, 2)
-
-        # Sampling
-        self.samp_lbl = FCLabel('%s:' % _('Sampling'))
-        self.sampling_combo = FCComboBox2()
-        self.sampling_combo.addItems([_("Palette"), _("Random"), _("Deterministic")])
-        options_grid.addWidget(self.samp_lbl, 20, 0)
-        options_grid.addWidget(self.sampling_combo, 20, 1)
-
-        # Number of colors
-        self.nr_colors_lbl = FCLabel('%s' % _("Colors"))
-        self.nr_colors_lbl.setToolTip(
-            _("Number of colors to use on palette.")
+        self.colors_lbl.setToolTip(
+            _("Color only.")
         )
-        self.nr_colors_entry = FCSpinner()
-        self.nr_colors_entry.set_range(0, 9999)
-        self.nr_colors_entry.setSingleStep(1)
+        options_grid.addWidget(self.colors_lbl, 6, 0, 1, 2)
 
-        options_grid.addWidget(self.nr_colors_lbl, 22, 0)
-        options_grid.addWidget(self.nr_colors_entry, 22, 1)
-
-        # Randomization Ratio
-        self.ratio_lbl = FCLabel('%s' % _("Ratio"))
-        self.ratio_lbl.setToolTip(
-            _("Color quantization will randomize a color if fewer pixels than (total pixels * ratio) has it.")
+        # Color Precision
+        self.color_precision_lbl = FCLabel('%s:' % _("Precision"))
+        self.color_precision_lbl.setToolTip(
+            _("Number of significant bits of each RGB channel [1 ... 8].\n"
+              "Lower values merge more colors.")
         )
-        self.ratio_entry = FCSpinner()
-        self.ratio_entry.set_range(0, 10)
-        self.ratio_entry.setSingleStep(1)
+        self.color_precision_entry = FCSpinner()
+        self.color_precision_entry.set_range(1, 8)
+        self.color_precision_entry.setSingleStep(1)
 
-        options_grid.addWidget(self.ratio_lbl, 24, 0)
-        options_grid.addWidget(self.ratio_entry, 24, 1)
+        options_grid.addWidget(self.color_precision_lbl, 8, 0)
+        options_grid.addWidget(self.color_precision_entry, 8, 1)
 
-        # Cycles of quantization
-        self.cycles_lbl = FCLabel('%s' % _("Cycles"))
-        self.cycles_lbl.setToolTip(
-            _("Color quantization will be repeated this many times.")
+        # Gradient Step
+        self.layer_diff_lbl = FCLabel('%s:' % _("Gradient Step"))
+        self.layer_diff_lbl.setToolTip(
+            _("Color difference between the layers of a gradient [0 ... 255].\n"
+              "Higher values make fewer layers.")
         )
-        self.cycles_entry = FCSpinner()
-        self.cycles_entry.set_range(0, 20)
-        self.cycles_entry.setSingleStep(1)
+        self.layer_diff_entry = FCSpinner()
+        self.layer_diff_entry.set_range(0, 255)
+        self.layer_diff_entry.setSingleStep(1)
 
-        options_grid.addWidget(self.cycles_lbl, 26, 0)
-        options_grid.addWidget(self.cycles_entry, 26, 1)
+        options_grid.addWidget(self.layer_diff_lbl, 10, 0)
+        options_grid.addWidget(self.layer_diff_entry, 10, 1)
 
         separator_line = QtWidgets.QFrame()
         separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        options_grid.addWidget(separator_line, 28, 0, 1, 2)
+        options_grid.addWidget(separator_line, 12, 0, 1, 2)
 
-        # Parameters
-        self.par_lbl = FCLabel('%s' % _("Parameters"), bold=True)
-        options_grid.addWidget(self.par_lbl, 30, 0, 1, 2)
-
-        # Stroke width
-        self.stroke_width_lbl = FCLabel('%s' % _("Stroke"))
-        self.stroke_width_lbl.setToolTip(
-            _("Width of the stroke to be applied to the shape.")
+        # Spline Section
+        self.spline_lbl = FCLabel('%s' % _("Spline"), bold=True)
+        self.spline_lbl.setToolTip(
+            _("Spline curve only.")
         )
-        self.stroke_width_entry = FCDoubleSpinner()
-        self.stroke_width_entry.set_precision(self.decimals)
-        self.stroke_width_entry.set_range(0.0000, 9999.0000)
-        self.stroke_width_entry.setSingleStep(0.1)
+        options_grid.addWidget(self.spline_lbl, 14, 0, 1, 2)
 
-        options_grid.addWidget(self.stroke_width_lbl, 32, 0)
-        options_grid.addWidget(self.stroke_width_entry, 32, 1)
-
-        # Rounding
-        self.rounding_lbl = FCLabel('%s' % _("Rounding"))
-        self.rounding_lbl.setToolTip(
-            _("Rounding coordinates to a given decimal place.")
+        # Corner Threshold
+        self.corner_lbl = FCLabel('%s:' % _("Corner"))
+        self.corner_lbl.setToolTip(
+            _("Minimum angle (in degrees) to be considered a corner.")
         )
-        self.rounding_entry = FCSpinner()
-        self.rounding_entry.set_range(0, 10)
-        self.rounding_entry.setSingleStep(1)
+        self.corner_entry = FCSpinner()
+        self.corner_entry.set_range(0, 180)
+        self.corner_entry.setSingleStep(1)
 
-        options_grid.addWidget(self.rounding_lbl, 34, 0)
-        options_grid.addWidget(self.rounding_entry, 34, 1)
+        options_grid.addWidget(self.corner_lbl, 16, 0)
+        options_grid.addWidget(self.corner_entry, 16, 1)
 
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        options_grid.addWidget(separator_line, 36, 0, 1, 2)
-
-        # Blur
-        self.blur_lbl = FCLabel('%s' % _("Blur"), bold=True)
-        options_grid.addWidget(self.blur_lbl, 38, 0, 1, 2)
-
-        # Radius
-        self.blur_radius_lbl = FCLabel('%s' % _("Radius"))
-        self.blur_radius_lbl.setToolTip(
-            _("Selective Gaussian blur preprocessing.")
+        # Segment Length
+        self.length_lbl = FCLabel('%s:' % _("Segment Length"))
+        self.length_lbl.setToolTip(
+            _("Curves are subdivided into segments of this length [3.5 ... 10].\n"
+              "Lower values make more segments.")
         )
-        self.blur_radius_entry = FCSpinner()
-        self.blur_radius_entry.set_range(0, 5)
-        self.blur_radius_entry.setSingleStep(1)
+        self.length_entry = FCDoubleSpinner()
+        self.length_entry.set_precision(1)
+        self.length_entry.set_range(3.5, 10.0)
+        self.length_entry.setSingleStep(0.5)
 
-        options_grid.addWidget(self.blur_radius_lbl, 40, 0)
-        options_grid.addWidget(self.blur_radius_entry, 40, 1)
+        options_grid.addWidget(self.length_lbl, 18, 0)
+        options_grid.addWidget(self.length_entry, 18, 1)
 
-        # Delta
-        self.blur_delta_lbl = FCLabel('%s' % _("Delta"))
-        self.blur_delta_lbl.setToolTip(
-            _("RGBA delta threshold for selective Gaussian blur preprocessing.")
+        # Splice Threshold
+        self.splice_lbl = FCLabel('%s:' % _("Splice"))
+        self.splice_lbl.setToolTip(
+            _("Minimum angle displacement (in degrees) to splice a spline.")
         )
-        self.blur_delta_entry = FCDoubleSpinner()
-        self.blur_delta_entry.set_precision(self.decimals)
-        self.blur_delta_entry.set_range(0.0000, 9999.0000)
-        self.blur_delta_entry.setSingleStep(0.1)
+        self.splice_entry = FCSpinner()
+        self.splice_entry.set_range(0, 180)
+        self.splice_entry.setSingleStep(1)
 
-        options_grid.addWidget(self.blur_delta_lbl, 42, 0)
-        options_grid.addWidget(self.blur_delta_entry, 42, 1)
+        options_grid.addWidget(self.splice_lbl, 20, 0)
+        options_grid.addWidget(self.splice_entry, 20, 1)
 
         GLay.set_common_column_size([par_grid, mod_grid, raster_grid, trace_grid, preset_grid, options_grid], 0)
 
@@ -963,8 +869,18 @@ class ImageUI:
         # Signals
         self.import_mode_radio.activated_custom.connect(self.on_import_image_mode)
         self.control_radio.activated_custom.connect(self.on_tracing_control_radio)
+        self.presets_combo.currentIndexChanged.connect(self.on_preset_changed)
+        self.curve_combo.currentIndexChanged.connect(self.on_curve_mode)
 
     def on_image_type(self, val):
+        # tracing: the threshold is for B/W, the color options are for Color
+        is_color = val == 'color'
+        self.threshold_lbl.setDisabled(is_color)
+        self.threshold_entry.setDisabled(is_color)
+        for wdg in (self.colors_lbl, self.color_precision_lbl, self.color_precision_entry, self.layer_diff_lbl,
+                    self.layer_diff_entry):
+            wdg.setDisabled(not is_color)
+
         if val == 'color':
             self.mask_r_label.setDisabled(False)
             self.mask_r_entry.setDisabled(False)
@@ -1001,3 +917,21 @@ class ImageUI:
         else:
             self.preset_frame.hide()
             self.options_frame.show()
+
+    def on_preset_changed(self, idx):
+        # copy the preset into the Options, so the Options start from it
+        opt = PRESETS[PRESET_NAMES[idx]]
+        self.curve_combo.set_value(CURVE_MODES.index(opt['mode']))
+        self.speckle_entry.set_value(opt['filter_speckle'])
+        self.color_precision_entry.set_value(opt['color_precision'])
+        self.layer_diff_entry.set_value(opt['layer_difference'])
+        self.corner_entry.set_value(opt['corner_threshold'])
+        self.length_entry.set_value(opt['length_threshold'])
+        self.splice_entry.set_value(opt['splice_threshold'])
+        self.on_curve_mode(self.curve_combo.get_value())
+
+    def on_curve_mode(self, idx):
+        is_spline = CURVE_MODES[idx] == 'spline'
+        for wdg in (self.spline_lbl, self.corner_lbl, self.corner_entry, self.length_lbl, self.length_entry,
+                    self.splice_lbl, self.splice_entry):
+            wdg.setDisabled(not is_spline)

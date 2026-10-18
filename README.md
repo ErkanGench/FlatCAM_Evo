@@ -140,7 +140,7 @@ Some packages are optional. FlatCAM Evo runs without them, but the related featu
 |---|---|
 | `ortools` | The MetaHeuristic and Basic path optimization of drill and mill paths. Works only on a 64-bit Python. |
 | `rasterio` (with GDAL) | The Image import plugin. |
-| `svgtrace`, `pyppeteer` | The tracing mode of the Image import plugin. |
+| `vtracer` | The tracing mode of the Image import plugin. |
 | `pikepdf` | An alternative PDF parser (the built-in parser is the default). |
 | `pyclipr` | Faster fusion of the Gerber geometry when a file is opened. See [`requirements-optional.txt`](requirements-optional.txt). |
 
