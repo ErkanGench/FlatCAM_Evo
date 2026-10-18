@@ -22,6 +22,39 @@ log = logging.getLogger('base')
 _MISSING = object()
 
 
+# Keys outside the "tools_" family that belong to the project.
+PROJECT_KEYS = frozenset((
+    'units',
+    'gerber_noncoppermargin', 'gerber_noncopperrounded', 'gerber_bboxmargin', 'gerber_bboxrounded',
+    'gerber_follow',
+    'excellon_drill_tooldia', 'excellon_slot_tooldia',
+    'geometry_seg_x', 'geometry_seg_y',
+))
+# "tools_" keys that belong to the application.
+APP_TOOL_PREFIXES = ('tools_grbl_', 'tools_calc_')
+APP_TOOL_SUFFIXES = ('_plotting', '_big_cursor', '_preprocessor_list')
+APP_TOOL_KEYS = frozenset((
+    'tools_al_controller', 'tools_gcode_fit_view', 'tools_dist_snap_center',
+    'tools_opt_precision', 'tools_qrcode_sel_limit',
+))
+
+
+def is_project_key(key):
+    """Return True if the key is a project option, False if it is an application setting."""
+    if key in PROJECT_KEYS:
+        return True
+    if not isinstance(key, str) or not key.startswith('tools_'):
+        return False
+    if key.startswith(APP_TOOL_PREFIXES) or key.endswith(APP_TOOL_SUFFIXES):
+        return False
+    return key not in APP_TOOL_KEYS
+
+
+def project_options(options):
+    """Return a dict with only the project keys of "options", for the project file."""
+    return {k: v for k, v in options.items() if is_project_key(k)}
+
+
 class AppDefaults:
 
     factory_defaults = {
