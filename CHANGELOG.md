@@ -16,6 +16,7 @@ GUI:
 - new Dim text preference, on by default, next to Dark Canvas: in the Dark theme the GUI text without its own color is shown in a darker gray (#8c8c8c) instead of bright white; the change applies on save without a restart
 - new Project Tab icons for Gerber, Excellon, CNCJob, Geometry, Script and Document objects
 - the toolbars have no border
+- a double click on a Notebook tab shows or hides the Notebook, the same as a double click on a Plot Area tab
 - fixed: the toolbar lock and menu text states are read as booleans from the settings; the menu checks follow the state
 - fixed: the layout selector stored an index instead of a layout name
 - fixed: the compact and minimal layouts restore the saved custom arrangement; the preset is used only when that arrangement is not valid
