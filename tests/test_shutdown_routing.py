@@ -32,7 +32,8 @@ def shutdown(qt_app, monkeypatch):
     window.splitter = SimpleNamespace(sizes=lambda: [120])
     window.on_toggle_gui = Mock()
     app = Mock(ui=window, resource_location='', save_in_progress=False,
-               should_we_save=True, _check_in_progress=False, _check_queued=False)
+               should_we_save=True, _check_in_progress=False, _check_queued=False,
+               project_save_pending=False, projects=None)
     app._update_operation_active.return_value = False
     app.collection.get_list.return_value = [object()]
     window.app = app

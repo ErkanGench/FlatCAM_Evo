@@ -252,8 +252,45 @@ class AppLifecycle(QtCore.QObject):
         """
         from PyQt6 import QtGui, QtWidgets
 
-        if self.app.save_in_progress:
+        # project_save_pending stays set until the GUI has the result of a File -> Save; before that, the dirty
+        # flag of a failed save is not restored yet
+        if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
+            return
+
+        # with more than 1 project, ask about each project that has unsaved changes
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None:
+            start = projects.active
+            # the dialogs below run a nested event loop; the autosave timer must not start a save during them.
+            # quit_application() also asks a question (the Tools Database) and can refuse the quit. Only a quit
+            # that returns True keeps the autosave blocked: quit_application() stops its timer.
+            autosave_state = projects.hold_autosave()
+            quitting = False
+            try:
+                for ctx in projects.dirty_contexts():
+                    answer = projects.ask_save(ctx)
+                    if answer == 'cancel' or (answer == 'yes' and not projects.save_context(ctx, visuals=False)):
+                        return
+                # check again: the app must not quit while a save is pending
+                if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
+                    self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
+                    return
+                quitting = self.quit_application() is True
+            finally:
+                if not quitting:
+                    # the exit stops (a cancel, a failed save, a pending save, a refused quit or an error). The save
+                    # of an inactive project made it active, but the canvas still shows start: make start active
+                    try:
+                        projects.return_to(start)
+                    finally:
+                        projects.release_autosave(autosave_state)
+            if quitting:
+                # QApplication.quit() only posts the quit event, so the tray icon is hidden before the app ends
+                try:
+                    self.app.trayIcon.hide()
+                except Exception:
+                    pass
             return
 
         if self.app.should_we_save and self.app.collection.get_list():

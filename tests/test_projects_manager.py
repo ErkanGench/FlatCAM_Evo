@@ -680,5 +680,188 @@ class TestTitleShowsProjectName(unittest.TestCase):
         self.assertEqual(window.title_bar.project_title, 'Loading Project ... Please Wait ...')
 
 
+class TestExitWithProjects(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # keep a reference: a QApplication without one is collected and the next QWidget aborts the process
+        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def make_lifecycle(self, dirty):
+        from appHandlers.appLifecycle import AppLifecycle
+        start = SimpleNamespace(name='Board_A')
+        projects = SimpleNamespace(active=start, dirty_contexts=Mock(return_value=dirty),
+                                   ask_save=Mock(), save_context=Mock(return_value=True),
+                                   switch=Mock(return_value=True), return_to=Mock(),
+                                   hold_autosave=Mock(return_value=False), release_autosave=Mock())
+        app = SimpleNamespace(save_in_progress=False, projects=projects, trayIcon=Mock(),
+                              inform=Mock(), log=Mock(), block_autosave=False, should_we_save=False)
+        lifecycle = AppLifecycle.__new__(AppLifecycle)
+        lifecycle.app = app
+        lifecycle.inform = app.inform
+        lifecycle.quit_application = Mock(return_value=True)
+        return lifecycle, projects, start
+
+    def test_no_dirty_project_quits(self):
+        lifecycle, projects, start = self.make_lifecycle([])
+        lifecycle.final_save()
+        lifecycle.quit_application.assert_called_once_with()
+
+    def test_each_dirty_project_is_asked(self):
+        first, second = SimpleNamespace(name='A'), SimpleNamespace(name='B')
+        lifecycle, projects, start = self.make_lifecycle([first, second])
+        projects.ask_save.side_effect = ['yes', 'no']
+        lifecycle.final_save()
+        self.assertEqual(projects.ask_save.call_count, 2)
+        projects.save_context.assert_called_once_with(first, visuals=False)
+        lifecycle.quit_application.assert_called_once_with()
+
+    def test_cancel_stops_the_exit_and_restores_the_active_project(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        projects.ask_save.return_value = 'cancel'
+        lifecycle.final_save()
+        lifecycle.quit_application.assert_not_called()
+        projects.return_to.assert_called_once_with(start)
+
+    def test_failed_save_stops_the_exit(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        projects.ask_save.return_value = 'yes'
+        projects.save_context.return_value = False
+        lifecycle.final_save()
+        lifecycle.quit_application.assert_not_called()
+
+    def test_exit_waits_for_the_completion_of_a_save(self):
+        # the worker of a failed save cleared save_in_progress, but the GUI did not restore the dirty flag yet
+        lifecycle, projects, start = self.make_lifecycle([])
+        lifecycle.app.project_save_pending = True
+        lifecycle.final_save()
+        lifecycle.quit_application.assert_not_called()
+        projects.dirty_contexts.assert_not_called()
+        lifecycle.inform.emit.assert_called_once()
+
+    def use_real_autosave_hold(self, lifecycle, projects):
+        from types import MethodType
+        from appHandlers.appProjects import ProjectManager
+        owner = SimpleNamespace(app=lifecycle.app)
+        projects.hold_autosave = MethodType(ProjectManager.hold_autosave, owner)
+        projects.release_autosave = MethodType(ProjectManager.release_autosave, owner)
+
+    def test_autosave_in_the_exit_dialog_does_not_start_a_save(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        self.use_real_autosave_hold(lifecycle, projects)
+        app = lifecycle.app
+        app.should_we_save = True
+        app.f_handlers = SimpleNamespace(on_file_save_project=Mock())
+
+        def answer_after_autosave(ctx):
+            # the autosave timer fires in the nested event loop of the dialog, then the user answers Yes
+            lifecycle.save_project_auto()
+            return 'yes'
+
+        projects.ask_save.side_effect = answer_after_autosave
+
+        lifecycle.final_save()
+
+        app.f_handlers.on_file_save_project.assert_not_called()
+        projects.save_context.assert_called_once_with(first, visuals=False)
+        lifecycle.quit_application.assert_called_once_with()
+
+    def test_cancel_restores_the_autosave(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        self.use_real_autosave_hold(lifecycle, projects)
+        seen = []
+
+        def answer(ctx):
+            seen.append(lifecycle.app.block_autosave)
+            return 'cancel'
+
+        projects.ask_save.side_effect = answer
+
+        lifecycle.final_save()
+
+        self.assertEqual(seen, [True])
+        self.assertFalse(lifecycle.app.block_autosave)
+        lifecycle.quit_application.assert_not_called()
+
+    def test_exit_does_not_quit_with_a_save_pending_after_the_dialogs(self):
+        first = SimpleNamespace(name='A')
+        lifecycle, projects, start = self.make_lifecycle([first])
+        projects.ask_save.return_value = 'yes'
+
+        def save_and_leave_pending(ctx, visuals=True):
+            lifecycle.app.project_save_pending = True
+            return True
+
+        projects.save_context.side_effect = save_and_leave_pending
+
+        lifecycle.final_save()
+
+        lifecycle.quit_application.assert_not_called()
+        lifecycle.inform.emit.assert_called_once()
+
+    def test_cancel_of_the_tools_database_question_restores_the_autosave(self):
+        from types import MethodType
+        from appHandlers.appLifecycle import AppLifecycle
+        lifecycle, projects, start = self.make_lifecycle([])
+        self.use_real_autosave_hold(lifecycle, projects)
+        app = lifecycle.app
+        app.f_handlers = SimpleNamespace(on_file_save_project=Mock())
+        # the real quit_application(); only the answer of the Tools Database question is mocked
+        lifecycle.quit_application = MethodType(AppLifecycle.quit_application, lifecycle)
+        lifecycle._confirm_tools_database = Mock(return_value=False)
+
+        lifecycle.final_save()
+
+        lifecycle._confirm_tools_database.assert_called_once_with()
+        self.assertFalse(app.block_autosave)
+        app.trayIcon.hide.assert_not_called()
+        # the app stays open, so the next autosave must start a save
+        app.should_we_save = True
+        lifecycle.save_project_auto()
+        app.f_handlers.on_file_save_project.assert_called_once_with()
+
+    def test_refused_quit_after_the_save_of_an_inactive_project_returns_to_the_start_project(self):
+        from types import MethodType
+        from appHandlers.appLifecycle import AppLifecycle
+        # the real ProjectManager: Board_A is active and on the canvas, Board_B is not active and has changes
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        second.filename = 'Board_B.FlatPrj'
+        second.should_we_save = True
+        app.block_autosave = False
+        app.projects = manager
+        app.trayIcon = Mock()
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True),
+                                         on_file_save_project=Mock())
+        manager.ask_save = Mock(return_value='yes')
+        lifecycle = AppLifecycle.__new__(AppLifecycle)
+        lifecycle.app = app
+        lifecycle.inform = app.inform
+        # the real quit_application(); only the answer of the Tools Database question is mocked
+        lifecycle.quit_application = MethodType(AppLifecycle.quit_application, lifecycle)
+        lifecycle._confirm_tools_database = Mock(return_value=False)
+
+        lifecycle.final_save()
+
+        # Board_B is saved, then the quit is refused
+        app.f_handlers.save_project_checked.assert_called_once_with('Board_B.FlatPrj', silent=True)
+        self.assertFalse(second.should_we_save)
+        # the live state is Board_A again, the same project that the canvas shows
+        self.assertIs(manager.active, first)
+        self.assertIs(app.collection, first.collection)
+        self.assertIs(manager.stack.currentWidget(), first.collection.view)
+        self.assertIs(manager.displayed, first)
+        app.trayIcon.hide.assert_not_called()
+        # the autosave runs again
+        self.assertFalse(app.block_autosave)
+        app.should_we_save = True
+        lifecycle.save_project_auto()
+        app.f_handlers.on_file_save_project.assert_called_once_with()
+
+
 if __name__ == '__main__':
     unittest.main()
