@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 from PyQt6 import QtCore, QtGui, QtWidgets, QtTest
 
 from appHandlers.appIO import appIO
+from defaults import AppOptions
 
 
 class ProjectSignals(QtCore.QObject):
@@ -35,7 +36,8 @@ class TestProjectLoadCleanup(unittest.TestCase):
         self.signals = ProjectSignals()
         self.tasks = []
         self.app = SimpleNamespace(
-            log=Mock(), inform=Mock(), splash=Mock(), options={}, defaults={}, app_units='MM',
+            log=Mock(), inform=Mock(), splash=Mock(), app_units='MM', preferencesUiManager=Mock(),
+            options=AppOptions(version='test', baseline={}, defaults={}), defaults={},
             ui=self.window, new_project_signal=self.signals.new_project,
             restore_project=self.signals.restore, restore_project_objects_sig=self.signals.objects,
             worker_task=SimpleNamespace(emit=self.tasks.append),
