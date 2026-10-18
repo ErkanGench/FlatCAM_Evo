@@ -129,6 +129,9 @@ The title bar shows the name of the active project.
   it. The app compares normalized absolute paths.
   - **Yes** reloads that entry from the file and makes it active.
   - **No** makes the existing entry active.
+- If the active project is empty, has no file and has no unsaved changes, it receives the
+  opened file. No new entry is added. This stops an empty `Project_1` from staying in the
+  list after the first open.
 - The "Import Settings?" answer applies only to the options of the new project.
 
 ### Save
