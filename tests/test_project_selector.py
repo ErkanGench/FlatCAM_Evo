@@ -14,7 +14,8 @@ class FakeManager(QtCore.QObject):
         super().__init__()
         self.contexts = [SimpleNamespace(name='Board_A'), SimpleNamespace(name='Board_B')]
         self.active = self.contexts[0]
-        self.app = SimpleNamespace(inform=Mock(), f_handlers=SimpleNamespace(on_file_open_project=Mock()),
+        self.app = SimpleNamespace(inform=Mock(), f_handlers=SimpleNamespace(on_file_open_project=Mock(),
+                                                                                on_file_save_project=Mock()),
                                    resource_location='assets/resources')
         self.busy = False
         self.switch = Mock(side_effect=self._switch)
@@ -64,11 +65,12 @@ class TestProjectSelector(unittest.TestCase):
         manager.switch.assert_called_once_with(manager.contexts[1])
         self.assertEqual(selector.combo.currentIndex(), 1)
 
-    def test_menu_has_the_4_commands(self):
+    def test_menu_has_the_5_commands_with_icons(self):
         manager, selector = self.make()
         menu = selector.build_menu()
         self.assertEqual([action.text() for action in menu.actions()],
-                         ['New Project', 'Open Project...', 'Rename Project...', 'Close Project'])
+                         ['New Project', 'Open Project...', 'Save Project', 'Rename Project...', 'Close Project'])
+        self.assertTrue(all(not action.icon().isNull() for action in menu.actions()))
 
     def test_menu_actions_call_the_manager(self):
         manager, selector = self.make()
@@ -78,7 +80,9 @@ class TestProjectSelector(unittest.TestCase):
         manager.new.assert_called_once_with()
         actions[1].trigger()
         manager.app.f_handlers.on_file_open_project.assert_called_once_with()
-        actions[3].trigger()
+        actions[2].trigger()
+        manager.app.f_handlers.on_file_save_project.assert_called_once_with()
+        actions[4].trigger()
         manager.request_close.assert_called_once_with(manager.active)
 
     def test_rename_uses_the_input_dialog(self):

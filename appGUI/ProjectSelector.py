@@ -69,11 +69,14 @@ class ProjectSelector(QtWidgets.QWidget):
         res = self.manager.app.resource_location
         new_action = menu.addAction(QtGui.QIcon(res + '/file16.png'), _("New Project"))
         open_action = menu.addAction(QtGui.QIcon(res + '/folder16.png'), _("Open Project..."))
+        save_action = menu.addAction(QtGui.QIcon(res + '/floppy16.png'), _("Save Project"))
         rename_action = menu.addAction(QtGui.QIcon(res + '/edit_file16.png'), _("Rename Project..."))
         close_action = menu.addAction(QtGui.QIcon(res + '/delete_file16.png'), _("Close Project"))
 
         new_action.triggered.connect(lambda: self.manager.new())
         open_action.triggered.connect(lambda: self.manager.app.f_handlers.on_file_open_project())
+        # File -> Save of the active project: a project without a file opens Save As
+        save_action.triggered.connect(lambda: self.manager.app.f_handlers.on_file_save_project())
         rename_action.triggered.connect(self.on_rename)
         close_action.triggered.connect(lambda: self.manager.request_close(self.manager.active))
         return menu
