@@ -25,11 +25,10 @@ import builtins
 from rasterio import open as rasterio_open
 from rasterio.features import shapes
 
-from lxml import etree as ET
 
 from appCommon.imagetrace import trace, PRESETS, PRESET_NAMES, CURVE_MODES
 
-from appParsers.ParseSVG import svgparselength, svgparse_viewbox, getsvggeo, getsvgtext
+from appParsers.SVG import svg_to_shapes, SvgImportError
 from defaults import AppDefaults
 
 fcTranslate.apply_language('strings')
@@ -414,61 +413,18 @@ class ToolImage(AppTool):
         :return:            None
         """
 
-        # Parse into list of shapely objects
-        # svg_tree = ET.parse(filename)
-        # svg_root = svg_tree.getroot()
-        svg_root = ET.fromstring(svg_text)
-
-        # Change origin to bottom left
-        # h = float(svg_root.get('height'))
-        # w = float(svg_root.get('width'))
-        svg_parsed_dims = svgparselength(svg_root.get('height'))
-        h = svg_parsed_dims[0]
-        svg_units = svg_parsed_dims[1]
-
-        svg_unit_to_mm = {
-            'mm': 1.0,
-            'cm': 10.0,
-            'in': 25.4,
-            'px': 25.4 / 96.0,
-            'pt': 25.4 / 72.0,
-        }
-
-        if svg_units in ['em', 'ex', '%']:
-            self.app.log.error("ToolImage.import_image_as_trace_handler(). SVG units not supported: %s" % svg_units)
-            return "fail"
-
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         res = self.app.options.get(
             'geometry_circle_steps', app_defaults.get('geometry_circle_steps', AppDefaults.factory_defaults.get('geometry_circle_steps')))
-        factor = svgparse_viewbox(svg_root)
 
-        if svg_units in svg_unit_to_mm:
-            unit_factor = svg_unit_to_mm[svg_units]
-            factor *= unit_factor
-            h *= unit_factor
-
-        geos = getsvggeo(svg_root, obj_type, units=units, res=res, factor=factor, app=self.app)
-        if geos is None:
+        # The vtracer SVG is in pixels: ask for raw user units (flip = plain mirror y -> -y), the dpi scaling is below
+        try:
+            geos = svg_to_shapes(svg_text, obj_type, units=units, resolution=res, flip=flip, app=self.app,
+                                 user_units=True)
+        except SvgImportError as e:
+            self.app.log.error("ToolImage.import_image_as_trace_handler(). %s" % str(e))
             return 'fail'
         self.app.log.debug("ToolImage.import_image_as_trace_handler(). Finished parsing the SVG geometry.")
-
-        geos_text = getsvgtext(svg_root, obj_type, app=self.app, units=units)
-        if geos_text is not None:
-            self.app.log.debug("ToolImage.import_image_as_trace_handler(). Processing SVG text.")
-            geos_text_f = []
-            if flip:
-                # Change origin to bottom left
-                for i in geos_text:
-                    __, minimy, __, maximy = i.bounds
-                    h2 = (maximy - minimy) * 0.5
-                    geos_text_f.append(translate(scale(i, 1.0, -1.0, origin=(0, 0)), yoff=(h + h2)))
-            if geos_text_f:
-                geos += geos_text_f
-
-        if flip:
-            geos = [translate(scale(g, 1.0, -1.0, origin=(0, 0))) for g in geos]
-            self.app.log.debug("ToolImage.import_image_as_trace_handler(). SVG geometry was flipped.")
 
         scale_factor = 25.4 / dpi if units.lower() == 'mm' else 1 / dpi
         geos = [translate(scale(g, scale_factor, scale_factor, origin=(0, 0))) for g in geos]

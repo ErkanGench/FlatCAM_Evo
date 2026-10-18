@@ -75,7 +75,7 @@ Editor plugins inherit from `AppToolEditor` and follow `EditorTool` + `EditorUI`
 
 ### Parsers (appParsers/)
 
-Format-specific parsers: `ParseGerber`, `ParseExcellon`, `ParseDXF`, `ParseSVG`, `ParsePDF`, `ParseFont`, `ParseHPGL2`. Each implements `parse()` and `build_geometry()`.
+Format-specific parsers: `ParseGerber`, `ParseExcellon`, `DXF` (package, `dxf_to_shapes`), `SVG` (package, `svg_to_shapes`), `ParsePDF`, `ParseFont`, `ParseHPGL2`. Each implements `parse()` and `build_geometry()`.
 
 ### Preprocessors (preprocessors/)
 

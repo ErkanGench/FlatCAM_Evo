@@ -13,8 +13,8 @@ from appCommon.Common import GracefulException as grace
 # from scipy.spatial import KDTree, Delaunay
 # from scipy.spatial import Delaunay
 
-from appParsers.ParseSVG import svgparselength, svgparse_viewbox, getsvggeo, getsvgtext
-from appParsers.ParseDXF import getdxfgeo
+from appParsers.SVG import svg_to_shapes, SvgImportError
+from appParsers.DXF import dxf_to_shapes
 
 from numpy.linalg import solve
 
@@ -26,7 +26,6 @@ from collections.abc import Iterable
 from copy import copy
 
 from rtree import index as rtindex
-from lxml import etree as ET
 from io import StringIO
 import ezdxf
 from ezdxf import recover
@@ -49,7 +48,6 @@ from shapely import (
 from shapely import box as shply_box
 from shapely.ops import unary_union, substring, linemerge
 import shapely.affinity as affinity
-from shapely.affinity import scale, translate
 from shapely.wkt import loads as sloads
 from shapely.wkt import dumps as sdumps
 from shapely.geometry.base import BaseGeometry, BaseMultipartGeometry, GeometrySequence
@@ -1249,50 +1247,18 @@ class Geometry(object):
 
         self.app.log.debug("camlib.Geometry.import_svg()")
 
-        # Parse into list of shapely objects
-        svg_tree = ET.parse(filename)
-        svg_root = svg_tree.getroot()
-
-        # Change origin to bottom left
-        # h = float(svg_root.get('height'))
-        # w = float(svg_root.get('width'))
-        svg_parsed_dims = svgparselength(svg_root.get('height'))
-        h = svg_parsed_dims[0]
-        svg_units = svg_parsed_dims[1]
-
-        # SVG unit to mm conversion factors
-        svg_unit_to_mm = {
-            'mm': 1.0,
-            'cm': 10.0,
-            'in': 25.4,
-            'px': 25.4 / 96.0,     # 1px = 1/96 inch
-            'pt': 25.4 / 72.0,     # 1pt = 1/72 inch
-        }
-
-        if svg_units in ['em', 'ex', '%']:
-            self.app.log.error("camlib.Geometry.import_svg(). SVG units not supported: %s" % svg_units)
-            self.app.inform.emit("[ERROR_NOTCL] %s" % _("Failed."))
-            return
-
         units = self.app.app_units if units is None else units
         res = self._app_option('geometry_circle_steps')
-        factor = svgparse_viewbox(svg_root)
 
-        # Apply unit conversion
-        if svg_units in svg_unit_to_mm:
-            unit_factor = svg_unit_to_mm[svg_units]
-            factor *= unit_factor
-            h *= unit_factor
-
-        geos = getsvggeo(svg_root, object_type, units=units, res=res, factor=factor, app=self.app)
-        if geos is None:
+        # Parse into a flat list of shapely objects (units conversion, flip and text are handled by the importer)
+        try:
+            geos = svg_to_shapes(filename, object_type, units=units, resolution=res, flip=flip, app=self.app)
+        except SvgImportError as e:
+            self.app.log.error("camlib.Geometry.import_svg(). %s" % str(e))
+            self.app.inform.emit("[ERROR_NOTCL] %s" % _("Failed."))
             return 'fail'
 
         self.app.log.debug("camlib.Geometry.import_svg(). Finished parsing the SVG geometry.")
-
-        if flip:
-            geos = [translate(scale(g, 1.0, -1.0, origin=(0, 0)), yoff=h) for g in geos]
-            self.app.log.debug("camlib.Geometry.import_svg(). SVG geometry was flipped.")
 
         # trying to optimize the resulting geometry by merging contiguous lines
         geos = list(self.flatten_list(geos))
@@ -1334,20 +1300,6 @@ class Geometry(object):
         # flatten the self.solid_geometry list for import_svg() to import SVG as Gerber
         self.solid_geometry = list(self.flatten_list(self.solid_geometry))
 
-        geos_text = getsvgtext(svg_root, object_type, app=self.app, units=units)
-
-        if geos_text is not None:
-            self.app.log.debug("camlib.Geometry.import_svg(). Processing SVG text.")
-            geos_text_f = []
-            if flip:
-                # Change origin to bottom left
-                for i in geos_text:
-                    __, minimy, __, maximy = i.bounds
-                    h2 = (maximy - minimy) * 0.5
-                    geos_text_f.append(translate(scale(i, 1.0, -1.0, origin=(0, 0)), yoff=(h + h2)))
-            if geos_text_f:
-                self.solid_geometry = self.solid_geometry + geos_text_f
-
         tooldia = float(self._app_option("tools_mill_tooldia"))
         tooldia = float('%.*f' % (self.decimals, tooldia))
 
@@ -1388,7 +1340,7 @@ class Geometry(object):
         except (KeyError, Exception) as e:
             self.app.log.warning("Standard DXF read failed (%s), trying recovery mode..." % str(e))
             dxf, auditor = recover.readfile(filename)
-        geos = getdxfgeo(dxf, text_mode=text_mode)
+        geos = dxf_to_shapes(dxf, text_mode=text_mode)
 
         # trying to optimize the resulting geometry by merging contiguous lines
         geos = list(self.flatten_list(geos))

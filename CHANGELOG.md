@@ -6,6 +6,30 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+19.10.2026
+
+DXF and SVG Import:
+
+- new DXF importer (appParsers/DXF package, dxf_to_shapes) replaces ParseDXF.py and ParseDXF_Spline.py; it is built on ezdxf
+- the DXF importer reads HATCH (with holes and islands in the holes), 3DFACE, MTEXT and MINSERT arrays, in addition to POINT, LINE, CIRCLE, ARC, ELLIPSE, SPLINE, LWPOLYLINE (bulges, closed), 2D and 3D POLYLINE, SOLID, TRACE, TEXT and ATTRIB
+- DXF text (TEXT, ATTRIB and MTEXT) has the stroke, outline (the holes of the letters stay) and none modes; the text uses ezdxf text2path and does not need matplotlib; an unknown mode logs a warning and uses stroke
+- DXF blocks: nested INSERTs with the full transform; an entity on layer 0 in a block takes the layer of the INSERT; a circle in a block with a non-uniform scale stays filled; ATTDEF is skipped
+- fixed: the DXF extrusion (mirrored arcs) is applied; invisible entities, invisible ATTRIBs and layers that are off or frozen are skipped; 1 bad entity does not stop the import; very large radii stay finite
+- the DXF curves are flattened with a tolerance of 0.01 mm in the $INSUNITS of the drawing, instead of a fixed number of points (100 for a circle)
+- new SVG importer (appParsers/SVG package, svg_to_shapes) replaces ParseSVG.py; it reads a path, text, bytes, a stream or an lxml element; a file that cannot be read gives SvgImportError; the XML is parsed without entity resolution and without network access
+- SVG paths: all the commands, absolute and relative, smooth curves, arc flags and radius scaling, implicit lineto and compact numbers; a syntax error stops only that path and keeps the part that was read
+- SVG units: px, pt, pc, mm, cm, in, Q, em and %, the viewBox with preserveAspectRatio, nested svg viewports and an optional user units mode (the old parser refused em, ex and %)
+- SVG fill rules nonzero and evenodd, with holes and islands; the strokes are buffered with the linecap, the linejoin and the miter limit, scaled by the transform and the units; vector-effect non-scaling-stroke is supported
+- SVG CSS: style sheets with class, id, tag, comma list and descendant selectors; the cascade and the inheritance with inherit, initial, unset, currentColor and calc(); paint none or transparent, display:none, visibility:hidden and zero opacity are skipped
+- SVG transforms: the transform attribute, the CSS transform property and transform-origin, with skew; defs, use (nested, with a recursion limit), symbol with viewBox, switch and a; unknown and Inkscape elements are ignored; 1 bad element does not stop the import
+- SVG text uses ParseFont: tspan, text-anchor, collapsed whitespace and generic font families; the Gerber import gets only polygons
+- the SVG import of simple fills is done in vectorized batches (a test with 20000 elements); the circle resolution follows the circle steps preference
+- the Geometry, Gerber and QR Code imports use the new importers; the unit, viewBox, flip and text code in each caller is removed
+
+Tests:
+
+- new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
+
 18.10.2026
 
 GUI:

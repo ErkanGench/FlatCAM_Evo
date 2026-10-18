@@ -21,17 +21,16 @@ import math
 
 from shapely import MultiPolygon, box, Polygon
 from shapely.ops import unary_union
-from shapely.affinity import translate, scale
+from shapely.affinity import translate
 import gettext
 import appTranslation as fcTranslate
 import builtins
 
-from appParsers.ParseSVG import getsvggeo, getsvgtext, svgparselength, svgparse_viewbox
+from appParsers.SVG import svg_to_shapes, SvgImportError
 
 import qrcode
 import qrcode.image.svg
 import qrcode.image.pil
-from lxml import etree as ET
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -509,44 +508,25 @@ class QRCode(AppTool):
 
         self.app.log.debug("QRCode.import_svg()")
 
-        # Parse into list of shapely objects
-        svg_tree = ET.parse(filename)
-        svg_root = svg_tree.getroot()
-
-        # Change origin to bottom left
-        # h = float(svg_root.get('height'))
-        # w = float(svg_root.get('width'))
-        h = svgparselength(svg_root.get('height'))[0]  # TODO: No units support yet
         units = self.app.app_units if units is None else units
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         app_option = lambda key: self.app.options.get(
             key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
         res = app_option('geometry_circle_steps')
-        factor = svgparse_viewbox(svg_root)
-        geos = getsvggeo(svg_root, object_type, units=units, res=res, factor=factor, app=self.app)
+
+        # the importer takes a path, SVG text/bytes or an element, not a file-like object
+        source = filename.getvalue() if hasattr(filename, 'getvalue') else filename
+
+        try:
+            geos = svg_to_shapes(source, object_type, units=units, resolution=res, flip=flip, app=self.app)
+        except SvgImportError as e:
+            self.app.log.error("QRCode.import_svg(). %s" % str(e))
+            return []
 
         self.app.log.debug("QRCode.import_svg(). Finished parsing the SVG geometry.")
 
-        if flip:
-            geos = [translate(scale(g, 1.0, -1.0, origin=(0, 0)), yoff=h) for g in geos]
-            self.app.log.debug("QRCode.import_svg(). SVG geometry was flipped.")
-
         # flatten the svg geometry for the case when the QRCode SVG is added into a Gerber object
         solid_geometry = list(self.flatten_list(geos))
-
-        geos_text = getsvgtext(svg_root, object_type, app=self.app, units=units)
-        if geos_text is not None:
-            self.app.log.debug("QRCode.import_svg(). Processing SVG text.")
-
-            geos_text_f = []
-            if flip:
-                # Change origin to bottom left
-                for i in geos_text:
-                    _, minimy, _, maximy = i.bounds
-                    h2 = (maximy - minimy) * 0.5
-                    geos_text_f.append(translate(scale(i, 1.0, -1.0, origin=(0, 0)), yoff=(h + h2)))
-            if geos_text_f:
-                solid_geometry += geos_text_f
         return solid_geometry
 
     def flatten_list(self, geo_list):

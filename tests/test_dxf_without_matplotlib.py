@@ -1,4 +1,4 @@
-"""Run directly to avoid conftest importing appMain before the import blocker."""
+"""Run directly so no conftest imports heavy modules before the import blocker."""
 
 import json
 import os
@@ -22,16 +22,14 @@ def probe(blocked):
     if blocked:
         sys.meta_path.insert(0, BlockMatplotlib())
     sys.path.insert(0, str(ROOT))
-    sys.argv = [str(ROOT / 'flatcam.py')]
-    import appMain
     import ezdxf
     import fontTools
     from ezdxf.fonts import fonts
-    from appParsers import ParseDXF
+    from appParsers.DXF import text as dxf_text
 
-    assert appMain.App
-    assert ParseDXF.HAS_TEXT2PATH
-    assert ParseDXF.HAS_TEXT2PATH_VERSION_OK, ezdxf.__version__
+    assert dxf_text.TEXT_RENDERING_AVAILABLE
+    assert dxf_text.TEXT2PATH_IMPORTED
+    assert dxf_text.TEXT2PATH_VERSION_OK, ezdxf.__version__
     doc = ezdxf.new()
     doc.styles.get('Standard').dxf.font = 'Arial.ttf'
     model = doc.modelspace()
@@ -41,7 +39,7 @@ def probe(blocked):
     results = {}
     for entity in entities:
         for mode in ('stroke', 'outline'):
-            geometry = ParseDXF.dxftext2shapely(entity, text_mode=mode)
+            geometry = dxf_text.text_entity_to_shapes(entity, text_mode=mode)
             assert geometry, (entity.dxftype(), mode)
             assert all(g.is_valid and not g.is_empty and g.length > 0 for g in geometry)
             assert all(math.isfinite(v) for g in geometry for v in g.bounds)
@@ -55,7 +53,7 @@ def probe(blocked):
     for entity in (model.add_mtext('ABC'), model.add_attdef('LABEL', text='ABC')):
         for mode in ('stroke', 'outline'):
             unsupported[f'{entity.dxftype()}:{mode}'] = len(
-                ParseDXF.dxftext2shapely(entity, text_mode=mode))
+                dxf_text.text_entity_to_shapes(entity, text_mode=mode))
 
     # Exercise the defensive branches without changing installed packages.
     import builtins
@@ -63,25 +61,28 @@ def probe(blocked):
     from unittest.mock import patch
 
     with patch.object(ezdxf, '__version__', '1.4.4'):
-        importlib.reload(ParseDXF)
-        assert not ParseDXF.HAS_TEXT2PATH_VERSION_OK
-        assert ParseDXF.dxftext2shapely(entities[0]) == []
+        importlib.reload(dxf_text)
+        assert not dxf_text.TEXT_RENDERING_AVAILABLE
+        assert not dxf_text.TEXT2PATH_VERSION_OK
+        assert dxf_text.text_entity_to_shapes(entities[0]) == []
     with patch.object(ezdxf, '__version__', 'invalid'):
-        importlib.reload(ParseDXF)
-        assert not ParseDXF.HAS_TEXT2PATH_VERSION_OK
-        assert ParseDXF.dxftext2shapely(entities[0]) == []
+        importlib.reload(dxf_text)
+        assert not dxf_text.TEXT_RENDERING_AVAILABLE
+        assert dxf_text.text_entity_to_shapes(entities[0]) == []
     original_import = builtins.__import__
 
     def without_addon(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == 'ezdxf.addons' and 'text2path' in fromlist:
+        if name == 'ezdxf.addons' and fromlist and 'text2path' in fromlist:
             raise ImportError('text2path unavailable')
         return original_import(name, globals, locals, fromlist, level)
 
     with patch('builtins.__import__', side_effect=without_addon):
-        importlib.reload(ParseDXF)
-        assert not ParseDXF.HAS_TEXT2PATH
-        assert ParseDXF.dxftext2shapely(entities[0]) == []
-    importlib.reload(ParseDXF)
+        importlib.reload(dxf_text)
+        assert not dxf_text.TEXT2PATH_IMPORTED
+        assert not dxf_text.TEXT_RENDERING_AVAILABLE
+        assert dxf_text.text_entity_to_shapes(entities[0]) == []
+    importlib.reload(dxf_text)
+    assert dxf_text.TEXT_RENDERING_AVAILABLE
     if blocked:
         assert not any(name.split('.')[0] in ('matplotlib', 'descartes') for name in sys.modules)
     return {'ezdxf': ezdxf.__version__, 'fontTools': fontTools.__version__,

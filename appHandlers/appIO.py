@@ -8,7 +8,7 @@ from appEditors.appGerberEditor import AppGerberEditor
 
 from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox, add_case_variants
 from appObjects.ProjectContext import same_path
-from camlib import to_dict, dict2obj, ET, ParseError
+from camlib import to_dict, dict2obj, ParseError
 from defaults import project_options
 from appParsers.ParseHPGL2 import HPGL2
 from appParsers.ParseGerber import Gerber
@@ -22,6 +22,7 @@ from reportlab.lib.units import inch, mm
 from reportlab.lib.pagesizes import landscape, portrait
 from svglib.svglib import svg2rlg
 from xml.dom.minidom import parseString as parse_xml_string
+from lxml import etree as ET
 
 import time
 import sys

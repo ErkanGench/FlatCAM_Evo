@@ -5,8 +5,8 @@ from camlib import Geometry, arc, arc_angle, ApertureMacro, grace, flatten_shape
     map_geometry
 
 from appParsers.clipper_fuse import fuse_parts
-from appParsers.ParseDXF import getdxfgeo
-from appParsers.ParseSVG import svgparselength, getsvggeo, svgparse_viewbox
+from appParsers.DXF import dxf_to_shapes
+from appParsers.SVG import svg_to_shapes, SvgImportError
 
 import numpy as np
 import traceback
@@ -21,7 +21,6 @@ from shapely import LinearRing, MultiLineString, LineString, Polygon, MultiPolyg
 from shapely import STRtree
 from shapely.geometry.base import BaseGeometry, BaseMultipartGeometry
 
-from lxml import etree as ET
 import ezdxf
 from ezdxf import recover
 import logging
@@ -2244,46 +2243,19 @@ class Gerber(Geometry):
 
         self.app.log.debug("appParsers.ParseGerber.Gerber.import_svg()")
 
-        # Parse into list of shapely objects
-        assert hasattr(ET, "parse")
-        svg_tree = ET.parse(filename)
-        svg_root = svg_tree.getroot()
-
-        # Change origin to bottom left
-        # h = float(svg_root.get('height'))
-        # w = float(svg_root.get('width'))
-        svg_parsed_dims = svgparselength(svg_root.get('height'))
-        h = svg_parsed_dims[0]
-        svg_units = svg_parsed_dims[1]
-
-        svg_unit_to_mm = {
-            'mm': 1.0,
-            'cm': 10.0,
-            'in': 25.4,
-            'px': 25.4 / 96.0,
-            'pt': 25.4 / 72.0,
-        }
-
-        if svg_units in ['em', 'ex', '%']:
-            self.app.log.error("ParseGerber.import_svg(). SVG units not supported: %s" % svg_units)
-            return 'fail'
-
         units = self.app.app_units if units is None else units
         res = self._app_option("gerber_circle_steps", 64)
-        factor = svgparse_viewbox(svg_root)
 
-        if svg_units in svg_unit_to_mm:
-            unit_factor = svg_unit_to_mm[svg_units]
-            factor *= unit_factor
-            h *= unit_factor
+        # Parse into a flat list of shapely Polygons (units conversion, flip and text are handled by the importer)
+        try:
+            geos = svg_to_shapes(filename, 'gerber', units=units, resolution=res, flip=flip, app=self.app)
+        except SvgImportError as e:
+            self.app.log.error("ParseGerber.import_svg(). %s" % str(e))
+            return 'fail'
 
-        geos = getsvggeo(svg_root, 'gerber', units=units, res=res, factor=factor, app=self.app)
+        geos = [g for g in geos if isinstance(g, Polygon)]
 
         self.app.log.debug("appParsers.ParseGerber.Gerber.import_svg(). Finished parsing the SVG geometry.")
-
-        if flip:
-            geos = [affinity.translate(affinity.scale(g, 1.0, -1.0, origin=(0, 0)), yoff=h) for g in geos]
-            self.app.log.debug("appParsers.ParseGerber.Gerber.import_svg(). SVG geometry was flipped.")
 
         # Work with a local list first because it makes typing a lot easier
         solid_geometry: list[BaseGeometry] = []
@@ -2345,7 +2317,7 @@ class Gerber(Geometry):
         except (KeyError, Exception) as e:
             self.app.log.warning("Standard DXF read failed (%s), trying recovery mode..." % str(e))
             dxf, auditor = recover.readfile(filename)
-        geos = getdxfgeo(dxf, text_mode=text_mode)
+        geos = dxf_to_shapes(dxf, text_mode=text_mode)
 
         # trying to optimize the resulting geometry by merging contiguous lines
         geos = list(self.flatten_list(geos))

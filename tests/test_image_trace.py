@@ -7,7 +7,6 @@ import sys
 import tempfile
 import unittest
 
-from lxml import etree as ET
 from PIL import Image, ImageDraw
 from shapely import unary_union
 
@@ -16,12 +15,12 @@ sys.path.insert(0, ROOT)
 
 from appCommon import imagetrace  # noqa: E402
 from appCommon.imagetrace import trace, PRESETS, PRESET_NAMES, CURVE_MODES  # noqa: E402
-from appParsers.ParseSVG import getsvggeo  # noqa: E402
+from appParsers.SVG import svg_to_shapes  # noqa: E402
 
 
 def svg_to_shape(svg_text):
     """The geometry that the plugin imports (in pixels, not flipped)."""
-    geos = getsvggeo(ET.fromstring(svg_text), 'gerber', units='MM', res=16, factor=1.0)
+    geos = svg_to_shapes(svg_text, 'gerber', units='MM', resolution=16, flip=False, user_units=True)
     return unary_union([g for g in geos if g is not None and not g.is_empty])
 
 
