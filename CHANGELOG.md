@@ -143,6 +143,20 @@ Project file:
 - an uncompressed project file has LF line endings on all platforms
 - replaced simplejson with the standard json module (equal or faster); removed the unused simplejson imports in the plugins; simplejson is no longer a requirement
 
+NCC Tool:
+
+- measured on a real board (Easyduino RP2040 front copper, KiCad: 20 x 50.2 mm, 106 copper polygons, 20688 vertices; tools 2, 1 and 0.5 mm; median of 3 runs, geometry generation only): normal clearing 1.6x faster (1.094 s to 0.672 s) and the cutter sweep over copper 89x smaller (1.240 mm2 to 0.014 mm2); rest machining 1.8x slower (0.655 s to 1.206 s) because the residual stock is now exact, but the sweep over copper is 61x smaller (0.668 mm2 to 0.011 mm2) and 74 paths clear the stock instead of 65; the small overlap that remains is the polygonal approximation of the round cutter
+- measured on the small test board (40 x 30 mm, 54 pads, 2 traces): normal clearing 0.131 s to 0.152 s, rest machining 0.042 s to 0.068 s; the sweep over copper 1.98 mm2 to 0.36 mm2 (normal) and 1.73 mm2 to 0.35 mm2 (rest)
+- the progressive plotting redraws at most every 50 ms: on the real board 53 to 4 redraws for the line clearing and 79 to 5 for the seed clearing; the events and the abort check still run on each step
+- the copper and offset preparation is computed 1 time for each different offset in a generation (it was computed again for each tool)
+- the shrink clearing does not union a single buffer component again; the union of split components stays, because its removal changes the geometry
+- the simplification uses the Geo Tolerance preference (converted for inch units) instead of a fixed 0.01; a simplified path is kept only when its full cutter sweep stays inside the area, else the original path is used; the stock boundaries are not simplified, so small copper features are not lost
+- rest machining subtracts the union of the cutter sweeps of each tool in 1 operation; a polygon that a tool cannot clear stays in the area for the next smaller tool and is not added a second time; the rest margin uses its own Margin field
+- fixed: the Tcl rest isolation passed the cutter diameter instead of the radius (the GUI passed the radius); multipart isolation geometry is handled
+- fixed: the rest machining tooltip said "next bigger tool" instead of "next smaller tool"
+- the Milling tool makes the CNC jobs of the selected tools in the visible row order of the tool table, so the NCC order and a manual reorder are kept
+- two optimizations were tested and rejected: batched scan-line intersections were slower, and the removal of all the shrinking buffer unions changed the geometry
+
 Tcl:
 
 - fixed: set_sys changes the preference through app.defaults, so the new value is also used by the active project
@@ -170,6 +184,7 @@ Tests:
 - new unit tests for the Move Tool, the multiple projects (ProjectContext, ProjectManager, project combobox, File New, Open, Save and Save As, exit, Tcl commands) and the split of application settings and project options; the gate list records the removed autosave tests
 - new unit tests for the project file: plain and Zstandard round trip with both Zstandard backends, legacy LZMA load, inf/nan cleanup, level clamp and a failed save that keeps the old file
 - new unit tests for the Tcl commands (tests/test_tcl_audit_*.py, 100 tests): the result contract, cutting, CNC generation, geometry, transforms and regressions
+- new unit tests for the NCC Tool (tests/test_ncc_followups.py and tests/test_ncc_rest_machining.py): preparation cache, simplification safety, rest machining, isolation parity, redraw throttle and the board benchmarks (pytest -k benchmark -s)
 
 17.10.2026
 

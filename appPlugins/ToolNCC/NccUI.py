@@ -477,7 +477,7 @@ class NccUI:
             "%s\n%s" % (
                 _("If checked, use 'rest machining'.\n"
                   "Copper features will be processed starting with the biggest selected tool.\n"
-                  "What cannot be processed will be passed to the next bigger tool and so on,\n"
+                  "What cannot be processed will be passed to the next smaller tool and so on,\n"
                   "until either there are no longer selected tools or all the copper features are processed."),
                 _("Only tools selected for copper clearing will be used.")
             )

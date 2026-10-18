@@ -716,7 +716,15 @@ class NccGen:
 
         if cp and cp.objects:
             if simplify_tol > 0.0:
-                return [x.simplify(simplify_tol) for x in cp.get_objects()]
+                paths = []
+                for path in cp.get_objects():
+                    simplified = path.simplify(simplify_tol)
+                    # A short chord can cross copper even when topology is preserved.
+                    # Keep the original path unless the entire cutter sweep is safe.
+                    if not pol.covers(simplified.buffer(tooldia / 2)):
+                        simplified = path
+                    paths.append(simplified)
+                return paths
             else:
                 return [x for x in cp.get_objects()]
         else:
@@ -790,13 +798,19 @@ class NccGen:
             self.app.proc_container.view.set_busy('%s...' % _("Working"))
             QtWidgets.QApplication.processEvents()
 
+        # Geo tolerance is a physical detail setting; convert its MM value for inch geometry.
+        simplification_value = float(self.app.options.get(
+            "global_tolerance", self.app.defaults.get("global_tolerance", 0.005)))
+        if self.app.units.upper() == 'IN':
+            simplification_value /= 25.4
+
         # Parameters reading from UI and defaults
         params = Params(
             units=self.app.units,
             tool_ordering=tool_ordering if tool_ordering is not None else self.ui.order_combo.get_value(),
             clipping_type=self.ui.select_method_combo.get_value(),
             rest_machining_choice=self.ui.rest_cb.get_value(),
-            simplification_value=0.01,  # TODO this should be in preferences and in the UI
+            simplification_value=simplification_value,
             # determine if to use the progressive plotting
             prog_plot=self.app.options.get(
                 "tools_ncc_plotting",
@@ -806,7 +820,7 @@ class NccGen:
                 )
             ) == 'progressive',
             tools_storage=tools_storage if tools_storage is not None else self.ncc_tools,
-            sorted_clear_tools=clear_tooldia_list,
+            sorted_clear_tools=list(clear_tooldia_list),
             areas_to_clear_list=areas_to_clear,
             # set the output_object_name for the future Geometry object
             # I do it here because it is also stored inside the _generate_clear_object_worker()
@@ -882,6 +896,9 @@ class NccGen:
             # ----------------------------------------------------
             # COPPER CLEARING with tools marked for CLEAR#
             # ----------------------------------------------------
+            # Source, isolation tools, margin and boundary stay fixed in this generation.
+            # First preparation also installs isolation paths in the output object.
+            prepared_areas = {}
             for tool in params.sorted_clear_tools:
                 self.app.log.debug("Starting geometry processing for tool: %s" % str(tool))
                 if self.app.abort_flag:
@@ -924,18 +941,20 @@ class NccGen:
                 # ----------------------------------------------------
                 # Area to clear
                 # ----------------------------------------------------
-                result = self.compute_area_to_clear(
-                    name=output_object_name,
-                    cleared_object=cleared_object,
-                    geo_obj=output_geo_object,
-                    iso_tooldia=iso_tooldia_list,
-                    margin=margin_value,
-                    has_offset=has_offset,
-                    offset=ncc_offset,
-                    tools_storage=params.tools_storage,
-                    clipping_region=clipping_region,
-                )
-                area, warning_flag = result
+                area_key = (has_offset is True, ncc_offset if has_offset is True else 0.0)
+                if area_key not in prepared_areas:
+                    prepared_areas[area_key] = self.compute_area_to_clear(
+                        name=output_object_name,
+                        cleared_object=cleared_object,
+                        geo_obj=output_geo_object,
+                        iso_tooldia=iso_tooldia_list,
+                        margin=margin_value,
+                        has_offset=has_offset,
+                        offset=ncc_offset,
+                        tools_storage=params.tools_storage,
+                        clipping_region=clipping_region,
+                    )
+                area, warning_flag = prepared_areas[area_key]
 
                 if area == "fail":
                     self.app.log.debug("Failed to create empty area for this tool.")
@@ -967,8 +986,9 @@ class NccGen:
                     # ----------------------------------------------------
                     # attempt to fix possible problems with the polygon
                     # ----------------------------------------------------
-                    p = p.buffer(0.0000001)
-                    p = flatten_shapely_geometry(p, simplify_tolerance=params.simplification_value)
+                    p = p.buffer(0)
+                    # Simplifying stock boundaries can remove small copper features.
+                    p = flatten_shapely_geometry(p)
 
                     poly_failed = 0
                     for pol in p:
@@ -1138,7 +1158,7 @@ class NccGen:
             if not params.run_threaded:
                 QtWidgets.QApplication.processEvents()
 
-            params.sorted_clear_tools.sort(reverse=True)
+            params.sorted_clear_tools = sorted(params.sorted_clear_tools, reverse=True)
 
             # re purposed flag for final object, output_geo_object. True if it has any solid_geometry, False if not.
             app_obj.poly_not_cleared = True
@@ -1165,7 +1185,7 @@ class NccGen:
             # app_obj.inform.emit("NCC Tool. Calculate 'empty' area.")
 
             # Bounding box for current tool
-            ncc_margin = self.ui.margin_entry.get_value()
+            ncc_margin = self.ui.rest_margin_entry.get_value()
             bbox = self.apply_margin_to_clipping_region(
                 clipping_region=env_obj,
                 box_kind=box_obj_kind,
@@ -1190,6 +1210,9 @@ class NccGen:
                 tools_storage=params.tools_storage,
                 clipping_region=bbox,
             )
+
+            if area == 'fail':
+                return 'fail'
 
             # for testing purposes ----------------------------------
             # for po in area.geoms:
@@ -1264,8 +1287,7 @@ class NccGen:
                             # cleared with the current tool. this tremendously reduce the clearing time
                             check_dist = -tool / 2
                             check_buff = p.buffer(check_dist, self.circle_steps)
-                            check_buff = flatten_shapely_geometry(check_buff, simplify_tolerance=params.simplification_value)
-                            if not check_buff:
+                            if check_buff.is_empty:
                                 continue
 
                             # if self.app.dec_format(float(tool), self.decimals) == 0.15:
@@ -1336,24 +1358,22 @@ class NccGen:
                 # except Exception as e:
                 #     self.app.log.error("Creating new area failed due of: %s" % str(e))
 
+                if not params.sorted_clear_tools:
+                    break
                 if not cleared_geo:
-                    break
+                    continue
                 buffered_cleared_geo = [line.buffer(tool / 2) for line in cleared_geo]
-                buffered_cleared_geo = flatten_shapely_geometry(buffered_cleared_geo)
-                if not buffered_cleared_geo:
-                    break
                 try:
-                    new_area = MultiPolygon(buffered_cleared_geo)
+                    new_area = unary_union(buffered_cleared_geo)
                 except Exception as err:
                     self.app.log.error("ToolNcc.ncc_handler._generate_rest_clear_object_worker() Buffering -> %s" % str(err))
                     self.app.log.debug(
                         "ToolNcc.ncc_handler._generate_rest_clear_object_worker() Buffering -> %s" % str(traceback.format_exc())
                     )
                     return
-                new_area = new_area.buffer(0.0000001)
-
                 area = area.difference(new_area)
-                area = flatten_shapely_geometry(area, simplify_tolerance=params.simplification_value)
+                # Keep residual stock exact; simplification can discard material not swept by the cutter.
+                area = flatten_shapely_geometry(area)
 
                 new_area = [pol for pol in area if pol.is_valid and not pol.is_empty]
                 area = MultiPolygon(new_area)
@@ -1754,7 +1774,7 @@ class NccGen:
                             app_obj.inform.emit('[WARNING_NOTCL] %s' % _("Isolation geometry is broken. Margin is less "
                                                                          "than isolation tool diameter."))
                         try:
-                            for geo_elem in isolated_geo:
+                            for geo_elem in flatten_shapely_geometry(isolated_geo):
                                 # provide the app with a way to process the GUI events when in a blocking loop
                                 QtWidgets.QApplication.processEvents()
 
@@ -2076,7 +2096,6 @@ class NccGen:
 
             cleared_geo = []
             cleared_by_last_tool = []
-            rest_geo = []
             current_uid = 1
             tools_ncc_tools = app_obj.options.get(
                 "tools_ncc_tools",
@@ -2099,7 +2118,7 @@ class NccGen:
             # Calculate the empty area by subtracting the solid_geometry from the object bounding box geometry ##
             # ###################################################################################################
             if ncc_obj.kind == 'gerber' and not iso_tooldia:
-                sol_geo = ncc_obj.solid_geometry
+                sol_geo = ncc_gerber_copper(ncc_obj)
                 if has_offset is True:
                     app_obj.inform.emit('[WARNING_NOTCL] %s ...' % _("Buffering"))
                     sol_geo = sol_geo.buffer(distance=ncc_offset)
@@ -2114,7 +2133,7 @@ class NccGen:
                     return 'fail'
             elif ncc_obj.kind == 'gerber' and iso_tooldia:
                 isolated_geo = []
-                self.solid_geometry = ncc_obj.solid_geometry
+                self.solid_geometry = ncc_gerber_copper(ncc_obj)
 
                 # if milling type is climb then the move is counter-clockwise around features
                 milling_type = app_obj.options.get(
@@ -2129,9 +2148,9 @@ class NccGen:
                     new_geometry = []
 
                     if milling_type == 'cl':
-                        isolated_geo = self.generate_envelope(tool_iso, 1)
+                        isolated_geo = self.generate_envelope(tool_iso / 2, 1)
                     else:
-                        isolated_geo = self.generate_envelope(tool_iso, 0)
+                        isolated_geo = self.generate_envelope(tool_iso / 2, 0)
 
                     if isolated_geo == 'fail':
                         app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
@@ -2140,7 +2159,7 @@ class NccGen:
                                                                      "than isolation tool diameter."))
 
                         try:
-                            for geo_elem in isolated_geo:
+                            for geo_elem in flatten_shapely_geometry(isolated_geo):
                                 # provide the app with a way to process the GUI events when in a blocking loop
                                 QtWidgets.QApplication.processEvents()
 
@@ -2279,29 +2298,23 @@ class NccGen:
                 tool_used = tool - 1e-12
                 cleared_geo[:] = []
 
-                # Area to clear
-                for poly_r in cleared_by_last_tool:
+                # Subtract the actual cutter sweeps together, not one overlay per path.
+                if cleared_by_last_tool:
                     # provide the app with a way to process the GUI events when in a blocking loop
                     QtWidgets.QApplication.processEvents()
 
                     if self.app.abort_flag:
                         # graceful abort requested by the user
                         raise grace
-                    try:
-                        area = area.difference(poly_r)
-                    except Exception:
-                        pass
+                    area = area.difference(unary_union(cleared_by_last_tool))
                 cleared_by_last_tool[:] = []
 
                 # Transform area to MultiPolygon
                 if type(area) is Polygon:
                     area = MultiPolygon([area])
 
-                # add the rest that was not cleared previously; area is a MultyPolygon
-                # and rest_geo it's a list
+                # Failed polygons already remain in area; don't add them a second time.
                 allparts = [p.buffer(0) for p in area.geoms]
-                allparts += deepcopy(rest_geo)
-                rest_geo[:] = []
                 area = MultiPolygon(deepcopy(allparts))
                 allparts[:] = []
 
@@ -2360,9 +2373,7 @@ class NccGen:
                                         cleared_geo.append(list(cp.get_objects()))
                                     except Exception as ee:
                                         self.app.log.error("Polygon can't be cleared. %s" % str(ee))
-                                        # this polygon should be added to a list and then try clear it with
-                                        # a smaller tool
-                                        rest_geo.append(p)
+                                        # This polygon remains in area for the next smaller tool.
                                 elif isinstance(p, MultiPolygon):
                                     for poly_p in p.geoms:
                                         if poly_p is not None:
@@ -2401,9 +2412,7 @@ class NccGen:
                                                 cleared_geo.append(list(cp.get_objects()))
                                             except Exception as eee:
                                                 self.app.log.error("Polygon can't be cleared. %s" % str(eee))
-                                                # this polygon should be added to a list and then try clear it with
-                                                # a smaller tool
-                                                rest_geo.append(poly_p)
+                                                # This polygon remains in area for the next smaller tool.
 
                                 pol_nr += 1
                                 disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
@@ -2594,7 +2603,9 @@ class NccGen:
         # the other passes overlap preceding ones and cut the leftover copper. It is better for them
         # to cut on the right side of the leftover copper i.e. on the left side of the features.
         try:
-            geom = self.parent_tool.isolation_geometry(offset, iso_type=envelope_iso_type)
+            geom = self.parent_tool.isolation_geometry(
+                offset, geometry=self.solid_geometry, iso_type=envelope_iso_type)
+            geom = unary_union(geom)
         except Exception as e:
             self.app.log.error('ToolNcc.generate_envelope() --> %s' % str(e))
             return 'fail'
@@ -2602,7 +2613,7 @@ class NccGen:
         if invert:
             try:
                 pl = []
-                for p in geom:
+                for p in flatten_shapely_geometry(geom):
                     if p is not None:
                         if isinstance(p, Polygon):
                             pl.append(Polygon(p.exterior.coords[::-1], p.interiors))

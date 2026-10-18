@@ -2994,8 +2994,10 @@ class ToolMilling(Geometry, AppTool):
 
         # test to see if we have tools available in the tool table
         if self.ui.tools_table_mill_geo.selectedItems():
-            for x in self.ui.tools_table_mill_geo.selectedItems():
-                tooluid = int(self.ui.tools_table_mill_geo.item(x.row(), 3).text())
+            # Execute in visible row order, including any explicit user reordering.
+            rows = sorted(set(x.row() for x in self.ui.tools_table_mill_geo.selectedItems()))
+            for row in rows:
+                tooluid = int(self.ui.tools_table_mill_geo.item(row, 3).text())
 
                 for tooluid_key, tooluid_value in self.target_obj.tools.items():
                     if int(tooluid_key) == tooluid:

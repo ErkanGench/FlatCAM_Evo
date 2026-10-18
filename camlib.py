@@ -32,6 +32,7 @@ import ezdxf
 from ezdxf import recover
 
 import math
+from time import monotonic
 
 # See: http://toblerity.org/shapely/manual.html
 from shapely import (
@@ -1510,6 +1511,7 @@ class Geometry(object):
             for i in p.interiors:
                 geoms.insert(i)
 
+        last_update = 0.0
         for cl_pol in current:
             while True:
                 if self.app.abort_flag:
@@ -1517,6 +1519,11 @@ class Geometry(object):
                     raise grace
                 # provide the app with a way to process the GUI events when in a blocking loop
                 QtWidgets.QApplication.processEvents()
+                if self.app.abort_flag:
+                    raise grace
+                if prog_plot and monotonic() - last_update >= 0.05:
+                    self.temp_shapes.redraw()
+                    last_update = monotonic()
 
                 cl_pol = cl_pol.buffer(-tooldia * (1 - overlap), quad_segs=quad_segs)
                 cl_pol_list = flatten_shapely_geometry(cl_pol)
@@ -1536,7 +1543,9 @@ class Geometry(object):
                 if added_flag is False:
                     break
 
-                cl_pol = unary_union(cl_pol_list)
+                # A singleton needs no union. Keep the split-component union: its
+                # canonicalization affects subsequent GEOS offset joins.
+                cl_pol = unary_union(cl_pol_list) if len(cl_pol_list) > 1 else cl_pol_list[0]
 
                 # if isinstance(cl_pol, MultiPolygon):
                 #     cl_pol = flatten_shapely_geometry(cl_pol)
@@ -1648,6 +1657,7 @@ class Geometry(object):
         if seedpoint is None:
             seedpoint = path_margin.representative_point()
 
+        last_update = 0.0
         # Grow from seed until outside the box. The polygons will
         # never have an interior, so take the exterior LinearRing.
         while True:
@@ -1657,6 +1667,11 @@ class Geometry(object):
 
             # provide the app with a way to process the GUI events when in a blocking loop
             QtWidgets.QApplication.processEvents()
+            if self.app.abort_flag:
+                raise grace
+            if prog_plot and monotonic() - last_update >= 0.05:
+                self.temp_shapes.redraw()
+                last_update = monotonic()
 
             path = Point(seedpoint).buffer(radius, quad_segs=quad_segs).exterior
             path = path.simplify(simplify_tol)
@@ -1672,9 +1687,6 @@ class Geometry(object):
                 geom_elems.insert(p)
                 if prog_plot:
                     self.plot_temp_shapes(p)
-
-            if prog_plot:
-                self.temp_shapes.redraw()
 
             radius += tooldia * (1 - overlap)
 
@@ -1773,6 +1785,7 @@ class Geometry(object):
             self.app.log.debug("camlib.Geometry.clear_polygon_lines() --> Could not buffer the Polygon")
             return None
 
+        last_update = 0.0
         # decide the direction of the lines
         if abs(left - right) >= abs(top - bot):
             # First line
@@ -1785,6 +1798,11 @@ class Geometry(object):
 
                     # provide the app with a way to process the GUI events when in a blocking loop
                     QtWidgets.QApplication.processEvents()
+                    if self.app.abort_flag:
+                        raise grace
+                    if prog_plot and monotonic() - last_update >= 0.05:
+                        self.temp_shapes.redraw()
+                        last_update = monotonic()
 
                     line = LineString([(left, y), (right, y)])
                     line = line.intersection(margin_poly)
@@ -1793,7 +1811,6 @@ class Geometry(object):
                     y -= tooldia * (1 - overlap)
                     if prog_plot:
                         self.plot_temp_shapes(line)
-                        self.temp_shapes.redraw()
 
                 # Last line
                 y = bot + margin_dist
@@ -1805,6 +1822,8 @@ class Geometry(object):
                     lines_trimmed.append(ll)
                     if prog_plot:
                         self.plot_temp_shapes(ll)
+            except grace:
+                raise
             except Exception as e:
                 self.app.log.error('camlib.Geometry.clear_polygon_lines() Processing poly --> %s' % str(e))
                 return None
@@ -1819,6 +1838,11 @@ class Geometry(object):
 
                     # provide the app with a way to process the GUI events when in a blocking loop
                     QtWidgets.QApplication.processEvents()
+                    if self.app.abort_flag:
+                        raise grace
+                    if prog_plot and monotonic() - last_update >= 0.05:
+                        self.temp_shapes.redraw()
+                        last_update = monotonic()
 
                     line = LineString([(x, top), (x, bot)])
                     line = line.intersection(margin_poly)
@@ -1827,7 +1851,6 @@ class Geometry(object):
                     x += tooldia * (1 - overlap)
                     if prog_plot:
                         self.plot_temp_shapes(line)
-                        self.temp_shapes.redraw()
 
                 # Last line
                 x = right - margin_dist
@@ -1839,6 +1862,8 @@ class Geometry(object):
                     lines_trimmed.append(ll)
                     if prog_plot:
                         self.plot_temp_shapes(ll)
+            except grace:
+                raise
             except Exception as e:
                 self.app.log.error('camlib.Geometry.clear_polygon_lines() Processing poly --> %s' % str(e))
                 return None
