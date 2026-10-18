@@ -8760,6 +8760,57 @@ class AppRTreeStorage(AppRTree):
         # Remove from index
         self.remove_obj(objidx, obj)
 
+    # Cost of 1 point in the rtree index, relative to the bulk load of 1 point (measured with rtree 1.x):
+    # a delete costs about 85 times and an insert about 12 times more.
+    DELETE_COST = 85
+    INSERT_COST = 12
+
+    def replace(self, removed=(), inserted=()):
+        """
+        Removes and inserts many objects. When the deletes and inserts of their points cost more than a new index,
+        the index is bulk loaded again from all the objects (the bulk load is about 12 times faster than the
+        inserts and about 85 times faster than the deletes).
+
+        :param removed:     objects that are in the storage
+        :param inserted:    new objects
+        :return:            None
+        """
+        removed = list(removed)
+        inserted = [(obj, list(self.get_points(obj))) for obj in inserted]
+        if not removed and not inserted:
+            return
+
+        removed_pts = sum(len(self.obj2points[self.indexes[id(obj)]]) for obj in removed)
+        inserted_pts = sum(len(points) for __, points in inserted)
+        live_pts = sum(len(self.obj2points[objid]) for objid, obj in enumerate(self.objects) if obj is not None)
+        new_index_pts = live_pts - removed_pts + inserted_pts
+
+        if removed_pts * self.DELETE_COST + inserted_pts * self.INSERT_COST <= new_index_pts:
+            for obj in removed:
+                self.remove(obj)
+            for obj, __ in inserted:
+                self.insert(obj)
+            return
+
+        for obj in removed:
+            self.objects[self.indexes.pop(id(obj))] = None
+        self.objects = [obj for obj in self.objects if obj is not None]
+        self.objects += [obj for obj, __ in inserted]
+        self.indexes = {id(obj): objid for objid, obj in enumerate(self.objects)}
+
+        self.obj2points = []
+        self.points2obj = []
+        entries = []
+        for objid, obj in enumerate(self.objects):
+            ptids = []
+            for pt in self.get_points(obj):
+                ptid = len(self.points2obj)
+                entries.append((ptid, (pt[0], pt[1], pt[0], pt[1]), objid))
+                ptids.append(ptid)
+                self.points2obj.append(objid)
+            self.obj2points.append(ptids)
+        self.rti = rtindex.Index(iter(entries)) if entries else rtindex.Index()
+
     def get_objects(self):
         return (o for o in self.objects if o is not None)
 

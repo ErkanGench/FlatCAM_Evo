@@ -5,7 +5,7 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from camlib import distance, arc, AppRTreeStorage
+from camlib import distance, arc, AppRTreeStorage, translate_geometry
 
 from PyQt6 import QtCore, QtWidgets, QtGui
 from PyQt6.QtCore import Qt
@@ -2378,23 +2378,30 @@ class MoveEditorExc(FCShapeTool):
         # Create new geometry
         dx = self.destination[0] - self.origin[0]
         dy = self.destination[1] - self.origin[1]
-        sel_shapes_to_be_deleted = []
 
-        for sel_dia in self.selected_dia_list:
-            self.current_storage = self.draw_app.storage_dict[sel_dia]
-            for select_shape in self.draw_app.get_selected():
-                if select_shape in self.current_storage.get_objects():
+        # Each tool storage is read 1 time, its shapes are translated in 1 vectorized batch and the editor
+        # is plotted 1 time at the end (not 1 time for each moved shape).
+        if dx != 0 or dy != 0:
+            selected = self.draw_app.get_selected()
+            moved_ids = set()
+            for sel_dia in self.selected_dia_list:
+                self.current_storage = self.draw_app.storage_dict[sel_dia]
+                storage_ids = {id(shape) for shape in self.current_storage.get_objects()}
+                shapes = [shape for shape in selected if id(shape) in storage_ids and id(shape) not in moved_ids]
+                if not shapes:
+                    continue
 
-                    self.geometry.append(DrawToolShape(translate(select_shape.geo, xoff=dx, yoff=dy)))
-                    self.current_storage.remove(select_shape)
-                    sel_shapes_to_be_deleted.append(select_shape)
-                    self.draw_app.on_exc_shape_complete(self.current_storage)
-                    self.geometry = []
+                translated = translate_geometry([shape.geo for shape in shapes], dx, dy)
+                # 1 change of the storage index instead of a delete and an insert for each point
+                self.current_storage.replace(removed=shapes, inserted=[DrawToolShape(geo) for geo in translated])
+                moved_ids |= {id(shape) for shape in shapes}
 
-            for shp in sel_shapes_to_be_deleted:
-                self.draw_app.selected.remove(shp)
-            sel_shapes_to_be_deleted = []
+            if moved_ids:
+                self.draw_app.selected[:] = [shape for shape in self.draw_app.selected if id(shape) not in moved_ids]
 
+        self.draw_app.delete_utility_geometry()
+        self.draw_app.tool_shape.clear(update=True)
+        self.draw_app.replot()
         self.draw_app.build_ui()
         self.draw_app.app.inform.emit('[success] %s' % _("Done."))
         try:
@@ -2445,8 +2452,7 @@ class MoveEditorExc(FCShapeTool):
 
         if len(self.draw_app.get_selected()) <= self.sel_limit:
             try:
-                for geom in self.draw_app.get_selected():
-                    geo_list.append(translate(geom.geo, xoff=dx, yoff=dy))
+                geo_list = translate_geometry([geom.geo for geom in self.draw_app.get_selected()], dx, dy)
             except AttributeError:
                 self.draw_app.select_tool('drill_select')
                 self.draw_app.selected.clear()

@@ -7,7 +7,7 @@
 
 from appEditors.grb_plugins.GrbCommon import DrawToolUtilityShape, DrawToolShape, DrawTool, ShapeToolEditorGrb
 
-from camlib import distance, arc, three_point_circle, flatten_shapely_geometry
+from camlib import distance, arc, three_point_circle, flatten_shapely_geometry, translate_geometry
 from appGUI.GUIElements import *
 
 from appTool import AppTool
@@ -2941,35 +2941,63 @@ class MoveEditorGrb(ShapeToolEditorGrb):
         return Polygon([pt1, pt2, pt3, pt4])
 
     def make(self):
-        # Create new geometry
+        self.transfer_selection(remove_source=True)
+
+    @staticmethod
+    def translated_elements(shapes, dx, dy):
+        """
+        Returns the geometry dicts of the shapes translated by (dx, dy). Each of the 'solid', 'follow' and 'clear'
+        keys is translated for all the shapes in 1 vectorized batch.
+
+        :param shapes:  list of DrawToolShape
+        :param dx:      offset on X
+        :param dy:      offset on Y
+        :return:        list of dicts, in the order of the shapes
+        """
+        new_elements = [{} for __ in shapes]
+        for key in ('solid', 'follow', 'clear'):
+            positions = [pos for pos, shape in enumerate(shapes) if key in shape.geo]
+            if not positions:
+                continue
+            translated = translate_geometry([shapes[pos].geo[key] for pos in positions], dx, dy)
+            for pos, geo in zip(positions, translated):
+                new_elements[pos][key] = geo
+        return new_elements
+
+    def transfer_selection(self, remove_source):
+        """
+        Adds a translated copy of each selected shape to its aperture storage. Each storage is changed in 1 pass and
+        the shapes are plotted 1 time at the end.
+
+        :param remove_source:   True: the selected shapes are removed (Move); False: they stay (Copy)
+        :return:                None
+        """
         dx = self.destination[0] - self.origin[0]
         dy = self.destination[1] - self.origin[1]
-        sel_shapes_to_be_deleted = []
 
-        for sel_dia in self.selected_apertures:
-            self.current_storage = self.draw_app.storage_dict[sel_dia]['geometry']
-            for select_shape in self.draw_app.get_selected():
-                if select_shape in self.current_storage:
-                    geometric_data = select_shape.geo
-                    new_geo_el = {}
-                    if 'solid' in geometric_data:
-                        new_geo_el['solid'] = translate(geometric_data['solid'], xoff=dx, yoff=dy)
-                    if 'follow' in geometric_data:
-                        new_geo_el['follow'] = translate(geometric_data['follow'], xoff=dx, yoff=dy)
-                    if 'clear' in geometric_data:
-                        new_geo_el['clear'] = translate(geometric_data['clear'], xoff=dx, yoff=dy)
+        if dx != 0 or dy != 0 or not remove_source:
+            selected = self.draw_app.get_selected()
+            done_ids = set()
+            for sel_dia in self.selected_apertures:
+                storage = self.draw_app.storage_dict[sel_dia]['geometry']
+                storage_ids = {id(shape) for shape in storage}
+                shapes = [shape for shape in selected if id(shape) in storage_ids and id(shape) not in done_ids]
+                if not shapes:
+                    continue
+                shape_ids = {id(shape) for shape in shapes}
 
-                    self.geometry.append(DrawToolShape(new_geo_el))
-                    self.current_storage.remove(select_shape)
-                    self.draw_app.touch_geometry()
-                    sel_shapes_to_be_deleted.append(select_shape)
-                    self.draw_app.on_grb_shape_complete(self.current_storage, no_plot=True)
-                    self.geometry = []
+                if remove_source:
+                    # slice assignment: storage_dict keeps a reference to this list
+                    storage[:] = [shape for shape in storage if id(shape) not in shape_ids]
+                storage.extend(DrawToolShape(geo_el) for geo_el in self.translated_elements(shapes, dx, dy))
+                done_ids |= shape_ids
 
-            for shp in sel_shapes_to_be_deleted:
-                self.draw_app.selected.remove(shp)
-            sel_shapes_to_be_deleted = []
+            if done_ids:
+                self.draw_app.selected[:] = [shape for shape in self.draw_app.selected if id(shape) not in done_ids]
+                self.draw_app.touch_geometry()
 
+        self.draw_app.delete_utility_geometry()
+        self.draw_app.tool_shape.clear(update=True)
         self.draw_app.plot_all()
         self.draw_app.build_ui()
         self.draw_app.app.inform.emit('[success] %s' % _("Done."))
@@ -3004,16 +3032,8 @@ class MoveEditorGrb(ShapeToolEditorGrb):
         dy = data[1] - self.origin[1]
 
         if len(self.draw_app.get_selected()) <= self.sel_limit:
-            for geom in self.draw_app.get_selected():
-                new_geo_el = {}
-                if 'solid' in geom.geo:
-                    new_geo_el['solid'] = translate(geom.geo['solid'], xoff=dx, yoff=dy)
-                if 'follow' in geom.geo:
-                    new_geo_el['follow'] = translate(geom.geo['follow'], xoff=dx, yoff=dy)
-                if 'clear' in geom.geo:
-                    new_geo_el['clear'] = translate(geom.geo['clear'], xoff=dx, yoff=dy)
-                geo_list.append(deepcopy(new_geo_el))
-            return DrawToolUtilityShape(geo_list)
+            # the translated geometry is new, so it needs no deepcopy
+            return DrawToolUtilityShape(self.translated_elements(self.draw_app.get_selected(), dx, dy))
         else:
             ss_el = {'solid': translate(self.selection_shape, xoff=dx, yoff=dy)}
             return DrawToolUtilityShape(ss_el)
@@ -3025,37 +3045,7 @@ class CopyEditorGrb(MoveEditorGrb):
         self.name = 'copy'
 
     def make(self):
-        # Create new geometry
-        dx = self.destination[0] - self.origin[0]
-        dy = self.destination[1] - self.origin[1]
-        sel_shapes_to_be_deleted = []
-
-        for sel_dia in self.selected_apertures:
-            self.current_storage = self.draw_app.storage_dict[sel_dia]['geometry']
-            for select_shape in self.draw_app.get_selected():
-                if select_shape in self.current_storage:
-                    geometric_data = select_shape.geo
-                    new_geo_el = {}
-                    if 'solid' in geometric_data:
-                        new_geo_el['solid'] = translate(geometric_data['solid'], xoff=dx, yoff=dy)
-                    if 'follow' in geometric_data:
-                        new_geo_el['follow'] = translate(geometric_data['follow'], xoff=dx, yoff=dy)
-                    if 'clear' in geometric_data:
-                        new_geo_el['clear'] = translate(geometric_data['clear'], xoff=dx, yoff=dy)
-                    self.geometry.append(DrawToolShape(new_geo_el))
-
-                    sel_shapes_to_be_deleted.append(select_shape)
-                    self.draw_app.on_grb_shape_complete(self.current_storage, no_plot=True)
-                    self.geometry = []
-
-            for shp in sel_shapes_to_be_deleted:
-                self.draw_app.selected.remove(shp)
-            sel_shapes_to_be_deleted = []
-
-        self.draw_app.plot_all()
-        self.draw_app.build_ui()
-        self.draw_app.app.inform.emit('[success] %s' % _("Done."))
-        self.draw_app.app.jump_signal.disconnect()
+        self.transfer_selection(remove_source=False)
 
 
 class EraserEditorGrb(ShapeToolEditorGrb):

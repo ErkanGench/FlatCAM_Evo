@@ -16,7 +16,8 @@ from PyQt6.QtCore import Qt
 # import inspect
 import math
 
-from camlib import distance, arc, three_point_circle, Geometry, AppRTreeStorage, flatten_shapely_geometry
+from camlib import distance, arc, three_point_circle, Geometry, AppRTreeStorage, flatten_shapely_geometry, \
+    translate_geometry
 from appGUI.GUIElements import FCLabel, GLay, FCDoubleSpinner, FCTree, FCButton, FCFrame, FCCheckBox, FCEntry, \
     FCTextEdit
 from appGUI.VisPyVisuals import ShapeCollection
@@ -984,22 +985,38 @@ class AppGeoEditor(QtCore.QObject):
         :type build_ui:     bool
         :return:            None
         """
+        # the shapes are collected first: the storage gets them in 1 batch and the UI is built 1 time
+        to_insert = []
+        ret = self._collect_shape(shape, to_insert)
+
+        if to_insert:
+            try:
+                self.storage.replace(inserted=to_insert)
+            except Exception as err:
+                self.app.inform_shell.emit('%s\n%s' % (_("Error on inserting shapes into storage."), str(err)))
+            if build_ui is True:
+                self.build_ui_sig.emit()  # Build UI
+
+        return ret
+
+    def _collect_shape(self, shape, to_insert):
+        """
+        Checks a shape for add_shape(). A utility shape goes to self.utility; a shape for the storage goes to
+        to_insert.
+
+        :param shape:       DrawToolShape, Shapely geometry or an iterable of them
+        :param to_insert:   list that collects the shapes for the storage
+        :return:            list with the DrawToolShape made for a Shapely geometry; None for an iterable
+        """
         ret = []
 
         if shape is None:
             return
 
-        # List of DrawToolShape?
-        # if isinstance(shape, list):
-        #     for subshape in shape:
-        #         self.add_shape(subshape)
-        #     return
-
         try:
             w_geo = shape.geoms if isinstance(shape, (MultiPolygon, MultiLineString)) else shape
             for subshape in w_geo:
-                ret_shape = self.add_shape(subshape)
-                ret.append(ret_shape)
+                self._collect_shape(subshape, to_insert)
             return
         except TypeError:
             pass
@@ -1018,12 +1035,7 @@ class AppGeoEditor(QtCore.QObject):
         else:
             geometry = shape.geo
             if geometry and geometry.is_valid and not geometry.is_empty and geometry.geom_type != 'Point':
-                try:
-                    self.storage.insert(shape)
-                except Exception as err:
-                    self.app.inform_shell.emit('%s\n%s' % (_("Error on inserting shapes into storage."), str(err)))
-                if build_ui is True:
-                    self.build_ui_sig.emit()  # Build UI
+                to_insert.append(shape)
 
         return ret
 
@@ -1555,19 +1567,14 @@ class AppGeoEditor(QtCore.QObject):
         # copy a list: 'selected' is passed in and shrinks while shapes are removed from it
         w_shapes = list(shapes) if isinstance(shapes, list) else [shapes]
 
-        for shape in w_shapes:
-            # remove from Utility
-            if shape in self.utility:
-                self.utility.remove(shape)
+        # 1 pass on each list instead of a search and a remove() for each shape; DrawToolShape has no __eq__,
+        # so the identity test is the same test as 'in'. The slice assignment keeps the list objects.
+        shape_ids = {id(shape) for shape in w_shapes}
+        self.utility[:] = [shape for shape in self.utility if id(shape) not in shape_ids]
+        self.selected[:] = [shape for shape in self.selected if id(shape) not in shape_ids]
 
-        for shape in w_shapes:
-            # remove from Selection
-            if shape in self.selected:
-                self.selected.remove(shape)
-
-        for shape in w_shapes:
-            # remove from Storage
-            self.storage.remove(shape)
+        # remove from Storage, in 1 batch
+        self.storage.replace(removed=w_shapes)
 
     def on_move(self):
         # if not self.selected:
@@ -1710,7 +1717,7 @@ class AppGeoEditor(QtCore.QObject):
                 self.app.defaults.get(
                     'geometry_editor_milling_type',
                     self.app.defaults.factory_defaults.get('geometry_editor_milling_type')
-                )) == 'cl':
+                )) == 'cl' and not getattr(self.active_tool, 'keeps_direction', False):
             # reverse the geometry coordinates direction to allow creation of Gcode for climb milling
             try:
                 for shp in geom_list:
@@ -3012,6 +3019,10 @@ class FCShapeTool(DrawTool):
     """
     Abstract class for tools that create a shape.
     """
+
+    # True for a tool that makes its shapes from shapes of the storage (Move, Copy, Explode): those shapes already
+    # have the milling direction, so on_shape_complete() must not reverse them again for climb milling
+    keeps_direction = False
 
     def __init__(self, draw_app):
         DrawTool.__init__(self, draw_app)
@@ -4495,6 +4506,8 @@ class FCSelect(DrawTool):
 
 
 class FCExplode(FCShapeTool):
+    keeps_direction = True
+
     def __init__(self, draw_app):
         FCShapeTool.__init__(self, draw_app)
         self.name = 'explode'
@@ -4570,6 +4583,8 @@ class FCExplode(FCShapeTool):
 
 
 class FCMove(FCShapeTool):
+    keeps_direction = True
+
     def __init__(self, draw_app):
         FCShapeTool.__init__(self, draw_app)
         self.name = 'move'
@@ -4670,11 +4685,16 @@ class FCMove(FCShapeTool):
             # Create new geometry
             dx = self.destination[0] - self.origin[0]
             dy = self.destination[1] - self.origin[1]
-            self.geometry = [DrawToolShape(translate(deepcopy(geom.geo), xoff=dx, yoff=dy))
-                             for geom in self.draw_app.get_selected()]
+            # 1 vectorized batch; Shapely geometry is immutable, so the source needs no deepcopy
+            selected = self.draw_app.get_selected()
+            self.geometry = [DrawToolShape(geo) for geo in translate_geometry([geom.geo for geom in selected], dx, dy)]
 
-            # Delete old
-            self.draw_app.delete_selected()
+            # Delete old. No plot here: on_shape_complete() plots after the new shapes are added.
+            self.draw_app.delete_shape(selected)
+            self.draw_app.build_ui()
+            self.draw_app.selected.clear()
+            self.draw_app.sel_shapes.clear(update=True)
+            self.draw_app.sel_shapes.redraw()
             self.complete = True
             self.origin = None
             self.draw_cursor_data(delete=True)
@@ -4727,8 +4747,7 @@ class FCMove(FCShapeTool):
 
         if len(self.draw_app.get_selected()) <= self.sel_limit:
             try:
-                for geom in self.draw_app.get_selected():
-                    geo_list.append(translate(geom.geo, xoff=dx, yoff=dy))
+                geo_list = translate_geometry([geom.geo for geom in self.draw_app.get_selected()], dx, dy)
             except AttributeError:
                 self.draw_app.select_tool('select')
                 self.draw_app.selected = []
@@ -4919,6 +4938,8 @@ class FCMove(FCShapeTool):
 
 
 class FCCopy(FCShapeTool):
+    keeps_direction = True
+
     def __init__(self, draw_app):
         FCShapeTool.__init__(self, draw_app)
         self.name = 'copy'

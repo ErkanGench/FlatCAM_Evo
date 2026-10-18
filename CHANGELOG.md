@@ -52,6 +52,15 @@ Gerber and Excellon:
 - an Excellon move translates the existing hole and slot outlines and does not buffer every drill again
 - the Gerber and Excellon source regeneration (after a move, a transform or an edit) formats a full path or all the holes of a tool in 1 operation instead of 1 coordinate at a time; the output is byte-identical; Gerber export 3.6x faster (0.542 s to 0.151 s for 4000 traces of 50 points), Excellon export 3.9x faster (0.112 s to 0.029 s for 40000 drills)
 
+Editors:
+
+- the Move in the Gerber, Excellon and Geometry editors translates the selected shapes in 1 vectorized batch, changes each storage in 1 pass and plots 1 time; measured with 2000 of 4000 shapes moved: Gerber editor 12x faster (0.166 s to 0.014 s; 1 time instead of 4000 canvas clears), Excellon editor 21x faster (23.26 s to 1.13 s; 1 replot instead of 2000), Geometry editor 13x faster (3.15 s to 0.23 s; 1 plot instead of 2 and 1 UI build instead of 2000); the canvas time of the removed plots, clears and UI builds is not in these numbers, so the gain in the application is larger
+- the drag outline of the Gerber editor Move is 9x faster (23.3 ms to 2.5 ms for each mouse move with 500 shapes); the Excellon and Geometry editors also translate the drag outline in 1 batch
+- the Gerber editor Copy uses the same batch as the Move
+- the editor storage (AppRTreeStorage) removes and inserts many shapes in 1 call: when the changes cost more than a new index, the R-tree is bulk loaded again (the bulk load is about 12x faster than the inserts and about 85x faster than the deletes)
+- the Geometry editor adds many shapes in 1 batch and builds the UI 1 time instead of 1 time for each shape; a delete of many shapes does 1 pass instead of a search for each shape
+- fixed: with the climb milling type, the Geometry editor reversed the direction of the shapes again on each Move, Copy and Explode; now only a new drawn shape is reversed
+
 Gerber Editor:
 
 - selecting elements updates only the selection colors and reuses the plotted geometry instead of rebuilding the whole board; geometry edits invalidate the cache
