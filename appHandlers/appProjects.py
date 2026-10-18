@@ -332,19 +332,94 @@ class ProjectManager(QtCore.QObject):
         self.update_title()
 
     # ------------------------------------------------------------------------------------------------------------
-    # Steps that change the GUI. Task 5 fills them.
+    # Steps that change the GUI
     # ------------------------------------------------------------------------------------------------------------
+    # these object kinds have no shapes on the canvas
+    NO_SHAPES_KINDS = ('script', 'document')
+
     def reset_options(self):
-        pass
+        """
+        A new project copies the project keys from the application defaults. The application settings are the
+        same for all projects, so they do not change.
+        """
+        self.app.on_defaults2options()
 
     def before_switch(self):
-        pass
+        """
+        Remove the canvas helpers of the current project. A switch never runs while an editor is open (is_busy),
+        so this method does not close an editor.
+        """
+        app = self.app
+        for attr in ('tool_shapes', 'hover_shapes'):
+            shapes = getattr(app, attr, None)
+            if shapes is not None:
+                try:
+                    shapes.clear(update=True)
+                except Exception as err:
+                    app.log.error("ProjectManager.before_switch() %s --> %s" % (attr, str(err)))
+
+        try:
+            app.levelling_tool.probing_shapes.clear(update=True)
+        except AttributeError:
+            pass
+
+        if getattr(app, 'exc_areas', None) is not None:
+            app.exc_areas.clear_shapes()
+
+        app.delete_selection_shape()
 
     def deactivate(self, ctx):
-        pass
+        """
+        Release the plot shapes of the objects of a project. The geometry and the Properties UI stay.
+        """
+        # the Properties tab can show the UI of an object of this project; replace it first
+        self.app.setup_default_properties_tab()
+
+        for obj in ctx.collection.get_list():
+            if obj.kind in self.NO_SHAPES_KINDS:
+                continue
+            try:
+                obj.clear(update=False)
+            except Exception as err:
+                self.app.log.error("ProjectManager.deactivate() --> %s" % str(err))
+            try:
+                obj.mark_shapes.clear(update=False)
+            except AttributeError:
+                pass
+            # forces a full plot when the project is active again
+            obj._full_plot_sig = None
+
+        self.app.plotcanvas.redraw()
 
     def activate(self, ctx):
-        pass
+        """
+        Re-create the plugins for the new collection and plot. The Properties UI of the objects is not built again:
+        set_ui() changes the data of a CNCJob and connects the object signals again.
+        """
+        app = self.app
+        app.setup_default_properties_tab()
+
+        # show the project keys of this project in the Preferences form
+        app.preferencesUiManager.defaults_write_form()
+
+        # the plugin comboboxes hold the model of the old collection; File -> New Project also does this
+        app.init_tools(init_tcl=False)
+
+        if ctx.collection.get_list():
+            app.plot_all(fit_view=False)
+        self._set_view_rect(ctx.view_rect)
 
     def _get_view_rect(self):
-        return None
+        try:
+            from vispy.geometry import Rect
+            return Rect(self.app.plotcanvas.view.camera.rect)
+        except Exception:
+            return None
+
+    def _set_view_rect(self, rect):
+        if rect is None:
+            return
+        try:
+            self.app.plotcanvas.view.camera.rect = rect
+        except Exception as err:
+            self.app.log.error("ProjectManager._set_view_rect() --> %s" % str(err))

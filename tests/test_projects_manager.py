@@ -356,5 +356,110 @@ class TestProjectManagerLifecycle(unittest.TestCase):
         self.assertIsNone(manager.find_by_filename(os.path.join('folder', 'Other.FlatPrj')))
 
 
+def make_object(kind='gerber', with_ui=True):
+    obj = SimpleNamespace(kind=kind, clear=Mock(), mark_shapes=Mock(), _full_plot_sig=(1, 2, 3),
+                          ui=QtWidgets.QWidget() if with_ui else None, ui_type=Mock(return_value='new-ui'),
+                          set_ui=Mock(), build_ui=Mock())
+    return obj
+
+
+class TestProjectManagerVisuals(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def make(self, objects):
+        from appHandlers.appProjects import ProjectManager
+        app = make_app(FakeCollection(objects))
+        app.setup_default_properties_tab = Mock()
+        app.init_tools = Mock()
+        app.plot_all = Mock()
+        app.plotcanvas = SimpleNamespace(redraw=Mock(), view=SimpleNamespace(camera=SimpleNamespace(rect=None)))
+        app.preferencesUiManager = Mock()
+        app.on_defaults2options = Mock()
+        manager = ProjectManager(app, collection_factory=FakeCollection)
+        return app, manager
+
+    def test_reset_options_copies_the_project_keys_from_the_defaults(self):
+        app, manager = self.make([])
+        manager.reset_options()
+        app.on_defaults2options.assert_called_once_with()
+
+    def test_deactivate_releases_shapes_and_keeps_the_ui(self):
+        gerber = make_object('gerber')
+        script = make_object('script')
+        app, manager = self.make([gerber, script])
+        gerber_ui = gerber.ui
+
+        manager.deactivate(manager.active)
+
+        gerber.clear.assert_called_once_with(update=False)
+        gerber.mark_shapes.clear.assert_called_once_with(update=False)
+        self.assertIsNone(gerber._full_plot_sig)
+        # the Properties UI stays; set_ui() is not safe to run again
+        self.assertIs(gerber.ui, gerber_ui)
+        # Script and Document objects have no shapes
+        script.clear.assert_not_called()
+        self.assertIsNotNone(script.ui)
+        app.setup_default_properties_tab.assert_called_once_with()
+        app.plotcanvas.redraw.assert_called_once_with()
+
+    def test_activate_plots_and_does_not_rebuild_the_ui(self):
+        gerber = make_object('gerber')
+        app, manager = self.make([gerber])
+        manager.active.view_rect = 'saved-rect'
+
+        manager.activate(manager.active)
+
+        gerber.ui_type.assert_not_called()
+        gerber.set_ui.assert_not_called()
+        gerber.build_ui.assert_not_called()
+        app.init_tools.assert_called_once_with(init_tcl=False)
+        app.plot_all.assert_called_once_with(fit_view=False)
+        self.assertEqual(app.plotcanvas.view.camera.rect, 'saved-rect')
+        # the Preferences form shows the project keys of the new active project
+        app.preferencesUiManager.defaults_write_form.assert_called_once_with()
+
+    def test_activate_of_an_empty_project_does_not_plot(self):
+        app, manager = self.make([])
+        manager.activate(manager.active)
+        app.plot_all.assert_not_called()
+        app.init_tools.assert_called_once_with(init_tcl=False)
+
+    def test_activate_does_not_build_a_missing_ui(self):
+        # an object without a UI is left as it is; set_ui() runs only when the object is made
+        gerber = make_object('gerber', with_ui=False)
+        app, manager = self.make([gerber])
+        manager.activate(manager.active)
+        gerber.set_ui.assert_not_called()
+
+    def test_before_switch_clears_the_canvas_helpers(self):
+        app, manager = self.make([])
+        app.call_source = 'app'
+        app.tool_shapes = Mock()
+        app.hover_shapes = Mock()
+        app.exc_areas = Mock()
+        app.delete_selection_shape = Mock()
+
+        manager.before_switch()
+
+        app.tool_shapes.clear.assert_called_once_with(update=True)
+        app.hover_shapes.clear.assert_called_once_with(update=True)
+        app.exc_areas.clear_shapes.assert_called_once_with()
+        app.delete_selection_shape.assert_called_once_with()
+
+    def test_before_switch_never_closes_an_editor(self):
+        # a switch is refused while an editor is open (is_busy); before_switch must not drop editor changes
+        app, manager = self.make([])
+        app.call_source = 'app'
+        app.on_editing_finished = Mock()
+        app.tool_shapes = None
+        app.hover_shapes = None
+        app.exc_areas = None
+        app.delete_selection_shape = Mock()
+        manager.before_switch()
+        app.on_editing_finished.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
