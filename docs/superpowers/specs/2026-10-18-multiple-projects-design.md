@@ -34,7 +34,7 @@ Holds the state of 1 project:
 | `name` | The project name. It is unique among the open projects. |
 | `filename` | The path of the `.FlatPrj` file, or `None`. |
 | `collection` | The `ObjectCollection` of the project. |
-| `options` | The project copy of the options. |
+| `options` | The project keys of the project (`defaults.project_options`). The application settings are in `app.defaults` and are the same for all projects. |
 | `should_we_save` | The dirty flag. |
 | `all_objects_list` | The project copy of `app.all_objects_list`. |
 | `view_rect` | The canvas view rectangle when the project was last active. |
@@ -132,7 +132,8 @@ The title bar shows the name of the active project.
 - If the active project is empty, has no file and has no unsaved changes, it receives the
   opened file. No new entry is added. This stops an empty `Project_1` from staying in the
   list after the first open.
-- The "Import Settings?" answer applies only to the options of the new project.
+- The project keys of the file go into the new project. The application settings in the file are ignored
+  (see `2026-10-18-options-defaults-split-design.md`).
 
 ### Save
 
@@ -145,8 +146,9 @@ The title bar shows the name of the active project.
 
 ### Settings
 
-Each project keeps its own options. A change in Preferences applies to the active
-project only.
+Each project keeps its own project keys. A change of a project key in Preferences applies to
+the active project and becomes the default for new projects. A change of an application setting
+applies to all projects.
 
 ### Exit
 

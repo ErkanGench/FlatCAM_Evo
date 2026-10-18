@@ -273,7 +273,8 @@ class ProjectContext:
         self.name = name
         self.collection = collection
         self.filename = filename
-        # None means: load the application defaults when the project becomes active
+        # only the project keys (see defaults.project_options); the application settings are not per project
+        # None means: copy the project keys from the application defaults when the project becomes active
         self.options = None
         self.should_we_save = False
         # the canvas view rectangle when the project was last active
@@ -352,8 +353,12 @@ In `tests/test_projects_manager.py`, add this code after the class `TestHandlers
 
 ```python
 def make_app(collection=None):
+    from defaults import AppOptions
+    # a merged AppOptions, as in the App: it stores the project keys and sends the other keys to "defaults"
+    defaults = {'units': 'MM', 'global_gridx': 1.0}
     return SimpleNamespace(
-        collection=collection or FakeCollection(), options={'units': 'MM'}, project_filename=None,
+        collection=collection or FakeCollection(), defaults=defaults,
+        options=AppOptions(version='test', baseline=defaults, defaults=defaults), project_filename=None,
         should_we_save=False, all_objects_list=[], inform=Mock(), log=Mock(),
         ui=SimpleNamespace(set_ui_title=Mock()),
         proc_container=SimpleNamespace(get_procs_count=Mock(return_value=0)),
@@ -406,7 +411,7 @@ class TestProjectManagerCore(unittest.TestCase):
         self.assertTrue(app.should_we_save)
         self.assertEqual(app.all_objects_list, [])
         self.assertIs(manager.stack.currentWidget(), second.collection.view)
-        # the old state is written back to the old context
+        # the old state is written back to the old context; only the project keys are kept
         self.assertEqual(first.options, {'units': 'MM'})
         self.assertEqual(first.filename, 'a.FlatPrj')
         self.assertFalse(first.should_we_save)
@@ -423,6 +428,19 @@ class TestProjectManagerCore(unittest.TestCase):
         manager.switch(first)
         self.assertEqual(app.options['units'], 'MM')
         self.assertIs(app.collection, first.collection)
+
+    def test_switch_does_not_change_the_application_settings(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        second.options = {'units': 'IN', 'global_gridx': 9.0}
+        manager.switch(second)
+        app.options['global_gridx'] = 2.0
+        manager.switch(first)
+        # an application key is not part of a project: it keeps the last value and is not saved in the context
+        self.assertEqual(app.options['global_gridx'], 2.0)
+        self.assertEqual(app.defaults['global_gridx'], 2.0)
+        self.assertNotIn('global_gridx', second.options)
 
     def test_switch_without_options_resets_options(self):
         app, manager = make_manager()
@@ -485,6 +503,7 @@ from PyQt6 import QtCore, QtWidgets
 
 from appObjects.ProjectContext import ProjectContext, unique_name, same_path, name_from_filename, \
     is_valid_name, PROJECT_EXT
+from defaults import project_options
 
 # App Translation
 import gettext
@@ -591,7 +610,8 @@ class ProjectManager(QtCore.QObject):
         Write the live state of the active project from the App back into its context.
         """
         ctx = self.active
-        ctx.options = deepcopy(dict(self.app.options.items()))
+        # only the project keys; the application settings stay in app.defaults for all projects
+        ctx.options = deepcopy(project_options(self.app.options))
         ctx.filename = self.app.project_filename
         ctx.should_we_save = self.app.should_we_save
         ctx.view_rect = self._get_view_rect()
@@ -601,8 +621,9 @@ class ProjectManager(QtCore.QObject):
         Put the state of the context into the App.
         """
         self.app.collection = ctx.collection
-        if ctx.options:
-            self.app.options.update(deepcopy(ctx.options))
+        if ctx.options is not None:
+            # copies the project keys from the defaults, then puts the saved project keys over them
+            self.app.options.load_project(deepcopy(ctx.options))
         else:
             self.reset_options()
         self.app.project_filename = ctx.filename
@@ -667,7 +688,7 @@ class ProjectManager(QtCore.QObject):
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (12 tests).
+Expected: `OK` (13 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -937,7 +958,7 @@ Add this block to the class `ProjectManager`, directly after the method `update_
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (27 tests).
+Expected: `OK` (28 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -980,8 +1001,15 @@ class TestProjectManagerVisuals(unittest.TestCase):
         app.init_tools = Mock()
         app.plot_all = Mock()
         app.plotcanvas = SimpleNamespace(redraw=Mock(), view=SimpleNamespace(camera=SimpleNamespace(rect=None)))
+        app.preferencesUiManager = Mock()
+        app.on_defaults2options = Mock()
         manager = ProjectManager(app, collection_factory=FakeCollection)
         return app, manager
+
+    def test_reset_options_copies_the_project_keys_from_the_defaults(self):
+        app, manager = self.make([])
+        manager.reset_options()
+        app.on_defaults2options.assert_called_once_with()
 
     def test_deactivate_releases_shapes_and_ui(self):
         gerber = make_object('gerber')
@@ -1013,6 +1041,8 @@ class TestProjectManagerVisuals(unittest.TestCase):
         app.init_tools.assert_called_once_with(init_tcl=False)
         app.plot_all.assert_called_once_with(fit_view=False)
         self.assertEqual(app.plotcanvas.view.camera.rect, 'saved-rect')
+        # the Preferences form shows the project keys of the new active project
+        app.preferencesUiManager.defaults_write_form.assert_called_once_with()
 
     def test_activate_of_an_empty_project_does_not_plot(self):
         app, manager = self.make([])
@@ -1056,7 +1086,7 @@ class TestProjectManagerVisuals(unittest.TestCase):
 - [ ] **Step 2: Run the tests and see them fail**
 
 Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: 6 failures in `TestProjectManagerVisuals` (the methods are still empty).
+Expected: 7 failures in `TestProjectManagerVisuals` (the methods are still empty).
 
 - [ ] **Step 3: Replace the empty methods in `appHandlers/appProjects.py`**
 
@@ -1093,9 +1123,9 @@ with this block:
 
     def reset_options(self):
         """
-        A new project starts with the application defaults, the same as File -> New Project did before.
+        A new project copies the project keys from the application defaults. The application settings are the
+        same for all projects, so they do not change.
         """
-        self.app.options.load(filename=self.app.defaults_path(), inform=self.app.inform)
         self.app.on_defaults2options()
 
     def before_switch(self):
@@ -1163,6 +1193,9 @@ with this block:
             obj.build_ui()
         app.setup_default_properties_tab()
 
+        # show the project keys of this project in the Preferences form
+        app.preferencesUiManager.defaults_write_form()
+
         # the plugin comboboxes hold the model of the old collection; File -> New Project also does this
         app.init_tools(init_tcl=False)
 
@@ -1189,7 +1222,7 @@ with this block:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (33 tests). The tests of Tasks 3 and 4 still pass because they replace these methods with `Mock`.
+Expected: `OK` (35 tests). The tests of Tasks 3 and 4 still pass because they replace these methods with `Mock`.
 
 - [ ] **Step 5: Commit**
 
@@ -1481,7 +1514,7 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (45 tests).
+Expected: `OK` (47 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -1563,7 +1596,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (48 tests).
+Expected: `OK` (50 tests).
 
 Also run: `.venv/Scripts/python.exe tests/test_titlebar.py`
 Expected: `OK`.
@@ -1892,6 +1925,7 @@ from unittest.mock import Mock
 from PyQt6 import QtCore, QtWidgets
 
 from appHandlers.appIO import appIO
+from defaults import AppOptions
 
 
 class ProjectSignals(QtCore.QObject):
@@ -1919,8 +1953,10 @@ class AppIOTestBase(unittest.TestCase):
         self.signals = ProjectSignals()
         self.tasks = []
         self.projects = Mock()
+        defaults = Defaults()
         self.app = SimpleNamespace(
-            log=Mock(), inform=Mock(), splash=Mock(), options={}, defaults=Defaults(), app_units='MM',
+            log=Mock(), inform=Mock(), splash=Mock(), defaults=defaults, app_units='MM',
+            options=AppOptions(version='test', baseline={}, defaults=defaults), preferencesUiManager=Mock(),
             ui=self.window, new_project_signal=self.signals.new_project,
             restore_project=self.signals.restore, restore_project_objects_sig=self.signals.objects,
             worker_task=SimpleNamespace(emit=self.tasks.append),
@@ -2319,7 +2355,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (52 tests).
+Expected: `OK` (54 tests).
 
 Also run: `.venv/Scripts/python.exe tests/test_shutdown_routing.py`
 Expected: `OK`.
