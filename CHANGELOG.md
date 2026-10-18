@@ -13,6 +13,7 @@ GUI:
 - new Appearance setting (Light or Dark) and Styling setting (Default or Custom): Default uses the Qt widget style without the application stylesheet; Custom applies the stylesheet; changing either needs a restart; the old theme values are migrated
 - new Icons Color preferences: the light and dark icon colors recolor the single-color icon files; mixed-color icons, Project Tab icons and status indicators are not changed; the new colors show after a restart
 - new Object AutoHide and Object Autoswitch preferences: AutoHide hides the source object after a new object is made; Autoswitch shows Properties after a new object is made
+- new Dim text preference, on by default, next to Dark Canvas: in the Dark theme the GUI text without its own color is shown in a darker gray (#8c8c8c) instead of bright white; the change applies on save without a restart
 - new Project Tab icons for Gerber, Excellon, CNCJob, Geometry, Script and Document objects
 - the toolbars have no border
 - fixed: the toolbar lock and menu text states are read as booleans from the settings; the menu checks follow the state
