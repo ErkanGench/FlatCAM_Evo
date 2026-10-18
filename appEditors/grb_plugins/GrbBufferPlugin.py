@@ -155,7 +155,8 @@ class BufferEditorTool(AppToolEditor):
                         buffered_geom_el['follow'] = geometric_data['follow'].buffer(buff_value, join_style=join_style)
                     if 'clear' in geometric_data:
                         buffered_geom_el['clear'] = geometric_data['clear'].buffer(buff_value, join_style=join_style)
-                    return DrawToolShape(buffered_geom_el)
+                    geom_el.geo = buffered_geom_el
+                    return geom_el
                 else:
                     return geom_el
 
@@ -168,12 +169,13 @@ class BufferEditorTool(AppToolEditor):
         for x in self.draw_app.ui.apertures_table.selectedItems():
             rows_list.add(x.row())
 
+        selection = set(self.draw_app.selected)
         for row in rows_list:
             try:
                 apcode = int(self.draw_app.ui.apertures_table.item(row, 1).text())
                 target_geo = self.draw_app.storage_dict[apcode]['geometry']
-                buffered_geo = buffer_recursion(target_geo, self.draw_app.selected)
-                self.draw_app.storage_dict[apcode]['geometry'] = deepcopy(buffered_geo)
+                buffered_geo = buffer_recursion(target_geo, selection)
+                self.draw_app.storage_dict[apcode]['geometry'] = buffered_geo
                 self.draw_app.touch_geometry()
             except Exception as e:
                 self.app.log.error(

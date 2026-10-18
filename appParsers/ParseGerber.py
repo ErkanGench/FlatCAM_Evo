@@ -2574,12 +2574,7 @@ class Gerber(Geometry):
         self.solid_geometry = translate_geometry(self.solid_geometry, dx, dy)
         self.follow_geometry = translate_geometry(self.follow_geometry, dx, dy)
 
-        # Progress tracking - count apertures with geometry
-        aperture_count = 0
-        for apid in self.tools:
-            if 'geometry' in self.tools[apid]:
-                aperture_count += len(self.tools[apid]['geometry'])
-        
+        aperture_count = sum(len(tool.get('geometry', [])) for tool in self.tools.values())
         old_disp_number = 0
         el_count = 0
 
@@ -2587,20 +2582,18 @@ class Gerber(Geometry):
         try:
             for apid in self.tools:
                 if 'geometry' in self.tools[apid]:
-                    for geo_el in self.tools[apid]['geometry']:
-                        if 'solid' in geo_el:
-                            geo_el['solid'] = translate_geometry(geo_el['solid'], dx, dy)
-                        if 'follow' in geo_el:
-                            geo_el['follow'] = translate_geometry(geo_el['follow'], dx, dy)
-                        if 'clear' in geo_el:
-                            geo_el['clear'] = translate_geometry(geo_el['clear'], dx, dy)
+                    geometry = self.tools[apid]['geometry']
+                    entries = [(geo_el, key) for geo_el in geometry
+                               for key in ('solid', 'follow', 'clear') if key in geo_el]
+                    translated = translate_geometry([geo_el[key] for geo_el, key in entries], dx, dy)
+                    for (geo_el, key), geo in zip(entries, translated):
+                        geo_el[key] = geo
 
-                        # Update progress at aperture level
-                        el_count += 1
-                        disp_number = int(np.interp(el_count, [0, aperture_count], [0, 100]))
-                        if old_disp_number < disp_number <= 100:
-                            self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                            old_disp_number = disp_number
+                    el_count += len(geometry)
+                    disp_number = int(100 * el_count / aperture_count) if aperture_count else 100
+                    if old_disp_number < disp_number <= 100:
+                        self.app.proc_container.update_view_text(' %d%%' % disp_number)
+                        old_disp_number = disp_number
 
         except Exception as e:
             self.app.log.error('ParseGerber.Gerber.offset() Exception --> %s' % str(e))

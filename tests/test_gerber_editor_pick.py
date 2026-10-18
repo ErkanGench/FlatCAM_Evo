@@ -16,7 +16,7 @@ from shapely.geometry import LineString, Point, Polygon, box
 
 from appEditors import appGerberEditor as module
 from appEditors.appGerberEditor import (
-    AppGerberEditor, EraserEditorGrb, ImportEditorGrb, MoveEditorGrb, SelectEditorGrb, SimplifyEditorGrb,
+    AppGerberEditor, CopyEditorGrb, EraserEditorGrb, ImportEditorGrb, MoveEditorGrb, SelectEditorGrb, SimplifyEditorGrb,
     TransformEditorTool, aperture_rank,
 )
 from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
@@ -1069,6 +1069,116 @@ class TestEraserMake(PickCase):
         self.eraser(ed, 5, 0).make()
         self.assertEqual(len(ed.storage_dict[0]['geometry']), 2)
         self.assertEqual(ed.storage_dict[10]['geometry'], [other])
+
+
+class TestEditorOperations(PickCase):
+    def test_copy_batch_replots_once(self):
+        shapes = [pad(x * 3, 0, 1) for x in range(30)]
+        ed = make_editor({10: aperture(shapes)})
+        ed.selected = list(shapes)
+        ed.sync_aperture_rows({10})
+        tool = CopyEditorGrb(ed)
+        ed.active_tool = tool
+        tool.origin = (0, 0)
+        tool.destination = (0, 10)
+        tool.make()
+        self.assertEqual(len(ed.storage_dict[10]['geometry']), 60)
+        self.assertEqual(ed.selected, [])
+        self.assertTrue(ed.storage_dict[10]['geometry'][30].geo['solid'].equals(pad(0, 10, 1).geo['solid']))
+        ed.plot_all.assert_called_once()
+
+    def test_bulk_delete_filters_storage_without_per_shape_searches(self):
+        class NoMembershipScan(list):
+            def __contains__(self, item):
+                raise AssertionError('Bulk deletion must not search the geometry list for every shape')
+
+        shapes = [pad(x * 3, 0, 1) for x in range(100)]
+        keep = pad(0, 10, 1)
+        ed = make_editor({10: aperture(shapes + [keep]), 11: aperture([shapes[0]])})
+        ed.storage_dict[10]['geometry'] = NoMembershipScan(shapes + [keep])
+        utility = module.DrawToolUtilityShape({'solid': box(0, 0, 1, 1)})
+        ed.utility = [utility]
+        ed.selected = list(reversed(shapes)) + [utility]
+        revision = ed.geometry_revision
+        ed.delete_selected()
+        self.assertEqual(ed.storage_dict[10]['geometry'], [keep])
+        self.assertEqual(ed.storage_dict[11]['geometry'], [])
+        self.assertEqual(ed.utility, [])
+        self.assertEqual(ed.selected, [])
+        self.assertTrue(ed.is_modified)
+        self.assertEqual(ed.geometry_revision, revision + 1)
+
+    def test_repeated_buffer_preserves_live_selection_and_unselected_shapes(self):
+        selected, other = pad(0, 0, 1), pad(10, 0, 1)
+        ed = make_editor({10: aperture([selected, other])})
+        ed.selected = [selected]
+        ed.sync_aperture_rows({10})
+        plugin = SimpleNamespace(app=ed.app, draw_app=ed)
+        BufferEditorTool.buffer(plugin, 1, 'round')
+        first_area = ed.storage_dict[10]['geometry'][0].geo['solid'].area
+        BufferEditorTool.buffer(plugin, 1, 'round')
+        self.assertIn(ed.selected[0], ed.storage_dict[10]['geometry'])
+        self.assertGreater(ed.storage_dict[10]['geometry'][0].geo['solid'].area, first_area)
+        self.assertIs(ed.storage_dict[10]['geometry'][1], other)
+        self.assertAlmostEqual(other.geo['solid'].area, pad(10, 0, 1).geo['solid'].area)
+
+    def test_scale_resolves_aperture_keys_and_scales_each_row_once(self):
+        for key in (10, '10'):
+            with self.subTest(key=key):
+                shape = pad(0, 0, 1)
+                ed = make_editor({key: aperture([shape])})
+                ed.selected = [shape]
+                ed.sync_aperture_rows({key})
+                table = ed.ui.apertures_table
+                with QtCore.QSignalBlocker(table):
+                    table.setItem(0, 2, QtWidgets.QTableWidgetItem('C'))
+                    table.selectRow(0)
+                ed.ui.scale_factor_entry.set_value(2)
+                area = shape.geo['solid'].area
+                ed.on_scale()
+                scaled = ed.storage_dict[key]['geometry'][0]
+                self.assertAlmostEqual(scaled.geo['solid'].area, area * 4)
+                self.assertIn(ed.selected[0], ed.storage_dict[key]['geometry'])
+                ed.app.log.error.assert_not_called()
+
+    def test_total_erasure_replots_even_without_surviving_fragments(self):
+        ed = make_editor({10: aperture([pad(0, 0, 0.1)])})
+        TestEraserMake().eraser(ed, 0, 0, 2).make()
+        self.assertEqual(sum(len(v['geometry']) for v in ed.storage_dict.values()), 0)
+        ed.plot_all.assert_called_once()
+
+    def test_import_merges_only_matching_aperture_types(self):
+        for existing_type, imported_type in (('R', 'O'), ('O', 'R'), ('R', 'R'), ('O', 'O')):
+            with self.subTest(existing=existing_type, imported=imported_type):
+                draw_app = MagicMock()
+                draw_app.storage_dict = {
+                    10: {'type': existing_type, 'size': 2.2, 'width': 2, 'height': 1, 'geometry': []}
+                }
+                imported = pad(5, 5, 1)
+                tool = SimpleNamespace(app=draw_app.app, draw_app=draw_app, sel_storage=[{
+                    'type': imported_type, 'size': 2.2, 'width': 2, 'height': 1, 'geometry': [imported]
+                }])
+                ImportEditorGrb.import_shapes(tool)
+                destination = 10 if existing_type == imported_type else 11
+                self.assertEqual(draw_app.storage_dict[destination]['type'], imported_type)
+                self.assertIn(imported, draw_app.storage_dict[destination]['geometry'])
+
+    def test_zoom_fit_uses_bounds_without_union(self):
+        ed = make_editor({10: aperture([
+            DrawToolShape({'solid': box(10, 20, 12, 22)}),
+            DrawToolShape({'solid': box(14, 25, 17, 29)}),
+            DrawToolShape({'solid': Polygon()}),
+            DrawToolShape({'follow': Point(100, 100)})
+        ])})
+        with patch.object(module, 'unary_union', side_effect=AssertionError('Zoom Fit must not union geometry')):
+            ed.on_zoom_fit()
+        rect = ed.app.plotcanvas.fit_view.call_args.kwargs['rect']
+        self.assertEqual((rect.left, rect.bottom, rect.right, rect.top), (10, 20, 17, 29))
+
+    def test_zoom_fit_empty_board_does_not_change_view(self):
+        ed = make_editor()
+        ed.on_zoom_fit()
+        ed.app.plotcanvas.fit_view.assert_not_called()
 
 
 if __name__ == '__main__':

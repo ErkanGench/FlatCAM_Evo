@@ -3045,13 +3045,14 @@ class CopyEditorGrb(MoveEditorGrb):
                     self.geometry.append(DrawToolShape(new_geo_el))
 
                     sel_shapes_to_be_deleted.append(select_shape)
-                    self.draw_app.on_grb_shape_complete(self.current_storage)
+                    self.draw_app.on_grb_shape_complete(self.current_storage, no_plot=True)
                     self.geometry = []
 
             for shp in sel_shapes_to_be_deleted:
                 self.draw_app.selected.remove(shp)
             sel_shapes_to_be_deleted = []
 
+        self.draw_app.plot_all()
         self.draw_app.build_ui()
         self.draw_app.app.inform.emit('[success] %s' % _("Done."))
         self.draw_app.app.jump_signal.disconnect()
@@ -3189,8 +3190,7 @@ class EraserEditorGrb(ShapeToolEditorGrb):
         if should_build:
             self.draw_app.build_ui()
         self.draw_app.delete_utility_geometry()
-        if intersection_geo_list:
-            self.draw_app.plot_all()
+        self.draw_app.plot_all()
         self.draw_app.app.inform.emit('[success] %s' % _("Done."))
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -3838,7 +3838,7 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
             elif ap_dict['type'] in ['R', 'O']:
                 added_flag = False
                 for storage in list(st_dict.keys()):
-                    if st_dict[storage]['type'] in ['R', 'O']:
+                    if st_dict[storage]['type'] == ap_dict['type']:
                         if st_dict[storage]['width'] == ap_dict['width'] and \
                                 st_dict[storage]['height'] == ap_dict['height']:
                             st_dict[storage]['geometry'] += ap_dict['geometry']
@@ -6659,15 +6659,17 @@ class AppGerberEditor(QtCore.QObject):
         for ap_code in self.storage_dict:
             for geo_el in self.storage_dict[ap_code]['geometry']:
                 actual_geo = geo_el.geo
-                if 'solid' in actual_geo:
-                    edit_geo.append(actual_geo['solid'])
+                solid = actual_geo.get('solid')
+                if solid is not None and not solid.is_empty:
+                    edit_geo.append(solid)
 
-        all_geo = unary_union(edit_geo)
+        if not edit_geo:
+            return
 
         # calculate the bounds values for the edited Gerber object
-        xmin, ymin, xmax, ymax = all_geo.bounds
+        xmin, ymin, xmax, ymax = get_shapely_list_bounds(edit_geo)
 
-        new_rect = Rect(xmin, ymin, xmax, ymax)
+        new_rect = Rect((xmin, ymin), (xmax - xmin, ymax - ymin))
         self.app.plotcanvas.fit_view(rect=new_rect)
 
     def get_selected(self):
@@ -6680,15 +6682,21 @@ class AppGerberEditor(QtCore.QObject):
         return self.selected
 
     def delete_selected(self):
-        temp_ref = [s for s in self.selected]
+        selected = set(self.selected)
 
-        if len(temp_ref) == 0:
+        if not selected:
             self.app.inform.emit('[ERROR_NOTCL] %s' %
                                  _("Failed. No aperture geometry is selected."))
             return
 
-        for shape_sel in temp_ref:
-            self.delete_shape(shape_sel)
+        self.is_modified = True
+        geometry_selected = selected - set(self.utility)
+        self.utility[:] = [shape for shape in self.utility if shape not in selected]
+        if geometry_selected:
+            for storage in self.storage_dict.values():
+                if 'geometry' in storage:
+                    storage['geometry'][:] = [shape for shape in storage['geometry'] if shape not in geometry_selected]
+            self.touch_geometry()
 
         self.selected = []
         self.build_ui()
@@ -6818,7 +6826,8 @@ class AppGerberEditor(QtCore.QObject):
                             geometric_data['clear'], scale_factor, scale_factor, origin='center'
                         )
 
-                    return DrawToolShape(scaled_geom_el)
+                    geom_el.geo = scaled_geom_el
+                    return geom_el
                 else:
                     return geom_el
 
@@ -6827,17 +6836,24 @@ class AppGerberEditor(QtCore.QObject):
                                  _("No aperture to scale. Select at least one aperture and try again."))
             return
 
-        for x in self.ui.apertures_table.selectedItems():
+        selection = set(self.selected)
+        rows = {item.row() for item in self.ui.apertures_table.selectedItems()}
+        for row in sorted(rows):
             try:
-                apcode = self.ui.apertures_table.item(x.row(), 1).text()
+                apcode = self.ui.apertures_table.item(row, 1).text()
+                if apcode not in self.storage_dict:
+                    apcode = int(apcode)
 
-                temp_storage = deepcopy(scale_recursion(self.storage_dict[apcode]['geometry'], self.selected))
-                self.storage_dict[apcode]['geometry'] = []
-                self.storage_dict[apcode]['geometry'] = temp_storage
+                self.storage_dict[apcode]['geometry'] = scale_recursion(
+                    self.storage_dict[apcode]['geometry'], selection
+                )
                 self.touch_geometry()
 
             except Exception as e:
                 self.app.log.error("AppGerberEditor.on_scale() --> %s" % str(e))
+                self.plot_all()
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                return
 
         self.plot_all()
         self.app.inform.emit('[success] %s' % _("Done."))

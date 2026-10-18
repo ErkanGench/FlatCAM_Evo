@@ -1382,8 +1382,8 @@ class Excellon(Geometry):
                 self.app.proc_container.update_view_text(' %d%%' % disp_number)
                 old_disp_number = disp_number
 
-        # Recreate geometry
-        self.create_geometry()
+        # Translation preserves hole/slot outlines; don't buffer every drill again.
+        self.solid_geometry = [geo for tool in self.tools.values() for geo in tool['solid_geometry']]
         self.app.proc_container.new_text = ''
 
     def mirror(self, axis, point):

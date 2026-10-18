@@ -29,6 +29,7 @@ class ToolMove(AppTool):
 
     pluginName = _("Move")
     replot_signal = QtCore.pyqtSignal(list)
+    move_finished = QtCore.pyqtSignal(object)
 
     def __init__(self, app):
         AppTool.__init__(self, app)
@@ -52,6 +53,7 @@ class ToolMove(AppTool):
         self.sel_shapes = self.app.sel_shapes
 
         self.replot_signal[list].connect(self.replot)
+        self.move_finished.connect(self._on_move_finished)
 
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='M', **kwargs)
@@ -85,7 +87,8 @@ class ToolMove(AppTool):
             # signal that there is a command active, and it is 'Move'
             self.app.command_active = "Move"
 
-            sel_obj_list = self.app.collection.get_selected()
+            sel_obj_list = [obj for obj in self.app.collection.get_selected()
+                            if obj.obj_options['plot'] and obj.visible is True]
             if sel_obj_list:
                 self.app.inform.emit(_("MOVE: Click on the Start point ..."))
 
@@ -174,66 +177,77 @@ class ToolMove(AppTool):
         """
 
         dx, dy = offset
+        if dx == 0 and dy == 0:
+            return
 
-        if not objects:
+        if objects is None:
             # move only the objects selected and plotted and visible
             obj_list = [
                 obj for obj in self.app.collection.get_selected() if obj.obj_options['plot'] and obj.visible is True
             ]
         else:
-            obj_list = objects
+            obj_list = list(objects)
+
+        if not obj_list:
+            self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No object is selected.")))
+            return "fail"
+
+        # Qt widgets belong to the GUI thread, not the movement worker.
+        for sel_obj in obj_list:
+            if sel_obj.kind == 'gerber':
+                sel_obj.ui.aperture_table_visibility_cb.setChecked(False)
+
+        result = {'updates': [], 'error': None}
 
         def job_move(app_obj):
             with self.app.proc_container.new('%s...' % _("Moving")):
-
-                if not obj_list:
-                    app_obj.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No object is selected.")))
-                    return "fail"
-
+                moved = []
                 try:
-                    # remove any mark aperture shape that may be displayed
                     for sel_obj in obj_list:
-                        # if the Gerber mark shapes are enabled they need to be disabled before move
-                        if sel_obj.kind == 'gerber':
-                            sel_obj.ui.aperture_table_visibility_cb.setChecked(False)
-
+                        moved.append(sel_obj)
                         try:
-                            sel_obj.replotApertures.emit()
-                        except Exception:
-                            pass
-
-                        # offset solid_geometry
-                        sel_obj.offset((dx, dy))
-
-                        # Update the object bounding box options
-                        a, b, c, d = sel_obj.bounds()
-                        sel_obj.obj_options['xmin'] = a
-                        sel_obj.obj_options['ymin'] = b
-                        sel_obj.obj_options['xmax'] = c
-                        sel_obj.obj_options['ymax'] = d
-
-                        try:
-                            sel_obj.set_offset_values()
-                        except AttributeError:
-                            # not all objects have this method
-                            pass
-
-                    # update the source_file with the new positions
-                    for sel_obj in obj_list:
-                        if sel_obj.kind in ('gerber', 'excellon'):
-                            sel_obj.regenerate_source()
+                            status = sel_obj.offset((dx, dy))
+                        finally:
+                            result['updates'].append((sel_obj, sel_obj.bounds()))
+                        if status == 'fail':
+                            raise ValueError('Object movement failed')
                 except Exception as err:
-                    app_obj.log.error('[ERROR_NOTCL] %s --> %s' % ('ToolMove.move_handler()', str(err)))
-                    return "fail"
+                    app_obj.app.log.exception('ToolMove.move_handler()')
+                    result['error'] = str(err)
 
-                # time to plot the moved objects
-                app_obj.replot_signal.emit(obj_list)
+                # Plot before exporting, and refresh even a partially moved object on failure.
+                for sel_obj in moved:
+                    try:
+                        sel_obj.plot()
+                        if sel_obj.kind in ('gerber', 'excellon'):
+                            if sel_obj.regenerate_source() is False:
+                                raise ValueError('Source regeneration failed')
+                    except Exception as err:
+                        app_obj.app.log.exception('ToolMove.move_handler() refresh')
+                        result['error'] = str(err)
 
-            # delete the selection bounding box
-            self.delete_shape()
-            self.app.inform.emit('[success] %s' % _("Done."))
+            app_obj.move_finished.emit(result)
 
+        self.app.should_we_save = True
         self.app.worker_task.emit({'fcn': job_move, 'params': [self]})
+
+    def _on_move_finished(self, result):
+        try:
+            for obj, bounds in result['updates']:
+                for key, value in zip(('xmin', 'ymin', 'xmax', 'ymax'), bounds):
+                    obj.obj_options[key] = value
+                try:
+                    obj.set_offset_values(bounds=bounds)
+                except AttributeError:
+                    pass
+            self.app.delete_selection_shape()
+        except Exception as err:
+            self.app.log.exception('ToolMove GUI refresh failed')
+            result['error'] = str(err)
+        if result['error'] is not None:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed."), result['error']))
+        else:
+            self.app.inform.emit('[success] %s' % _("Done."))
 
     def on_move(self, event):
         event_pos = event.pos
@@ -279,7 +293,7 @@ class ToolMove(AppTool):
         # first get a bounding box to fit all
         for obj in obj_list:
             # don't move disabled objects, move only plotted objects
-            if obj.obj_options['plot']:
+            if obj.obj_options['plot'] and obj.visible is True:
                 xmin, ymin, xmax, ymax = obj.bounds()
                 xminlist.append(xmin)
                 yminlist.append(ymin)
@@ -303,7 +317,7 @@ class ToolMove(AppTool):
         self.sel_shapes.redraw()
 
     def update_sel_bbox(self, pos):
-        self.delete_shape()
+        self.sel_shapes.clear()
 
         pt1 = (self.old_coords[0][0] + pos[0], self.old_coords[0][1] + pos[1])
         pt2 = (self.old_coords[1][0] + pos[0], self.old_coords[1][1] + pos[1])
@@ -338,6 +352,6 @@ class ToolMove(AppTool):
         face = '#0000FF' + str(hex(int(0.2 * 255)))[2:]
         outline = '#0000FFAF'
 
-        self.sel_shapes.add(proc_shape, color=outline, face_color=face, update=True, layer=0, tolerance=None)
+        self.sel_shapes.add(proc_shape, color=outline, face_color=face, update=False, layer=0, tolerance=None)
 
 # end of file
