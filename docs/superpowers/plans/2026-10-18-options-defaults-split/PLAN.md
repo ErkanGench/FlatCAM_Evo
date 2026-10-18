@@ -746,12 +746,14 @@ rtk git commit -m "feat(project): save and load only the project options, remove
    with:
 
 ```python
+        old_options = handler.options
         handler.options = AppOptions(version="test", baseline={}, defaults=handler.defaults)
         handler.defaults.update({"answer": 42, "units": "IN"})
         reads = [call for call in prefs.calls if call[0] == "defaults_read_form"]
         invoke("lifecycle", handler, "on_defaults2options")
         self.assertEqual(42, handler.options["answer"])
         self.assertEqual("IN", handler.options["units"])
+        handler.options = old_options
         self.assertIn(("defaults_write_form", (), {}), prefs.calls)
         self.assertEqual(reads, [call for call in prefs.calls if call[0] == "defaults_read_form"])
 ```

@@ -22,6 +22,7 @@ _original_argv = sys.argv
 try:
     sys.argv = [sys.argv[0]]
     from appMain import App
+    from defaults import AppOptions
 finally:
     sys.argv = _original_argv
 
@@ -198,23 +199,20 @@ class TestLifecycleBehavior(AppCharacterizationTest):
 
         app.preferencesUiManager.defaults_write_form_field.assert_called_once_with(field='global_hud')
 
-    def test_defaults_are_read_before_project_options_update(self):
-        events = []
+    def test_new_project_options_come_from_defaults_not_from_the_form(self):
         app = base_app()
         app.defaults.update({'units': 'IN', 'new_key': 7})
-        app.options.update({'units': 'MM', 'project_only': 3})
-        app.preferencesUiManager = SimpleNamespace(
-            defaults_read_form=Mock(side_effect=lambda: events.append('read'))
-        )
+        app.options = AppOptions(version='test', baseline={}, defaults=app.defaults)
+        app.options['units'] = 'MM'
+        app.preferencesUiManager = SimpleNamespace(defaults_read_form=Mock(), defaults_write_form=Mock())
         target, _ = target_for(app, 'lifecycle')
 
         target.on_defaults2options()
-        events.append('updated')
 
-        self.assertEqual(events, ['read', 'updated'])
+        app.preferencesUiManager.defaults_read_form.assert_not_called()
+        app.preferencesUiManager.defaults_write_form.assert_called_once_with()
         self.assertEqual(app.options['units'], 'IN')
         self.assertEqual(app.options['new_key'], 7)
-        self.assertEqual(app.options['project_only'], 3)
 
     def test_autosave_guard_truth_table(self):
         for block_autosave, should_save, save_in_progress in product((False, True), repeat=3):

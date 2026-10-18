@@ -27,6 +27,7 @@ from appHandlers.appUIActions import AppUIActions
 from appHandlers.appObjectOps import AppObjectOps
 from appHandlers.appCanvasEvents import AppCanvasEvents
 from appHandlers.appSignalConnector import AppSignalConnector
+from defaults import AppOptions
 
 
 FAMILY_CLASSES = {
@@ -530,7 +531,7 @@ class TestLifecycle(AppTestCase):
                 invoke("lifecycle", handler, "kill_app")
         self.assertEqual(0, raised.exception.code)
 
-        prefs = Recorder(("defaults_write_form_field", "defaults_read_form", "save_defaults"))
+        prefs = Recorder(("defaults_write_form_field", "defaults_read_form", "defaults_write_form", "save_defaults"))
         app.preferencesUiManager = prefs
         with tempfile.TemporaryDirectory() as temp_dir:
             app_root = Path(temp_dir) / "FlatCAM"
@@ -550,9 +551,16 @@ class TestLifecycle(AppTestCase):
             self.assertIn(("save_defaults", (), {"silent": True, "data_path": str(config_dir)}), prefs.calls)
 
         invoke("lifecycle", handler, "on_defaults_dict_change", "units")
-        handler.defaults.update({"answer": 42})
+        old_options = handler.options
+        handler.options = AppOptions(version="test", baseline={}, defaults=handler.defaults)
+        handler.defaults.update({"answer": 42, "units": "IN"})
+        reads = [call for call in prefs.calls if call[0] == "defaults_read_form"]
         invoke("lifecycle", handler, "on_defaults2options")
         self.assertEqual(42, handler.options["answer"])
+        self.assertEqual("IN", handler.options["units"])
+        handler.options = old_options
+        self.assertIn(("defaults_write_form", (), {}), prefs.calls)
+        self.assertEqual(reads, [call for call in prefs.calls if call[0] == "defaults_read_form"])
         self.assertIn(("defaults_write_form_field", (), {"field": "units"}), prefs.calls)
 
         from appGUI.preferences.OptionsGroupUI import OptionsGroupUI

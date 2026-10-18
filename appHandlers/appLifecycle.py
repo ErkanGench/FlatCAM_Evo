@@ -581,14 +581,14 @@ class AppLifecycle(QtCore.QObject):
     # --------------------------------------------------------------------------
     def on_defaults2options(self):
         """
-        Callback for Options->Transfer Options->App=>Project. Copy options
-        from application defaults to project options.
+        Set the project options of a new project from the application defaults
+        and show them in the Preferences form.
 
         :return:    None
         """
 
-        self.app.preferencesUiManager.defaults_read_form()
-        self.options.update(self.defaults)
+        self.options.reset_from_defaults()
+        self.app.preferencesUiManager.defaults_write_form()
 
     # --------------------------------------------------------------------------
     # Method 10: setup_obj_classes
