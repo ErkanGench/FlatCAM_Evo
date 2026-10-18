@@ -2280,6 +2280,12 @@ class MainGUI(QtWidgets.QMainWindow):
         :param name: String that store the project path and project name
         :return: None
         """
+        # the title shows the name of the active project instead of its file path
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None and (not name or name == self.app.project_filename or
+                                     name == _("New Project - Not saved")):
+            name = projects.active.name
+
         if self.title_bar is None:
             title = (
                 f"FlatCAM Evo {self.app.version} "

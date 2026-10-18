@@ -654,5 +654,31 @@ class TestProjectManagerDialogs(unittest.TestCase):
         manager.deactivate.assert_not_called()
 
 
+class TestTitleShowsProjectName(unittest.TestCase):
+    def make_window(self, filename=None):
+        return SimpleNamespace(
+            title_bar=SimpleNamespace(project_title=None, update_title=Mock()), setWindowTitle=Mock(),
+            app=SimpleNamespace(projects=SimpleNamespace(active=SimpleNamespace(name='Board_A')),
+                                project_filename=filename, version='9.0', beta=False))
+
+    def test_filename_is_replaced_by_the_project_name(self):
+        from appGUI.MainGUI import MainGUI
+        window = self.make_window(filename='C:/x/Board_A.FlatPrj')
+        MainGUI.set_ui_title(window, name='C:/x/Board_A.FlatPrj')
+        self.assertEqual(window.title_bar.project_title, 'Board_A')
+
+    def test_empty_name_is_replaced_by_the_project_name(self):
+        from appGUI.MainGUI import MainGUI
+        window = self.make_window()
+        MainGUI.set_ui_title(window, name=None)
+        self.assertEqual(window.title_bar.project_title, 'Board_A')
+
+    def test_other_text_is_kept(self):
+        from appGUI.MainGUI import MainGUI
+        window = self.make_window()
+        MainGUI.set_ui_title(window, name='Loading Project ... Please Wait ...')
+        self.assertEqual(window.title_bar.project_title, 'Loading Project ... Please Wait ...')
+
+
 if __name__ == '__main__':
     unittest.main()
