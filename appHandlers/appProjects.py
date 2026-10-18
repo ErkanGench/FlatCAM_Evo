@@ -195,6 +195,143 @@ class ProjectManager(QtCore.QObject):
         self.app.ui.set_ui_title(name=self.active.name)
 
     # ------------------------------------------------------------------------------------------------------------
+    # New, rename, close
+    # ------------------------------------------------------------------------------------------------------------
+    def new(self, visuals=True):
+        """
+        Add an empty project and make it active.
+
+        :return:    the new ProjectContext, or None if a task runs
+        """
+        if self.is_busy():
+            self.inform_busy()
+            return None
+
+        ctx = self.add_context(self.default_name())
+        if not self.switch(ctx, visuals=visuals):
+            self._dispose(ctx)
+            return None
+        return ctx
+
+    def rename(self, ctx, name):
+        """
+        :return:    True if the name changed. False if the name is not valid or another project uses it.
+        """
+        name = name.strip() if name else ''
+        if not is_valid_name(name):
+            return False
+        if name in [other.name for other in self.contexts if other is not ctx]:
+            return False
+
+        ctx.name = name
+        self.projects_changed.emit()
+        if ctx is self.active:
+            self.update_title()
+        return True
+
+    def is_dirty(self, ctx):
+        """
+        True if the project has unsaved changes. A project with a file is dirty when its flag is set, also when it
+        is empty: the deletion of all its objects is a change. A project without a file and without objects has
+        nothing to save, the same rule as the exit of the app with 1 project (AppLifecycle.final_save).
+        """
+        flag = self.app.should_we_save if ctx is self.active else ctx.should_we_save
+        if not flag:
+            return False
+        return bool(ctx.collection.get_list()) or self.filename_of(ctx) is not None
+
+    def dirty_contexts(self):
+        return [ctx for ctx in self.contexts if self.is_dirty(ctx)]
+
+    def close(self, ctx, force=False, visuals=True):
+        """
+        Close and remove a project. There is no dialog.
+
+        :param ctx:     the project to close
+        :param force:   if True, a project with unsaved changes is closed and the changes are lost
+        :param visuals: passed to switch()
+        :return:        True if the project is removed
+        """
+        if ctx not in self.contexts:
+            return False
+        if self.is_dirty(ctx) and not force:
+            return False
+        if self.is_busy():
+            self.inform_busy()
+            return False
+
+        if ctx is self.active:
+            if len(self.contexts) > 1:
+                idx = self.contexts.index(ctx)
+                target = self.contexts[idx - 1] if idx > 0 else self.contexts[idx + 1]
+                if not self.switch(target, visuals=visuals):
+                    return False
+            elif self.new(visuals=visuals) is None:
+                return False
+
+        self._dispose(ctx)
+        return True
+
+    def _dispose(self, ctx):
+        """
+        Remove an inactive project from the list and release its objects.
+        """
+        if ctx in self.contexts:
+            self.contexts.remove(ctx)
+        if self.displayed is ctx:
+            self.displayed = None
+
+        for obj in ctx.collection.get_list():
+            try:
+                obj.clear(update=False)
+            except Exception as err:
+                self.app.log.error("ProjectManager._dispose() --> %s" % str(err))
+            try:
+                obj.mark_shapes.clear(update=False)
+                obj.mark_shapes.parent = None
+            except AttributeError:
+                pass
+
+        self.stack.removeWidget(ctx.collection.view)
+        ctx.collection.view.deleteLater()
+        try:
+            ctx.collection.deleteLater()
+        except AttributeError:
+            pass
+        ctx.collection = None
+        self.projects_changed.emit()
+
+    # ------------------------------------------------------------------------------------------------------------
+    # File name rules
+    # ------------------------------------------------------------------------------------------------------------
+    def save_target(self, ctx=None):
+        """
+        The file that a Save of the project writes.
+
+        :return:    None if the project has no file (then Save As is needed). The current file if the project name
+                    is the file name. Else, '<name>.FlatPrj' in the folder of the current file.
+        """
+        ctx = ctx if ctx is not None else self.active
+        filename = self.filename_of(ctx)
+        if not filename:
+            return None
+        if name_from_filename(filename) == ctx.name:
+            return filename
+        return os.path.join(os.path.dirname(filename), ctx.name + PROJECT_EXT)
+
+    def adopt_filename(self, filename):
+        """
+        The active project now uses this file: its name becomes the file name.
+        Called after an open and after a Save As.
+        """
+        ctx = self.active
+        ctx.filename = filename
+        used = [other.name for other in self.contexts if other is not ctx]
+        ctx.name = unique_name(name_from_filename(filename), used)
+        self.projects_changed.emit()
+        self.update_title()
+
+    # ------------------------------------------------------------------------------------------------------------
     # Steps that change the GUI. Task 5 fills them.
     # ------------------------------------------------------------------------------------------------------------
     def reset_options(self):

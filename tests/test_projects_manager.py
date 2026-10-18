@@ -239,5 +239,122 @@ class TestProjectManagerCore(unittest.TestCase):
         listener.assert_called()
 
 
+class TestProjectManagerLifecycle(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_new_adds_a_unique_project_and_activates_it(self):
+        app, manager = make_manager()
+        ctx = manager.new()
+        self.assertEqual(manager.names(), ['Project_1', 'Project_2'])
+        self.assertIs(manager.active, ctx)
+        self.assertIs(app.collection, ctx.collection)
+
+    def test_new_is_refused_while_busy(self):
+        app, manager = make_manager()
+        app.save_in_progress = True
+        self.assertIsNone(manager.new())
+        self.assertEqual(manager.names(), ['Project_1'])
+
+    def test_rename(self):
+        app, manager = make_manager()
+        manager.new()
+        self.assertTrue(manager.rename(manager.active, ' Board_B '))
+        self.assertEqual(manager.active.name, 'Board_B')
+        app.ui.set_ui_title.assert_called_with(name='Board_B')
+
+    def test_rename_refuses_a_used_name(self):
+        app, manager = make_manager()
+        manager.new()
+        self.assertFalse(manager.rename(manager.active, 'Project_1'))
+        self.assertEqual(manager.active.name, 'Project_2')
+
+    def test_rename_refuses_a_name_that_is_not_valid(self):
+        app, manager = make_manager()
+        self.assertFalse(manager.rename(manager.active, 'a/b'))
+        self.assertFalse(manager.rename(manager.active, ''))
+
+    def test_is_dirty_needs_changes_and_objects(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        self.assertFalse(manager.is_dirty(manager.active))
+        app.should_we_save = True
+        self.assertTrue(manager.is_dirty(manager.active))
+        self.assertEqual(manager.dirty_contexts(), [manager.active])
+
+    def test_saved_project_with_all_objects_deleted_is_dirty(self):
+        # the deletion of all the objects of a saved project is a change that must be saved
+        app, manager = make_manager()
+        app.should_we_save = True
+        self.assertFalse(manager.is_dirty(manager.active))
+        app.project_filename = os.path.join('folder', 'Project_1.FlatPrj')
+        self.assertTrue(manager.is_dirty(manager.active))
+        # so the GUI close asks and the Tcl close needs -force
+        self.assertFalse(manager.close(manager.active))
+        self.assertTrue(manager.close(manager.active, force=True))
+
+    def test_close_inactive_project(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.new()
+        self.assertTrue(manager.close(first))
+        self.assertEqual(manager.names(), ['Project_2'])
+        self.assertIs(manager.active, second)
+        self.assertEqual(manager.stack.count(), 1)
+
+    def test_close_active_project_activates_the_previous_one(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.new()
+        self.assertTrue(manager.close(second))
+        self.assertIs(manager.active, first)
+        self.assertEqual(manager.names(), ['Project_1'])
+
+    def test_close_last_project_leaves_one_empty_project(self):
+        app, manager = make_manager()
+        first = manager.active
+        self.assertTrue(manager.close(first))
+        self.assertEqual(len(manager.contexts), 1)
+        self.assertIsNot(manager.active, first)
+        self.assertEqual(manager.active.name, 'Project_2')
+
+    def test_close_refuses_a_dirty_project_without_force(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.should_we_save = True
+        self.assertFalse(manager.close(manager.active))
+        self.assertTrue(manager.close(manager.active, force=True))
+
+    def test_save_target_without_file(self):
+        app, manager = make_manager()
+        self.assertIsNone(manager.save_target())
+
+    def test_save_target_same_name(self):
+        app, manager = make_manager()
+        path = os.path.join('folder', 'Project_1.FlatPrj')
+        app.project_filename = path
+        self.assertEqual(manager.save_target(), path)
+
+    def test_save_target_after_rename(self):
+        app, manager = make_manager()
+        app.project_filename = os.path.join('folder', 'Project_1.FlatPrj')
+        manager.rename(manager.active, 'Board_B')
+        self.assertEqual(manager.save_target(), os.path.join('folder', 'Board_B.FlatPrj'))
+
+    def test_adopt_filename_renames_the_active_project(self):
+        app, manager = make_manager()
+        manager.new()
+        manager.rename(manager.active, 'Board')
+        manager.switch(manager.contexts[0])
+        manager.adopt_filename(os.path.join('folder', 'Board.FlatPrj'))
+        self.assertEqual(manager.active.name, 'Board_1')
+        self.assertEqual(manager.active.filename, os.path.join('folder', 'Board.FlatPrj'))
+
+    def test_find_by_filename_uses_the_live_filename(self):
+        app, manager = make_manager()
+        app.project_filename = os.path.join('folder', 'Board.FlatPrj')
+        self.assertIs(manager.find_by_filename(os.path.join('folder', '.', 'Board.FlatPrj')), manager.active)
+        self.assertIsNone(manager.find_by_filename(os.path.join('folder', 'Other.FlatPrj')))
+
+
 if __name__ == '__main__':
     unittest.main()
