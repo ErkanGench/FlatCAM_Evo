@@ -482,6 +482,7 @@ class AppObjectOps(QtCore.QObject):
         self.defaults.report_usage("on_jump_to()")
 
         if not custom_location:
+            reference = tuple(self.app.mouse_pos)
             dia_box_location = None
 
             try:
@@ -510,8 +511,8 @@ class AppObjectOps(QtCore.QObject):
                         return
 
                     if dia_box.reference == 'rel':
-                        rel_x = self.app.mouse_pos[0] + location[0]
-                        rel_y = self.app.mouse_pos[1] + location[1]
+                        rel_x = reference[0] + location[0]
+                        rel_y = reference[1] + location[1]
                         location = (rel_x, rel_y)
                     self.options['global_jump_ref'] = dia_box.reference
                 except Exception:
@@ -521,6 +522,7 @@ class AppObjectOps(QtCore.QObject):
         else:
             location = custom_location
 
+        self.app.mouse_pos = [location[0], location[1]]
         self.app.jump_signal.emit(location)
 
         if fit_center:
@@ -528,14 +530,11 @@ class AppObjectOps(QtCore.QObject):
 
         cursor = QtGui.QCursor()
 
-        cal_location = (location[0], location[1])
-        canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
-        jump_loc = self.app.plotcanvas.translate_coords_2((cal_location[0], cal_location[1]))
-        j_pos = (
-            int(canvas_origin.x() + round(jump_loc[0])),
-            int(canvas_origin.y() + round(jump_loc[1]))
+        jump_loc = self.app.plotcanvas.translate_coords_2((location[0], location[1]))
+        j_pos = self.app.plotcanvas.native.mapToGlobal(
+            QPoint(round(jump_loc[0]), round(jump_loc[1]))
         )
-        cursor.setPos(j_pos[0], j_pos[1])
+        cursor.setPos(j_pos.x(), j_pos.y())
 
         if self.app.grid_status():
             # Update cursor
@@ -607,6 +606,7 @@ class AppObjectOps(QtCore.QObject):
             cy = loc_b[1] + abs((loc_b[3] - loc_b[1]) / 2)
             location = (cx, cy)
 
+        self.app.mouse_pos = [location[0], location[1]]
         self.app.locate_signal.emit(location, location_point)
 
         if fit_center:
@@ -614,14 +614,11 @@ class AppObjectOps(QtCore.QObject):
 
         cursor = QtGui.QCursor()
 
-        cal_location = (location[0], location[1])
-        canvas_origin = self.app.plotcanvas.native.mapToGlobal(QPoint(0, 0))
-        jump_loc = self.app.plotcanvas.translate_coords_2((cal_location[0], cal_location[1]))
-        j_pos = (
-            int(canvas_origin.x() + round(jump_loc[0])),
-            int(canvas_origin.y() + round(jump_loc[1]))
+        jump_loc = self.app.plotcanvas.translate_coords_2((location[0], location[1]))
+        j_pos = self.app.plotcanvas.native.mapToGlobal(
+            QPoint(round(jump_loc[0]), round(jump_loc[1]))
         )
-        cursor.setPos(j_pos[0], j_pos[1])
+        cursor.setPos(j_pos.x(), j_pos.y())
 
         if self.app.grid_status():
             # Update cursor

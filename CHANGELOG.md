@@ -27,6 +27,7 @@ GUI:
 - the Project tab can hold more than 1 project: a combobox above the tree selects the active project; a right-click on the combobox has New Project, Open Project, Save Project, Rename Project and Close Project, with icons; an inactive project keeps its geometry and its Properties UI but releases its plots, the CNCJob annotations and the Gerber marks; a switch is refused while an editor is open or a task runs; File New and File Open add a project; after a rename, Save writes '<new name>.FlatPrj' in the same folder and the title bar shows the project name; Save and Save As change the file name and the dirty flag only after a good save; exit asks about each project with unsaved changes; new Tcl commands list_projects, select_project and close_project
 - the File toolbar has no Open and Save buttons; the project commands are in the File menu and in the menu of the project combobox
 - removed the project autosave and its Preferences options; an old preferences file with the autosave keys still loads
+- fixed: Jump To and Locate put the mouse cursor at the wrong place on a scaled display: VisPyCanvas.translate_coords_2 maps to the logical canvas pixels (the inverse of translate_coords), and the canvas point is mapped to the screen with mapToGlobal; the application mouse position is updated to the new location, so the next relative Jump To starts from it, and a relative jump uses the position from the start of the command
 
 Objects:
 

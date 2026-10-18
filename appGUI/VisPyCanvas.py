@@ -151,9 +151,9 @@ class VisPyCanvas(scene.SceneCanvas):
 
     def translate_coords_2(self, pos):
         """
-        Translate FlatCAM units to pixels.
+        Translate FlatCAM units to logical canvas pixels (the inverse of translate_coords).
         """
-        tr = self.grid.get_transform('visual', 'document')
+        tr = self.grid.get_transform('visual', 'canvas')
         return tr.map(pos)
 
 
