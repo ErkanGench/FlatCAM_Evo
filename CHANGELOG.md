@@ -58,10 +58,21 @@ Plot 3D:
 - fixed: an empty marker or line visual does not raise an error when the view bounds are calculated
 - the 3D plot area has no margins
 
+Image Import:
+
+- the Tracing mode uses the vtracer package instead of svgtrace; Chromium, playwright, pyppeteer, scikit-image and SciPy are no longer needed
+- the default tracing uses straight segments (polygon mode); the old engine filled white areas enclosed by traces, which made shorts on PCB artwork
+- new Threshold option for B/W tracing: a pixel darker than the value is traced; transparent areas are traced as white
+- new presets: Default, Detailed, Smooth and Photo; a preset fills the Options
+- new Options: Curve (Polygon, Spline, Pixel), Filter Speckle, Precision, Gradient Step, Corner, Segment Length and Splice; the options that do not apply are disabled
+- the Chromium download dialog is removed; if vtracer is not installed, the plugin loads and Tracing shows how to install it
+- fixed: the Custom options of the old engine had no effect
+
 Tests:
 
 - new unit tests for the GCode sender workflow, console, restart, simulation, audit fixes, icon colors, layout changes and plugin object creation
 - extended unit tests for the GRBL sender, Plot 3D, levelling audit and theme color scheme; the gate list is updated
+- new unit tests for the image tracing; the gate list records the renamed Plot 3D zoom test
 
 17.10.2026
 
