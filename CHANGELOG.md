@@ -1,10 +1,10 @@
-FlatCAM Evo BETA (c) 2019 - by Marius Stanciu
+FlatCAM Evo (c) 2016-2026 (former FlatCAM beta) by Marius Stanciu
 
 Based on FlatCAM: 
 2D Computer-Aided PCB Manufacturing by (c) 2014-2016 Juan Pablo Caram
 =================================================
 
-CHANGELOG for FlatCAM Evo beta
+CHANGELOG for FlatCAM Evo
 
 18.10.2026
 
@@ -24,6 +24,9 @@ GUI:
 - fixed: the Toggle Grid Lines menu action uses grid32.png instead of grid_lines32.png
 - the Drilling tool uses the drill32.png icon
 - the paper size label is shown in tomato color
+- the Project tab can hold more than 1 project: a combobox above the tree selects the active project; a right-click on the combobox has New Project, Open Project, Save Project, Rename Project and Close Project, with icons; an inactive project keeps its geometry and its Properties UI but releases its plots, the CNCJob annotations and the Gerber marks; a switch is refused while an editor is open or a task runs; File New and File Open add a project; after a rename, Save writes '<new name>.FlatPrj' in the same folder and the title bar shows the project name; Save and Save As change the file name and the dirty flag only after a good save; exit asks about each project with unsaved changes; new Tcl commands list_projects, select_project and close_project
+- the File toolbar has no Open and Save buttons; the project commands are in the File menu and in the menu of the project combobox
+- removed the project autosave and its Preferences options; an old preferences file with the autosave keys still loads
 
 Objects:
 
