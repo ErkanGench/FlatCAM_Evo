@@ -209,22 +209,33 @@ class Sim:
 
 # ---------------------------------------------------------------- checking
 
-def _project(poly, ptr, window, x, y):
+def _segments(poly):
+    """(ax, ay, az, vx, vy, vz, len2) of each segment of poly, for _project."""
+    segments = []
+    for (ax, ay, az), (bx, by, bz) in zip(poly, poly[1:]):
+        vx, vy = bx - ax, by - ay
+        segments.append((ax, ay, az, vx, vy, bz - az, vx * vx + vy * vy))
+    return segments
+
+
+def _project(segments, ptr, window, x, y):
     """
-    Closest point to (x, y) on the segments poly[ptr:ptr+window].
+    Closest point to (x, y) on the segments[ptr:ptr+window] (made by _segments).
     Returns (segment index, Z at the closest point, distance).
     """
     best = None
-    last = min(len(poly) - 1, ptr + window)
-    for j in range(ptr, last):
-        ax, ay, az = poly[j]
-        bx, by, bz = poly[j + 1]
-        vx, vy = bx - ax, by - ay
-        len2 = vx * vx + vy * vy
-        t = 0.0 if len2 == 0.0 else max(0.0, min(1.0, ((x - ax) * vx + (y - ay) * vy) / len2))
-        dist = math.hypot(x - (ax + t * vx), y - (ay + t * vy))
-        if best is None or dist < best[2] - 1e-12:
-            best = (j, az + (bz - az) * t, dist)
+    best_dist = math.inf
+    hypot = math.hypot
+    for j in range(ptr, min(len(segments), ptr + window)):
+        ax, ay, az, vx, vy, vz, len2 = segments[j]
+        if len2 == 0.0:
+            t = 0.0
+        else:
+            t = ((x - ax) * vx + (y - ay) * vy) / len2
+            t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+        dist = hypot(x - (ax + t * vx), y - (ay + t * vy))
+        if best is None or dist < best_dist - 1e-12:
+            best, best_dist = (j, az + vz * t, dist), dist
     return best
 
 
@@ -300,7 +311,9 @@ def _check_cut(test, om, l_moves, o_start, l_start, offset, arc_segment, report,
     start_err = abs((l_start[2] - o_start[2]) - offset(l_start[0], l_start[1]))
     pre_ok = start_err <= 2 * BASE_TOL
     poly = [om.start] + list(om.pts)
-    degenerate = _xy_length(poly) < 1e-9
+    length = _xy_length(poly)
+    degenerate = length < 1e-9
+    segments = _segments(poly)
     if om.kind == 'arc':
         sag = om.rmax * (1.0 - math.cos(min(HALF_ANGLE, arc_segment / (2.0 * om.rmax))))
         xy_bound = sag + 4 * 10 ** -DEC
@@ -313,8 +326,7 @@ def _check_cut(test, om, l_moves, o_start, l_start, offset, arc_segment, report,
     # Every vertex is rounded to 10**-decimals per axis: within 0.71 * 10**-decimals of the exact one.
     xy_dev = max(math.dist(l_start[:2], o_start[:2]), math.dist(l_moves[-1].end[:2], om.end[:2]),
                  0.71 * 10 ** -DEC)
-    length = _xy_length(poly)
-    slope = 0.0 if degenerate else abs(om.end[2] - om.start[2]) / length
+    slope =0.0 if degenerate else abs(om.end[2] - om.start[2]) / length
     ptr = 0
     for index, lm in enumerate(l_moves):
         last_move = index == len(l_moves) - 1
@@ -327,7 +339,7 @@ def _check_cut(test, om, l_moves, o_start, l_start, offset, arc_segment, report,
             if degenerate or (last_move and k == len(points) - 1):
                 z_orig, dist = om.end[2], 0.0
             else:
-                ptr, z_orig, dist = _project(poly, ptr, window if full else len(poly), x, y)
+                ptr, z_orig, dist = _project(segments, ptr, window if full else len(segments), x, y)
             err = abs(z - (z_orig + offset(x, y)))
             report.samples += 1
             report.worst_z = max(report.worst_z, err - om.extra - slope * xy_dev)

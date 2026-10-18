@@ -55,32 +55,32 @@ class TestHudLayout(unittest.TestCase):
         return canvas
 
     def test_hud_text_is_visible_and_fits_its_background(self):
-        for dark in (False, True):
-            for font_size in (8, 16, 24):
-                with self.subTest(dark=dark, font_size=font_size):
-                    canvas = self.make_canvas(dark, font_size)
-                    image = canvas.render()
-                    scale = canvas.pixel_scale
-                    origin = canvas.view.node_transform(canvas.scene).map((0, 0))[:2]
-                    x0, y0 = np.round((origin + 1) * scale).astype(int)
-                    x1, y1 = np.round((origin + canvas.view.size - 1) * scale).astype(int)
-                    image = image[y0:y1, x0:x1]
-                    if dark:
-                        text = image[:, :, :3].min(axis=2) > 180
-                    else:
-                        text = image[:, :, :3].max(axis=2) < 60
-                    rows, columns = np.nonzero(text)
-                    self.assertGreater(len(rows), 10, 'HUD text must be visible')
-                    rows = rows + scale
-                    columns = columns + scale
-                    left = canvas.rect_hud.center[0] - canvas.rect_hud.width / 2
-                    top = canvas.rect_hud.center[1] - canvas.rect_hud.height / 2
-                    self.assertGreaterEqual(columns.min() / scale - left, 3)
-                    self.assertGreaterEqual(rows.min() / scale - top, 3)
-                    self.assertLessEqual((columns.max() + 1) / scale, left + canvas.rect_hud.width - 3)
-                    self.assertLessEqual((rows.max() + 1) / scale, top + canvas.rect_hud.height - 3)
-                    # A small padding, rather than heuristic spare rows around the content.
-                    self.assertLessEqual(canvas.rect_hud.height - (rows.max() - rows.min() + 1) / scale, 24)
+        # each canvas costs about 0.4 s: each theme and each font size is in 1 pair
+        for dark, font_size in ((True, 8), (False, 16), (True, 24)):
+            with self.subTest(dark=dark, font_size=font_size):
+                canvas = self.make_canvas(dark, font_size)
+                image = canvas.render()
+                scale = canvas.pixel_scale
+                origin = canvas.view.node_transform(canvas.scene).map((0, 0))[:2]
+                x0, y0 = np.round((origin + 1) * scale).astype(int)
+                x1, y1 = np.round((origin + canvas.view.size - 1) * scale).astype(int)
+                image = image[y0:y1, x0:x1]
+                if dark:
+                    text = image[:, :, :3].min(axis=2) > 180
+                else:
+                    text = image[:, :, :3].max(axis=2) < 60
+                rows, columns = np.nonzero(text)
+                self.assertGreater(len(rows), 10, 'HUD text must be visible')
+                rows = rows + scale
+                columns = columns + scale
+                left = canvas.rect_hud.center[0] - canvas.rect_hud.width / 2
+                top = canvas.rect_hud.center[1] - canvas.rect_hud.height / 2
+                self.assertGreaterEqual(columns.min() / scale - left, 3)
+                self.assertGreaterEqual(rows.min() / scale - top, 3)
+                self.assertLessEqual((columns.max() + 1) / scale, left + canvas.rect_hud.width - 3)
+                self.assertLessEqual((rows.max() + 1) / scale, top + canvas.rect_hud.height - 3)
+                # A small padding, rather than heuristic spare rows around the content.
+                self.assertLessEqual(canvas.rect_hud.height - (rows.max() - rows.min() + 1) / scale, 24)
 
     def test_hud_foreground_contrasts_with_the_actual_canvas_background(self):
         canvas = self.make_canvas(True, 8)

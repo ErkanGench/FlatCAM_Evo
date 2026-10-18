@@ -1,3 +1,4 @@
+import functools
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,12 @@ from appParsers.ParseExcellon import Excellon
 from appParsers.ParseGerber import Gerber
 from appParsers.ParseSprintLayout import SprintLayoutParser
 from defaults import AppDefaults
+
+
+@functools.lru_cache(maxsize=None)
+def _parsed_board():
+    # 1 parse for both test classes: the import copies the geometry and does not change the parsed board
+    return SprintLayoutParser(app=_app('MM')).parse_file(TestSprintLayoutFixture.FIXTURE)
 
 
 class NativeGerberObject(GerberObject):
@@ -113,7 +120,7 @@ class TestSprintLayoutFixture(unittest.TestCase):
     def setUpClass(cls):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         cls.app = _app('MM')
-        cls.parsed = SprintLayoutParser(app=cls.app).parse_file(cls.FIXTURE)
+        cls.parsed = _parsed_board()
         cls.references = {}
         for layer, filename in cls.REFERENCE.items():
             parser = Gerber(cls.app)
@@ -223,7 +230,7 @@ class TestSprintLayoutFixtureRoundTrip(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-        cls.parsed = SprintLayoutParser(app=_app('MM')).parse_file(cls.FIXTURE)
+        cls.parsed = _parsed_board()
 
     def _import(self, units):
         app = _app(units)

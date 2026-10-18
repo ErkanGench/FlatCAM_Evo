@@ -100,20 +100,24 @@ def unsafe_connections(source, protected):
                             break
             self.generic_visit(node)
 
-    Connections().visit(ast.parse(source))
+    Connections().visit(source if isinstance(source, ast.AST) else ast.parse(source))
     return findings
 
 
 def audit_sources(sources):
+    # each file is parsed 1 time: the same tree gives the protected names and the connections
+    trees = {path: ast.parse(source) for path, source in sources.items()}
     protected = {}
-    for source in sources.values():
-        for node in ast.walk(ast.parse(source)):
+    for tree in trees.values():
+        for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 parameter = optional_command_parameter(node)
                 if parameter in OPTION_PARAMETERS and not no_argument_slot(node):
                     protected[node.name] = parameter
-    return [(path, line, receiver, parameter) for path, source in sources.items()
-            for line, receiver, parameter in unsafe_connections(source, protected)]
+    # only a file with a triggered or clicked signal can hold a finding
+    return [(path, line, receiver, parameter) for path, tree in trees.items()
+            if 'triggered' in sources[path] or 'clicked' in sources[path]
+            for line, receiver, parameter in unsafe_connections(tree, protected)]
 
 
 @pytest.mark.parametrize('connection', [

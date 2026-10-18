@@ -39,7 +39,7 @@ File layout, as far as it is used:
 import math
 import struct
 
-from shapely import LineString, Point, Polygon, box
+from shapely import LineString, MultiLineString, Point, Polygon, box
 from shapely.affinity import affine_transform
 from shapely.ops import polygonize, unary_union
 
@@ -1084,7 +1084,8 @@ class AllegroBrdParser:
             follows = [affine_transform(line, (-1, 0, 0, 1, 0, 0)) for line in follows]
         if not follows:
             return Polygon(), []
-        solid = unary_union([line.buffer(stroke / 2, quad_segs=self._quad) for line in follows])
+        # 1 buffer of all strokes gives the same shape as a union of 1 buffer per stroke, 2x faster
+        solid = MultiLineString(follows).buffer(stroke / 2, quad_segs=self._quad)
         return solid, follows
 
     def _build_text(self):

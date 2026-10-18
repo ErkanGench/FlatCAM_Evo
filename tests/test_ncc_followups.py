@@ -1,9 +1,11 @@
 """Headless NCC regressions and repeatable board-like generation timings.
 
-Timings: .venv/Scripts/python.exe -m pytest tests/test_ncc_followups.py -k benchmark -s
+Timings: set FLATCAM_BENCHMARK=1, then run
+.venv/Scripts/python.exe -m pytest tests/test_ncc_followups.py -k benchmark -s
 These exercise geometry generation, not application startup, rendering or CNC hardware.
 """
 import json
+import os
 from math import cos, pi
 from statistics import median
 from time import perf_counter
@@ -17,6 +19,9 @@ from shapely.ops import unary_union
 
 import camlib
 from appPlugins.ToolNCC.NccGen import NccGen
+
+# the benchmark tests time each case 3 times for a median only with FLATCAM_BENCHMARK=1; 1 time in the suite
+REPEATS = 3 if os.environ.get('FLATCAM_BENCHMARK') else 1
 
 
 def board():
@@ -259,7 +264,7 @@ def test_final_cleanup_board_benchmark():
     for rest in (False, True):
         for enabled in (False, True):
             elapsed = []
-            for _ in range(3):
+            for _ in range(REPEATS):
                 gen, output, source, tools, _, _ = generator(rest=rest)
                 for tool in gen.ncc_tools.values():
                     tool['data']['tools_ncc_final_cleanup'] = enabled
@@ -519,7 +524,7 @@ def test_board_generation_benchmark():
     overlaps = []
     for rest in (False, True):
         times = []
-        for _ in range(3):
+        for _ in range(REPEATS):
             gen, output, source, tools, boundary, copper = generator(rest=rest)
             start = perf_counter()
             generate(gen, source, tools)
@@ -556,7 +561,7 @@ def test_shared_clearing_benchmark():
         gen, _, _, _, _, _ = generator()
         geo = gen.parent_tool
         times = []
-        for _ in range(5):
+        for _ in range(5 if REPEATS > 1 else 1):
             start = perf_counter()
             paths = getattr(geo, 'clear_polygon_' + method)(area, 0.5, 32, connect=False)
             times.append(perf_counter() - start)

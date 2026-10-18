@@ -1,3 +1,4 @@
+import functools
 import math
 import os
 import random
@@ -18,6 +19,12 @@ from appParsers.ParseAllegroBrd import AllegroBrdParser, AllegroBrdParseError
 
 MM = 1000 / 0.0254
 FIXTURE = Path(__file__).parent / 'fixtures' / 'orcad_17.2' / 'proiectCAD.brd'
+
+
+@functools.lru_cache(maxsize=None)
+def parsed_sample(path):
+    """1 parse of a sample board for the tests that only read the result."""
+    return AllegroBrdParser().parse_file(path)
 
 SH_CIRCLE, SH_RECT, SH_OBLONG_Y, SH_DIAMOND = 0x02, 0x06, 0x0C, 0x07
 
@@ -705,7 +712,7 @@ class TestAllegroUntestedReleases(unittest.TestCase):
                 put(blob, 0, magic, '<I')
                 if reads:
                     parsed = AllegroBrdParser().parse_bytes(bytes(blob))
-                    reference = AllegroBrdParser().parse_file(path)
+                    reference = parsed_sample(path)
                     self.assertEqual(parsed.warnings[0], 'Allegro %s is not tested: check the result against '
                                                          'Gerbers made by Allegro.' % name)
                     self.assertEqual(parsed.warnings[1:], reference.warnings)
@@ -722,7 +729,7 @@ class TestAllegroUntestedReleases(unittest.TestCase):
     def test_checked_releases_have_no_untested_warning(self):
         for path, version in ((FIXTURE, '17.2'), (FIXTURE_B, '18.1/24.1')):
             with self.subTest(file=path.name):
-                parsed = AllegroBrdParser().parse_file(path)
+                parsed = parsed_sample(path)
                 self.assertEqual(parsed.version, version)
                 self.assertFalse([w for w in parsed.warnings if 'not tested' in w])
                 self.assertEqual(parsed.warnings, ['Text is drawn with an approximate stroke font; glyph shapes, '
@@ -887,7 +894,7 @@ class TestAllegroFixtureBoards(unittest.TestCase):
                     AllegroBrdParser().parse_file(FIXTURE.with_name(name))
 
     def test_sample_board_summary(self):
-        parsed = AllegroBrdParser().parse_file(FIXTURE)
+        parsed = parsed_sample(FIXTURE)
         self.assertEqual(parsed.version, '17.2')
         self.assertEqual(parsed.copper_layers, ['TOP', 'BOTTOM'])
         self.assertEqual(list(parsed.layers), ['TOP', 'BOTTOM', 'SOLDERMASK_TOP', 'SOLDERMASK_BOTTOM',

@@ -16,7 +16,7 @@ represented raises KiCadPcbParseError; skipped non-copper items are warned.
 import math
 import re
 
-from shapely import LineString, Point, Polygon, box, set_precision
+from shapely import LineString, MultiLineString, Point, Polygon, box, set_precision
 from shapely.affinity import rotate, scale, translate
 from shapely.ops import polygonize, unary_union
 
@@ -818,7 +818,8 @@ class KiCadPcbParser:
             follows_all = [scale(line, xfact=-1, yfact=1, origin=(0, 0)) for line in follows_all]
         if not follows_all:
             return Polygon(), []
-        solid = unary_union([line.buffer(thickness / 2, quad_segs=self._quad) for line in follows_all])
+        # 1 buffer of all strokes gives the same shape as a union of 1 buffer per stroke, 2x faster
+        solid = MultiLineString(follows_all).buffer(thickness / 2, quad_segs=self._quad)
         return solid, follows_all
 
     def _text(self, layer, text, position, angle, effects, fields=None, at=None):

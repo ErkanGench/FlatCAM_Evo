@@ -1,3 +1,4 @@
+import functools
 import os
 import re
 import tempfile
@@ -24,6 +25,12 @@ from defaults import AppDefaults
 
 # The Eagle CAM references (GERBER/, inch) and Pcb39.TXT are shifted against the board coordinates by OFFSET mm.
 OFFSET = (14.62913, 9.88898)
+
+
+@functools.lru_cache(maxsize=None)
+def _parsed_board():
+    # 1 parse for both test classes: the import copies the geometry and does not change the parsed board
+    return EagleBrdParser(app=_app('MM')).parse_file(TestEagleFixture.FIXTURE)
 
 
 class NativeGerberObject(GerberObject):
@@ -127,7 +134,7 @@ class TestEagleFixture(unittest.TestCase):
     def setUpClass(cls):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         cls.app = _app('MM')
-        cls.parsed = EagleBrdParser(app=cls.app).parse_file(cls.FIXTURE)
+        cls.parsed = _parsed_board()
         cls.references = {}
         for key, filename in cls.REFERENCE.items():
             parser = Gerber(cls.app)
@@ -234,7 +241,7 @@ class TestEagleFixtureRoundTrip(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-        cls.parsed = EagleBrdParser(app=_app('MM')).parse_file(cls.FIXTURE)
+        cls.parsed = _parsed_board()
 
     def _import(self, units):
         app = _app(units)
