@@ -83,11 +83,13 @@ class AppLifecycle(QtCore.QObject):
         self.defaults.report_usage("on_layout()")
         self.log.debug(" ---> New Layout")
 
-        if lay:
+        # QComboBox.activated supplies an index, not a layout name.
+        if isinstance(lay, str) and lay:
             current_layout = lay
         else:
             current_layout = self.app.ui.general_pref_form.general_gui_group.layout_combo.get_value()
 
+        self.options['global_layout'] = current_layout
         lay_settings = QSettings("Open Source", "FlatCAM_EVO")
         lay_settings.setValue('layout', current_layout)
 
@@ -114,76 +116,76 @@ class AppLifecycle(QtCore.QObject):
             # ## TOOLBAR INSTALLATION # ##
             self.app.ui.toolbarfile = QtWidgets.QToolBar('File Toolbar')
             self.app.ui.toolbarfile.setObjectName('File_TB')
-            self.app.ui.toolbarfile.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarfile.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbarfile)
 
             self.app.ui.toolbaredit = QtWidgets.QToolBar('Edit Toolbar')
             self.app.ui.toolbaredit.setObjectName('Edit_TB')
-            self.app.ui.toolbaredit.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbaredit.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbaredit)
 
             self.app.ui.toolbarshell = QtWidgets.QToolBar('Shell Toolbar')
             self.app.ui.toolbarshell.setObjectName('Shell_TB')
-            self.app.ui.toolbarshell.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarshell.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbarshell)
 
             self.app.ui.toolbarplugins = QtWidgets.QToolBar('Plugin Toolbar')
             self.app.ui.toolbarplugins.setObjectName('Plugins_TB')
-            self.app.ui.toolbarplugins.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarplugins.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.app.ui.toolbarplugins)
 
             self.app.ui.geo_edit_toolbar = QtWidgets.QToolBar('Geometry Editor Toolbar')
             self.app.ui.geo_edit_toolbar.setObjectName('GeoEditor_TB')
-            self.app.ui.geo_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.geo_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.geo_edit_toolbar)
 
             self.app.ui.toolbarview = QtWidgets.QToolBar('View Toolbar')
             self.app.ui.toolbarview.setObjectName('View_TB')
-            self.app.ui.toolbarview.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarview.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.toolbarview)
 
             self.app.ui.addToolBarBreak(area=Qt.ToolBarArea.RightToolBarArea)
 
             self.app.ui.grb_edit_toolbar = QtWidgets.QToolBar('Gerber Editor Toolbar')
             self.app.ui.grb_edit_toolbar.setObjectName('GrbEditor_TB')
-            self.app.ui.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.grb_edit_toolbar)
 
             self.app.ui.exc_edit_toolbar = QtWidgets.QToolBar('Excellon Editor Toolbar')
             self.app.ui.exc_edit_toolbar.setObjectName('ExcEditor_TB')
-            self.app.ui.exc_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.exc_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.app.ui.exc_edit_toolbar)
         else:
             # ## TOOLBAR INSTALLATION # ##
             self.app.ui.toolbarfile = QtWidgets.QToolBar('File Toolbar')
             self.app.ui.toolbarfile.setObjectName('File_TB')
-            self.app.ui.toolbarfile.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarfile.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.toolbarfile)
 
             self.app.ui.toolbaredit = QtWidgets.QToolBar('Edit Toolbar')
             self.app.ui.toolbaredit.setObjectName('Edit_TB')
-            self.app.ui.toolbaredit.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbaredit.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.toolbaredit)
 
             self.app.ui.toolbarview = QtWidgets.QToolBar('View Toolbar')
             self.app.ui.toolbarview.setObjectName('View_TB')
-            self.app.ui.toolbarview.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarview.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.toolbarview)
 
             self.app.ui.toolbarshell = QtWidgets.QToolBar('Shell Toolbar')
             self.app.ui.toolbarshell.setObjectName('Shell_TB')
-            self.app.ui.toolbarshell.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarshell.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.toolbarshell)
 
             self.app.ui.toolbarplugins = QtWidgets.QToolBar('Plugin Toolbar')
             self.app.ui.toolbarplugins.setObjectName('Plugins_TB')
-            self.app.ui.toolbarplugins.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.toolbarplugins.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.toolbarplugins)
 
             self.app.ui.exc_edit_toolbar = QtWidgets.QToolBar('Excellon Editor Toolbar')
             # self.ui.exc_edit_toolbar.setVisible(False)
             self.app.ui.exc_edit_toolbar.setObjectName('ExcEditor_TB')
-            self.app.ui.exc_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.exc_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.exc_edit_toolbar)
 
             self.app.ui.addToolBarBreak()
@@ -191,13 +193,13 @@ class AppLifecycle(QtCore.QObject):
             self.app.ui.geo_edit_toolbar = QtWidgets.QToolBar('Geometry Editor Toolbar')
             # self.ui.geo_edit_toolbar.setVisible(False)
             self.app.ui.geo_edit_toolbar.setObjectName('GeoEditor_TB')
-            self.app.ui.geo_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.geo_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.geo_edit_toolbar)
 
             self.app.ui.grb_edit_toolbar = QtWidgets.QToolBar('Gerber Editor Toolbar')
             # self.ui.grb_edit_toolbar.setVisible(False)
             self.app.ui.grb_edit_toolbar.setObjectName('GrbEditor_TB')
-            self.app.ui.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;}")
+            self.app.ui.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.grb_edit_toolbar)
 
         if current_layout == 'minimal':
@@ -206,10 +208,13 @@ class AppLifecycle(QtCore.QObject):
             self.app.ui.geo_edit_toolbar.setVisible(False)
             self.app.ui.grb_edit_toolbar.setVisible(False)
             self.app.ui.exc_edit_toolbar.setVisible(False)
-            self.app.ui.lock_toolbar(lock=True)
 
         # add all the actions to the toolbars
         self.app.ui.populate_toolbars()
+
+        # Rebuilt toolbars must match the menu state; minimal keeps its locked preset.
+        self.app.ui.lock_toolbar(lock=True if current_layout == 'minimal' else self.app.ui.lock_action.isChecked())
+        self.app.ui.show_text_under_action(show_text=self.app.ui.show_text_action.isChecked())
 
         try:
             # reconnect all the signals to the toolbar actions

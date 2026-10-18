@@ -446,6 +446,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
                                    antialias=True, method='agg', parent=self.view.scene)
 
         self.fcapp.ui.wplace_label.set_value(workspace_size[:3])
+        self.fcapp.ui.wplace_label.color = 'tomato'
         self.fcapp.ui.wplace_label.setToolTip(workspace_size)
         self.fcapp.ui.wplace_label.setStyleSheet("""
                         QLabel

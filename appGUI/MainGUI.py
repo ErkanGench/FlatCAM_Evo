@@ -637,7 +637,7 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/grid32.png'),
             '%s\t%s' % (_("Toggle Grid Snap"), _('G')))
         self.menuview_toggle_grid_lines = self.menuview.addAction(
-            QtGui.QIcon(self.app.resource_location + '/grid_lines32.png'),
+            QtGui.QIcon(self.app.resource_location + '/grid32.png'),
             '%s\t%s' % (_("Toggle Grid Lines"), _('Shift+G')))
         self.menuview_toggle_axis = self.menuview.addAction(
             QtGui.QIcon(self.app.resource_location + '/axis32.png'),
@@ -1026,7 +1026,7 @@ class MainGUI(QtWidgets.QMainWindow):
 
         # ## TOOLBAR INSTALLATION ###
         self.setIconSize(self.iconSize() * 0.8)
-        toolbar_style = "QToolBar{spacing:2px;padding:1px;} QToolBar > QToolButton{padding:2px;}"
+        toolbar_style = "QToolBar{spacing:2px;padding:1px;border:0px;} QToolBar > QToolButton{padding:2px;}"
         self.toolbarfile = QtWidgets.QToolBar(_('File Toolbar'))
         self.toolbarfile.setObjectName('File_TB')
         self.toolbarfile.setStyleSheet(toolbar_style)
@@ -1465,7 +1465,7 @@ class MainGUI(QtWidgets.QMainWindow):
         self.status_toolbar.addWidget(self.hud_label)
         self.status_toolbar.addWidget(FCLabel(" "))
 
-        self.wplace_label = FCLabel("A4")
+        self.wplace_label = FCLabel("A4", color='tomato')
         self.wplace_label.setToolTip(_("Draw a delimiting rectangle on canvas.\n"
                                        "The purpose is to illustrate the limits for our work.")
                                      )
@@ -1504,7 +1504,7 @@ class MainGUI(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.shell_dock)
 
         # ####################### GRBL Console DOCK ##############################
-        self.grbl_console_dock = FCDock(_("GRBL Console"), close_callback=self.on_grbl_console_closed)
+        self.grbl_console_dock = FCDock(_("GCode Console"), close_callback=self.on_grbl_console_closed)
         self.grbl_console_dock.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app24.png'))
         self.grbl_console_dock.setObjectName('GrblConsole_DockWidget')
         self.grbl_console_dock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
@@ -2112,8 +2112,8 @@ class MainGUI(QtWidgets.QMainWindow):
         if q_settings.contains("saved_gui_state"):
             self.restoreState(q_settings.value('saved_gui_state'), 0)
             self.grbl_console_dock.hide()
-        tb_lock_state = q_settings.value('toolbar_lock', "true")
-        show_text_state = q_settings.value('menu_show_text', "true")
+        tb_lock_state = q_settings.value('toolbar_lock', True, type=bool)
+        show_text_state = q_settings.value('menu_show_text', True, type=bool)
         win_geo = q_settings.value('window_geometry', (100, 100, 800, 400))
         splitter_left = int(q_settings.value('splitter_left', 1))
 
@@ -2134,16 +2134,13 @@ class MainGUI(QtWidgets.QMainWindow):
             del q_settings
             self.app.log.debug("MainGUI.__init__() --> UI layout restored from options. QSettings set to 'standard'")
 
-        self.lock_action.setChecked(True if tb_lock_state == 'true' else False)
-        self.show_text_action.setChecked(True if show_text_state == 'true' else False)
-
         self.setGeometry(win_geo[0], win_geo[1], win_geo[2], win_geo[3])
         self.app.log.debug("MainGUI.__init__() --> UI state restored from QSettings.")
 
         self.splitter.setSizes([splitter_left, 0])
 
-        self.lock_toolbar(lock=True if tb_lock_state == 'true' else False)
-        self.show_text_under_action(show_text=True if show_text_state == 'true' else False)
+        self.lock_toolbar(lock=tb_lock_state)
+        self.show_text_under_action(show_text=show_text_state)
 
         self.corner_snap_btn.setVisible(False)
         self.snap_magnet.setVisible(False)
@@ -2215,20 +2212,13 @@ class MainGUI(QtWidgets.QMainWindow):
 
     def on_pref_tabbar_clicked(self, idx, color=None):
         self.set_pref_tab_area_tab_default_text_color()
-        if color is None:
-            if self.app.qapp.styleSheet():
-                self.pref_tab_area.tabBar().setTabTextColor(idx, QtGui.QColor('green'))
-            else:
-                # The Default theme has no stylesheet: the selected tab is drawn with the system highlight as
-                # background and green text was unreadable on it.
-                self.pref_tab_area.tabBar().setTabTextColor(
-                    idx, self.pref_tab_area.palette().color(QtGui.QPalette.ColorRole.HighlightedText))
-        else:
+        if color is not None:
             self.pref_tab_area.tabBar().setTabTextColor(idx, color)
 
     def set_pref_tab_area_tab_default_text_color(self):
         for idx in range(self.pref_tab_area.count()):
-            self.pref_tab_area.tabBar().setTabTextColor(idx, self.default_pref_tab_area_tab_text_color)
+            # An invalid color clears overrides so Qt's style can choose selected/unselected text colors.
+            self.pref_tab_area.tabBar().setTabTextColor(idx, QtGui.QColor())
 
     def update_location_labels(self, dx, dy, x, y):
         """
@@ -2824,6 +2814,7 @@ class MainGUI(QtWidgets.QMainWindow):
         :return: None
         """
 
+        self.lock_action.setChecked(lock)
         if lock:
             for widget in self.children():
                 if isinstance(widget, QtWidgets.QToolBar):
@@ -2839,6 +2830,7 @@ class MainGUI(QtWidgets.QMainWindow):
         del q_settings
 
     def show_text_under_action(self, show_text=True):
+        self.show_text_action.setChecked(show_text)
         if show_text:
             for widget in self.children():
                 if isinstance(widget, QtWidgets.QToolBar):

@@ -510,6 +510,8 @@ class TestLifecycle(AppTestCase):
             toolbarshell=old[3], toolbarplugins=old[4], exc_edit_toolbar=old[5], geo_edit_toolbar=old[6],
             grb_edit_toolbar=old[7], populate_toolbars=Recorder(("call",)).call,
             lock_toolbar=Recorder(("call",)).call, grid_snap_btn=Value(), corner_snap_btn=Value(),
+            lock_action=Value(True), show_text_action=Value(True),
+            show_text_under_action=Recorder(("call",)).call,
             snap_magnet=Value(), grid_gap_x_entry=Value(), grid_gap_y_entry=Value(),
             snap_max_dist_entry=Value(), grid_gap_link_cb=Value(),
         )
