@@ -1421,8 +1421,9 @@ class App(QtCore.QObject):
 
         # self.ui.notebook.callback_on_close = self.on_close_notebook_tab
 
-        # Plot Area double-clicking
+        # Plot Area and Notebook double-clicking
         self.ui.plot_tab_area.tabBarDoubleClicked.connect(self.on_plot_area_tab_double_clicked)
+        self.ui.notebook.tabBarDoubleClicked.connect(self.on_plot_area_tab_double_clicked)
 
         # #################################### GUI PREFERENCES SIGNALS ##############################################
         # ##################################### Workspace Setting Signals ###########################################
