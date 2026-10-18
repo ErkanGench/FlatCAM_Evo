@@ -33,6 +33,22 @@ Objects:
 - a tool that makes a new object from a source object passes the AutoHide and Autoswitch options to the new object
 - the options are shown in the tool form under Common Parameters
 
+Move Tool:
+
+- moves only the selected objects that are plotted and visible; the selection box uses the same objects; a hidden selection cancels the move without an error
+- a move of 0 does nothing: no replot and no export
+- the Gerber aperture marks are turned off on the GUI thread before the move starts
+- the worker moves the objects, plots them and then regenerates the Gerber and Excellon source; the bounds, the offset fields and the selection box update on the GUI thread after the worker ends
+- a failure is shown in the status bar; the objects that moved are plotted again, so the canvas and the bounds stay in sync
+- a queued move keeps its own object list; an empty object list does not move the current selection
+- the move marks the project as changed
+- the outline of the objects during the drag is drawn 1 time for each mouse move
+
+Gerber and Excellon:
+
+- a Gerber move translates the geometry of each aperture in 1 batch instead of 1 element at a time
+- an Excellon move translates the existing hole and slot outlines and does not buffer every drill again
+
 Gerber Editor:
 
 - selecting elements updates only the selection colors and reuses the plotted geometry instead of rebuilding the whole board; geometry edits invalidate the cache
@@ -45,6 +61,14 @@ Gerber Editor:
 - fixed: imported shape records are copied; transforming an imported shape no longer changes the source object's aperture records
 - fixed: regions split into multiple polygons by the eraser can be saved and exported; saving also handles split regions without follow geometry
 - added regression tests for LPC imports, source object isolation after transforms and saving split regions, including Gerber export / reimport checks
+- Copy plots the board 1 time at the end instead of after each copied shape
+- the Eraser replots the board also when no fragment is left
+- Delete removes the selected shapes in 1 pass over the apertures and marks the edit as changed
+- Scale and Buffer change the selected shapes in place: the selection stays valid after a repeated Scale or Buffer, and the shapes that are not selected do not change; Scale finds the aperture also when its code is a number; a failed Scale shows an error and stops
+- Import merges a rectangular (R) or oblong (O) aperture only with an aperture of the same type
+- Zoom Fit uses the bounds of the shapes without a union of all the geometry; an empty board does not change the view
+- fixed: Zoom Fit made the view rectangle from the bounds in the wrong format
+- added regression tests for Copy, Delete, Buffer, Scale, Eraser, Import and Zoom Fit
 
 GCode sender:
 
@@ -96,17 +120,22 @@ Preferences:
 - fixed: a save of the Preferences copied all the preferences into the project options
 - Import Preferences writes the application settings of the file into the preferences
 
+Tcl:
+
+- fixed: set_sys changes the preference through app.defaults, so the new value is also used by the active project
+
 Tests:
 
 - new unit tests for the GCode sender workflow, console, restart, simulation, audit fixes, icon colors, layout changes and plugin object creation
 - extended unit tests for the GRBL sender, Plot 3D, levelling audit and theme color scheme; the gate list is updated
 - new unit tests for the image tracing; the gate list records the renamed Plot 3D zoom test
+- new unit tests for the Move Tool, the multiple projects (ProjectContext, ProjectManager, project combobox, File New, Open, Save and Save As, exit, Tcl commands) and the split of application settings and project options; the gate list records the removed autosave tests
 
 17.10.2026
 
 GUI:
 
-- fixed: the Default and Light themes were unreadable when the operating system was in dark mode (dark blue headings, black project items and black ruler ticks on a dark window; the selected preferences tab had green text on the system highlight): Qt's color scheme now follows the theme (Default and Light are light, Dark is dark, Auto follows the operating system); needs Qt 6.8 or newer, with an older Qt the ruler ticks of the plot canvas still switch to gray on a dark window
+- fixed: the Default and Light themes were unreadable when the operating system was in dark mode (dark blue headings, black project items and black ruler ticks on a dark window; the selected preferences tab had green text on the system highlight): Qt's color scheme now follows the theme (Default and Light are light, Dark is dark, Auto follows the operating system); needs Qt 6.8 or newer, with an older Qt the ruler ticks of the plot canvas still switch to gray on a dark window (merged PR #9 from gargamel778)
 
 GRBL Sender:
 
@@ -146,6 +175,8 @@ GUI:
 - fixed: Return and Enter in the project tree open the selected object's Properties through the native tree activation; object insertion keeps both existing Properties UI builds and restores the selected object's UI
 - File / Exit and the system tray Exit now use the guarded window-close path; updater and save guards run before settings are saved, and cancelling the unsaved-project prompt keeps the window open; the native Quit shortcut and Exit Editor remain separate
 - worker progress messages are coalesced on the GUI thread instead of updating widgets from worker threads
+- fixed: on macOS, Cmd+Q and the Quit item of the application menu work with the native menu bar (merged PR #5 from gargamel778)
+- the custom title bar is on by default only on Windows (merged PR #7 from gargamel778)
 - the Objects menu no longer rebuilds a per-object entry list on every collection change; Select All and Deselect All remain connected once at startup
 
 File loading:
@@ -178,6 +209,15 @@ Preferences:
 Tcl:
 
 - fixed: open_gerber without a filename raised an unhandled error; it now reports the missing argument
+- fixed: export_gerber and export_excellon pass the object name as obj_name (merged PR #4 from gargamel778)
+
+Isolation:
+
+- fixed: when the passes are combined into 1 Geometry, every pass is kept (merged PR #3 from gargamel778)
+
+Compatibility:
+
+- fixed: a backslash in an f-string expression of the NCC Tool stopped FlatCAM from starting on Python 3.10 and 3.11 (merged PR #2 from gargamel778)
 
 README:
 
