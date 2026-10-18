@@ -1448,6 +1448,17 @@ class Geometry(object):
         # Shapely uses segments per quadrant, not per full circle.
         quad_segs = circle_quad_segs(steps_per_circle)
 
+        # Bound every inset's chord error by the configured cutter-radius circle
+        # error, and by Geo Tolerance when supplied. Use the same IN convention
+        # as NCC and Milling; display/G-code decimal counts are not tolerances.
+        chord_error = tooldia * math.sin(math.pi / (8 * quad_segs)) ** 2
+        tolerance = float(getattr(self.app, 'options', {}).get('global_tolerance', 0))
+        if getattr(self.app, 'units', 'MM').upper() == 'IN':
+            tolerance /= 20
+        if tolerance > 0:
+            chord_error = min(chord_error, tolerance)
+        step = tooldia * (1 - overlap)
+
         # The toolpaths
         # Index first and last points in paths
         def get_pts(o):
@@ -1468,6 +1479,7 @@ class Geometry(object):
 
         last_update = 0.0
         for cl_pol in current:
+            pass_index = 1
             while True:
                 if self.app.abort_flag:
                     # graceful abort requested by the user
@@ -1480,8 +1492,15 @@ class Geometry(object):
                     self.temp_shapes.redraw()
                     last_update = monotonic()
 
-                cl_pol = cl_pol.buffer(-tooldia * (1 - overlap), quad_segs=quad_segs)
-                cl_pol_list = flatten_shapely_geometry(cl_pol)
+                # Offset the original margin, not the previous tessellated inset.
+                # GEOS rounds fillet segment counts: short arcs can span up to
+                # 1.5 nominal increments. Combined with 1 - cos(x) <= x*x/2,
+                # this bounds chord error without compounding round-join vertices.
+                distance = pass_index * step
+                inset_quad_segs = max(
+                    quad_segs, math.ceil(3 * math.pi / 8 * math.sqrt(distance / (2 * chord_error))))
+                inset = cl_pol.buffer(-distance, quad_segs=inset_quad_segs)
+                cl_pol_list = flatten_shapely_geometry(inset)
 
                 added_flag = False
                 for tiny_pol in cl_pol_list:
@@ -1498,9 +1517,7 @@ class Geometry(object):
                 if added_flag is False:
                     break
 
-                # A singleton needs no union. Keep the split-component union: its
-                # canonicalization affects subsequent GEOS offset joins.
-                cl_pol = unary_union(cl_pol_list) if len(cl_pol_list) > 1 else cl_pol_list[0]
+                pass_index += 1
 
                 # if isinstance(cl_pol, MultiPolygon):
                 #     cl_pol = flatten_shapely_geometry(cl_pol)
@@ -1601,8 +1618,8 @@ class Geometry(object):
         geom_elems.get_points = get_pts
 
         # Path margin
-        path_margin = polygon_to_clear.buffer(-tooldia / 2, quad_segs=quad_segs)
-        path_margin = flatten_shapely_geometry(path_margin, simplify_tolerance=simplify_tol)
+        buffered_margin = polygon_to_clear.buffer(-tooldia / 2, quad_segs=quad_segs)
+        path_margin = flatten_shapely_geometry(buffered_margin, simplify_tolerance=simplify_tol)
         path_margin = MultiPolygon(path_margin)
 
         if path_margin.is_empty or path_margin is None:
@@ -1647,7 +1664,7 @@ class Geometry(object):
 
         # Clean inside edges (contours) of the original polygon
         if contour:
-            buffered_poly = autolist(polygon_to_clear.buffer(-tooldia / 2, quad_segs=quad_segs))
+            buffered_poly = autolist(buffered_margin)
             buffered_poly: list[Polygon] = [x.simplify(simplify_tol) for x in buffered_poly]
             outer_edges = [x.exterior for x in buffered_poly]
 
@@ -4059,8 +4076,8 @@ class CNCjob(Geometry):
 
         locations = list(geo_storage.keys())
 
-        if 'ncc_cleanup_start' in tools[tool]:
-            # Final NCC cleanup depends on the standard paths running first. Preserve
+        if 'ncc_cleanup_start' in tools[tool] or 'paint_cleanup_start' in tools[tool]:
+            # Final cleanup depends on the standard paths running first. Preserve
             # the validated sequence (including equal start points) and its geometry.
             optimized_path = [(geo.coords[0], geo) for geo in temp_solid_geometry]
             self.tolerance = 0.0
@@ -8116,6 +8133,288 @@ def flatten_shapely_geometry(
 
     flatten(geometry)
     return flat_list
+
+
+def trim_covered_ends(path, radius, parts, parts_tree, covered=None) -> tuple:
+    """Return one cutting run and its stock-reaching segments, without adding a lift."""
+    coords = np.asarray(path.coords)
+    count = len(coords) - 1
+    if count < 1:
+        return path, None
+    segments = shapely.linestrings(np.stack((coords[:-1], coords[1:]), axis=1))
+    pairs = parts_tree.query(segments, predicate='dwithin', distance=radius)
+    # A centerline inside an old footprint may still cut fresh stock at its sides.
+    # Test the full cutter radius; mere tangency removes no area.
+    distances = shapely.distance(segments[pairs[0]], [parts[i] for i in pairs[1]])
+    active = np.unique(pairs[0][distances < radius])
+    reaches_stock = np.zeros(count, dtype=bool)
+    reaches_stock[active] = True
+    if covered is not None and len(active):
+        # Exact old-centerline coverage is sufficient only when the old cutter
+        # is at least as wide. This also avoids polygonal round-cap artifacts
+        # making an identical, already-cut segment appear productive.
+        exact = covered[0].query(segments, predicate='covered_by')
+        redundant = exact[0][np.asarray(covered[1])[exact[1]] >= radius]
+        active = np.setdiff1d(active, redundant)
+    if not len(active):
+        return None, segments[:0]
+    if len(active) == count:
+        return path, segments[reaches_stock]
+    if not np.array_equal(coords[0], coords[-1]):
+        kept = np.arange(active[0], active[-1] + 1)
+        return LineString(coords[active[0]:active[-1] + 2]), segments[kept[reaches_stock[kept]]]
+    # Open a ring at its longest covered gap, retaining every productive segment
+    # and the internal connectors instead of creating multiple cutting runs.
+    cumulative = np.r_[0, np.cumsum(shapely.length(segments))]
+    following = np.roll(active, -1)
+    gaps = cumulative[following] - cumulative[active + 1]
+    gaps[following <= active] += cumulative[-1]
+    gap = int(np.argmax(gaps))
+    start = following[gap]
+    length = (active[gap] - start) % count + 1
+    kept = np.arange(start, start + length) % count
+    return (LineString(coords[np.arange(start, start + length + 1) % count]),
+            segments[kept[reaches_stock[kept]]])
+
+
+def order_cleanup_paths(paths, app=None):
+    """Shorten rapids only; retain endpoints, direction, cutter paths and lift count."""
+    if len(paths) < 4:
+        return paths
+    storage = AppRTreeStorage()
+    # Index starts only: choosing a nearer end must not reverse cutting direction.
+    storage.get_points = lambda path: [path.coords[0]]
+    for path in paths[1:-1]:
+        storage.insert(path)
+    ordered = [paths[0]]
+    current = paths[0].coords[-1]
+    for _ in range(len(paths) - 2):
+        if app is not None:
+            QtWidgets.QApplication.processEvents()
+            if app.abort_flag:
+                raise grace
+        _, path = storage.nearest(current)
+        storage.remove(path)
+        ordered.append(path)
+        current = path.coords[-1]
+    ordered.append(paths[-1])
+
+    def travel(sequence):
+        return sum(math.dist(a.coords[-1], b.coords[0]) for a, b in zip(sequence, sequence[1:]))
+
+    # Greedy is not always better for directed paths. Fixed first/last paths
+    # make the comparison valid for any preceding cut, toolchange or job end XY.
+    return ordered if travel(ordered) < travel(paths) else paths
+
+
+def residual_cleanup(app, domain, diameter, circle_steps, previous_tools, generate_paths, physical=False,
+                     boundary_first=True):
+    """Target residual stock while keeping the complete cutter in the original domain.
+
+    Shared by NCC and Paint; callers own tool selection, settings and output storage.
+    Work component-by-component and index previous paths rather than unioning a board
+    of centerlines. A residual narrower than the cutter can use already-cleared room.
+    """
+    # Paint circle_steps counts a full circle; retain NCC's historical quadrant
+    # count. At least 16 segments/quadrant keeps coverage estimates conservative.
+    steps = max(16, circle_quad_segs(circle_steps) if physical else circle_steps)
+    radius = diameter / 2
+    tolerance = float(app.options.get('global_tolerance', 0.005))
+    if app.units.upper() == 'IN':
+        tolerance /= 25.4
+
+    def sweep(path, distance, segments=None):
+        # Preserve NCC's historical coverage accounting; Paint measures physical
+        # segment capsules because GEOS can simplify a whole line before buffering.
+        if physical and isinstance(path, (LineString, LinearRing)):
+            if segments is None:
+                coords = np.asarray(path.coords)
+                segments = shapely.linestrings(np.stack((coords[:-1], coords[1:]), axis=1))
+            return unary_union(shapely.buffer(segments, distance, quad_segs=steps))
+        return path.buffer(distance, quad_segs=steps)
+
+    previous = []
+    radii = []
+    for tool in previous_tools:
+        for path in flatten_shapely_geometry(tool.get('solid_geometry', [])):
+            previous.append(path)
+            radii.append(float(tool['tooldia']) / 2)
+    tree = shapely.STRtree(previous)
+    max_radius = max(radii, default=0)
+    paths = []
+    residuals = []
+    for component in flatten_shapely_geometry(domain):
+        QtWidgets.QApplication.processEvents()
+        if app.abort_flag:
+            raise grace
+        if not isinstance(component, Polygon) or component.is_empty:
+            continue
+        guard = max(diameter * 1e-9, np.finfo(float).eps * max(abs(v) for v in component.bounds) * 32)
+        safe_radius = radius / math.cos(math.pi / (4 * steps)) + guard
+        centers = component.buffer(-safe_radius, quad_segs=steps)
+        sweeps = []
+        for i in tree.query(component.buffer(max_radius, quad_segs=steps)):
+            QtWidgets.QApplication.processEvents()
+            if app.abort_flag:
+                raise grace
+            sweeps.append(sweep(previous[i], radii[i]))
+        residual = component.difference(unary_union(sweeps))
+        min_gain = max(guard * guard, tolerance * diameter)
+        reachable = centers.buffer(radius, quad_segs=steps)
+        target = residual.intersection(reachable)
+        QtWidgets.QApplication.processEvents()
+        if app.abort_flag:
+            raise grace
+        if target.area < min_gain:
+            residuals.append(residual)
+            continue
+        parts = [part for part in flatten_shapely_geometry(target) if not part.is_empty]
+        target_parts = parts
+        reach = (unary_union(shapely.buffer(parts, radius, quad_segs=steps)) if physical
+                 else target.buffer(radius, quad_segs=steps))
+        candidates = flatten_shapely_geometry(target.boundary.intersection(centers))
+        candidates.extend(flatten_shapely_geometry(centers.boundary.intersection(reach)))
+        shapely.prepare(reach)
+        shapely.prepare(component)
+        boundary = component.boundary
+        shapely.prepare(boundary)
+
+        def safe(path):
+            # Actual segment distance avoids both GEOS input simplification and
+            # repeated large positive buffers. Holes belong to the boundary too.
+            if physical:
+                return component.covers(path) and not shapely.dwithin(path, boundary, radius + guard)
+            return component.covers(path.buffer(safe_radius, quad_segs=steps))
+
+        # Paint uses the full residual for physical gain and pruning, not only
+        # the polygonal approximation of the reachable target. Reuse one mutable
+        # index so accepting a path does not repeat every stock subtraction.
+        if physical:
+            parts = flatten_shapely_geometry(residual)
+        parts_tree = shapely.STRtree(parts)
+        part_areas = shapely.area(parts)
+
+        def gain_and_remaining(swept):
+            near = parts_tree.query(swept)
+            if not physical:
+                return sum(parts[i].intersection(swept).area for i in near), near, None, None
+            # One local overlay serves both the gain test and the accepted stock
+            # update. Rejected candidates never change the mutable residual.
+            remaining = shapely.difference([parts[i] for i in near], swept)
+            remaining_areas = shapely.area(remaining)
+            gain = float(np.sum(part_areas[near] - remaining_areas))
+            # Near the threshold, avoid cancellation in area(A) - area(A-B).
+            # Re-evaluate the original intersection test, not a relaxed threshold.
+            roundoff = np.finfo(float).eps * max(1.0, float(np.sum(part_areas[near]))) * 16
+            if abs(gain - min_gain) <= roundoff:
+                gain = sum(parts[i].intersection(swept).area for i in near)
+            return gain, near, remaining, remaining_areas
+
+        def candidate_paths():
+            prefer_boundaries = physical and boundary_first and bool(previous)
+            pending_tree = None
+            if prefer_boundaries:
+                # Straddle thin residuals directly before painting their larger
+                # workspaces. Frequently these paths finish the useful work.
+                yield from candidates
+                QtWidgets.QApplication.processEvents()
+                if app.abort_flag:
+                    raise grace
+                pending = unary_union(parts).intersection(reachable)
+                if pending.area < min_gain:
+                    return
+                pending_tree = shapely.STRtree(flatten_shapely_geometry(pending))
+            # Keep the original neighborhoods: shrinking them to tiny leftovers
+            # can lose paths whose grouped gains meet the useful-gain threshold.
+            # Dilation still distributes over the target parts, not one expensive
+            # multipart buffer. Entire finished workspaces need no generation.
+            workspace = (unary_union(shapely.buffer(target_parts, diameter, quad_segs=steps)) if physical
+                         else target.buffer(diameter, quad_segs=steps)).intersection(component)
+            for pol in flatten_shapely_geometry(workspace):
+                QtWidgets.QApplication.processEvents()
+                if app.abort_flag:
+                    raise grace
+                if not isinstance(pol, Polygon) or pol.is_empty:
+                    continue
+                if pending_tree is not None and not len(pending_tree.query(
+                        pol, predicate='dwithin', distance=radius)):
+                    continue
+                result = generate_paths(pol, 2 * safe_radius)
+                if result == 'fail':
+                    raise grace
+                if result:
+                    yield from result
+            if not prefer_boundaries:
+                yield from candidates
+
+        swept_paths = []
+        for candidate in candidate_paths():
+            QtWidgets.QApplication.processEvents()
+            if app.abort_flag:
+                raise grace
+            if not reach.intersects(candidate):
+                continue
+            for path in flatten_shapely_geometry(candidate.intersection(centers)):
+                if not isinstance(path, (LineString, LinearRing)) or path.is_empty:
+                    continue
+                near = parts_tree.query(path, predicate='dwithin', distance=radius)
+                # Updated parts only shrink. Their total area is a cheap upper
+                # bound on gain, before constructing any segment capsules.
+                if (float(np.sum(part_areas[near])) if physical else
+                        sum(parts[i].area for i in near)) < min_gain:
+                    continue
+                simplified = path.simplify(tolerance) if tolerance > 0 else path
+                original = path
+                if len(simplified.coords) < len(path.coords) and safe(simplified):
+                    path = simplified
+                used_simplification = path is not original
+                stock_segments = None
+                if physical:
+                    path, stock_segments = trim_covered_ends(path, radius, parts, parts_tree, covered=(tree, radii))
+                    # A simplified chord may be wholly covered while the small
+                    # bend it replaced still paints a useful sliver.
+                    if path is None and used_simplification and safe(original):
+                        path, stock_segments = trim_covered_ends(
+                            original, radius, parts, parts_tree, covered=(tree, radii))
+                        used_simplification = False
+                if path is None:
+                    continue
+                if not safe(path):
+                    continue
+                # Nonproductive internal connectors remain in the cutting run,
+                # but their capsules cannot intersect current stock. Reusing the
+                # segment mask avoids unioning them for gain or stock updates.
+                swept = sweep(path, radius, stock_segments)
+                gain, near, remaining, remaining_areas = gain_and_remaining(swept)
+                if gain < min_gain and used_simplification and safe(original):
+                    if physical:
+                        path, stock_segments = trim_covered_ends(
+                            original, radius, parts, parts_tree, covered=(tree, radii))
+                    else:
+                        path = original
+                    if path is None:
+                        continue
+                    swept = sweep(path, radius, stock_segments)
+                    gain, near, remaining, remaining_areas = gain_and_remaining(swept)
+                if gain < min_gain:
+                    continue
+                paths.append(path)
+                swept_paths.append(swept)
+                if physical:
+                    for i, part in zip(near, remaining):
+                        parts[i] = part
+                    part_areas[near] = remaining_areas
+                else:
+                    for i in near:
+                        parts[i] = parts[i].difference(swept)
+        if swept_paths:
+            residual = residual.difference(unary_union(swept_paths))
+        residuals.append(residual)
+    if physical:
+        paths = order_cleanup_paths(paths, app=app)
+    if app.abort_flag:
+        raise grace
+    return paths, unary_union(residuals)
 
 
 def polygon_gap_pairs(polygons, decimals, neighbors=False):

@@ -630,8 +630,10 @@ class AppDefaults:
         "tools_paint_area_shape": "square",
         "tools_paint_connect": True,
         "tools_paint_contour": True,
+        "tools_paint_final_cleanup": False,
         "tools_paint_plotting": 'normal',
         "tools_paint_rest": False,
+        "tools_paint_simplification": 0.01,  # millimetres, like global_tolerance
         "tools_paint_cutz": -0.05,
         "tools_paint_tipdia": 0.1,
         "tools_paint_tipangle": 30,

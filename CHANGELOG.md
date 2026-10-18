@@ -45,11 +45,20 @@ PDF Import:
 - the Python parser reads the /Contents streams of the first page in their order, instead of all the streams of the file (fonts and images were mixed in); new ASCIIHexDecode and ASCII85Decode filters; clear errors for encrypted files, object streams, /DecodeParms and filters that are not supported
 - clipping paths (W, W*), XObjects (Do) and inline images show a "[WARNING] Unsupported PDF content" message; the pikepdf path also finds them
 
+Paint Tool:
+
+- new Final paint option for each tool (Paint form, Preferences and Tools Database), Off by default: after the Paint, the smallest selected tool with Final paint paints the gaps that it can enter; the paths can cross the old passes, but the full cutter stays inside the selection and its margins; the final paths run after the normal paths of all the tools; old Tools Databases get Off
+- the residual cleanup code is shared by the NCC Final cleanup and the Final paint (camlib.residual_cleanup); the cleanup trims the path ends that cut no new stock, opens covered gaps of a ring without more lifts and orders the paths to make the rapids shorter
+- new Simplification preference (in mm, 0.01 by default; 0 disables it) for the tolerance of the Paint tool paths; inch projects convert the value 1 time
+- the clearing insets are made from the original margin at each distance, not from the last inset; the chord error is limited by the circle steps and by the Geo Tolerance; the number of segments is about 10 times smaller than with unbounded insets
+- faster Paint: the seed contour uses the margin buffer again; the last tool does not compute the residual area; a polygon narrower than the tool is skipped; the bounds of the output do not need a union of the paths
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
 - new unit tests for the Image tool loading (tests/test_image_tool.py)
 - new unit tests for the PDF import: winding rules, nested q/Q transforms, the Gerber round trip with holes and islands, the drill filter and the duplicates, the stream order of the first page, filters that are not supported and encrypted files
+- new unit tests for the Final paint, the Paint simplification, the Paint performance and the bounded insets (tests/test_shrink_offsets.py); the Tools Database tests check the Final paint
 
 18.10.2026
 

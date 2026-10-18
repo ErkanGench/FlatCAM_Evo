@@ -226,6 +226,13 @@ class ToolsPaintPrefGroupUI(OptionsGroupUI):
         tool_grid.addWidget(self.pathconnect_cb, 6, 0)
         tool_grid.addWidget(self.contour_cb, 6, 1)
 
+        self.final_cleanup_cb = FCCheckBox(_("Final paint"))
+        self.final_cleanup_cb.setToolTip(_(
+            "After painting, use the smallest selected tool with Final paint enabled\n"
+            "to paint reachable gaps. May overlap previous passes, but keeps the whole\n"
+            "tool inside the selected boundary and margins. Default: Off."))
+        tool_grid.addWidget(self.final_cleanup_cb, 7, 0, 1, 2)
+
         # #############################################################################################################
         # General Parameters Frame
         # #############################################################################################################
@@ -307,6 +314,19 @@ class ToolsPaintPrefGroupUI(OptionsGroupUI):
         )
         gen_grid.addWidget(plotting_label, 8, 0)
         gen_grid.addWidget(self.paint_plotting_radio, 8, 1)
+
+        simplification_label = FCLabel('%s:' % _("Simplification"))
+        simplification_label.setToolTip(
+            _("Tolerance for simplifying the generated tool paths, in millimeters.\n"
+              "Set to zero to disable simplification.")
+        )
+        self.simplification_entry = FCDoubleSpinner()
+        self.simplification_entry.set_precision(max(self.decimals, 6))
+        self.simplification_entry.set_range(0.0, 10000.0)
+        self.simplification_entry.setSingleStep(0.001)
+        self.simplification_entry.setToolTip(simplification_label.toolTip())
+        gen_grid.addWidget(simplification_label, 10, 0)
+        gen_grid.addWidget(self.simplification_entry, 10, 1)
 
         GLay.set_common_column_size([tool_grid, param_grid, gen_grid], 0)
 

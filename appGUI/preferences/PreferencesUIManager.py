@@ -524,9 +524,11 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_paint_area_shape":   self.ui.plugin_eng_pref_form.tools_paint_group.area_shape_radio,
             "tools_paint_connect":        self.ui.plugin_eng_pref_form.tools_paint_group.pathconnect_cb,
             "tools_paint_contour":       self.ui.plugin_eng_pref_form.tools_paint_group.contour_cb,
+            "tools_paint_final_cleanup": self.ui.plugin_eng_pref_form.tools_paint_group.final_cleanup_cb,
             "tools_paint_plotting":     self.ui.plugin_eng_pref_form.tools_paint_group.paint_plotting_radio,
 
             "tools_paint_rest":          self.ui.plugin_eng_pref_form.tools_paint_group.rest_cb,
+            "tools_paint_simplification": self.ui.plugin_eng_pref_form.tools_paint_group.simplification_entry,
             "tools_paint_cutz":          self.ui.plugin_eng_pref_form.tools_paint_group.cutz_entry,
             "tools_paint_tipdia":        self.ui.plugin_eng_pref_form.tools_paint_group.tipdia_entry,
             "tools_paint_tipangle":      self.ui.plugin_eng_pref_form.tools_paint_group.tipangle_entry,

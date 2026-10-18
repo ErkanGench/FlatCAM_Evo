@@ -127,6 +127,7 @@ class ToolPaint(Geometry, AppTool):
             "tools_paint_method":    self.ui.method_combo,
             "tools_paint_connect":    self.ui.connect_cb,
             "tools_paint_contour":   self.ui.contour_cb,
+            "tools_paint_final_cleanup": self.ui.final_cleanup_cb,
         }
 
         self.name2option = {
@@ -135,6 +136,7 @@ class ToolPaint(Geometry, AppTool):
             'p_method':     "tools_paint_method",
             'p_connect':    "tools_paint_connect",
             'p_contour':    "tools_paint_contour",
+            'p_final_cleanup': "tools_paint_final_cleanup",
         }
 
         # #############################################################################
@@ -344,6 +346,7 @@ class ToolPaint(Geometry, AppTool):
             "tools_paint_method":    self.ui.method_combo,
             "tools_paint_connect":    self.ui.connect_cb,
             "tools_paint_contour":   self.ui.contour_cb,
+            "tools_paint_final_cleanup": self.ui.final_cleanup_cb,
         }
 
         self.clear_context_menu()
@@ -432,6 +435,9 @@ class ToolPaint(Geometry, AppTool):
             "tools_paint_connect", app_defaults.get("tools_paint_connect", AppDefaults.factory_defaults.get("tools_paint_connect"))))
         self.ui.contour_cb.set_value(self.app.options.get(
             "tools_paint_contour", app_defaults.get("tools_paint_contour", AppDefaults.factory_defaults.get("tools_paint_contour"))))
+        self.ui.final_cleanup_cb.set_value(self.app.options.get(
+            "tools_paint_final_cleanup", app_defaults.get("tools_paint_final_cleanup", False)))
+        self.default_data['tools_paint_final_cleanup'] = self.ui.final_cleanup_cb.get_value()
         self.ui.overlap_entry.set_value(self.app.options.get(
             "tools_paint_overlap", app_defaults.get("tools_paint_overlap", AppDefaults.factory_defaults.get("tools_paint_overlap"))))
 
@@ -701,6 +707,7 @@ class ToolPaint(Geometry, AppTool):
         self.blockSignals(False)
 
     def storage_to_form(self, dict_storage):
+        dict_storage.setdefault('tools_paint_final_cleanup', False)
         for k in self.form_fields:
             try:
                 self.form_fields[k].set_value(dict_storage[k])

@@ -178,6 +178,54 @@ class LifecycleChecks(DatabaseCase):
 
 
 class EditorChecks(DatabaseCase):
+    def test_paint_final_cleanup_roundtrip_and_old_database(self):
+        from appDatabase import load_tools_database
+        self.assertIs(AppDefaults.factory_defaults.get('tools_paint_final_cleanup'), False)
+        old = record(4)
+        old['data'].pop('tools_paint_final_cleanup', None)
+        self.app.options = dict(self.app.options, tools_paint_final_cleanup=True)
+        db = self.database({'1': old})
+        self.assertIs(db.db_tool_dict['1']['data']['tools_paint_final_cleanup'], False)
+        db.ui.tree_widget.setCurrentItem(db.ui.tree_widget.topLevelItem(0))
+        db.ui.paint_final_cleanup_cb.set_value(True)
+        self.assertIs(db.db_tool_dict['1']['data']['tools_paint_final_cleanup'], True)
+        self.assertTrue(db.on_save_tools_db(silent=True))
+        self.assertIs(load_tools_database(str(self.path), self.app.options)['1']['data'][
+            'tools_paint_final_cleanup'], True)
+        self.assertEqual([], self.slot_errors)
+
+    def test_paint_final_cleanup_tool_form_and_preferences(self):
+        from PyQt6 import QtGui
+        from appPlugins.ToolPaint.Paint import ToolPaint
+        from appPlugins.ToolPaint.PaintUI import PaintUI
+        from appGUI.preferences.tools.ToolsPaintPrefGroupUI import ToolsPaintPrefGroupUI
+        self.app.collection = QtGui.QStandardItemModel()
+        parent = QtWidgets.QWidget()
+        self.addCleanup(parent.deleteLater)
+        ui = PaintUI(QtWidgets.QVBoxLayout(parent), self.app)
+        pref = ToolsPaintPrefGroupUI(self.app)
+        self.addCleanup(pref.deleteLater)
+        self.assertFalse(ui.final_cleanup_cb.get_value())
+        self.assertFalse(pref.final_cleanup_cb.get_value())
+        ui.tools_table.setRowCount(1)
+        ui.tools_table.setItem(0, 3, QtWidgets.QTableWidgetItem('1'))
+        ui.tools_table.selectAll()
+        holder = SimpleNamespace(
+            ui=ui, form_fields={'tools_paint_final_cleanup': ui.final_cleanup_cb}, app=self.app,
+            name2option={'p_final_cleanup': 'tools_paint_final_cleanup'},
+            paint_tools={1: {'data': {'tools_paint_final_cleanup': False}}},
+            blockSignals=lambda value: None, sender=lambda: ui.final_cleanup_cb)
+        ui.final_cleanup_cb.set_value(True)
+        ToolPaint.form_to_storage(holder)
+        self.assertIs(holder.paint_tools[1]['data']['tools_paint_final_cleanup'], True)
+        ToolPaint.storage_to_form(holder, {})
+        self.assertFalse(ui.final_cleanup_cb.get_value())
+        pref.final_cleanup_cb.set_value(True)
+        ToolPaint.storage_to_form(holder, {'tools_paint_final_cleanup': pref.final_cleanup_cb.get_value()})
+        self.assertTrue(ui.final_cleanup_cb.get_value())
+        ui.on_rest_machining_check(True)
+        self.assertTrue(ui.final_cleanup_cb.isEnabled())
+
     def test_ncc_final_cleanup_roundtrip_and_old_database(self):
         from appDatabase import load_tools_database
         old = record(5)

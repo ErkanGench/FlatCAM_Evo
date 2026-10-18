@@ -368,6 +368,14 @@ class PaintUI:
         param_grid.addWidget(self.connect_cb, 6, 0)
         param_grid.addWidget(self.contour_cb, 6, 1)
 
+        self.final_cleanup_cb = FCCheckBox(_("Final paint"))
+        self.final_cleanup_cb.setObjectName('p_final_cleanup')
+        self.final_cleanup_cb.setToolTip(_(
+            "After painting, use the smallest selected tool with Final paint enabled\n"
+            "to paint reachable gaps. May overlap previous passes, but keeps the whole\n"
+            "tool inside the selected boundary and margins. Default: Off."))
+        param_grid.addWidget(self.final_cleanup_cb, 7, 0, 1, 2)
+
         # #############################################################################################################
         # Apply All Parameters Button
         # #############################################################################################################

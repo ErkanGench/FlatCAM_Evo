@@ -97,6 +97,7 @@ class HPGL2:
             "tools_paint_selectmethod": self._get_app_option("tools_paint_selectmethod"),
             "tools_paint_connect":      self._get_app_option("tools_paint_connect"),
             "tools_paint_contour":      self._get_app_option("tools_paint_contour"),
+            "tools_paint_final_cleanup": self._get_app_option("tools_paint_final_cleanup"),
             "tools_paint_overlap":      self._get_app_option("tools_paint_overlap"),
             "tools_paint_rest":         self._get_app_option("tools_paint_rest"),
 

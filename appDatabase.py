@@ -128,6 +128,7 @@ def normalize_tools_database(records, defaults):
             data = tool['data']
             # Old databases must not enable a new cutting operation via current preferences.
             data.setdefault('tools_ncc_final_cleanup', False)
+            data.setdefault('tools_paint_final_cleanup', False)
             data['tool_target'] = _database_enum(data.get('tool_target'), target_labels, 'data.tool_target')
 
             if 'job' in data:
@@ -992,6 +993,14 @@ class ToolsDB2UI:
         self.grid3.addWidget(self.path_connect_cb, 10, 0)
         self.grid3.addWidget(self.paint_contour_cb, 10, 1)
 
+        self.paint_final_cleanup_cb = FCCheckBox(_("Final paint"))
+        self.paint_final_cleanup_cb.setObjectName('gdb_p_final_cleanup')
+        self.paint_final_cleanup_cb.setToolTip(_(
+            "After painting, use the smallest selected tool with Final paint enabled\n"
+            "to paint reachable gaps. May overlap previous passes, but keeps the whole\n"
+            "tool inside the selected boundary and margins. Default: Off."))
+        self.grid3.addWidget(self.paint_final_cleanup_cb, 11, 0, 1, 2)
+
         # ###########################################################################
         # ############### Isolation UI form #########################################
         # ###########################################################################
@@ -1625,6 +1634,7 @@ class ToolsDB2(QtWidgets.QWidget):
             "tools_paint_method":       self.ui.paint_method_combo,
             "tools_paint_connect":      self.ui.path_connect_cb,
             "tools_paint_contour":      self.ui.paint_contour_cb,
+            "tools_paint_final_cleanup": self.ui.paint_final_cleanup_cb,
 
             # Isolation
             "tools_iso_passes":         self.ui.iso_passes_entry,
@@ -1709,6 +1719,7 @@ class ToolsDB2(QtWidgets.QWidget):
             'gdb_p_method':         "tools_paint_method",
             'gdb_p_connect':        "tools_paint_connect",
             'gdb_p_contour':        "tools_paint_contour",
+            'gdb_p_final_cleanup':  "tools_paint_final_cleanup",
 
             # Isolation
             "gdb_i_passes":         "tools_iso_passes",
@@ -2129,6 +2140,7 @@ class ToolsDB2(QtWidgets.QWidget):
             "tools_paint_method":        _database_option(self.app, "tools_paint_method"),
             "tools_paint_connect":        _database_option(self.app, "tools_paint_connect"),
             "tools_paint_contour":       _database_option(self.app, "tools_paint_contour"),
+            "tools_paint_final_cleanup": _database_option(self.app, "tools_paint_final_cleanup"),
 
             # Isolation
             "tools_iso_passes":         int(_database_option(self.app, "tools_iso_passes")),

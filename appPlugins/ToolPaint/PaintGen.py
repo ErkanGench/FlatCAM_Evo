@@ -21,6 +21,7 @@ from shapely import (
     MultiPolygon,
     Point,
     LinearRing,
+    total_bounds,
 )
 from shapely.geometry import base
 from shapely.ops import unary_union, linemerge
@@ -36,6 +37,7 @@ from camlib import (
     AppRTreeStorage,
     grace,
     flatten_shapely_geometry,
+    residual_cleanup,
 )
 from defaults import AppDefaults
 from appParsers.feature_access import fused_solid
@@ -603,12 +605,19 @@ class PaintGen:
 
     def _create_params(self, order, method, rest, outname, tools_storage, run_threaded):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        simplification_value = float(self.app.options.get(
+            "tools_paint_simplification",
+            app_defaults.get("tools_paint_simplification", AppDefaults.factory_defaults["tools_paint_simplification"])
+        ))
+        # Preferences store tolerances in mm; both workers consume geometry units.
+        if self.app.units.upper() == 'IN':
+            simplification_value /= 25.4
         return Params(
             units=self.app.units,
             tool_ordering=order if order is not None else self.ui.order_combo.get_value(),
             paint_method=method if method is not None else self.ui.method_combo.get_value(),
             rest_machining_choice=rest if rest is not None else self.ui.rest_cb.get_value(),
-            simplification_value=0.01,
+            simplification_value=simplification_value,
             prog_plot=self.app.options.get(
                 "tools_paint_plotting",
                 app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
@@ -707,7 +716,8 @@ class PaintGen:
 
     def _set_output_bounds(self, output_obj, solid_geometry):
         try:
-            a, b, c, d = unary_union(solid_geometry).bounds
+            # Bounds don't need another topological union of the completed toolpaths.
+            a, b, c, d = total_bounds(solid_geometry) if solid_geometry else (np.nan,) * 4
             output_obj.obj_options['xmin'] = a
             output_obj.obj_options['ymin'] = b
             output_obj.obj_options['xmax'] = c
@@ -733,6 +743,10 @@ class PaintGen:
         current_uid = None
         final_solid_geometry = []
         old_disp_number = 0
+
+        for tool in params.tools_storage.values():
+            tool.pop('paint_cleanup_start', None)
+            tool['solid_geometry'] = []
 
         if params.tool_ordering == 1:
             sorted_paint_tools.sort(reverse=False)
@@ -798,6 +812,12 @@ class PaintGen:
             params.tools_storage[current_uid]['data']['output_object_name'] = params.output_object_name
             final_solid_geometry += total_geometry
 
+        output_geo_object.tools = {uid: dict(tool) for uid, tool in params.tools_storage.items()
+                                   if tool['solid_geometry']}
+        self.final_cleanup(output_geo_object, params, sorted_paint_tools, geometry)
+        final_solid_geometry = [path for tool in output_geo_object.tools.values()
+                                for path in tool['solid_geometry']]
+
         self._cleanup_progressive_plotting()
         self._remove_empty_tools(params.tools_storage)
 
@@ -823,6 +843,10 @@ class PaintGen:
         final_solid_geometry = []
         old_disp_number = 0
 
+        for tool in params.tools_storage.values():
+            tool.pop('paint_cleanup_start', None)
+            tool['solid_geometry'] = []
+
         sorted_paint_tools.sort(reverse=True)
         paint_offset = self.ui.rest_offset_entry.get_value()
 
@@ -847,7 +871,8 @@ class PaintGen:
         geo_len = len(poly_buf)
         self.app.log.warning("Total number of polygons to be cleared. %s" % str(geo_len))
 
-        for tool_dia in sorted_paint_tools:
+        for tool_index, tool_dia in enumerate(sorted_paint_tools):
+            has_next_tool = tool_index + 1 < len(sorted_paint_tools)
             self.app.log.debug("Starting geometry processing for tool: %s" % str(tool_dia))
             msg = '[success] %s %s%s %s' % (_('Painting with tool diameter = '),
                                             str(tool_dia),
@@ -871,21 +896,30 @@ class PaintGen:
                     if self.app.abort_flag:
                         raise grace
 
+                    # A cutter cannot fit inside a polygon narrower than its diameter.
+                    left, bottom, right, top = pp.bounds
+                    if right - left < tool_dia or top - bottom < tool_dia:
+                        continue
+
                     check_dist = -tool_dia / 2.0
                     check_buff = pp.buffer(check_dist)
                     if not check_buff or check_buff.is_empty:
                         continue
 
                     geo_res = self._process_polygon(pp, tool_dia, tool_params, params, painted_object)
-                    geo_elems = self._simplify_geometry(geo_res.get_objects(), params.simplification_value)
+                    if geo_res == 'fail':
+                        raise grace
+                    geo_elems = self._simplify_geometry(
+                        geo_res.get_objects(), params.simplification_value) if geo_res else []
 
-                    pp_cleared = unary_union(geo_elems).buffer(tool_dia / 2.0)
-                    rest_geo = pp.difference(pp_cleared)
-                    if rest_geo:
-                        rest_geo = flatten_shapely_geometry(rest_geo)
-                        for r in rest_geo:
-                            if r.is_valid and not r.is_empty:
-                                rest_list.append(r)
+                    if has_next_tool:
+                        pp_cleared = unary_union(geo_elems).buffer(tool_dia / 2.0)
+                        rest_geo = pp.difference(pp_cleared)
+                        if rest_geo:
+                            rest_geo = flatten_shapely_geometry(rest_geo)
+                            for r in rest_geo:
+                                if r.is_valid and not r.is_empty:
+                                    rest_list.append(r)
 
                     if geo_res:
                         cleared_geo += geo_elems
@@ -909,6 +943,10 @@ class PaintGen:
             else:
                 self.app.log.debug("There are no geometries in the cleared polygon.")
 
+            # Residual coverage is consumed only by a subsequent tool.
+            if not has_next_tool:
+                break
+
             self.app.log.debug("Generating rest geometry for the next tool.")
 
             buffered_cleared = unary_union(cleared_geo)
@@ -919,7 +957,6 @@ class PaintGen:
             tmp = [p for p in poly_buf if p.is_valid]
             tmp += rest_list
 
-            print(tmp)
             poly_buf = MultiPolygon(tmp)
             if not poly_buf.is_valid:
                 poly_buf = unary_union(tmp)
@@ -927,6 +964,10 @@ class PaintGen:
                 app_obj.log.debug("Rest geometry empty. Breaking.")
                 break
             poly_buf = flatten_shapely_geometry(poly_buf)
+
+        self.final_cleanup(output_geo_object, params, sorted_paint_tools, geometry, rest_offset=paint_offset)
+        final_solid_geometry = [path for tool in output_geo_object.tools.values()
+                                for path in tool['solid_geometry']]
 
         output_geo_object.multigeo = True
         output_geo_object.obj_options["tools_mill_tooldia"] = '0.0'
@@ -955,6 +996,53 @@ class PaintGen:
 
         if not self._set_output_bounds(output_geo_object, output_geo_object.solid_geometry):
             return
+
+    def final_cleanup(self, output, params, diameters, geometry, rest_offset=None):
+        """One final tool; residuals are targets, not new boundaries for the cutter."""
+        selected = {self._find_tool_uid(dia, params.tools_storage) for dia in diameters}
+        eligible = [uid for uid, tool in params.tools_storage.items()
+                    if uid in selected and float(tool['tooldia']) > 0
+                    and tool['data'].get('tools_paint_final_cleanup', False)]
+        if not eligible:
+            return
+        if self.app.abort_flag:
+            raise grace
+        original = unary_union(flatten_shapely_geometry(geometry))
+        for uid in sorted(eligible, key=lambda key: float(params.tools_storage[key]['tooldia'])):
+            tool = params.tools_storage[uid]
+            offset = float(tool['data']['tools_paint_offset']) if rest_offset is None else rest_offset
+            # Negative Paint offsets must not authorize cleanup outside the selection or in holes.
+            domain = original.intersection(unary_union(self._buffer_geometry(geometry, offset)))
+            if not domain.is_empty:
+                break
+        else:
+            return
+        tool_params = self._get_tool_params(uid, params.tools_storage)
+
+        def generate_paths(pol, diameter):
+            result = self.paint_polygon_worker(
+                pol, diameter, 2 if params.paint_method == 3 else params.paint_method,
+                tool_params['over'], tool_params['conn'], True, False, None)
+            if result == 'fail':
+                return 'fail'
+            return list(result.get_objects()) if result else []
+
+        paths, residual = residual_cleanup(
+            self.app, domain, float(tool['tooldia']), self.circle_steps,
+            output.tools.values(), generate_paths, physical=True,
+            boundary_first=not tool_params['conn'])
+        if paths:
+            standard = list(output.tools.get(uid, {}).get('solid_geometry', []))
+            tool['solid_geometry'] = standard + paths
+            tool['data']['output_object_name'] = params.output_object_name
+            tool['paint_cleanup_start'] = len(standard)
+            params.tools_storage[uid] = params.tools_storage.pop(uid)
+            output.tools.pop(uid, None)
+            output.tools[uid] = dict(tool)
+        output.paint_cleanup_residual = residual
+        if not residual.is_empty:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                'Final paint finished. Some areas could not be painted with this tool.'))
 
     def paint_poly(
             self,

@@ -36,18 +36,13 @@ class TestPaintGeometry(unittest.TestCase):
         self.polygon = Polygon(box(0, 0, 6, 6).exterior.coords,
                                [box(2, 2, 4, 4).exterior.coords])
 
-    def test_shrink_uses_full_circle_steps_for_every_offset(self):
+    def test_shrink_uses_configured_circle_accuracy_for_cumulative_offsets(self):
+        from test_shrink_offsets import inset_layers, layer_paths
         for steps in (1, 16, 17, 64):
             with self.subTest(steps=steps):
                 paths = list(camlib.Geometry.clear_polygon_shrink(
                     self.geometry, self.polygon, 1, steps, connect=False).get_objects())
-                expected = []
-                quad_segs = camlib.circle_quad_segs(steps)
-                current = self.polygon.buffer(-0.5, quad_segs=quad_segs)
-                while not current.is_empty:
-                    for polygon in camlib.flatten_shapely_geometry(current):
-                        expected.extend([polygon.exterior, *polygon.interiors])
-                    current = current.buffer(-0.85, quad_segs=quad_segs)
+                expected = layer_paths(inset_layers(self.polygon, 1, 0.15, steps, True, bounded=True))
                 self.assertEqual(len(paths), len(expected))
                 self.assertTrue(all(a.equals_exact(b, 1e-12) for a, b in zip(paths, expected)))
 
@@ -115,6 +110,22 @@ class TestPaintGeometry(unittest.TestCase):
 
     def test_connect_empty_storage(self):
         self.assertIsNone(camlib.Geometry.paint_connect(storage_of([]), box(0, 0, 1, 1), 0.2, 64))
+
+    def test_paint_output_bounds_do_not_union_toolpaths_again(self):
+        paths = [LineString(), LineString([(-2, 1), (6, 5)]),
+                 LineString([(-2, 5), (6, 1)]), self.polygon.exterior]
+        expected = camlib.unary_union(paths).bounds
+        output = SimpleNamespace(obj_options={})
+        worker = SimpleNamespace(app=self.geometry.app)
+        with patch('appPlugins.ToolPaint.PaintGen.unary_union', side_effect=AssertionError('Redundant union')):
+            self.assertTrue(PaintGen._set_output_bounds(worker, output, paths))
+        self.assertEqual(tuple(output.obj_options[key] for key in ('xmin', 'ymin', 'xmax', 'ymax')), expected)
+
+    def test_paint_empty_output_bounds(self):
+        output = SimpleNamespace(obj_options={})
+        worker = SimpleNamespace(app=self.geometry.app)
+        self.assertTrue(PaintGen._set_output_bounds(worker, output, []))
+        self.assertTrue(all(math.isnan(value) for value in output.obj_options.values()))
 
     def test_paint_and_ncc_dispatch_to_the_same_clearing_paths(self):
         worker = SimpleNamespace(app=self.geometry.app, parent_tool=self.geometry, circle_steps=64)
