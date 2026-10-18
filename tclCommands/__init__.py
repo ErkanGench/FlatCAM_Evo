@@ -17,6 +17,7 @@ import tclCommands.TclCommandBbox
 import tclCommands.TclCommandBounds
 import tclCommands.TclCommandBuffer
 import tclCommands.TclCommandClearShell
+import tclCommands.TclCommandCloseProject
 import tclCommands.TclCommandCncjob
 import tclCommands.TclCommandCopperClear
 import tclCommands.TclCommandCutout
@@ -43,6 +44,7 @@ import tclCommands.TclCommandJoinGeometry
 import tclCommands.TclCommandJoinGerber
 import tclCommands.TclCommandListSys
 import tclCommands.TclCommandListPP
+import tclCommands.TclCommandListProjects
 import tclCommands.TclCommandMillDrills
 import tclCommands.TclCommandMillSlots
 import tclCommands.TclCommandMirror
@@ -68,6 +70,7 @@ import tclCommands.TclCommandQuit
 import tclCommands.TclCommandSaveProject
 import tclCommands.TclCommandSaveSys
 import tclCommands.TclCommandScale
+import tclCommands.TclCommandSelectProject
 import tclCommands.TclCommandSetActive
 import tclCommands.TclCommandSetOrigin
 import tclCommands.TclCommandSetPath
