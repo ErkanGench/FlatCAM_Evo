@@ -33,6 +33,15 @@ Objects:
 - a tool that makes a new object from a source object passes the AutoHide and Autoswitch options to the new object
 - the options are shown in the tool form under Common Parameters
 
+Plotting:
+
+- the polygon fill is triangulated with GEOS (shapely.constrained_delaunay_triangles) when it is available and the polygon is valid; GLU is still used for older GEOS versions and invalid contours
+- the shape buffers are made with NumPy: line segments, colors (np.tile, the color conversion is cached) and interiors; no Python loop for each vertex
+- the CNC job plot buffers the paths of a tool in batches of 1024 (shapely.buffer and shapely.simplify on arrays) instead of 1 call for each path; the path annotations use a set for the position check
+- measured on 2000 shapes (tests/benchmark_object_plot.py, median of 3 runs, buffer preparation): Gerber surfaces 3.39 s to 1.14 s (3.0x), Gerber contours 0.437 s to 0.144 s (3.0x), Geometry contours 0.427 s to 0.208 s (2.1x), Gerber follow 0.057 s to 0.033 s (1.7x), Geometry lines do not change; the fingerprints of the rendered buffers are the same
+- the Gerber aperture marking sends the shapes in 1 batch for each aperture, so the existing multiprocessing is used; Mark All redraws 1 time instead of after each aperture and gets the marking color 1 time
+- measured on 2000 shapes with 4 worker processes (tests/benchmark_gerber_marks.py, median of 3 runs): 1 aperture 0.71 s to 0.28 s (2.5x), Mark All with 40 apertures 1.13 s to 0.33 s (3.4x); the fingerprints of the rendered buffers are the same, including the colors, the visibility and the layer
+
 Move Tool:
 
 - moves only the selected objects that are plotted and visible; the selection box uses the same objects; a hidden selection cancels the move without an error
@@ -187,6 +196,7 @@ Tests:
 - new unit tests for the image tracing; the gate list records the renamed Plot 3D zoom test
 - new unit tests for the Move Tool, the multiple projects (ProjectContext, ProjectManager, project combobox, File New, Open, Save and Save As, exit, Tcl commands) and the split of application settings and project options; the gate list records the removed autosave tests
 - new unit tests for the project file: plain and Zstandard round trip with both Zstandard backends, legacy LZMA load, inf/nan cleanup, level clamp and a failed save that keeps the old file
+- new unit tests for the plot preparation of objects and CNC jobs and for the Gerber marking batch; new benchmark scripts tests/benchmark_object_plot.py and tests/benchmark_gerber_marks.py (with --baseline-ref to measure an old revision)
 - new unit tests for the NCC Final cleanup: re-crossing of cleared stock, default Off, negative offset on Gerber copper, the offset and boundary limits in mm and inch, a gap that no tool can enter, abort, Tcl, unsafe connectors, holes and multipart areas; the Tools Database round trip, old databases and the tool form and preferences
 - new unit tests for the Tcl commands (tests/test_tcl_audit_*.py, 100 tests): the result contract, cutting, CNC generation, geometry, transforms and regressions
 - new unit tests for the NCC Tool (tests/test_ncc_followups.py and tests/test_ncc_rest_machining.py): preparation cache, simplification safety, rest machining, isolation parity, redraw throttle and the board benchmarks (pytest -k benchmark -s)

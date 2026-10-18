@@ -6714,37 +6714,30 @@ class CNCjob(Geometry):
             if self.coordinates_type == "G90":
                 # For Absolute coordinates type G90
                 batch = []
+                annotations = obj.annotations_dict.get(tooldia)
+                annotation_positions = set(annotations['pos']) if annotations else set()
+                is_excellon = self.obj_options['type'].lower() == 'excellon'
                 for geo in gcode_parsed:
                     if not geo:
                         continue
 
                     if geo['kind'][0] == 'T':   # noqa
-                        start_position = geo['geom'].coords[0]  # noqa
+                        coords = geo['geom'].coords   # noqa
+                        if annotations is None:
+                            annotations = obj.annotations_dict[tooldia] = {'pos': [], 'text': []}
+                        for position in (coords[0], coords[-1]):
+                            if position not in annotation_positions:
+                                annotation_positions.add(position)
+                                path_num += 1
+                                annotations['pos'].append(position)
+                                annotations['text'].append(str(path_num))
 
-                        if tooldia not in obj.annotations_dict:
-                            obj.annotations_dict[tooldia] = {
-                                'pos': [],
-                                'text': []
-                            }
-                        if start_position not in obj.annotations_dict[tooldia]['pos']:
-                            path_num += 1
-                            obj.annotations_dict[tooldia]['pos'].append(start_position)
-                            obj.annotations_dict[tooldia]['text'].append(str(path_num))
-
-                        end_position = geo['geom'].coords[-1]   # noqa
-
-                        if tooldia not in obj.annotations_dict:
-                            obj.annotations_dict[tooldia] = {
-                                'pos': [],
-                                'text': []
-                            }
-                        if end_position not in obj.annotations_dict[tooldia]['pos']:
-                            path_num += 1
-                            obj.annotations_dict[tooldia]['pos'].append(end_position)
-                            obj.annotations_dict[tooldia]['text'].append(str(path_num))
+                    if (kind == 'travel' and geo['kind'][0] != 'T') or \
+                            (kind == 'cut' and geo['kind'][0] != 'C'):
+                        continue
 
                     # plot the geometry of Excellon objects
-                    if self.obj_options['type'].lower() == 'excellon':
+                    if is_excellon:
                         try:
                             # if the geos are travel lines
                             if geo['kind'][0] == 'T':   # noqa
@@ -6757,9 +6750,8 @@ class CNCjob(Geometry):
                             # deal here with unexpected plot errors due of LineStrings not valid
                             continue
                     else:
-                        # plot the geometry of any objects other than Excellon
-                        poly = geo['geom'].buffer((tooldia / 1.99999999), self.steps_per_circle)    # noqa
-                        poly = poly.simplify(tool_tolerance)
+                        # Buffer the selected paths together below, avoiding per-path Python calls.
+                        poly = geo['geom']
 
                     # Collect into batch instead of add_shape
                     if kind == 'all':
@@ -6781,6 +6773,17 @@ class CNCjob(Geometry):
                                 'shape': poly, 'color': color['C'][1],
                                 'face_color': color['C'][0], 'layer': 1
                             })
+
+                if batch and not is_excellon:
+                    # Bound temporary GEOS arrays without changing path order or plot resolution.
+                    for start in range(0, len(batch), 1024):
+                        chunk = batch[start:start + 1024]
+                        polygons = shapely.buffer(
+                            [item['shape'] for item in chunk], tooldia / 1.99999999,
+                            quad_segs=self.steps_per_circle)
+                        polygons = shapely.simplify(polygons, tool_tolerance)
+                        for item, polygon in zip(chunk, polygons):
+                            item['shape'] = polygon
 
                 if batch:
                     obj.add_shapes_batch(batch, visible=visible)

@@ -16,6 +16,7 @@ from shapely import Polygon, LineString, LinearRing
 import itertools
 import threading
 import numpy as np
+from functools import lru_cache
 from appGUI.VisPyTesselators import GLUTess
 
 
@@ -29,6 +30,11 @@ from appGUI.VisPyTesselators import GLUTess
 #         self._pos = None
 #         self._changed['pos'] = True
 #         self.update()
+
+
+@lru_cache(maxsize=128)
+def _cached_color_rgba(color):
+    return Color(color).rgba
 
 
 def _update_shape_buffers(data, triangulation='glu'):
@@ -73,30 +79,30 @@ def _update_shape_buffers(data, triangulation='glu'):
             # Prepare polygon edges
             if color is not None:
                 pts = _linearring_to_segments(simplified_geo.exterior.coords)
-                for ints in simplified_geo.interiors:
-                    pts += _linearring_to_segments(ints.coords)
+                if len(simplified_geo.interiors):
+                    pts = np.concatenate([pts] + [
+                        _linearring_to_segments(ints.coords) for ints in simplified_geo.interiors])
 
         # Appending data for mesh
         if len(tri_pts) > 0 and len(tri_tris) > 0:
             mesh_tris += tri_tris
             mesh_vertices += tri_pts
-            face_color_rgba = Color(face_color).rgba
-            # Use list multiplication (faster than list comprehension for uniform values)
-            mesh_colors += [face_color_rgba] * (len(tri_tris) // 3)
+            face_color_rgba = (_cached_color_rgba(face_color) if isinstance(face_color, str)
+                               else Color(face_color).rgba)
+            mesh_colors = np.tile(face_color_rgba, (len(tri_tris) // 3, 1))
 
         # Appending data for line
         if len(pts) > 0:
-            line_pts += pts
-            colo_rgba = Color(color).rgba
-            # Use list multiplication (faster than list comprehension for uniform values)
-            line_colors += [colo_rgba] * len(pts)
+            line_pts = pts
+            colo_rgba = _cached_color_rgba(color) if isinstance(color, str) else Color(color).rgba
+            line_colors = np.tile(colo_rgba, (len(pts), 1))
 
     # Store buffers as numpy arrays for faster concatenation in __update()
-    data['line_pts'] = np.array(line_pts, dtype=np.float32) if line_pts else np.empty((0, 2), dtype=np.float32)
-    data['line_colors'] = np.array(line_colors, dtype=np.float32) if line_colors else np.empty((0, 4), dtype=np.float32)
+    data['line_pts'] = np.asarray(line_pts, dtype=np.float32) if len(line_pts) else np.empty((0, 2), dtype=np.float32)
+    data['line_colors'] = np.asarray(line_colors, dtype=np.float32).reshape(-1, 4)
     data['mesh_vertices'] = np.array(mesh_vertices, dtype=np.float32) if mesh_vertices else np.empty((0, 2), dtype=np.float32)
     data['mesh_tris'] = np.array(mesh_tris, dtype=np.uint32) if mesh_tris else np.empty(0, dtype=np.uint32)
-    data['mesh_colors'] = np.array(mesh_colors, dtype=np.float32) if mesh_colors else np.empty((0, 4), dtype=np.float32)
+    data['mesh_colors'] = np.asarray(mesh_colors, dtype=np.float32).reshape(-1, 4)
 
     # Clear shapely geometry
     del data['geometry']
@@ -113,16 +119,10 @@ def _linearring_to_segments(arr):
     :return: numpy.array
         Line segments
     """
-    # Use zip for pair generation - works for both open and closed rings
-    # zip(arr[:-1], arr[1:]) gives pairs of consecutive elements
-    segments = [coord for pair in zip(arr[:-1], arr[1:]) for coord in pair]
-    
-    # Close ring if not already closed (add final segment from last to first)
-    if arr[0] != arr[-1]:
-        segments.append(arr[-1])
-        segments.append(arr[0])
-    
-    return segments
+    arr = np.asarray(arr)
+    if len(arr) and not np.array_equal(arr[0], arr[-1]):
+        arr = np.concatenate((arr, arr[:1]))
+    return _linestring_to_segments(arr)
 
 
 def _linestring_to_segments(arr):
@@ -133,10 +133,13 @@ def _linestring_to_segments(arr):
     :return: numpy.array
         Line segments
     """
-    # Optimized: direct pair generation using zip - avoids creating oversized intermediate list
-    # zip(arr[:-1], arr[1:]) creates pairs of consecutive vertices
-    # flatten with list comprehension
-    return [coord for pair in zip(arr[:-1], arr[1:]) for coord in pair]
+    arr = np.asarray(arr)
+    if len(arr) < 2:
+        return np.empty((0, 2), dtype=np.float32)
+    segments = np.empty(((len(arr) - 1) * 2, arr.shape[1]), dtype=np.float32)
+    segments[0::2] = arr[:-1]
+    segments[1::2] = arr[1:]
+    return segments
 
 
 class ShapeGroup(object):

@@ -1020,7 +1020,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
 
         :param only_flashes:    plot only flashed
         :param run_thread:      if True run the aperture plot as a thread in a worker
-        :param kwargs:          color and face_color
+        :param kwargs:          color, visible, redraw (defaults to True)
         :return:
         """
 
@@ -1052,6 +1052,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     if aperture_to_plot_mark in app_obj.tools:
                         # an aperture added after build_ui has no storage key yet
                         mark_storage = app_obj.mark_shapes_storage.setdefault(aperture_to_plot_mark, [])
+                        batch = []
                         for elem in app_obj.tools[aperture_to_plot_mark]['geometry']:
                             if 'solid' in elem:
                                 if only_flashes and not isinstance(elem['follow'], Point):
@@ -1059,15 +1060,17 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                                 geo = elem['solid']
                                 s_geo = geo.geoms if isinstance(geo, (MultiLineString, MultiPolygon)) else geo
                                 try:
-                                    for el in s_geo:
-                                        shape_key = app_obj.add_mark_shape(shape=el, color=color, face_color=color,
-                                                                           visible=visibility)
-                                        mark_storage.append(shape_key)
+                                    elements = iter(s_geo)
                                 except TypeError:
-                                    shape_key = app_obj.add_mark_shape(shape=s_geo, color=color, face_color=color,
-                                                                       visible=visibility)
-                                    mark_storage.append(shape_key)
-                    app_obj.mark_shapes.redraw()
+                                    elements = (s_geo,)
+                                batch.extend({'shape': el, 'color': color, 'face_color': color} for el in elements)
+                        if batch:
+                            if app_obj.deleted:
+                                raise ObjectDeleted()
+                            mark_storage.extend(app_obj.mark_shapes.add_batch(
+                                batch, tolerance=app_obj.drawing_tolerance, layer=0, visible=visibility))
+                    if kwargs.get('redraw', True):
+                        app_obj.mark_shapes.redraw()
                 except (ObjectDeleted, AttributeError):
                     app_obj.clear_plot_apertures()
                 except Exception as e:
@@ -1164,11 +1167,11 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
             mark_cb.setChecked(mark_all)
 
         if mark_all:
+            color = self._app_option('global_sel_draw_color')
+            color = (color + 'AF') if len(color) == 7 else (color[:-2] + 'AF')
             for aperture in self.tools:
-                # self.plot_aperture(color='#2d4606bf', marked_aperture=aperture, visible=True)
-                color = self._app_option('global_sel_draw_color')
-                color = (color + 'AF') if len(color) == 7 else (color[:-2] + 'AF')
-                self.plot_aperture(color=color, marked_aperture=aperture, visible=True)
+                self.plot_aperture(color=color, marked_aperture=aperture, visible=True, redraw=False)
+            self.mark_shapes.redraw()
             # HACK: enable/disable the grid for a better look
             self.app.ui.grid_snap_btn.trigger()
             self.app.ui.grid_snap_btn.trigger()

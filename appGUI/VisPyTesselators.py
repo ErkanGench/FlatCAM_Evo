@@ -8,6 +8,8 @@
 
 from OpenGL import GLU
 import numpy as np
+import shapely
+from shapely.errors import GEOSException
 
 
 class GLUTess:
@@ -48,6 +50,26 @@ class GLUTess:
             Array of triangle vertex indices [t0i0, t0i1, t0i2, t1i0, t1i1, ... ]
             Array of polygon points [(x0, y0), (x1, y1), ... ]
         """
+        # GEOS avoids Python callbacks for every vertex. Keep GLU for older GEOS/Shapely
+        # and invalid contours that need its intersection/combine handling.
+        native_triangulate = getattr(shapely, 'constrained_delaunay_triangles', None)
+        if native_triangulate is not None and polygon.is_valid and not polygon.is_empty:
+            try:
+                triangles = native_triangulate(polygon)
+                points = shapely.get_coordinates(triangles).reshape(-1, 4, 2)[:, :3].copy()
+                if len(points):
+                    a = points[:, 1] - points[:, 0]
+                    b = points[:, 2] - points[:, 0]
+                    clockwise = a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0] < 0
+                    points[clockwise, 1], points[clockwise, 2] = \
+                        points[clockwise, 2].copy(), points[clockwise, 1].copy()
+                    vertices, indices = np.unique(points.reshape(-1, 2), axis=0, return_inverse=True)
+                    self.pts = vertices.tolist()
+                    self.tris = indices.tolist()
+                    return self.tris, self.pts
+            except (GEOSException, shapely.errors.UnsupportedGEOSVersionError):
+                pass
+
         # Create tessellation object
         tess = GLU.gluNewTess()
 
