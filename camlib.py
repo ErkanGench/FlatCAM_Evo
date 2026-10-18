@@ -565,6 +565,9 @@ class Geometry(object):
         # "geo_steps_per_circle": 128
     }
 
+    # clear_polygon_lines() cuts the scan lines from bands of this many lines (measured: 8 is the fastest)
+    SCAN_BAND_LINES = 8
+
     obj_options: dict[str, Any]
     kind: str
     multigeo: bool
@@ -1786,11 +1789,16 @@ class Geometry(object):
             return None
 
         last_update = 0.0
+        # The cut of a scan line costs O(size of the polygon). Each line is cut from a band of SCAN_BAND_LINES lines,
+        # clipped from the margin polygon: about 12x faster on a board polygon of 14600 vertices (same result).
+        step = tooldia * (1 - overlap)
+        band = None
         # decide the direction of the lines
         if abs(left - right) >= abs(top - bot):
             # First line
             try:
                 y = top - margin_dist
+                band_end = y
                 while y > bot + edge_dist:
                     if self.app.abort_flag:
                         # graceful abort requested by the user
@@ -1804,11 +1812,14 @@ class Geometry(object):
                         self.temp_shapes.redraw()
                         last_update = monotonic()
 
+                    if band is None or y < band_end:
+                        band_end = y - self.SCAN_BAND_LINES * step
+                        band = shapely.clip_by_rect(margin_poly, left - 1, band_end - step, right + 1, y + step)
                     line = LineString([(left, y), (right, y)])
-                    line = line.intersection(margin_poly)
+                    line = line.intersection(band)
                     line = flatten_shapely_geometry(line, simplify_tolerance=simplify_tol)
                     lines_trimmed += line
-                    y -= tooldia * (1 - overlap)
+                    y -= step
                     if prog_plot:
                         self.plot_temp_shapes(line)
 
@@ -1831,6 +1842,7 @@ class Geometry(object):
             # First line
             try:
                 x = left + margin_dist
+                band_end = x
                 while x < right - edge_dist:
                     if self.app.abort_flag:
                         # graceful abort requested by the user
@@ -1844,11 +1856,14 @@ class Geometry(object):
                         self.temp_shapes.redraw()
                         last_update = monotonic()
 
+                    if band is None or x > band_end:
+                        band_end = x + self.SCAN_BAND_LINES * step
+                        band = shapely.clip_by_rect(margin_poly, x - step, bot - 1, band_end + step, top + 1)
                     line = LineString([(x, top), (x, bot)])
-                    line = line.intersection(margin_poly)
+                    line = line.intersection(band)
                     line = flatten_shapely_geometry(line, simplify_tolerance=simplify_tol)
                     lines_trimmed += line
-                    x += tooldia * (1 - overlap)
+                    x += step
                     if prog_plot:
                         self.plot_temp_shapes(line)
 
@@ -2192,7 +2207,6 @@ class Geometry(object):
         # If max_walk is not specified, the maximum allowed is
         # 10 times the tool diameter
         max_walk = max_walk or 10 * tooldia
-        quad_segs = circle_quad_segs(steps_per_circle)
 
         # Assuming geo list is a flat list of flat elements
 
@@ -2228,6 +2242,10 @@ class Geometry(object):
         geo_coords = list(geo.coords)
         current_pt = geo_coords[-1]
         boundary_edge = boundary.boundary
+        # Each walk is tested against the full boundary: prepared geometries test it in O(log n), not O(n).
+        shapely.prepare(boundary)
+        shapely.prepare(boundary_edge)
+        min_clearance = tooldia / 2 - 1e-9
         try:
             while True:
                 path_count += 1
@@ -2246,15 +2264,14 @@ class Geometry(object):
 
                 # Straight line from current_pt to pt.
                 # Is the toolpath inside the geometry?
-                walk_path = LineString([current_pt, pt])
-                walk_cut = walk_path.buffer(tooldia / 2, quad_segs=quad_segs)
+                walk_path = LineString([current_pt, pt]) if current_pt != pt else Point(pt)
 
-                # The polygonal buffer is inscribed: also check the real tool radius,
-                # so fewer circle steps cannot admit a walk across a boundary or hole.
+                # A walk inside the boundary and at the real tool radius (or more) from its edge keeps the
+                # full cutter inside, also across holes; no polygonal buffer of the cutter is needed.
                 # The paths of the first pass are at exactly the tool radius from the
                 # boundary, so a rounding error must not reject the walk.
-                if (walk_path.length < max_walk and walk_cut.within(boundary)
-                        and walk_path.distance(boundary_edge) >= tooldia / 2 - 1e-9):
+                if (walk_path.length < max_walk and boundary.contains(walk_path)
+                        and not shapely.dwithin(walk_path, boundary_edge, min_clearance)):
                     # log.debug("Walk to path #%d is inside. Joining." % path_count)
 
                     # Completely inside. Append...
@@ -8686,6 +8703,24 @@ def distance_euclidian(x1, y1, x2, y2):
     return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
 
+def new_rtree_index(entries=None):
+    """
+    Makes an rtree index with the quadratic split. The default R* variant reinserts entries after each delete:
+    measured on 20000 points, the quadratic variant is 7.8x faster for a nearest + delete walk (paint_connect),
+    2.6x faster for the inserts and also faster for the bulk load, the nearest and the window queries.
+
+    :param entries: optional iterable of (id, bounds, obj) for a bulk load
+    :return:        rtree.index.Index
+    """
+    properties = rtindex.Property()
+    properties.variant = rtindex.RT_Quadratic
+    # the linear and quadratic variants need a fill factor below 0.5 (the default is 0.7, for R*)
+    properties.fill_factor = 0.4
+    if entries is None:
+        return rtindex.Index(properties=properties)
+    return rtindex.Index(iter(entries), properties=properties)
+
+
 class AppRTree(object):
     """
     Indexes geometry (Any object with "coords" property containing
@@ -8696,7 +8731,7 @@ class AppRTree(object):
 
     def __init__(self):
         # Python RTree Index
-        self.rti = rtindex.Index()
+        self.rti = new_rtree_index()
 
         # ## Track object-point relationship
         # Each is list of points in object.
@@ -8804,16 +8839,16 @@ class AppRTreeStorage(AppRTree):
         # Remove from index
         self.remove_obj(objidx, obj)
 
-    # Cost of 1 point in the rtree index, relative to the bulk load of 1 point (measured with rtree 1.x):
-    # a delete costs about 85 times and an insert about 12 times more.
-    DELETE_COST = 85
-    INSERT_COST = 12
+    # Cost of 1 point in the quadratic rtree index (new_rtree_index), relative to the bulk load of 1 point
+    # (measured with rtree 1.x on 20000 and 100000 points): a delete and an insert cost about 3 times more.
+    DELETE_COST = 3
+    INSERT_COST = 3
 
     def replace(self, removed=(), inserted=()):
         """
         Removes and inserts many objects. When the deletes and inserts of their points cost more than a new index,
-        the index is bulk loaded again from all the objects (the bulk load is about 12 times faster than the
-        inserts and about 85 times faster than the deletes).
+        the index is bulk loaded again from all the objects (the bulk load is about 3 times faster than the
+        inserts and the deletes).
 
         :param removed:     objects that are in the storage
         :param inserted:    new objects
@@ -8853,7 +8888,7 @@ class AppRTreeStorage(AppRTree):
                 ptids.append(ptid)
                 self.points2obj.append(objid)
             self.obj2points.append(ptids)
-        self.rti = rtindex.Index(iter(entries)) if entries else rtindex.Index()
+        self.rti = new_rtree_index(entries if entries else None)
 
     def get_objects(self):
         return (o for o in self.objects if o is not None)

@@ -16,6 +16,8 @@ from shapely import (
     MultiPolygon,
     MultiLineString,
     LinearRing,
+    STRtree,
+    prepare,
 )
 from shapely.geometry import base
 from shapely.ops import unary_union
@@ -768,10 +770,26 @@ class NccGen:
                     raise grace
                 sweeps.append(path.buffer(float(previous['tooldia']) / 2, quad_segs=steps))
         residual = domain.difference(unary_union(sweeps))
+        tolerance = float(self.app.options.get('global_tolerance', 0.005))
+        if self.app.units.upper() == 'IN':
+            tolerance /= 25.4
+        # A path must remove at least a strip of tolerance width across the cutter;
+        # smaller gains are below the geometric precision and only add tool travel.
+        min_gain = max(guard * guard, tolerance * dia)
+        # The cutter centers stay in 'centers', so only this part of the residual can be
+        # swept. Most of the residual is in gaps narrower than the cutter.
+        target = residual.intersection(centers.buffer(radius, quad_segs=steps))
+        # the overlays above can take seconds on a large board
+        QtWidgets.QApplication.processEvents()
+        if self.app.abort_flag:
+            raise grace
+        if target.area < min_gain:
+            target = Polygon()
         paths = []
+        swept_paths = []
         # Expansion supplies already-cleared room to straddle thin targets. The original
         # domain still constrains every complete sweep, including generated connectors.
-        workspace = residual.buffer(dia, quad_segs=steps).intersection(domain)
+        workspace = target.buffer(dia, quad_segs=steps).intersection(domain)
         candidates = []
         for pol in flatten_shapely_geometry(workspace):
             QtWidgets.QApplication.processEvents()
@@ -791,31 +809,46 @@ class NccGen:
                 candidates.extend(result)
         # A thin target can collapse even inside a larger workspace's inward contours.
         # Its own boundary is a useful center path when it lies in the safe domain.
-        candidates.extend(flatten_shapely_geometry(residual.boundary.intersection(centers)))
-        candidates.extend(flatten_shapely_geometry(centers.boundary.intersection(
-            residual.buffer(radius, quad_segs=steps))))
-        tolerance = float(self.app.options.get('global_tolerance', 0.005))
-        if self.app.units.upper() == 'IN':
-            tolerance /= 25.4
+        # Only a path that touches this zone can sweep residual copper.
+        reach = target.buffer(radius, quad_segs=steps)
+        candidates.extend(flatten_shapely_geometry(target.boundary.intersection(centers)))
+        candidates.extend(flatten_shapely_geometry(centers.boundary.intersection(reach)))
+        prepare(reach)
+        prepare(domain)
+        # The gain check and the update work only on the target parts near a path: an overlay with the
+        # full target costs O(target size) for each candidate. A part only shrinks, so the tree of the
+        # original part bounds still finds every part that a path can touch.
+        parts = [part for part in flatten_shapely_geometry(target) if not part.is_empty]
+        parts_tree = STRtree(parts)
         for candidate in candidates:
             QtWidgets.QApplication.processEvents()
             if self.app.abort_flag:
                 raise grace
+            if not reach.intersects(candidate):
+                continue
             for path in flatten_shapely_geometry(candidate.intersection(centers)):
                 if not isinstance(path, (LineString, LinearRing)) or path.is_empty:
                     continue
+                # The gain check needs 1 buffer; the cutter safety checks need 1 or 2 more.
+                swept = path.buffer(radius, quad_segs=steps)
+                near = parts_tree.query(swept)
+                if sum(parts[i].intersection(swept).area for i in near) < min_gain:
+                    continue
                 simplified = path.simplify(tolerance) if tolerance > 0 else path
-                if domain.covers(simplified.buffer(safe_radius, quad_segs=steps)):
+                if len(simplified.coords) < len(path.coords) and \
+                        domain.covers(simplified.buffer(safe_radius, quad_segs=steps)):
                     path = simplified
+                    swept = path.buffer(radius, quad_segs=steps)
                 elif not domain.covers(path.buffer(safe_radius, quad_segs=steps)):
                     continue
-                swept = path.buffer(radius, quad_segs=steps)
-                if swept.intersection(residual).area <= guard * guard:
-                    continue
                 paths.append(path)
-                residual = residual.difference(swept)
+                swept_paths.append(swept)
+                for i in parts_tree.query(swept):
+                    parts[i] = parts[i].difference(swept)
         if self.app.abort_flag:
             raise grace
+        if swept_paths:
+            residual = residual.difference(unary_union(swept_paths))
         if paths:
             standard = list(output.tools.get(uid, {}).get('solid_geometry', []))
             tool['solid_geometry'] = standard + paths
