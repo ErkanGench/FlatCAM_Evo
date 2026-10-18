@@ -7,7 +7,7 @@ Branch: 1.0
 
 The Project tab can hold more than one project. Only 1 project is active at a time.
 A combobox above the object tree selects the active project. Inactive projects keep
-their geometry in RAM but release their plot data and their Properties UI.
+their geometry and their Properties UI in RAM but release their plot data.
 
 ## Current state
 
@@ -84,22 +84,32 @@ On deactivate, for each object in the collection:
 
 - Clear and disable `shapes`.
 - Clear and disable `mark_shapes` (Gerber) and `annotation` / `text_col` (CNCJob).
-- Delete the Properties UI of the object.
 
-The geometry of the objects stays in RAM.
+The geometry and the Properties UI of the objects stay in RAM. The Properties UI is not
+deleted, because `set_ui()` is not safe to run 2 times: `CNCJobObject.set_ui()` generates
+the G-code and `source_file` again and sets the units from `app.app_units`, and the
+`set_ui()` of 4 object kinds connects object signals again.
 
 On activate:
 
-- Rebuild the Properties UI of each object (`set_ui` + `build_ui`).
 - Replot all objects.
 - Restore the canvas view rectangle.
 
-On a switch, the app also closes any open editor and resets the plugins, the same as
-`on_file_new_project` does now (`appIO.py:1117-1172`). The tool shapes, the exclusion
-areas, the selection shape and the hover shapes are cleared.
+On a switch, the app resets the plugins, the same as `on_file_new_project` does now
+(`appIO.py:1117-1172`). The tool shapes, the exclusion areas, the selection shape and the
+hover shapes are cleared.
 
-While a background task runs, the combobox and its menu are disabled. The status bar
-tells the user why.
+A switch is refused while:
+
+- an editor is open (`app.call_source != 'app'`). A switch would lose the editor changes.
+  The status bar shows "Close the editor first."
+- a background task is queued or runs: a task in the worker stack (from the moment it is
+  queued), a process in the process container, a save, a promise or an object load batch.
+
+The status bar tells the user why.
+
+A save that a close or an exit asks for must succeed before the project closes.
+`appIO.save_project()` returns `True` after a written and verified file, else `False`.
 
 ## 3. Combobox and its right-click menu
 
@@ -190,13 +200,16 @@ New commands:
 - The save path is correct for each of the 3 cases in section 4.
 - The "already open" check uses normalized paths.
 - `close` of the last project leaves 1 empty project.
-- A switch is refused while `is_busy()` returns `True`.
+- A switch is refused while `is_busy()` returns `True`, while a task is queued in the
+  worker stack and while an editor is open.
+- A failed save stops a close: the project stays and keeps its unsaved changes.
+- `appIO.save_project()` returns `False` for a real write failure and `True` for a good save.
 
 Option B test:
 
-- A switch clears the shapes and deletes the Properties UI of the inactive objects. The
-  geometry stays.
-- A switch back rebuilds the Properties UI and plots the objects.
+- A switch clears the shapes of the inactive objects. The geometry and the Properties UI
+  stay.
+- A switch back plots the objects and does not call `set_ui()`.
 
 Qt test:
 

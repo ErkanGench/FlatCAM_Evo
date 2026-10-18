@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The Project tab holds more than 1 project. A combobox above the object tree selects the active project. Inactive projects keep their geometry but release their plot shapes and their Properties UI.
+**Goal:** The Project tab holds more than 1 project. A combobox above the object tree selects the active project. Inactive projects keep their geometry and their Properties UI but release their plot shapes. A switch is refused while an editor is open or a task is queued or runs.
 
 **Architecture:** A new `ProjectContext` holds the state of 1 project. A new `ProjectManager` holds the list of contexts and puts the state of the active context into the existing `App` attributes (`app.collection`, `app.options`, `app.project_filename`, `app.should_we_save`, `app.all_objects_list`). Because all existing code reads `app.collection` when it runs, the 817 existing call sites do not change. A new `ProjectSelector` widget shows the combobox and its right-click menu.
 
@@ -15,14 +15,14 @@
 ## Rules for the agent (read first)
 
 1. Work on the local branch `1.0`. Do not make a new branch. Do not push.
-2. Run Python with the project venv: `.venv/Scripts/python.exe`. Run a test file as a script: `.venv/Scripts/python.exe tests/test_projects_manager.py`.
+2. Run Python with the project venv: `.venv/Scripts/python.exe`. Run a test file from the repository root with unittest discovery: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`. Do not run a test file as a script (`python tests/x.py`): then `tests/` is first on `sys.path` and `import appObjects` fails with `ModuleNotFoundError`.
 3. Run only the test files that the task names. Do not run the full test suite. The full suite takes about 4 minutes and runs only once, in Task 13.
 4. Do not add a `Co-Authored-By` line or any Claude attribution to a commit message.
 5. Commit only the files that the task names. The folder `docs/mach3/` is not part of this work. Do not add it.
 6. The line numbers in this plan are approximate. Find each place by the quoted code text, not by the line number.
 7. Match the style of the code around the change: 4-space indent, `_()` for user-visible strings, the same comment style.
 8. If a test fails and the fix is not clear in 2 tries, stop and report the error text. Do not change a test to make it pass.
-9. If a `python.exe` process stays alive after a test run, stop it: `taskkill /F /IM python.exe`.
+9. WARNING: Never run `taskkill /IM python.exe`. It stops every Python process, including a FlatCAM that the user runs with unsaved work. If a test run hangs, stop only the process that you started, by its PID. Never run Python with a heredoc or with `python -` (stdin): it hangs.
 
 ## Files
 
@@ -126,7 +126,7 @@ if __name__ == '__main__':
 
 - [ ] **Step 2: Run the test and see it fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
 Expected: 2 failures, `AssertionError: <...FakeCollection...> is not <...FakeCollection...>`.
 
 - [ ] **Step 3: Change `appHandlers/appPlotManager.py`**
@@ -165,10 +165,10 @@ Add this property to the class `appEditor`, directly after the end of `__init__`
 
 - [ ] **Step 5: Run the test and see it pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
 Expected: `OK` (2 tests).
 
-Also run: `.venv/Scripts/python.exe tests/test_plot_visibility_toggle.py`
+Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_plot_visibility_toggle.py"`
 Expected: `OK`.
 
 - [ ] **Step 6: Commit**
@@ -246,7 +246,7 @@ if __name__ == '__main__':
 
 - [ ] **Step 2: Run the test and see it fail**
 
-Run: `.venv/Scripts/python.exe tests/test_project_context.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_context.py"`
 Expected: `ModuleNotFoundError: No module named 'appObjects.ProjectContext'`.
 
 - [ ] **Step 3: Write `appObjects/ProjectContext.py`**
@@ -327,7 +327,7 @@ def is_valid_name(name):
 
 - [ ] **Step 4: Run the test and see it pass**
 
-Run: `.venv/Scripts/python.exe tests/test_project_context.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_context.py"`
 Expected: `OK` (8 tests).
 
 - [ ] **Step 5: Commit**
@@ -343,8 +343,11 @@ rtk git commit -m "feat(projects): add ProjectContext and the project name helpe
 
 This task makes the manager without dialogs. The visual steps of a switch (`before_switch`, `deactivate`, `activate`) are empty in this task. Task 5 fills them.
 
+A switch is refused while the app is busy. "Busy" also covers a task that is queued in the worker stack but not started yet, and an open editor. A switch with an open editor would lose the editor changes.
+
 **Files:**
 - Create: `appHandlers/appProjects.py`
+- Modify: `appWorkerStack.py` (add the method `pending_count`)
 - Test: `tests/test_projects_manager.py` (add tests)
 
 - [ ] **Step 1: Write the failing tests**
@@ -362,6 +365,7 @@ def make_app(collection=None):
         should_we_save=False, all_objects_list=[], inform=Mock(), log=Mock(),
         ui=SimpleNamespace(set_ui_title=Mock()),
         proc_container=SimpleNamespace(get_procs_count=Mock(return_value=0)),
+        workers=SimpleNamespace(pending_count=Mock(return_value=0)), call_source='app',
         save_in_progress=False, app_obj=SimpleNamespace(load_batches=set()), plotcanvas=None)
 
 
@@ -478,6 +482,30 @@ class TestProjectManagerCore(unittest.TestCase):
         app.save_in_progress = False
         app.app_obj.load_batches.add(object())
         self.assertTrue(manager.is_busy())
+        app.app_obj.load_batches.clear()
+        # a task that is queued but not started yet (for example the parse of a project or a plot)
+        app.workers.pending_count.return_value = 1
+        self.assertTrue(manager.is_busy())
+
+    def test_switch_is_refused_while_an_editor_is_open(self):
+        app, manager = make_manager()
+        second = manager.add_context('Board_B')
+        app.call_source = 'geo_editor'
+        self.assertTrue(manager.is_busy())
+        self.assertFalse(manager.switch(second))
+        self.assertIsNot(manager.active, second)
+        self.assertIn('Close the editor first', app.inform.emit.call_args[0][0])
+
+    def test_worker_stack_pending_count(self):
+        from appWorkerStack import WorkerStack
+        stack = WorkerStack(workers_number=1)
+        try:
+            self.assertEqual(stack.pending_count(), 0)
+            stack._deferred_tasks.append(object())
+            self.assertEqual(stack.pending_count(), 1)
+        finally:
+            stack._deferred_tasks.clear()
+            stack.quit()
 
     def test_projects_changed_is_emitted_on_switch(self):
         app, manager = make_manager()
@@ -490,8 +518,20 @@ class TestProjectManagerCore(unittest.TestCase):
 
 - [ ] **Step 2: Run the tests and see them fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
 Expected: errors with `ModuleNotFoundError: No module named 'appHandlers.appProjects'`.
+
+- [ ] **Step 3a: Add `pending_count` to the worker stack**
+
+In `appWorkerStack.py`, in the class `WorkerStack`, add this method after the method `on_task_completed`:
+
+```python
+    def pending_count(self):
+        """
+        Return the number of tasks that are queued or run now, including the deferred low priority tasks.
+        """
+        return self._pending_count + len(self._deferred_tasks)
+```
 
 - [ ] **Step 3: Write `appHandlers/appProjects.py`**
 
@@ -571,12 +611,26 @@ class ProjectManager(QtCore.QObject):
                 return ctx
         return None
 
+    def is_editing(self):
+        """
+        True if an editor is open. A switch then would lose the changes of the editor.
+        """
+        return getattr(self.app, 'call_source', 'app') != 'app'
+
     def is_busy(self):
         """
-        True if a background task runs. A switch is not allowed then, because the task can add its result to the
-        wrong project.
+        True if a switch is not allowed now: an editor is open, or a task is queued or runs. A task that ends after
+        a switch can add its result to the wrong project.
         """
         app = self.app
+        if self.is_editing():
+            return True
+        # a task counts from the moment it is queued, before its worker starts. A worker that hands its result to
+        # the GUI thread (for example the parse of a project, which then starts the restore of the objects) posts
+        # that signal before its "task completed" signal, so the next stage is registered before this count is 0.
+        workers = getattr(app, 'workers', None)
+        if workers is not None and workers.pending_count() > 0:
+            return True
         try:
             if app.proc_container.get_procs_count() > 0:
                 return True
@@ -590,7 +644,11 @@ class ProjectManager(QtCore.QObject):
         return bool(getattr(getattr(app, 'app_obj', None), 'load_batches', None))
 
     def inform_busy(self):
-        self.app.inform.emit('[WARNING_NOTCL] %s' % _("A task is running. Wait until it ends."))
+        if self.is_editing():
+            msg = _("Close the editor first.")
+        else:
+            msg = _("A task is running. Wait until it ends.")
+        self.app.inform.emit('[WARNING_NOTCL] %s' % msg)
 
     # ------------------------------------------------------------------------------------------------------------
     # Switch
@@ -636,7 +694,7 @@ class ProjectManager(QtCore.QObject):
         Make ctx the active project.
 
         :param ctx:     the ProjectContext to activate
-        :param visuals: if False, the plots, the Properties UI and the plugins are not changed (used on exit)
+        :param visuals: if False, the plots and the plugins are not changed (used on exit)
         :return:        True if ctx is now the active project
         """
         if ctx is self.active:
@@ -687,13 +745,13 @@ class ProjectManager(QtCore.QObject):
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (13 tests).
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
+Expected: `OK` (15 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-rtk git add appHandlers/appProjects.py tests/test_projects_manager.py
+rtk git add appHandlers/appProjects.py appWorkerStack.py tests/test_projects_manager.py
 rtk git commit -m "feat(projects): add the ProjectManager with switch, capture and load"
 ```
 
@@ -818,7 +876,7 @@ class TestProjectManagerLifecycle(unittest.TestCase):
 
 - [ ] **Step 2: Run the tests and see them fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
 Expected: errors such as `AttributeError: 'ProjectManager' object has no attribute 'new'`.
 
 - [ ] **Step 3: Add the methods to `appHandlers/appProjects.py`**
@@ -957,8 +1015,8 @@ Add this block to the class `ProjectManager`, directly after the method `update_
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (28 tests).
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
+Expected: `OK` (30 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -969,9 +1027,13 @@ rtk git commit -m "feat(projects): add new, rename, close and the save file rule
 
 ---
 
-### Task 5: `ProjectManager`: release and rebuild the plots and the Properties UI
+### Task 5: `ProjectManager`: release and restore the plots
 
 This task fills the 5 empty methods of Task 3. These methods change the canvas, the Properties tab and the plugins.
+
+An inactive project releases only the plot shapes of its objects. The Properties UI of each object stays. Do NOT delete it and do NOT call `set_ui()` again on activate:
+- `CNCJobObject.set_ui()` sets the units from `app.app_units` and generates the G-code and `source_file` again (`appObjects/CNCJobObject.py:481` and `:588-597`). An edited G-code source would be lost.
+- `set_ui()` of the Gerber, Excellon, Geometry and CNCJob objects connects object signals (for example `calculations_finished`) each time it runs. A second call makes the handlers run 2 times.
 
 **Files:**
 - Modify: `appHandlers/appProjects.py`
@@ -1011,33 +1073,35 @@ class TestProjectManagerVisuals(unittest.TestCase):
         manager.reset_options()
         app.on_defaults2options.assert_called_once_with()
 
-    def test_deactivate_releases_shapes_and_ui(self):
+    def test_deactivate_releases_shapes_and_keeps_the_ui(self):
         gerber = make_object('gerber')
         script = make_object('script')
         app, manager = self.make([gerber, script])
+        gerber_ui = gerber.ui
 
         manager.deactivate(manager.active)
 
         gerber.clear.assert_called_once_with(update=False)
         gerber.mark_shapes.clear.assert_called_once_with(update=False)
         self.assertIsNone(gerber._full_plot_sig)
-        self.assertIsNone(gerber.ui)
-        # Script and Document objects keep their UI and have no shapes
+        # the Properties UI stays; set_ui() is not safe to run again
+        self.assertIs(gerber.ui, gerber_ui)
+        # Script and Document objects have no shapes
         script.clear.assert_not_called()
         self.assertIsNotNone(script.ui)
         app.setup_default_properties_tab.assert_called_once_with()
         app.plotcanvas.redraw.assert_called_once_with()
 
-    def test_activate_rebuilds_ui_and_plots(self):
-        gerber = make_object('gerber', with_ui=False)
+    def test_activate_plots_and_does_not_rebuild_the_ui(self):
+        gerber = make_object('gerber')
         app, manager = self.make([gerber])
         manager.active.view_rect = 'saved-rect'
 
         manager.activate(manager.active)
 
-        gerber.ui_type.assert_called_once_with(app=app)
-        gerber.set_ui.assert_called_once_with('new-ui')
-        gerber.build_ui.assert_called_once_with()
+        gerber.ui_type.assert_not_called()
+        gerber.set_ui.assert_not_called()
+        gerber.build_ui.assert_not_called()
         app.init_tools.assert_called_once_with(init_tcl=False)
         app.plot_all.assert_called_once_with(fit_view=False)
         self.assertEqual(app.plotcanvas.view.camera.rect, 'saved-rect')
@@ -1050,8 +1114,9 @@ class TestProjectManagerVisuals(unittest.TestCase):
         app.plot_all.assert_not_called()
         app.init_tools.assert_called_once_with(init_tcl=False)
 
-    def test_activate_keeps_an_existing_ui(self):
-        gerber = make_object('gerber', with_ui=True)
+    def test_activate_does_not_build_a_missing_ui(self):
+        # an object without a UI is left as it is; set_ui() runs only when the object is made
+        gerber = make_object('gerber', with_ui=False)
         app, manager = self.make([gerber])
         manager.activate(manager.active)
         gerber.set_ui.assert_not_called()
@@ -1071,22 +1136,23 @@ class TestProjectManagerVisuals(unittest.TestCase):
         app.exc_areas.clear_shapes.assert_called_once_with()
         app.delete_selection_shape.assert_called_once_with()
 
-    def test_before_switch_closes_an_open_editor(self):
+    def test_before_switch_never_closes_an_editor(self):
+        # a switch is refused while an editor is open (is_busy); before_switch must not drop editor changes
         app, manager = self.make([])
-        app.call_source = 'geo_editor'
+        app.call_source = 'app'
         app.on_editing_finished = Mock()
         app.tool_shapes = None
         app.hover_shapes = None
         app.exc_areas = None
         app.delete_selection_shape = Mock()
         manager.before_switch()
-        app.on_editing_finished.assert_called_once_with(cleanup=True)
+        app.on_editing_finished.assert_not_called()
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: 7 failures in `TestProjectManagerVisuals` (the methods are still empty).
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
+Expected: 5 failures in `TestProjectManagerVisuals` (the methods are still empty). `test_activate_does_not_build_a_missing_ui` and `test_before_switch_never_closes_an_editor` pass already.
 
 - [ ] **Step 3: Replace the empty methods in `appHandlers/appProjects.py`**
 
@@ -1118,8 +1184,8 @@ with this block:
     # ------------------------------------------------------------------------------------------------------------
     # Steps that change the GUI
     # ------------------------------------------------------------------------------------------------------------
-    # these object kinds have no shapes on the canvas and a small UI, so they are not released
-    KEEP_UI_KINDS = ('script', 'document')
+    # these object kinds have no shapes on the canvas
+    NO_SHAPES_KINDS = ('script', 'document')
 
     def reset_options(self):
         """
@@ -1130,12 +1196,10 @@ with this block:
 
     def before_switch(self):
         """
-        Close the open editor and remove the canvas helpers of the current project.
+        Remove the canvas helpers of the current project. A switch never runs while an editor is open (is_busy),
+        so this method does not close an editor.
         """
         app = self.app
-        if getattr(app, 'call_source', 'app') != 'app':
-            app.on_editing_finished(cleanup=True)
-
         for attr in ('tool_shapes', 'hover_shapes'):
             shapes = getattr(app, attr, None)
             if shapes is not None:
@@ -1156,13 +1220,13 @@ with this block:
 
     def deactivate(self, ctx):
         """
-        Release the plot shapes and the Properties UI of the objects of a project. The geometry stays.
+        Release the plot shapes of the objects of a project. The geometry and the Properties UI stay.
         """
         # the Properties tab can show the UI of an object of this project; replace it first
         self.app.setup_default_properties_tab()
 
         for obj in ctx.collection.get_list():
-            if obj.kind in self.KEEP_UI_KINDS:
+            if obj.kind in self.NO_SHAPES_KINDS:
                 continue
             try:
                 obj.clear(update=False)
@@ -1172,25 +1236,17 @@ with this block:
                 obj.mark_shapes.clear(update=False)
             except AttributeError:
                 pass
+            # forces a full plot when the project is active again
             obj._full_plot_sig = None
-
-            ui = obj.ui
-            if ui is not None:
-                obj.ui = None
-                ui.deleteLater()
 
         self.app.plotcanvas.redraw()
 
     def activate(self, ctx):
         """
-        Rebuild the Properties UI of the objects, re-create the plugins for the new collection and plot.
+        Re-create the plugins for the new collection and plot. The Properties UI of the objects is not built again:
+        set_ui() changes the data of a CNCJob and connects the object signals again.
         """
         app = self.app
-        for obj in ctx.collection.get_list():
-            if obj.ui is not None:
-                continue
-            obj.set_ui(obj.ui_type(app=app))
-            obj.build_ui()
         app.setup_default_properties_tab()
 
         # show the project keys of this project in the Preferences form
@@ -1221,14 +1277,14 @@ with this block:
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (35 tests). The tests of Tasks 3 and 4 still pass because they replace these methods with `Mock`.
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
+Expected: `OK` (37 tests). The tests of Tasks 3 and 4 still pass because they replace these methods with `Mock`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 rtk git add appHandlers/appProjects.py tests/test_projects_manager.py
-rtk git commit -m "feat(projects): release the shapes and the Properties UI of an inactive project"
+rtk git commit -m "feat(projects): release the plot shapes of an inactive project"
 ```
 
 ---
@@ -1237,9 +1293,124 @@ rtk git commit -m "feat(projects): release the shapes and the Properties UI of a
 
 This task adds the methods that show dialogs. Each dialog is 1 method, so a test can replace it with a `Mock`.
 
+It also makes `appIO.save_project()` return `True` after a confirmed save and `False` after a failed save. Today it returns `None` in both cases. A close or an exit must not continue after a failed save.
+
 **Files:**
 - Modify: `appHandlers/appProjects.py`
+- Modify: `appHandlers/appIO.py`, method `save_project`
 - Test: `tests/test_projects_manager.py` (add tests)
+- Test: `tests/test_unify_characterization.py` (add 1 test)
+
+- [ ] **Step 0a: Write the failing test of `save_project`**
+
+In `tests/test_unify_characterization.py`, add this test after the function `test_saved_project_has_only_project_options`:
+
+```python
+
+
+def test_save_project_reports_success_and_failure(tmp_path):
+    app = make_app()
+    io = appIO(app)
+    app.collection.get_list.return_value = []
+    app.collection.get_active.return_value = None
+    # a real failure: the folder does not exist, so open() fails
+    assert io.save_project(str(tmp_path / 'missing' / 'bad.FlatPrj'), silent=True) is False
+    assert app.save_in_progress is False
+    assert io.save_project(str(tmp_path / 'good.FlatPrj'), silent=True) is True
+```
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_unify_characterization.py -q -k reports_success`
+Expected: FAIL with `assert None is False`.
+
+- [ ] **Step 0b: Make `save_project` return the result**
+
+In `appHandlers/appIO.py`, in `save_project`:
+
+1. In the 2 blocks that end with these lines (the serialize failure and the compression failure of the compressed branch):
+
+```python
+                        self.app.save_in_progress = False
+                        return
+```
+
+and
+
+```python
+                    self.app.save_in_progress = False
+                    return
+```
+
+   change each `return` to `return False`. Do this for each `return` in the method that comes after `self.app.save_in_progress = False`.
+
+2. Replace the whole part from the line `                if project_zipped != b'':` to the line `            self.app.start_delayed_quit(delay=500, filename=filename, should_quit=quit_action)` (the end of the method) with:
+
+```python
+                if project_zipped == b'':
+                    self.log.error("Failed to save file: %s. Empty binary file.", str(filename))
+                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                    self.app.save_in_progress = False
+                    return False
+                try:
+                    with open(filename, "wb") as f_to_write:
+                        f_to_write.write(project_zipped)
+                except IOError:
+                    self.log.error("Failed to open file for saving: %s", str(filename))
+                    self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
+                    self.app.save_in_progress = False
+                    return False
+
+                self.inform.emit('[success] %s: %s' % (_("Project saved to"), str(filename)))
+            else:
+                # Open file
+                try:
+                    f = open(filename, 'w')
+                except IOError:
+                    self.log.error("Failed to open file for saving: %s", str(filename))
+                    self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
+                    self.app.save_in_progress = False
+                    return False
+
+                # Write
+                try:
+                    json.dump(d, f, default=to_dict, indent=2, sort_keys=True)
+                except Exception as e:
+                    self.log.error(
+                        "Failed to serialize file: %s because: %s" % (str(filename), str(e)))
+                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                    f.close()
+                    self.app.save_in_progress = False
+                    return False
+                f.close()
+
+                # verification of the saved project: open and parse it
+                try:
+                    with open(filename, 'r') as saved_f:
+                        saved_d = json.load(saved_f, object_hook=dict2obj)
+                except Exception:
+                    saved_d = None
+                if not saved_d or 'version' not in saved_d:
+                    if silent is False:
+                        self.inform.emit('[ERROR_NOTCL] %s: %s %s' %
+                                         (_("Failed to parse saved project file"),
+                                          str(filename),
+                                          _("Retry to save it.")))  # noqa
+                    self.app.save_in_progress = False
+                    return False
+
+                if silent is False:
+                    self.inform.emit('[success] %s: %s' % (_("Project saved to"), str(filename)))
+
+            # if quit:
+            # t = threading.Thread(target=lambda: self.check_project_file_size(1, filename=filename))
+            # t.start()
+            self.app.start_delayed_quit(delay=500, filename=filename, should_quit=quit_action)
+            return True
+```
+
+3. Change the docstring line `:return:                None` of `save_project` to `:return:                True if the file is written and verified, else False`.
+
+Run: `.venv/Scripts/python.exe -m pytest tests/test_unify_characterization.py -q`
+Expected: all pass.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1322,7 +1493,7 @@ class TestProjectManagerDialogs(unittest.TestCase):
         app, manager = make_manager(make_app(FakeCollection([object()])))
         app.project_filename = self.path('Project_1.FlatPrj')
         app.should_we_save = True
-        app.f_handlers = SimpleNamespace(save_project=Mock())
+        app.f_handlers = SimpleNamespace(save_project=Mock(return_value=True))
         manager.rename(manager.active, 'Board_B')
 
         self.assertTrue(manager.save_context(manager.active))
@@ -1336,7 +1507,7 @@ class TestProjectManagerDialogs(unittest.TestCase):
     def test_save_context_asks_before_it_overwrites(self):
         app, manager = make_manager(make_app(FakeCollection([object()])))
         app.project_filename = self.path('Project_1.FlatPrj')
-        app.f_handlers = SimpleNamespace(save_project=Mock())
+        app.f_handlers = SimpleNamespace(save_project=Mock(return_value=True))
         manager.rename(manager.active, 'Board_B')
         with open(self.path('Board_B.FlatPrj'), 'w') as stream:
             stream.write('x')
@@ -1347,7 +1518,7 @@ class TestProjectManagerDialogs(unittest.TestCase):
 
     def test_save_context_without_file_asks_for_a_path(self):
         app, manager = make_manager(make_app(FakeCollection([object()])))
-        app.f_handlers = SimpleNamespace(save_project=Mock())
+        app.f_handlers = SimpleNamespace(save_project=Mock(return_value=True))
         manager.ask_save_path = Mock(return_value=self.path('Chosen.FlatPrj'))
 
         self.assertTrue(manager.save_context(manager.active))
@@ -1357,15 +1528,41 @@ class TestProjectManagerDialogs(unittest.TestCase):
 
     def test_save_context_without_file_cancelled(self):
         app, manager = make_manager(make_app(FakeCollection([object()])))
-        app.f_handlers = SimpleNamespace(save_project=Mock())
+        app.f_handlers = SimpleNamespace(save_project=Mock(return_value=True))
         manager.ask_save_path = Mock(return_value='')
         self.assertFalse(manager.save_context(manager.active))
         app.f_handlers.save_project.assert_not_called()
+
+    def test_save_context_failure_keeps_the_project_dirty(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.should_we_save = True
+        app.f_handlers = SimpleNamespace(save_project=Mock(return_value=False))
+        manager.rename(manager.active, 'Board_B')
+
+        self.assertFalse(manager.save_context(manager.active))
+
+        self.assertTrue(app.should_we_save)
+        self.assertEqual(app.project_filename, self.path('Project_1.FlatPrj'))
+        self.assertFalse(app.save_in_progress)
+
+    def test_request_close_stops_when_the_save_fails(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.should_we_save = True
+        app.f_handlers = SimpleNamespace(save_project=Mock(return_value=False))
+        manager.ask_save = Mock(return_value='yes')
+
+        self.assertFalse(manager.request_close(first))
+
+        self.assertIn(first, manager.contexts)
+        self.assertTrue(app.should_we_save)
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
 Expected: errors such as `AttributeError: 'ProjectManager' object has no attribute 'prepare_open'`.
 
 - [ ] **Step 3: Add the methods to `appHandlers/appProjects.py`**
@@ -1498,7 +1695,11 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
                                                    _("Do you want to overwrite it?"))):
                 return False
 
-        self.app.f_handlers.save_project(path, silent=True)
+        if self.app.f_handlers.save_project(path, silent=True) is not True:
+            # the save failed: the project keeps its file name and its unsaved changes
+            self.app.save_in_progress = False
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The project was not saved"), path))
+            return False
         # save_project() starts a timer that resets this flag later; the save is already done here
         self.app.save_in_progress = False
         timer = getattr(self.app, 'save_timer', None)
@@ -1513,13 +1714,13 @@ Add this block at the end of the class `ProjectManager` (after `_set_view_rect`)
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (47 tests).
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
+Expected: `OK` (51 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-rtk git add appHandlers/appProjects.py tests/test_projects_manager.py
+rtk git add appHandlers/appProjects.py appHandlers/appIO.py tests/test_projects_manager.py tests/test_unify_characterization.py
 rtk git commit -m "feat(projects): add the open, close and save dialogs of the ProjectManager"
 ```
 
@@ -1564,7 +1765,7 @@ class TestTitleShowsProjectName(unittest.TestCase):
 
 - [ ] **Step 2: Run the test and see it fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
 Expected: 2 failures: `'C:/x/Board_A.FlatPrj' != 'Board_A'` and `'Untitled' != 'Board_A'`.
 
 - [ ] **Step 3: Change `MainGUI.set_ui_title`**
@@ -1595,10 +1796,10 @@ Replace it with:
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (50 tests).
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
+Expected: `OK` (54 tests).
 
-Also run: `.venv/Scripts/python.exe tests/test_titlebar.py`
+Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_titlebar.py"`
 Expected: `OK`.
 
 - [ ] **Step 5: Commit**
@@ -1732,7 +1933,7 @@ if __name__ == '__main__':
 
 - [ ] **Step 2: Run the test and see it fail**
 
-Run: `.venv/Scripts/python.exe tests/test_project_selector.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_selector.py"`
 Expected: `ModuleNotFoundError: No module named 'appGUI.ProjectSelector'`.
 
 - [ ] **Step 3: Write `appGUI/ProjectSelector.py`**
@@ -1838,7 +2039,7 @@ class ProjectSelector(QtWidgets.QWidget):
 
 - [ ] **Step 4: Run the test and see it pass**
 
-Run: `.venv/Scripts/python.exe tests/test_project_selector.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_selector.py"`
 Expected: `OK` (8 tests).
 
 - [ ] **Step 5: Wire the manager and the selector into `appMain.py`**
@@ -1890,7 +2091,7 @@ from appGUI.ProjectSelector import ProjectSelector
 Run: `.venv/Scripts/python.exe -c "import appMain"`
 Expected: no output, no error.
 
-Run: `.venv/Scripts/python.exe tests/test_app_refactor_integration.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_app_refactor_integration.py"`
 Expected: `OK`.
 
 - [ ] **Step 7: Commit**
@@ -2010,7 +2211,7 @@ if __name__ == '__main__':
 
 - [ ] **Step 2: Run the test and see it fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_appio.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"`
 Expected: 4 failures (for example `Expected 'new' to be called once. Called 0 times.`).
 
 - [ ] **Step 3: Change `on_file_new_click`**
@@ -2071,10 +2272,10 @@ In `_restore_project_handler`, find:
 
 - [ ] **Step 6: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_appio.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"`
 Expected: `OK` (4 tests).
 
-Also run: `.venv/Scripts/python.exe tests/test_project_load_cleanup.py`
+Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_load_cleanup.py"`
 Expected: `OK`. This test uses an app without `projects`, so the `getattr` guard must work.
 
 - [ ] **Step 7: Commit**
@@ -2141,7 +2342,7 @@ class TestSave(AppIOTestBase):
 
 - [ ] **Step 2: Run the tests and see them fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_appio.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"`
 Expected: failures in `TestSave`.
 
 - [ ] **Step 3: Change `on_file_save_project`**
@@ -2236,10 +2437,10 @@ Replace it with:
 
 - [ ] **Step 5: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_appio.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"`
 Expected: `OK` (8 tests).
 
-Also run: `.venv/Scripts/python.exe tests/test_project_load_cleanup.py`
+Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_load_cleanup.py"`
 Expected: `OK`.
 
 - [ ] **Step 6: Commit**
@@ -2310,7 +2511,7 @@ class TestExitWithProjects(unittest.TestCase):
 
 - [ ] **Step 2: Run the tests and see them fail**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
 Expected: failures in `TestExitWithProjects`.
 
 - [ ] **Step 3: Change `AppLifecycle.final_save`**
@@ -2354,11 +2555,11 @@ Replace it with:
 
 - [ ] **Step 4: Run the tests and see them pass**
 
-Run: `.venv/Scripts/python.exe tests/test_projects_manager.py`
-Expected: `OK` (54 tests).
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
+Expected: `OK` (58 tests).
 
-Also run: `.venv/Scripts/python.exe tests/test_shutdown_routing.py`
-Expected: `OK`.
+Also run: `.venv/Scripts/python.exe -m pytest tests/test_shutdown_routing.py -q`
+Expected: all tests pass, 0 failed.
 
 - [ ] **Step 5: Commit**
 
@@ -2507,7 +2708,7 @@ if __name__ == '__main__':
 
 - [ ] **Step 2: Run the test and see it fail**
 
-Run: `.venv/Scripts/python.exe tests/test_tcl_projects.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_tcl_projects.py"`
 Expected: errors with `ModuleNotFoundError: No module named 'tclCommands.TclCommandListProjects'`.
 
 - [ ] **Step 3: Write `tclCommands/TclCommandListProjects.py`**
@@ -2737,7 +2938,7 @@ import tclCommands.TclCommandSelectProject
 
 - [ ] **Step 7: Run the test and see it pass**
 
-Run: `.venv/Scripts/python.exe tests/test_tcl_projects.py`
+Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_tcl_projects.py"`
 Expected: `OK` (13 tests).
 
 - [ ] **Step 8: Commit**
@@ -2756,10 +2957,10 @@ rtk git commit -m "feat(tcl): add the list_projects, select_project and close_pr
 
 - [ ] **Step 1: Add the changelog entry**
 
-In `CHANGELOG.md`, the newest date block is at the top, below the line `CHANGELOG for FlatCAM Evo beta`. If a block `18.10.2026` with a `GUI:` section exists, add this line at the end of the `GUI:` list. If no block for today exists, make a new date block with today's date in the same format, with a `GUI:` section.
+In `CHANGELOG.md`, the newest date block is at the top, below the line that starts with `CHANGELOG for FlatCAM Evo`. If a block `18.10.2026` with a `GUI:` section exists, add this line at the end of the `GUI:` list. If no block for today exists, make a new date block with today's date in the same format, with a `GUI:` section.
 
 ```markdown
-- the Project tab can hold more than 1 project: a Project combobox above the tree selects the active project; a right-click on the combobox has New Project, Open Project, Rename Project and Close Project; an inactive project keeps its geometry but releases its plots and its Properties UI; File New and File Open add a project; after a rename, Save writes '<new name>.FlatPrj' in the same folder and the title bar shows the project name; exit asks about each project with unsaved changes; new Tcl commands list_projects, select_project and close_project
+- the Project tab can hold more than 1 project: a Project combobox above the tree selects the active project; a right-click on the combobox has New Project, Open Project, Rename Project and Close Project; an inactive project keeps its geometry and its Properties UI but releases its plots; a switch is refused while an editor is open or a task runs; File New and File Open add a project; after a rename, Save writes '<new name>.FlatPrj' in the same folder and the title bar shows the project name; exit asks about each project with unsaved changes; new Tcl commands list_projects, select_project and close_project
 ```
 
 - [ ] **Step 2: Run all the new test files**
@@ -2767,17 +2968,17 @@ In `CHANGELOG.md`, the newest date block is at the top, below the line `CHANGELO
 Run each command. Each one must show `OK`:
 
 ```bash
-.venv/Scripts/python.exe tests/test_project_context.py
-.venv/Scripts/python.exe tests/test_projects_manager.py
-.venv/Scripts/python.exe tests/test_project_selector.py
-.venv/Scripts/python.exe tests/test_projects_appio.py
-.venv/Scripts/python.exe tests/test_tcl_projects.py
+.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_context.py"
+.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"
+.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_selector.py"
+.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"
+.venv/Scripts/python.exe -m unittest discover -s tests -p "test_tcl_projects.py"
 ```
 
 - [ ] **Step 3: Run the full test suite 1 time**
 
-Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_*.py"`
-Expected: `OK`. This takes about 4 minutes. If a test fails, compare with the result on the commit before Task 1 (`rtk git stash` is not needed; use `rtk git log --oneline -15` to find that commit and report the failing test names). Report the failures. Do not fix tests that were already failing before Task 1.
+Run: `.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider`
+Expected: 0 failed, except the tests that already failed before Task 1. On 2026-10-18 these 5 tests failed before this work: `test_appmain_refactored.py::TestSignalConnections::test_object_status_changed_connected`, `test_grbl_sender_audit_fixes.py::TestStaleHeightMesh::test_on_show_3d_failed_build_clears_mesh`, `test_levelling_audit.py::TestSignalsOnce::test_port_force_closes_on_app_quit` and 2 tests in `test_pcbdoc_isolation.py`. The run takes about 7 minutes. Use pytest here: some test files have pytest-style test functions that unittest discovery does not find. If a test fails, compare with the result on the commit before Task 1 (`rtk git stash` is not needed; use `rtk git log --oneline -15` to find that commit and report the failing test names). Report the failures. Do not fix tests that were already failing before Task 1.
 
 - [ ] **Step 4: Commit**
 
@@ -2798,9 +2999,12 @@ The agent can not do these checks. Copy the list into the final report:
 6. Save. Save As suggests `Board_A.FlatPrj`. Save it. Rename to `Board_B`. Save. A new file `Board_B.FlatPrj` is in the same folder. `Board_A.FlatPrj` is still there.
 7. Open `Board_A.FlatPrj` while `Board_B` is open. It adds a project named `Board_A`. Open `Board_A.FlatPrj` again. The app asks to overwrite it.
 8. Start an Isolation job on a big Gerber. While it runs, click the combobox. It does not open, and the status bar shows "A task is running. Wait until it ends."
-9. Change a preference in Project A, for example the units. Switch to Project B. The preference has the value of Project B.
+9. Change a project option in Project A, for example the Isolation tool diameter in Preferences. Switch to Project B. Preferences shows the value of Project B. Change an application setting, for example the grid. It is the same in both projects.
 10. In the Tcl shell: `list_projects`, `select_project Board_A`, `close_project Board_A` (with unsaved changes: error), `close_project Board_A -force 1`.
 11. Make changes in 2 projects. Close the app. The app asks about each project by name.
+12. Open the Geometry Editor on an object. Use File > New Project. The status bar shows "Close the editor first." and the editor stays open with its changes.
+13. Open a CNCJob and edit its G-code in the CNC editor. Save the edit. Switch to another project and back. The edited G-code is still there.
+14. Make the project folder read-only. Close the project and choose Save. The save fails, the project stays open and it still has unsaved changes.
 12. Check the RAM in Task Manager: open a big project, add a second project and switch to it. The RAM of the app goes down or stays the same. It does not double.
 
 ---
