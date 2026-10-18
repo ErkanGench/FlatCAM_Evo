@@ -3111,7 +3111,7 @@ class appIO(QtCore.QObject):
         :param quit_action:     if the project saving will be followed by an app quit; boolean
         :param silent:          if True will not display status messages
         :param from_tcl         True is run from Tcl Shell
-        :return:                None
+        :return:                True if the file is written and verified, else False
         """
         self.log.debug("save_project() -> Saving Project")
         self.app.save_in_progress = True
@@ -3131,8 +3131,15 @@ class appIO(QtCore.QObject):
 
             # Only the project keys go into the project file. The application settings stay in the defaults.
             app_options = project_options(self.app.options)
+            try:
+                objs = [obj.to_dict() for obj in self.app.collection.get_list()]
+            except Exception as e:
+                self.log.error("Failed to serialize the objects for: %s because: %s" % (str(filename), str(e)))
+                self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                self.app.save_in_progress = False
+                return False
             d = {
-                "objs":             [obj.to_dict() for obj in self.app.collection.get_list()],
+                "objs":             objs,
                 "options":          app_options,
                 "version":          self.app.version
             }
@@ -3173,7 +3180,7 @@ class appIO(QtCore.QObject):
                             "Failed to serialize file before compression: %s because: %s" % (str(filename), str(e)))
                         self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
                         self.app.save_in_progress = False
-                        return
+                        return False
 
                 try:
                     # with lzma.open(filename, "w", preset=int(self.options['global_compression_level'])) as f:
@@ -3188,18 +3195,23 @@ class appIO(QtCore.QObject):
                     self.log.error("Failed to save compressed file: %s because: %s" % (str(filename), str(error_msg)))
                     self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
                     self.app.save_in_progress = False
-                    return
+                    return False
 
-                if project_zipped != b'':
-                    with open(filename, "wb") as f_to_write:
-                        f_to_write.write(project_zipped)
-
-                    self.inform.emit('[success] %s: %s' % (_("Project saved to"), str(filename)))
-                else:
+                if project_zipped == b'':
                     self.log.error("Failed to save file: %s. Empty binary file.", str(filename))
                     self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
                     self.app.save_in_progress = False
-                    return
+                    return False
+                try:
+                    with open(filename, "wb") as f_to_write:
+                        f_to_write.write(project_zipped)
+                except IOError:
+                    self.log.error("Failed to open file for saving: %s", str(filename))
+                    self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
+                    self.app.save_in_progress = False
+                    return False
+
+                self.inform.emit('[success] %s: %s' % (_("Project saved to"), str(filename)))
             else:
                 # Open file
                 try:
@@ -3208,7 +3220,7 @@ class appIO(QtCore.QObject):
                     self.log.error("Failed to open file for saving: %s", str(filename))
                     self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
                     self.app.save_in_progress = False
-                    return
+                    return False
 
                 # Write
                 try:
@@ -3217,56 +3229,54 @@ class appIO(QtCore.QObject):
                     self.log.error(
                         "Failed to serialize file: %s because: %s" % (str(filename), str(e)))
                     self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    self.app.save_in_progress = False
-                    return
-                f.close()
-
-                # verification of the saved project
-                # Open and parse
-                try:
-                    saved_f = open(filename, 'r')
-                except IOError:
-                    if silent is False:
-                        self.inform.emit('[ERROR_NOTCL] %s: %s %s' %
-                                         (_("Failed to verify project file"), str(filename), _("Retry to save it.")))
-                        self.app.save_in_progress = False
-                    return
-
-                try:
-                    saved_d = json.load(saved_f, object_hook=dict2obj)
-                    if not saved_d:
-                        self.inform.emit('[ERROR_NOTCL] %s: %s %s' %
-                                         (_("Failed to parse saved project file"),
-                                          str(filename),
-                                          _("Retry to save it.")))  # noqa
-                        f.close()
-                        self.app.save_in_progress = False
-                        return
-                except Exception:
-                    if silent is False:
-                        self.inform.emit('[ERROR_NOTCL] %s: %s %s' %
-                                         (_("Failed to parse saved project file"),
-                                          str(filename),
-                                          _("Retry to save it.")))  # noqa
                     f.close()
                     self.app.save_in_progress = False
-                    return
+                    return False
+                # a buffered write can fail only when it is flushed, in close()
+                try:
+                    f.close()
+                except Exception as e:
+                    self.log.error("Failed to write file: %s because: %s" % (str(filename), str(e)))
+                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                    self.app.save_in_progress = False
+                    return False
 
-                saved_f.close()
-
-                if silent is False:
-                    if 'version' in saved_d:
-                        self.inform.emit('[success] %s: %s' % (_("Project saved to"), str(filename)))
-                    else:
+                # verification of the saved project: open and parse it
+                try:
+                    with open(filename, 'r') as saved_f:
+                        saved_d = json.load(saved_f, object_hook=dict2obj)
+                except Exception:
+                    saved_d = None
+                if not saved_d or 'version' not in saved_d:
+                    if silent is False:
                         self.inform.emit('[ERROR_NOTCL] %s: %s %s' %
                                          (_("Failed to parse saved project file"),
                                           str(filename),
                                           _("Retry to save it.")))  # noqa
+                    self.app.save_in_progress = False
+                    return False
+
+                if silent is False:
+                    self.inform.emit('[success] %s: %s' % (_("Project saved to"), str(filename)))
 
             # if quit:
             # t = threading.Thread(target=lambda: self.check_project_file_size(1, filename=filename))
             # t.start()
             self.app.start_delayed_quit(delay=500, filename=filename, should_quit=quit_action)
+            return True
+
+    def save_project_checked(self, filename, quit_action=False, silent=False):
+        """
+        Run save_project() and return True only after a written and verified file. It never raises: an
+        unexpected error is logged, the save state is reset and the result is False.
+        """
+        try:
+            return self.save_project(filename, quit_action=quit_action, silent=silent) is True
+        except Exception as err:
+            self.log.error("appIO.save_project_checked() --> %s" % str(err))
+            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to save the project"), str(filename)))
+            self.app.save_in_progress = False
+            return False
 
     def save_source_file(self, obj_name, filename):
         """

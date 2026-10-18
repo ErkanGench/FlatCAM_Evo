@@ -423,3 +423,183 @@ class ProjectManager(QtCore.QObject):
             self.app.plotcanvas.view.camera.rect = rect
         except Exception as err:
             self.app.log.error("ProjectManager._set_view_rect() --> %s" % str(err))
+
+    # ------------------------------------------------------------------------------------------------------------
+    # Dialogs. Each dialog is 1 method so a test can replace it.
+    # ------------------------------------------------------------------------------------------------------------
+    def ask_yes_no(self, title, text):
+        from PyQt6 import QtGui
+        from appGUI.GUIElements import FCMessageBox
+
+        msgbox = FCMessageBox(parent=self.app.ui)
+        msgbox.setWindowTitle(title)
+        msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
+        msgbox.setText('<b>%s</b>' % title)
+        msgbox.setInformativeText(text)
+        msgbox.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+        msgbox.setDefaultButton(bt_yes)
+        msgbox.exec()
+        return msgbox.clickedButton() == bt_yes
+
+    def ask_save(self, ctx):
+        """
+        :return:    'yes', 'no' or 'cancel'
+        """
+        from PyQt6 import QtGui
+        from appGUI.GUIElements import FCMessageBox
+
+        title = _("Save changes")
+        msgbox = FCMessageBox(parent=self.app.ui)
+        msgbox.setWindowTitle(title)
+        msgbox.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app128.png'))
+        msgbox.setText('<b>%s</b>' % title)
+        msgbox.setInformativeText('%s: %s\n%s' % (_("The project has changes"), ctx.name,
+                                                  _("Do you want to Save the project?")))
+        msgbox.setIconPixmap(QtGui.QPixmap(self.app.resource_location + '/save_as.png'))
+        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+        msgbox.addButton(_('Cancel'), QtWidgets.QMessageBox.ButtonRole.RejectRole)
+        msgbox.setDefaultButton(bt_yes)
+        msgbox.exec()
+        response = msgbox.clickedButton()
+        if response == bt_yes:
+            return 'yes'
+        if response == bt_no:
+            return 'no'
+        return 'cancel'
+
+    def ask_save_path(self, ctx):
+        """
+        :return:    the chosen path, or '' if the user cancels
+        """
+        from appGUI.GUIElements import FCFileSaveDialog
+
+        filename, _f = FCFileSaveDialog.get_saved_filename(
+            caption=_("Save Project As ..."),
+            directory='%s/%s' % (str(self.app.get_last_save_folder()), ctx.name),
+            ext_filter="FlatCAM Project .FlatPrj (*.FlatPrj);; All Files (*.*)")
+        return str(filename)
+
+    def hold_autosave(self):
+        """
+        Stop the autosave until release_autosave(). A dialog runs a nested event loop: the autosave timer can fire
+        in it and start a second save.
+
+        :return:    the old state, for release_autosave()
+        """
+        previous = getattr(self.app, 'block_autosave', False)
+        self.app.block_autosave = True
+        return previous
+
+    def release_autosave(self, previous):
+        self.app.block_autosave = previous
+
+    def return_to(self, ctx):
+        """
+        Make ctx the active project again after an exit that stops. The save of an inactive project during the exit
+        makes it active with switch(visuals=False), so the canvas and the plugins still show ctx. This method puts
+        the live state back to ctx, the same as switch(ctx, visuals=False). It does not check is_busy(): the exit
+        stops in all cases, and the live collection must be the one that the canvas shows.
+        """
+        if ctx is self.active or ctx not in self.contexts:
+            return
+        self.capture()
+        self.active = ctx
+        self._load(ctx)
+        self.projects_changed.emit()
+        self.update_title()
+
+    # ------------------------------------------------------------------------------------------------------------
+    # Open, close request, save
+    # ------------------------------------------------------------------------------------------------------------
+    def prepare_open(self, filename):
+        """
+        Called before a project file is loaded from the GUI. It selects the project that receives the file.
+
+        :return:    True if the load must continue. False if the load must stop.
+        """
+        if self.is_busy():
+            self.inform_busy()
+            return False
+
+        existing = self.find_by_filename(filename)
+        if existing is not None:
+            reload_file = self.ask_yes_no(
+                _("Project already open"),
+                '%s: %s\n%s' % (_("This project is already open"), existing.name,
+                                _("Do you want to overwrite it with the version from the file?")))
+            if not self.switch(existing):
+                return False
+            return reload_file
+
+        # an empty project that was never saved receives the file; no new entry is needed
+        active = self.active
+        if not active.collection.get_list() and not self.app.project_filename and not self.app.should_we_save:
+            return True
+
+        return self.new() is not None
+
+    def request_close(self, ctx):
+        """
+        Close a project from the GUI. If it has unsaved changes, ask the user first.
+
+        :return:    True if the project is removed
+        """
+        if self.is_busy():
+            self.inform_busy()
+            return False
+        if self.is_dirty(ctx):
+            # the dialogs run a nested event loop; the autosave timer must not start a save during them
+            autosave_state = self.hold_autosave()
+            try:
+                answer = self.ask_save(ctx)
+                if answer == 'cancel':
+                    return False
+                if answer == 'yes' and not self.save_context(ctx):
+                    return False
+            finally:
+                self.release_autosave(autosave_state)
+        return self.close(ctx, force=True)
+
+    def save_context(self, ctx, visuals=True):
+        """
+        Save a project now, in this thread. If the project is not active, it becomes active first.
+
+        :return:    True if the file is written
+        """
+        # switch() returns at once for the active project and skips its busy check; a pending save (for example an
+        # autosave) must end first, else 2 saves overlap
+        if self.is_busy():
+            self.inform_busy()
+            return False
+        if not self.switch(ctx, visuals=visuals):
+            return False
+
+        path = self.save_target(ctx)
+        if path is None:
+            path = self.ask_save_path(ctx)
+            if not path:
+                return False
+        elif os.path.exists(path) and not same_path(path, self.app.project_filename):
+            if not self.ask_yes_no(_("Overwrite"),
+                                   '%s: %s\n%s' % (_("The file already exists"), path,
+                                                   _("Do you want to overwrite it?"))):
+                return False
+
+        if not self.app.f_handlers.save_project_checked(path, silent=True):
+            # the save failed: the project keeps its file name and its unsaved changes
+            self.app.save_in_progress = False
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The project was not saved"), path))
+            return False
+        # save_project() starts a timer that resets this flag later; the save is already done here
+        self.app.save_in_progress = False
+        timer = getattr(self.app, 'save_timer', None)
+        if timer is not None:
+            timer.stop()
+
+        self.app.project_filename = path
+        self.adopt_filename(path)
+        self.app.should_we_save = False
+        return True

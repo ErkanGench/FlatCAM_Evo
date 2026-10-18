@@ -638,6 +638,56 @@ def test_saved_project_has_only_project_options(tmp_path):
     assert all(is_project_key(key) for key in proj['options'])
 
 
+
+def test_save_project_reports_success_and_failure(tmp_path):
+    app = make_app()
+    io = appIO(app)
+    app.collection.get_list.return_value = []
+    app.collection.get_active.return_value = None
+    # a real failure: the folder does not exist, so open() fails
+    assert io.save_project(str(tmp_path / 'missing' / 'bad.FlatPrj'), silent=True) is False
+    assert app.save_in_progress is False
+    assert io.save_project(str(tmp_path / 'good.FlatPrj'), silent=True) is True
+
+
+def test_save_project_object_serialization_error_is_a_failure(tmp_path):
+    app = make_app()
+    io = appIO(app)
+    app.collection.get_list.return_value = [SimpleNamespace(to_dict=Mock(side_effect=ValueError('bad object')))]
+    app.collection.get_active.return_value = None
+    path = tmp_path / 'bad_object.FlatPrj'
+    assert io.save_project(str(path), silent=True) is False
+    assert app.save_in_progress is False
+    assert not path.exists()
+
+
+def test_save_project_close_error_is_a_failure(tmp_path):
+    import io as stdio
+
+    class FailingClose(stdio.StringIO):
+        def close(self):
+            raise OSError('disk full')
+
+    app = make_app()
+    io = appIO(app)
+    app.collection.get_list.return_value = []
+    app.collection.get_active.return_value = None
+    with patch('appHandlers.appIO.open', create=True, return_value=FailingClose()):
+        assert io.save_project(str(tmp_path / 'full.FlatPrj'), silent=True) is False
+    assert app.save_in_progress is False
+
+
+def test_save_project_checked_never_raises(tmp_path):
+    app = make_app()
+    io = appIO(app)
+    app.save_in_progress = True
+    with patch.object(appIO, 'save_project', side_effect=RuntimeError('boom')):
+        assert io.save_project_checked(str(tmp_path / 'x.FlatPrj'), silent=True) is False
+    assert app.save_in_progress is False
+    with patch.object(appIO, 'save_project', return_value=True):
+        assert io.save_project_checked(str(tmp_path / 'x.FlatPrj'), silent=True) is True
+
+
 def assert_same_tools(old, new, kind):
     assert sorted(old) == sorted(new)
     for key, tool in old.items():

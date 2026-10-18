@@ -461,5 +461,198 @@ class TestProjectManagerVisuals(unittest.TestCase):
         app.on_editing_finished.assert_not_called()
 
 
+class TestProjectManagerDialogs(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+
+    def path(self, name):
+        return os.path.join(self.directory.name, name)
+
+    def test_prepare_open_reuses_an_empty_active_project(self):
+        app, manager = make_manager()
+        self.assertTrue(manager.prepare_open(self.path('Board.FlatPrj')))
+        self.assertEqual(len(manager.contexts), 1)
+
+    def test_prepare_open_adds_a_project(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        self.assertTrue(manager.prepare_open(self.path('Board.FlatPrj')))
+        self.assertEqual(len(manager.contexts), 2)
+        self.assertIs(manager.active, manager.contexts[1])
+
+    def test_prepare_open_of_an_open_file_yes_reloads(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        app.project_filename = self.path('Board.FlatPrj')
+        manager.new()
+        manager.ask_yes_no = Mock(return_value=True)
+        self.assertTrue(manager.prepare_open(self.path('Board.FlatPrj')))
+        self.assertIs(manager.active, first)
+        manager.ask_yes_no.assert_called_once()
+
+    def test_prepare_open_of_an_open_file_no_only_switches(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        app.project_filename = self.path('Board.FlatPrj')
+        manager.new()
+        manager.ask_yes_no = Mock(return_value=False)
+        self.assertFalse(manager.prepare_open(self.path('Board.FlatPrj')))
+        self.assertIs(manager.active, first)
+
+    def test_prepare_open_is_refused_while_busy(self):
+        app, manager = make_manager()
+        app.save_in_progress = True
+        self.assertFalse(manager.prepare_open(self.path('Board.FlatPrj')))
+
+    def test_request_close_cancel(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.should_we_save = True
+        manager.ask_save = Mock(return_value='cancel')
+        self.assertFalse(manager.request_close(manager.active))
+        self.assertEqual(len(manager.contexts), 1)
+        self.assertEqual(manager.active.name, 'Project_1')
+
+    def test_request_close_no_discards(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        app.should_we_save = True
+        manager.ask_save = Mock(return_value='no')
+        self.assertTrue(manager.request_close(first))
+        self.assertNotIn(first, manager.contexts)
+
+    def test_request_close_yes_saves_first(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        app.should_we_save = True
+        manager.ask_save = Mock(return_value='yes')
+        manager.save_context = Mock(return_value=True)
+        self.assertTrue(manager.request_close(first))
+        manager.save_context.assert_called_once_with(first)
+
+    def test_save_context_writes_the_target_file(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.should_we_save = True
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True))
+        manager.rename(manager.active, 'Board_B')
+
+        self.assertTrue(manager.save_context(manager.active))
+
+        target = self.path('Board_B.FlatPrj')
+        app.f_handlers.save_project_checked.assert_called_once_with(target, silent=True)
+        self.assertEqual(app.project_filename, target)
+        self.assertFalse(app.should_we_save)
+        self.assertFalse(app.save_in_progress)
+
+    def test_save_context_asks_before_it_overwrites(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True))
+        manager.rename(manager.active, 'Board_B')
+        with open(self.path('Board_B.FlatPrj'), 'w') as stream:
+            stream.write('x')
+        manager.ask_yes_no = Mock(return_value=False)
+
+        self.assertFalse(manager.save_context(manager.active))
+        app.f_handlers.save_project_checked.assert_not_called()
+
+    def test_save_context_without_file_asks_for_a_path(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True))
+        manager.ask_save_path = Mock(return_value=self.path('Chosen.FlatPrj'))
+
+        self.assertTrue(manager.save_context(manager.active))
+
+        app.f_handlers.save_project_checked.assert_called_once_with(self.path('Chosen.FlatPrj'), silent=True)
+        self.assertEqual(manager.active.name, 'Chosen')
+
+    def test_save_context_without_file_cancelled(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True))
+        manager.ask_save_path = Mock(return_value='')
+        self.assertFalse(manager.save_context(manager.active))
+        app.f_handlers.save_project_checked.assert_not_called()
+
+    def test_save_context_failure_keeps_the_project_dirty(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.should_we_save = True
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=False))
+        manager.rename(manager.active, 'Board_B')
+
+        self.assertFalse(manager.save_context(manager.active))
+
+        self.assertTrue(app.should_we_save)
+        self.assertEqual(app.project_filename, self.path('Project_1.FlatPrj'))
+        self.assertFalse(app.save_in_progress)
+
+    def test_request_close_stops_when_the_save_fails(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.should_we_save = True
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=False))
+        manager.ask_save = Mock(return_value='yes')
+
+        self.assertFalse(manager.request_close(first))
+
+        self.assertIn(first, manager.contexts)
+        self.assertTrue(app.should_we_save)
+
+    def test_save_context_of_the_active_project_waits_for_a_pending_save(self):
+        # switch() returns at once for the active project, so save_context() must check the pending save itself
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.project_filename = self.path('Project_1.FlatPrj')
+        app.should_we_save = True
+        app.project_save_pending = True
+        app.f_handlers = SimpleNamespace(save_project_checked=Mock(return_value=True))
+
+        self.assertFalse(manager.save_context(manager.active))
+
+        app.f_handlers.save_project_checked.assert_not_called()
+        self.assertTrue(app.should_we_save)
+        app.inform.emit.assert_called_once()
+
+    def test_request_close_blocks_the_autosave_during_the_dialogs(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        app.should_we_save = True
+        app.block_autosave = False
+        seen = []
+
+        def answer(ctx):
+            # the dialog runs a nested event loop; the autosave timer can fire there
+            seen.append(app.block_autosave)
+            return 'cancel'
+
+        manager.ask_save = Mock(side_effect=answer)
+
+        self.assertFalse(manager.request_close(manager.active))
+
+        self.assertEqual(seen, [True])
+        # the cancel restores the old state of the autosave
+        self.assertFalse(app.block_autosave)
+
+    def test_return_to_restores_the_live_state_also_when_busy(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        self.assertTrue(manager.switch(second, visuals=False))
+        app.workers.pending_count.return_value = 1
+
+        manager.return_to(first)
+
+        self.assertIs(manager.active, first)
+        self.assertIs(app.collection, first.collection)
+        self.assertIs(manager.stack.currentWidget(), first.collection.view)
+        self.assertIs(manager.displayed, first)
+        # the canvas did not change: no visual step runs
+        manager.activate.assert_not_called()
+        manager.deactivate.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
