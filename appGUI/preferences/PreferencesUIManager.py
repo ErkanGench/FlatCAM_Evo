@@ -75,8 +75,6 @@ class PreferencesUIManager(QtCore.QObject):
 
             "global_compression_level": self.ui.general_pref_form.general_app_group.compress_spinner,
             "global_save_compressed": self.ui.general_pref_form.general_app_group.save_type_cb,
-            "global_autosave": self.ui.general_pref_form.general_app_group.autosave_cb,
-            "global_autosave_timeout": self.ui.general_pref_form.general_app_group.autosave_entry,
 
             "global_tpdf_tmargin": self.ui.general_pref_form.general_app_group.tmargin_entry,
             "global_tpdf_bmargin": self.ui.general_pref_form.general_app_group.bmargin_entry,
@@ -1343,9 +1341,6 @@ class PreferencesUIManager(QtCore.QObject):
 
         if not silent:
             self.inform.emit('[success] %s' % _("Preferences saved."))
-
-        # update the autosave timer
-        self.ui.app.save_project_auto_update()
 
     def on_preferences_edited(self):
         """

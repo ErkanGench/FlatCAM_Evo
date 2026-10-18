@@ -21,7 +21,7 @@ from appGUI.GUIElements import FCMessageBox
 
 
 class AppLifecycle(QtCore.QObject):
-    """Handler for app lifecycle methods: startup, shutdown, autosave, version check."""
+    """Handler for app lifecycle methods: startup, shutdown, version check."""
 
     def __init__(self, app):
         """Cache only dependencies available during early construction.
@@ -262,10 +262,7 @@ class AppLifecycle(QtCore.QObject):
         projects = getattr(self.app, 'projects', None)
         if projects is not None:
             start = projects.active
-            # the dialogs below run a nested event loop; the autosave timer must not start a save during them.
-            # quit_application() also asks a question (the Tools Database) and can refuse the quit. Only a quit
-            # that returns True keeps the autosave blocked: quit_application() stops its timer.
-            autosave_state = projects.hold_autosave()
+            # quit_application() also asks a question (the Tools Database) and can refuse the quit
             quitting = False
             try:
                 for ctx in projects.dirty_contexts():
@@ -281,10 +278,7 @@ class AppLifecycle(QtCore.QObject):
                 if not quitting:
                     # the exit stops (a cancel, a failed save, a pending save, a refused quit or an error). The save
                     # of an inactive project made it active, but the canvas still shows start: make start active
-                    try:
-                        projects.return_to(start)
-                    finally:
-                        projects.release_autosave(autosave_state)
+                    projects.return_to(start)
             if quitting:
                 # QApplication.quit() only posts the quit event, so the tray icon is hidden before the app ends
                 try:
@@ -383,9 +377,6 @@ class AppLifecycle(QtCore.QObject):
 
         # hide the UI so the user experiences a faster shutdown
         self.app.ui.hide()
-
-        # stop autosave timer to prevent it from firing during shutdown
-        self.app.autosave_timer.stop()
 
         if sys.platform == 'win32':
             # Set thread_exit directly - safe from main thread (GIL protects bool assignment)
@@ -713,36 +704,3 @@ class AppLifecycle(QtCore.QObject):
         except Exception:
             traceback.print_exc()
 
-    # --------------------------------------------------------------------------
-    # Method 14: save_project_auto
-    # --------------------------------------------------------------------------
-    def save_project_auto(self):
-        """
-        Called periodically to save the project.
-        It will save if there is no block on the save, if the project was saved at least once and if there is no save in
-        # progress.
-
-        :return:
-        """
-
-        if self.app.block_autosave is False and self.app.should_we_save is True and self.app.save_in_progress is False:
-            self.app.f_handlers.on_file_save_project()
-
-    # --------------------------------------------------------------------------
-    # Method 15: save_project_auto_update
-    # --------------------------------------------------------------------------
-    def save_project_auto_update(self):
-        """
-        Update the auto save time interval value.
-        :return:
-        """
-        self.log.debug("App.save_project_auto_update() --> updated the interval timeout.")
-        try:
-            if self.app.autosave_timer.isActive():
-                self.app.autosave_timer.stop()
-        except Exception:
-            pass
-
-        if self.options.get('global_autosave', self.defaults.get('global_autosave', False)) is True:
-            self.app.autosave_timer.setInterval(int(self.options.get('global_autosave_timeout', self.defaults.get('global_autosave_timeout', 300000))))
-            self.app.autosave_timer.start()

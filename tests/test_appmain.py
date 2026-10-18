@@ -392,41 +392,6 @@ class TestVersionCheck(unittest.TestCase):
 
 
 # =============================================================================
-# FIX 6: Autosave timer not stopped on quit
-# =============================================================================
-
-class TestAutosaveTimer(unittest.TestCase):
-    """Test that autosave timer is stopped on quit."""
-
-    def test_autosave_timer_stopped_on_quit(self):
-        """
-        RED: self.autosave_timer is started during init but never stopped
-        in quit_application(). Timer can fire after shutdown begins.
-        """
-        source = read_lifecycle()
-        method = extract_method(source, 'quit_application')
-        self.assertIsNotNone(method, "quit_application method not found in appLifecycle.py")
-
-        # After fix: should call autosave_timer.stop()
-        self.assertIn('autosave_timer.stop', method,
-            "quit_application() should call self.autosave_timer.stop() "
-            "to prevent timer from firing during shutdown")
-
-    def test_autosave_timer_started_in_init(self):
-        """
-        Verify that autosave_timer is indeed started in __init__.
-        This confirms the timer needs to be stopped on quit.
-        """
-        source = read_appmain()
-        method = extract_method(source, '_setup_gui')
-        self.assertIsNotNone(method, "_setup_gui method not found in appMain.py")
-
-        # The timer setup includes autosave_timer creation
-        self.assertIn('autosave_timer', method,
-            "autosave_timer should be present in __init__")
-
-
-# =============================================================================
 # Test runner
 # =============================================================================
 
@@ -441,7 +406,6 @@ def run_all_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestEditorCleanup))
     suite.addTests(loader.loadTestsFromTestCase(TestArgsThreadMyLoop))
     suite.addTests(loader.loadTestsFromTestCase(TestVersionCheck))
-    suite.addTests(loader.loadTestsFromTestCase(TestAutosaveTimer))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

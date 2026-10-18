@@ -119,7 +119,6 @@ class LifecycleChecks(DatabaseCase):
         self.app.ui.saveState = MagicMock(return_value=b'')
         self.app.ui.isMaximized = MagicMock(return_value=False)
         self.app.ui.general_pref_form = MagicMock()
-        self.app.autosave_timer = MagicMock()
         self.app.new_launch = SimpleNamespace(thread_exit=False, address=('127.0.0.1', 1))
         self.app.listen_th = MagicMock()
         self.app.geo_editor = None
@@ -163,7 +162,6 @@ class LifecycleChecks(DatabaseCase):
                         call('mouse_double_click', self.app.on_mouse_double_click_over_plot),
                         call('key_press', self.app.ui.keyPressEvent)])
                     self.app.plotcanvas.close.assert_called_once_with()
-                    self.app.autosave_timer.stop.assert_called_once_with()
                     self.app.pool.terminate.assert_called_once_with()
                     self.app.pool.join.assert_called_once_with()
                     self.app.workers.quit.assert_called_once_with()
@@ -173,7 +171,6 @@ class LifecycleChecks(DatabaseCase):
                     self.app.preferencesUiManager.save_defaults.assert_not_called()
                     self.app.plotcanvas.graph_event_disconnect.assert_not_called()
                     self.app.plotcanvas.close.assert_not_called()
-                    self.app.autosave_timer.stop.assert_not_called()
                     self.app.pool.terminate.assert_not_called()
                     self.app.pool.join.assert_not_called()
                     self.app.workers.quit.assert_not_called()

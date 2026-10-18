@@ -308,32 +308,6 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
 
         self.proj_ois = OptionalInputSection(self.save_type_cb, [self.compress_label, self.compress_spinner], True)
 
-        # Auto save CB
-        self.autosave_cb = FCCheckBox(_('Enable Auto Save'))
-        self.autosave_cb.setToolTip(
-            _("Check to enable the autosave feature.\n"
-              "When enabled, the application will try to save a project\n"
-              "at the set interval.")
-        )
-
-        grid6.addWidget(self.autosave_cb, 4, 0, 1, 2)
-
-        # Auto Save Timeout Interval
-        self.autosave_entry = FCSpinner()
-        self.autosave_entry.set_range(0, 9999999)
-        self.autosave_label = FCLabel('%s:' % _('Interval'))
-        self.autosave_label.setToolTip(
-            _("Time interval for autosaving. In milliseconds.\n"
-              "The application will try to save periodically but only\n"
-              "if the project was saved manually at least once.\n"
-              "While active, some operations may block this feature.")
-        )
-
-        grid6.addWidget(self.autosave_label, 6, 0)
-        grid6.addWidget(self.autosave_entry, 6, 1)
-
-        # self.as_ois = OptionalInputSection(self.autosave_cb, [self.autosave_label, self.autosave_entry], True)
-
         self.pdf_param_label = FCLabel('%s' % _("Text to PDF parameters"), color='orange', bold=True)
         self.pdf_param_label.setToolTip(
             _("Used when saving text in Code Editor or in FlatCAM Document objects.")

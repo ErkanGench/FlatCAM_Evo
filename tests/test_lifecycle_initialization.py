@@ -37,7 +37,6 @@ class TestInitializationOrder(unittest.TestCase):
         self.mock_app.collection = Mock()
         self.mock_app.f_handlers = Mock()
         self.mock_app.trayIcon = Mock()
-        self.mock_app.autosave_timer = Mock()
         self.mock_app.listen_th = Mock()
         self.mock_app.new_launch = Mock()
         self.mock_app.geo_editor = Mock()
@@ -47,7 +46,6 @@ class TestInitializationOrder(unittest.TestCase):
         self.mock_app.workers = Mock()
         self.mock_app.pool = Mock()
         self.mock_app.save_in_progress = False
-        self.mock_app.block_autosave = False
         self.mock_app.on_properties_tab_click = Mock()
         self.mock_app.app_quit = Mock()
         self.mock_app.message = Mock()
@@ -236,7 +234,7 @@ class TestAppLifecycleCaching(unittest.TestCase):
         from appHandlers.appLifecycle import AppLifecycle
         
         late_attributes = {
-            'autosave_timer', 'collection', 'exc_editor', 'f_handlers',
+            'collection', 'exc_editor', 'f_handlers',
             'gcode_editor', 'geo_editor', 'grb_editor', 'plotcanvas',
             'preferencesUiManager', 'trayIcon', 'ui', 'workers'
         }
@@ -282,7 +280,6 @@ class TestAppShutdownSequence(unittest.TestCase):
         mock_app.defaults = Mock()
         mock_app.options = {}
         mock_app.ui = Mock()
-        mock_app.autosave_timer = Mock()
         mock_app.new_launch = Mock()
         mock_app.listen_th = Mock()
         mock_app.geo_editor = None
@@ -442,7 +439,6 @@ class TestFinalSaveSequence(unittest.TestCase):
         mock_app.project_save_pending = False
         mock_app.trayIcon = Mock()
         mock_app.trayIcon.hide = Mock()
-        mock_app.autosave_timer = Mock()
         mock_app.new_launch = Mock()
         mock_app.listen_th = Mock()
         mock_app.geo_editor = None

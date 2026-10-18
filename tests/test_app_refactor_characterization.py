@@ -33,7 +33,7 @@ FAMILIES = {
         'AppLifecycle',
         (
             'on_options_value_changed', 'on_defaults_dict_change', 'on_defaults2options',
-            'save_project_auto', 'save_project_auto_update', 'on_portable_checked'
+            'on_portable_checked'
         )
     ),
     'ui': (
@@ -213,44 +213,6 @@ class TestLifecycleBehavior(AppCharacterizationTest):
         app.preferencesUiManager.defaults_write_form.assert_called_once_with()
         self.assertEqual(app.options['units'], 'IN')
         self.assertEqual(app.options['new_key'], 7)
-
-    def test_autosave_guard_truth_table(self):
-        for block_autosave, should_save, save_in_progress in product((False, True), repeat=3):
-            with self.subTest(
-                    block_autosave=block_autosave,
-                    should_save=should_save,
-                    save_in_progress=save_in_progress):
-                app = base_app()
-                app.block_autosave = block_autosave
-                app.should_we_save = should_save
-                app.save_in_progress = save_in_progress
-                save = Mock()
-                app.f_handlers = SimpleNamespace(on_file_save_project=save)
-                target, _ = target_for(app, 'lifecycle')
-
-                target.save_project_auto()
-
-                expected = not block_autosave and should_save and not save_in_progress
-                self.assertEqual(save.call_count, int(expected))
-
-    def test_autosave_timer_update(self):
-        for enabled in (False, True):
-            with self.subTest(enabled=enabled):
-                app = base_app()
-                app.options.update({'global_autosave': enabled, 'global_autosave_timeout': '2500'})
-                app.autosave_timer = Timer(active=True)
-                target, _ = target_for(app, 'lifecycle')
-
-                target.save_project_auto_update()
-
-                self.assertEqual(app.autosave_timer.calls[:2], [('isActive',), ('stop',)])
-                if enabled:
-                    self.assertEqual(
-                        app.autosave_timer.calls[2:],
-                        [('setInterval', 2500), ('start',)]
-                    )
-                else:
-                    self.assertEqual(app.autosave_timer.calls[2:], [])
 
     def test_portable_configuration_uses_project_config_directory(self):
         app = base_app()

@@ -376,7 +376,6 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.app.proc_container = SimpleNamespace(new=lambda text: nullcontext())
         self.app.file_opened = Mock()
         self.app.should_we_save = True
-        self.app.block_autosave = True
         tasks = []
         self.app.worker_task = SimpleNamespace(emit=tasks.append)
         io = appIO(self.app)
@@ -393,7 +392,6 @@ class TestBatchPropertiesQt(unittest.TestCase):
             self.assertFalse(worker.is_alive())
         self.assertEqual(self.app.collection.get_list(), [])
         self.app.file_opened.emit.assert_not_called()
-        self.assertTrue(self.app.block_autosave)
         self.wait_for(lambda: batch.completed)
         self.assertFalse(batch.failed)
         obj = self.app.collection.get_by_name('cli_layer')
@@ -402,7 +400,6 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.assertTrue(all(thread is QtCore.QThread.currentThread() for thread in obj.build_threads))
         self.assertEqual(self.app.all_objects_list, [obj])
         self.app.file_opened.emit.assert_called_once_with('project', 'cli.FlatPrj')
-        self.assertFalse(self.app.block_autosave)
         self.assertFalse(self.app.should_we_save)
         self.app.on_zoom_fit.assert_not_called()
 

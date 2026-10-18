@@ -482,20 +482,6 @@ class ProjectManager(QtCore.QObject):
             ext_filter="FlatCAM Project .FlatPrj (*.FlatPrj);; All Files (*.*)")
         return str(filename)
 
-    def hold_autosave(self):
-        """
-        Stop the autosave until release_autosave(). A dialog runs a nested event loop: the autosave timer can fire
-        in it and start a second save.
-
-        :return:    the old state, for release_autosave()
-        """
-        previous = getattr(self.app, 'block_autosave', False)
-        self.app.block_autosave = True
-        return previous
-
-    def release_autosave(self, previous):
-        self.app.block_autosave = previous
-
     def return_to(self, ctx):
         """
         Make ctx the active project again after an exit that stops. The save of an inactive project during the exit
@@ -551,16 +537,11 @@ class ProjectManager(QtCore.QObject):
             self.inform_busy()
             return False
         if self.is_dirty(ctx):
-            # the dialogs run a nested event loop; the autosave timer must not start a save during them
-            autosave_state = self.hold_autosave()
-            try:
-                answer = self.ask_save(ctx)
-                if answer == 'cancel':
-                    return False
-                if answer == 'yes' and not self.save_context(ctx):
-                    return False
-            finally:
-                self.release_autosave(autosave_state)
+            answer = self.ask_save(ctx)
+            if answer == 'cancel':
+                return False
+            if answer == 'yes' and not self.save_context(ctx):
+                return False
         return self.close(ctx, force=True)
 
     def save_context(self, ctx, visuals=True):
@@ -569,8 +550,8 @@ class ProjectManager(QtCore.QObject):
 
         :return:    True if the file is written
         """
-        # switch() returns at once for the active project and skips its busy check; a pending save (for example an
-        # autosave) must end first, else 2 saves overlap
+        # switch() returns at once for the active project and skips its busy check; a pending save must end first,
+        # else 2 saves overlap
         if self.is_busy():
             self.inform_busy()
             return False

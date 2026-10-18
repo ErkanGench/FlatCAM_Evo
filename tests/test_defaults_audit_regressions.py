@@ -90,3 +90,13 @@ def test_factory_snapshot_matches_current_defaults(tmp_path, change):
             assert path.stat().st_mtime_ns == original_mtime
     finally:
         path.chmod(stat.S_IWRITE | stat.S_IREAD)
+
+
+def test_load_drops_the_removed_autosave_keys(tmp_path):
+    path = tmp_path / "current_defaults.FlatConfig"
+    path.write_text(json.dumps({"global_autosave": True, "global_autosave_timeout": 1000, "units": "IN"}))
+    defaults = AppDefaults(beta=False)
+    defaults.load(str(path), SimpleNamespace(emit=lambda *args: None))
+    assert "global_autosave" not in defaults
+    assert "global_autosave_timeout" not in defaults
+    assert defaults["units"] == "IN"

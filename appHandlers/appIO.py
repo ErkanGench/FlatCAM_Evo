@@ -89,7 +89,6 @@ class appIO(QtCore.QObject):
         self.options = self.app.options
         self.app_units = self.app.app_units
         self.pagesize = {}
-        self._project_autosave_state = None
 
         self.app.new_project_signal.connect(self.on_new_project_house_keeping)
         self.pcbdoc_parsed.connect(self.on_pcbdoc_parsed, Qt.ConnectionType.QueuedConnection)
@@ -2874,13 +2873,7 @@ class appIO(QtCore.QObject):
 
         self.project_load_requested.emit(filename, run_from_arg, plot, cli, from_tcl)
 
-    def _restore_project_autosave(self):
-        previous = getattr(self, '_project_autosave_state', None)
-        self.app.block_autosave = previous if previous is not None else False
-        self._project_autosave_state = None
-
     def _on_project_load_failed(self):
-        self._restore_project_autosave()
         self.app.ui.set_ui_title(name=self.app.project_filename)
 
     def _open_project(self, filename, run_from_arg, plot, cli, from_tcl):
@@ -2896,10 +2889,6 @@ class appIO(QtCore.QObject):
         if projects is not None and not run_from_arg and not cli and not from_tcl:
             if not projects.prepare_open(project_filename):
                 return
-
-        # block auto-saving while a project is loaded
-        self._project_autosave_state = self.app.block_autosave
-        self.app.block_autosave = True
 
         # for some reason, setting ui_title does not work when this method is called from Tcl Shell
         # it's because the TclCommand is run in another thread (it inherit TclCommandSignaled)
@@ -3047,7 +3036,6 @@ class appIO(QtCore.QObject):
                 self.inform.emit('[success] %s: %s' % (_("Project loaded from"), filename))
                 self.app.should_we_save = False
                 self.app.file_opened.emit("project", filename)
-            self._restore_project_autosave()
             if cli is None:
                 self.app.ui.set_ui_title(name=self.app.project_filename)
             self.log.debug(" **************** Finished PROJECT loading... **************** ")

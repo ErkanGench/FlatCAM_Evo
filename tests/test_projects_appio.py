@@ -46,7 +46,7 @@ class AppIOTestBase(unittest.TestCase):
             restore_project=self.signals.restore, restore_project_objects_sig=self.signals.objects,
             worker_task=SimpleNamespace(emit=self.tasks.append),
             proc_container=SimpleNamespace(new=lambda text: nullcontext()),
-            block_autosave=False, project_filename=None, resource_location='assets/resources',
+            project_filename=None, resource_location='assets/resources',
             app_obj=SimpleNamespace(load_batches=set()), projects=self.projects,
             file_opened=Mock(), file_saved=Mock(), should_we_save=True,
             get_last_save_folder=Mock(return_value=self.directory.name))
@@ -72,7 +72,6 @@ class TestNewAndOpen(AppIOTestBase):
         self.io._open_project(filename, False, True, False, False)
 
         self.projects.prepare_open.assert_called_once_with(filename)
-        self.assertFalse(self.app.block_autosave)
         self.assertEqual(self.tasks, [])
 
     def test_tcl_open_does_not_call_prepare_open(self):

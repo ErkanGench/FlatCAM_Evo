@@ -419,7 +419,6 @@ class App(QtCore.QObject):
         self.poly_not_cleared = False
         self.isHovering = False
         self.notHovering = True
-        self.block_autosave = False
 
         # Window geometry
         self.x_pos = None
@@ -459,7 +458,6 @@ class App(QtCore.QObject):
         self.ui = None
         self.shell = None
         self.regFK = None
-        self.autosave_timer = None
 
         # Preferences/collection
         self.defaults = None
@@ -1091,12 +1089,6 @@ class App(QtCore.QObject):
             keywords=KeyWords(),
             extensions=Extensions()
         )
-
-        # ########################################### AUTOSAVE SETUP ################################################
-        self.block_autosave = False
-        self.autosave_timer = QtCore.QTimer(self)
-        self.save_project_auto_update()
-        self.autosave_timer.timeout.connect(self.save_project_auto)
 
         # ##################################### UPDATE PREFERENCES GUI FORMS ########################################
         self.preferencesUiManager = PreferencesUIManager(
@@ -4031,12 +4023,6 @@ class App(QtCore.QObject):
 
     def check_project_file_size(self, filename, should_quit=None):
         self.lifecycle.check_project_file_size(filename=filename, should_quit=should_quit)
-
-    def save_project_auto(self):
-        self.lifecycle.save_project_auto()
-
-    def save_project_auto_update(self):
-        self.lifecycle.save_project_auto_update()
 
     def on_defaults2options(self):
         self.lifecycle.on_defaults2options()

@@ -1,4 +1,4 @@
-"""Project parse failures must release autosave on the GUI thread."""
+"""Project parse failures must clean up on the GUI thread."""
 
 import json
 import os
@@ -42,7 +42,7 @@ class TestProjectLoadCleanup(unittest.TestCase):
             restore_project=self.signals.restore, restore_project_objects_sig=self.signals.objects,
             worker_task=SimpleNamespace(emit=self.tasks.append),
             proc_container=SimpleNamespace(new=lambda text: nullcontext()),
-            block_autosave=False, project_filename='previous.FlatPrj', resource_location='assets/resources',
+            project_filename='previous.FlatPrj', resource_location='assets/resources',
             app_obj=SimpleNamespace(load_batches=set()))
         self.io = appIO(self.app)
         self.signals.restore.connect(self.io.restore_project_handler)
@@ -55,22 +55,19 @@ class TestProjectLoadCleanup(unittest.TestCase):
             QtTest.QTest.qWait(1)
         self.assertTrue(predicate(), 'GUI completion timed out')
 
-    def parse(self, text, prior=False, unreadable=False, request_from_worker=False):
+    def parse(self, text, unreadable=False, request_from_worker=False):
         filename = os.path.join(self.directory.name, 'project.FlatPrj')
         with open(filename, 'w') as stream:
             stream.write(text)
-        self.app.block_autosave = prior
         if request_from_worker:
             request = threading.Thread(target=lambda: self.io.open_project(filename, cli=None))
             request.start()
             request.join(2)
             self.assertFalse(request.is_alive())
-            self.assertEqual(self.app.block_autosave, prior)
             self.assertFalse(self.tasks)
         else:
             self.io.open_project(filename)
         self.wait_for(lambda: bool(self.tasks))
-        self.assertTrue(self.app.block_autosave)
         task = self.tasks.pop()
         errors = []
 
@@ -92,48 +89,15 @@ class TestProjectLoadCleanup(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertFalse(errors)
 
-    def test_malformed_project_restores_autosave_after_queued_gui_cleanup(self):
-        self.parse('not JSON or LZMA')
-        # Worker completion alone must not mutate GUI-owned completion state.
-        self.assertTrue(self.app.block_autosave)
-        self.wait_for(lambda: not self.app.block_autosave)
-        self.assertFalse(self.app.app_obj.load_batches)
-
-    def test_unreadable_project_restores_autosave(self):
-        self.parse('{}', unreadable=True)
-        self.wait_for(lambda: not self.app.block_autosave)
-
-    def test_invalid_project_schema_restores_autosave(self):
-        for text in ('[]', '{}', '{"objs":null,"options":{}}', '{"objs":[null],"options":{}}',
-                     '{"objs":[],"options":[]}'):
-            with self.subTest(text=text):
-                self.parse(text)
-                self.wait_for(lambda: not self.app.block_autosave)
-
-    def test_failure_preserves_previously_blocked_autosave(self):
-        self.parse('bad project', prior=True)
-        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.MetaCall)
-        self.assertTrue(self.app.block_autosave)
-        self.assertIsNone(self.io._project_autosave_state)
-
     def test_worker_request_starts_and_cleans_up_on_gui_thread(self):
         gui_thread = QtCore.QThread.currentThread()
         title_threads = []
         self.window.set_ui_title.side_effect = lambda **kwargs: title_threads.append(QtCore.QThread.currentThread())
         self.parse('bad project', request_from_worker=True)
-        self.wait_for(lambda: not self.app.block_autosave)
+        self.wait_for(lambda: len(title_threads) >= 2)
         self.assertEqual(title_threads, [gui_thread, gui_thread])
 
-    def test_success_cleanup_preserves_prior_autosave_state(self):
-        for prior in (False, True):
-            with self.subTest(prior=prior):
-                self.io._project_autosave_state = prior
-                self.app.block_autosave = True
-                self.io._restore_project_autosave()
-                self.assertEqual(self.app.block_autosave, prior)
-                self.assertIsNone(self.io._project_autosave_state)
-
-    def test_empty_project_parses_and_finishes_batch_with_prior_autosave_state(self):
+    def test_empty_project_parses_and_finishes_batch(self):
         from appObjects.AppObject import AppObject
 
         tree = QtWidgets.QTreeView()
@@ -160,32 +124,21 @@ class TestProjectLoadCleanup(unittest.TestCase):
         dialog = Mock()
         no = object()
         dialog.clickedButton.return_value = no
-        for prior in (False, True):
-            with self.subTest(prior=prior), patch('appHandlers.appIO.FCMessageBox', return_value=dialog):
-                dialog.addButton.side_effect = [object(), no]
-                self.app.should_we_save = True
-                self.parse(json.dumps({'objs': [], 'options': {}}), prior=prior)
-                self.wait_for(lambda: bool(self.tasks))
-                self.assertTrue(self.app.block_autosave)
-                self.assertTrue(self.app.should_we_save)
-                task = self.tasks.pop()
-                worker = threading.Thread(target=lambda: task['fcn'](*task['params']))
-                worker.start()
-                worker.join(2)
-                self.assertFalse(worker.is_alive())
-                self.wait_for(lambda: not self.app.app_obj.load_batches)
-                self.assertEqual(self.app.block_autosave, prior)
-                self.assertFalse(self.app.should_we_save)
-        self.assertEqual(opened.call_count, 2)
-        self.assertEqual(self.app.flush_recent_items.call_count, 2)
-
-    def test_missing_project_does_not_change_prior_state(self):
-        for prior in (False, True):
-            self.app.block_autosave = prior
-            self.io.open_project(os.path.join(self.directory.name, 'missing.FlatPrj'))
-            QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.MetaCall)
-            self.assertEqual(self.app.block_autosave, prior)
-            self.assertFalse(self.tasks)
+        with patch('appHandlers.appIO.FCMessageBox', return_value=dialog):
+            dialog.addButton.side_effect = [object(), no]
+            self.app.should_we_save = True
+            self.parse(json.dumps({'objs': [], 'options': {}}))
+            self.wait_for(lambda: bool(self.tasks))
+            self.assertTrue(self.app.should_we_save)
+            task = self.tasks.pop()
+            worker = threading.Thread(target=lambda: task['fcn'](*task['params']))
+            worker.start()
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.wait_for(lambda: not self.app.app_obj.load_batches)
+            self.assertFalse(self.app.should_we_save)
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(self.app.flush_recent_items.call_count, 1)
 
     def test_legacy_cancel_is_on_gui_thread_and_keeps_current_project(self):
         gui_thread = QtCore.QThread.currentThread()
@@ -201,7 +154,7 @@ class TestProjectLoadCleanup(unittest.TestCase):
         project = {'objs': [{'kind': 'gerber', 'options': {'name': 'old'}, 'apertures': {}}], 'options': {}}
         with patch('appHandlers.appIO.FCMessageBox', side_effect=make_dialog):
             self.parse(json.dumps(project))
-            self.wait_for(lambda: not self.app.block_autosave)
+            self.wait_for(lambda: dialog.clickedButton.called)
         self.io.on_file_new_project.assert_not_called()
         self.assertFalse(self.app.app_obj.load_batches)
 

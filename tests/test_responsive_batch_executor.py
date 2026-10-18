@@ -107,7 +107,6 @@ class TestResponsiveBatch(unittest.TestCase):
         self.batch.on_event('done', None)
         self.app.app_obj = self.owner
         self.app.should_we_save = True
-        self.app.block_autosave = True
         self.app.project_filename = 'empty.FlatPrj'
         signals = FileOpened()
         self.app.file_opened = signals.opened
@@ -132,11 +131,9 @@ class TestResponsiveBatch(unittest.TestCase):
         io.restore_project_objects({'objs': []}, 'empty.FlatPrj', False, False)
         tasks[0]['fcn'](*tasks[0]['params'])
         self.assertTrue(self.app.should_we_save)
-        self.assertTrue(self.app.block_autosave)
         opened.assert_not_called()
         QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.MetaCall)
         self.assertFalse(self.app.should_we_save)
-        self.assertFalse(self.app.block_autosave)
         opened.assert_called_once_with('project', 'empty.FlatPrj')
         self.app.flush_recent_items.assert_called_once_with()
         self.assertEqual(snapshots, [[{'kind': 'project', 'filename': 'empty.FlatPrj'}]])

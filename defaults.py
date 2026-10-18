@@ -129,8 +129,6 @@ class AppDefaults:
 
         "global_save_compressed": True,
         "global_compression_level": 3,
-        "global_autosave": False,
-        "global_autosave_timeout": 300000,
 
         "global_tpdf_tmargin": 15.0,
         "global_tpdf_bmargin": 10.0,
@@ -1122,6 +1120,8 @@ class AppDefaults:
         # ponytail: strip obsolete 'version' field from loaded data
         defaults.pop('version', None)
         defaults.pop('global_graphic_engine', None)
+        defaults.pop('global_autosave', None)
+        defaults.pop('global_autosave_timeout', None)
 
         # Migrate before merging: the old appearance also selected the stylesheet.
         if 'global_styling' not in defaults:

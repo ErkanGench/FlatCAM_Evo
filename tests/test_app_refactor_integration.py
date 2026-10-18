@@ -45,8 +45,6 @@ FACADE_MANIFEST = {
         'version_check': invocation(),
         'start_delayed_quit': invocation(delay=ARG, filename=SECOND_ARG, should_quit=False),
         'check_project_file_size': invocation(filename=ARG, should_quit=False),
-        'save_project_auto': invocation(),
-        'save_project_auto_update': invocation(),
     },
     'ui_actions': {
         'on_about': invocation(),
@@ -438,9 +436,6 @@ class TestControlledAppStartup(unittest.TestCase):
 
     @classmethod
     def dispose_app(cls, app, original_log_handlers, original_log_level, original_stylesheet):
-        app.autosave_timer.stop()
-        app.autosave_timer.deleteLater()
-
         app_signals = [
             app.inform[str],
             app.inform[str, bool],
@@ -507,7 +502,6 @@ class TestControlledAppStartup(unittest.TestCase):
             app.collection = CollectionStub()
             app.plotcanvas = PlotCanvasStub()
             app.proc_container = ProcessContainerStub()
-            app.autosave_timer = QtCore.QTimer(app)
             app.splash = None
             app._show_splash = False
 

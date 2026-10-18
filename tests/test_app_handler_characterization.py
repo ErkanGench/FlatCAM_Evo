@@ -43,7 +43,6 @@ METHOD_MANIFEST = {
         "on_options_value_changed", "on_app_restart", "on_layout", "final_save", "quit_application",
         "kill_app", "on_portable_checked", "on_defaults_dict_change", "on_defaults2options",
         "setup_obj_classes", "version_check", "start_delayed_quit", "check_project_file_size",
-        "save_project_auto", "save_project_auto_update",
     ),
     "ui_actions": (
         "on_about", "on_howto", "install_bookmarks", "on_bookmarks_manager", "on_backup_site",
@@ -475,7 +474,6 @@ class TestLifecycle(AppTestCase):
         defaults = Defaults()
         options = {
             "global_gridx": 1.0, "global_gridy": 2.0, "global_snap_max": 0.5,
-            "global_autosave": True, "global_autosave_timeout": 321,
             "global_serial": "serial", "global_stats": {},
         }
         app = SimpleNamespace(log=log, inform=inform, defaults=defaults, options=options)
@@ -600,18 +598,6 @@ class TestLifecycle(AppTestCase):
         self.assertFalse(app.save_in_progress)
         self.assertEqual([()], app.app_quit.emissions)
 
-        app.block_autosave = False
-        app.should_we_save = True
-        app.save_in_progress = False
-        app.f_handlers = Recorder(("on_file_save_project",))
-        invoke("lifecycle", handler, "save_project_auto")
-        self.assertEqual("on_file_save_project", app.f_handlers.calls[-1][0])
-
-        app.autosave_timer = Timer(active=True)
-        invoke("lifecycle", handler, "save_project_auto_update")
-        self.assertTrue(app.autosave_timer.active)
-        self.assertEqual(321, app.autosave_timer.interval)
-
     @covers("lifecycle", "quit_application")
     def test_quit_application_disconnects_vispy_despite_stale_backend_setting(self):
         app, handler = self.make_handler()
@@ -629,7 +615,6 @@ class TestLifecycle(AppTestCase):
         # quit_application saves the GUI state, so the ui needs these members (QSettings is patched below)
         app.ui = SimpleNamespace(hide=Recorder(("call",)).call, saveState=lambda: b"",
                                  isMaximized=lambda: False, general_pref_form=MagicMock())
-        app.autosave_timer = Timer(active=True)
         app.geo_editor = app.exc_editor = app.grb_editor = app.gcode_editor = None
         app._editor_for = lambda kind: None
         app.plotcanvas = PlotCanvas()
