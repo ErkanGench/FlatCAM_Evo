@@ -857,14 +857,8 @@ class App(QtCore.QObject):
             self.defaults.load(filename=current_defaults_path, inform=self.inform)
 
         # ######################################## UPDATE THE OPTIONS ###############################################
-        self.options = AppOptions(version=self.version, baseline=self.defaults)
-        # -----------------------------------------------------------------------------------------------------------
-        #   Update the self.options from the self.defaults
-        #   The self.options holds the application defaults while the self.options holds the object defaults
-        # -----------------------------------------------------------------------------------------------------------
-        # Copy app defaults to project options
-        for def_key, def_val in self.defaults.items():
-            self.options[def_key] = deepcopy(def_val)
+        # The options store only the project keys. They read and write the application keys in self.defaults.
+        self.options = AppOptions(version=self.version, baseline=self.defaults, defaults=self.defaults)
 
         # Set global_theme based on appearance
         appearance = self.options.get("global_appearance", self.defaults.get("global_appearance"))

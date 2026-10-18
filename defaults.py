@@ -1200,57 +1200,145 @@ class AppDefaults:
         self.defaults['global_stats'] = stats
 
 
+# A marker for a missing key. Do not use _MISSING for this: AppDefaults.get(key, _MISSING) returns the factory value.
+_ABSENT = object()
+
+
 class AppOptions:
-    def __init__(self, version, callback=lambda x: None, baseline=None):
+    def __init__(self, version, callback=lambda x: None, baseline=None, defaults=None):
         """
         Class that holds the options parameters used throughout the app.
 
         :param callback:    A method called each time that one of the values are changed in the self.defaults LouDict
+        :param baseline:    The values used to fill the options at the start
+        :param defaults:    The live AppDefaults. If it is set, only the project keys are stored here and the
+                            application keys are read from and written to "defaults".
         """
         self.options = LoudDict()
         self.current_options = {}  # copy used for restoring after cancelled prefs changes
         self.version = version
+        self.app_defaults = defaults
         self.baseline = deepcopy(dict(baseline)) if baseline is not None else deepcopy(AppDefaults.factory_defaults)
         self.baseline.pop('global_graphic_engine', None)
-        self.options.set_change_callback(callback)
         if baseline is not None:
-            self.options.update(deepcopy(self.baseline))
-            self.current_options = deepcopy(self.baseline)
+            self.options.update(deepcopy(self._own(self.baseline)))
+            self.current_options = deepcopy(dict(self.options))
+        # set after the first fill, so the callback runs only for later changes
+        self.options.set_change_callback(callback)
+
+    def _is_app_key(self, key):
+        """Return True if "key" is read from and written to the linked defaults."""
+        return self.app_defaults is not None and not is_project_key(key)
+
+    def _own(self, values):
+        """Return the part of "values" that this object stores itself."""
+        if self.app_defaults is None:
+            return dict(values)
+        return {k: v for k, v in values.items() if is_project_key(k)}
 
     # #### Pass-through to the defaults LoudDict #####
     def __len__(self):
-        return self.options.__len__()
+        return len(self.keys())
 
     def __getitem__(self, item):
+        if self._is_app_key(item):
+            return self.app_defaults[item]
         return self.options.__getitem__(item)
 
     def __setitem__(self, key, value):
+        if self._is_app_key(key):
+            current = self.app_defaults.get(key, _ABSENT)
+            if current is not _ABSENT and current == value:
+                return
+            self.app_defaults[key] = value
+            self.options.callback(key)
+            return
         return self.options.__setitem__(key, value)
 
     def __delitem__(self, key):
+        if self._is_app_key(key):
+            del self.app_defaults[key]
+            return
         return self.options.__delitem__(key)
 
+    def __contains__(self, key):
+        if self._is_app_key(key):
+            return self.app_defaults.get(key, _ABSENT) is not _ABSENT
+        return key in self.options
+
     def __iter__(self):
-        return self.options.__iter__()
+        return iter(self.keys())
 
     def __getattr__(self, item):
         # Unfortunately this method alone is not enough to pass through the other magic methods above.
         return self.options.__getattribute__(item)
 
+    def keys(self):
+        if self.app_defaults is None:
+            return self.options.keys()
+        return list(self.options.keys()) + [k for k in self.app_defaults if not is_project_key(k)]
+
+    def items(self):
+        if self.app_defaults is None:
+            return self.options.items()
+        return [(k, self[k]) for k in self.keys()]
+
+    def values(self):
+        if self.app_defaults is None:
+            return self.options.values()
+        return [self[k] for k in self.keys()]
+
+    def copy(self):
+        return dict(self.items())
+
+    def update(self, *args, **kwargs):
+        if len(args) > 1:
+            raise TypeError("update expected at most 1 arguments, got %d" % len(args))
+        other = dict(*args, **kwargs)
+        for key in other:
+            self[key] = other[key]
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def pop(self, key, *default):
+        if self._is_app_key(key):
+            return self.app_defaults.pop(key, *default)
+        return self.options.pop(key, *default)
+
     def get(self, key, default=_MISSING):
         """Return an option or its copied baseline when the option is missing."""
-        if key in self.options:
-            return self.options[key]
+        if key in self:
+            return self[key]
         if default is not _MISSING:
             return default
         return deepcopy(self.baseline.get(key))
 
-    def load(self, filename: str, inform, baseline=None):
+    def reset_from_defaults(self):
+        """Copy each project key from the linked defaults, or from the baseline if no defaults are linked."""
+        source = self.app_defaults if self.app_defaults is not None else self.baseline
+        for key in list(source):
+            if is_project_key(key):
+                self.options[key] = deepcopy(source[key])
+
+    def load_project(self, project_options):
+        """Set the project keys from a project file. The application keys in the file are ignored."""
+        self.reset_from_defaults()
+        for key, value in project_options.items():
+            if is_project_key(key):
+                self.options[key] = value
+
+    def load(self, filename: str, inform, baseline=None, include_app_keys=False):
         """
         Loads the options from a file on disk, performing migration if required.
 
-        :param filename:    a path to the file that is to be loaded
-        :param inform:      a pyqtSignal used to display information's in the StatusBar of the GUI
+        :param filename:            a path to the file that is to be loaded
+        :param inform:              a pyqtSignal used to display information's in the StatusBar of the GUI
+        :param baseline:            the values used for the keys that the file does not have
+        :param include_app_keys:    if defaults are linked, also write the application keys of the file
+                                    into the defaults
         """
 
         # Read in the file
@@ -1281,6 +1369,13 @@ class AppOptions:
 
         # Save the resulting defaults
         self.options.clear()
-        self.options.update(deepcopy(self.baseline))
-        self.options.update(options)
+        self.options.update(deepcopy(self._own(self.baseline)))
+        if self.app_defaults is None:
+            self.options.update(options)
+        else:
+            for key, value in options.items():
+                if is_project_key(key):
+                    self.options[key] = value
+                elif include_app_keys:
+                    self[key] = value
         self.current_options = deepcopy(dict(self.options))

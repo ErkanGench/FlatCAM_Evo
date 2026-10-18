@@ -327,10 +327,11 @@ class AppOptions:
         self.app_defaults = defaults
         self.baseline = deepcopy(dict(baseline)) if baseline is not None else deepcopy(AppDefaults.factory_defaults)
         self.baseline.pop('global_graphic_engine', None)
-        self.options.set_change_callback(callback)
         if baseline is not None:
             self.options.update(deepcopy(self._own(self.baseline)))
             self.current_options = deepcopy(dict(self.options))
+        # set after the first fill, so the callback runs only for later changes
+        self.options.set_change_callback(callback)
 
     def _is_app_key(self, key):
         """Return True if "key" is read from and written to the linked defaults."""

@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from defaults import AppDefaults, APP_TOOL_KEYS, PROJECT_KEYS, is_project_key
+from defaults import AppDefaults, AppOptions, APP_TOOL_KEYS, PROJECT_KEYS, is_project_key, project_options
 
 
 class TestIsProjectKey(unittest.TestCase):
@@ -38,6 +38,122 @@ class TestIsProjectKey(unittest.TestCase):
     def test_listed_keys_exist_in_factory_defaults(self):
         for key in PROJECT_KEYS | APP_TOOL_KEYS:
             self.assertIn(key, AppDefaults.factory_defaults, key)
+
+
+class TestAppOptionsMergedView(unittest.TestCase):
+    def make(self):
+        defaults = AppDefaults(beta=False)
+        calls = []
+        options = AppOptions(version='test', callback=calls.append, baseline=defaults, defaults=defaults)
+        return defaults, options, calls
+
+    def test_storage_holds_only_project_keys(self):
+        _defaults, options, _calls = self.make()
+        self.assertIn('units', options.options)
+        self.assertNotIn('global_gridx', options.options)
+        self.assertTrue(all(is_project_key(key) for key in options.options))
+
+    def test_application_key_reads_and_writes_defaults(self):
+        defaults, options, calls = self.make()
+        options['global_gridx'] = 7.5
+        self.assertEqual(defaults['global_gridx'], 7.5)
+        self.assertEqual(options['global_gridx'], 7.5)
+        self.assertEqual(options.get('global_gridx'), 7.5)
+        self.assertIn('global_gridx', options)
+        self.assertEqual(calls, ['global_gridx'])
+        defaults['global_gridx'] = 3.0
+        self.assertEqual(options['global_gridx'], 3.0)
+
+    def test_project_key_stays_in_own_storage(self):
+        defaults, options, calls = self.make()
+        before = defaults['gerber_bboxmargin']
+        options['gerber_bboxmargin'] = before + 1.0
+        self.assertEqual(options['gerber_bboxmargin'], before + 1.0)
+        self.assertEqual(defaults['gerber_bboxmargin'], before)
+        self.assertEqual(calls, ['gerber_bboxmargin'])
+
+    def test_unchanged_value_does_not_call_back(self):
+        defaults, options, calls = self.make()
+        options['global_gridx'] = defaults['global_gridx']
+        options['units'] = options['units']
+        self.assertEqual(calls, [])
+
+    def test_loop_and_items_see_all_keys(self):
+        defaults, options, _calls = self.make()
+        self.assertEqual(set(options), set(defaults))
+        self.assertEqual(set(options.keys()), set(defaults))
+        self.assertEqual(len(options), len(list(defaults)))
+        merged = dict(options.items())
+        self.assertEqual(merged['global_gridx'], defaults['global_gridx'])
+        self.assertEqual(options.copy(), merged)
+        self.assertEqual(len(options.values()), len(merged))
+
+    def test_update_setdefault_pop_go_to_the_right_place(self):
+        defaults, options, _calls = self.make()
+        options.update({'global_gridx': 9.0, 'gerber_bboxmargin': 4.0})
+        self.assertEqual(defaults['global_gridx'], 9.0)
+        self.assertEqual(options.options['gerber_bboxmargin'], 4.0)
+        options.update(global_gridy=8.0)
+        self.assertEqual(defaults['global_gridy'], 8.0)
+        self.assertEqual(options.setdefault('global_new_test_key', 1), 1)
+        self.assertEqual(defaults['global_new_test_key'], 1)
+        self.assertEqual(options.pop('global_new_test_key'), 1)
+        self.assertNotIn('global_new_test_key', options)
+        self.assertIsNone(options.pop('global_missing_test_key', None))
+
+    def test_project_options_has_only_project_keys(self):
+        _defaults, options, _calls = self.make()
+        saved = project_options(options)
+        self.assertIn('units', saved)
+        self.assertNotIn('global_gridx', saved)
+        self.assertTrue(all(is_project_key(key) for key in saved))
+        self.assertEqual(project_options({'units': 'MM', 'global_gridx': 1}), {'units': 'MM'})
+
+    def test_reset_from_defaults(self):
+        defaults, options, _calls = self.make()
+        options['gerber_bboxmargin'] = 99.0
+        defaults['gerber_bboxmargin'] = 0.25
+        options.reset_from_defaults()
+        self.assertEqual(options['gerber_bboxmargin'], 0.25)
+
+    def test_reset_from_defaults_copies_values(self):
+        defaults, options, _calls = self.make()
+        defaults['tools_test_list'] = [1, 2]
+        options.reset_from_defaults()
+        options['tools_test_list'].append(3)
+        self.assertEqual(defaults['tools_test_list'], [1, 2])
+
+    def test_load_project_ignores_application_keys(self):
+        defaults, options, _calls = self.make()
+        appearance = defaults['global_appearance']
+        options['gerber_bboxrounded'] = not defaults['gerber_bboxrounded']
+        options.load_project({'global_appearance': 'not-a-theme', 'gerber_bboxmargin': 0.75,
+                              'global_graphic_engine': '2D'})
+        self.assertEqual(defaults['global_appearance'], appearance)
+        self.assertEqual(options['gerber_bboxmargin'], 0.75)
+        self.assertEqual(options['gerber_bboxrounded'], defaults['gerber_bboxrounded'])
+        self.assertNotIn('global_graphic_engine', options)
+
+    def test_load_keeps_only_project_keys_unless_asked(self):
+        defaults, options, _calls = self.make()
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, 'prefs.FlatConfig')
+            with open(path, 'w') as f:
+                json.dump({'global_gridx': 42.0, 'gerber_bboxmargin': 0.5}, f)
+            options.load(path, Mock())
+            self.assertEqual(options['gerber_bboxmargin'], 0.5)
+            self.assertNotEqual(defaults['global_gridx'], 42.0)
+            options.load(path, Mock(), include_app_keys=True)
+            self.assertEqual(defaults['global_gridx'], 42.0)
+        self.assertTrue(all(is_project_key(key) for key in options.options))
+
+    def test_without_defaults_link_works_as_before(self):
+        options = AppOptions(version='test', baseline={'global_gridx': 1.0, 'units': 'MM'})
+        self.assertEqual(dict(options.options), {'global_gridx': 1.0, 'units': 'MM'})
+        options['global_gridx'] = 2.0
+        self.assertEqual(options.options['global_gridx'], 2.0)
+        self.assertEqual(set(options), {'global_gridx', 'units'})
+        self.assertEqual(options.get('missing', 5), 5)
 
 
 if __name__ == '__main__':
