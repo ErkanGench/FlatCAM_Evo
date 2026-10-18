@@ -159,6 +159,9 @@ The title bar shows the name of the active project.
 - **A change during a save:** the dirty flag is cleared when the save is queued, before
   the worker reads the objects. A change during the save sets it again, and a good save
   does not clear it. A failed save sets it back.
+- **1 save at a time:** a File > Save, Save As or autosave is refused while another one is
+  pending. `app.project_save_pending` is set when the save is queued and cleared only when
+  the GUI has its result. While it is set, the exit and a project switch wait.
 - **An error during a save:** `appIO.save_project_checked()` never raises. An error is a
   failed save: `save_in_progress` is reset and the completion of the save always comes.
 

@@ -504,6 +504,10 @@ class TestProjectManagerCore(unittest.TestCase):
         app.save_in_progress = True
         self.assertTrue(manager.is_busy())
         app.save_in_progress = False
+        # a File -> Save that the GUI has not completed yet (Task 10)
+        app.project_save_pending = True
+        self.assertTrue(manager.is_busy())
+        app.project_save_pending = False
         app.app_obj.load_batches.add(object())
         self.assertTrue(manager.is_busy())
         app.app_obj.load_batches.clear()
@@ -663,7 +667,7 @@ class ProjectManager(QtCore.QObject):
                 return True
         except AttributeError:
             pass
-        if getattr(app, 'save_in_progress', False):
+        if getattr(app, 'save_in_progress', False) or getattr(app, 'project_save_pending', False):
             return True
         collection = app.collection
         if collection.has_promises() or collection.has_plot_promises():
@@ -2501,6 +2505,36 @@ class TestSave(AppIOTestBase):
         self.assertTrue(self.app.should_we_save)
         self.app.file_saved.emit.assert_called_once_with('project', self.path('Board_A.FlatPrj'))
 
+    def test_second_save_is_refused_while_the_first_is_running(self):
+        self.app.project_filename = self.path('Board_A.FlatPrj')
+        self.projects.save_target.return_value = self.path('Board_A.FlatPrj')
+        self.io.on_file_save_project()
+        self.io.on_file_save_project()
+        self.assertEqual(len(self.tasks), 1)
+        self.assertTrue(self.app.project_save_pending)
+
+        self.run_queued_save(True)
+
+        self.assertFalse(self.app.project_save_pending)
+        self.io.on_file_save_project()
+        self.assertEqual(len(self.tasks), 2)
+
+    def test_save_stays_pending_until_the_gui_completion(self):
+        self.app.project_filename = self.path('Board_A.FlatPrj')
+        self.projects.save_target.return_value = self.path('Board_A.FlatPrj')
+        self.io.on_file_save_project()
+        # the worker ends with a failure, but its completion signal is not delivered yet
+        self.io.project_save_done.disconnect(self.io._on_project_save_done)
+        self.run_queued_save(False)
+        self.assertTrue(self.app.project_save_pending)
+        self.assertFalse(self.app.should_we_save)
+
+        # the completion arrives on the GUI thread
+        self.io._on_project_save_done(self.path('Board_A.FlatPrj'), False, False, True)
+
+        self.assertFalse(self.app.project_save_pending)
+        self.assertTrue(self.app.should_we_save)
+
     def test_save_that_raises_reports_a_failure(self):
         from unittest.mock import patch
         self.app.project_filename = self.path('Board_A.FlatPrj')
@@ -2602,7 +2636,19 @@ from appObjects.ProjectContext import same_path
         The dirty flag is cleared now, before the worker reads the objects. A change while the save runs sets the
         flag again, so a good save does not hide it. A failed save sets the flag back. save_in_progress is set now,
         so the exit waits for a save that is queued but not started.
+
+        Only 1 save runs at a time. project_save_pending is set here and cleared only in _on_project_save_done(),
+        both on the GUI thread. While it is set, a new save is refused (a second save could end first; the older
+        one would then set an old file name, clear the dirty flag or overwrite a newer file), and the exit and a
+        project switch wait (the worker clears save_in_progress before the GUI restores the dirty flag).
+
+        :return:    True if the save is queued
         """
+        if getattr(self.app, 'project_save_pending', False):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("A save of the project is running. Wait until it ends."))
+            return False
+        self.app.project_save_pending = True
+
         was_dirty = bool(self.app.should_we_save)
         self.app.should_we_save = False
         self.app.save_in_progress = True
@@ -2611,6 +2657,7 @@ from appObjects.ProjectContext import same_path
             self.worker_task.emit({'fcn': self._save_project_task, 'params': params})
         else:
             self._save_project_task(*params)
+        return True
 
     def _save_project_task(self, filename, quit_action=False, silent=False, make_copy=False, was_dirty=True):
         """
@@ -2625,6 +2672,8 @@ from appObjects.ProjectContext import same_path
         Change the state of the project after a save. After a failed save, the project keeps its file name,
         its name and its unsaved changes.
         """
+        # the save is complete for the GUI; a new save, the exit and a switch are allowed again after this method
+        self.app.project_save_pending = False
         if not ok:
             self.app.save_in_progress = False
             if was_dirty:
@@ -2721,7 +2770,7 @@ Replace it with:
 - [ ] **Step 6: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_appio.py"`
-Expected: `OK` (12 tests).
+Expected: `OK` (14 tests).
 
 Also run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_project_load_cleanup.py"`
 Expected: `OK`.
@@ -2793,6 +2842,15 @@ class TestExitWithProjects(unittest.TestCase):
         projects.save_context.return_value = False
         lifecycle.final_save()
         lifecycle.quit_application.assert_not_called()
+
+    def test_exit_waits_for_the_completion_of_a_save(self):
+        # the worker of a failed save cleared save_in_progress, but the GUI did not restore the dirty flag yet
+        lifecycle, projects, start = self.make_lifecycle([])
+        lifecycle.app.project_save_pending = True
+        lifecycle.final_save()
+        lifecycle.quit_application.assert_not_called()
+        projects.dirty_contexts.assert_not_called()
+        lifecycle.inform.emit.assert_called_once()
 ```
 
 - [ ] **Step 2: Run the tests and see them fail**
@@ -2815,7 +2873,9 @@ In `appHandlers/appLifecycle.py`, in `final_save`, find:
 Replace it with:
 
 ```python
-        if self.app.save_in_progress:
+        # project_save_pending stays set until the GUI has the result of a File -> Save; before that, the dirty
+        # flag of a failed save is not restored yet
+        if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
             return
 
@@ -2842,7 +2902,7 @@ Replace it with:
 - [ ] **Step 4: Run the tests and see them pass**
 
 Run: `.venv/Scripts/python.exe -m unittest discover -s tests -p "test_projects_manager.py"`
-Expected: `OK` (61 tests).
+Expected: `OK` (62 tests).
 
 Also run: `.venv/Scripts/python.exe -m pytest tests/test_shutdown_routing.py -q`
 Expected: all tests pass, 0 failed.
@@ -3306,4 +3366,5 @@ The agent can not do these checks. Copy the list into the final report:
 - The Code Editor tabs of Script and Document objects stay open after a switch.
 - The Tcl commands `new` and `open_project` replace the active project. They do not add a project.
 - An inactive project keeps the Properties UI of its objects, so it uses more RAM than a project that releases it. `set_ui()` must become safe to run 2 times before the UI can be released.
-- The autosave and the Tcl `save_project` command still call `save_project()` directly. They do not use the save completion of Task 10.
+- The Tcl `save_project` command still calls `save_project()` directly (`tclCommands/TclCommandSaveProject.py:53`). It gets the error handling of Task 6, but not the completion of Task 10: it does not change the file name or the dirty flag, the same as today.
+- The autosave calls `on_file_save_project()` (`appLifecycle.py:682`), so it uses the flow of Task 10. After a rename, the autosave writes `<new name>.FlatPrj`, and if that file exists it shows the overwrite question, the same as File > Save. An autosave while a save is pending is refused with the status bar message of Task 10.
