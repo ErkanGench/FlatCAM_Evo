@@ -7,6 +7,7 @@ from appEditors.appGeoEditor import AppGeoEditor
 from appEditors.appGerberEditor import AppGerberEditor
 
 from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox, add_case_variants
+from appObjects.ProjectContext import same_path
 from camlib import to_dict, dict2obj, ET, ParseError
 from defaults import project_options
 from appParsers.ParseHPGL2 import HPGL2
@@ -71,6 +72,8 @@ class appIO(QtCore.QObject):
     project_load_requested = QtCore.pyqtSignal(object, bool, bool, object, bool)
     project_load_failed = QtCore.pyqtSignal()
     project_objects_requested = QtCore.pyqtSignal(object, str, object, bool)
+    # emitted by the save task of File -> Save and Save As: filename, success, make_copy, was_dirty
+    project_save_done = QtCore.pyqtSignal(str, bool, bool, bool)
 
     def __init__(self, app):
         """
@@ -94,6 +97,7 @@ class appIO(QtCore.QObject):
         self.project_load_requested.connect(self._open_project)
         self.project_load_failed.connect(self._on_project_load_failed, Qt.ConnectionType.QueuedConnection)
         self.project_objects_requested.connect(self.restore_project_objects)
+        self.project_save_done.connect(self._on_project_save_done)
 
     # Native PCB formats imported through the PcbDoc pipeline: kind -> file extension, file dialog filter,
     # name in the logs and whether the layer name goes before its id in the checkboxes and in the object names.
@@ -1388,17 +1392,91 @@ class appIO(QtCore.QObject):
         """
         self.log.debug("on_file_save_project()")
 
-        if self.app.project_filename is None:
+        target = self.app.project_filename
+        # after a rename, the project is saved as '<new name>.FlatPrj' in the same folder; the old file stays
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None and target is not None:
+            new_target = projects.save_target()
+            if new_target and not same_path(new_target, target):
+                if os.path.exists(new_target) and not projects.ask_yes_no(
+                        _("Overwrite"), '%s: %s\n%s' % (_("The file already exists"), new_target,
+                                                        _("Do you want to overwrite it?"))):
+                    self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+                    return
+                target = new_target
+
+        if target is None:
             self.on_file_save_project_as()
+            return
+
+        # the file name and the title change in _on_project_save_done(), after a good save
+        self._queue_project_save(target, quit_action=False, silent=silent)
+
+    def _queue_project_save(self, filename, quit_action=False, silent=False, make_copy=False, use_thread=True):
+        """
+        Start a save of File -> Save or File -> Save As, on the GUI thread.
+
+        The dirty flag is cleared now, before the worker reads the objects. A change while the save runs sets the
+        flag again, so a good save does not hide it. A failed save sets the flag back. save_in_progress is set now,
+        so the exit waits for a save that is queued but not started.
+
+        Only 1 save runs at a time. project_save_pending is set here and cleared only in _on_project_save_done(),
+        both on the GUI thread. While it is set, a new save is refused (a second save could end first; the older
+        one would then set an old file name, clear the dirty flag or overwrite a newer file), and the exit and a
+        project switch wait (the worker clears save_in_progress before the GUI restores the dirty flag).
+
+        :return:    True if the save is queued
+        """
+        if getattr(self.app, 'project_save_pending', False):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("A save of the project is running. Wait until it ends."))
+            return False
+        self.app.project_save_pending = True
+
+        was_dirty = bool(self.app.should_we_save)
+        self.app.should_we_save = False
+        self.app.save_in_progress = True
+        params = [filename, quit_action, silent, make_copy, was_dirty]
+        if use_thread is True:
+            self.worker_task.emit({'fcn': self._save_project_task, 'params': params})
         else:
-            self.worker_task.emit({'fcn': self.save_project, 'params': [self.app.project_filename, silent]})
-            if self.app.options.get("global_open_style", self.app.defaults.get("global_open_style")) is False:
-                self.app.file_opened.emit("project", self.app.project_filename)
-            self.app.file_saved.emit("project", self.app.project_filename)
+            self._save_project_task(*params)
+        return True
+
+    def _save_project_task(self, filename, quit_action=False, silent=False, make_copy=False, was_dirty=True):
+        """
+        The worker task of File -> Save and File -> Save As. It always emits project_save_done, also after an
+        error. The state of the project changes only in _on_project_save_done(), on the GUI thread.
+        """
+        ok = self.save_project_checked(filename, quit_action=quit_action, silent=silent)
+        self.project_save_done.emit(str(filename), ok, bool(make_copy), bool(was_dirty))
+
+    def _on_project_save_done(self, filename, ok, make_copy, was_dirty):
+        """
+        Change the state of the project after a save. After a failed save, the project keeps its file name,
+        its name and its unsaved changes.
+        """
+        # the save is complete for the GUI; a new save, the exit and a switch are allowed again after this method
+        self.app.project_save_pending = False
+        if not ok:
+            self.app.save_in_progress = False
+            if was_dirty:
+                self.app.should_we_save = True
+            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The project was not saved"), filename))
+            return
+
+        if self.app.options.get("global_open_style", self.app.defaults.get("global_open_style")) is False:
+            self.app.file_opened.emit("project", filename)
+        self.app.file_saved.emit("project", filename)
+
+        if not make_copy:
+            self.app.project_filename = filename
+            projects = getattr(self.app, 'projects', None)
+            if projects is not None:
+                projects.adopt_filename(filename)
 
         self.app.ui.set_ui_title(name=self.app.project_filename)
-
-        self.app.should_we_save = False
+        # do not clear should_we_save here: it was cleared when the save was queued, and if it is set now, the
+        # project changed while the save ran and that change is not in the file
 
     def on_file_save_project_as(self, make_copy=False, use_thread=True, quit_action=False):
         """
@@ -1415,11 +1493,16 @@ class appIO(QtCore.QObject):
         date = date.replace(' ', '_')
 
         filter_ = "FlatCAM Project .FlatPrj (*.FlatPrj);; All Files (*.*)"
+        # the suggested file name is the project name
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None:
+            proj_name = projects.active.name
+        else:
+            proj_name = '%s_%s' % (_("Project"), date)
         try:
             filename, _f = FCFileSaveDialog.get_saved_filename(
                 caption=_("Save Project As ..."),
-                directory='{l_save}/{proj}_{date}'.format(l_save=str(self.app.get_last_save_folder()), date=date,
-                                                          proj=_("Project")),
+                directory='{l_save}/{proj}'.format(l_save=str(self.app.get_last_save_folder()), proj=proj_name),
                 ext_filter=filter_
             )
         except TypeError:
@@ -1433,21 +1516,9 @@ class appIO(QtCore.QObject):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
             return
 
-        if use_thread is True:
-            self.worker_task.emit({'fcn': self.save_project, 'params': [filename, quit_action]})
-        else:
-            self.save_project(filename, quit_action)
-
-        # self.save_project(filename)
-        if self.app.options.get("global_open_style", self.app.defaults.get("global_open_style", self.app.defaults.factory_defaults.get("global_open_style"))) is False:
-            self.app.file_opened.emit("project", filename)
-        self.app.file_saved.emit("project", filename)
-
-        if not make_copy:
-            self.app.project_filename = filename
-
-        self.app.ui.set_ui_title(name=self.app.project_filename)
-        self.app.should_we_save = False
+        # the file name and the title change in _on_project_save_done(), after a good save
+        self._queue_project_save(filename, quit_action=quit_action, silent=False, make_copy=make_copy,
+                                 use_thread=use_thread)
 
     def on_file_save_objects_pdf(self, use_thread=True):
         self.log.debug("on_file_save_objects_pdf()")
