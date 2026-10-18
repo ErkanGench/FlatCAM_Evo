@@ -1,9 +1,12 @@
 
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import QSettings
+from pathlib import Path
+import re
 
 from appGUI.GUIElements import RadioSet, FCCheckBox, FCComboBox, FCSliderWithSpinner, FCColorEntry, FCLabel, \
-    GLay, FCFrame, FCButton, FCSpinner
+    GLay, FCFrame, FCButton, FCSpinner, FCMessageBox
+from appCommon.IconColors import recolor_icons
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 from appTranslation import restart_program
 from appDatabase import _database_option
@@ -38,21 +41,19 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         par_frame.setLayout(grid0)
 
         # Theme selection
-        self.appearance_label = FCLabel('%s' % _("Theme"), bold=True)
+        self.appearance_label = FCLabel('%s' % _("Appearance"), bold=True)
         self.appearance_label.setToolTip(
-            _("Select a theme for the application.\n"
-              "It will theme the plot area.")
+            _("Select the application color scheme.\n"
+              "Auto matches the operating system.")
         )
 
         self.appearance_radio = RadioSet([
-            {"label": _("Default"), "value": "default"},
             {"label": _("Auto"), "value": "auto"},
             {"label": _("Light"), "value": "light"},
             {"label": _("Dark"), "value": "dark"}
         ], compact=True)
         self.appearance_radio.setToolTip(
-            _("The theme can be:\n"
-              "Default: Default theme\n"
+            _("The appearance can be:\n"
               "Auto: Matches mode from OS\n"
               "Light: Light mode\n"
               "Dark: Dark mode")
@@ -91,6 +92,21 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
         grid0.addWidget(separator_line, 4, 0, 1, 2)
 
+        self.styling_label = FCLabel('%s:' % _('Styling'))
+        self.styling_combo = FCComboBox()
+        self.styling_combo.addItem(_('Default'), 'default')
+        self.styling_combo.addItem(_('Custom'), 'custom')
+        self.styling_combo.get_value = self.styling_combo.currentData
+        self.styling_combo.set_value = lambda val: self.styling_combo.setCurrentIndex(
+            self.styling_combo.findData(val))
+        self.styling_combo.setToolTip(
+            _("Default uses the Qt widget style without an application stylesheet.\n"
+              "Custom applies the light or dark application stylesheet.\n"
+              "Changing this option requires an application restart.")
+        )
+        grid0.addWidget(self.styling_label, 5, 0)
+        grid0.addWidget(self.styling_combo, 5, 1)
+
         # Layout selection
         self.layout_label = FCLabel('%s:' % _('Layout'))
         self.layout_label.setToolTip(
@@ -110,11 +126,11 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         q_settings = QSettings("Open Source", "FlatCAM_EVO")
         if q_settings.contains("layout"):
             layout = q_settings.value('layout', type=str)
-            idx = self.layout_combo.findText(layout.capitalize())
+            idx = self.layout_combo.findText(layout)
             self.layout_combo.setCurrentIndex(idx)
 
         # Style selection
-        self.style_label = FCLabel('%s:' % _('Style'))
+        self.style_label = FCLabel('%s:' % _('Qt Widget Style'))
         self.style_label.setToolTip(
             _("Select a style for the application.\n"
               "It will be applied at the next app start.")
@@ -365,7 +381,48 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         grid1.addWidget(self.proj_color_dis_d_label, 38, 0)
         grid1.addWidget(self.proj_color_dis_dark_entry, 38, 1)
 
-        GLay.set_common_column_size([grid0, grid1], 0)
+        separator_line = QtWidgets.QFrame()
+        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
+        grid1.addWidget(separator_line, 40, 0, 1, 2)
+
+        self.icon_color_label = FCLabel('%s' % _("Icons Color"), bold=True, color='green')
+        grid1.addWidget(self.icon_color_label, 41, 0, 1, 2)
+
+        self.icon_settings_l_label = FCLabel('%s %s' % (_("Light"), _("Theme")), bold=True)
+        grid1.addWidget(self.icon_settings_l_label, 42, 0, 1, 2)
+        self.icon_color_l_label = FCLabel('%s:' % _('Color'))
+        self.icon_color_light_entry = FCColorEntry(icon=QtGui.QIcon(
+            self.app.resource_location + '/set_colors64.png'))
+        self.icon_color_light_entry.set_value(_database_option(self.app, 'global_icon_color_light'))
+        grid1.addWidget(self.icon_color_l_label, 44, 0)
+        grid1.addWidget(self.icon_color_light_entry, 44, 1)
+        self.icon_color_light_apply_btn = FCButton(_("Apply"))
+        grid1.addWidget(self.icon_color_light_apply_btn, 46, 0, 1, 2)
+
+        separator_line = QtWidgets.QFrame()
+        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
+        grid1.addWidget(separator_line, 48, 0, 1, 2)
+
+        self.icon_settings_d_label = FCLabel('%s %s' % (_("Dark"), _("Theme")), bold=True)
+        grid1.addWidget(self.icon_settings_d_label, 49, 0, 1, 2)
+        self.icon_color_d_label = FCLabel('%s:' % _('Color'))
+        self.icon_color_dark_entry = FCColorEntry(icon=QtGui.QIcon(
+            self.app.resource_location + '/set_colors64.png'))
+        self.icon_color_dark_entry.set_value(_database_option(self.app, 'global_icon_color_dark'))
+        grid1.addWidget(self.icon_color_d_label, 51, 0)
+        grid1.addWidget(self.icon_color_dark_entry, 51, 1)
+        self.icon_color_dark_apply_btn = FCButton(_("Apply"))
+        grid1.addWidget(self.icon_color_dark_apply_btn, 53, 0, 1, 2)
+
+        icon_tooltip = _("Recolor single-color icons in this theme's resource files.\n"
+                         "Mixed-color icons, Project Tab icons and status indicators are protected.\n"
+                         "Transparency is preserved; the color picker's alpha value is ignored.\n"
+                         "Changes become visible after restarting the application.")
+        for widget in (self.icon_color_light_entry, self.icon_color_dark_entry,
+                       self.icon_color_light_apply_btn, self.icon_color_dark_apply_btn):
+            widget.setToolTip(icon_tooltip)
 
         # Project autohide CB
         self.project_autohide_cb = FCCheckBox(label=_('Project AutoHide'))
@@ -375,7 +432,20 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
               "to show whenever a new object is created.")
         )
 
-        self.layout.addWidget(self.project_autohide_cb)
+        row = grid0.rowCount()
+        grid0.addWidget(self.project_autohide_cb, row, 0, 1, 3)
+
+        self.object_autohide_cb = FCCheckBox(label=_('Object AutoHide'))
+        self.object_autohide_cb.setToolTip(
+            _("When checked, once a new object is generated the source object is hidden on canvas."))
+        grid0.addWidget(self.object_autohide_cb, row + 1, 0, 1, 3)
+
+        self.object_autoswitch_cb = FCCheckBox(label=_('Object Autoswitch'))
+        self.object_autoswitch_cb.setToolTip(
+            _("When checked, on new object creation, switch to Properties."))
+        grid0.addWidget(self.object_autoswitch_cb, row + 2, 0, 1, 3)
+
+        GLay.set_common_column_size([grid0, grid1], 0)
 
         self.layout.addStretch()
 
@@ -405,6 +475,11 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         self.proj_color_dark_entry.editingFinished.connect(self.on_proj_color_dark_entry)
         self.proj_color_dis_dark_entry.editingFinished.connect(self.on_proj_color_dis_dark_entry)
 
+        self.icon_color_light_apply_btn.clicked.connect(
+            lambda: self.on_icon_color_apply('light', self.icon_color_light_entry.get_value()))
+        self.icon_color_dark_apply_btn.clicked.connect(
+            lambda: self.on_icon_color_apply('dark', self.icon_color_dark_entry.get_value()))
+
         self.layout_combo.activated.connect(self.app.on_layout)
 
         self.apply_app_font_size_btn.clicked.connect(
@@ -415,6 +490,48 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         if q_settings.contains("font_size"):
             font_size = int(q_settings.value("font_size", type=str))  # noqa
             self.app_font_size_entry.set_value(font_size)
+
+    def on_icon_color_apply(self, theme, value):
+        if (theme not in ('light', 'dark') or not isinstance(value, str) or
+                re.fullmatch(r'#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?', value) is None):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Enter a valid hex color in #RRGGBB format."))
+            return
+        color = value[:7].lower()
+        directory = Path(self.app.resource_location)
+        if directory.name == 'dark_resources':
+            directory = directory.parent
+        if theme == 'dark':
+            directory /= 'dark_resources'
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            count = recolor_icons(directory, color)
+        except (OSError, ValueError) as error:
+            self.app.log.error('Icon recoloring failed: %s', error)
+            self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Could not recolor icons."), str(error)))
+            return
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+        key = 'global_icon_color_%s' % theme
+        self.app.options[key] = color
+        self.app.defaults[key] = color
+        self.app.defaults.current_defaults[key] = color
+        getattr(self, 'icon_color_%s_entry' % theme).set_value(color)
+        self.app.preferencesUiManager.save_defaults(silent=True)
+        self.app.inform.emit('[success] %s %s' % (_("Icons recolored:"), count))
+
+        msgbox = FCMessageBox(parent=self.app.ui)
+        msgbox.setWindowTitle(_("Restart application"))
+        msgbox.setText(_("The icon color will be visible after restarting the application."))
+        msgbox.setInformativeText(_("Restart now?"))
+        msgbox.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        bt_later = msgbox.addButton(_('Later'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+        msgbox.setDefaultButton(bt_later)
+        msgbox.exec()
+        if msgbox.clickedButton() == bt_yes:
+            self.app.on_app_restart()
 
     @staticmethod
     def handle_font_size(app, val):

@@ -107,9 +107,10 @@ class AppDefaults:
         "pdf_python_parser": True,
 
         # General GUI Preferences
-        "global_appearance": 'default',
+        "global_appearance": 'light',
+        "global_styling": 'default',
         "global_dark_canvas": False,
-        "global_theme": 'default',
+        "global_theme": 'light',
         # the custom title bar is on by default only on Windows; macOS and Linux keep the native window decorations
         "global_custom_titlebar": sys.platform == "win32",
 
@@ -131,7 +132,13 @@ class AppDefaults:
         "global_proj_item_color_dark": '#AAAAAAFF',
         "global_proj_item_dis_color_dark": '#4a4a4aFF',
 
+        # UI icon colors (Project Tab icons and status indicators are separate)
+        "global_icon_color_light": '#4d4d4d',
+        "global_icon_color_dark": '#9AA0A6',
+
         "global_project_autohide": True,
+        "global_object_autohide": True,
+        "global_object_autoswitch": True,
 
         # General App Settings
         "global_grid_bar_show": True,
@@ -531,6 +538,7 @@ class AppDefaults:
         "tools_grbl_travelz": 15.0,
         "tools_grbl_baudrate": '115200',
         "tools_grbl_console_visible": False,
+        "tools_gcode_fit_view": True,
         "tools_grbl_arc_mode": 'split',
         "tools_grbl_arc_segment": 0.5,
         "tools_grbl_seg_len": 1.0,
@@ -1080,6 +1088,12 @@ class AppDefaults:
         # ponytail: strip obsolete 'version' field from loaded data
         defaults.pop('version', None)
         defaults.pop('global_graphic_engine', None)
+
+        # Migrate before merging: the old appearance also selected the stylesheet.
+        if 'global_styling' not in defaults:
+            appearance = defaults.get('global_appearance', 'default')
+            defaults['global_styling'] = 'default' if appearance == 'default' else 'custom'
+            defaults['global_appearance'] = 'light' if appearance == 'default' else appearance
         
         # ponytail: merge saved data over factory defaults. Missing keys get factory values,
         # user overrides (including falsy values) are preserved. No version gating.

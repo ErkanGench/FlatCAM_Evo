@@ -874,14 +874,14 @@ class App(QtCore.QObject):
             else:
                 theme = 'light'
         else:
-            if appearance == 'default':
-                theme = 'default'
-            elif appearance == 'dark':
+            if appearance == 'dark':
                 theme = 'dark'
             else:
                 theme = 'light'
 
         self.options["global_theme"] = theme
+        self.defaults["global_theme"] = theme
+        self.defaults.current_defaults["global_theme"] = theme
 
         # Cache theme for use in _setup_gui (avoids passing theme as parameter)
         self._current_theme = theme
@@ -892,14 +892,13 @@ class App(QtCore.QObject):
         self.default_units = self.defaults.get("units")
         self.decimals = int(self.options.get('units_precision', self.defaults.get('units_precision')))
 
-        if self.options.get("global_theme", self.defaults.get("global_theme")) == 'default':
-            self.resource_location = 'assets/resources'
-        elif self.options.get("global_theme", self.defaults.get("global_theme")) == 'light':
-            self.resource_location = 'assets/resources'
+        self.resource_location = 'assets/resources/dark_resources' if theme == 'dark' else 'assets/resources'
+        if self.options.get("global_styling", self.defaults.get("global_styling")) == 'default':
+            self.qapp.setStyleSheet('')
+        elif theme == 'light':
             qlightsheet.STYLE_SHEET = light_style_sheet.L_STYLE_SHEET
             self.qapp.setStyleSheet(libs.qdarktheme.load_stylesheet('light'))
         else:
-            self.resource_location = 'assets/resources/dark_resources'
             qdarksheet.STYLE_SHEET = dark_style_sheet.D_STYLE_SHEET
             self.qapp.setStyleSheet(libs.qdarktheme.load_stylesheet())
 
@@ -1051,6 +1050,7 @@ class App(QtCore.QObject):
 
         theme_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
         theme_settings.setValue("appearance", self.options.get("global_appearance", self.defaults.get("global_appearance")))
+        theme_settings.setValue("styling", self.options.get("global_styling", self.defaults.get("global_styling")))
         theme_settings.setValue("theme", self.options.get("global_theme", self.defaults.get("global_theme")))
         theme_settings.setValue("dark_canvas", self.options.get("global_dark_canvas", self.defaults.get("global_dark_canvas")))
 
@@ -1303,7 +1303,7 @@ class App(QtCore.QObject):
         self.ui_actions.setup_default_properties_tab()
 
     def _setup_tools_and_editors(self):
-        """Phase 1: Setup first-run section (must run after _setup_canvas_and_plotting for editors)."""
+        """Phase 1: Restore the layout (must run after _setup_canvas_and_plotting for editors)."""
         # ##################################### FIRST RUN SECTION ###################################################
         # ################################ It's done only once after install   #####################################
         if self.options.get("first_run", self.defaults.get("first_run")) is True:
@@ -1320,6 +1320,19 @@ class App(QtCore.QObject):
             self.options["first_run"] = False
             self.log.debug("-> First Run: Updating the Defaults file with Factory Defaults")
             self.preferencesUiManager.save_defaults(silent=True)
+        else:
+            q_settings = QSettings("Open Source", "FlatCAM_EVO")
+            layout = q_settings.value('layout', 'standard', type=str)
+            self.options['global_layout'] = layout
+            if layout in ('compact', 'minimal'):
+                # Keep a valid custom arrangement; use the preset only as a fallback.
+                if not (q_settings.contains('saved_gui_state') and self.ui.restoreState(
+                        q_settings.value('saved_gui_state'), 0)):
+                    self.on_layout(lay=layout, connect_signals=False)
+                self.ui.grbl_console_dock.hide()
+                self.ui.exc_edit_toolbar.setDisabled(True)
+                self.ui.geo_edit_toolbar.setDisabled(True)
+                self.ui.grb_edit_toolbar.setDisabled(True)
 
     def _setup_system_integration(self):
         """Phase 1: Setup system tray and recent items."""
@@ -1843,7 +1856,7 @@ class App(QtCore.QObject):
                                  before=self.sub_tool.menuAction, separator=True)
 
         self.drilling_tool = ToolDrilling(self)
-        self.drilling_tool.install(icon=QtGui.QIcon(self.resource_location + '/extract_drill32.png'),
+        self.drilling_tool.install(icon=QtGui.QIcon(self.resource_location + '/drill32.png'),
                                    pos=self.ui.menu_plugins, before=self.sub_tool.menuAction, separator=True)
         self.milling_tool = ToolMilling(self)
         self.milling_tool.install(icon=QtGui.QIcon(self.resource_location + '/milling_tool32.png'),

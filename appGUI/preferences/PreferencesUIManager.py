@@ -85,6 +85,7 @@ class PreferencesUIManager(QtCore.QObject):
 
             # General GUI Preferences
             "global_appearance": self.ui.general_pref_form.general_gui_group.appearance_radio,
+            "global_styling": self.ui.general_pref_form.general_gui_group.styling_combo,
             "global_dark_canvas": self.ui.general_pref_form.general_gui_group.dark_canvas_cb,
             "global_custom_titlebar": self.ui.general_pref_form.general_gui_group.custom_titlebar_cb,
             "global_layout": self.ui.general_pref_form.general_gui_group.layout_combo,
@@ -104,7 +105,12 @@ class PreferencesUIManager(QtCore.QObject):
             "global_proj_item_color_dark": self.ui.general_pref_form.general_gui_group.proj_color_dark_entry,
             "global_proj_item_dis_color_dark": self.ui.general_pref_form.general_gui_group.proj_color_dis_dark_entry,
 
+            "global_icon_color_light": self.ui.general_pref_form.general_gui_group.icon_color_light_entry,
+            "global_icon_color_dark": self.ui.general_pref_form.general_gui_group.icon_color_dark_entry,
+
             "global_project_autohide": self.ui.general_pref_form.general_gui_group.project_autohide_cb,
+            "global_object_autohide": self.ui.general_pref_form.general_gui_group.object_autohide_cb,
+            "global_object_autoswitch": self.ui.general_pref_form.general_gui_group.object_autoswitch_cb,
 
             # General APP Settings
             "global_gridx": self.ui.general_pref_form.general_app_set_group.gridx_entry,
@@ -1160,20 +1166,23 @@ class PreferencesUIManager(QtCore.QObject):
         if appearance_settings.contains("appearance"):
             appearance = appearance_settings.value('appearance', type=str)
         else:
-            appearance = None
+            appearance = self._pref('global_appearance')
+
+        styling = appearance_settings.value('styling', self._pref('global_styling'), type=str)
 
         if appearance_settings.contains("dark_canvas"):
             dark_canvas = appearance_settings.value('dark_canvas', type=bool)
         else:
-            dark_canvas = None
+            dark_canvas = self._pref('global_dark_canvas')
 
         should_restart = False
         appearance_new_val = self.ui.general_pref_form.general_gui_group.appearance_radio.get_value()
+        styling_new_val = self.ui.general_pref_form.general_gui_group.styling_combo.get_value()
         dark_canvas_new_val = self.ui.general_pref_form.general_gui_group.dark_canvas_cb.get_value()
         custom_titlebar = self._pref("global_custom_titlebar")
         custom_titlebar_new_val = self.ui.general_pref_form.general_gui_group.custom_titlebar_cb.get_value()
 
-        if (appearance_new_val != appearance or dark_canvas_new_val != dark_canvas or
+        if (appearance_new_val != appearance or styling_new_val != styling or dark_canvas_new_val != dark_canvas or
                 custom_titlebar_new_val != custom_titlebar):
             msgbox = FCMessageBox(parent=self.ui)
             title = _("Application will restart")
@@ -1198,6 +1207,13 @@ class PreferencesUIManager(QtCore.QObject):
                 else:
                     self.ui.general_pref_form.general_gui_group.appearance_radio.set_value(appearance)
 
+            if styling_new_val != styling:
+                if response == bt_yes:
+                    appearance_settings.setValue('styling', styling_new_val)
+                    should_restart = True
+                else:
+                    self.ui.general_pref_form.general_gui_group.styling_combo.set_value(styling)
+
             if dark_canvas_new_val != dark_canvas:
                 if response == bt_yes:
                     appearance_settings.setValue('dark_canvas', dark_canvas_new_val)
@@ -1219,6 +1235,7 @@ class PreferencesUIManager(QtCore.QObject):
         # #############################################################################################################
         # update the `defaults` dict from the Preferences UI form
         self.defaults_read_form()
+        self.defaults.current_defaults.update(self.defaults)
         # Apply the `defaults` dict to project options
         self.ui.app.options.update(self.defaults)
         # #############################################################################################################
