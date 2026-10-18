@@ -386,6 +386,9 @@ def test_rest_order_reaches_multigeometry_cnc_execution(explicit_reverse, from_t
         return job
     milling = SimpleNamespace(app=gen.app, units='MM', decimals=6,
                               target_obj=output, sel_tools=ordered, new_object=new_object)
+    for name in ('_capture_cnc_job_context', '_submit_cnc_job_creation',
+                 '_initialize_single_geometry_cnc_job', '_initialize_multi_geometry_cnc_job'):
+        setattr(milling, name, getattr(ToolMilling, name).__get__(milling))
     result = ToolMilling.generate_cnc_job_handler(
         milling, geo_obj=output, tools_dict=ordered, toolchange=True,
         use_thread=False, plot=False, from_tcl=from_tcl)
@@ -501,16 +504,20 @@ def legacy_shrink(area, dia, steps=32):
     return paths
 
 
-def test_shrink_matches_legacy_swept_geometry():
+def test_shrink_keeps_initial_boundary_and_uses_bounded_cumulative_offsets():
+    from test_shrink_offsets import inset_layers, layer_paths
     gen, _, _, _, boundary, copper = generator()
     area = boundary.difference(copper)
     old = legacy_shrink(area, 0.5)
     new = list(gen.parent_tool.clear_polygon_shrink(area, 0.5, 32, connect=False).get_objects())
-    assert len(old) == len(new)
-    assert all(a.hausdorff_distance(b) < 1e-9 for a, b in zip(old, new))
-    old_sweep = unary_union([p.buffer(0.25) for p in old])
-    new_sweep = unary_union([p.buffer(0.25) for p in new])
-    assert old_sweep.symmetric_difference(new_sweep).area < 1e-9
+    margin = area.buffer(-0.25, quad_segs=8)
+    initial_paths = layer_paths([camlib.flatten_shapely_geometry(margin)])
+    assert [p.wkb for p in new[:len(initial_paths)]] == [p.wkb for p in old[:len(initial_paths)]]
+    expected = layer_paths(inset_layers(area, 0.5, 0.15, 32, True, bounded=True, tolerance=0.005))
+    assert [p.wkb for p in new] == [p.wkb for p in expected]
+    # The whole centre-line set remains inside the unchanged cutter margin;
+    # no later cut can add overcut beyond the initial contour's cutter sweep.
+    assert margin.buffer(1e-10).covers(unary_union(new))
 
 
 def test_shrink_does_not_reunion_single_buffer_component(monkeypatch):

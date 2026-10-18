@@ -1057,15 +1057,17 @@ class ToolDrilling(Geometry, AppTool):
 
         # When object selection on canvas change
         # self.app.collection.view.selectionModel().selectionChanged.connect(self.on_object_selection_changed)
+        try:
+            self.app.proj_selection_changed.disconnect(self.on_object_selection_changed)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
         self.app.proj_selection_changed.connect(self.on_object_selection_changed)
 
         # Area Exception - exclusion shape added signal
-        # first disconnect it from any other object
         try:
-            self.app.exc_areas.e_shape_modified.disconnect()
-        except (TypeError, AttributeError):
+            self.app.exc_areas.e_shape_modified.disconnect(self.update_exclusion_table)
+        except (TypeError, RuntimeError, AttributeError):
             pass
-        # then connect it to the current build_tool_ui() method
         self.app.exc_areas.e_shape_modified.connect(self.update_exclusion_table)
 
         # rows selected
@@ -1112,8 +1114,13 @@ class ToolDrilling(Geometry, AppTool):
         # When object selection on canvas change
         # self.app.collection.view.selectionModel().selectionChanged.disconnect()
         try:
-            self.app.proj_selection_changed.disconnect()
-        except (TypeError, AttributeError):
+            self.app.proj_selection_changed.disconnect(self.on_object_selection_changed)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+
+        try:
+            self.app.exc_areas.e_shape_modified.disconnect(self.update_exclusion_table)
+        except (TypeError, RuntimeError, AttributeError):
             pass
 
         # rows selected

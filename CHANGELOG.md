@@ -53,12 +53,22 @@ Paint Tool:
 - the clearing insets are made from the original margin at each distance, not from the last inset; the chord error is limited by the circle steps and by the Geo Tolerance; the number of segments is about 10 times smaller than with unbounded insets
 - faster Paint: the seed contour uses the margin buffer again; the last tool does not compute the residual area; a polygon narrower than the tool is skipped; the bounds of the output do not need a union of the paths
 
+Milling and Drilling Tools:
+
+- fixed: the tool connects and disconnects only its own slots of proj_selection_changed and of the exclusion area signal; before, a disconnect removed the slots of the other tools; a second connect does not add a second slot; the exclusion area signal is also disconnected when the tool closes
+- the CNC job of the Milling tool reads all the GUI values on the GUI thread before the worker starts; the single and multi geometry jobs share the same code
+- fixed: a Tcl command without an explicit toolchange does not read the widgets; a failure is returned to the caller; missing geometry options and an empty multi geometry fail
+- fixed: the offset types (Path, In, Out, Custom) and the disabled offset are the same in the single and multi geometry jobs
+- fixed: the buffer of the drills and slots is computed for each tool; a changed widget value is applied 1 time to all the selected tools
+- the Excellon paint keeps only the paths and not the RTree index of each feature; abort is checked before each clearing step; the polishing keeps the captured steps and stops on abort
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
 - new unit tests for the Image tool loading (tests/test_image_tool.py)
 - new unit tests for the PDF import: winding rules, nested q/Q transforms, the Gerber round trip with holes and islands, the drill filter and the duplicates, the stream order of the first page, filters that are not supported and encrypted files
 - new unit tests for the Final paint, the Paint simplification, the Paint performance and the bounded insets (tests/test_shrink_offsets.py); the Tools Database tests check the Final paint
+- new unit tests for the signal lifecycle of the Milling and Drilling tools (tests/test_milling_lifecycle.py)
 
 18.10.2026
 

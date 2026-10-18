@@ -1496,15 +1496,17 @@ class ToolMilling(Geometry, AppTool):
     def ui_connect(self):
         # When object selection on canvas change
         # self.app.collection.view.selectionModel().selectionChanged.connect(self.on_object_selection_changed)
+        try:
+            self.app.proj_selection_changed.disconnect(self.on_object_selection_changed)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
         self.app.proj_selection_changed.connect(self.on_object_selection_changed)
 
         # Area Exception - exclusion shape added signal
-        # first disconnect it from any other object
         try:
-            self.app.exc_areas.e_shape_modified.disconnect()
-        except (TypeError, AttributeError):
+            self.app.exc_areas.e_shape_modified.disconnect(self.update_exclusion_table)
+        except (TypeError, RuntimeError, AttributeError):
             pass
-        # then connect it to the current build_ui() method
         self.app.exc_areas.e_shape_modified.connect(self.update_exclusion_table)
 
         # connect Tool Table Widgets
@@ -1560,8 +1562,13 @@ class ToolMilling(Geometry, AppTool):
 
     def ui_disconnect(self):
         try:
-            self.app.proj_selection_changed.disconnect()
-        except (TypeError, AttributeError):
+            self.app.proj_selection_changed.disconnect(self.on_object_selection_changed)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+
+        try:
+            self.app.exc_areas.e_shape_modified.disconnect(self.update_exclusion_table)
+        except (TypeError, RuntimeError, AttributeError):
             pass
 
         # Excellon Tool Table - rows selected
@@ -1889,7 +1896,7 @@ class ToolMilling(Geometry, AppTool):
         self.current_row = t_table.currentRow()
 
         for storage_key in dict_storage:
-            if storage_key in list(self.form_fields.keys()) and storage_key not in \
+            if storage_key in self.form_fields and storage_key not in \
                     ["tools_mill_toolchange", "tools_mill_toolchangez", "tools_mill_endxy", "tools_mill_endz",
                      "tools_mill_ppname_g", "tools_mill_area_exclusion",
                      "tools_mill_area_shape", "tools_mill_area_strategy", "tools_mill_area_overz"]:
@@ -1942,31 +1949,30 @@ class ToolMilling(Geometry, AppTool):
 
         # update the tool specific parameters
         rows = sorted(set(index.row() for index in used_tools_table.selectedIndexes()))
+        selected_tools = set()
         for row in rows:
             if row < 0:
                 row = 0
-            tooluid_item = int(used_tools_table.item(row, 3).text())
+            selected_tools.add(int(used_tools_table.item(row, 3).text()))
 
-            # update tool parameters
+        if option_changed in self.form_fields and selected_tools:
+            new_option_value = self.form_fields[option_changed].get_value()
             for tooluid_key, tooluid_val in self.target_obj.tools.items():
-                if int(tooluid_key) == tooluid_item:
-                    if option_changed in self.form_fields:
-                        new_option_value = self.form_fields[option_changed].get_value()
-
-                        try:
-                            self.target_obj.tools[tooluid_key]['data'][option_changed] = new_option_value
-                        except Exception as e:
-                            self.app.log.error(
-                                "ToolMilling.form_to_storage() for key: %s with value: %s --> %s" %
-                                (str(option_changed), str(new_option_value), str(e))
-                            )
+                if int(tooluid_key) in selected_tools:
+                    try:
+                        tooluid_val['data'][option_changed] = new_option_value
+                    except Exception as e:
+                        self.app.log.error(
+                            "ToolMilling.form_to_storage() for key: %s with value: %s --> %s" %
+                            (str(option_changed), str(new_option_value), str(e))
+                        )
 
         # update the general parameters in all tools
-        for tooluid_key, tooluid_val in self.target_obj.tools.items():
-            if option_changed in self.general_form_fields:
-                new_opt_val = self.general_form_fields[option_changed].get_value()
+        if option_changed in self.general_form_fields and self.target_obj.tools:
+            new_opt_val = self.general_form_fields[option_changed].get_value()
+            for tooluid_key, tooluid_val in self.target_obj.tools.items():
                 try:
-                    self.target_obj.tools[tooluid_key]['data'][option_changed] = new_opt_val
+                    tooluid_val['data'][option_changed] = new_opt_val
                 except Exception as err:
                     self.app.log.error("ToolMilling.form_to_storage() general parameters --> %s" % str(err))
         self.ui_connect()
@@ -2616,8 +2622,8 @@ class ToolMilling(Geometry, AppTool):
             # for FlatCAM is 6 decimals,
             # we add a tenth of the minimum value, meaning 0.0000001, which from our point of view is "almost zero"
             for etool in tools:
+                buffer_value = self.target_obj.tools[etool]['tooldia'] / 2 - tooldia / 2
                 for drill in self.target_obj.tools[etool]['drills']:
-                    buffer_value = self.target_obj.tools[etool]['tooldia'] / 2 - tooldia / 2
                     if buffer_value == 0:
                         geo_obj.solid_geometry.append(drill.buffer(0.0000001).exterior)
                     else:
@@ -2720,13 +2726,13 @@ class ToolMilling(Geometry, AppTool):
             # for FlatCAM is 6 decimals,
             # we add a tenth of the minimum value, meaning 0.0000001, which from our point of view is "almost zero"
             for m_tool in tools:
-                for slot in self.target_obj.tools[m_tool]['slots']:
-                    toolstable_tool = float('%.*f' % (self.decimals, float(tooldia)))
-                    file_tool = float('%.*f' % (self.decimals, float(self.target_obj.tools[m_tool]["tooldia"])))
+                toolstable_tool = float('%.*f' % (self.decimals, float(tooldia)))
+                file_tool = float('%.*f' % (self.decimals, float(self.target_obj.tools[m_tool]["tooldia"])))
 
-                    # I add the 0.0001 value to account for the rounding error in converting from IN to MM and reverse
-                    # for the file_tool (tooldia actually)
-                    buffer_value = float(file_tool / 2) - float(toolstable_tool / 2) + 0.0001
+                # I add the 0.0001 value to account for the rounding error in converting from IN to MM and reverse
+                # for the file_tool (tooldia actually)
+                buffer_value = float(file_tool / 2) - float(toolstable_tool / 2) + 0.0001
+                for slot in self.target_obj.tools[m_tool]['slots']:
                     if buffer_value == 0:
                         start = slot[0]
                         stop = slot[1]
@@ -2838,9 +2844,35 @@ class ToolMilling(Geometry, AppTool):
 
     def paint_excellon_cncjpb(self):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        outname = "%s_%s" % (self.target_obj.obj_options["name"], 'exc_cnc')
+        new_obj = self._prepare_excellon_paint_object()
         tools_dict = self.sel_tools
+        circle_steps = self.app.options.get(
+            'geometry_circle_steps', app_defaults.get(
+                'geometry_circle_steps', AppDefaults.factory_defaults.get('geometry_circle_steps')))
 
+        for tool in tools_dict:
+            total_geometry = self._paint_excellon_tool_geometry(tools_dict[tool], circle_steps)
+            if total_geometry is None:
+                continue
+            mill_dia = tools_dict[tool]['data']['tools_mill_milling_dia']
+            tools_dict[tool]['data']['tools_mill_tooldia'] = mill_dia
+            tools_dict[tool]['tooldia'] = mill_dia
+            new_obj.tools[tool] = {
+                'tooldia':          mill_dia,
+                'data':             deepcopy(self.target_obj.tools[tool]['data']),
+                'solid_geometry':   deepcopy(total_geometry)
+            }
+            new_obj.tools[tool]['data']['tools_mill_tooldia'] = mill_dia
+            new_obj.tools[tool]['data']['seg_x'] = self.app.options.get(
+                'geometry_seg_x', app_defaults.get('geometry_seg_x', AppDefaults.factory_defaults.get('geometry_seg_x')))
+            new_obj.tools[tool]['data']['seg_y'] = self.app.options.get(
+                'geometry_seg_y', app_defaults.get('geometry_seg_y', AppDefaults.factory_defaults.get('geometry_seg_y')))
+
+        self.generate_cnc_job_handler(geo_obj=new_obj, tools_dict=new_obj.tools, disable_offset=True)
+
+    def _prepare_excellon_paint_object(self):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        outname = "%s_%s" % (self.target_obj.obj_options["name"], 'exc_cnc')
         new_obj = HybridGeoExc(app=self.app)
         new_obj.obj_options = dict()
         for opt, val in self.target_obj.obj_options.items():
@@ -2854,112 +2886,66 @@ class ToolMilling(Geometry, AppTool):
                 oname = option[len(kind) + 1:]
                 new_obj.obj_options[oname] = self.app.options.get(
                     option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
+        return new_obj
 
-        for tool in tools_dict:
-            old_disp_number = 0
-            drills_tool_geo = []
-            slots_tool_geo = []
-            total_paint_geo = []
+    def _paint_excellon_tool_geometry(self, tool, circle_steps):
+        drills_tool_geo = []
+        slots_tool_geo = []
+        total_paint_geo = []
+        data = tool['data']
+        mill_type = data['tools_mill_milling_type']
+        mill_dia = data['tools_mill_milling_dia']
+        over = data['tools_mill_milling_overlap'] / 100
+        conn = data['tools_mill_milling_connect']
+        if data['tools_mill_offset_type'] == 0:     # Path
+            offset = 0.0
+        elif data['tools_mill_offset_type'] == 1:   # In
+            offset = -mill_dia / 2.0
+        elif data['tools_mill_offset_type'] == 2:   # Out
+            offset = mill_dia / 2.0
+        else:   # Custom
+            offset = data['tools_mill_offset_value']
+        buff_dia = float(tool['tooldia']) / 2.0 + offset
+        if mill_type in ['drills', 'both']:
+            try:
+                drills_tool_geo = [d_p.buffer(buff_dia) for d_p in tool['drills']]
+                total_paint_geo = drills_tool_geo
+            except KeyError:
+                total_paint_geo = []
+        if mill_type in ['slots', 'both']:
+            try:
+                slots_tool_geo = [LineString(s_l).buffer(buff_dia) for s_l in tool['slots']]
+                total_paint_geo = slots_tool_geo
+            except KeyError:
+                total_paint_geo = []
+        if mill_type == 'both':
+            total_paint_geo = drills_tool_geo + slots_tool_geo
+        if not total_paint_geo:
+            return
 
-            mill_type = tools_dict[tool]['data']['tools_mill_milling_type']
-            mill_dia = tools_dict[tool]['data']['tools_mill_milling_dia']
-
-            over = tools_dict[tool]['data']['tools_mill_milling_overlap'] / 100
-            conn = tools_dict[tool]['data']['tools_mill_milling_connect']
-            cont = True  # in this case we need the contour always on
-
-            if tools_dict[tool]['data']['tools_mill_offset_type'] == 0:     # Path
-                offset = 0.0
-            elif tools_dict[tool]['data']['tools_mill_offset_type'] == 1:     # In
-                offset = -mill_dia / 2.0
-            elif tools_dict[tool]['data']['tools_mill_offset_type'] == 2:     # Out
-                offset = mill_dia / 2.0
-            else:   # Custom
-                offset = tools_dict[tool]['data']['tools_mill_offset_value']
-
-            buff_dia = float(tools_dict[tool]['tooldia']) / 2.0 + offset
-            if mill_type in ['drills', 'both']:
-                try:
-                    drills_tool_geo = [
-                        d_p.buffer(buff_dia) for d_p in tools_dict[tool]['drills']
-                    ]
-                    total_paint_geo = drills_tool_geo
-                except KeyError:
-                    total_paint_geo = []
-            if mill_type in ['slots', 'both']:
-                try:
-                    slots_tool_geo = [
-                        LineString(s_l).buffer(buff_dia) for s_l in tools_dict[tool]['slots']
-                    ]
-                    total_paint_geo = slots_tool_geo
-                except KeyError:
-                    total_paint_geo = []
-            if mill_type == 'both':
-                total_paint_geo = drills_tool_geo + slots_tool_geo
-
-            if not total_paint_geo:
-                continue
-
-            pol_nr = 0
-            geo_len = len(total_paint_geo)
-            cp = []
-
-            for pp in total_paint_geo:
-                # provide the app with a way to process the GUI events when in a blocking loop
-                QtWidgets.QApplication.processEvents()
-                if self.app.abort_flag:
-                    # graceful abort requested by the user
-                    raise grace
-                geo_res = self.clear_polygon_seed(pp, seedpoint=pp.centroid, tooldia=mill_dia, overlap=over,
-                                                  steps_per_circle=self.app.options.get(
-                                                      'geometry_circle_steps',
-                                                      app_defaults.get('geometry_circle_steps',
-                                                                       AppDefaults.factory_defaults.get('geometry_circle_steps'))),
-                                                  connect=conn, contour=cont, prog_plot=False)
-                if geo_res:
-                    cp.append(geo_res)
-                pol_nr += 1
-                disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
-                # log.debug("Polygons cleared: %d" % pol_nr)
-
-                if old_disp_number < disp_number <= 100:
-                    self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                    old_disp_number = disp_number
-
-            total_geometry = []
-            if cp:
-                for x in cp:
-                    total_geometry += list(x.get_objects())
-
-                # clean the geometry
-                total_geometry = [g for g in total_geometry if g and not g.is_empty]
-            else:
-                self.app.log.debug("The tools does not have a suitable geometry for milling.")
-                continue
-
-            tools_dict[tool]['data']['tools_mill_tooldia'] = mill_dia
-            tools_dict[tool]['tooldia'] = mill_dia
-
-            new_obj.tools[tool] = {
-                'tooldia':          mill_dia,
-                'data':             deepcopy(self.target_obj.tools[tool]['data']),
-                'solid_geometry':   deepcopy(total_geometry)
-            }
-            new_obj.tools[tool]['data']['tools_mill_tooldia'] = mill_dia
-            new_obj.tools[tool]['data']['seg_x'] = self.app.options.get(
-                'geometry_seg_x', app_defaults.get('geometry_seg_x', AppDefaults.factory_defaults.get('geometry_seg_x')))
-            new_obj.tools[tool]['data']['seg_y'] = self.app.options.get(
-                'geometry_seg_y', app_defaults.get('geometry_seg_y', AppDefaults.factory_defaults.get('geometry_seg_y')))
-
-        # if not total_tool_geo:
-        #     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Nothing to mill ..."))
-        #     return
-
-        # I need to prepare a dictionary like cnc_dict for a CNCJob object, each key a tool and each tool a data and
-        # a milled geometry (either drills or slots or both) not a total sum.
-        # painting the polygons
-
-        self.generate_cnc_job_handler(geo_obj=new_obj, tools_dict=new_obj.tools, disable_offset=True)
+        geo_len = len(total_paint_geo)
+        old_disp_number = 0
+        total_geometry = []
+        has_geometry = False
+        for pol_nr, pp in enumerate(total_paint_geo, 1):
+            QtWidgets.QApplication.processEvents()
+            if self.app.abort_flag:
+                raise grace
+            geo_res = self.clear_polygon_seed(
+                pp, seedpoint=pp.centroid, tooldia=mill_dia, overlap=over,
+                steps_per_circle=circle_steps, connect=conn, contour=True, prog_plot=False)
+            if geo_res:
+                has_geometry = True
+                # Retain paths, not every feature's RTree index, until the tool finishes.
+                total_geometry.extend(geo_res.get_objects())
+            disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
+            if old_disp_number < disp_number <= 100:
+                self.app.proc_container.update_view_text(' %d%%' % disp_number)
+                old_disp_number = disp_number
+        if not has_geometry:
+            self.app.log.debug("The tools does not have a suitable geometry for milling.")
+            return
+        return [g for g in total_geometry if g and not g.is_empty]
 
     def on_generate_cnc_from_geo(self):
         self.app.log.debug("Generating CNCJob from Geometry ...")
@@ -3052,6 +3038,15 @@ class ToolMilling(Geometry, AppTool):
         """
 
         self.app.log.debug("ToolMilling.generate_cnc_job_handler()")
+        context = self._capture_cnc_job_context(
+            geo_obj, outname, tools_dict, seg_x, seg_y, toolchange, disable_offset, from_tcl)
+        if context is None:
+            return
+        return self._submit_cnc_job_creation(context, plot, use_thread)
+
+    def _capture_cnc_job_context(self, geo_obj, outname, tools_dict, seg_x, seg_y,
+                                 toolchange, disable_offset, from_tcl):
+        """Resolve GUI inputs on the submitting thread; keep the caller's tool storage shared."""
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         geo_obj = geo_obj if geo_obj is not None else self.target_obj
@@ -3109,545 +3104,294 @@ class ToolMilling(Geometry, AppTool):
             self.app.inform.emit(msg)
             return
 
-        # force everything as MULTI-GEO
-        # self.multigeo = True
+        options = {}
+        for key in ('tools_mill_spindledir', 'cncjob_coords_decimals', 'cncjob_fr_decimals',
+                    'global_tolerance', 'tools_mill_toolchange'):
+            options[key] = self.app.options.get(
+                key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
 
-        is_tool_change = toolchange if toolchange is not None else self.ui.toolchange_cb.get_value()
+        if toolchange is None:
+            toolchange = options['tools_mill_toolchange'] if from_tcl else self.ui.toolchange_cb.get_value()
+        overrides = {}
+        if not from_tcl:
+            fields = {'tools_mill_offset_value': 'offset_entry'}
+            if geo_obj.multigeo:
+                fields.update({
+                    'tools_mill_toolchangez': 'toolchangez_entry',
+                    'tools_mill_toolchangexy': 'toolchangexy_entry',
+                    'tools_mill_endz': 'endz_entry', 'tools_mill_endxy': 'endxy_entry',
+                    'tools_mill_z_p_depth': 'pdepth_entry', 'tools_mill_feedrate_probe': 'feedrate_probe_entry',
+                    'tools_mill_area_exclusion': 'exclusion_cb', 'tools_mill_area_shape': 'area_shape_radio',
+                    'tools_mill_area_strategy': 'strategy_radio', 'tools_mill_area_overz': 'over_z_entry',
+                    'tools_mill_ppname_g': 'pp_geo_name_cb'})
+            for key, widget in fields.items():
+                if key == 'tools_mill_offset_value' and not any(
+                        tool['data']['tools_mill_offset_type'] == 3 for tool in tools_dict.values()):
+                    continue
+                try:
+                    overrides[key] = deepcopy(getattr(self.ui, widget).get_value())
+                except AttributeError:
+                    overrides[key] = False if key == 'tools_mill_area_exclusion' else deepcopy(
+                        self.app.options.get(key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
 
-        # Object initialization function for app.app_obj.new_object()
-        # RUNNING ON SEPARATE THREAD!
-        def job_init_single_geometry(new_cncjob_obj, app_obj):
-            self.app.log.debug("Creating a CNCJob out of a single-geometry")
-            assert new_cncjob_obj.kind == 'cncjob', "Initializer expected a CNCJobObject, got %s" % type(new_cncjob_obj)
+        return {
+            'geo_obj': geo_obj, 'source_obj': source_obj, 'outname': outname, 'tools_dict': tools_dict,
+            'multigeo': geo_obj.multigeo, 'used_tools': list(tools_dict),
+            'bounds': {'xmin': xmin, 'ymin': ymin, 'xmax': xmax, 'ymax': ymax},
+            'seg_x': seg_x, 'seg_y': seg_y, 'toolchange': toolchange,
+            'disable_offset': disable_offset, 'from_tcl': from_tcl,
+            'overrides': overrides, 'options': options, 'decimals': self.decimals,
+            'circle_steps': getattr(self, 'circle_steps', None),
+            'units': self.units,
+            'geo_options': {key: geo_obj.obj_options[key] for key in
+                            ('tools_mill_z_p_depth', 'tools_mill_feedrate_probe', 'tools_mill_optimization_type')
+                            if key in geo_obj.obj_options}}
 
-            new_cncjob_obj.obj_options['xmin'] = xmin
-            new_cncjob_obj.obj_options['ymin'] = ymin
-            new_cncjob_obj.obj_options['xmax'] = xmax
-            new_cncjob_obj.obj_options['ymax'] = ymax
+    def _initialize_single_geometry_cnc_job(self, new_cncjob_obj, app_obj, context):
+        self.app.log.debug("Creating a CNCJob out of a single-geometry")
+        assert new_cncjob_obj.kind == 'cncjob', "Initializer expected a CNCJobObject, got %s" % type(new_cncjob_obj)
+        geo_obj, tools_dict = context['geo_obj'], context['tools_dict']
+        new_cncjob_obj.obj_options.update(context['bounds'])
+        new_cncjob_obj.multitool = True
+        new_cncjob_obj.multigeo = False
+        new_cncjob_obj.tools.clear()
+        new_cncjob_obj.seg_x = context['seg_x']
+        new_cncjob_obj.seg_y = context['seg_y']
+        new_cncjob_obj.z_p_depth = float(context['geo_options']['tools_mill_z_p_depth'])
+        new_cncjob_obj.feedrate_probe = float(context['geo_options']['tools_mill_feedrate_probe'])
+        used_tools = context['used_tools']
+        new_cncjob_obj.used_tools = used_tools
+        total_gcode = ''
+        for tool_cnt, tool_uid_key in enumerate(used_tools, 1):
+            data = tools_dict[tool_uid_key]['data']
+            dia_cnc_dict = deepcopy(tools_dict[tool_uid_key])
+            tooldia_val = app_obj.dec_format(float(data['tools_mill_tooldia']), context['decimals'])
+            dia_cnc_dict['data']['tools_mill_tooldia'] = tooldia_val
+            if "optimization_type" not in data:
+                data['tools_mill_optimization_type'] = context['geo_options']['tools_mill_optimization_type']
 
-            # count the tools
-            tool_cnt = 0
-
-            # dia_cnc_dict = {}
-
-            # this turn on the FlatCAMCNCJob plot for multiple tools
-            new_cncjob_obj.multitool = True
-            new_cncjob_obj.multigeo = False
-            new_cncjob_obj.tools.clear()
-
-            new_cncjob_obj.seg_x = seg_x
-            new_cncjob_obj.seg_y = seg_y
-
-            new_cncjob_obj.z_p_depth = float(geo_obj.obj_options["tools_mill_z_p_depth"])
-            new_cncjob_obj.feedrate_probe = float(geo_obj.obj_options["tools_mill_feedrate_probe"])
-
-            used_tools = list(tools_dict.keys())
-            new_cncjob_obj.used_tools = used_tools
-
-            total_gcode = ''
-            for tool_uid_key in used_tools:
-                tool_cnt += 1
-
-                dia_cnc_dict = deepcopy(tools_dict[tool_uid_key])
-                tooldia_val = app_obj.dec_format(
-                    float(tools_dict[tool_uid_key]['data']['tools_mill_tooldia']), self.decimals)
-                dia_cnc_dict['data']['tools_mill_tooldia'] = tooldia_val
-
-                if "optimization_type" not in tools_dict[tool_uid_key]['data']:
-                    def_optimization_type = geo_obj.obj_options["tools_mill_optimization_type"]
-                    tools_dict[tool_uid_key]['data']["tools_mill_optimization_type"] = def_optimization_type
-
-                if dia_cnc_dict['data']['tools_mill_offset_type'] == 1:  # 'in'
-                    tool_offset = -dia_cnc_dict['tools_mill_tooldia'] / 2
-                elif dia_cnc_dict['data']['tools_mill_offset_type'] == 2:  # 'out'
-                    tool_offset = dia_cnc_dict['tools_mill_tooldia'] / 2
-                elif dia_cnc_dict['data']['tools_mill_offset_type'] == 3:  # 'custom'
+            offset_type = dia_cnc_dict['data']['tools_mill_offset_type']
+            if offset_type == 1:
+                tool_offset = -tooldia_val / 2
+            elif offset_type == 2:
+                tool_offset = tooldia_val / 2
+            elif offset_type == 3:
+                offset_value = data['tools_mill_offset_value'] if context['from_tcl'] else \
+                    context['overrides']['tools_mill_offset_value']
+                try:
+                    offset_value = float(offset_value)
+                except ValueError:
                     try:
-                        offset_value = float(self.ui.offset_entry.get_value())
+                        offset_value = float(offset_value.replace(',', '.'))
                     except ValueError:
-                        # try to convert comma to decimal point. if it's still not working error message and return
-                        try:
-                            offset_value = float(self.ui.offset_entry.get_value().replace(',', '.'))
-                        except ValueError:
-                            app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
-                            return
-                    if offset_value:
-                        tool_offset = float(offset_value)
-                    else:
-                        app_obj.inform.emit(
-                            '[WARNING] %s' % _("Tool Offset is selected in Tool Table but no value is provided.\n"
-                                               "Add a Tool Offset or change the Offset Type.")
-                        )
+                        app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
                         return
+                if offset_value:
+                    tool_offset = float(offset_value)
                 else:
-                    tool_offset = 0.0
+                    app_obj.inform.emit(
+                        '[WARNING] %s' % _("Tool Offset is selected in Tool Table but no value is provided.\n"
+                                           "Add a Tool Offset or change the Offset Type."))
+                    return
+            else:
+                tool_offset = 0.0
+            if context['disable_offset'] is True:
+                tool_offset = 0.0
+            dia_cnc_dict['data']['tools_mill_offset_value'] = tool_offset
+            tool_solid_geometry = geo_obj.solid_geometry
+            new_cncjob_obj.coords_decimals = context['options']['cncjob_coords_decimals']
+            new_cncjob_obj.fr_decimals = context['options']['cncjob_fr_decimals']
+            new_cncjob_obj.obj_options['tooldia'] = tooldia_val
+            new_cncjob_obj.obj_options['type'] = 'Geometry'
+            new_cncjob_obj.obj_options['tool_dia'] = tooldia_val
 
-                if disable_offset is True:
-                    tool_offset = 0.0
+            glob_tol = float(context['options']['global_tolerance'])
+            tol = glob_tol / 20 if context['units'].lower() == 'in' else glob_tol
+            res, start_gcode = new_cncjob_obj.generate_from_geometry_2(
+                geo_obj, tooldia=tooldia_val, offset=tool_offset, tolerance=tol,
+                z_cut=data['tools_mill_cutz'], z_move=data['tools_mill_travelz'],
+                feedrate=data['tools_mill_feedrate'], feedrate_z=data['tools_mill_feedrate_z'],
+                feedrate_rapid=data['tools_mill_feedrate_rapid'], spindlespeed=data['tools_mill_spindlespeed'],
+                spindle_dir=context['options']['tools_mill_spindledir'],
+                dwell=data['tools_mill_dwell'], dwelltime=data['tools_mill_dwelltime'],
+                laser_min_power=data['tools_mill_min_power'], laser_on_code=data['tools_mill_laser_on'],
+                multidepth=data['tools_mill_multidepth'], depthpercut=data['tools_mill_depthperpass'],
+                extracut=data['tools_mill_extracut'], extracut_length=data['tools_mill_extracut_length'],
+                startz=data['tools_mill_startz'], endz=data['tools_mill_endz'], endxy=data['tools_mill_endxy'],
+                toolchange=data['tools_mill_toolchange'], toolchangez=data['tools_mill_toolchangez'],
+                toolchangexy=data['tools_mill_toolchangexy'], pp_geometry_name=data['tools_mill_ppname_g'],
+                tool_no=tool_cnt, is_first=tool_uid_key == used_tools[0])
+            if res == 'fail':
+                self.app.log.debug("GeometryObject.mtool_gen_cncjob() --> generate_from_geometry2() failed")
+                return 'fail'
+            dia_cnc_dict['gcode'] = res
+            if start_gcode != '':
+                new_cncjob_obj.gc_start = start_gcode
+            total_gcode += res
+            self.app.inform.emit('[success] %s' % _("G-Code parsing in progress..."))
+            dia_cnc_dict['gcode_parsed'] = new_cncjob_obj.gcode_parse(tool_data=data)
+            app_obj.inform.emit('[success] %s' % _("G-Code parsing finished..."))
+            try:
+                dia_cnc_dict['solid_geometry'] = tool_solid_geometry
+                app_obj.inform.emit('[success] %s...' % _("Finished G-Code processing"))
+            except Exception as er:
+                app_obj.inform.emit('[ERROR] %s: %s' % (_("G-Code processing failed with error"), str(er)))
+            new_cncjob_obj.tools.update({tool_uid_key: deepcopy(dia_cnc_dict)})
+            dia_cnc_dict.clear()
+        new_cncjob_obj.source_file = new_cncjob_obj.gc_start + total_gcode
 
-                dia_cnc_dict['data']['tools_mill_offset_value'] = tool_offset
+    def _initialize_multi_geometry_cnc_job(self, new_cncjob_obj, app_obj, context):
+        self.app.log.debug("Creating a CNCJob out of a multi-geometry")
+        assert new_cncjob_obj.kind == 'cncjob', "Initializer expected a CNCJobObject, got %s" % type(new_cncjob_obj)
+        geo_obj, tools_dict = context['geo_obj'], context['tools_dict']
+        new_cncjob_obj.obj_options.update(context['bounds'])
+        new_cncjob_obj.multitool = True
+        new_cncjob_obj.multigeo = True
+        new_cncjob_obj.tools.clear()
+        new_cncjob_obj.seg_x = context['seg_x']
+        new_cncjob_obj.seg_y = context['seg_y']
+        new_cncjob_obj.z_p_depth = float(context['geo_options']['tools_mill_z_p_depth'])
+        new_cncjob_obj.feedrate_probe = float(context['geo_options']['tools_mill_feedrate_probe'])
 
-                z_cut = tools_dict[tool_uid_key]['data']["tools_mill_cutz"]
-                z_move = tools_dict[tool_uid_key]['data']["tools_mill_travelz"]
-                feedrate = tools_dict[tool_uid_key]['data']["tools_mill_feedrate"]
-                feedrate_z = tools_dict[tool_uid_key]['data']["tools_mill_feedrate_z"]
-                feedrate_rapid = tools_dict[tool_uid_key]['data']["tools_mill_feedrate_rapid"]
-                multidepth = tools_dict[tool_uid_key]['data']["tools_mill_multidepth"]
-                extracut = tools_dict[tool_uid_key]['data']["tools_mill_extracut"]
-                extracut_length = tools_dict[tool_uid_key]['data']["tools_mill_extracut_length"]
-                depthpercut = tools_dict[tool_uid_key]['data']["tools_mill_depthperpass"]
-                toolchange = tools_dict[tool_uid_key]['data']["tools_mill_toolchange"]
-                toolchangez = tools_dict[tool_uid_key]['data']["tools_mill_toolchangez"]
-                toolchangexy = tools_dict[tool_uid_key]['data']["tools_mill_toolchangexy"]
-                startz = tools_dict[tool_uid_key]['data']["tools_mill_startz"]
-                endz = tools_dict[tool_uid_key]['data']["tools_mill_endz"]
-                endxy = tools_dict[tool_uid_key]['data']["tools_mill_endxy"]
-                spindlespeed = tools_dict[tool_uid_key]['data']["tools_mill_spindlespeed"]
-                dwell = tools_dict[tool_uid_key]['data']["tools_mill_dwell"]
-                dwelltime = tools_dict[tool_uid_key]['data']["tools_mill_dwelltime"]
-                laser_min_power = tools_dict[tool_uid_key]['data']["tools_mill_min_power"]
-                laser_on_code = tools_dict[tool_uid_key]['data']["tools_mill_laser_on"]
-                pp_geometry_name = tools_dict[tool_uid_key]['data']["tools_mill_ppname_g"]
+        if not geo_obj.solid_geometry:
+            if all(tool['solid_geometry'] is None for tool in geo_obj.tools.values()):
+                app_obj.inform.emit('[ERROR_NOTCL] %s...' % _('Cancelled. Empty file, it has no geometry'))
+                return 'fail'
+        new_cncjob_obj.tools.update(tools_dict)
+        used_tools = context['used_tools']
+        new_cncjob_obj.used_tools = used_tools
+        total_gcode = ''
+        for tool_uid_key in used_tools:
+            data = tools_dict[tool_uid_key]['data']
+            dia_cnc_dict = deepcopy(tools_dict[tool_uid_key])
+            tooldia_val = app_obj.dec_format(float(data['tools_mill_tooldia']), context['decimals'])
+            dia_cnc_dict['data']['tools_mill_tooldia'] = tooldia_val
+            if "optimization_type" not in data:
+                data['tools_mill_optimization_type'] = context['geo_options']['tools_mill_optimization_type']
 
-                spindle_dir = self.app.options.get(
-                    'tools_mill_spindledir',
-                    app_defaults.get('tools_mill_spindledir', AppDefaults.factory_defaults.get('tools_mill_spindledir')))
-                tool_solid_geometry = geo_obj.solid_geometry
-
-                new_cncjob_obj.coords_decimals = self.app.options.get(
-                    "cncjob_coords_decimals",
-                    app_defaults.get("cncjob_coords_decimals", AppDefaults.factory_defaults.get("cncjob_coords_decimals")))
-                new_cncjob_obj.fr_decimals = self.app.options.get(
-                    "cncjob_fr_decimals",
-                    app_defaults.get("cncjob_fr_decimals", AppDefaults.factory_defaults.get("cncjob_fr_decimals")))
-
-                # Propagate options
-                new_cncjob_obj.obj_options["tooldia"] = tooldia_val
-                new_cncjob_obj.obj_options['type'] = 'Geometry'
-                new_cncjob_obj.obj_options['tool_dia'] = tooldia_val
-
-                tool_lst = list(tools_dict.keys())
-                is_first = True if tool_uid_key == tool_lst[0] else False
-
-                # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
-                # to a value of 0.0005 which is 20 times less than 0.01
-                glob_tol = float(self.app.options.get(
-                    'global_tolerance',
-                    app_defaults.get('global_tolerance', AppDefaults.factory_defaults.get('global_tolerance'))))
-                tol = glob_tol / 20 if self.units.lower() == 'in' else glob_tol
-
-                res, start_gcode = new_cncjob_obj.generate_from_geometry_2(
-                    geo_obj, tooldia=tooldia_val, offset=tool_offset, tolerance=tol,
-                    z_cut=z_cut, z_move=z_move,
-                    feedrate=feedrate, feedrate_z=feedrate_z, feedrate_rapid=feedrate_rapid,
-                    spindlespeed=spindlespeed, spindle_dir=spindle_dir, dwell=dwell, dwelltime=dwelltime,
-                    laser_min_power=laser_min_power,
-                    laser_on_code=laser_on_code,
-                    multidepth=multidepth, depthpercut=depthpercut,
-                    extracut=extracut, extracut_length=extracut_length, startz=startz, endz=endz, endxy=endxy,
-                    toolchange=toolchange, toolchangez=toolchangez, toolchangexy=toolchangexy,
-                    pp_geometry_name=pp_geometry_name,
-                    tool_no=tool_cnt, is_first=is_first)
-
-                if res == 'fail':
-                    self.app.log.debug("GeometryObject.mtool_gen_cncjob() --> generate_from_geometry2() failed")
-                    return 'fail'
-
-                dia_cnc_dict['gcode'] = res
-                if start_gcode != '':
-                    new_cncjob_obj.gc_start = start_gcode
-
-                total_gcode += res
-
-                self.app.inform.emit('[success] %s' % _("G-Code parsing in progress..."))
-                dia_cnc_dict['gcode_parsed'] = new_cncjob_obj.gcode_parse(tool_data=tools_dict[tool_uid_key]['data'])
-                app_obj.inform.emit('[success] %s' % _("G-Code parsing finished..."))
-
-                # commented this; there is no need for the actual GCode geometry - the original one will serve as well
-                # for bounding box values
-                # dia_cnc_dict['solid_geometry'] = unary_union([geo['geom'] for geo in dia_cnc_dict['gcode_parsed']])
+            if data['tools_mill_job_type'] == 3:   # Polishing
+                self.app.log.debug("Painting the polished area ...")
+                margin = data['tools_mill_polish_margin']
+                overlap = data['tools_mill_polish_overlap'] / 100
+                paint_method = data['tools_mill_polish_method']
+                bounds = context['bounds']
+                bbox = box(bounds['xmin']-margin, bounds['ymin']-margin,
+                           bounds['xmax']+margin, bounds['ymax']+margin)
                 try:
-                    dia_cnc_dict['solid_geometry'] = tool_solid_geometry
-                    app_obj.inform.emit('[success] %s...' % _("Finished G-Code processing"))
-                except Exception as er:
-                    app_obj.inform.emit('[ERROR] %s: %s' % (_("G-Code processing failed with error"), str(er)))
-
-                new_cncjob_obj.tools.update({
-                    tool_uid_key: deepcopy(dia_cnc_dict)
-                })
-                dia_cnc_dict.clear()
-
-            new_cncjob_obj.source_file = new_cncjob_obj.gc_start + total_gcode
-
-        # Object initialization function for app.app_obj.new_object()
-        # RUNNING ON SEPARATE THREAD!
-        def job_init_multi_geometry(new_cncjob_obj, app_obj):
-            self.app.log.debug("Creating a CNCJob out of a multi-geometry")
-            assert new_cncjob_obj.kind == 'cncjob', "Initializer expected a CNCJobObject, got %s" % type(new_cncjob_obj)
-
-            new_cncjob_obj.obj_options['xmin'] = xmin
-            new_cncjob_obj.obj_options['ymin'] = ymin
-            new_cncjob_obj.obj_options['xmax'] = xmax
-            new_cncjob_obj.obj_options['ymax'] = ymax
-
-            # count the tools
-            tool_cnt = 0
-
-            # dia_cnc_dict = {}
-
-            # this turn on the FlatCAMCNCJob plot for multiple tools
-            new_cncjob_obj.multitool = True
-            new_cncjob_obj.multigeo = True
-            new_cncjob_obj.tools.clear()
-
-            new_cncjob_obj.seg_x = seg_x
-            new_cncjob_obj.seg_y = seg_y
-
-            new_cncjob_obj.z_p_depth = float(geo_obj.obj_options["tools_mill_z_p_depth"])
-            new_cncjob_obj.feedrate_probe = float(geo_obj.obj_options["tools_mill_feedrate_probe"])
-
-            # make sure that trying to make a CNCJob from an empty file is not creating an app crash
-            if not geo_obj.solid_geometry:
-                a = 0
-                for tool_uid_key in geo_obj.tools:
-                    if geo_obj.tools[tool_uid_key]['solid_geometry'] is None:
-                        a += 1
-                if a == len(geo_obj.tools):
-                    app_obj.inform.emit('[ERROR_NOTCL] %s...' % _('Cancelled. Empty file, it has no geometry'))
-                    return 'fail'
-
-            new_cncjob_obj.tools.update(tools_dict)
-
-            used_tools = list(tools_dict.keys())
-            new_cncjob_obj.used_tools = used_tools
-            total_gcode = ''
-            for tool_uid_key in used_tools:
-                tool_cnt += 1
-                dia_cnc_dict = deepcopy(tools_dict[tool_uid_key])
-
-                # Tooldia update
-                tooldia_val = app_obj.dec_format(
-                    float(tools_dict[tool_uid_key]['data']['tools_mill_tooldia']), self.decimals)
-                dia_cnc_dict['data']['tools_mill_tooldia'] = deepcopy(tooldia_val)
-
-                # Path optimizations
-                if "optimization_type" not in tools_dict[tool_uid_key]['data']:
-                    def_optimization_type = geo_obj.obj_options["tools_mill_optimization_type"]
-                    tools_dict[tool_uid_key]['data']["tools_mill_optimization_type"] = def_optimization_type
-
-                # -----------------------------------------------------------------------------------------------------
-                # Polishing
-                # -----------------------------------------------------------------------------------------------------
-                job_type = tools_dict[tool_uid_key]['data']['tools_mill_job_type']
-                if job_type == 3:   # Polishing
-                    self.app.log.debug("Painting the polished area ...")
-
-                    margin = tools_dict[tool_uid_key]['data']['tools_mill_polish_margin']
-                    overlap = tools_dict[tool_uid_key]['data']['tools_mill_polish_overlap'] / 100
-                    paint_method = tools_dict[tool_uid_key]['data']['tools_mill_polish_method']
-
-                    # create the Paint geometry for this tool
-                    bbox = box(xmin-margin, ymin-margin, xmax+margin, ymax+margin)
-
-                    # paint the box
-                    try:
-                        # provide the app with a way to process the GUI events when in a blocking loop
-                        QtWidgets.QApplication.processEvents()
-                        if self.app.abort_flag:
-                            # graceful abort requested by the user
-                            raise grace
-
-                        # Type(cpoly) == AppRTreeStorage | None
-                        c_poly = None
-                        if paint_method == 0:  # Standard
-                            c_poly = self.clear_polygon_shrink(bbox,
-                                                              tooldia=tooldia_val,
-                                                              steps_per_circle=self.circle_steps,
-                                                              overlap=overlap,
-                                                              contour=True,
-                                                              connect=True,
-                                                              prog_plot=False)
-                        elif paint_method == 1:  # Seed
-                            c_poly = self.clear_polygon_seed(bbox,
-                                                            tooldia=tooldia_val,
-                                                            steps_per_circle=self.circle_steps,
-                                                            overlap=overlap,
-                                                            contour=True,
-                                                            connect=True,
-                                                            prog_plot=False)
-                        elif paint_method == 2:  # Lines
-                            c_poly = self.clear_polygon_lines(bbox,
-                                                             tooldia=tooldia_val,
-                                                             steps_per_circle=self.circle_steps,
-                                                             overlap=overlap,
-                                                             contour=True,
-                                                             connect=True,
-                                                             prog_plot=False)
-
-                        if not c_poly or not c_poly.objects:
-                            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Geometry could not be painted completely'))
-                            return
-
-                        paint_geo = [g for g in c_poly.get_objects() if g and not g.is_empty]
-                    except grace:
-                        return "fail"
-                    except Exception as ero:
-                        self.app.log.error("Could not Paint the polygons. %s" % str(ero))
-                        mssg = '[ERROR] %s\n%s' % (_("Could not do Paint. Try a different combination of parameters. "
-                                                     "Or a different method of Paint"), str(ero))
-                        self.app.inform.emit(mssg)
+                    QtWidgets.QApplication.processEvents()
+                    if self.app.abort_flag:
+                        raise grace
+                    c_poly = None
+                    if paint_method == 0:
+                        c_poly = self.clear_polygon_shrink(
+                            bbox, tooldia=tooldia_val, steps_per_circle=context['circle_steps'],
+                            overlap=overlap, contour=True, connect=True, prog_plot=False)
+                    elif paint_method == 1:
+                        c_poly = self.clear_polygon_seed(
+                            bbox, tooldia=tooldia_val, steps_per_circle=context['circle_steps'],
+                            overlap=overlap, contour=True, connect=True, prog_plot=False)
+                    elif paint_method == 2:
+                        c_poly = self.clear_polygon_lines(
+                            bbox, tooldia=tooldia_val, steps_per_circle=context['circle_steps'],
+                            overlap=overlap, contour=True, connect=True, prog_plot=False)
+                    if not c_poly or not c_poly.objects:
+                        self.app.inform.emit('[ERROR_NOTCL] %s' % _('Geometry could not be painted completely'))
                         return
+                    paint_geo = [g for g in c_poly.get_objects() if g and not g.is_empty]
+                except grace:
+                    return "fail"
+                except Exception as ero:
+                    self.app.log.error("Could not Paint the polygons. %s" % str(ero))
+                    mssg = '[ERROR] %s\n%s' % (_("Could not do Paint. Try a different combination of parameters. "
+                                                 "Or a different method of Paint"), str(ero))
+                    self.app.inform.emit(mssg)
+                    return
+                tools_dict[tool_uid_key]['solid_geometry'] = paint_geo
+                self.app.log.debug("Finished painting the polished area ...")
 
-                    tools_dict[tool_uid_key]['solid_geometry'] = paint_geo
-                    self.app.log.debug("Finished painting the polished area ...")
-                # -----------------------------------------------------------------------------------------------------
-
-                # #####################################################################################################
-                # ############################ COMMON Parameters ######################################################
-                # #####################################################################################################
-
-                # Toolchange Z
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_toolchangez'] = \
-                            self.ui.toolchangez_entry.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_toolchangez'] = \
-                        self.app.options.get(
-                            'tools_mill_toolchangez',
-                            app_defaults.get('tools_mill_toolchangez',
-                                             AppDefaults.factory_defaults.get('tools_mill_toolchangez')))
-                # Toolchange X-Y
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_toolchangexy'] = \
-                            self.ui.toolchangexy_entry.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_toolchangexy'] = \
-                        self.app.options.get(
-                            'tools_mill_toolchangexy',
-                            app_defaults.get('tools_mill_toolchangexy',
-                                             AppDefaults.factory_defaults.get('tools_mill_toolchangexy')))
-                # End Move Z
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_endz'] = self.ui.endz_entry.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_endz'] = self.app.options.get(
-                        'tools_mill_endz',
-                        app_defaults.get('tools_mill_endz', AppDefaults.factory_defaults.get('tools_mill_endz')))
-                # End Move XY
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_endxy'] = self.ui.endxy_entry.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_endxy'] = self.app.options.get(
-                        'tools_mill_endxy',
-                        app_defaults.get('tools_mill_endxy', AppDefaults.factory_defaults.get('tools_mill_endxy')))
-                # Probe Z
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_z_p_depth'] = self.ui.pdepth_entry.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_z_p_depth'] = self.app.options.get(
-                        'tools_mill_z_p_depth',
-                        app_defaults.get('tools_mill_z_p_depth', AppDefaults.factory_defaults.get('tools_mill_z_p_depth')))
-                # Probe FR
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_feedrate_probe'] = \
-                            self.ui.feedrate_probe_entry.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data'][
-                        'tools_mill_feedrate_probe'] = self.app.options.get(
-                            'tools_mill_feedrate_probe',
-                            app_defaults.get('tools_mill_feedrate_probe',
-                                             AppDefaults.factory_defaults.get('tools_mill_feedrate_probe')))
-
-                # Exclusion Areas Enable
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_area_exclusion'] = self.ui.exclusion_cb.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_area_exclusion'] = False    # Tcl Command most likely
-                # Exclusion Areas Shape
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_area_shape'] = self.ui.area_shape_radio.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_area_shape'] = \
-                        self.app.options.get(
-                            'tools_mill_area_shape',
-                            app_defaults.get('tools_mill_area_shape',
-                                             AppDefaults.factory_defaults.get('tools_mill_area_shape')))
-                # Exclusion Areas Strategy
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_area_strategy'] = self.ui.strategy_radio.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_area_strategy'] = \
-                        self.app.options.get(
-                            'tools_mill_area_strategy',
-                            app_defaults.get('tools_mill_area_strategy',
-                                             AppDefaults.factory_defaults.get('tools_mill_area_strategy')))
-                # Exclusion Areas Overz
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_area_overz'] = self.ui.over_z_entry.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_area_overz'] = \
-                        self.app.options.get(
-                            'tools_mill_area_overz',
-                            app_defaults.get('tools_mill_area_overz',
-                                             AppDefaults.factory_defaults.get('tools_mill_area_overz')))
-
-                # Preprocessor
-                try:
-                    if not from_tcl:
-                        tools_dict[tool_uid_key]['data']['tools_mill_ppname_g'] = self.ui.pp_geo_name_cb.get_value()
-                except AttributeError:
-                    tools_dict[tool_uid_key]['data']['tools_mill_ppname_g'] = self.app.options.get(
-                        'tools_mill_ppname_g',
-                        app_defaults.get('tools_mill_ppname_g', AppDefaults.factory_defaults.get('tools_mill_ppname_g')))
-
-                # Offset calculation
-                offset_type = dia_cnc_dict['data']['tools_mill_offset_type']
-                if offset_type == 1:    # 'in'
-                    tool_offset = -tooldia_val / 2
-                elif offset_type == 2:  # 'out'
-                    tool_offset = tooldia_val / 2
-                elif offset_type == 3:  # 'custom'
-                    try:
-                        if not from_tcl:
-                            offset_value = self.ui.offset_entry.get_value()
-                        else:
-                            offset_value = tools_dict[tool_uid_key]['data']['tools_mill_offset_value']
-                    except AttributeError:
-                        offset_value = self.app.options.get(
-                            'tools_mill_offset_value',
-                            app_defaults.get('tools_mill_offset_value',
-                                             AppDefaults.factory_defaults.get('tools_mill_offset_value')))
-                    if offset_value:
-                        tool_offset = float(offset_value)
-                    else:
-                        self.app.inform.emit('[WARNING] %s' %
-                                             _("Tool Offset is selected in Tool Table but "
-                                               "no value is provided.\n"
-                                               "Add a Tool Offset or change the Offset Type."))
-                        return
+            # Keep the original shared-storage updates after the per-tool copy and polishing.
+            data.update({key: value for key, value in context['overrides'].items()
+                         if key != 'tools_mill_offset_value'})
+            offset_type = dia_cnc_dict['data']['tools_mill_offset_type']
+            if offset_type == 1:
+                tool_offset = -tooldia_val / 2
+            elif offset_type == 2:
+                tool_offset = tooldia_val / 2
+            elif offset_type == 3:
+                offset_value = data['tools_mill_offset_value'] if context['from_tcl'] else \
+                    context['overrides']['tools_mill_offset_value']
+                if offset_value:
+                    tool_offset = float(offset_value)
                 else:
-                    tool_offset = 0.0
+                    self.app.inform.emit('[WARNING] %s' %
+                                         _("Tool Offset is selected in Tool Table but "
+                                           "no value is provided.\n"
+                                           "Add a Tool Offset or change the Offset Type."))
+                    return
+            else:
+                tool_offset = 0.0
+            if context['disable_offset'] is True:
+                tool_offset = 0.0
+            dia_cnc_dict['data']['tools_mill_offset_value'] = tool_offset
+            data['tools_mill_offset_value'] = tool_offset
+            tool_solid_geometry = geo_obj.tools[tool_uid_key]['solid_geometry']
+            new_cncjob_obj.coords_decimals = context['options']['cncjob_coords_decimals']
+            new_cncjob_obj.fr_decimals = context['options']['cncjob_fr_decimals']
+            new_cncjob_obj.obj_options['tooldia'] = tooldia_val
+            new_cncjob_obj.obj_options['type'] = 'Geometry'
+            new_cncjob_obj.obj_options['tool_dia'] = tooldia_val
+            glob_tol = float(context['options']['global_tolerance'])
+            tol = glob_tol / 20 if context['units'].lower() == 'in' else glob_tol
+            res, start_gcode = new_cncjob_obj.geometry_tool_gcode_gen(
+                tool_uid_key, tools_dict, first_pt=(0, 0), last_pt=data['tools_mill_endxy'],
+                tolerance=tol, is_first=tool_uid_key == used_tools[0],
+                is_last=tool_uid_key == used_tools[-1], toolchange=context['toolchange'],
+                use_ui=not context['from_tcl'])
+            if res == 'fail':
+                self.app.log.debug("ToolMilling.generate_cnc_job_handler() --> "
+                                   "Failed to generate GCode for tool: %s" % tool_uid_key)
+                return 'fail'
+            dia_cnc_dict['gcode'] = res
+            total_gcode += res
+            if start_gcode != '':
+                new_cncjob_obj.gc_start = start_gcode
+            app_obj.inform.emit('[success] %s' % _("G-Code parsing in progress..."))
+            dia_cnc_dict['gcode_parsed'] = new_cncjob_obj.gcode_parse(tool_data=data)
+            app_obj.inform.emit('[success] %s' % _("G-Code parsing finished..."))
+            try:
+                dia_cnc_dict['solid_geometry'] = deepcopy(tool_solid_geometry)
+                app_obj.inform.emit('[success] %s...' % _("Finished G-Code processing"))
+            except Exception as ee:
+                app_obj.inform.emit('[ERROR] %s: %s' % (_("G-Code processing failed with error"), str(ee)))
+            new_cncjob_obj.tools.update({tool_uid_key: deepcopy(dia_cnc_dict)})
+            dia_cnc_dict.clear()
+        new_cncjob_obj.source_file = total_gcode
 
-                if disable_offset is True:
-                    tool_offset = 0.0
+    def _submit_cnc_job_creation(self, context, plot, use_thread):
+        initializer = self._initialize_multi_geometry_cnc_job if context['multigeo'] else \
+            self._initialize_single_geometry_cnc_job
 
-                dia_cnc_dict['data']['tools_mill_offset_value'] = tool_offset
-                tools_dict[tool_uid_key]['data']['tools_mill_offset_value'] = tool_offset
+        def job_init(new_cncjob_obj, app_obj):
+            return initializer(new_cncjob_obj, app_obj, context)
 
-                # Solid Geometry
-                tool_solid_geometry = geo_obj.tools[tool_uid_key]['solid_geometry']
-
-                # Coordinates
-                new_cncjob_obj.coords_decimals = self.app.options.get(
-                    "cncjob_coords_decimals",
-                    app_defaults.get("cncjob_coords_decimals", AppDefaults.factory_defaults.get("cncjob_coords_decimals")))
-                new_cncjob_obj.fr_decimals = self.app.options.get(
-                    "cncjob_fr_decimals",
-                    app_defaults.get("cncjob_fr_decimals", AppDefaults.factory_defaults.get("cncjob_fr_decimals")))
-
-                # Propagate options
-                new_cncjob_obj.obj_options["tooldia"] = tooldia_val
-                new_cncjob_obj.obj_options['type'] = 'Geometry'
-                new_cncjob_obj.obj_options['tool_dia'] = tooldia_val
-
-                # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
-                # to a value of 0.0005 which is 20 times less than 0.01
-                glob_tol = float(self.app.options.get(
-                    'global_tolerance',
-                    app_defaults.get('global_tolerance', AppDefaults.factory_defaults.get('global_tolerance'))))
-                tol = glob_tol / 20 if self.units.lower() == 'in' else glob_tol
-
-                tool_lst = list(tools_dict.keys())
-                is_first = True if tool_uid_key == tool_lst[0] else False
-                first_pt = (0, 0)
-                is_last = True if tool_uid_key == tool_lst[-1] else False
-                last_pt = tools_dict[tool_uid_key]['data']['tools_mill_endxy']
-
-                res, start_gcode = new_cncjob_obj.geometry_tool_gcode_gen(tool_uid_key, tools_dict, first_pt=first_pt,
-                                                                          last_pt=last_pt,
-                                                                          tolerance=tol,
-                                                                          is_first=is_first, is_last=is_last,
-                                                                          toolchange=is_tool_change,
-                                                                          use_ui=not from_tcl)
-                if res == 'fail':
-                    self.app.log.debug(
-                        "ToolMilling.generate_cnc_job_handler() --> "
-                        "Failed to generate GCode for tool: %s" % tool_uid_key)
-                    return 'fail'
-
-                # Store the GCode
-                dia_cnc_dict['gcode'] = res
-                total_gcode += res
-
-                if start_gcode != '':
-                    new_cncjob_obj.gc_start = start_gcode
-
-                app_obj.inform.emit('[success] %s' % _("G-Code parsing in progress..."))
-                dia_cnc_dict['gcode_parsed'] = new_cncjob_obj.gcode_parse(tool_data=tools_dict[tool_uid_key]['data'])
-                app_obj.inform.emit('[success] %s' % _("G-Code parsing finished..."))
-
-                # commented this; there is no need for the actual GCode geometry - the original one will serve as well
-                # for bounding box values
-                # geo_for_bound_values = unary_union([
-                #     geo['geom'] for geo in dia_cnc_dict['gcode_parsed'] if geo['geom'].is_valid is True
-                # ])
-                try:
-                    dia_cnc_dict['solid_geometry'] = deepcopy(tool_solid_geometry)
-                    app_obj.inform.emit('[success] %s...' % _("Finished G-Code processing"))
-                except Exception as ee:
-                    app_obj.inform.emit('[ERROR] %s: %s' % (_("G-Code processing failed with error"), str(ee)))
-
-                # tell gcode_parse from which point to start drawing the lines depending on what kind of
-                # object is the source of gcode
-
-                # Update the CNCJob tools dictionary
-                new_cncjob_obj.tools.update({
-                    tool_uid_key: deepcopy(dia_cnc_dict)
-                })
-                dia_cnc_dict.clear()
-
-            new_cncjob_obj.source_file = total_gcode
+        def create_job():
+            return self.new_object("cncjob", context['outname'], job_init,
+                                   source=context['source_obj'], from_tcl=context['from_tcl'],
+                                   plot=plot, autoselected=True)
 
         if use_thread:
-            # To be run in separate thread
             def job_thread(a_obj):
-                if geo_obj.multigeo is False:
-                    with self.app.proc_container.new('%s...' % _("Generating")):
-                        ret_value = self.new_object("cncjob", outname, job_init_single_geometry,
-                                                    source=source_obj, from_tcl=from_tcl,
-                                                    plot=plot, autoselected=True)
-                else:
-                    with self.app.proc_container.new('%s...' % _("Generating")):
-                        ret_value = self.new_object("cncjob", outname, job_init_multi_geometry,
-                                                    source=source_obj, from_tcl=from_tcl,
-                                                    plot=plot, autoselected=True)
-
+                with self.app.proc_container.new('%s...' % _("Generating")):
+                    ret_value = create_job()
                 if ret_value != 'fail':
-                    a_obj.inform.emit('[success] %s: %s' % (_("CNCjob created"), outname))
+                    a_obj.inform.emit('[success] %s: %s' % (_("CNCjob created"), context['outname']))
 
-            # Create a promise with the name
-            self.app.collection.promise(outname)
-            # Send to worker
+            self.app.collection.promise(context['outname'])
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
-            if geo_obj.multigeo is False:
-                ret_val = self.new_object("cncjob", outname, job_init_single_geometry,
-                                          source=source_obj, from_tcl=from_tcl, plot=plot, autoselected=True)
-            else:
-                ret_val = self.new_object("cncjob", outname, job_init_multi_geometry,
-                                          source=source_obj, from_tcl=from_tcl, plot=plot, autoselected=True)
+            ret_val = create_job()
             if ret_val != 'fail':
-                self.app.inform.emit('[success] %s: %s' % (_("CNCjob created"), outname))
+                self.app.inform.emit('[success] %s: %s' % (_("CNCjob created"), context['outname']))
             return 'fail' if ret_val == 'fail' or ret_val is False else None
 
     def on_pp_changed(self):
