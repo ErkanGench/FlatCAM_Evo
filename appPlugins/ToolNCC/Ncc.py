@@ -67,6 +67,7 @@ class ToolNcc(Geometry, AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = NccUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         self.init_context_menu()
@@ -369,6 +370,7 @@ class ToolNcc(Geometry, AppTool):
 
         self.clear_ui(self.layout)
         self.ui = NccUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         self.clear_context_menu()

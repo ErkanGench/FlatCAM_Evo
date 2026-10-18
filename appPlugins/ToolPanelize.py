@@ -41,6 +41,7 @@ class Panelize(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = PanelizeUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -122,6 +123,7 @@ class Panelize(AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = PanelizeUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         self.reset_fields()
@@ -497,15 +499,15 @@ class Panelize(AppTool):
 
                 self.app.inform.emit('%s: %d' % (_("Generating panel... Spawning copies"), (int(rows * columns))))
                 if panel_source_obj.kind == 'excellon':
-                    self.app.app_obj.new_object(
-                        "excellon", self.outname, job_init_excellon, plot=True, autoselected=False)
+                    self.new_object("excellon", self.outname, job_init_excellon,
+                                    source=panel_source_obj, plot=True, autoselected=False)
                 else:
                     if panel_type == 'geometry':
-                        self.app.app_obj.new_object(
-                            'geometry', self.outname, job_init_geometry, plot=True, autoselected=False)
+                        self.new_object('geometry', self.outname, job_init_geometry,
+                                        source=panel_source_obj, plot=True, autoselected=False)
                     if panel_type == 'gerber':
-                        self.app.app_obj.new_object(
-                            'gerber', self.outname, job_init_gerber, plot=True, autoselected=False)
+                        self.new_object('gerber', self.outname, job_init_gerber,
+                                        source=panel_source_obj, plot=True, autoselected=False)
 
         def job_thread(app_obj):
             with self.app.proc_container.new('%s...' % _("Working")):

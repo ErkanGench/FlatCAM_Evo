@@ -119,6 +119,7 @@ class ToolPaint(Geometry, AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = PaintUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         self.form_fields = {
@@ -335,6 +336,7 @@ class ToolPaint(Geometry, AppTool):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         self.clear_ui(self.layout)
         self.ui = PaintUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         self.form_fields = {

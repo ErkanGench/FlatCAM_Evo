@@ -1441,17 +1441,19 @@ class NccGen:
             ret = None
             try:
                 if params.rest_machining_choice:
-                    app_instance.app_obj.new_object(
+                    self.parent_tool.new_object(
                         "geometry",
                         output_object_name,
                         _generate_rest_clear_object_worker,
+                        source=cleared_object,
                         autoselected=False,
                     )
                 else:
-                    app_instance.app_obj.new_object(
+                    self.parent_tool.new_object(
                         "geometry",
                         output_object_name,
                         _generate_clear_object_worker,
+                        source=cleared_object,
                         autoselected=False,
                     )
             except grace:
@@ -2507,9 +2509,6 @@ class NccGen:
                 proc.done()
             else:
                 app_obj.proc_container.view.set_idle()
-
-            # focus on Properties Tab
-            self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
 
         if run_threaded:
             # Promise object with the new name

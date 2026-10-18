@@ -42,6 +42,7 @@ class ToolExtract(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = ExtractUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -188,6 +189,7 @@ class ToolExtract(AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = ExtractUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -496,7 +498,7 @@ class ToolExtract(AppTool):
             self.clear_aperture_marking()
 
             try:
-                self.app.app_obj.new_object("excellon", outname, obj_init, autoselected=False)
+                self.new_object("excellon", outname, obj_init, source=fcobj, autoselected=False)
             except Exception as e:
                 self.app.log.error("Error on Extracted Excellon object creation: %s" % str(e))
                 return
@@ -866,7 +868,7 @@ class ToolExtract(AppTool):
 
         with self.app.proc_container.new('%s...' % _("Working")):
             try:
-                self.app.app_obj.new_object("gerber", outname, obj_init, autoselected=False)
+                self.new_object("gerber", outname, obj_init, source=obj, autoselected=False)
             except Exception as e:
                 self.app.log.error("Error on Extracted Soldermask Gerber object creation: %s" % str(e))
                 return
@@ -940,7 +942,7 @@ class ToolExtract(AppTool):
 
         with self.app.proc_container.new('%s...' % _("Working")):
             try:
-                self.app.app_obj.new_object("gerber", outname, obj_init)
+                self.new_object("gerber", outname, obj_init, source=obj)
             except Exception as e:
                 self.app.log.error("Error on Extracted Cutout Gerber object creation: %s" % str(e))
                 return

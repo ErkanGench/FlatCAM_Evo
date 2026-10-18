@@ -58,6 +58,7 @@ class ToolIsolation(Geometry, AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = IsoUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -288,6 +289,7 @@ class ToolIsolation(Geometry, AppTool):
 
         self.clear_ui(self.layout)
         self.ui = IsoUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -2037,7 +2039,8 @@ class ToolIsolation(Geometry, AppTool):
                         geo_obj.multigeo = True
 
                     a_select = True if self.validation_status else False
-                    self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot, autoselected=a_select)
+                    self.new_object("geometry", iso_name, iso_init, source=isolated_obj,
+                                    plot=plot, autoselected=a_select)
 
             # clean the progressive plotted shapes if it was used
 
@@ -2253,7 +2256,7 @@ class ToolIsolation(Geometry, AppTool):
                     app_obj.inform.emit(mssg)
 
         a_select = True if self.validation_status else False
-        self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot, autoselected=a_select)
+        self.new_object("geometry", iso_name, iso_init, source=iso_obj, plot=plot, autoselected=a_select)
 
         # the tools are finished but the isolation is not finished therefore it failed
         if work_geo:
@@ -2482,7 +2485,7 @@ class ToolIsolation(Geometry, AppTool):
                     app_obj.inform.emit(msg)
 
         a_select = True if self.validation_status else False
-        self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot, autoselected=a_select)
+        self.new_object("geometry", iso_name, iso_init, source=iso_obj, plot=plot, autoselected=a_select)
 
     def area_subtraction(self, geo, subtraction_geo=None):
         """

@@ -86,6 +86,7 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = LevelUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         self._al_core_signals_connected = False
@@ -190,6 +191,7 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
             self._height_map_is_complete()
         self.clear_ui(self.layout)
         self.ui = LevelUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -245,7 +247,7 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
         if self.app.options.get("tools_al_controller") == 'GRBL':
             self.app.options["tools_al_controller"] = 'MACH3'
             self.app.inform.emit('[WARNING_NOTCL] %s' % _(
-                "The Levelling Plugin no longer has GRBL. Use the GRBL Sender Plugin."))
+                "The Levelling Plugin no longer has GRBL. Use the GCode sender Plugin."))
         self.to_form()
         self.on_controller_change_alter_ui()
 
@@ -750,7 +752,7 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
 
                     if not context_current():
                         return
-                    ret = self.app.app_obj.new_object('cncjob', outname, obj_init)
+                    ret = self.new_object('cncjob', outname, obj_init, source=target_obj)
                     if ret == 'fail':
                         self.app.inform.emit(
                             '[ERROR_NOTCL] %s' % _("Failed to create the levelled CNCJob object.")

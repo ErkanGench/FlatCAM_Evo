@@ -49,6 +49,7 @@ class SolderPaste(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = SolderUI(layout=self.layout, app=self.app, solder_class=self)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
         self.app.object_status_changed.connect(self.update_comboboxes)
@@ -186,6 +187,7 @@ class SolderPaste(AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = SolderUI(layout=self.layout, app=self.app, solder_class=self)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -967,7 +969,7 @@ class SolderPaste(AppTool):
         if use_thread:
             def job_thread(app_obj):
                 try:
-                    app_obj.app_obj.new_object("geometry", name + "_solderpaste", geo_init)
+                    self.new_object("geometry", name + "_solderpaste", geo_init, source=obj)
                 except Exception as e:
                     self.app.log.error("SolderPaste.on_create_geo() --> %s" % str(e))
                     proc.done()
@@ -981,7 +983,7 @@ class SolderPaste(AppTool):
             # Background
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
-            self.app.app_obj.new_object("geometry", name + "_solderpaste", geo_init)
+            self.new_object("geometry", name + "_solderpaste", geo_init, source=obj)
 
     def on_create_gcode_click(self):
         """
@@ -1110,14 +1112,14 @@ class SolderPaste(AppTool):
             # To be run in separate thread
             def job_thread(app_obj):
                 with self.app.proc_container.new('%s...' % _("Working")):
-                    if app_obj.app_obj.new_object("cncjob", name, job_init) != 'fail':
+                    if self.new_object("cncjob", name, job_init, source=obj) != 'fail':
                         app_obj.inform.emit('[success] %s: %s' % (_("CNCjob created"), name))
             # Create a promise with the name
             self.app.collection.promise(name)
             # Send to worker
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
-            self.app.app_obj.new_object("cncjob", name, job_init)
+            self.new_object("cncjob", name, job_init, source=obj)
 
     def on_view_gcode(self):
         """

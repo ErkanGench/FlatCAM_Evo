@@ -52,6 +52,7 @@ class ToolCopperThieving(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = ThievingUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -167,6 +168,7 @@ class ToolCopperThieving(AppTool):
 
         self.clear_ui(self.layout)
         self.ui = ThievingUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -364,7 +366,7 @@ class ToolCopperThieving(AppTool):
             # update the source file with the new geometry:
             grb_obj.regenerate_source(name=outname)
 
-        ret_val = self.app.app_obj.new_object('gerber', outname, initialize, plot=True)
+        ret_val = self.new_object('gerber', outname, initialize, source=self.grb_object, plot=True)
         self.app.proc_container.update_view_text(' %s' % '')
         if ret_val == 'fail':
             self.app.call_source = "app"
@@ -929,7 +931,8 @@ class ToolCopperThieving(AppTool):
                 app_obj.proc_container.update_view_text(' %s' % _("Append source file"))
                 grb_obj.regenerate_source(name=outname)
 
-            ret_val = self.app.app_obj.new_object('gerber', outname, initialize, plot=True, autoselected=False)
+            ret_val = self.new_object('gerber', outname, initialize, source=thieving_obj,
+                                      plot=True, autoselected=False)
             tool_obj.app.proc_container.update_view_text(' %s' % '')
             if ret_val == 'fail':
                 self.app.call_source = "app"
@@ -1132,7 +1135,7 @@ class ToolCopperThieving(AppTool):
         obj_name, separatpr, obj_extension = self.sm_object.obj_options['name'].rpartition('.')
         outname = '%s_%s.%s' % (obj_name, 'plating_mask', obj_extension)
 
-        ret_val = self.app.app_obj.new_object('gerber', outname, obj_init, autoselected=False)
+        ret_val = self.new_object('gerber', outname, obj_init, source=self.sm_object, autoselected=False)
         if ret_val == 'fail':
             self.app.call_source = "app"
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))

@@ -449,6 +449,7 @@ class ToolMilling(Geometry, AppTool):
 
     def init_ui(self):
         self.ui = MillingUI(layout=self.layout, app=self.app, name=self.pluginName)
+        self.add_object_creation_controls()
 
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
@@ -2628,7 +2629,7 @@ class ToolMilling(Geometry, AppTool):
 
         if use_thread:
             def geo_thread(a_obj):
-                a_obj.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+                self.new_object("geometry", outname, geo_init, source=self.target_obj, plot=plot)
 
             # Create a promise with the new name
             self.app.collection.promise(outname)
@@ -2636,7 +2637,7 @@ class ToolMilling(Geometry, AppTool):
             # Send to worker
             self.app.worker_task.emit({'fcn': geo_thread, 'params': [self.app]})
         else:
-            self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+            self.new_object("geometry", outname, geo_init, source=self.target_obj, plot=plot)
 
         return True, ""
 
@@ -2746,7 +2747,7 @@ class ToolMilling(Geometry, AppTool):
 
         if use_thread:
             def geo_thread(a_obj):
-                a_obj.app_obj.new_object("geometry", outname + '_slot', geo_init, plot=plot)
+                self.new_object("geometry", outname + '_slot', geo_init, source=self.target_obj, plot=plot)
 
             # Create a promise with the new name
             self.app.collection.promise(outname)
@@ -2754,7 +2755,7 @@ class ToolMilling(Geometry, AppTool):
             # Send to worker
             self.app.worker_task.emit({'fcn': geo_thread, 'params': [self.app]})
         else:
-            self.app.app_obj.new_object("geometry", outname + '_slot', geo_init, plot=plot)
+            self.new_object("geometry", outname + '_slot', geo_init, source=self.target_obj, plot=plot)
 
         return True, ""
 
@@ -3053,6 +3054,7 @@ class ToolMilling(Geometry, AppTool):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         geo_obj = geo_obj if geo_obj is not None else self.target_obj
+        source_obj = self.target_obj if isinstance(geo_obj, HybridGeoExc) else geo_obj
 
         # use the name of the first tool selected in self.tools_table_mill_geo which has the diameter passed as tool_dia
         outname = "%s_%s" % (geo_obj.obj_options["name"], 'cnc') if outname is None else outname
@@ -3620,15 +3622,16 @@ class ToolMilling(Geometry, AppTool):
             def job_thread(a_obj):
                 if geo_obj.multigeo is False:
                     with self.app.proc_container.new('%s...' % _("Generating")):
-                        ret_value = a_obj.app_obj.new_object("cncjob", outname, job_init_single_geometry, plot=plot,
-                                                             autoselected=True)
+                        ret_value = self.new_object("cncjob", outname, job_init_single_geometry,
+                                                    source=source_obj, from_tcl=from_tcl,
+                                                    plot=plot, autoselected=True)
                 else:
                     with self.app.proc_container.new('%s...' % _("Generating")):
-                        ret_value = a_obj.app_obj.new_object("cncjob", outname, job_init_multi_geometry, plot=plot,
-                                                             autoselected=True)
+                        ret_value = self.new_object("cncjob", outname, job_init_multi_geometry,
+                                                    source=source_obj, from_tcl=from_tcl,
+                                                    plot=plot, autoselected=True)
 
                 if ret_value != 'fail':
-                    self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
                     a_obj.inform.emit('[success] %s: %s' % (_("CNCjob created"), outname))
 
             # Create a promise with the name
@@ -3637,13 +3640,12 @@ class ToolMilling(Geometry, AppTool):
             self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
         else:
             if geo_obj.multigeo is False:
-                ret_val = self.app.app_obj.new_object("cncjob", outname, job_init_single_geometry, plot=plot,
-                                                      autoselected=True)
+                ret_val = self.new_object("cncjob", outname, job_init_single_geometry,
+                                          source=source_obj, from_tcl=from_tcl, plot=plot, autoselected=True)
             else:
-                ret_val = self.app.app_obj.new_object("cncjob", outname, job_init_multi_geometry, plot=plot,
-                                                      autoselected=True)
+                ret_val = self.new_object("cncjob", outname, job_init_multi_geometry,
+                                          source=source_obj, from_tcl=from_tcl, plot=plot, autoselected=True)
             if ret_val != 'fail':
-                self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
                 self.app.inform.emit('[success] %s: %s' % (_("CNCjob created"), outname))
 
     def on_pp_changed(self):

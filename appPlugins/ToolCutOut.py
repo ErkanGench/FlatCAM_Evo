@@ -562,6 +562,7 @@ class CutOut(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = CutoutUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -772,6 +773,7 @@ class CutOut(AppTool):
 
         self.clear_ui(self.layout)
         self.ui = CutoutUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -1343,12 +1345,13 @@ class CutOut(AppTool):
 
                 try:
                     if self.ui.gaptype_combo.get_value() == 2:  # "mouse bytes"
-                        ret = app_obj.app_obj.new_object('excellon', outname_exc, excellon_init, autoselected=False)
+                        ret = self.new_object('excellon', outname_exc, excellon_init,
+                                              source=cutout_obj, autoselected=False)
                         if ret == 'fail':
                             app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
                         app_obj.should_we_save = True
 
-                    ret = app_obj.app_obj.new_object('geometry', outname, geo_init, autoselected=False)
+                    ret = self.new_object('geometry', outname, geo_init, source=cutout_obj, autoselected=False)
                     if ret == 'fail':
                         self.app.log.debug("Cutout.on_freeform_cutout() -> Failure in creating an Geometry object..")
                         app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
@@ -1758,11 +1761,12 @@ class CutOut(AppTool):
 
                 try:
                     if self_c.ui.gaptype_combo.get_value() == 2:  # "mouse bytes"
-                        ret = app_obj.app_obj.new_object('excellon', outname_exc, excellon_init, autoselected=False)
+                        ret = self_c.new_object('excellon', outname_exc, excellon_init,
+                                                source=cutout_obj, autoselected=False)
                         if ret == 'fail':
                             app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
 
-                    ret = app_obj.app_obj.new_object('geometry', outname, geo_init, autoselected=False)
+                    ret = self_c.new_object('geometry', outname, geo_init, source=cutout_obj, autoselected=False)
                     if ret == 'fail':
                         self.app.log.debug("Cutout.on_rectangular_cutout() -> Could not create a Geometry object.")
                         app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
@@ -1932,7 +1936,7 @@ class CutOut(AppTool):
 
         with self.app.proc_container.new('%s...' % _("Working")):
             try:
-                ret = self.app.app_obj.new_object("excellon", outname, obj_init, autoselected=False)
+                ret = self.new_object("excellon", outname, obj_init, source=obj, autoselected=False)
             except Exception as e:
                 self.app.log.error("Error on Drill Cutting Excellon object creation: %s" % str(e))
                 return
@@ -2186,7 +2190,7 @@ class CutOut(AppTool):
             geo_obj.tools[1]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
 
         outname = cutout_obj.obj_options["name"] + "_cutout"
-        self.app.app_obj.new_object('geometry', outname, geo_init, autoselected=False)
+        self.new_object('geometry', outname, geo_init, source=cutout_obj, autoselected=False)
 
     def cutting_geo(self, pos):
         self.cutting_dia = float(self.ui.dia.get_value())
@@ -2289,7 +2293,8 @@ class CutOut(AppTool):
                             exc_obj.obj_options['xmax'] = xmax
                             exc_obj.obj_options['ymax'] = ymax
 
-                        ret = app_obj.app_obj.new_object('excellon', outname_exc, excellon_init, autoselected=False)
+                        ret = self.new_object('excellon', outname_exc, excellon_init,
+                                              source=self.man_cutout_obj, autoselected=False)
                         if ret == 'fail':
                             app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
 

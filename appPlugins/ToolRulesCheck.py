@@ -42,6 +42,7 @@ class RulesCheck(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = RulesUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -146,6 +147,7 @@ class RulesCheck(AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = RulesUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -1184,7 +1186,7 @@ class RulesCheck(AppTool):
             new_obj.source_file = txt
             new_obj.read_only = True
 
-        self.app.app_obj.new_object('document', name='Rules_check_results', initialize=init, plot=False)
+        self.new_object('document', name='Rules_check_results', initialize=init, plot=False)
 
     def reset_fields(self):
         # self.object_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))

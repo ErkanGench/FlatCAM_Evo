@@ -70,6 +70,7 @@ class ToolPunchGerber(Geometry, AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = PunchUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -219,6 +220,7 @@ class ToolPunchGerber(Geometry, AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = PunchUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -734,7 +736,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=grb_obj, autoselected=False)
 
     def on_excellon_manual_method(self, outname):
         # get the Excellon file whose geometry will create the punch holes
@@ -854,7 +856,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=self.grb_obj, autoselected=False)
 
     def on_fixed_method(self, grb_obj, outname):
         punch_size = float(self.ui.dia_entry.get_value())
@@ -986,7 +988,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=grb_obj, autoselected=False)
 
     def on_fixed_manual_method(self, outname):
         punch_size = float(self.ui.dia_entry.get_value())
@@ -1080,7 +1082,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=self.grb_obj, autoselected=False)
 
     def on_ring_method(self, grb_obj, outname):
         circ_r_val = self.ui.circular_ring_entry.get_value()
@@ -1228,7 +1230,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=grb_obj, autoselected=False)
 
     def on_ring_manual_method(self, outname):
         circ_r_val = self.ui.circular_ring_entry.get_value()
@@ -1367,7 +1369,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=self.grb_obj, autoselected=False)
 
     def on_proportional_method(self, grb_obj, outname):
         prop_factor = self.ui.factor_entry.get_value() / 100.0
@@ -1510,7 +1512,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=grb_obj, autoselected=False)
 
     def on_proportional_manual_method(self, outname):
         prop_factor = self.ui.factor_entry.get_value() / 100.0
@@ -1645,7 +1647,7 @@ class ToolPunchGerber(Geometry, AppTool):
             new_obj.solid_geometry = deepcopy(punched_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func, autoselected=False)
+        self.new_object('gerber', outname, init_func, source=self.grb_obj, autoselected=False)
 
     def find_pad(self, point):
         pt = Point(point) if type(point) is tuple else point

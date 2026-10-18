@@ -48,6 +48,7 @@ class ToolSub(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = SubUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -207,6 +208,7 @@ class ToolSub(AppTool):
 
         self.clear_ui(self.layout)
         self.ui = SubUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -487,7 +489,7 @@ class ToolSub(AppTool):
             grb_obj.regenerate_source(name=outname)
 
         with self.app.proc_container.new('%s...' % _("Generating")):
-            ret = self.app.app_obj.new_object('gerber', outname, obj_init, autoselected=False)
+            ret = self.new_object('gerber', outname, obj_init, source=self.target_grb_obj, autoselected=False)
             if ret == 'fail':
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _('Generating new object failed.'))
                 return
@@ -681,7 +683,7 @@ class ToolSub(AppTool):
                 geo_obj.multigeo = False
 
         with self.app.proc_container.new('%s...' % _("Generating")):
-            ret = self.app.app_obj.new_object('geometry', outname, obj_init, autoselected=False)
+            ret = self.new_object('geometry', outname, obj_init, source=self.target_geo_obj, autoselected=False)
             if ret == 'fail':
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _('Generating new object failed.'))
                 return

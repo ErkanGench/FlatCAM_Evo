@@ -57,6 +57,7 @@ class ToolMarkers(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = MarkersUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         # Objects involved in Copper thieving
@@ -185,6 +186,7 @@ class ToolMarkers(AppTool):
 
         self.clear_ui(self.layout)
         self.ui = MarkersUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -743,7 +745,7 @@ class ToolMarkers(AppTool):
 
             grb_obj.regenerate_source(name=outname)
 
-        ret = self.app.app_obj.new_object('gerber', outname, initialize, plot=True, autoselected=False)
+        ret = self.new_object('gerber', outname, initialize, source=self.grb_object, plot=True, autoselected=False)
 
         return ret
 
@@ -834,7 +836,7 @@ class ToolMarkers(AppTool):
             geo_obj.multigeo = True
             geo_obj.tools = deepcopy(new_tools)
 
-        ret = self.app.app_obj.new_object('geometry', outname, initialize, plot=True, autoselected=False)
+        ret = self.new_object('geometry', outname, initialize, source=self.grb_object, plot=True, autoselected=False)
 
         return ret
 
@@ -927,7 +929,7 @@ class ToolMarkers(AppTool):
             obj_inst.regenerate_source()
 
         outname = '%s_%s' % (str(self.grb_object.obj_options['name']), 'corner_drills')
-        ret_val = self.app.app_obj.new_object("excellon", outname, obj_init, autoselected=False)
+        ret_val = self.new_object("excellon", outname, obj_init, source=self.grb_object, autoselected=False)
 
         self.app.call_source = "app"
         if ret_val == 'fail':
@@ -1031,7 +1033,7 @@ class ToolMarkers(AppTool):
             new_obj.regenerate_source()
 
         outname = '%s_%s' % (str(self.grb_object.obj_options['name']), 'verification')
-        ret_val = self.app.app_obj.new_object("excellon", outname, obj_init, autoselected=False)
+        ret_val = self.new_object("excellon", outname, obj_init, source=self.grb_object, autoselected=False)
 
         self.app.call_source = "app"
         if ret_val == 'fail':

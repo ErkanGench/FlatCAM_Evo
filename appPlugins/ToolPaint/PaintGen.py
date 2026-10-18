@@ -545,7 +545,7 @@ class PaintGen:
             ret = None
             try:
                 if params.rest_machining_choice:
-                    ret = app_instance.app_obj.new_object(
+                    ret = self.parent_tool.new_object(
                         "geometry",
                         params.output_object_name,
                         lambda o, a: self._generate_rest_paint_worker(
@@ -558,15 +558,17 @@ class PaintGen:
                             plot,
                         ),
                         plot=plot,
+                        source=painted_object,
                         autoselected=False,
                     )
                 else:
-                    ret = app_instance.app_obj.new_object(
+                    ret = self.parent_tool.new_object(
                         "geometry",
                         params.output_object_name,
                         lambda o, a: self._generate_paint_worker(
                             o, a, params, sorted_paint_tools, geometry, painted_object, plot),
                         plot=plot,
+                        source=painted_object,
                         autoselected=False,
                     )
             except grace:

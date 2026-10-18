@@ -426,6 +426,17 @@ class AppObject(QtCore.QObject):
         # The Collection might change the name if there is a collision
         self.app.collection.append(obj)
 
+        creation_context = getattr(obj, '_plugin_creation_context', None)
+        auto_switch = False
+        if creation_context is not None:
+            del obj._plugin_creation_context
+            source, auto_hide, auto_switch = creation_context
+            if auto_hide and source is not None and source is not obj:
+                source.obj_options['plot'] = False
+                source.visible = False
+            if auto_switch:
+                auto_select = True
+
         # after adding the object to the collection always update the list of objects that are in the collection
         batch = getattr(obj, '_load_batch', None)
         if batch is None or not batch.interactive:
@@ -547,6 +558,9 @@ class AppObject(QtCore.QObject):
         if callback is not None:
             # callback(*callback_params)
             self.app.worker_task.emit({'fcn': callback, 'params': callback_params})
+
+        if creation_context is not None and auto_switch:
+            self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
 
     def on_object_changed(self, obj):
         """

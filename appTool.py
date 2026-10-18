@@ -8,6 +8,7 @@
 
 from PyQt6 import QtGui, QtWidgets, QtCore
 from shapely import Polygon, LineString
+from appGUI.GUIElements import FCCheckBox, FCFrame, FCLabel, GLay
 
 import gettext
 import appTranslation as fcTranslate
@@ -41,6 +42,62 @@ class AppTool(QtWidgets.QWidget):
         self.setLayout(self.layout)
 
         self.menuAction = None
+
+    def add_object_creation_controls(self, has_source=True):
+        """Initialize plugin-local creation options from the application preferences."""
+        label = getattr(self.ui, 'gen_param_label', None)
+        if label is not None:
+            layout = label.parentWidget().layout()
+            grid = layout.itemAt(layout.indexOf(label) + 1).widget().layout()
+        else:
+            self.ui.gen_param_label = FCLabel(_("Common Parameters"), color='indigo', bold=True)
+            frame = FCFrame()
+            grid = GLay(v_spacing=5, h_spacing=3)
+            frame.setLayout(grid)
+            index = self.layout.count()
+            if index and self.layout.itemAt(index - 1).spacerItem() is not None:
+                index -= 1
+            self.layout.insertWidget(index, self.ui.gen_param_label)
+            self.layout.insertWidget(index + 1, frame)
+
+        if has_source:
+            self.ui.object_autohide_cb = FCCheckBox(_("Object AutoHide"))
+            self.ui.object_autohide_cb.setToolTip(
+                _("When checked, once a new object is generated the source object is hidden on canvas."))
+            self.ui.object_autohide_cb.toggled.connect(
+                lambda value: setattr(self, 'object_autohide', value))
+            grid.addWidget(self.ui.object_autohide_cb, grid.rowCount(), 0, 1, 2)
+
+        self.ui.object_autoswitch_cb = FCCheckBox(_("Object Autoswitch"))
+        self.ui.object_autoswitch_cb.setToolTip(
+            _("When checked, on new object creation, switch to Properties."))
+        self.ui.object_autoswitch_cb.toggled.connect(
+            lambda value: setattr(self, 'object_autoswitch', value))
+        grid.addWidget(self.ui.object_autoswitch_cb, grid.rowCount(), 0, 1, 2)
+        self.reset_object_creation_controls()
+
+    def reset_object_creation_controls(self):
+        self.object_autohide = False
+        for name in ('object_autohide', 'object_autoswitch'):
+            checkbox = getattr(self.ui, name + '_cb', None)
+            if checkbox is not None:
+                key = 'global_' + name
+                value = self.app.options.get(key, self.app.defaults.get(key, True))
+                setattr(self, name, value)
+                checkbox.set_value(value)
+
+    def new_object(self, kind, name, initialize, source=None, from_tcl=False, **kwargs):
+        """Carry this generator's source and options to GUI-thread completion."""
+        if from_tcl or 'object_autoswitch' not in self.__dict__:
+            return self.app.app_obj.new_object(kind, name, initialize, **kwargs)
+        context = (source, self.object_autohide, self.object_autoswitch)
+
+        def plugin_initialize(obj, app):
+            result = initialize(obj, app)
+            obj._plugin_creation_context = context
+            return result
+
+        return self.app.app_obj.new_object(kind, name, plugin_initialize, **kwargs)
 
     def install(self, icon=None, separator=None, shortcut=None, **kwargs):
         before = None

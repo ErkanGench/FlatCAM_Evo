@@ -56,6 +56,7 @@ class Film(AppTool):
         # ######################################## Tool GUI ###########################################################
         # #############################################################################################################
         self.ui = FilmUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
         # #############################################################################################################
@@ -185,6 +186,7 @@ class Film(AppTool):
 
         self.clear_ui(self.layout)
         self.ui = FilmUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -459,7 +461,7 @@ class Film(AppTool):
                 new_obj.solid_geometry = deepcopy(punched_solid_geometry)
 
             outname = name + "_punched"
-            self.app.app_obj.new_object('gerber', outname, init_func)
+            self.new_object('gerber', outname, init_func, source=film_obj)
 
             self.generate_positive_normal_film(outname, boxname, factor=factor, ftype=ftype)
         else:
@@ -517,7 +519,7 @@ class Film(AppTool):
                 new_obj.solid_geometry = deepcopy(punched_solid_geometry)
 
             outname = name + "_punched"
-            self.app.app_obj.new_object('gerber', outname, init_func)
+            self.new_object('gerber', outname, init_func, source=film_obj)
 
             self.generate_positive_normal_film(outname, boxname, factor=factor, ftype=ftype)
 

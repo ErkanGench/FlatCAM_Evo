@@ -49,6 +49,7 @@ class ToolImage(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = ImageUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -118,6 +119,7 @@ class ToolImage(AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = ImageUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -348,7 +350,7 @@ class ToolImage(AppTool):
             name = outname or filename.split('/')[-1].split('\\')[-1]
             units = self.app.app_units
 
-            res = self.app.app_obj.new_object(obj_type, name, obj_init)
+            res = self.new_object(obj_type, name, obj_init)
             if res == 'fail':
                 self.app.inform.emit("[ERROR_NOTCL] %s" % _("Failed."))
                 return

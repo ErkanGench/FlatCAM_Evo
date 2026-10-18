@@ -39,6 +39,7 @@ class DblSidedTool(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = DsidedUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -148,6 +149,7 @@ class DblSidedTool(AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = DsidedUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -365,7 +367,7 @@ class DblSidedTool(AppTool):
             obj_inst.create_geometry()
             obj_inst.regenerate_source()
 
-        ret_val = self.app.app_obj.new_object("excellon", _("Alignment Drills"), obj_init, autoselected=False)
+        ret_val = self.new_object("excellon", _("Alignment Drills"), obj_init, autoselected=False)
         self.drill_values = ''
 
         if not ret_val == 'fail':

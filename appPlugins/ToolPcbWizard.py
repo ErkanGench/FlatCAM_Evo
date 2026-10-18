@@ -40,6 +40,7 @@ class PcbWizard(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = WizardUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -135,6 +136,7 @@ class PcbWizard(AppTool):
 
         self.clear_ui(self.layout)
         self.ui = WizardUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls(has_source=False)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -377,7 +379,7 @@ class PcbWizard(AppTool):
                     # Object name
                     name = self.outname
 
-                    ret_val = self.app.app_obj.new_object("excellon", name, obj_init, autoselected=False)
+                    ret_val = self.new_object("excellon", name, obj_init, autoselected=False)
                     if ret_val == 'fail':
                         self.app.inform.emit('[ERROR_NOTCL] %s' % _('Import Excellon file failed.'))
                         return
@@ -387,7 +389,6 @@ class PcbWizard(AppTool):
 
                     # GUI feedback
                     self.app.inform.emit('[success] %s: %s' % (_("Imported"), name))
-                    self.app.ui.notebook.setCurrentWidget(self.app.ui.project_tab)
             else:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _('Excellon merging is in progress. Please wait...'))
         else:

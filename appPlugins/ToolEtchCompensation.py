@@ -41,6 +41,7 @@ class ToolEtchCompensation(AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = EtchUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -114,6 +115,7 @@ class ToolEtchCompensation(AppTool):
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = EtchUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -291,7 +293,7 @@ class ToolEtchCompensation(AppTool):
             new_obj.solid_geometry = deepcopy(new_solid_geometry)
             new_obj.regenerate_source(name=outname)
 
-        self.app.app_obj.new_object('gerber', outname, init_func)
+        self.new_object('gerber', outname, init_func, source=grb_obj)
 
     def reset_fields(self):
         self.ui.gerber_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))

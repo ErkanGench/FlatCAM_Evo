@@ -354,8 +354,10 @@ class ToolDrilling(Geometry, AppTool):
 
     def init_ui(self):
         self.ui = DrillingUI(layout=self.layout, app=self.app, name=self.pluginName)
+        self.add_object_creation_controls()
 
     def set_tool_ui(self):
+        self.reset_object_creation_controls()
         self.units = self.app.app_units.upper()
 
         self.clear_ui(self.layout)
@@ -2399,10 +2401,7 @@ class ToolDrilling(Geometry, AppTool):
         # To be run in separate thread
         def job_thread(a_obj):
             with self.app.proc_container.new(_("Generating CNC Code")):
-                a_obj.app_obj.new_object("cncjob", job_name, job_init)
-
-            # Switch notebook to Properties page
-            self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
+                self.new_object("cncjob", job_name, job_init, source=obj)
 
         # Create promise for the new name.
         self.app.collection.promise(job_name)

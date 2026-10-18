@@ -52,6 +52,7 @@ class ToolFollow(Geometry, AppTool):
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = FollowUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -139,6 +140,7 @@ class ToolFollow(Geometry, AppTool):
 
         self.clear_ui(self.layout)
         self.ui = FollowUI(layout=self.layout, app=self.app)
+        self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -379,7 +381,7 @@ class ToolFollow(Geometry, AppTool):
                 }
             }
 
-        ret = self.app.app_obj.new_object("geometry", outname, follow_init)
+        ret = self.new_object("geometry", outname, follow_init, source=followed_obj)
         if ret == 'fail':
             self.app.inform.emit("[ERROR_NOTCL] %s" % _("Failed to create Follow Geometry."))
         else:
@@ -468,7 +470,7 @@ class ToolFollow(Geometry, AppTool):
                 }
             }
 
-        ret = self.app.app_obj.new_object("geometry", outname, follow_init)
+        ret = self.new_object("geometry", outname, follow_init, source=followed_obj)
         if ret == 'fail':
             self.app.inform.emit("[ERROR_NOTCL] %s" % _("Failed to create Follow Geometry."))
         else:
