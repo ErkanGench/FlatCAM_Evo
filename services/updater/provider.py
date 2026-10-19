@@ -33,10 +33,10 @@ def provider_url(app, provider=None) -> str:
     return value
 
 
-def create_update_checker(app):
-    """Build the checker of the selected provider."""
-    provider = update_provider(app)
-    url = provider_url(app, provider)
+def create_update_checker(app, provider=None, url=None):
+    """Build the checker of the selected provider, or of an explicit provider and address."""
+    provider = provider if provider in (PROVIDER_GITHUB, PROVIDER_DIGI) else update_provider(app)
+    url = url or provider_url(app, provider)
     if provider == PROVIDER_DIGI:
         from .digi.checker import UpdateChecker
 

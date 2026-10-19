@@ -133,7 +133,9 @@ def test_custom_update_url_survives_the_digi_migration(tmp_path):
     defaults = AppDefaults(beta=False, version="1.0")
     defaults.load(str(filename), MagicMock())
 
-    assert defaults["global_update_url"] == "https://mirror.example.invalid/updates"
+    # A custom share saved before the provider choice is kept for the legacy Digi provider.
+    assert defaults["global_legacy_update_url"] == "https://mirror.example.invalid/updates"
+    assert defaults["global_update_url"] == DEFAULT_REPOSITORY
 
 
 def test_both_entrypoints_construct_the_github_checker():

@@ -133,6 +133,9 @@ class GitHubUpdateChecker:
             "current": current,
             "current_version": current["version"],
             "current_build": current["build"],
+            # The offer carries its source so the download uses the same provider and address.
+            "provider": "github",
+            "provider_url": getattr(self, "_offer_url", None) or self.repository_url or DEFAULT_REPOSITORY,
         }
         if release is not None:
             payload.update(
@@ -215,6 +218,7 @@ class GitHubUpdateChecker:
     def run_check(self, app=None, *, forced=False, repository_url=None):
         """Run one check and return a result safe for a worker task."""
         app = app or self.app
+        self._offer_url = self.repository_url if repository_url is None else repository_url
         try:
             return self._check(app, forced=forced, repository_url=repository_url)
         except Exception as exc:

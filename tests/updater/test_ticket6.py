@@ -383,7 +383,8 @@ class TestLegacyCompatibility:
         # Verify user preferences preserved
         assert defaults["units"] == "IN"
         assert defaults["global_version_check"] is False
-        assert defaults["global_update_url"] == "https://custom.example.com"
+        # A custom share saved before the provider choice is kept for the legacy Digi provider.
+        assert defaults["global_legacy_update_url"] == "https://custom.example.com"
 
     def test_no_legacy_file_returns_none(self, tmp_path):
         """Returns None when no legacy files exist."""

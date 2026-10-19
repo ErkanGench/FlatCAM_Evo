@@ -199,3 +199,80 @@ def test_old_digi_url_migrates_but_stays_available_as_legacy_url(tmp_path):
     assert defaults["global_update_url"] == DEFAULT_REPOSITORY
     assert defaults["global_legacy_update_url"] == DIGI_URL
     assert defaults["global_update_provider"] == "github"
+
+
+def test_custom_digi_share_from_old_settings_moves_to_the_legacy_url(tmp_path):
+    filename = tmp_path / "current_defaults.FlatConfig"
+    filename.write_text(json.dumps({"global_update_url": "https://s.example.invalid/custom"}))
+
+    defaults = AppDefaults(beta=False, version="1.0")
+    defaults.load(str(filename), MagicMock())
+
+    assert defaults["global_update_url"] == DEFAULT_REPOSITORY
+    assert defaults["global_legacy_update_url"] == "https://s.example.invalid/custom"
+    assert defaults["global_update_provider"] == "github"
+
+
+def test_settings_with_a_provider_keep_their_urls(tmp_path):
+    filename = tmp_path / "current_defaults.FlatConfig"
+    saved = {
+        "global_update_provider": "github",
+        "global_update_url": "https://github.com/example/fork",
+        "global_legacy_update_url": "https://s.example.invalid/custom",
+    }
+    filename.write_text(json.dumps(saved))
+
+    defaults = AppDefaults(beta=False, version="1.0")
+    defaults.load(str(filename), MagicMock())
+
+    for key, value in saved.items():
+        assert defaults[key] == value
+
+
+def test_offers_record_their_provider_and_address():
+    github = GitHubUpdateChecker(SimpleNamespace(), repository_url="https://github.com/example/fork")
+    github.run_check(forced=True, repository_url="https://github.com/example/other")
+    payload = github._payload("up_to_date", "windows", SimpleNamespace())
+    assert payload["provider"] == "github"
+    assert payload["provider_url"] == "https://github.com/example/other"
+
+    digi = UpdateChecker(SimpleNamespace(), share_url="https://s.example.invalid/x")
+    payload = digi._payload("up_to_date", "windows", SimpleNamespace())
+    assert payload["provider"] == "digi"
+    assert payload["provider_url"] == "https://s.example.invalid/x"
+
+
+def test_download_uses_the_provider_of_the_offer_not_the_current_preference(monkeypatch, tmp_path):
+    from appMain import App
+
+    seen = {}
+
+    class GitHubChecker:
+        provider = "github"
+
+        def create_transport(self, app, *, repository_url=None):
+            seen["repository_url"] = repository_url
+            return "github-transport"
+
+    def fake_stage_update(app, payload, *, transport, cancel_cb, progress_cb):
+        seen["transport"] = transport
+        raise RuntimeError("stop after routing")
+
+    app = _fake_app(tmp_path)
+    # The user switched to Digi after the GitHub check produced this offer.
+    app.options = {"global_update_provider": "digi"}
+    app.update_checker = SimpleNamespace(provider="digi")
+    monkeypatch.setattr("appMain.create_update_checker", lambda app, provider=None, url=None: GitHubChecker())
+    monkeypatch.setattr("appMain.stage_update", fake_stage_update)
+    payload = {
+        "status": "update_available",
+        "provider": "github",
+        "provider_url": "https://github.com/example/fork",
+        "channel": "windows",
+    }
+
+    App._download_update_worker(app, payload, SimpleNamespace(is_set=lambda: False))
+
+    assert seen == {"repository_url": "https://github.com/example/fork", "transport": "github-transport"}
+    data = app.update_staged.emissions[0][0]
+    assert data["error"] == "stop after routing"

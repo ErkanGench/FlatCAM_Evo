@@ -71,6 +71,9 @@ class UpdateChecker:
             "current": current,
             "current_version": current["version"],
             "current_build": current["build"],
+            # The offer carries its source so the download uses the same provider and address.
+            "provider": "digi",
+            "provider_url": getattr(self, "_offer_url", None) or self.share_url,
         }
         if error:
             payload["error"] = error
@@ -79,6 +82,7 @@ class UpdateChecker:
     def run_check(self, app=None, *, forced=False, share_url=None):
         """Run one check and return a result safe for a worker task."""
         app = app or self.app
+        self._offer_url = self.share_url if share_url is None else share_url
         try:
             return self._check(app, forced=forced, share_url=share_url)
         except Exception as exc:

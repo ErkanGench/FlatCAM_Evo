@@ -15,7 +15,8 @@ from appParsers.ParseExcellon import Excellon
 from appParsers.ParseGerber import Gerber
 
 from services.updater.digi.transport import DEFAULT_UPDATE_URL as LEGACY_DIGI_UPDATE_URL
-from services.updater.github.transport import DEFAULT_REPOSITORY as DEFAULT_UPDATE_URL
+from services.updater.common import TransportError
+from services.updater.github.transport import DEFAULT_REPOSITORY as DEFAULT_UPDATE_URL, normalize_repository
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -1171,10 +1172,27 @@ class AppDefaults:
             self.defaults["global_update_url"] = DEFAULT_UPDATE_URL
             # The Digi address stays available for the explicit legacy provider.
             self.defaults["global_legacy_update_url"] = LEGACY_DIGI_UPDATE_URL
+        elif "global_update_provider" not in defaults and self._is_custom_digi_update_url(
+                self.defaults.get("global_update_url")):
+            # Settings saved before the provider choice held a custom Digi share in global_update_url:
+            # keep it for the legacy provider and give the GitHub provider its own address.
+            self.defaults["global_legacy_update_url"] = self.defaults.get("global_update_url")
+            self.defaults["global_update_url"] = DEFAULT_UPDATE_URL
 
         self.current_defaults = deepcopy(dict(self.defaults))
 
         # log.debug("App defaults loaded from: %s" % filename)
+
+    @staticmethod
+    def _is_custom_digi_update_url(url) -> bool:
+        """Return whether a saved update URL is a non-empty address that is not a GitHub repository."""
+        if not isinstance(url, str) or not url.strip():
+            return False
+        try:
+            normalize_repository(url)
+        except TransportError:
+            return True
+        return False
 
     def reset_to_factory_defaults(self):
         self.defaults.clear()

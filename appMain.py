@@ -3007,18 +3007,22 @@ class App(QtCore.QObject):
             self.inform.emit('[ERROR_NOTCL] %s' % _("Update download could not be started."))
 
     def _download_update_worker(self, payload, cancel_event):
+        # The offer records the provider and address that produced it; a later preference change must
+        # not route its download through the other provider.
+        provider = payload.get("provider") or update_provider(self)
         checker = checker_for(self)
-        provider = update_provider(self)
+        if getattr(checker, "provider", provider) != provider:
+            checker = create_update_checker(self, provider=provider, url=payload.get("provider_url"))
         options = self.options
         defaults = self.defaults
-        repository_url = options.get(
+        repository_url = payload.get("provider_url") or options.get(
             "global_update_url",
             defaults.get(
                 "global_update_url",
                 AppDefaults.factory_defaults.get("global_update_url"),
             ),
         )
-        share_url = options.get(
+        share_url = payload.get("provider_url") or options.get(
             "global_legacy_update_url",
             defaults.get(
                 "global_legacy_update_url",
