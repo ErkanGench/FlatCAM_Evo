@@ -230,9 +230,14 @@ def test_settings_with_a_provider_keep_their_urls(tmp_path):
 
 
 def test_offers_record_their_provider_and_address():
-    github = GitHubUpdateChecker(SimpleNamespace(), repository_url="https://github.com/example/fork")
-    github.run_check(forced=True, repository_url="https://github.com/example/other")
-    payload = github._payload("up_to_date", "windows", SimpleNamespace())
+    no_releases = SimpleNamespace(list_releases=lambda: [])
+    github = GitHubUpdateChecker(
+        SimpleNamespace(),
+        repository_url="https://github.com/example/fork",
+        transport_factory=lambda app: no_releases,
+    )
+    payload = github.run_check(forced=True, repository_url="https://github.com/example/other")
+    assert payload["no_releases"] is True
     assert payload["provider"] == "github"
     assert payload["provider_url"] == "https://github.com/example/other"
 
