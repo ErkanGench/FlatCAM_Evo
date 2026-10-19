@@ -12,7 +12,6 @@ from PyQt6.QtCore import QSettings, pyqtSlot  # noqa
 from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject  # noqa
 
 import logging
-import hashlib
 import os.path
 import sys
 import threading
@@ -75,11 +74,14 @@ from appHandlers.appSignalConnector import AppSignalConnector
 from appHandlers.appUIActions import AppUIActions
 from appHandlers.appLifecycle import AppLifecycle
 
-from services.updater.checker import UpdateChecker
+from services.updater.digi.release import prepare_releases, validate_release_roots
+from services.updater.github.checker import GitHubUpdateChecker
+from services.updater.github.staging import stage_update
+from services.updater.digi.staging import stage_update_archive
+from services.updater.provider import PROVIDER_DIGI, checker_for, create_update_checker, update_provider
 from services.updater.launcher import launch_rollback, launch_update
 from services.updater.recovery import load_restore_point, restore_dir_for_install
-from services.updater.release import prepare_releases, validate_release_roots
-from services.updater.transport import DigiPublicShareTransport, DownloadCancelled
+from services.updater.common import DownloadCancelled
 
 from Bookmark import BookmarkManager
 # from appDatabase import ToolsDB2
@@ -139,28 +141,6 @@ import darkdetect
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
-
-
-def _stage_update_archive(payload, data_path, transport, *, cancel_cb=None, progress_cb=None):
-    """Download one verified full archive into a stable, disposable staging area."""
-    manifest = payload["manifest"]
-    install_key = hashlib.sha1(str(Path(sys.executable).resolve().parent).encode()).hexdigest()[:8]
-    staging_root = Path(data_path) / "update" / f"staging_{install_key}"
-    archive_path = staging_root / manifest.archive.filename
-    shutil.rmtree(staging_root, ignore_errors=True)
-    try:
-        return transport.download_archive(
-            payload["channel"],
-            manifest.archive.filename,
-            archive_path,
-            expected_size=manifest.archive.size,
-            expected_sha256=manifest.archive.sha256,
-            progress_cb=progress_cb,
-            cancel_cb=cancel_cb,
-        )
-    except Exception:
-        shutil.rmtree(staging_root, ignore_errors=True)
-        raise
 
 
 def _release_build_identity(app, fallback=""):
@@ -247,7 +227,8 @@ class App(QtCore.QObject):
     date = date.replace(' ', '_')
 
     # ############################################ URLS's ###########################################################
-    # Retained for compatibility with older integrations; updater checks use the Digi share.
+    # Retained for compatibility with older integrations; the GitHub Releases updater is the
+    # default and the Digi share is the legacy provider.
     version_url = "http://flatcam.org/version"
 
     # App URL
@@ -562,6 +543,7 @@ class App(QtCore.QObject):
         self._update_dialog = None
         self._update_progress_dialog = None
         self._update_in_progress = False
+        self._update_cancel_event = None
         self._rollback_in_progress = False
         self._release_preparation_in_progress = False
 
@@ -927,10 +909,7 @@ class App(QtCore.QObject):
         # #################################### SETUP OBJECT CLASSES #################################################
         # Need lifecycle initialized before setup_objclasses
         self.lifecycle = AppLifecycle(app=self)
-        self.update_checker = UpdateChecker(
-            app=self,
-            share_url=self.options.get("global_update_url", self.defaults.get("global_update_url")),
-        )
+        self.update_checker = create_update_checker(self)
         self.setup_obj_classes()
 
         # ###################################### CREATE MULTIPROCESSING POOL #######################################
@@ -1507,7 +1486,7 @@ class App(QtCore.QObject):
             self.trayIcon.show()
 
         self.refresh_rollback_action()
-        if not self.beta and self.options.get("global_version_check", self.defaults.get("global_version_check")):
+        if self.options.get("global_version_check", self.defaults.get("global_version_check")):
             self.log.info(f"Checking for updates in background (this is version {self.version}).")
             self._queue_version_check()
 
@@ -2806,6 +2785,11 @@ class App(QtCore.QObject):
         dialog = getattr(self, "_update_progress_dialog", None)
         if dialog is not None:
             try:
+                # QProgressDialog emits canceled when it closes; a programmatic close is not a user cancel.
+                dialog.canceled.disconnect()
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+            try:
                 dialog.close()
             except (AttributeError, RuntimeError):
                 pass
@@ -2817,7 +2801,14 @@ class App(QtCore.QObject):
             return
         try:
             dialog.setLabelText(text)
-            dialog.setValue(value)
+            if value < 0:
+                # A negative value means the transport cannot report a total yet.
+                if dialog.maximum() != 0:
+                    dialog.setRange(0, 0)
+                return
+            if dialog.maximum() == 0:
+                dialog.setRange(0, 100)
+            dialog.setValue(min(value, dialog.maximum()))
         except (AttributeError, RuntimeError):
             pass
 
@@ -2943,12 +2934,23 @@ class App(QtCore.QObject):
     def on_update_check_result(self, payload):
         self._check_in_progress = False
         if payload.get("status") == "up_to_date" and self._manual_update_requested:
-            self.inform.emit('[success] %s' % _("The application is up to date!"))
-        self._manual_update_requested = False
+            if payload.get("no_releases"):
+                self.inform.emit('[WARNING_NOTCL] %s' % _("No releases have been published yet."))
+            else:
+                self.inform.emit('[success] %s' % _("The application is up to date!"))
+        if payload.get("status") != "update_available":
+            self._manual_update_requested = False
 
     def on_update_available(self, payload):
         if self._update_operation_active():
             self.log.info("Ignoring duplicate update offer while an update operation is active.")
+            return
+
+        manual_request = bool(getattr(self, "_manual_update_requested", False))
+        self._manual_update_requested = False
+        if payload.get("manual") and not manual_request:
+            # Automatic checks must not nag about installs that are always replaced by hand.
+            self.log.info("A manual update is available; automatic checks stay nonintrusive.")
             return
 
         dialog = UpdateDialog(parent=self.ui, payload=payload)
@@ -2962,6 +2964,8 @@ class App(QtCore.QObject):
                 if self._updater_shutdown_preflight():
                     self.quit_application()
                 return
+            if payload.get("manual"):
+                return
 
             self._start_update_download(payload)
 
@@ -2973,6 +2977,7 @@ class App(QtCore.QObject):
             return
         self._update_in_progress = True
         cancel_event = threading.Event()
+        self._update_cancel_event = cancel_event
         progress = QtWidgets.QProgressDialog(
             _("Downloading update..."), _("Cancel"), 0, 100, self.ui
         )
@@ -2980,6 +2985,11 @@ class App(QtCore.QObject):
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setAutoClose(False)
         progress.setAutoReset(False)
+        asset = payload.get("asset") if isinstance(payload.get("asset"), dict) else {}
+        known_size = asset.get("size") if payload.get("install") == "windows_asset" else None
+        if not known_size:
+            # Source archives only report their total while streaming.
+            progress.setRange(0, 0)
         progress.canceled.connect(cancel_event.set)
         self._update_progress_dialog = progress
         progress.show()
@@ -2992,46 +3002,84 @@ class App(QtCore.QObject):
         except Exception as exc:
             self.log.error("Could not queue update download: %s" % str(exc))
             self._update_in_progress = False
+            self._update_cancel_event = None
             self._close_update_progress()
             self.inform.emit('[ERROR_NOTCL] %s' % _("Update download could not be started."))
 
     def _download_update_worker(self, payload, cancel_event):
-        checker = getattr(self, "update_checker", None)
-        if checker is None:
-            checker = UpdateChecker(app=self)
-            self.update_checker = checker
+        checker = checker_for(self)
+        provider = update_provider(self)
         options = self.options
         defaults = self.defaults
-        share_url = options.get(
+        repository_url = options.get(
             "global_update_url",
             defaults.get(
                 "global_update_url",
                 AppDefaults.factory_defaults.get("global_update_url"),
             ),
         )
+        share_url = options.get(
+            "global_legacy_update_url",
+            defaults.get(
+                "global_legacy_update_url",
+                AppDefaults.factory_defaults.get("global_legacy_update_url"),
+            ),
+        )
 
         def progress(written, total):
-            total = total or payload["manifest"].archive.size or 0
-            value = 100 if total and written >= total else int((written * 100) / total) if total else 0
-            self.update_progress.emit(min(value, 100), _("Downloading update: %s%%") % value)
+            if not total:
+                self.update_progress.emit(-1, _("Downloading update..."))
+                return
+            value = min(int((written * 100) / total), 100)
+            self.update_progress.emit(value, _("Downloading update: %s%%") % value)
 
         try:
-            transport = checker.create_transport(
+            if provider == PROVIDER_DIGI:
+                transport = checker.create_transport(self, share_url=share_url)
+                archive_path = stage_update_archive(
+                    payload,
+                    self.data_path,
+                    transport,
+                    cancel_cb=cancel_event.is_set,
+                    progress_cb=progress,
+                )
+                if cancel_event.is_set():
+                    shutil.rmtree(str(archive_path.parent), ignore_errors=True)
+                    self.update_staged.emit({"canceled": True, "payload": payload})
+                    return
+                self.update_staged.emit({
+                    "canceled": False,
+                    "payload": payload,
+                    "staging_dir": str(archive_path.parent),
+                    "archive_path": str(archive_path),
+                    "manifest": payload["manifest"],
+                    "channel": payload.get("channel"),
+                })
+                return
+
+            transport = checker.create_transport(self, repository_url=repository_url)
+            staged = stage_update(
                 self,
-                share_url=share_url,
-            )
-            archive_path = _stage_update_archive(
                 payload,
-                self.data_path,
-                transport,
+                transport=transport,
                 cancel_cb=cancel_event.is_set,
                 progress_cb=progress,
             )
+            if cancel_event.is_set():
+                shutil.rmtree(str(staged.staging_dir), ignore_errors=True)
+                self.update_staged.emit({"canceled": True, "payload": payload})
+                return
             self.update_staged.emit({
-                "archive_path": str(archive_path),
-                "staging_dir": str(archive_path.parent),
                 "canceled": False,
                 "payload": payload,
+                "stage": staged,
+                "staging_dir": str(staged.staging_dir),
+                "archive_path": str(staged.archive_path),
+                "manifest": staged.manifest,
+                "channel": staged.channel,
+                "install": staged.install,
+                "trust": staged.trust,
+                "dependencies": staged.dependencies,
             })
         except DownloadCancelled:
             self.update_staged.emit({"canceled": True, "payload": payload})
@@ -3039,33 +3087,107 @@ class App(QtCore.QObject):
             self.log.error("Update download failed: %s" % str(exc))
             self.update_staged.emit({"canceled": False, "payload": payload, "error": str(exc)})
 
+    def _cleanup_staged_update(self, data):
+        staging_dir = data.get("staging_dir")
+        if staging_dir:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+    @staticmethod
+    def _dependency_warning(dependencies):
+        detail = []
+        for label, key in (("Added", "added"), ("Removed", "removed")):
+            values = dependencies.get(key) or []
+            if values:
+                detail.append("%s: %s" % (label, ", ".join(sorted(str(value) for value in values))))
+        return "\n".join(detail)
+
+    def _confirm_staged_update(self, manifest, channel, dependencies, trust):
+        """Ask on the GUI thread before the external helper may touch the installation."""
+        dependencies = dependencies if isinstance(dependencies, dict) else {}
+        warning = ""
+        if channel == "linux" and dependencies.get("changed"):
+            warning = _(
+                "The application requirements changed. Update the Python environment and "
+                "restart afterwards; otherwise FlatCAM may fail to start. FlatCAM does not "
+                "run pip or change the environment itself."
+            )
+            detail = self._dependency_warning(dependencies)
+            if detail:
+                warning = "%s\n%s" % (warning, detail)
+        if not trust and not warning:
+            return True
+
+        version = manifest.get("version", "") if isinstance(manifest, dict) else getattr(manifest, "version", "")
+        build = manifest.get("build", "") if isinstance(manifest, dict) else getattr(manifest, "build_string", "")
+        message = ["%s (%s)" % (version, build)]
+        if trust:
+            message.append(_("Trust: %s") % trust)
+        if warning:
+            message.append(warning)
+        default = (
+            QtWidgets.QMessageBox.StandardButton.Cancel
+            if warning
+            else QtWidgets.QMessageBox.StandardButton.Yes
+        )
+        box = QtWidgets.QMessageBox(self.ui)
+        box.setWindowTitle(_("Install update"))
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText("\n\n".join(message))
+        box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        box.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(default)
+        answer = box.exec()
+        return answer == QtWidgets.QMessageBox.StandardButton.Yes
+
     def on_update_staged(self, data):
         self._close_update_progress()
-        self._update_in_progress = False
-        staging_dir = data.get("staging_dir")
-        if data.get("canceled"):
-            self.inform.emit('[WARNING_NOTCL] %s' % _("Update download canceled."))
-            return
+        self._update_in_progress = True
+        launched = False
+        try:
+            cancel_event = getattr(self, "_update_cancel_event", None)
+            if data.get("canceled") or (cancel_event is not None and cancel_event.is_set()):
+                self._cleanup_staged_update(data)
+                self.inform.emit('[WARNING_NOTCL] %s' % _("Update download canceled."))
+                return
 
-        archive_path = data.get("archive_path")
-        payload = data.get("payload", {})
-        if not archive_path or not payload.get("manifest"):
-            if staging_dir:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            self.inform.emit('[ERROR_NOTCL] %s' % _("Update download failed; the installation was not changed."))
-            return
-        if not self._updater_shutdown_preflight():
-            if staging_dir:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            return
+            stage = data.get("stage")
+            manifest = data.get("manifest")
+            archive_path = data.get("archive_path")
+            payload = data.get("payload") or {}
+            if manifest is None:
+                manifest = payload.get("manifest")
+            if archive_path is None and stage is not None:
+                archive_path = str(stage.archive_path)
+            if data.get("error") or not manifest or not archive_path:
+                self._cleanup_staged_update(data)
+                self.inform.emit('[ERROR_NOTCL] %s' % _("Update download failed; the installation was not changed."))
+                return
 
-        success = launch_update(self, payload["manifest"], archive_path)
-        if not success:
-            if staging_dir:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            self.inform.emit('[WARNING_NOTCL] %s' % _("The updater could not be started."))
-            return
-        self.quit_application(mode="updater")
+            channel = data.get("channel") or getattr(stage, "channel", "")
+            trust = data.get("trust") or getattr(stage, "trust", "")
+            dependencies = data.get("dependencies") or getattr(stage, "dependencies", {})
+            if not self._confirm_staged_update(manifest, channel, dependencies, trust):
+                self._cleanup_staged_update(data)
+                self.inform.emit('[WARNING_NOTCL] %s' % _("Update was canceled; the installation was not changed."))
+                return
+            if not self._updater_shutdown_preflight():
+                self._cleanup_staged_update(data)
+                return
+
+            if not launch_update(self, manifest, archive_path):
+                self._cleanup_staged_update(data)
+                self.inform.emit('[WARNING_NOTCL] %s' % _("The updater could not be started."))
+                return
+            # The launcher owns a verified archive copy, so the download stage is disposable.
+            self._cleanup_staged_update(data)
+            launched = True
+            self.quit_application(mode="updater")
+        finally:
+            self._update_cancel_event = None
+            if not launched:
+                self._update_in_progress = False
 
     def _load_rollback_restore_point(self):
         install_dir = (

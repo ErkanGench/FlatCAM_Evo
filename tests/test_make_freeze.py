@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 import unittest
@@ -13,7 +14,7 @@ except ImportError:
     # make_freeze.py is local only (git-ignored); skip the tests when it is absent
     make_freeze = None
 
-from services.updater.release import build_deterministic_zip
+from services.updater.archive import build_deterministic_zip
 
 
 class FakeExecutable:
@@ -77,6 +78,22 @@ class TestMakeFreeze(unittest.TestCase):
         self.assertEqual("FlatCAMUpdater.exe", updater.kwargs["target_name"])
         self.assertEqual("gui", updater.kwargs["base"])
 
+    def test_updater_helper_has_no_gui_or_application_coupling(self):
+        tree = ast.parse(Path(make_freeze.UPDATER_SCRIPT).read_text(encoding="utf-8"))
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+
+        forbidden = ("PyQt", "appGUI", "appMain", "appObjects", "flatcam")
+        self.assertEqual([], [name for name in imported if name.startswith(forbidden)])
+        self.assertEqual(
+            {"services.updater.recovery"},
+            {name for name in imported if name.startswith("services.updater")},
+        )
+
     def test_main_include_files_only_contains_existing_payload_directories(self):
         root = Path(self._tempdir.name) / "source"
         for relative in ("assets", "locale", "preprocessors"):
@@ -105,6 +122,8 @@ class TestMakeFreeze(unittest.TestCase):
         self.assertEqual(2, len(calls))
         self.assertEqual(main_stage, calls[0].target_dir)
         self.assertEqual(updater_stage, calls[1].target_dir)
+        self.assertEqual(["services.updater"], calls[0].kwargs["packages"])
+        self.assertEqual([], calls[1].kwargs["packages"])
         self.assertEqual(["services.updater.recovery"], calls[1].kwargs["includes"])
         self.assertTrue((main_stage / "FlatCAM.exe").is_file())
         self.assertTrue((updater_stage / "FlatCAMUpdater.exe").is_file())

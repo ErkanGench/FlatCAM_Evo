@@ -4,7 +4,7 @@ import sys
 from PyQt6.QtCore import QSettings
 
 from appGUI.GUIElements import RadioSet, FCSpinner, FCCheckBox, FCComboBox, FCButton, OptionalInputSection, \
-    FCDoubleSpinner, FCLabel, GLay, RadioSetDefaults, FCFrame, FCComboBox2
+    FCDoubleSpinner, FCLabel, GLay, RadioSetDefaults, FCFrame, FCComboBox2, FCEntry
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 from appDatabase import _database_option
 
@@ -19,6 +19,17 @@ if '_' not in builtins.__dict__:
 
 # https://www.w3schools.com/colors/colors_names.asp
 # Colors names
+class UpdateSourceCombo(FCComboBox):
+    """Combo that stores the provider key ("github"/"digi") instead of the shown text."""
+
+    def get_value(self):
+        return str(self.currentData() or "github")
+
+    def set_value(self, val):
+        idx = self.findData(str(val))
+        self.setCurrentIndex(idx if idx != -1 else 0)
+
+
 class GeneralAppPrefGroupUI(OptionsGroupUI):
     def __init__(self, app, parent=None):
         super(GeneralAppPrefGroupUI, self).__init__(self, parent=parent)
@@ -254,13 +265,36 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
 
         grid4.addWidget(self.version_check_cb, 8, 0, 1, 2)
 
-        # Prepare Update Files
-        self.prepare_update_files_btn = FCButton('%s' % _('Prepare Update Files'))
+        # Update source
+        self.update_provider_label = FCLabel('%s:' % _('Update source'))
+        self.update_provider_label.setToolTip(
+            _("Where updates are downloaded from.\n"
+              "GitHub: the GitHub Releases of the project (default).\n"
+              "Digi (legacy): the former Digi public share.")
+        )
+        self.update_provider_combo = UpdateSourceCombo()
+        self.update_provider_combo.addItem(_("GitHub"), "github")
+        self.update_provider_combo.addItem(_("Digi (legacy)"), "digi")
+        grid4.addWidget(self.update_provider_label, 9, 0)
+        grid4.addWidget(self.update_provider_combo, 9, 1)
+
+        # Legacy Digi share address
+        self.legacy_update_url_label = FCLabel('%s:' % _('Digi share URL'))
+        self.legacy_update_url_label.setToolTip(
+            _("Address of the Digi public share used when the update source is Digi (legacy).")
+        )
+        self.legacy_update_url_entry = FCEntry()
+        grid4.addWidget(self.legacy_update_url_label, 10, 0)
+        grid4.addWidget(self.legacy_update_url_entry, 10, 1)
+
+        # Prepare Update Files (legacy Digi publishing)
+        self.prepare_update_files_btn = FCButton('%s' % _('Prepare Update Files (Digi Legacy)'))
         self.prepare_update_files_btn.setToolTip(
-            _("Create local upload files for manual Digi publishing.\n"
+            _("Digi legacy: create local upload files for manual Digi publishing.\n"
+              "GitHub releases are published separately.\n"
               "This does not upload or send credentials or application data.")
         )
-        grid4.addWidget(self.prepare_update_files_btn, 9, 0, 1, 2)
+        grid4.addWidget(self.prepare_update_files_btn, 11, 0, 1, 2)
 
         # Send Stats CB
         self.send_stats_cb = FCCheckBox(label='%s' % _('Send Statistics'))
@@ -269,7 +303,7 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
               "stats automatically at startup, to help improve FlatCAM.")
         )
 
-        grid4.addWidget(self.send_stats_cb, 10, 0, 1, 2)
+        grid4.addWidget(self.send_stats_cb, 12, 0, 1, 2)
 
         # Save Settings
         self.save_label = FCLabel('%s' % _("Save Settings"), color='purple', bold=True)

@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import gettext
+import html
 
 from PyQt6 import QtGui, QtWidgets
 
 
 _ = gettext.gettext
+
+_MANUAL_REASONS = {
+    "appimage": _("This FlatCAM copy runs from an AppImage."),
+    "windows-source": _("This is a source installation on Windows."),
+    "unsupported-architecture": _("This build does not match the published Windows x64 archive."),
+    "frozen-linux": _("The packaged Linux application is replaced by hand."),
+    "git-checkout": _("This is a Git checkout."),
+    "read-only": _("The installation folder is read-only."),
+    "macos": _("macOS builds are replaced by hand."),
+    "unsupported-platform": _("This platform has no automatic package."),
+}
 
 
 def _human_bytes(value: int) -> str:
@@ -19,17 +31,57 @@ def _human_bytes(value: int) -> str:
     return f"{number:.1f} TB"
 
 
+def _release_details(payload: dict) -> dict:
+    """Read release details from the pre-staging checker payload."""
+    manifest = payload.get("manifest")
+    version = build = notes = published = ""
+    size = None
+    if isinstance(manifest, dict):
+        archive = manifest.get("archive")
+        if not isinstance(archive, dict):
+            archive = {}
+        notes = payload.get("release_notes", manifest.get("release_notes"))
+        version = payload.get("version") or manifest.get("version") or payload.get("tag") or ""
+        build = payload.get("build_string") or manifest.get("build") or manifest.get("build_string") or ""
+        published = payload.get("published_at") or manifest.get("version_date") or ""
+        size = archive.get("size")
+    elif manifest is not None:
+        archive = getattr(manifest, "archive", None)
+        notes = getattr(manifest, "release_notes", "")
+        version = getattr(manifest, "version", "")
+        build = getattr(manifest, "build_string", "")
+        published = getattr(manifest, "version_date", "")
+        size = getattr(archive, "size", None)
+    else:
+        notes = payload.get("release_notes")
+        version = payload.get("version") or payload.get("tag") or ""
+        build = payload.get("build_string") or ""
+        published = payload.get("published_at") or ""
+    asset = payload.get("asset")
+    if payload.get("install") == "windows_asset" and isinstance(asset, dict) and not size:
+        size = asset.get("size")
+    return {
+        "version": str(version or ""),
+        "build": str(build or ""),
+        "notes": str(notes or ""),
+        "published": str(published or ""),
+        "size": size if type(size) is int and size > 0 else None,
+        "release_page": str(payload.get("release_page") or ""),
+    }
+
+
 class UpdateDialog(QtWidgets.QDialog):
     """Display release details without blocking the application event loop."""
 
     def __init__(self, parent, payload: dict) -> None:
         super().__init__(parent)
-        manifest = payload["manifest"]
+        details = _release_details(payload)
         current = payload.get("current", {})
         self._mandatory = bool(payload.get("mandatory", False))
+        self._manual = bool(payload.get("manual", False))
         self.choice = "later"
 
-        self.setWindowTitle(_("FlatCAM update available: %s") % manifest.version)
+        self.setWindowTitle(_("FlatCAM update available: %s") % (details["version"] or _("unknown version")))
         self.setModal(True)
         self.setMinimumWidth(520)
 
@@ -38,26 +90,55 @@ class UpdateDialog(QtWidgets.QDialog):
         layout.setSpacing(10)
 
         current_text = "%s (%s)" % (current.get("version", "unknown"), current.get("build", ""))
-        available_text = "%s (%s)" % (manifest.version, manifest.build_string)
+        available_text = "%s (%s)" % (details["version"] or _("unknown"), details["build"])
         header = QtWidgets.QLabel(
             _("A new version is available: <b>%s</b><br>You have: <b>%s</b>")
-            % (available_text, current_text)
+            % (html.escape(available_text), html.escape(current_text))
         )
         header.setWordWrap(True)
         header.setAccessibleName(_("Update version information"))
         layout.addWidget(header)
 
-        archive_size = QtWidgets.QLabel(
-            _("Full archive size: %s") % _human_bytes(manifest.archive.size)
-        )
+        if details["size"] is None:
+            size_text = _("Update size: unknown; the source archive is prepared automatically.")
+        else:
+            size_text = _("Full archive size: %s") % _human_bytes(details["size"])
+        archive_size = QtWidgets.QLabel(size_text)
         archive_size.setAccessibleName(_("Update archive size"))
         layout.addWidget(archive_size)
 
+        if details["published"]:
+            published = QtWidgets.QLabel(_("Published: %s") % details["published"])
+            published.setAccessibleName(_("Release date"))
+            layout.addWidget(published)
+
         notes = QtWidgets.QTextBrowser()
         notes.setAccessibleName(_("Release notes"))
-        notes.setOpenExternalLinks(True)
-        notes.setPlainText(manifest.release_notes or _("No release notes provided."))
+        notes.setOpenExternalLinks(False)
+        notes.setPlainText(details["notes"] or _("No release notes provided."))
         layout.addWidget(notes)
+
+        if self._manual:
+            reason = _MANUAL_REASONS.get(
+                payload.get("manual_reason", ""),
+                _("Automatic replacement is not available for this installation."),
+            )
+            manual_label = QtWidgets.QLabel(
+                _("This update cannot be installed automatically. %s "
+                  "Download the release from its page and replace this installation manually.")
+                % reason
+            )
+            manual_label.setWordWrap(True)
+            manual_label.setAccessibleName(_("Manual installation guidance"))
+            layout.addWidget(manual_label)
+            if details["release_page"].startswith(("https://", "http://")):
+                link = QtWidgets.QLabel(
+                    '<a href="%s">%s</a>'
+                    % (html.escape(details["release_page"], quote=True), html.escape(details["release_page"]))
+                )
+                link.setOpenExternalLinks(True)
+                link.setAccessibleName(_("Open the release page"))
+                layout.addWidget(link)
 
         if self._mandatory:
             warning = QtWidgets.QLabel(
@@ -69,19 +150,22 @@ class UpdateDialog(QtWidgets.QDialog):
 
         buttons = QtWidgets.QHBoxLayout()
         buttons.addStretch(1)
-        self.update_button = QtWidgets.QPushButton(_("Update now"))
-        self.update_button.setDefault(True)
-        self.update_button.setAccessibleName(_("Update now"))
-        buttons.addWidget(self.update_button)
+        self.update_button = None
+        if not self._manual:
+            self.update_button = QtWidgets.QPushButton(_("Update now"))
+            self.update_button.setDefault(True)
+            self.update_button.setAccessibleName(_("Update now"))
+            self.update_button.clicked.connect(self._on_update)
+            buttons.addWidget(self.update_button)
         self.other_button = QtWidgets.QPushButton(
             _("Exit") if self._mandatory else _("Later")
         )
+        if self._manual:
+            self.other_button.setDefault(True)
         self.other_button.setAccessibleName(self.other_button.text())
+        self.other_button.clicked.connect(self._on_other)
         buttons.addWidget(self.other_button)
         layout.addLayout(buttons)
-
-        self.update_button.clicked.connect(self._on_update)
-        self.other_button.clicked.connect(self._on_other)
 
     def _on_update(self) -> None:
         self.choice = "update"

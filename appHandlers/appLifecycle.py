@@ -650,16 +650,11 @@ class AppLifecycle(QtCore.QObject):
         :return: None
         """
         self.log.debug("version_check()")
-        from services.updater.checker import UpdateChecker
+        from services.updater.provider import checker_for, run_provider_check
 
-        checker = getattr(self.app, "update_checker", None)
-        if checker is None:
-            checker = UpdateChecker(self.app)
-            self.app.update_checker = checker
-        return checker.run_check(
-            forced=forced,
-            share_url=self.options.get("global_update_url", self.defaults.get("global_update_url")),
-        )
+        # The checker is rebuilt when the update source preference changed since it was cached.
+        checker = checker_for(self.app)
+        return run_provider_check(self.app, checker, forced=forced)
 
     # --------------------------------------------------------------------------
     # Method 12: start_delayed_quit

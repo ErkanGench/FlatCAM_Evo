@@ -15,18 +15,22 @@ from .manifest import (
     sha256_file,
     validate_relative_path,
 )
-from .release import (
+from .archive import (
     DEFAULT_EXCLUSION_POLICY,
     ExclusionPolicy,
+)
+from .digi.release import (
     ReleaseArtifact,
     ReleasePreparation,
     prepare_releases,
 )
-from .transport import (
+from .digi.transport import (
     DigiPublicShareTransport,
-    DownloadCancelled,
     RemoteFile,
     ShareMetadata,
+)
+from .common import (
+    DownloadCancelled,
     TransportError,
 )
 

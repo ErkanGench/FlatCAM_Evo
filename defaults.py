@@ -14,6 +14,9 @@ import builtins
 from appParsers.ParseExcellon import Excellon
 from appParsers.ParseGerber import Gerber
 
+from services.updater.digi.transport import DEFAULT_UPDATE_URL as LEGACY_DIGI_UPDATE_URL
+from services.updater.github.transport import DEFAULT_REPOSITORY as DEFAULT_UPDATE_URL
+
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
@@ -121,7 +124,9 @@ class AppDefaults:
         "global_shell_at_startup": False,  # Show the shell at startup.
         "global_project_at_startup": False,
         "global_version_check": True,
-        "global_update_url": "https://s.go.ro/zihniipc",
+        "global_update_url": DEFAULT_UPDATE_URL,
+        "global_update_provider": "github",  # "github" or "digi" (legacy)
+        "global_legacy_update_url": LEGACY_DIGI_UPDATE_URL,
         "global_send_stats": True,
         "global_worker_number": min(4, max(2, int((os.cpu_count()) / 2))) if os.cpu_count() else 2,
         "global_process_number": int((os.cpu_count()) / 4) if os.cpu_count() > 4 else 1,
@@ -1160,6 +1165,13 @@ class AppDefaults:
         self.defaults.clear()
         self.defaults.update(deepcopy(self.factory_defaults))
         self.defaults.update(defaults)
+
+        # Exact legacy Digi share default migrates to the GitHub repository; custom URLs survive.
+        if self.defaults.get("global_update_url") == LEGACY_DIGI_UPDATE_URL:
+            self.defaults["global_update_url"] = DEFAULT_UPDATE_URL
+            # The Digi address stays available for the explicit legacy provider.
+            self.defaults["global_legacy_update_url"] = LEGACY_DIGI_UPDATE_URL
+
         self.current_defaults = deepcopy(dict(self.defaults))
 
         # log.debug("App defaults loaded from: %s" % filename)

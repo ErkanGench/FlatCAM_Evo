@@ -162,7 +162,7 @@ def test_startup_separates_scheme_from_stylesheet(tmp_path, monkeypatch, appeara
     app.defaults_path.return_value = str(path)
     app.data_path = str(tmp_path)
     monkeypatch.setattr(appMain.darkdetect, 'isDark', lambda: os_dark)
-    for name in ('AppLifecycle', 'UpdateChecker', 'Pool'):
+    for name in ('AppLifecycle', 'GitHubUpdateChecker', 'Pool'):
         monkeypatch.setattr(appMain, name, MagicMock())
     appMain.App._setup_defaults_and_preferences(app)
     app._apply_color_scheme.assert_called_once_with(theme)
