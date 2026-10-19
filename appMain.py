@@ -63,7 +63,7 @@ from appGUI.themes import dark_style_sheet, light_style_sheet
 # Various
 from appCommon.Common import ExclusionAreas
 from appCommon.Common import AppLogging
-from appCommon.StartDir import resolve_user_path
+from appCommon.StartDir import resolve_user_path, resolve_existing_paths
 from appCommon.RegisterFileKeywords import RegisterFK, Extensions, KeyWords
 
 from appHandlers.appIO import appIO
@@ -233,7 +233,7 @@ class App(QtCore.QObject):
             sys.exit(2)
 
     # The same for the files to open, given as arguments. The words that are no file (quit, save ...) stay as they are.
-    args = [resolve_user_path(a) if os.path.exists(resolve_user_path(a)) else a for a in args]
+    args = resolve_existing_paths(args)
 
     # ################################### Version and VERSION DATE ##################################################
     # version = "Unstable"

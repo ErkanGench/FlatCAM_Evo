@@ -51,12 +51,14 @@ def test_export_excellon_writes_a_file_that_parses_back(app, tmp_path):
 
 @pytest.mark.parametrize('command_class, handler', [(TclCommandExportGerber, 'export_gerber'),
                                                     (TclCommandExportExcellon, 'export_excellon')])
-def test_the_handler_gets_the_object_name_as_obj_name(app, command_class, handler):
+def test_the_handler_gets_the_object_name_as_obj_name(app, tmp_path, command_class, handler):
+    # an absolute name of the platform: '/tmp/x' has no drive on Windows and is completed with one
+    target = str(tmp_path / 'x')
     app.f_handlers = Mock()
     cmd = command_class(app)
-    args, unnamed = cmd.check_args(('my_object', '/tmp/x'))
+    args, unnamed = cmd.check_args(('my_object', target))
 
     cmd.execute(args, unnamed)
 
     getattr(app.f_handlers, handler).assert_called_once_with(use_thread=False, obj_name='my_object',
-                                                             filename='/tmp/x')
+                                                             filename=target)

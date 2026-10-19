@@ -368,7 +368,7 @@ Plot 3D:
 
 Tcl and command line:
 
-- fixed: a relative file name in a Tcl command (write_gcode, save_project, open_gerber, export_svg ...) was resolved against the application folder, because the application changes into it at startup; for a packaged application that wrote into the application bundle and broke its code signature. It is now resolved against the folder FlatCAM was started from (the home folder when that is the root folder, or the application itself); a leading ~ is expanded
+- fixed: a relative file name in a Tcl command (write_gcode, save_project, open_gerber, export_svg ...) was resolved against the application folder, because the application changes into it at startup; for a packaged application that wrote into the application bundle and broke its code signature. It is now resolved against the folder FlatCAM was started from (the home folder when that is the root folder, a folder inside the Windows folder, or the application itself); after set_path or a Tcl cd the new working folder is used; a leading ~ is expanded
 - fixed: a relative --shellfile or a relative file to open given on the command line was not found for the same reason; an unreadable --shellfile now ends the program with an error before the GUI starts (it started the GUI and then crashed on exit)
 
 16.10.2026

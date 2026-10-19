@@ -7,35 +7,49 @@ started from, not relative to the application folder. For a packaged application
 read-only application bundle: the file was written inside it and the code signature broke.
 
 This module is imported before the chdir, so it can remember the folder FlatCAM was started from.
+
+The user can still move the process: ``set_path`` and the Tcl ``cd`` change the working folder, and from then on the
+relative names follow it (see base_dir()).
 """
 
 import os
 import sys
 
 
+def _normalized(path):
+    # on Windows the letters of a path are not case sensitive: C:\Program Files\FlatCAM is c:\program files\flatcam
+    return os.path.normcase(os.path.realpath(path))
+
+
 def _is_inside(path, folder):
+    path, folder = _normalized(path), _normalized(folder)
     try:
-        return os.path.commonpath([os.path.realpath(path), os.path.realpath(folder)]) == os.path.realpath(folder)
+        return os.path.commonpath([path, folder]) == folder
     except ValueError:
         # different drives on Windows
         return False
 
 
-def compute_start_dir(cwd, app_dir, frozen, home):
+def compute_start_dir(cwd, app_dir, frozen, home, system_root=None):
     """
     :param cwd: the working directory at the start of the application, None if it could not be read
     :param app_dir: the application folder
     :param frozen: True for a packaged application (PyInstaller, cx_freeze ...)
     :param home: the home folder of the user
+    :param system_root: the Windows folder (%SystemRoot%), None elsewhere
     :return: the folder that relative file names are resolved against.
     The home folder replaces a working directory that is no place for the user's files: none, the root of the file
-    system (a packaged application started from the Finder / Dock has it) or, for a packaged application, a folder
-    inside the application itself. A source checkout started from its own folder keeps it.
+    system (a packaged application started from the Finder / Dock, an AppImage or a launcher on Linux, ``C:\\`` or
+    ``\\\\server\\share\\`` on Windows), a folder inside the Windows folder (some launchers start in System32) or,
+    for a packaged application, a folder inside the application itself. A source checkout started from its own
+    folder keeps it.
     """
 
     if not cwd:
         return home
     if os.path.dirname(cwd) == cwd:
+        return home
+    if system_root and _is_inside(cwd, system_root):
         return home
     if frozen and _is_inside(cwd, app_dir):
         return home
@@ -50,18 +64,43 @@ def _current_dir():
         return None
 
 
+def _application_dir():
+    # the same folder as App.app_home
+    folder = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if os.path.isfile(folder):
+        # cx_freeze: the modules are in a zip file
+        folder = os.path.dirname(folder)
+    return folder
+
+
+APP_DIR = _application_dir()
+
 START_DIR = compute_start_dir(
     cwd=_current_dir(),
-    app_dir=os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+    app_dir=APP_DIR,
     frozen=getattr(sys, 'frozen', False),
     home=os.path.expanduser('~'),
+    system_root=os.environ.get('SystemRoot'),
 )
+
+
+def base_dir():
+    """
+    :return: the folder that relative file names are resolved against: the folder FlatCAM was started from as long as the
+    process is still in the application folder (where App.__init__() put it), and the working folder when the user
+    moved the process with ``set_path`` or the Tcl ``cd``.
+    """
+
+    cwd = _current_dir()
+    if cwd is None or _normalized(cwd) == _normalized(APP_DIR):
+        return START_DIR
+    return cwd
 
 
 def resolve_user_path(path, start_dir=None):
     """
     :param path: a file or folder name as the user typed it
-    :param start_dir: the folder for relative names; default the folder FlatCAM was started from
+    :param start_dir: the folder for relative names; default base_dir()
     :return: the absolute name. ``~`` is expanded, an absolute name and anything that is not a non-empty string are
     returned unchanged.
     """
@@ -72,4 +111,17 @@ def resolve_user_path(path, start_dir=None):
     path = os.path.expanduser(path)
     if os.path.isabs(path):
         return path
-    return os.path.join(START_DIR if start_dir is None else start_dir, path)
+    return os.path.join(base_dir() if start_dir is None else start_dir, path)
+
+
+def resolve_existing_paths(names, start_dir=None):
+    """
+    :param names: the arguments of the command line (the files to open and words like quit or save)
+    :return: the list with the names of the files that exist made absolute; the other names are unchanged.
+    """
+
+    result = []
+    for name in names:
+        resolved = resolve_user_path(name, start_dir)
+        result.append(resolved if os.path.exists(resolved) else name)
+    return result
