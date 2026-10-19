@@ -11,6 +11,8 @@ from PyQt6 import QtCore
 class TclCommandFailure(str):
     """Legacy Python text result that must be translated to an error at the Tcl boundary."""
 
+from appCommon.StartDir import resolve_user_path
+
 
 class TclCommand(object):
 
@@ -41,6 +43,10 @@ class TclCommand(object):
 
     # List of mandatory options for current Tcl command: required = {'name','outname'}
     required = ['name']
+
+    # Names of the arguments / options that hold a file or folder name. A relative name is resolved against the folder
+    # FlatCAM was started from: the application itself runs from its own folder (see appCommon/StartDir.py).
+    path_args = ('filename', 'path', 'dir')
 
     # Structured help for current command, args needs to be ordered
     # OrderedDict should be like collections.OrderedDict([(key,value),(key2,value2)])
@@ -313,6 +319,11 @@ class TclCommand(object):
             except Exception as e:
                 self.raise_tcl_error("Cannot cast argument '-%s' to type '%s' with exception '%s'."
                                      % (key, arg_type, str(e)))
+
+        # relative file and folder names are relative to where FlatCAM was started from
+        for key in self.path_args:
+            if named_args.get(key):
+                named_args[key] = resolve_user_path(named_args[key])
 
         # check required arguments
         for key in self.required:
