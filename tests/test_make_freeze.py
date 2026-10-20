@@ -5,6 +5,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from zipfile import ZipFile
 
@@ -40,9 +41,9 @@ def _fake_freezer_class(calls, *, include_recovery=True, include_executable=True
 
         def freeze(self):
             self.target_dir.mkdir(parents=True, exist_ok=True)
-            executable = self.executables[0]
             if include_executable:
-                (self.target_dir / executable.kwargs["target_name"]).write_bytes(b"executable")
+                for executable in self.executables:
+                    (self.target_dir / executable.kwargs["target_name"]).write_bytes(b"executable")
             if self.target_dir.name == "updater" and include_recovery:
                 _write_recovery_runtime(self.target_dir)
 
@@ -77,6 +78,26 @@ class TestMakeFreeze(unittest.TestCase):
         self.assertEqual("updater_app.py", Path(updater.script).name)
         self.assertEqual("FlatCAMUpdater.exe", updater.kwargs["target_name"])
         self.assertEqual("gui", updater.kwargs["base"])
+
+    def test_windows_has_a_console_executable_for_headless_runs(self):
+        created = []
+
+        def fake_executable(script, **kwargs):
+            created.append((Path(script).name, kwargs))
+            return SimpleNamespace(script=script, kwargs=kwargs)
+
+        with patch.object(make_freeze, 'Executable', fake_executable),                 patch.object(make_freeze.sys, 'platform', 'win32'):
+            executables = make_freeze.make_main_executables(make_freeze.ROOT)
+
+        self.assertEqual(
+            [('flatcam.py', {'target_name': 'FlatCAM.exe', 'base': 'gui'}),
+             ('flatcam.py', {'target_name': 'FlatCAM-cli.exe'})],
+            created)
+        self.assertEqual(2, len(executables))
+
+    def test_other_platforms_have_one_executable(self):
+        with patch.object(make_freeze, 'Executable', lambda script, **kwargs: kwargs),                 patch.object(make_freeze.sys, 'platform', 'linux'):
+            self.assertEqual(1, len(make_freeze.make_main_executables(make_freeze.ROOT)))
 
     def test_updater_helper_has_no_gui_or_application_coupling(self):
         tree = ast.parse(Path(make_freeze.UPDATER_SCRIPT).read_text(encoding="utf-8"))
@@ -157,6 +178,7 @@ class TestMakeFreeze(unittest.TestCase):
         build_dir = Path(self._tempdir.name) / "build"
         (main_stage / "lib").mkdir(parents=True)
         (main_stage / "FlatCAM.exe").write_bytes(b"main")
+        (main_stage / "FlatCAM-cli.exe").write_bytes(b"main-cli")
         (main_stage / "lib" / "library.zip").write_bytes(b"main-runtime")
         updater_stage.mkdir()
         (updater_stage / "FlatCAMUpdater.exe").write_bytes(b"updater")
