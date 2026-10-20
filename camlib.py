@@ -8740,6 +8740,45 @@ def polygon_gap_pairs(polygons, decimals, neighbors=False):
     return pairs
 
 
+def isolation_leftover_paths(inner_pass, outer_pass, burn_radius, quad_segs=16):
+    """
+    Paths that clear the copper left between 2 consecutive isolation passes.
+
+    Where the passes around 2 features meet, the band left between the last passes can be too narrow for one more
+    pass and wider than what the last pass cuts: strips and triangles of copper stay, however many passes are made.
+    The points cut by neither pass are
+
+        buffer(outer_pass, -burn_radius) - buffer(inner_pass, +burn_radius)
+
+    No point of them is farther than (pass step - burn_radius) from their outline, and with an overlap >= 0 that is
+    not more than burn_radius, so one path along each outline clears them. The paths stay farther from the copper
+    than the inner pass. Leftovers thinner than a tenth of burn_radius are dropped (arc approximation noise).
+
+    :param inner_pass:  the isolation geometry (polygons) of a pass, as made by Geometry.isolation_geometry()
+    :param outer_pass:  the isolation geometry (polygons) of the next pass
+    :param burn_radius: half of the tool width: what a path cuts on each side; no paths when it is not positive
+    :param quad_segs:   the segments of a quarter circle of the buffers
+    :return:            list of LinearRing
+    """
+    if burn_radius <= 0:
+        return []
+
+    def polygons(geo):
+        # the parts of 1 union: they do not overlap
+        return MultiPolygon([p for p in flatten_shapely_geometry(geo) if isinstance(p, Polygon)])
+
+    grown = shapely.buffer(polygons(inner_pass), burn_radius, quad_segs=quad_segs)
+    shrunk = shapely.buffer(polygons(outer_pass), -burn_radius, quad_segs=quad_segs)
+
+    paths = []
+    for poly in flatten_shapely_geometry(shapely.difference(shrunk, grown)):
+        if not isinstance(poly, Polygon) or shapely.buffer(poly, -burn_radius / 20.0).is_empty:
+            continue
+        paths.append(LinearRing(poly.exterior.coords))
+        paths += [LinearRing(ring.coords) for ring in poly.interiors]
+    return paths
+
+
 def app_option(app, key, fallback=None):
     """
     Look up an option: app.options first, then app.defaults, then the factory defaults, then ``fallback``.
