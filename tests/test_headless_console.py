@@ -28,6 +28,35 @@ def test_selected_and_input_echo_are_not_written():
     assert _write('in', '> help\n') == ('', '')
 
 
+def test_the_log_copy_in_the_shell_is_not_written():
+    # AppLogging copies each log message into the shell as '[log]...'; the log itself already reaches stderr
+    assert _write('out', '[log]DEBUG 20261020_033744 ***\tAppObject.new_object()\n') == ('', '')
+
+
+def test_quiet_logs_lets_only_warnings_and_errors_pass():
+    import logging
+    from appCommon.Headless import quiet_logs
+    stream = io.StringIO()
+    logger = logging.getLogger('test_headless_quiet')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(logging.StreamHandler(stream))
+    quiet_logs(('test_headless_quiet',))
+    # a handler added after quiet_logs() (AppLogging does this) is filtered too
+    logger.addHandler(logging.StreamHandler(stream))
+    logger.debug('no')
+    logger.info('no')
+    logger.warning('yes')
+    assert stream.getvalue() == 'yes\nyes\n'
+
+
+def test_only_critical_qt_messages_reach_stderr(capsys):
+    from PyQt6 import QtCore
+    from appCommon.Headless import headless_qt_message_handler
+    headless_qt_message_handler(QtCore.QtMsgType.QtWarningMsg, None, 'QWidget::setMaximumSize: Negative sizes')
+    headless_qt_message_handler(QtCore.QtMsgType.QtCriticalMsg, None, 'broken')
+    assert capsys.readouterr().err == 'Qt: broken\n'
+
+
 def test_raw_html_is_plain_text():
     assert console_text('<b>a</b><br>b &amp; c<br/>') == 'a\nb & c\n'
     assert _write('raw', '<span>x</span>\n') == ('x\n', '')

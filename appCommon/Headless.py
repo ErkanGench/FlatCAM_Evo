@@ -8,6 +8,7 @@ stdin with no window and no OpenGL, writes the shell output to stdout / stderr a
 """
 
 import html
+import logging
 import re
 import sys
 import tkinter as tk
@@ -26,6 +27,28 @@ class HeadlessExit(BaseException):
 
 
 _TAG_RE = re.compile(r'<[^>]+>')
+
+
+def quiet_logs(names=('base', 'base2')):
+    """
+    Lets only the warnings and errors of the application logs reach the console. A filter on the logger, not a level
+    on a handler: AppLogging and camlib add their own handlers at DEBUG level.
+
+    :param names: the names of the loggers
+    :return: None
+    """
+    for name in names:
+        logging.getLogger(name).addFilter(lambda record: record.levelno >= logging.WARNING)
+
+
+def headless_qt_message_handler(message_type, context, message):
+    """
+    The Qt message handler of the headless mode: the widgets are never shown, so only the critical and fatal Qt
+    messages are written to stderr.
+    """
+    if message_type in (QtCore.QtMsgType.QtCriticalMsg, QtCore.QtMsgType.QtFatalMsg):
+        sys.stderr.write('Qt: %s\n' % message)
+        sys.stderr.flush()
 
 
 def console_text(text):
@@ -50,6 +73,9 @@ def console_write(style, text, out=None, err=None):
 
     # 'in' is the echo of a typed command and the banner of the shell, 'selected' a canvas selection
     if style in ('in', 'selected') or not text:
+        return
+    # AppLogging copies each log message into the shell; the log itself reaches the console through quiet_logs()
+    if text.startswith('[log]'):
         return
     if style == 'raw':
         text = console_text(text)

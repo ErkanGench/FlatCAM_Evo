@@ -177,6 +177,13 @@ if __name__ == '__main__':
     if App.cmd_line_headless:
         # no display and no GPU: Qt draws nothing and needs no X11, Wayland or Windows desktop
         os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+        if sys.platform == 'win32':
+            # the offscreen platform does not know the Windows fonts ("QFontDatabase: Cannot find font directory")
+            os.environ.setdefault('QT_QPA_FONTDIR', os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts'))
+        from appCommon.Headless import quiet_logs, headless_qt_message_handler
+        quiet_logs()
+        # the Qt warnings are about widgets nobody sees; only the critical and fatal messages reach stderr
+        QtCore.qInstallMessageHandler(headless_qt_message_handler)
 
     app = QtWidgets.QApplication(sys.argv)
     app.aboutToQuit.connect(_install_shutdown_message_handler)
