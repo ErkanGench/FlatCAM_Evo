@@ -122,6 +122,11 @@ if __name__ == '__main__':
     VisPyPatches.apply_patches()
 
     def excepthook(exc_type, exc_value, exc_tb):
+        if App.cmd_line_headless:
+            # no window for a message box: the traceback goes to stderr and the run ends with exit code 1
+            sys.stderr.write("".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+            sys.stderr.flush()
+            os._exit(1)
         msg = '%s\n' % str(datetime.today())
         if exc_type != KeyboardInterrupt:
             msg += "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -169,6 +174,10 @@ if __name__ == '__main__':
 
     sys.excepthook = excepthook
 
+    if App.cmd_line_headless:
+        # no display and no GPU: Qt draws nothing and needs no X11, Wayland or Windows desktop
+        os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
     app = QtWidgets.QApplication(sys.argv)
     app.aboutToQuit.connect(_install_shutdown_message_handler)
 
@@ -198,6 +207,10 @@ if __name__ == '__main__':
         app.setFont(font)
 
     fc = App(qapp=app)
+
+    if fc.headless:
+        from appCommon.Headless import HeadlessRunner
+        os._exit(HeadlessRunner(fc).run())
 
     # interrupt the Qt loop such that Python events have a chance to be responsive
     timer = QTimer()
