@@ -226,6 +226,7 @@ Project file:
 
 - the project save makes the WKT of all the geometries with vectorized Shapely calls, in pieces of about 10000 coordinates, instead of 1 call for each geometry while the JSON is written; a large project saves about 5x faster (compressed) and the GUI thread is blocked for much shorter times during the save
 - the coordinates are saved with the shortest text that reads back to the same number instead of 16 fixed decimals, which lost the last bits of a coordinate below 1; the files are smaller and older versions open them
+- a compressed project is written as compact JSON (no indentation, no sorted keys), which is faster for a project with many small items (a CNC job); a plain project keeps the indented JSON
 
 Tests:
 
