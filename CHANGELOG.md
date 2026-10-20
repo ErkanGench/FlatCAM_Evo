@@ -8,6 +8,14 @@ CHANGELOG for FlatCAM Evo
 
 20.10.2026
 
+Headless mode:
+
+- new: flatcam.py --headless runs a FlatScript (--shellfile), Tcl commands (--command) or a Tcl prompt on stdin with no window and no OpenGL (Qt offscreen platform), for build servers and containers with no display; the output goes to stdout, the errors to stderr; exit code 0 done, 1 a Tcl command failed, 2 bad command line, N for 'exit N'
+- new: --command="cmd1; cmd2" runs Tcl commands after the --shellfile, also in GUI mode
+- in headless mode quit_app ends the run and the preferences of the user are not saved; a headless run never hands its arguments to an open FlatCAM window
+- the frozen Windows build has FlatCAM-cli.exe, a console executable for headless runs
+- fixed: the Tcl command interiors plotted its result; a Tcl command makes no plot (only plot_all and plot_objects draw), a test checks every command
+
 Packaging:
 
 - fixed: the application frozen with make_freeze.py (cx_Freeze) did not start: PyOpenGL loads its platform module (OpenGL.platform.win32) by name, so cx_Freeze left it out; the OpenGL package is now included
