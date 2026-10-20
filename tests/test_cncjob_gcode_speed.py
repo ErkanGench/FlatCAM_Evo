@@ -3,6 +3,7 @@
 Run from the repository root:
     .venv/Scripts/python -m pytest tests/test_cncjob_gcode_speed.py -q
 """
+import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -169,6 +170,95 @@ class TestGeometryToolGcode:
     def test_multi_depth_and_extra_cut_simplify_each_path(self, changes):
         __, presimplified, __ = tool_gcode('default', noisy_paths(40), **changes)
         assert not presimplified
+
+
+def old_codes_split(job, gline):
+    """CNCjob.codes_split() before the patterns were compiled once: the reference."""
+    command = {}
+
+    if job.pp_solderpaste_name is not None:
+        if gline.strip() in ('(PASTE_ON)', ';PASTE_ON'):
+            return {'Z': 0}
+        if gline.strip() in ('(PASTE_OFF)', ';PASTE_OFF'):
+            return {'Z': 1}
+        dot = re.match(r'^[;(]PASTE_DOT X([+\-\d.]+) Y([+\-\d.]+) D([+\-\d.]+)', gline)
+        if dot:
+            return {'X': float(dot[1]), 'Y': float(dot[2]), '_paste_dot': float(dot[3])}
+
+    if 'Roland' in job.pp_excellon_name or 'Roland' in job.pp_geometry_name:
+        match_z = re.search(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+        if match_z:
+            command['G'] = 0
+            command['X'] = float(match_z.group(1).replace(" ", "")) * 0.01
+            command['Y'] = float(match_z.group(2).replace(" ", "")) * 0.01
+            command['Z'] = float(match_z.group(3).replace(" ", "")) * 0.025
+    elif 'hpgl' in job.pp_excellon_name or 'hpgl' in job.pp_geometry_name:
+        match_pa = re.search(r"^PA(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+        if match_pa:
+            command['G'] = 0
+            command['X'] = float(match_pa.group(1).replace(" ", "")) / 40
+            command['Y'] = float(match_pa.group(2).replace(" ", "")) / 40
+        match_pen = re.search(r"^(P[U|D])", gline)
+        if match_pen:
+            command['Z'] = 1 if match_pen.group(1) == 'PU' else 0
+        if re.search(r"^SP\d*", gline):
+            command['Z'] = 1
+    elif 'laser' in job.pp_excellon_name.lower() or 'laser' in job.pp_geometry_name.lower() or \
+            (job.pp_solderpaste_name is not None and 'paste' in job.pp_solderpaste_name.lower()):
+        match_lsr = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+        if match_lsr:
+            command['X'] = float(match_lsr.group(1).replace(" ", ""))
+            command['Y'] = float(match_lsr.group(2).replace(" ", ""))
+        match_lsr_pos = re.search(r"^(M0?[3-5])", gline)
+        if match_lsr_pos:
+            command['Z'] = 1 if ('M05' in match_lsr_pos.group(1) or 'M5' in match_lsr_pos.group(1)) else 0
+        match_lsr_pos_2 = re.search(r"^(M10[6|7])", gline)
+        if match_lsr_pos_2:
+            command['Z'] = 1 if 'M107' in match_lsr_pos_2.group(1) else 0
+        match_lsr_pos_3 = re.search(r"^.*(laser OFF).*", gline)
+        if match_lsr_pos_3:
+            command['Z'] = 1 if 'laser OFF' in match_lsr_pos_3.group(1) else 0
+    elif job.pp_solderpaste_name is not None:
+        if 'Paste' in job.pp_solderpaste_name:
+            match_paste = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+            if match_paste:
+                command['X'] = float(match_paste.group(1).replace(" ", ""))
+                command['Y'] = float(match_paste.group(2).replace(" ", ""))
+    else:
+        match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+        while match:
+            command[match.group(1)] = float(match.group(2).replace(" ", ""))
+            gline = gline[match.end():]
+            match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+    return command
+
+
+LINES = [
+    'G0 X1.0000 Y2.0000', 'G1 X-1.5 Y2.5 F1000', 'G01 X1.2 Y-3.4 Z0.5', '  G1X1Y2', 'G00 Z2.0000', 'T1', 'M6',
+    'M3 S500', 'M03 S500', 'M4', 'M5', 'M05', ' M5', 'M106 S255', 'M107', 'M3 S0 (laser OFF)', 'G94', 'G21',
+    '(comment X1 Y2)', '', 'X1.0 Y2.0', 'G1 X 1.25 Y 2.5', 'PA10.0,20.0;', 'PU;', 'PD;', 'SP1;',
+    'Z100.0,200.0,-50.0;', 'Z1.5,2.5;', 'G1 X1.0000Y2.0000', 'M5 (laser OFF)', 'G0 X1e3 Y2', 'G1 X1 Y2 ; laser OFF',
+    '(PASTE_ON)', ';PASTE_OFF', ';PASTE_DOT X1.5 Y-2 D0.4', 'G4 P1.5', 'G1 X1.2.3', 'MOVEABS 1000, 2000',
+]
+NAMES = [
+    ('default', 'default', None), ('default', 'GRBL_laser', None), ('GRBL_laser_z', 'default', None),
+    ('default', 'Roland_MDX_20', None), ('default', 'hpgl', None), ('default', 'default', 'Paste_1'),
+    ('default', 'default', 'other'), ('default', 'Marlin_laser_FAN_pin', None), ('default', 'GRBL_11', None),
+]
+
+
+class TestCodesSplit:
+    @pytest.mark.parametrize('names', NAMES)
+    def test_same_as_before(self, names):
+        job = SimpleNamespace(pp_excellon_name=names[0], pp_geometry_name=names[1], pp_solderpaste_name=names[2])
+        for line in LINES:
+            try:
+                expected = old_codes_split(job, line)
+            except ValueError:
+                with pytest.raises(ValueError):
+                    CNCjob.codes_split(job, line)
+                continue
+            assert CNCjob.codes_split(job, line) == expected, (names, line)
 
 
 class TestMillingCopies:

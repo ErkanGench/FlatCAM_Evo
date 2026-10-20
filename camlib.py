@@ -2851,6 +2851,18 @@ class AttrDict(dict):
         self.__dict__ = self
 
 
+# G-code read back by CNCjob.codes_split(), compiled once: it is called for every line of the G-code
+GCODE_ROLAND_Z_RE = re.compile(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$")
+GCODE_HPGL_PA_RE = re.compile(r"^PA(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$")
+GCODE_HPGL_PEN_RE = re.compile(r"^(P[U|D])")
+GCODE_HPGL_SP_RE = re.compile(r"^SP\d*")
+GCODE_XY_RE = re.compile(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)")
+GCODE_LASER_M345_RE = re.compile(r"^(M0?[3-5])")
+GCODE_LASER_M10X_RE = re.compile(r"^(M10[6|7])")
+# 1 word (letter and number), matched at a position of the line
+GCODE_WORD_RE = re.compile(r'\s*([A-Z])\s*([+\-.\d\s]+)')
+
+
 class CNCjob(Geometry):
     """
     Represents work to be done by a CNC machine.
@@ -6290,7 +6302,7 @@ class CNCjob(Geometry):
                 return {'X': float(dot[1]), 'Y': float(dot[2]), '_paste_dot': float(dot[3])}
 
         if 'Roland' in self.pp_excellon_name or 'Roland' in self.pp_geometry_name:
-            match_z = re.search(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+            match_z = GCODE_ROLAND_Z_RE.search(gline)
             if match_z:
                 command['G'] = 0
                 command['X'] = float(match_z.group(1).replace(" ", "")) * 0.01
@@ -6298,12 +6310,12 @@ class CNCjob(Geometry):
                 command['Z'] = float(match_z.group(3).replace(" ", "")) * 0.025
 
         elif 'hpgl' in self.pp_excellon_name or 'hpgl' in self.pp_geometry_name:
-            match_pa = re.search(r"^PA(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+            match_pa = GCODE_HPGL_PA_RE.search(gline)
             if match_pa:
                 command['G'] = 0
                 command['X'] = float(match_pa.group(1).replace(" ", "")) / 40
                 command['Y'] = float(match_pa.group(2).replace(" ", "")) / 40
-            match_pen = re.search(r"^(P[U|D])", gline)
+            match_pen = GCODE_HPGL_PEN_RE.search(gline)
             if match_pen:
                 if match_pen.group(1) == 'PU':
                     # the value does not matter, only that it is positive so the gcode_parse() know it is > 0,
@@ -6311,18 +6323,19 @@ class CNCjob(Geometry):
                     command['Z'] = 1
                 else:
                     command['Z'] = 0
-            match_toolchange = re.search(r"^SP\d*", gline)
+            match_toolchange = GCODE_HPGL_SP_RE.search(gline)
             if match_toolchange:
                 command['Z'] = 1
 
         elif 'laser' in self.pp_excellon_name.lower() or 'laser' in self.pp_geometry_name.lower() or \
                 (self.pp_solderpaste_name is not None and 'paste' in self.pp_solderpaste_name.lower()):
-            match_lsr = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+            # (the coordinates are searched only in a line that has an X)
+            match_lsr = GCODE_XY_RE.search(gline) if 'X' in gline else None
             if match_lsr:
                 command['X'] = float(match_lsr.group(1).replace(" ", ""))
                 command['Y'] = float(match_lsr.group(2).replace(" ", ""))
 
-            match_lsr_pos = re.search(r"^(M0?[3-5])", gline)
+            match_lsr_pos = GCODE_LASER_M345_RE.match(gline)
             if match_lsr_pos:
                 if 'M05' in match_lsr_pos.group(1) or 'M5' in match_lsr_pos.group(1):
                     # the value does not matter, only that it is positive so the gcode_parse() know it is > 0,
@@ -6331,32 +6344,28 @@ class CNCjob(Geometry):
                 else:
                     command['Z'] = 0
 
-            match_lsr_pos_2 = re.search(r"^(M10[6|7])", gline)
+            match_lsr_pos_2 = GCODE_LASER_M10X_RE.match(gline)
             if match_lsr_pos_2:
                 if 'M107' in match_lsr_pos_2.group(1):
                     command['Z'] = 1
                 else:
                     command['Z'] = 0
 
-            match_lsr_pos_3 = re.search(r"^.*(laser OFF).*", gline)
-            if match_lsr_pos_3:
-                if 'laser OFF' in match_lsr_pos_3.group(1):
-                    command['Z'] = 1
-                else:
-                    command['Z'] = 0
+            if 'laser OFF' in gline:
+                command['Z'] = 1
 
         elif self.pp_solderpaste_name is not None:
             if 'Paste' in self.pp_solderpaste_name:
-                match_paste = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+                match_paste = GCODE_XY_RE.search(gline)
                 if match_paste:
                     command['X'] = float(match_paste.group(1).replace(" ", ""))
                     command['Y'] = float(match_paste.group(2).replace(" ", ""))
         else:
-            match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+            # the words are matched one after the other, from the end of the previous one
+            match = GCODE_WORD_RE.match(gline)
             while match:
                 command[match.group(1)] = float(match.group(2).replace(" ", ""))
-                gline = gline[match.end():]
-                match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+                match = GCODE_WORD_RE.match(gline, match.end())
         return command
 
     def gcode_parse(self, force_parsing=None, tool_data=None):
