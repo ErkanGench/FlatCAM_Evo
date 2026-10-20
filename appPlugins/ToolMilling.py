@@ -34,6 +34,82 @@ if '_' not in builtins.__dict__:
 
 log = logging.getLogger('base')
 
+# The tool data of a Geometry saved by an older app version keeps its milling settings under older names. FlatCAM 8.994
+# uses the name without the 'tools_mill_' prefix (the tool data of real 8.994 projects; FlatCAMGeometry.py of that
+# version). FlatCAM Evo before 12.2023 names the probe depth 'tools_mill_z_pdepth' (renamed in 993a195bd).
+# modern key -> its older names in the tool data
+LEGACY_MILL_DATA_KEYS = {
+    'tools_mill_cutz': ('cutz',),
+    'tools_mill_vtipdia': ('vtipdia',),
+    'tools_mill_vtipangle': ('vtipangle',),
+    'tools_mill_multidepth': ('multidepth',),
+    'tools_mill_depthperpass': ('depthperpass',),
+    'tools_mill_travelz': ('travelz',),
+    'tools_mill_toolchange': ('toolchange',),
+    'tools_mill_toolchangez': ('toolchangez',),
+    'tools_mill_toolchangexy': ('toolchangexy',),
+    'tools_mill_startz': ('startz',),
+    'tools_mill_endz': ('endz',),
+    'tools_mill_endxy': ('endxy',),
+    'tools_mill_feedrate': ('feedrate',),
+    'tools_mill_feedrate_z': ('feedrate_z',),
+    'tools_mill_feedrate_rapid': ('feedrate_rapid',),
+    'tools_mill_spindlespeed': ('spindlespeed',),    # a laser preprocessor: the laser power, as now
+    'tools_mill_spindledir': ('spindledir',),
+    'tools_mill_dwell': ('dwell',),
+    'tools_mill_dwelltime': ('dwelltime',),
+    'tools_mill_ppname_g': ('ppname_g',),
+    'tools_mill_extracut': ('extracut',),
+    'tools_mill_extracut_length': ('extracut_length',),
+    'tools_mill_f_plunge': ('f_plunge',),
+    'tools_mill_z_p_depth': ('tools_mill_z_pdepth', 'z_pdepth'),
+    'tools_mill_feedrate_probe': ('feedrate_probe',),
+    'tools_mill_area_exclusion': ('area_exclusion',),
+    'tools_mill_area_shape': ('area_shape',),
+    'tools_mill_area_strategy': ('area_strategy',),
+    'tools_mill_area_overz': ('area_overz',),
+    'tools_mill_polish': ('polish',),
+    'tools_mill_polish_margin': ('polish_margin',),
+    'tools_mill_polish_overlap': ('polish_overlap',),
+    'tools_mill_polish_method': ('polish_method',),
+    'tools_mill_optimization_type': ('optimization_type',),
+    'tools_mill_search_time': ('search_time',),
+}
+
+# FlatCAM 8.994 keeps these settings in the tool itself, next to its data.
+# modern key -> (older key, the modern value of each older value; None when the value is the same)
+LEGACY_MILL_TOOL_KEYS = {
+    'tools_mill_tooldia': ('tooldia', None),
+    'tools_mill_offset_value': ('offset_value', None),
+    'tools_mill_offset_type': ('offset', {'path': 0, 'in': 1, 'out': 2, 'custom': 3}),
+    'tools_mill_job_type': ('type', {'rough': 0, 'finish': 1, 'iso': 2}),
+    'tools_mill_tool_shape': ('tool_type', {'c1': 0, 'c2': 1, 'c3': 2, 'c4': 3, 'b': 4, 'v': 5}),
+}
+
+
+def legacy_mill_value(tool, key):
+    """
+    Find the milling setting 'key' that a tool made by an older app version keeps under an older name.
+
+    :param tool:    a tool of a Geometry: {'tooldia': ..., 'data': {...}, ...}
+    :param key:     a modern 'tools_mill_*' key
+    :return:        (True, a copy of the value) or (False, None) when the tool has no recognized older setting
+    """
+    data = tool['data']
+    for old_key in LEGACY_MILL_DATA_KEYS.get(key, ()):
+        if old_key in data:
+            return True, deepcopy(data[old_key])
+    if key in LEGACY_MILL_TOOL_KEYS:
+        old_key, values = LEGACY_MILL_TOOL_KEYS[key]
+        if old_key in tool:
+            if values is None:
+                return True, deepcopy(tool[old_key])
+            # the older values are combo box texts ('Path', 'Iso', 'C1'...); 8.994 sometimes saved them with spaces
+            value = values.get(str(tool[old_key]).strip().lower())
+            if value is not None:
+                return True, value
+    return False, None
+
 
 class HybridGeoExc:
     def __init__(self, app):
@@ -3071,15 +3147,16 @@ class ToolMilling(Geometry, AppTool):
         tools_dict = self.sel_tools if tools_dict is None else tools_dict
 
         # the tool data of objects made by older app versions (e.g. a Geometry in an older project) lacks the
-        # options added later; the CNC job reads them, so they get the application value
+        # options added later or keeps them under an older name; the CNC job reads them. A missing option gets the
+        # value of its older name in the tool, and the application value only when the tool has neither.
         for tool in tools_dict.values():
             data = tool['data']
-            if 'tools_mill_tooldia' not in data and 'tooldia' in tool:
-                data['tools_mill_tooldia'] = tool['tooldia']
             for key in AppDefaults.factory_defaults:
-                if key.startswith('tools_mill_') and key not in data:
-                    data[key] = deepcopy(self.app.options.get(
-                        key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
+                if not key.startswith('tools_mill_') or key in data:
+                    continue
+                found, value = legacy_mill_value(tool, key)
+                data[key] = value if found else deepcopy(self.app.options.get(
+                    key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
 
         if not geo_obj.tools:
             seg_x = seg_x if seg_x is not None else float(geo_obj.obj_options['seg_x'])
