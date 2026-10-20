@@ -258,8 +258,9 @@ def test_older_tool_values_are_converted():
     # an older value that is not recognized is not used
     assert legacy_mill_value({'offset': 'Sideways', 'data': {}}, 'tools_mill_offset_type') == (False, None)
     assert legacy_mill_value({'data': {}}, 'tools_mill_cutz') == (False, None)
-    # a job type saved by 8.994 in another language (here Turkish 'Rough'); an 8.994 'Polish' tool already holds the
-    # painted paths, so it is not a Polishing job (that paints the area again)
+    # a translated job type (here Turkish 'Rough'; saved by versions before 2020-11-03, or from a Tools Database entry
+    # saved by them); an 8.994 'Polish' tool already holds the painted paths, so it is not a Polishing job (that paints
+    # the area again)
     assert legacy_mill_value({'type': 'Kaba', 'data': {}}, 'tools_mill_job_type') == (False, None)
     assert legacy_mill_value({'type': 'Polish', 'data': {}}, 'tools_mill_job_type') == (False, None)
     # a valid falsy older value is used
@@ -268,10 +269,11 @@ def test_older_tool_values_are_converted():
 
 @pytest.mark.parametrize('saved, app_value, expected', [
     ('Standard', 2, 0), ('Seed', 2, 1), ('lines', 0, 2), (0, 2, 0), (2, 0, 2),
-    # not recognized, so the application value: a text of 8.994 in Spanish, an index that does not exist, a bool
+    # not recognized, so the application value: a translated text (here Spanish), an index that does not exist, a bool
     ('Semilla', 2, 2), (7, 1, 1), (True, 2, 2)])
 def test_saved_polish_method(saved, app_value, expected):
-    # the FlatCAM 8.994 release saved the text of the polish method combo box, its later builds the index
+    # the development builds of 21-28.10.2020 saved the text of the polish method combo box; the FlatCAM 8.994 release
+    # and FlatCAM Evo save the index
     tool = flatcam_8_994_cutout_tool(polish_method=saved)
 
     gcode, _milling = make_cnc_job(tool, True, **dict(OTHER_OPTIONS, tools_mill_polish_method=app_value))

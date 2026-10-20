@@ -76,14 +76,17 @@ LEGACY_MILL_DATA_KEYS = {
     'tools_mill_search_time': ('search_time',),
 }
 
-# The older value of these settings in the tool data can be the text of a combo box: the FlatCAM 8.994 release saved
-# the polish method as 'Standard', 'Seed' or 'Lines', its later builds and FlatCAM Evo save the index.
+# The older value of these settings in the tool data can be the text of a combo box: the development builds of
+# 21-28.10.2020 (0b94eef84 to eb7de1173, before the FlatCAM 8.994 release) saved the polish method as 'Standard', 'Seed'
+# or 'Lines' (translated in another interface language); the 8.994 release and FlatCAM Evo save the index.
 # modern key -> the modern value of each older text
 LEGACY_MILL_DATA_TEXTS = {
     'tools_mill_polish_method': {'standard': 0, 'seed': 1, 'lines': 2},
 }
 
-# FlatCAM 8.994 keeps these settings in the tool itself, next to its data.
+# FlatCAM 8.994 keeps these settings in the tool itself, next to its data. The offset, type and tool_type are combo box
+# texts. The 8.994 release saves the type in English; a translated type comes from older versions (before bb2bb7fc2,
+# 2020-11-03: 8.993 and older), from a Tools Database entry saved by them, or from the 8.994 polishing (_('Polish')).
 # modern key -> (older key, the modern value of each older value; None when the value is the same)
 LEGACY_MILL_TOOL_KEYS = {
     'tools_mill_tooldia': ('tooldia', None),
@@ -101,7 +104,7 @@ def legacy_index(value, values):
     """
     The modern index of an older combo box value: its English text ('Path', 'Iso', 'C1', 'Standard'...; spaces and case
     are ignored, 8.994 sometimes saved them with spaces) or already a modern index. None when it is not recognized (e.g.
-    a text saved by 8.994 in another language).
+    a translated text).
     """
     if type(value) is int:
         return value if value in values.values() else None
