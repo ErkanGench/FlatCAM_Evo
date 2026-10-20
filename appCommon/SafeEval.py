@@ -15,7 +15,9 @@ meant to hold and nothing else:
 - arithmetic on numbers: + - * / // % **, unary + and -, parentheses (the entries accept "10/3", the Gerber macros
   "$1x0.5+0.1")
 
-Anything else (names, calls, attributes, subscripts, comprehensions, lambdas...) raises ValueError.
+Anything else (names, calls, attributes, subscripts, comprehensions, lambdas...) raises ValueError, as does a
+calculation that would take too long: an exponent above MAX_EXPONENT, or a product or power of integers that could
+have more than MAX_INTEGER_BITS bits (refused before it is calculated).
 """
 
 import ast
@@ -38,6 +40,11 @@ _UNARY = {
 MAX_LENGTH = 100000
 # 9**9**9 would run for minutes
 MAX_EXPONENT = 1000
+# the exponent limit alone does not bound an integer: (2**1000)**1000 has 1000001 bits, ((2**1000)**1000)**1000 has
+# 10**9 (about 10 s and 0.5 GB; with 3 instead of 2 more than 5 minutes). These texts hold coordinates, sizes and
+# flags: a float ends at 1024 bits. Only * and ** can make an integer much larger than their operands (+ and - add
+# 1 bit, // and % do not add any, << is refused).
+MAX_INTEGER_BITS = 4096
 
 
 def safe_eval(text):
@@ -66,6 +73,19 @@ def _number(value):
     return isinstance(value, (int, float, complex)) and not isinstance(value, bool)
 
 
+def _integer_bits(op, left, right):
+    """
+    The most bits that left <op> right can have, for 2 integers, without calculating it: a product has at most the
+    sum of the bit lengths, a power at most the bit length times the exponent. 0 when the result does not grow: a
+    product with 0, a power of 0, 1 or -1, an exponent of 0 (1) or below 0 (a float), the other operators.
+    """
+    if isinstance(op, ast.Mult) and left and right:
+        return left.bit_length() + right.bit_length()
+    if isinstance(op, ast.Pow) and right > 0 and abs(left) > 1:
+        return left.bit_length() * right
+    return 0
+
+
 def _value(node):
     if isinstance(node, ast.Constant):
         return node.value
@@ -90,6 +110,8 @@ def _value(node):
             raise ValueError('arithmetic on a %s and a %s' % (type(left).__name__, type(right).__name__))
         if isinstance(node.op, ast.Pow) and abs(right) > MAX_EXPONENT:
             raise ValueError('exponent too large')
+        if isinstance(left, int) and isinstance(right, int) and _integer_bits(node.op, left, right) > MAX_INTEGER_BITS:
+            raise ValueError('integer result too large')
         try:
             return _BINARY[type(node.op)](left, right)
         except (ZeroDivisionError, OverflowError, TypeError) as err:
