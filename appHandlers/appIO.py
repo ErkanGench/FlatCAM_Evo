@@ -8,7 +8,7 @@ from appEditors.appGerberEditor import AppGerberEditor
 
 from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox, add_case_variants
 from appObjects.ProjectContext import same_path
-from camlib import to_dict, dict2obj, ParseError
+from camlib import dict2obj, ParseError, geometry_wkt_cache, project_json_default
 from defaults import project_options
 from appParsers.ParseHPGL2 import HPGL2
 from appParsers.ParseGerber import Gerber
@@ -1460,6 +1460,8 @@ class appIO(QtCore.QObject):
             self.app.save_in_progress = False
             if was_dirty:
                 self.app.should_we_save = True
+            # a close during the save does not close the app: the project was not saved
+            self.app.close_after_save = False
             self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The project was not saved"), filename))
             return
 
@@ -3183,7 +3185,9 @@ class appIO(QtCore.QObject):
             # the JSON is written as a stream (compressed with Zstandard if requested) to a temporary file
             # that replaces the project file only after a complete write
             try:
-                save_project_file(filename, d, default=to_dict, compression_level=compression_level)
+                # the WKT of all the geometries is made before the JSON (see camlib.geometry_wkt_cache())
+                json_default = project_json_default(geometry_wkt_cache(d))
+                save_project_file(filename, d, default=json_default, compression_level=compression_level)
             except PermissionError:
                 self.log.error("Failed to open file for saving: %s", str(filename))
                 self.inform.emit('[ERROR_NOTCL] %s' % _("The object is used by another application."))
