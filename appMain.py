@@ -64,6 +64,7 @@ from appGUI.themes import dark_style_sheet, light_style_sheet
 from appCommon.Common import ExclusionAreas
 from appCommon.Common import AppLogging
 from appCommon.StartDir import resolve_user_path, resolve_existing_paths
+from appCommon.DataPath import data_path_from_env, DATA_PATH_ENV
 from appCommon.RegisterFileKeywords import RegisterFK, Extensions, KeyWords
 
 from appHandlers.appIO import appIO
@@ -784,6 +785,14 @@ class App(QtCore.QObject):
                 '.FlatCAM'
             )
             self.os = 'unix'
+
+        # a folder set in the FLATCAM_DATA_PATH environment variable is used instead (also instead of the portable one)
+        env_data_path = data_path_from_env()
+        if env_data_path:
+            self.data_path = env_data_path
+            # keep the absolute path: a restart and the relaunch after an update start from the application folder
+            os.environ[DATA_PATH_ENV] = env_data_path
+            self.log.debug('Data folder from FLATCAM_DATA_PATH: ' + self.data_path)
 
         # ################################# Setup folders and files ##################################################
         if not os.path.exists(self.data_path):
