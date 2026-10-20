@@ -7,6 +7,7 @@ from datetime import datetime
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import QSettings, QTimer
 from appMain import App
+from appCommon.DataPath import data_path_from_env
 from appGUI import VisPyPatches
 
 from appGUI.GUIElements import FCMessageBox
@@ -84,6 +85,9 @@ if __name__ == '__main__':
             data_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__))) + '\\config'
     else:
         data_path = os.path.expanduser('~') + '/.FlatCAM'
+
+    # a folder set in the FLATCAM_DATA_PATH environment variable is used instead, as in App
+    data_path = data_path_from_env() or data_path
 
     if not os.path.exists(data_path):
         os.makedirs(data_path)

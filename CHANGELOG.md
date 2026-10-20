@@ -185,6 +185,11 @@ Preprocessors:
 - fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path) (merged PR #20 from ErkanGench)
 - the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters) (merged PR #20 from ErkanGench)
 - fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *' (merged PR #20 from ErkanGench)
+
+Data Folder:
+
+- new: the FLATCAM_DATA_PATH environment variable sets the data folder (preferences, Tools Database, recent files, preprocessors, log and the updater files) instead of %APPDATA%/FlatCAM, ~/.FlatCAM or the portable 'config' folder; a second installation keeps its own settings, also on Linux and macOS, and a test or a script can start with a throw-away folder; a relative path is taken from the working folder at the start
+
 Translations:
 
 - new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language (merged PR #27 from ErkanGench)
