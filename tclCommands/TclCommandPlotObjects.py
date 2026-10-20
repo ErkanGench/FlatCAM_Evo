@@ -9,6 +9,14 @@ from tclCommands.TclCommand import TclCommand
 
 import collections
 
+import gettext
+import appTranslation as fcTranslate
+import builtins
+
+fcTranslate.apply_language('strings')
+if '_' not in builtins.__dict__:
+    _ = gettext.gettext
+
 
 class TclCommandPlotObjects(TclCommand):
     """
@@ -56,6 +64,11 @@ class TclCommandPlotObjects(TclCommand):
         :param unnamed_args:
         :return:
         """
+
+        if getattr(self.app, 'headless', False) is True:
+            # headless mode: there is no canvas, and a Tcl command makes no plot anyway
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Headless mode: nothing is plotted."))
+            return
 
         if 'plot_status' in args:
             if args['plot_status'] is None:
