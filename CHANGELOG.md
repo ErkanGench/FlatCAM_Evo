@@ -8,6 +8,61 @@ CHANGELOG for FlatCAM Evo
 
 20.10.2026
 
+Security:
+
+- fixed: opening a Gerber file, a project or the preferences, pasting from the clipboard or typing in an entry no longer runs Python code; the aperture macro expressions, the tool diameters, the toolchange and end X,Y values, the clipboard coordinates, the entry fields, --shellvar and the portable flag are read with safe_eval() (literals and arithmetic only) in place of eval() (merged PR #15 from ErkanGench)
+
+CNCJob:
+
+- fixed: the G-code file of a multi-tool drill job with a preprocessor without a header (Roland_MDX_20, Roland_MDX_540, ISEL_ICP_CNC) had no drill moves (merged PR #21 from gargamel778)
+
+Milling and Geometry Editor:
+
+- fixed: Apply parameters to all tools read the Excellon tools table also for a Geometry target; it raised an error or copied the data of a wrong tool (merged PR #19 from ErkanGench)
+- fixed: Copy in the Geometry Editor works without a cursor move after the reference click (merged PR #19 from ErkanGench)
+
+Export:
+
+- fixed: File > Export > Export Gerber lists each Gerber file type and All Files again: the ';;' separator and the '*' of the patterns were missing (merged PR #14 from ErkanGench)
+- fixed: the viewBox of an exported SVG contains the drawing; a viewer showed an empty page (merged PR #23 from gargamel778)
+
+Translations:
+
+- fixed: the labels and tooltips of the General preferences are marked with _() where they are defined, so the extractor finds them; the Tools Database accepts an English label, its translation or its index
+- i18n_tool: a bad PO string or line gives an error with the line number; bad brace formatting in a translation is an error of that entry
+
+Machine Sender:
+
+- new: E-Cut USB motion controller support (appPlugins/Common/ecut): connect, jog (also continuous: hold the arrow), streaming, spindle, inputs and outputs, soft limits and the motion settings of the board
+- new: a manual tool change dialog; the spindle stays off until a spindle command
+- new: the connected controllers stop (motion, spindle, outputs) when the application closes or crashes (appCommon/MachineSafety)
+- fixed: GRBL reset waits for the controller banner in a worker; after a stop the controller asks for Home; the status report reads the accessory state (spindle, coolant)
+- fixed: the 3D view of the sender with an empty path raised an error in VisPy
+- hardware tests run only with FLATCAM_TEST_HARDWARE=1; the other tests cannot open a real HID device or serial port
+
+Isolation Plugin:
+
+- fixed: All and Area Selection generate isolation Geometry with Combine unchecked; separate passes use the Gerber object's geometry when no specific geometry is supplied (merged PR #16 from ErkanGench)
+- fixed: the Optimal tool diameter fits in the smallest gap: the proposed diameter was the rounded gap, up to half a unit of the last decimal above the real gap, so Check validity rejected it with "Incomplete isolation." (merged PR #17 from ErkanGench)
+- fixed: Isolation, NCC and Optimal give the same safe tool diameter: they measure the same geometry (no positive buffer) and round the gap to the app decimals; a gap of 0 or less shows "Could not find a safe tool diameter." instead of a 0 diameter; NCC keeps its recommendation below the real gap; Optimal clears the last results when it starts
+
+G-Code preprocessors:
+
+- fixed: the final X-Y move is made at least at Travel Z when End Z is lower; the tool lowers to End Z only after reaching End X-Y, avoiding travel across the board below the configured clearance height (merged PR #12 from ErkanGench)
+- fixed: Line_xyz, ISEL_ICP_CNC and Berta_CNC raised inside the preprocessor, so the start block or the tool change lines were missing from the G-code without an error (merged PR #22 from gargamel778)
+
+Application updater:
+
+- new: updates can be downloaded from GitHub Releases; Digi remains available as the legacy update provider
+- fixed: update offers keep the provider they were checked with; existing custom Digi share URLs are migrated to the legacy provider setting
+
+Laser G-Code:
+
+- fixed: GRBL_laser, GRBL_laser_z and grbl_laser_eleks_drd emit explicit S0 for zero or unset cutting power, preventing laser activation from reusing the controller's previous power; intentional minimum travel power is preserved
+- fixed: the Tcl commands cncjob and drillcncjob accept -spindlespeed as laser power when -las_power is omitted; an explicit -las_power takes priority (merged PR #13 from ErkanGench)
+- new: Drilling and Milling G-Code generation (including the Tcl commands) warns when the 'laser OFF' commands retain a nonzero Min Power; the tooltips explain this behavior; the generated G-Code and intentional minimum-power behavior are unchanged (merged PR #11 from ErkanGench)
+- fixed: the laser Min Power warning names only the tool whose G-code has the 'laser OFF' commands; a single-geometry job with more tools reported the Min Power of an earlier tool for the next one (merged PR #25 from ErkanGench)
+
 Headless mode:
 
 - new: flatcam.py --headless runs a FlatScript (--shellfile), Tcl commands (--command) or a Tcl prompt on stdin with no window and no OpenGL (Qt offscreen platform), for build servers and containers with no display; the output goes to stdout, the errors to stderr; exit code 0 done, 1 a Tcl command failed, 2 bad command line, N for 'exit N'
@@ -127,18 +182,18 @@ CNCJob Plot:
 
 Preprocessors:
 
-- fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path)
-- the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters)
-- fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *'
+- fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path) (merged PR #20 from ErkanGench)
+- the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters) (merged PR #20 from ErkanGench)
+- fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *' (merged PR #20 from ErkanGench)
 Translations:
 
-- new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language
-- check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings
-- stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt
-- new guide for the translators (docs/TRANSLATING.md)
-- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
-- fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
-- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
+- new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language (merged PR #27 from ErkanGench)
+- check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings (merged PR #27 from ErkanGench)
+- stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt (merged PR #27 from ErkanGench)
+- new guide for the translators (docs/TRANSLATING.md) (merged PR #27 from ErkanGench)
+- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form (merged PR #27 from ErkanGench)
+- fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated (merged PR #27 from ErkanGench)
+- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped (merged PR #27 from ErkanGench)
 
 Tests:
 
@@ -151,10 +206,10 @@ Tests:
 - new unit tests for the Film tool (tests/test_film.py)
 - new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
 - new unit tests for the CNC job plot filter and the visibility toggle
-- new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
-- new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py)
-- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
-- new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
+- new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py) (merged PR #20 from ErkanGench)
+- new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py) (merged PR #27 from ErkanGench)
+- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py) (merged PR #27 from ErkanGench)
+- new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py) (merged PR #27 from ErkanGench)
 
 18.10.2026
 

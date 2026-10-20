@@ -296,6 +296,7 @@ class AppUIActions(QtCore.QObject):
                     {'name': "Ali Khalil", 'description': '', 'email': ''},
                     {'name': "Maftei Albert-Alexandru", 'description': '', 'email': ''},
                     {'name': "@gargamel778", 'description': '', 'email': ''},
+                    {'name': "@ErkanGench", 'description': '', 'email': ''},
                 ]
 
                 self.prog_grid_lay = GLay(v_spacing=5, h_spacing=3, c_stretch=[0, 0, 1])
