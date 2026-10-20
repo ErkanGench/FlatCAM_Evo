@@ -171,10 +171,16 @@ class App(QtCore.QObject):
     # #################################### Get Cmd Line Options #####################################################
     cmd_line_shellfile = ''
     cmd_line_shellvar = ''
+    cmd_line_command = ''
+    cmd_line_headless = False
 
     cmd_line_help = (
         "FlatCam.py --shellfile=<cmd_line_shellfile>\n"
-        "FlatCam.py --shellvar=<1,'C:\\path',23>"
+        "FlatCam.py --shellvar=<1,'C:\\path',23>\n"
+        "FlatCam.py --command=\"<Tcl commands, separated by ;>\"\n"
+        "FlatCam.py --headless [--shellfile=...] [--shellvar=...] [--command=...]\n"
+        "    no window and no OpenGL; without --shellfile and --command the Tcl commands are read from stdin.\n"
+        "    Exit code: 0 done, 1 a Tcl command failed, 2 bad command line, N for 'exit N'."
     )
     try:
         # Multiprocessing pool will spawn additional processes with 'multiprocessing-fork' flag
@@ -184,6 +190,8 @@ class App(QtCore.QObject):
             [
                 "shellfile=",
                 "shellvar=",
+                "command=",
+                "headless",
                 "multiprocessing-fork="
             ]
         )
@@ -199,6 +207,10 @@ class App(QtCore.QObject):
             cmd_line_shellfile = arg
         elif opt == '--shellvar':
             cmd_line_shellvar = arg
+        elif opt == '--command':
+            cmd_line_command = arg
+        elif opt == '--headless':
+            cmd_line_headless = True
 
     # The application does os.chdir() into its own folder when it starts, so a relative file name would no longer be
     # found. Make the --shellfile absolute here and refuse to start on a file that cannot be read: a failure later in
@@ -1460,6 +1472,26 @@ class App(QtCore.QObject):
 
         self.log.debug("Finished connecting Signals.")
 
+    def shellvar_commands(self):
+        """
+        :return: the Tcl commands that set shellvar_0, shellvar_1 ... from the --shellvar option
+        """
+        commands = []
+        if not self.cmd_line_shellvar:
+            return commands
+        for cnt, i in enumerate(self.cmd_line_shellvar.split(',')):
+            # noinspection PyBroadException
+            try:
+                command_tcl = eval(i)
+            except Exception:
+                command_tcl = i
+            command_tcl_formatted = 'set shellvar_{nr} "{cmd}"'.format(cmd=str(command_tcl), nr=str(cnt))
+            # if there are Windows paths then replace the path separator with a Unix like one
+            if sys.platform == 'win32':
+                command_tcl_formatted = command_tcl_formatted.replace('\\', '/')
+            commands.append(command_tcl_formatted)
+        return commands
+
     def _setup_startup(self):
         """Phase 1: Show GUI and process startup arguments."""
         # ##################################### Finished the CONSTRUCTOR ############################################
@@ -1494,23 +1526,7 @@ class App(QtCore.QObject):
         # test if the program was started with a script as parameter
         if self.cmd_line_shellvar:
             try:
-                cnt = 0
-                command_tcl = 0
-                for i in self.cmd_line_shellvar.split(','):
-                    if i is not None:
-                        # noinspection PyBroadException
-                        try:
-                            command_tcl = eval(i)
-                        except Exception:
-                            command_tcl = i
-
-                    command_tcl_formatted = 'set shellvar_{nr} "{cmd}"'.format(cmd=str(command_tcl), nr=str(cnt))
-
-                    cnt += 1
-
-                    # if there are Windows paths then replace the path separator with a Unix like one
-                    if sys.platform == 'win32':
-                        command_tcl_formatted = command_tcl_formatted.replace('\\', '/')
+                for command_tcl_formatted in self.shellvar_commands():
                     self.shell.exec_command(command_tcl_formatted, no_echo=True)
             except Exception as ext:
                 print("ERROR: ", ext)
@@ -1534,6 +1550,11 @@ class App(QtCore.QObject):
             except Exception as ext:
                 print("ERROR: ", ext)
                 sys.exit(2)
+
+        if self.cmd_line_command:
+            if self.ui.shell_dock.isHidden():
+                self.ui.shell_dock.show()
+            self.shell.exec_command(self.cmd_line_command)
 
         # accept some type file as command line parameter: FlatCAM project, FlatCAM preferences or scripts
         # the path/file_name must be enclosed in quotes, if it contains spaces
