@@ -10,6 +10,7 @@ from appMain import App
 from appGUI import VisPyPatches
 
 from appGUI.GUIElements import FCMessageBox
+from appCommon.SafeEval import safe_eval
 
 from multiprocessing import freeze_support
 
@@ -72,8 +73,8 @@ if __name__ == '__main__':
 
                 if param[0] == 'portable':
                     try:
-                        portable = eval(param[2])
-                    except NameError:
+                        portable = safe_eval(param[2])
+                    except (NameError, ValueError):
                         portable = False
 
         if portable is False:

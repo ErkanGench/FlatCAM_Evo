@@ -16,6 +16,8 @@ import numpy as np
 from shapely import Point, Polygon
 from shapely.ops import unary_union
 
+from appCommon.SafeEval import safe_eval
+
 import builtins
 import gettext
 
@@ -350,7 +352,7 @@ class AppCanvasEvents(QtCore.QObject):
             self.inform.emit('[success] %s' % _("Copied to clipboard."))
         elif modifiers == ctrl_shift_mod:
             try:
-                old_clipb = eval(self.app.clipboard.text())
+                old_clipb = safe_eval(self.app.clipboard.text())
             except Exception:
                 # self.log.error("App.on_mouse_and_key_modifiers() --> %s" % str(err))
                 old_clipb = None

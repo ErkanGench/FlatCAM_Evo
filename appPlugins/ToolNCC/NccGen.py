@@ -28,6 +28,7 @@ import builtins
 
 from camlib import grace, flatten_shapely_geometry, residual_cleanup
 from appParsers.feature_access import fused_solid
+from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -1655,7 +1656,7 @@ class NccGen:
         # ######################################################################################################
         sorted_tools = []
         try:
-            sorted_tools = [float(eval(dia)) for dia in ncc_tooldia.split(",") if dia != '']
+            sorted_tools = [float(safe_eval(dia)) for dia in ncc_tooldia.split(",") if dia != '']
         except AttributeError:
             if not isinstance(ncc_tooldia, list):
                 sorted_tools = [float(ncc_tooldia)]
@@ -2177,9 +2178,9 @@ class NccGen:
                 )
             )
             try:
-                tool = eval(str(tools_ncc_tools))[0]
+                tool = safe_eval(str(tools_ncc_tools))[0]
             except TypeError:
-                tool = eval(tools_ncc_tools)
+                tool = safe_eval(tools_ncc_tools)
 
             # repurposed flag for final object, geometry_obj_output. True if it has any solid_geometry, False if not.
             app_obj.poly_not_cleared = True

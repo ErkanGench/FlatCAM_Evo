@@ -20,6 +20,7 @@ from shapely.affinity import scale, translate
 from shapely.ops import unary_union
 
 from camlib import Geometry, flatten_shapely_geometry, translate_geometry
+from appCommon.SafeEval import safe_eval
 
 import shapely
 
@@ -121,7 +122,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             else:
                 try:
                     tools_string = self._app_option("tools_mill_tooldia").split(",")
-                    tools_diameters = [eval(a) for a in tools_string if a != '']
+                    tools_diameters = [safe_eval(a) for a in tools_string if a != '']
                     self.obj_options["tools_mill_tooldia"] = tools_diameters[0] if tools_diameters else 0.0
                 except Exception as e:
                     self.app.log.error("FlatCAMObj.GeometryObject.init() --> %s" % str(e))
@@ -385,7 +386,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             try:
                 temp_tools = self.obj_options["tools_mill_tooldia"].split(",")
                 tools_list = [
-                    float(eval(dia)) for dia in temp_tools if dia != ''
+                    float(safe_eval(dia)) for dia in temp_tools if dia != ''
                 ]
             except Exception as e:
                 self.app.log.error("GeometryObject.set_ui() -> At least one tool diameter needed. "
@@ -1073,7 +1074,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         if isinstance(endxy, str):
             endxy = re.sub(r'[()\[\]]', '', endxy)
             if endxy and endxy != '':
-                endxy = [float(eval(a)) for a in endxy.split(",")]
+                endxy = [float(safe_eval(a)) for a in endxy.split(",")]
 
         toolchangez = toolchangez if toolchangez is not None else float(self.obj_options["tools_mill_toolchangez"])
 
@@ -1081,7 +1082,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         if isinstance(toolchangexy, str):
             toolchangexy = re.sub(r'[()\[\]]', '', toolchangexy)
             if toolchangexy and toolchangexy != '':
-                toolchangexy = [float(eval(a)) for a in toolchangexy.split(",")]
+                toolchangexy = [float(safe_eval(a)) for a in toolchangexy.split(",")]
 
         toolchange = toolchange if toolchange is not None else self.obj_options["tools_mill_toolchange"]
 
@@ -1310,7 +1311,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         if self._app_option("tools_mill_toolchangexy") == '':
             self.obj_options['toolchangexy'] = "0.0, 0.0"
         else:
-            coords_xy = [float(eval(coord)) for coord in self._app_option("tools_mill_toolchangexy").split(",")]
+            coords_xy = [float(safe_eval(coord)) for coord in self._app_option("tools_mill_toolchangexy").split(",")]
             if len(coords_xy) < 2:
                 self.app.inform.emit('[ERROR] %s' %
                                      _("The Toolchange X,Y field in Edit -> Preferences "

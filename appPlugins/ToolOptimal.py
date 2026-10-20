@@ -11,6 +11,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     FCEntry, FCTextArea, FCSpinner, OptionalHideInputSection
 from defaults import AppDefaults
 from camlib import grace, flatten_shapely_geometry, polygon_gap_pairs
+from appCommon.SafeEval import safe_eval
 
 import logging
 
@@ -300,7 +301,7 @@ class ToolOptimal(AppTool):
 
         try:
             if self.selected_text != '':
-                loc = eval(self.selected_text)
+                loc = safe_eval(self.selected_text)
             else:
                 return 'fail'
         except Exception as e:
@@ -378,7 +379,7 @@ class ToolOptimal(AppTool):
         cursor.setBlockFormat(tmp)
 
         distance_text = cursor.selectedText()
-        key_in_min_dict = eval(distance_text)
+        key_in_min_dict = safe_eval(distance_text)
         self.on_update_locations_text(dist=key_in_min_dict)
 
     def on_update_locations_text(self, dist):
@@ -413,7 +414,7 @@ class ToolOptimal(AppTool):
     def on_locate_sec_position(self):
         try:
             if self.selected_locations_text != '':
-                loc = eval(self.selected_locations_text)
+                loc = safe_eval(self.selected_locations_text)
             else:
                 return
         except Exception as e:

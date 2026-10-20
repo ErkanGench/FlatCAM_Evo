@@ -65,6 +65,7 @@ from appCommon.Common import ExclusionAreas
 from appCommon.Common import AppLogging
 from appCommon.StartDir import resolve_user_path, resolve_existing_paths
 from appCommon.RegisterFileKeywords import RegisterFK, Extensions, KeyWords
+from appCommon.SafeEval import safe_eval
 
 from appHandlers.appIO import appIO
 from appHandlers.appEdit import appEditor
@@ -1496,7 +1497,7 @@ class App(QtCore.QObject):
         for cnt, i in enumerate(self.cmd_line_shellvar.split(',')):
             # noinspection PyBroadException
             try:
-                command_tcl = eval(i)
+                command_tcl = safe_eval(i)
             except Exception:
                 command_tcl = i
             command_tcl_formatted = 'set shellvar_{nr} "{cmd}"'.format(cmd=str(command_tcl), nr=str(cnt))
