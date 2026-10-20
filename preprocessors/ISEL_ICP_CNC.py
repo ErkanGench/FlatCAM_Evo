@@ -117,17 +117,11 @@ class ISEL_ICP_CNC(PreProc):
 
     def toolchange_code(self, p):
         f_plunge = p.f_plunge
-        no_drills = 1
 
         toolC_formatted = '%.*f' % (p.decimals, p.toolC)
 
         if str(p['obj_options']['type']) == 'Excellon':
-            for i in p['obj_options']['Tools_in_use']:
-                if i[0] == p.tool:
-                    no_drills = i[2]
-
-            gcode = "GETTOOL {tool}\n; Changed to Tool Dia = {toolC}".format(tool=int(p.tool), t_drills=no_drills,
-                                                                             toolC=toolC_formatted)
+            gcode = "GETTOOL {tool}\n; Changed to Tool Dia = {toolC}".format(tool=int(p.tool), toolC=toolC_formatted)
 
             if f_plunge is True:
                 gcode += '\nFASTABS Z' + str(int(p.z_move * 1000))
