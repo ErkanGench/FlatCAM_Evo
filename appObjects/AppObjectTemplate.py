@@ -211,8 +211,7 @@ class FlatCAMObj(QtCore.QObject):
         self.kind = None  # Override with proper name
 
         self.shapes = self.app.plotcanvas.new_shape_group()
-        self.mark_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool,
-                                           fcoptions=self.app.options)
+        self.mark_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
 
         self.item = None  # Link with project view item
 

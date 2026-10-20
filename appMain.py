@@ -1157,15 +1157,15 @@ class App(QtCore.QObject):
         # Storage for shapes, storage that can be used by FlatCAm tools for utility geometry
         # VisPy visuals
         try:
-            self.tool_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+            self.tool_shapes = self.plotcanvas.new_shape_collection(layers=1)
         except AttributeError:
             self.tool_shapes = None
 
         # Storage for Hover Shapes
-        self.hover_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+        self.hover_shapes = self.plotcanvas.new_shape_collection(layers=1)
 
         # Storage for Selection shapes
-        self.sel_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+        self.sel_shapes = self.plotcanvas.new_shape_collection(layers=1)
         # #############################################################################################################
 
         end_plot_time = time.time()
