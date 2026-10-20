@@ -2238,8 +2238,11 @@ class Geometry(object):
         storage.remove(geo)
 
         # ponytail: accumulate coordinates; materialize once per completed path.
-        geo_coords = list(geo.coords)
-        current_pt = geo_coords[-1]
+        # The coordinates are kept as NumPy arrays: a LineString made from 1 array is several times faster than one
+        # made from a list of coordinate tuples, and get_coordinates() is faster than the coords tuples.
+        include_z = geo.has_z
+        geo_coords = [shapely.get_coordinates(geo, include_z=include_z)]
+        current_pt = tuple(geo_coords[-1][-1].tolist())
         boundary_edge = boundary.boundary
         # Each walk is tested against the full boundary: prepared geometries test it in O(log n), not O(n).
         shapely.prepare(boundary)
@@ -2253,13 +2256,13 @@ class Geometry(object):
                 pt, candidate = storage.nearest(current_pt)
                 storage.remove(candidate)
 
-                candidate_coords = list(candidate.coords)
+                candidate_coords = shapely.get_coordinates(candidate, include_z=include_z)
 
                 # If last point in geometry is the nearest
                 # then reverse coordinates.
                 # but prefer the first one if last == first
-                if pt != candidate_coords[0] and pt == candidate_coords[-1]:
-                    candidate_coords.reverse()
+                if pt != tuple(candidate_coords[0].tolist()) and pt == tuple(candidate_coords[-1].tolist()):
+                    candidate_coords = candidate_coords[::-1]
 
                 # Straight line from current_pt to pt.
                 # Is the toolpath inside the geometry?
@@ -2274,24 +2277,24 @@ class Geometry(object):
                     # log.debug("Walk to path #%d is inside. Joining." % path_count)
 
                     # Completely inside. Append...
-                    geo_coords.extend(candidate_coords)
+                    geo_coords.append(candidate_coords)
 
                 else:
 
                     # Have to lift tool. End path.
                     # log.debug("Path #%d not within boundary. Next." % path_count)
                     # optimized_paths.append(geo)
-                    optimized_paths.insert(LineString(geo_coords))
-                    geo_coords = candidate_coords
+                    optimized_paths.insert(LineString(np.concatenate(geo_coords)))
+                    geo_coords = [candidate_coords]
 
-                current_pt = geo_coords[-1]
+                current_pt = tuple(geo_coords[-1][-1].tolist())
 
                 # Next
                 # pt, geo = storage.nearest(current_pt)
 
         except StopIteration:  # Nothing left in storage.
             # pass
-            optimized_paths.insert(LineString(geo_coords))
+            optimized_paths.insert(LineString(np.concatenate(geo_coords)))
 
         return optimized_paths
 

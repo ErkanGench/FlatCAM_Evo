@@ -1,7 +1,8 @@
 """Run: python tests/test_clearing_speed.py
 
 The seed clearing makes its rings in bands and cuts them from the margin without the holes and polygons that the
-rings of a band cannot touch. It must give the paths of the ring-by-ring cut, bit for bit.
+rings of a band cannot touch; paint_connect() joins the paths as NumPy coordinate arrays. Both must give the paths of
+the ring-by-ring cut and of the joining with coordinate tuples, bit for bit.
 """
 import math
 import os
@@ -18,11 +19,12 @@ try:
     import camlib
     import numpy as np
     import shapely
-    from shapely import MultiPolygon, Point, Polygon, box
+    from shapely import LineString, MultiPolygon, Point, Polygon, box
 finally:
     sys.argv = _saved_argv
 
 from test_clearing_paths import make_geometry
+from test_paint_geometry import storage_of
 
 PAD_CENTERS = [(x, y) for x in range(3, 29, 3) for y in range(3, 20, 3)]
 # (getattr and create=True: on the code before the bands the seed tests run too, and show its ring-by-ring cut)
@@ -74,6 +76,36 @@ def seed_rings_one_by_one(polygon, tooldia, steps, overlap=0.15, simplify_tol=0.
         paths += camlib.flatten_shapely_geometry(path, simplify_tolerance=simplify_tol)
         radius += tooldia * (1 - overlap)
     return paths, rings
+
+
+def connect_with_tuples(storage, boundary, tooldia, max_walk=None):
+    """paint_connect() with the joined path kept as a list of coordinate tuples (the code before the arrays)."""
+    max_walk = max_walk or 10 * tooldia
+    result = []
+    try:
+        pt, geo = storage.nearest((0, 0))
+    except StopIteration:
+        return result
+    storage.remove(geo)
+    coords = list(geo.coords)
+    boundary_edge = boundary.boundary
+    try:
+        while True:
+            pt, candidate = storage.nearest(coords[-1])
+            storage.remove(candidate)
+            candidate_coords = list(candidate.coords)
+            if pt != candidate_coords[0] and pt == candidate_coords[-1]:
+                candidate_coords.reverse()
+            walk = LineString([coords[-1], pt]) if coords[-1] != pt else Point(pt)
+            if (walk.length < max_walk and boundary.contains(walk)
+                    and not shapely.dwithin(walk, boundary_edge, tooldia / 2 - 1e-9)):
+                coords.extend(candidate_coords)
+            else:
+                result.append(LineString(coords))
+                coords = candidate_coords
+    except StopIteration:
+        result.append(LineString(coords))
+    return result
 
 
 class TestSeedBands(unittest.TestCase):
@@ -166,6 +198,44 @@ class TestSeedBands(unittest.TestCase):
         self.assertEqual([h.wkb for h in kept_holes], [h.wkb for h in holes if h.intersects(annulus)])
         self.assertEqual([i.wkb for i in kept_islands], [i.wkb for i in islands if i.intersects(annulus)])
         self.assertTrue(0 < len(kept_holes) < len(holes) and 0 < len(kept_islands) < len(islands))
+
+
+class TestConnectArrays(unittest.TestCase):
+    def setUp(self):
+        self.geometry = make_geometry()
+
+    def test_joins_the_paths_of_the_coordinate_tuples(self):
+        polygon = board()
+        for method in ('clear_polygon_seed', 'clear_polygon_lines', 'clear_polygon_shrink'):
+            with self.subTest(method=method):
+                paths = list(getattr(self.geometry, method)(polygon, 0.4, 64, connect=False).get_objects())
+                expected = connect_with_tuples(storage_of(paths), polygon, 0.4)
+                joined = list(camlib.Geometry.paint_connect(storage_of(paths), polygon, 0.4, 64).get_objects())
+                self.assertLess(len(joined), len(paths))
+                self.assertEqual([p.wkb for p in joined], [p.wkb for p in expected])
+
+    def test_joined_paths_are_made_from_coordinate_arrays(self):
+        paths = [LineString([(i + 1, 1), (i + 1.2, 1.1), (i + 1.5, 1)]) for i in range(20)]
+        arguments = []
+
+        def recorded(coords):
+            arguments.append(coords)
+            return LineString(coords)
+
+        with patch.object(camlib, 'LineString', side_effect=recorded):
+            result = camlib.Geometry.paint_connect(storage_of(paths), box(0, 0, 22, 3), 0.2, 64)
+        self.assertEqual(len(list(result.get_objects())), 1)
+        # the walks are made from 2 points; the joined path from 1 array, not from coordinate tuples
+        joined = [coords for coords in arguments if len(coords) > 2]
+        self.assertEqual(len(joined), 1)
+        self.assertIsInstance(joined[0], np.ndarray)
+
+    def test_closed_rings_are_joined_as_paths(self):
+        rings = [box(1, 1, 2, 2).exterior, box(1, 2.5, 2, 3.5).exterior]
+        joined = list(camlib.Geometry.paint_connect(storage_of(rings), box(0, 0, 3, 5), 0.2, 64).get_objects())
+        self.assertEqual(len(joined), 1)
+        self.assertIsInstance(joined[0], LineString)
+        self.assertEqual(list(joined[0].coords), list(rings[0].coords) + list(rings[1].coords))
 
 
 if __name__ == '__main__':
