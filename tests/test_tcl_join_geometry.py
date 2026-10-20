@@ -12,6 +12,7 @@ is not iterable", also in Edit -> Join. The tests use the headless fixtures of t
 from copy import deepcopy
 from unittest.mock import Mock
 
+import pytest
 from shapely.geometry import MultiLineString, MultiPolygon, box
 
 from appObjects.GeometryObject import GeometryObject
@@ -67,6 +68,8 @@ def tool_geometry(obj):
 def test_multigeo_objects_are_joined_as_in_the_gui(app):
     a, b = isolation(app, 'a'), isolation(app, 'b')
     assert a.multigeo and b.multigeo
+    a.tools[1]['data'].update({'name': 'a', 'xmin': 0.0})
+    b.tools[1]['data'].update({'name': 'b', 'xmin': 100.0})
 
     ret, created = run_join(app, {'a': a, 'b': b}, '-outname', 'joined')
     assert ret != 'fail'
@@ -143,3 +146,55 @@ def test_multigeo_and_singlegeo_objects_are_not_joined(app):
     assert ret == 'fail'
     assert created == {}
     app.app_obj.new_object.assert_not_called()
+
+
+@pytest.mark.parametrize('use_tcl', [True, False], ids=['tcl', 'gui'])
+@pytest.mark.parametrize('parameter,values', [
+    ('tools_mill_cutz', (-0.05, -1.6)),
+    ('tools_mill_feedrate', (100.0, 300.0)),
+    ('tools_mill_ppname_g', ('default', 'GRBL_11')),
+], ids=['depth', 'feedrate', 'preprocessor'])
+def test_fusion_preserves_different_machining_parameters(app, use_tcl, parameter, values):
+    a = single_geo(app, 'a', [box(0, 0, 1, 1)])
+    b = single_geo(app, 'b', [box(2, 0, 3, 1)])
+    a.multigeo = b.multigeo = True
+    a.tools[1]['data'][parameter], b.tools[1]['data'][parameter] = values
+
+    if use_tcl:
+        ret, created = run_join(app, {'a': a, 'b': b}, '-outname', 'joined')
+        assert ret != 'fail'
+        joined = created['joined']
+    else:
+        joined = GeometryObject('joined', app)
+        GeometryObject.merge([a, b], joined, multi_geo=True, fuse_tools=True, log=app.log)
+
+    assert joined.multigeo is True
+    assert len(joined.tools) == 2
+    assert [tool['data'][parameter] for tool in joined.tools.values()] == list(values)
+    assert tool_geometry(joined) == {1: tool_geometry(a)[1], 2: tool_geometry(b)[1]}
+
+
+@pytest.mark.parametrize('use_tcl', [True, False], ids=['tcl', 'gui'])
+@pytest.mark.parametrize('different_depths', [False, True], ids=['equal', 'different'])
+def test_fusion_preserves_singlegeo_tools_with_empty_geometry(app, use_tcl, different_depths):
+    a = single_geo(app, 'a', [box(0, 0, 1, 1)])
+    b = single_geo(app, 'b', [box(2, 0, 3, 1)])
+    # MultiGeo -> SingleGeo conversion keeps the geometry on the object and clears each tool's geometry.
+    a.tools[1]['solid_geometry'] = []
+    b.tools[1]['solid_geometry'] = []
+    a.tools[1]['data']['tools_mill_cutz'] = -0.05
+    b.tools[1]['data']['tools_mill_cutz'] = -1.6 if different_depths else -0.05
+
+    if use_tcl:
+        ret, created = run_join(app, {'a': a, 'b': b}, '-outname', 'joined')
+        assert ret != 'fail'
+        joined = created['joined']
+    else:
+        joined = GeometryObject('joined', app)
+        GeometryObject.merge([a, b], joined, multi_geo=False, fuse_tools=True, log=app.log)
+
+    assert joined.multigeo is False
+    assert sorted(g.bounds for g in joined.solid_geometry) == [(0.0, 0.0, 1.0, 1.0), (2.0, 0.0, 3.0, 1.0)]
+    assert [tool['data']['tools_mill_cutz'] for tool in joined.tools.values()] == \
+        ([-0.05, -1.6] if different_depths else [-0.05])
+    assert all(tool['solid_geometry'] == [] for tool in joined.tools.values())
