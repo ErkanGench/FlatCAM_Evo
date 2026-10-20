@@ -76,6 +76,13 @@ LEGACY_MILL_DATA_KEYS = {
     'tools_mill_search_time': ('search_time',),
 }
 
+# The older value of these settings in the tool data can be the text of a combo box: the FlatCAM 8.994 release saved
+# the polish method as 'Standard', 'Seed' or 'Lines', its later builds and FlatCAM Evo save the index.
+# modern key -> the modern value of each older text
+LEGACY_MILL_DATA_TEXTS = {
+    'tools_mill_polish_method': {'standard': 0, 'seed': 1, 'lines': 2},
+}
+
 # FlatCAM 8.994 keeps these settings in the tool itself, next to its data.
 # modern key -> (older key, the modern value of each older value; None when the value is the same)
 LEGACY_MILL_TOOL_KEYS = {
@@ -90,14 +97,25 @@ LEGACY_MILL_TOOL_KEYS = {
 LEGACY_PREPROCESSOR_NAMES = {'grbl_11': 'GRBL_11', 'line_xyz': 'Line_xyz', 'Z_laser': 'GRBL_laser_z'}
 
 
+def legacy_index(value, values):
+    """
+    The modern index of an older combo box value: its English text ('Path', 'Iso', 'C1', 'Standard'...; spaces and case
+    are ignored, 8.994 sometimes saved them with spaces) or already a modern index. None when it is not recognized (e.g.
+    a text saved by 8.994 in another language).
+    """
+    if type(value) is int:
+        return value if value in values.values() else None
+    return values.get(str(value).strip().lower())
+
+
 def legacy_mill_value(tool, key):
     """
     Find the milling setting 'key' that a tool made by an older app version keeps under an older name.
 
     :param tool:    a tool of a Geometry: {'tooldia': ..., 'data': {...}, ...}
     :param key:     a modern 'tools_mill_*' key
-    :return:        (True, a copy of the value; a renamed preprocessor gets its current name) or (False, None) when the
-                    tool has no recognized older setting
+    :return:        (True, a copy of the value; a renamed preprocessor gets its current name, a text its modern index)
+                    or (False, None) when the tool has no recognized older setting
     """
     data = tool['data']
     for old_key in LEGACY_MILL_DATA_KEYS.get(key, ()):
@@ -105,14 +123,17 @@ def legacy_mill_value(tool, key):
             value = deepcopy(data[old_key])
             if key == 'tools_mill_ppname_g' and isinstance(value, str):
                 value = LEGACY_PREPROCESSOR_NAMES.get(value, value)
+            elif key in LEGACY_MILL_DATA_TEXTS:
+                value = legacy_index(value, LEGACY_MILL_DATA_TEXTS[key])
+                if value is None:
+                    return False, None
             return True, value
     if key in LEGACY_MILL_TOOL_KEYS:
         old_key, values = LEGACY_MILL_TOOL_KEYS[key]
         if old_key in tool:
             if values is None:
                 return True, deepcopy(tool[old_key])
-            # the older values are combo box texts ('Path', 'Iso', 'C1'...); 8.994 sometimes saved them with spaces
-            value = values.get(str(tool[old_key]).strip().lower())
+            value = legacy_index(tool[old_key], values)
             if value is not None:
                 return True, value
     return False, None

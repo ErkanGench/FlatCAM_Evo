@@ -6,7 +6,8 @@ key: its tool data keeps the settings under older names ('cutz', 'feedrate'...) 
 'offset', 'offset_value', 'type' and 'tool_type'. The CNC job failed with a KeyError.
 
 A missing option now gets, in this order: the value of its older name in the tool, the application value. A saved
-preprocessor that was renamed gets its current name; one that the app does not have counts as absent.
+preprocessor that was renamed gets its current name; one that the app does not have counts as absent. An older combo
+box text gets its modern index; a text that is not recognized counts as absent.
 """
 import os
 from copy import deepcopy
@@ -18,7 +19,8 @@ import pytest
 from PyQt6 import QtWidgets
 from shapely import LineString
 
-from appPlugins.ToolMilling import ToolMilling, LEGACY_MILL_DATA_KEYS, LEGACY_MILL_TOOL_KEYS, legacy_mill_value
+from appPlugins.ToolMilling import (ToolMilling, LEGACY_MILL_DATA_KEYS, LEGACY_MILL_DATA_TEXTS, LEGACY_MILL_TOOL_KEYS,
+                                     legacy_mill_value)
 from camlib import CNCjob
 from defaults import AppDefaults
 from preprocessors.GRBL_11 import GRBL_11
@@ -256,8 +258,28 @@ def test_older_tool_values_are_converted():
     # an older value that is not recognized is not used
     assert legacy_mill_value({'offset': 'Sideways', 'data': {}}, 'tools_mill_offset_type') == (False, None)
     assert legacy_mill_value({'data': {}}, 'tools_mill_cutz') == (False, None)
+    # a job type saved by 8.994 in another language (here Turkish 'Rough'); an 8.994 'Polish' tool already holds the
+    # painted paths, so it is not a Polishing job (that paints the area again)
+    assert legacy_mill_value({'type': 'Kaba', 'data': {}}, 'tools_mill_job_type') == (False, None)
+    assert legacy_mill_value({'type': 'Polish', 'data': {}}, 'tools_mill_job_type') == (False, None)
     # a valid falsy older value is used
     assert legacy_mill_value({'data': {'spindlespeed': 0}}, 'tools_mill_spindlespeed') == (True, 0)
+
+
+@pytest.mark.parametrize('saved, app_value, expected', [
+    ('Standard', 2, 0), ('Seed', 2, 1), ('lines', 0, 2), (0, 2, 0), (2, 0, 2),
+    # not recognized, so the application value: a text of 8.994 in Spanish, an index that does not exist, a bool
+    ('Semilla', 2, 2), (7, 1, 1), (True, 2, 2)])
+def test_saved_polish_method(saved, app_value, expected):
+    # the FlatCAM 8.994 release saved the text of the polish method combo box, its later builds the index
+    tool = flatcam_8_994_cutout_tool(polish_method=saved)
+
+    gcode, _milling = make_cnc_job(tool, True, **dict(OTHER_OPTIONS, tools_mill_polish_method=app_value))
+
+    assert tool['data']['tools_mill_polish_method'] == expected
+    assert type(tool['data']['tools_mill_polish_method']) is int
+    # the other saved settings are kept
+    assert 'G01 Z-2.4000' in gcode and 'G01 F120.00' in gcode
 
 
 def test_older_names_are_application_options():
@@ -265,6 +287,8 @@ def test_older_names_are_application_options():
         assert key in MILL_OPTIONS, key
     older = [name for names in LEGACY_MILL_DATA_KEYS.values() for name in names]
     assert len(older) == len(set(older))
+    # the older texts are converted for an older name of the tool data
+    assert set(LEGACY_MILL_DATA_TEXTS) <= set(LEGACY_MILL_DATA_KEYS)
 
 
 def test_values_from_the_application_options_are_copies():
