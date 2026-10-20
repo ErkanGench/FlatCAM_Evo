@@ -6,6 +6,19 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+20.10.2026
+
+Packaging:
+
+- fixed: the application frozen with make_freeze.py (cx_Freeze) did not start: PyOpenGL loads its platform module (OpenGL.platform.win32) by name, so cx_Freeze left it out; the OpenGL package is now included
+- fixed: the frozen application did not find its data: assets, locale, preprocessors and config are now copied into lib/, next to the modules, where the application looks for them (as the old freeze script did); config/configuration.txt was not copied at all
+- fixed: the frozen application logged "No translation file found for domain: 'strings'" at each start: it looked for the translations in library.zip first; the existing locale folder is now used at the first try
+
+Tcl and command line:
+
+- fixed: a packaged application started in its install folder (a Start Menu shortcut) wrote relative file names into the install folder, because with cx_Freeze the modules are in its lib/ subfolder; the folder of the executable (the .app bundle on macOS) now also counts as the application, and the home folder is used
+- fixed: quit_app in a --shellfile hid the window but did not end the application: the script runs before the Qt event loop starts, and QApplication.quit() does nothing then; the quit is now also queued for the event loop
+
 19.10.2026
 
 DXF and SVG Import:
@@ -368,8 +381,8 @@ Plot 3D:
 
 Tcl and command line:
 
-- fixed: a relative file name in a Tcl command (write_gcode, save_project, open_gerber, export_svg ...) was resolved against the application folder, because the application changes into it at startup; for a packaged application that wrote into the application bundle and broke its code signature. It is now resolved against the folder FlatCAM was started from (the home folder when that is the root folder, a folder inside the Windows folder, or the application itself); after set_path or a Tcl cd the new working folder is used; a leading ~ is expanded
-- fixed: a relative --shellfile or a relative file to open given on the command line was not found for the same reason; an unreadable --shellfile now ends the program with an error before the GUI starts (it started the GUI and then crashed on exit)
+- fixed: a relative file name in a Tcl command (write_gcode, save_project, open_gerber, export_svg ...) was resolved against the application folder, because the application changes into it at startup; for a packaged application that wrote into the application bundle and broke its code signature. It is now resolved against the folder FlatCAM was started from (the home folder when that is the root folder, a folder inside the Windows folder, or the application itself); after set_path or a Tcl cd the new working folder is used; a leading ~ is expanded (merged PR #10 from gargamel778)
+- fixed: a relative --shellfile or a relative file to open given on the command line was not found for the same reason; an unreadable --shellfile now ends the program with an error before the GUI starts (it started the GUI and then crashed on exit) (merged PR #10 from gargamel778)
 
 16.10.2026
 

@@ -357,7 +357,7 @@ class AppLifecycle(QtCore.QObject):
         :return: bool
         """
         from PyQt6.QtCore import QSettings
-        from PyQt6 import QtWidgets
+        from PyQt6 import QtCore, QtWidgets
 
         if not self._confirm_tools_database():
             return False
@@ -475,6 +475,10 @@ class AppLifecycle(QtCore.QObject):
 
         # quit app directly - do NOT call back to App
         QtWidgets.QApplication.quit()
+        # QApplication.quit() does nothing while the event loop does not run: a --shellfile runs in App.__init__(),
+        # before app.exec(), and with only the line above `quit_app` left a hidden application running. The queued
+        # quit ends the application as soon as the event loop starts.
+        QtCore.QTimer.singleShot(0, QtWidgets.QApplication.quit)
         return True
 
     # --------------------------------------------------------------------------

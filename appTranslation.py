@@ -52,17 +52,10 @@ def isAdmin():
 
 def load_languages():
     available_translations = []
-    languages_path_search = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'locale')
-
     try:
-        available_translations = next(os.walk(languages_path_search))[1]
+        available_translations = next(os.walk(locale_dir()))[1]
     except StopIteration:
-        if not available_translations:
-            languages_path_search = os.path.join(str(Path(__file__).parents[1]), 'locale')
-            try:
-                available_translations = next(os.walk(languages_path_search))[1]
-            except StopIteration:
-                pass
+        pass
 
     for lang in available_translations:
         try:
@@ -79,6 +72,17 @@ def languages_dir():
 
 def languages_dir_cx_freeze():
     return os.path.join(Path(__file__).parents[1], 'locale')
+
+
+def locale_dir():
+    """
+    :return: the folder with the translations. From the source it is next to this module; frozen with cx_Freeze this
+    module is inside lib/library.zip and the folder is lib/locale.
+    """
+    folder = languages_dir()
+    if os.path.isdir(folder):
+        return folder
+    return languages_dir_cx_freeze()
 
 
 def on_language_apply_click(app, restart=False):
@@ -164,17 +168,10 @@ def apply_language(domain, lang=None):
         return "no language"
     else:
         try:
-            current_lang = gettext.translation(str(domain), localedir=languages_dir(), languages=[lang_code])
+            current_lang = gettext.translation(str(domain), localedir=locale_dir(), languages=[lang_code])
             current_lang.install()
         except Exception as e:
-            log.error("FlatCAMTranslation.apply_language() --> %s. Perhaps is Cx_freeze-ed?" % str(e))
-            try:
-                current_lang = gettext.translation(str(domain),
-                                                   localedir=languages_dir_cx_freeze(),
-                                                   languages=[lang_code])
-                current_lang.install()
-            except Exception as e:
-                log.error("FlatCAMTranslation.apply_language() --> %s" % str(e))
+            log.error("FlatCAMTranslation.apply_language() --> %s" % str(e))
 
         return name
 

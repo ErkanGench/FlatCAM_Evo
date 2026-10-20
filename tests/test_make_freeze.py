@@ -103,8 +103,9 @@ class TestMakeFreeze(unittest.TestCase):
         include_files = make_freeze.get_main_include_files(root)
 
         destinations = {Path(destination).as_posix() for _, destination in include_files}
-        self.assertEqual({"assets", "locale", "preprocessors"}, destinations)
-        self.assertNotIn("docs", destinations)
+        # the frozen application looks for its data next to its modules, in lib/
+        self.assertEqual({"lib/assets", "lib/locale", "lib/preprocessors"}, destinations)
+        self.assertNotIn("lib/docs", destinations)
 
     def test_freezers_keep_main_and_updater_stages_independent(self):
         calls = []
@@ -122,7 +123,9 @@ class TestMakeFreeze(unittest.TestCase):
         self.assertEqual(2, len(calls))
         self.assertEqual(main_stage, calls[0].target_dir)
         self.assertEqual(updater_stage, calls[1].target_dir)
-        self.assertEqual(["services.updater"], calls[0].kwargs["packages"])
+        self.assertEqual("services.updater", calls[0].kwargs["packages"][0])
+        # PyOpenGL loads its platform module by name: without the package the frozen app does not start
+        self.assertIn("OpenGL", calls[0].kwargs["packages"])
         self.assertEqual([], calls[1].kwargs["packages"])
         self.assertEqual(["services.updater.recovery"], calls[1].kwargs["includes"])
         self.assertTrue((main_stage / "FlatCAM.exe").is_file())

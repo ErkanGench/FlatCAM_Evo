@@ -119,6 +119,27 @@ class TestComputeStartDir:
         cwd = os.path.join(HOME, 'Windows', 'System32')
         assert compute_start_dir(cwd, self.app_dir, frozen=True, home=HOME, system_root=None) == cwd
 
+    def test_the_folder_of_the_executable_gives_home(self):
+        # cx_freeze: the modules (app_dir) are in lib/, a Start Menu shortcut starts in the install folder above it
+        install = os.path.join(HOME, 'Program Files', 'FlatCAM')
+        lib = os.path.join(install, 'lib')
+        assert compute_start_dir(install, lib, frozen=True, home=HOME, exe_dir=install) == HOME
+        assert compute_start_dir(lib, lib, frozen=True, home=HOME, exe_dir=install) == HOME
+        # a source checkout is not packaged: the folder of the Python executable plays no role
+        assert compute_start_dir(install, lib, frozen=False, home=HOME, exe_dir=install) == install
+
+
+class TestExecutableDir:
+    def test_the_folder_of_the_executable(self, monkeypatch):
+        exe = os.path.join(HOME, 'FlatCAM', 'FlatCAM.exe')
+        monkeypatch.setattr(StartDir.sys, 'executable', exe)
+        assert same_folder(StartDir._executable_dir(), os.path.dirname(exe))
+
+    def test_the_macos_bundle_is_the_application(self, monkeypatch):
+        bundle = os.path.join(HOME, 'Applications', 'FlatCAM.app')
+        monkeypatch.setattr(StartDir.sys, 'executable', os.path.join(bundle, 'Contents', 'MacOS', 'FlatCAM'))
+        assert same_folder(StartDir._executable_dir(), bundle)
+
 
 class TestWindowsPathsEmulated:
     """the rules of Windows paths, run with ntpath on every platform"""
