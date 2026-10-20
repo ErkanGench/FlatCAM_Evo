@@ -226,6 +226,12 @@ Code Editor:
 
 - the code editor (Source Editor, G-code Editor, Script Editor) highlights only the lines that are shown, the other lines when they are scrolled into view; Qt highlighted every line when the text was set: the View Source of a G-code of 94000 lines took 11 s, now 0.9 s; Print and Print Preview highlight every line first
 
+Project Tab:
+
+- fixed: View Source opened an empty Source Editor and left the app busy for an object without a source, e.g. a Geometry made by a tool; it shows a warning now
+- the context menu shows only the entries that apply to the selected objects: View Source for 1 object with a source, Edit and Save for 1 object (Batch Save for several CNCJob objects), Set Color for Gerber and Excellon objects, Enable Plot or Disable Plot by the plot state
+- fixed: the context menu entries hidden for a Script or a Document object stayed hidden for the next objects
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -246,6 +252,7 @@ Tests:
 - new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
 - new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
 - new unit tests for the highlighting of the code editor (tests/test_lazy_highlight.py)
+- new unit tests for the Project tab context menu and View Source (tests/test_project_context_menu.py)
 
 18.10.2026
 

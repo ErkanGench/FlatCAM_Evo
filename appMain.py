@@ -3700,6 +3700,13 @@ class App(QtCore.QObject):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Select an Gerber or Excellon file to view it's source file."))
             return 'fail'
 
+        # checked before the Source Editor tab is added: for an object without a source (e.g. a Geometry made by a
+        # tool) the tab stayed empty and the app stayed busy
+        if not self.collection.has_source(obj):
+            self.inform.emit('[WARNING_NOTCL] %s: %s' % (_("The object has no source file to show"),
+                                                         obj.obj_options['name']))
+            return 'fail'
+
         self.inform.emit('%s' % _("Viewing the source code of the selected object."))
         self.proc_container.view.set_busy('%s...' % _("Loading"))
 
