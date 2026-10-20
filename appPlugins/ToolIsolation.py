@@ -1204,12 +1204,11 @@ class ToolIsolation(Geometry, AppTool):
         for ap in list(aperture_storage.keys()):
             if 'geometry' in aperture_storage[ap]:
                 for geo_el in aperture_storage[ap]['geometry']:
-                    if 'solid' in geo_el and geo_el['solid'] is not None:
-                        buff_geo = geo_el['solid'].buffer(0.0000001)
-                        if buff_geo.is_valid:
-                            total_geo.append(buff_geo)
+                    if 'solid' in geo_el and geo_el['solid'] is not None and geo_el['solid'].is_valid:
+                        total_geo.append(geo_el['solid'])
 
-        total_geo = unary_union(total_geo)
+        # Measure the same geometry as Optimal; a positive buffer changes the rounded gap.
+        total_geo = MultiPolygon(total_geo).buffer(0)
         total_geo = flatten_shapely_geometry(total_geo)
 
         if len(total_geo) <= 1:
@@ -1218,6 +1217,9 @@ class ToolIsolation(Geometry, AppTool):
 
         min_dist = min(polygon_gap_pairs(total_geo, decimals))
         min_dist -= 10 ** -decimals  # make sure that this works for isolation case
+        min_dist = round(min_dist, decimals)
+        if min_dist <= 0:
+            return '[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."), np.inf
 
         return msg, min_dist
 
@@ -1268,6 +1270,8 @@ class ToolIsolation(Geometry, AppTool):
                 res = p.get()
 
                 if res[0] != 'ok':
+                    self.safe_tooldia = None
+                    self.validation_status = False
                     app_obj.inform.emit(res[0])
                     return 'fail'
 
@@ -1310,6 +1314,7 @@ class ToolIsolation(Geometry, AppTool):
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
     def find_safe_tooldia_worker(self):
+        self.safe_tooldia = None
         self.app.inform.emit(_("Checking tools for validity."))
         self.units = self.app.app_units.upper()
 
@@ -1347,7 +1352,7 @@ class ToolIsolation(Geometry, AppTool):
                     total_geo = flatten_shapely_geometry(total_geo)
 
                     geo_len = len(total_geo)
-                    if geo_len == 1:
+                    if geo_len <= 1:
                         msg = _("The Gerber object has one Polygon as geometry.\n"
                                 "There are no distances between geometry elements to be found.")
                         app_obj.inform.emit('[ERROR_NOTCL] %s' % msg)

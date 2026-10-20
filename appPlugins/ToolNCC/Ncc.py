@@ -1135,12 +1135,11 @@ class ToolNcc(Geometry, AppTool):
         for ap in list(aperture_storage.keys()):
             if 'geometry' in aperture_storage[ap]:
                 for geo_el in aperture_storage[ap]['geometry']:
-                    if 'solid' in geo_el and geo_el['solid'] is not None:
-                        buff_geo = geo_el['solid'].buffer(0.0000001)
-                        if buff_geo.is_valid:
-                            total_geo.append(buff_geo)
+                    if 'solid' in geo_el and geo_el['solid'] is not None and geo_el['solid'].is_valid:
+                        total_geo.append(geo_el['solid'])
 
-        total_geo = unary_union(total_geo)
+        # Measure the same geometry as Optimal; a positive buffer changes the rounded gap.
+        total_geo = MultiPolygon(total_geo).buffer(0)
         total_geo = flatten_shapely_geometry(total_geo)
 
         if len(total_geo) <= 1:
@@ -1149,6 +1148,9 @@ class ToolNcc(Geometry, AppTool):
 
         min_dist = min(polygon_gap_pairs(total_geo, decimals))
         min_dist -= 10**-decimals  # make sure that this works for isolation case
+        min_dist = round(min_dist, decimals)
+        if min_dist <= 0:
+            return '[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."), np.inf
 
         return msg, min_dist
 
@@ -1199,6 +1201,7 @@ class ToolNcc(Geometry, AppTool):
                 res = p.get()
 
                 if res[0] != 'ok':
+                    self.safe_tooldia = None
                     app_obj.inform.emit(res[0])
                     return 'fail'
 
@@ -1229,6 +1232,8 @@ class ToolNcc(Geometry, AppTool):
                     if not suitable_tools:
                         msg = _("Incomplete isolation. None of the selected tools could do a complete isolation.")
                         self.app.inform.emit('[WARNING] %s' % msg)
+                        self.safe_tooldia = None
+                        return 'fail'
                     else:
                         msg = _("At least one of the selected tools can do a complete isolation.")
                         self.app.inform.emit('[success] %s' % msg)
@@ -1246,6 +1251,7 @@ class ToolNcc(Geometry, AppTool):
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
     def find_safe_tooldia_worker(self):
+        self.safe_tooldia = None
         self.app.inform.emit(_("Checking tools for validity."))
         self.units = self.app.app_units.upper()
 
@@ -1283,16 +1289,21 @@ class ToolNcc(Geometry, AppTool):
                     total_geo = flatten_shapely_geometry(total_geo)
 
                     geo_len = len(total_geo)
-                    if geo_len == 1:
+                    if geo_len <= 1:
                         app_obj.inform.emit(
                             '[ERROR_NOTCL] %s' % _("The Gerber object has one Polygon as geometry.\n"
                                                    "There are no distances between geometry elements to be found."))
                         return 'fail'
 
                     min_dist = min(polygon_gap_pairs(total_geo, self.decimals))
+                    # Keep the recommendation below the real gap and consistent with Check validity.
+                    min_dist -= 10 ** -self.decimals
                     app_obj.proc_container.update_view_text(' %d%%' % 100)
 
                     min_dist_truncated = self.app.dec_format(float(min_dist), self.decimals)
+                    if min_dist_truncated <= 0:
+                        app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."))
+                        return 'fail'
                     self.safe_tooldia = min_dist_truncated
 
                     self.optimal_found_sig.emit(min_dist_truncated)
