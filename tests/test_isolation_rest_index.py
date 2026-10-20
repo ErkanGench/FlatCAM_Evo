@@ -1,5 +1,5 @@
-"""Isolation rest machining: ToolIsolation.generate_rest_geometry() finds the passes that reach another polygon with 1
-spatial index query per pass. The result must be the one of the test of each pass against every other polygon.
+"""Isolation rest machining uses bounded bulk queries for sparse passes and early exit for dense passes.
+The result must be the one of the test of each pass against every other polygon.
 """
 
 from types import SimpleNamespace
@@ -55,6 +55,8 @@ def rest_passes_pairwise(geometry, tooldia, passes, overlap, negative_dia, force
     isolated = []
     for geo in work_geo:
         for poly in getattr(geo, 'geoms', [geo]):
+            if poly.is_empty:
+                continue
             isolated += [poly.exterior] + list(poly.interiors)
     return isolated, not_isolated
 
@@ -103,3 +105,56 @@ def test_a_polygon_abandoned_in_the_first_pass_is_not_tested_in_the_next_passes(
     assert [len(arr) for arr in check_buffers] == [len(geometry), len(geometry) - 1, len(geometry) - 1]
     assert any(geo is geometry[20] for geo in check_buffers[0])
     assert not any(geo is geometry[20] for arr in check_buffers[1:] for geo in arr)
+
+
+@pytest.mark.parametrize('dense', [False, True], ids=['missed_cluster', 'dense'])
+def test_query_results_are_bounded(dense):
+    geometry = [box(i * 3, 0, i * 3 + 1, 1) for i in range(400)]
+    # The small cluster lies between the evenly spaced sample indexes.
+    for i in (range(400) if dense else range(1, 20)):
+        geometry[i] = box(-10, 0, -9, 1)
+    original_tree = shapely.STRtree
+    query_sizes = []
+
+    class RecordedTree:
+        def __init__(self, geos):
+            self.tree = original_tree(geos)
+
+        def query(self, geos, *args, **kwargs):
+            query_count = 1 if isinstance(geos, shapely.Geometry) else len(geos)
+            query_sizes.append(query_count)
+            # Even when every bounding box matches, a query cannot return more than this many pairs.
+            assert query_count * len(self.tree.geometries) <= 65536
+            return self.tree.query(geos, *args, **kwargs)
+
+    with patch.object(shapely, 'STRtree', RecordedTree):
+        actual = run_rest(geometry, 1)
+    expected = rest_passes_pairwise(geometry, TOOLDIA, 1, OVERLAP, False, False)
+    assert [[g.wkb for g in part] for part in actual] == [[g.wkb for g in part] for part in expected]
+    assert query_sizes
+
+
+def test_dense_layout_uses_early_exit_for_unsampled_polygons():
+    geometry = [box((i % 30) * 0.1, (i // 30) * 0.1,
+                    (i % 30) * 0.1 + 0.02, (i // 30) * 0.1 + 0.02) for i in range(900)]
+    original_intersects = shapely.geometry.base.BaseGeometry.intersects
+    with patch.object(shapely.geometry.base.BaseGeometry, 'intersects', autospec=True,
+                      side_effect=original_intersects) as intersects:
+        isolated, not_isolated = run_rest(geometry, 1)
+    assert not isolated
+    assert [g.wkb for g in not_isolated] == [g.wkb for g in geometry]
+    # The sample doesn't cover the whole board; remaining polygons stop at a nearby collision.
+    assert 0 < intersects.call_count < len(geometry) * 16
+
+
+@pytest.mark.parametrize('negative_dia', [False, True])
+@pytest.mark.parametrize('forced_rest', [False, True])
+def test_dense_passes_preserve_paths_and_abandoned_polygons(negative_dia, forced_rest):
+    geometry = [box((i % 30) * 0.1, (i // 30) * 0.1,
+                    (i % 30) * 0.1 + 0.02, (i // 30) * 0.1 + 0.02) for i in range(900)]
+    geometry += [Polygon(box(10, 0, 13, 3).exterior.coords,
+                         [box(10.5, 1, 10.6, 1.1).exterior.coords, box(12, 1, 12.1, 1.1).exterior.coords]),
+                 box(20, 0, 22, 2)]
+    actual = run_rest(geometry, 3, negative_dia, forced_rest)
+    expected = rest_passes_pairwise(geometry, TOOLDIA, 3, OVERLAP, negative_dia, forced_rest)
+    assert [[g.wkb for g in part] for part in actual] == [[g.wkb for g in part] for part in expected]

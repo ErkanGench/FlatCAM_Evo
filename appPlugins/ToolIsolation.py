@@ -3165,9 +3165,9 @@ class ToolIsolation(Geometry, AppTool):
         geo_len = len(geometry)
         geo_array = np.empty(geo_len, dtype=object)
         geo_array[:] = list(geometry)
-        # find if each pass of each geo is valid (no intersection with other geos): 1 spatial index query for all
-        # the geos in each pass; testing every other geo for each geo grew with the square of the number of geos
+        # Sparse passes use bulk queries; dense passes stop at the first collision instead of collecting every pair.
         geo_indexes = np.arange(geo_len)
+        geo_tree = None
         pass_offsets = []
         pass_intersects = []
         first_pass_iso = [None] * geo_len
@@ -3180,13 +3180,38 @@ class ToolIsolation(Geometry, AppTool):
             buf_chek = iso_offset * 1.99999
             # (quad_segs=16: as geo.buffer())
             check_geo = shapely.buffer(geo_array[geo_indexes], buf_chek, quad_segs=16)
-            # the index holds the check geos and the geos are the (prepared) query: a large geo (a ground pour) is
-            # then prepared once instead of being walked for each small check geo near it
-            other_idx, check_idx = shapely.STRtree(check_geo).query(geo_array, predicate='intersects')
-            check_idx = geo_indexes[check_idx]
+            check_tree = shapely.STRtree(check_geo)
             intersect_flags = np.zeros(geo_len, dtype=bool)
-            # we don't want to test intersection with itself
-            intersect_flags[check_idx[check_idx != other_idx]] = True
+            # ponytail: cap each bulk query at 65536 possible pairs (or one query polygon for a larger index).
+            # A missed dense cluster can cost extra queries, but cannot create a quadratic temporary array.
+            batch_size = max(1, 65536 // max(1, len(check_geo)))
+            sample_indexes = np.linspace(0, geo_len, min(16, batch_size, geo_len), endpoint=False, dtype=int)
+            other_idx, check_idx = check_tree.query(geo_array[sample_indexes], predicate='intersects')
+            check_idx = geo_indexes[check_idx]
+            intersect_flags[check_idx[check_idx != sample_indexes[other_idx]]] = True
+
+            if len(check_idx) > 8 * len(sample_indexes):
+                if geo_tree is None:
+                    geo_tree = shapely.STRtree(geo_array)
+                # Keep collisions already found by the sample; only unresolved check buffers need a search.
+                for check_pos in np.flatnonzero(~intersect_flags[geo_indexes]):
+                    idx = geo_indexes[check_pos]
+                    check = check_geo[check_pos]
+                    for other_idx in geo_tree.query(check):
+                        if other_idx != idx and check.intersects(geo_array[other_idx]):
+                            intersect_flags[idx] = True
+                            break
+            else:
+                query_mask = np.ones(geo_len, dtype=bool)
+                query_mask[sample_indexes] = False
+                query_indexes = np.flatnonzero(query_mask)
+                # The index holds check buffers and the original polygons are the prepared queries, so a large
+                # ground pour is prepared once per query rather than walked for every nearby check buffer.
+                for start in range(0, len(query_indexes), batch_size):
+                    batch = query_indexes[start:start + batch_size]
+                    other_idx, check_idx = check_tree.query(geo_array[batch], predicate='intersects')
+                    check_idx = geo_indexes[check_idx]
+                    intersect_flags[check_idx[check_idx != batch[other_idx]]] = True
             pass_offsets.append(iso_offset)
             pass_intersects.append(intersect_flags)
 
