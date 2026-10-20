@@ -102,6 +102,7 @@ def _startup_app(auto_updates, beta=False):
     from defaults import AppDefaults
 
     app = App.__new__(App)
+    app.headless = False
     app.log = MagicMock()
     app.cmd_line_shellvar = ""
     app.cmd_line_shellfile = ""

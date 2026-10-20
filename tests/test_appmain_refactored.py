@@ -516,7 +516,7 @@ class TestSignalConnections(unittest.TestCase):
         app = App.__new__(App)
         QtCore.QObject.__init__(app)
         app.decimals = 4
-        tool = SimpleNamespace(layout=None, update_comboboxes=Mock())
+        tool = SimpleNamespace(layout=None, update_comboboxes=Mock(), add_object_creation_controls=Mock())
         tool.connect_signals_at_init = lambda: SolderPaste.connect_signals_at_init(tool)
 
         class WidgetSignals(QtCore.QObject):

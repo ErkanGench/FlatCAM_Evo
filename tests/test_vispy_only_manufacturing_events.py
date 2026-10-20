@@ -40,8 +40,8 @@ def test_cutout_mouse_move_uses_vispy_position():
     assert tool.mouse_is_dragging is True
     tool.cutting_geo.assert_called_once_with(pos=(4, 5))
     tool.app.geo_editor.tool_shape.clear.assert_called_once_with(update=True)
-    preview = tool.draw_utility_geometry.call_args.kwargs['geo']
-    assert preview.equals_exact(rotate(cut_geo, -45), 1e-9)
+    # the gaps are cut by distance along the contour, so the preview is the gap shape itself (no rotation)
+    tool.draw_utility_geometry.assert_called_once_with(geo=cut_geo)
     assert event.pos == ('10', '20')
 
 
@@ -92,7 +92,10 @@ def test_supported_keys_without_legacy_backend(plugin):
         tool.area_sel_disconnect_flag = plugin == 'ToolFollow'
         tool.poly_sel_disconnect_flag = plugin in ('ToolIsolation', 'ToolPunchGerber')
         tool.mouse_events_connected = True
+        tool.mb_manual_cuts = ['cut']
         namespace['on_key_press'](tool, SimpleNamespace(key='Escape'))
+        if plugin == 'ToolCutOut':
+            assert tool.mb_manual_cuts == []
         assert tool.app.plotcanvas.graph_event_disconnect.call_count >= 2
         if plugin in ('ToolIsolation', 'ToolPunchGerber'):
             tool.app.ui.grid_snap_btn.trigger.assert_called_once_with()

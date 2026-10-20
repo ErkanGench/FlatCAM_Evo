@@ -6,6 +6,7 @@ from shapely.geometry import Point, box
 from shapely.ops import unary_union
 
 from appPlugins.ToolIsolation import ToolIsolation
+from appTool import AppTool
 
 
 class TestPcbDocIsolation(unittest.TestCase):
@@ -15,6 +16,7 @@ class TestPcbDocIsolation(unittest.TestCase):
         app = SimpleNamespace(options={'gerber_circle_steps': 64}, inform=Mock(), app_obj=Mock())
         tool = SimpleNamespace(app=app, decimals=4, validation_status=True,
                                generate_envelope=Mock(return_value=[envelope]))
+        tool.new_object = lambda *args, **kwargs: AppTool.new_object(tool, *args, **kwargs)
         source = SimpleNamespace(obj_options={'name': 'native'}, solid_geometry=[solid],
                                  tools={0: {'type': 'REG', 'size': 0, 'geometry': entries}})
         storage = {1: {'tooldia': 0.2, 'data': {

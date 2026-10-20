@@ -83,7 +83,7 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
             self.assertEqual(list(ring.coords)[::-1], list(poly.exterior.coords))
         geo.app.collection.get_by_name.return_value = geo
         output = SimpleNamespace()
-        geo.app.app_obj.new_object.side_effect = lambda kind, name, init: init(output, geo.app)
+        geo.app.app_obj.new_object.side_effect = lambda kind, name, init, **kwargs: init(output, geo.app)
         TclCommandInteriors.execute(SimpleNamespace(app=geo.app), {'name': 'source'}, [])
         self.assertTrue(all(isinstance(ring, LinearRing) for ring in output.solid_geometry))
         self.assertEqual(len(output.solid_geometry), 2)
