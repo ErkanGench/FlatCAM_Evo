@@ -19,8 +19,10 @@ from appParsers.DXF import dxf_to_shapes
 
 from numpy.linalg import solve
 
+import os
 import platform
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from copy import deepcopy
 from collections.abc import Iterable
@@ -2850,6 +2852,18 @@ class AttrDict(dict):
         self.__dict__ = self
 
 
+# G-code read back by CNCjob.codes_split(), compiled once: it is called for every line of the G-code
+GCODE_ROLAND_Z_RE = re.compile(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$")
+GCODE_HPGL_PA_RE = re.compile(r"^PA(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$")
+GCODE_HPGL_PEN_RE = re.compile(r"^(P[U|D])")
+GCODE_HPGL_SP_RE = re.compile(r"^SP\d*")
+GCODE_XY_RE = re.compile(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)")
+GCODE_LASER_M345_RE = re.compile(r"^(M0?[3-5])")
+GCODE_LASER_M10X_RE = re.compile(r"^(M10[6|7])")
+# 1 word (letter and number), matched at a position of the line
+GCODE_WORD_RE = re.compile(r'\s*([A-Z])\s*([+\-.\d\s]+)')
+
+
 class CNCjob(Geometry):
     """
     Represents work to be done by a CNC machine.
@@ -3078,6 +3092,21 @@ class CNCjob(Geometry):
         attributes = AttrDict()
         attributes.update(self.postdata)
         attributes.update(kwargs)
+        return self.doformat_attributes(fun, attributes)
+
+    def doformat_attributes(self, fun, attributes):
+        """
+        Like doformat2() but with the attributes made by the caller: an AttrDict of the attributes of the current class
+        updated with the values of the line. For many lines that differ only in a few values (the points of a path),
+        the attributes are copied once instead of for every line.
+
+        :param fun:         One of the methods inside the preprocessor classes which get loaded here in the 'p' object
+        :type fun:          class 'function'
+        :param attributes:  the attributes given to the preprocessor method
+        :type attributes:   AttrDict
+        :return:            Gcode line
+        :rtype:             str
+        """
         try:
             ret = fun(attributes)
             return ret
@@ -4206,27 +4235,44 @@ class CNCjob(Geometry):
         self.app.log.warning("Number of paths for which to generate GCode: %s" % str(geo_len))
         old_disp_number = 0
 
-        current_pt = first_pt
+        oriented_path = []
         for pt, geo in optimized_path:
+            # If last point in geometry is the nearest but prefer the first one if last point == first point
+            # then reverse coordinates.
+            if pt != geo.coords[0] and pt == geo.coords[-1]:
+                geo = LineString(list(geo.coords)[::-1])
+            oriented_path.append((pt, geo))
+
+        # Single depth without extra cut: the oriented paths are simplified at once, on several threads, instead of
+        # one by one in linear2gcode() (a large part of the time); the same paths. Multi depth simplifies each depth
+        # in its own direction and the extra cut looks at the path before the simplification.
+        simplified = None
+        if not self.multidepth and self.extracut is False and self.tolerance > 0:
+            simplified = simplify_paths([geo for __, geo in oriented_path], self.tolerance)
+
+        # the G-code of the paths is joined at the end: added to the growing string, it was copied again and again
+        gcode_parts = [t_gcode]
+        current_pt = first_pt
+        for path_idx, (pt, geo) in enumerate(oriented_path):
             if self.app.abort_flag:
                 # graceful abort requested by the user
                 raise grace
 
             path_count += 1
 
-            # If last point in geometry is the nearest but prefer the first one if last point == first point
-            # then reverse coordinates.
-            if pt != geo.coords[0] and pt == geo.coords[-1]:
-                geo = LineString(list(geo.coords)[::-1])
-
             # ---------- Single depth/pass --------
             if not self.multidepth:
                 # calculate the cut distance
                 total_cut = total_cut + geo.length
 
-                t_gcode += self.create_gcode_single_pass(geo, current_tooldia, self.extracut,
-                                                         self.extracut_length, self.tolerance,
-                                                         z_move=self.z_move, old_point=current_pt)
+                if simplified is None:
+                    gcode_parts.append(self.create_gcode_single_pass(geo, current_tooldia, self.extracut,
+                                                                     self.extracut_length, self.tolerance,
+                                                                     z_move=self.z_move, old_point=current_pt))
+                else:
+                    gcode_parts.append(self.create_gcode_single_pass(simplified[path_idx], current_tooldia,
+                                                                     self.extracut, self.extracut_length, 0,
+                                                                     z_move=self.z_move, old_point=current_pt))
 
             # --------- Multi-pass ---------
             else:
@@ -4243,7 +4289,7 @@ class CNCjob(Geometry):
                 gc, geo = self.create_gcode_multi_pass(geo, current_tooldia, self.extracut,
                                                        self.extracut_length, self.tolerance,
                                                        z_move=self.z_move, postproc=p, old_point=current_pt)
-                t_gcode += gc
+                gcode_parts.append(gc)
 
             # calculate the total distance
             total_travel = total_travel + abs(distance(pt1=current_pt, pt2=pt))
@@ -4254,6 +4300,7 @@ class CNCjob(Geometry):
                 self.app.proc_container.update_view_text(' %d%%' % disp_number)
                 old_disp_number = disp_number
 
+        t_gcode = ''.join(gcode_parts)
         self.app.log.debug("Finished G-Code... %s paths traced." % path_count)
 
         # add move to end position
@@ -6256,7 +6303,7 @@ class CNCjob(Geometry):
                 return {'X': float(dot[1]), 'Y': float(dot[2]), '_paste_dot': float(dot[3])}
 
         if 'Roland' in self.pp_excellon_name or 'Roland' in self.pp_geometry_name:
-            match_z = re.search(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+            match_z = GCODE_ROLAND_Z_RE.search(gline)
             if match_z:
                 command['G'] = 0
                 command['X'] = float(match_z.group(1).replace(" ", "")) * 0.01
@@ -6264,12 +6311,12 @@ class CNCjob(Geometry):
                 command['Z'] = float(match_z.group(3).replace(" ", "")) * 0.025
 
         elif 'hpgl' in self.pp_excellon_name or 'hpgl' in self.pp_geometry_name:
-            match_pa = re.search(r"^PA(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+            match_pa = GCODE_HPGL_PA_RE.search(gline)
             if match_pa:
                 command['G'] = 0
                 command['X'] = float(match_pa.group(1).replace(" ", "")) / 40
                 command['Y'] = float(match_pa.group(2).replace(" ", "")) / 40
-            match_pen = re.search(r"^(P[U|D])", gline)
+            match_pen = GCODE_HPGL_PEN_RE.search(gline)
             if match_pen:
                 if match_pen.group(1) == 'PU':
                     # the value does not matter, only that it is positive so the gcode_parse() know it is > 0,
@@ -6277,18 +6324,19 @@ class CNCjob(Geometry):
                     command['Z'] = 1
                 else:
                     command['Z'] = 0
-            match_toolchange = re.search(r"^SP\d*", gline)
+            match_toolchange = GCODE_HPGL_SP_RE.search(gline)
             if match_toolchange:
                 command['Z'] = 1
 
         elif 'laser' in self.pp_excellon_name.lower() or 'laser' in self.pp_geometry_name.lower() or \
                 (self.pp_solderpaste_name is not None and 'paste' in self.pp_solderpaste_name.lower()):
-            match_lsr = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+            # (the coordinates are searched only in a line that has an X)
+            match_lsr = GCODE_XY_RE.search(gline) if 'X' in gline else None
             if match_lsr:
                 command['X'] = float(match_lsr.group(1).replace(" ", ""))
                 command['Y'] = float(match_lsr.group(2).replace(" ", ""))
 
-            match_lsr_pos = re.search(r"^(M0?[3-5])", gline)
+            match_lsr_pos = GCODE_LASER_M345_RE.match(gline)
             if match_lsr_pos:
                 if 'M05' in match_lsr_pos.group(1) or 'M5' in match_lsr_pos.group(1):
                     # the value does not matter, only that it is positive so the gcode_parse() know it is > 0,
@@ -6297,32 +6345,28 @@ class CNCjob(Geometry):
                 else:
                     command['Z'] = 0
 
-            match_lsr_pos_2 = re.search(r"^(M10[6|7])", gline)
+            match_lsr_pos_2 = GCODE_LASER_M10X_RE.match(gline)
             if match_lsr_pos_2:
                 if 'M107' in match_lsr_pos_2.group(1):
                     command['Z'] = 1
                 else:
                     command['Z'] = 0
 
-            match_lsr_pos_3 = re.search(r"^.*(laser OFF).*", gline)
-            if match_lsr_pos_3:
-                if 'laser OFF' in match_lsr_pos_3.group(1):
-                    command['Z'] = 1
-                else:
-                    command['Z'] = 0
+            if 'laser OFF' in gline:
+                command['Z'] = 1
 
         elif self.pp_solderpaste_name is not None:
             if 'Paste' in self.pp_solderpaste_name:
-                match_paste = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+                match_paste = GCODE_XY_RE.search(gline)
                 if match_paste:
                     command['X'] = float(match_paste.group(1).replace(" ", ""))
                     command['Y'] = float(match_paste.group(2).replace(" ", ""))
         else:
-            match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+            # the words are matched one after the other, from the end of the previous one
+            match = GCODE_WORD_RE.match(gline)
             while match:
                 command[match.group(1)] = float(match.group(2).replace(" ", ""))
-                gline = gline[match.end():]
-                match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+                match = GCODE_WORD_RE.match(gline, match.end())
         return command
 
     def gcode_parse(self, force_parsing=None, tool_data=None):
@@ -7079,6 +7123,11 @@ class CNCjob(Geometry):
         # Cutting...
         prev_x = first_x
         prev_y = first_y
+        # the attributes are copied once for the path and only x, y change from a point to the next one (doformat()
+        # copies all the attributes of this object for every line)
+        attributes = AttrDict()
+        attributes.update(self.postdata)
+        attributes['z_cut'] = z_cut
         for pt in path[1:]:
             if self.app.abort_flag:
                 # graceful abort requested by the user
@@ -7096,7 +7145,9 @@ class CNCjob(Geometry):
                 next_x = pt[0]
                 next_y = pt[1]
 
-            gcode += self.doformat(p.linear_code, x=next_x, y=next_y, z_cut=z_cut)  # Linear motion to point
+            attributes['x'] = next_x
+            attributes['y'] = next_y
+            gcode += self.doformat_attributes(p.linear_code, attributes) + "\n"  # Linear motion to point
             prev_x = pt[0]
             prev_y = pt[1]
 
@@ -8696,6 +8747,58 @@ def arc_angle(start, stop, direction):
 #             pass
 #
 #     return None
+
+
+def simplify_paths(paths, tolerance):
+    """
+    The same as [path.simplify(tolerance) for path in paths], made with vectorized calls on several threads (GEOS
+    releases the GIL). A geometry that is more than once in the list is simplified once, by one thread, and the same
+    simplified geometry is returned for each of its places.
+
+    :param paths:       list of Shapely geometries
+    :type paths:        list
+    :param tolerance:   simplification tolerance
+    :type tolerance:    float
+    :return:            the simplified geometries, in the same order
+    :rtype:             list
+    """
+    unique = {id(path): path for path in paths}
+    geoms = np.empty(len(unique), dtype=object)
+    geoms[:] = list(unique.values())
+
+    workers = min(os.cpu_count() or 1, len(geoms) // 16)
+    if workers < 2:
+        simplified = shapely.simplify(geoms, tolerance)
+    else:
+        # more pieces than threads: the paths are not equally long
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pieces = pool.map(lambda piece: shapely.simplify(piece, tolerance), np.array_split(geoms, workers * 4))
+            simplified = np.concatenate(list(pieces))
+
+    by_id = dict(zip(unique.keys(), simplified))
+    return [by_id[id(path)] for path in paths]
+
+
+def deepcopy_keep_geometry(obj):
+    """
+    Like deepcopy() but the Shapely geometries are shared instead of copied: they are immutable and the copy of a
+    geometry goes through WKB (seconds for the tools of a big isolation). The dicts, lists and tuples that hold them
+    are copied.
+
+    :param obj:     dicts, lists and tuples with Shapely geometries in them (and anything else that deepcopy() copies)
+    :return:        the copy
+    """
+    memo = {}
+    seen = set()
+    stack = [obj]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, BaseGeometry):
+            memo[id(item)] = item
+        elif isinstance(item, (dict, list, tuple)) and id(item) not in seen:
+            seen.add(id(item))
+            stack.extend(item.values() if isinstance(item, dict) else item)
+    return deepcopy(obj, memo)
 
 
 def to_dict(obj):
