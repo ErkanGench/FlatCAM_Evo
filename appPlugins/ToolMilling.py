@@ -26,7 +26,7 @@ import builtins
 
 from appDatabase import load_tools_database
 from defaults import AppDefaults
-from camlib import Geometry, grace
+from camlib import Geometry, grace, deepcopy_keep_geometry
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -3001,7 +3001,7 @@ class ToolMilling(Geometry, AppTool):
                 for tooluid_key, tooluid_value in self.target_obj.tools.items():
                     if int(tooluid_key) == tooluid:
                         self.sel_tools.update({
-                            tooluid: deepcopy(tooluid_value)
+                            tooluid: deepcopy_keep_geometry(tooluid_value)
                         })
 
             self.generate_cnc_job_handler()
@@ -3013,7 +3013,7 @@ class ToolMilling(Geometry, AppTool):
             for tooluid_key, tooluid_value in self.target_obj.tools.items():
                 if int(tooluid_key) == tooluid:
                     self.sel_tools.update({
-                        tooluid: deepcopy(tooluid_value)
+                        tooluid: deepcopy_keep_geometry(tooluid_value)
                     })
             self.generate_cnc_job_handler()
             # self.ui.tools_table_mill_geo.clearSelection()
@@ -3177,7 +3177,7 @@ class ToolMilling(Geometry, AppTool):
         total_gcode = ''
         for tool_cnt, tool_uid_key in enumerate(used_tools, 1):
             data = tools_dict[tool_uid_key]['data']
-            dia_cnc_dict = deepcopy(tools_dict[tool_uid_key])
+            dia_cnc_dict = deepcopy_keep_geometry(tools_dict[tool_uid_key])
             tooldia_val = app_obj.dec_format(float(data['tools_mill_tooldia']), context['decimals'])
             dia_cnc_dict['data']['tools_mill_tooldia'] = tooldia_val
             if "optimization_type" not in data:
@@ -3249,7 +3249,7 @@ class ToolMilling(Geometry, AppTool):
                 app_obj.inform.emit('[success] %s...' % _("Finished G-Code processing"))
             except Exception as er:
                 app_obj.inform.emit('[ERROR] %s: %s' % (_("G-Code processing failed with error"), str(er)))
-            new_cncjob_obj.tools.update({tool_uid_key: deepcopy(dia_cnc_dict)})
+            new_cncjob_obj.tools.update({tool_uid_key: deepcopy_keep_geometry(dia_cnc_dict)})
             dia_cnc_dict.clear()
         new_cncjob_obj.source_file = new_cncjob_obj.gc_start + total_gcode
 
@@ -3276,7 +3276,7 @@ class ToolMilling(Geometry, AppTool):
         total_gcode = ''
         for tool_uid_key in used_tools:
             data = tools_dict[tool_uid_key]['data']
-            dia_cnc_dict = deepcopy(tools_dict[tool_uid_key])
+            dia_cnc_dict = deepcopy_keep_geometry(tools_dict[tool_uid_key])
             tooldia_val = app_obj.dec_format(float(data['tools_mill_tooldia']), context['decimals'])
             dia_cnc_dict['data']['tools_mill_tooldia'] = tooldia_val
             if "optimization_type" not in data:
@@ -3372,11 +3372,11 @@ class ToolMilling(Geometry, AppTool):
             dia_cnc_dict['gcode_parsed'] = new_cncjob_obj.gcode_parse(tool_data=data)
             app_obj.inform.emit('[success] %s' % _("G-Code parsing finished..."))
             try:
-                dia_cnc_dict['solid_geometry'] = deepcopy(tool_solid_geometry)
+                dia_cnc_dict['solid_geometry'] = deepcopy_keep_geometry(tool_solid_geometry)
                 app_obj.inform.emit('[success] %s...' % _("Finished G-Code processing"))
             except Exception as ee:
                 app_obj.inform.emit('[ERROR] %s: %s' % (_("G-Code processing failed with error"), str(ee)))
-            new_cncjob_obj.tools.update({tool_uid_key: deepcopy(dia_cnc_dict)})
+            new_cncjob_obj.tools.update({tool_uid_key: deepcopy_keep_geometry(dia_cnc_dict)})
             dia_cnc_dict.clear()
         new_cncjob_obj.source_file = total_gcode
 

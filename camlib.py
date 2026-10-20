@@ -8697,6 +8697,28 @@ def arc_angle(start, stop, direction):
 #     return None
 
 
+def deepcopy_keep_geometry(obj):
+    """
+    Like deepcopy() but the Shapely geometries are shared instead of copied: they are immutable and the copy of a
+    geometry goes through WKB (seconds for the tools of a big isolation). The dicts, lists and tuples that hold them
+    are copied.
+
+    :param obj:     dicts, lists and tuples with Shapely geometries in them (and anything else that deepcopy() copies)
+    :return:        the copy
+    """
+    memo = {}
+    seen = set()
+    stack = [obj]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, BaseGeometry):
+            memo[id(item)] = item
+        elif isinstance(item, (dict, list, tuple)) and id(item) not in seen:
+            seen.add(id(item))
+            stack.extend(item.values() if isinstance(item, dict) else item)
+    return deepcopy(obj, memo)
+
+
 def to_dict(obj):
     """
     Makes the following types into serializable form:
