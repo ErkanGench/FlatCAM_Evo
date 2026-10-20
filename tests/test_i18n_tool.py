@@ -5,6 +5,7 @@ scripts/i18n_tool.py: extraction of the strings, .po read / write / merge, .mo c
 """
 
 import contextlib
+import functools
 import gettext
 import io
 import os
@@ -18,6 +19,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
 
 import i18n_tool as t       # noqa: E402
+
+
+@functools.lru_cache(maxsize=None)
+def extract_program_strings():
+    """1 extraction of the strings of the program (about 4 seconds) for the tests that only read the result."""
+    return t.extract()
+
 
 PO = textwrap.dedent('''\
     msgid ""
@@ -247,7 +255,7 @@ class TestTranslatorTools(unittest.TestCase):
         self.assertGreater(len(terms), 50)
         self.assertTrue(all(term and note for term, note in terms))
         # every term is a string of the program (case and a final ':' ignored), so a language can translate it
-        strings, __ = t.extract()
+        strings, __ = extract_program_strings()
         texts = {s.strip().rstrip(':').strip().casefold() for s in strings}
         self.assertEqual([], [term for term, __ in terms if term.casefold() not in texts])
         langs = [lang for lang in t.languages() if lang != 'en']
@@ -331,7 +339,7 @@ class TestExtract(unittest.TestCase):
         self.assertEqual(2, len(problems))
 
     def test_the_application_strings(self):
-        strings, problems = t.extract()
+        strings, problems = extract_program_strings()
         self.assertGreater(len(strings), 3000)
         # the format operator inside _() makes a string that can not be translated
         self.assertFalse([p for p in problems if 'BinOp' in p or 'JoinedStr' in p], problems)

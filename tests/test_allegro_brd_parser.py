@@ -8,6 +8,7 @@ import unittest
 import warnings
 from pathlib import Path
 
+import pytest
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
@@ -839,14 +840,14 @@ class TestAllegroRobustness(unittest.TestCase):
                         leaked.append(str(error))
         self.assertEqual(leaked, [])
 
-    def test_mutated_sample_board_fields_never_leak_internal_errors(self):
+    def _check_mutated_sample_board_fields(self, loops):
         # same, with every changed byte inside a block header or field of the real 17.2 board
         rng = random.Random(11)
         data = FIXTURE.read_bytes()
         leaked = []
         with warnings.catch_warnings():
             warnings.simplefilter('error', RuntimeWarning)
-            for _ in range(40):
+            for _ in range(loops):
                 blob = bytearray(data)
                 for _ in range(rng.choice((1, 3, 6))):
                     blob[rng.randrange(0x1200, len(blob))] = rng.randrange(256)
@@ -856,6 +857,14 @@ class TestAllegroRobustness(unittest.TestCase):
                     if str(error).startswith('Cannot read Allegro board:'):
                         leaked.append(str(error))
         self.assertEqual(leaked, [])
+
+    def test_mutated_sample_board_fields_never_leak_internal_errors_quick(self):
+        # the first 4 loops of the full test below (same seed)
+        self._check_mutated_sample_board_fields(4)
+
+    @pytest.mark.slow
+    def test_mutated_sample_board_fields_never_leak_internal_errors(self):
+        self._check_mutated_sample_board_fields(40)
 
     def test_giant_counts_do_not_allocate_or_loop(self):
         data = bytearray(self._sample())

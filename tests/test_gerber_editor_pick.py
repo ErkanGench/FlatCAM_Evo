@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+import pytest
 from PyQt6 import QtCore, QtWidgets
 from shapely.geometry import LineString, Point, Polygon, box
 
@@ -480,6 +481,7 @@ class TestRevisionCounter(PickCase):
             self.assertTrue(err is not None)
 
 
+@pytest.mark.slow
 class TestPerformance(PickCase):
     def test_large_board_pick_time(self):
         shapes = []

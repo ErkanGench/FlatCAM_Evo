@@ -24,7 +24,18 @@ from appPlugins.ToolNCC.NccGen import NccGen
 REPEATS = 3 if os.environ.get('FLATCAM_BENCHMARK') else 1
 
 
-def board():
+def board(small=False):
+    if small:
+        # a quarter of the board: 1 tool pass costs far less, the same kinds of features are present
+        copper = unary_union([
+            Point(x, y).buffer(0.9, quad_segs=8)
+            for x in range(4, 18, 4) for y in range(4, 14, 4)
+        ] + [box(3, 8.8, 17, 9.2), box(9.8, 3, 10.2, 12)])
+        return box(0, 0, 20, 15), copper
+    return board_full()
+
+
+def board_full():
     copper = unary_union([
         Point(x, y).buffer(0.9, quad_segs=8)
         for x in range(4, 38, 4) for y in range(4, 26, 4)
@@ -32,7 +43,7 @@ def board():
     return box(0, 0, 40, 30), copper
 
 
-def generator(rest=False, units='MM', offsets=(0, 0, 0), method=0):
+def generator(rest=False, units='MM', offsets=(0, 0, 0), method=0, small=False):
     gen = NccGen.__new__(NccGen)
     options = {'tools_ncc_plotting': 'normal', 'tools_ncc_cutz': -0.1,
                'tools_ncc_tools': '(2, 1, 0.5)', 'global_tolerance': 0.005,
@@ -62,7 +73,7 @@ def generator(rest=False, units='MM', offsets=(0, 0, 0), method=0):
             'rest_offset_entry': 0, 'milling_type_radio': 'cv',
         }.items()
     })
-    boundary, copper = board()
+    boundary, copper = board(small)
     boundary, copper = [scale(g, xfact=factor, yfact=factor, origin=(0, 0)) for g in (boundary, copper)]
     source = SimpleNamespace(kind='gerber', solid_geometry=list(copper.geoms))
     output = SimpleNamespace(kind='geometry', tools={}, obj_options={})
@@ -140,10 +151,8 @@ def test_final_cleanup_never_exposes_useful_copper_with_negative_offset():
     assert all(path.buffer(0.25, quad_segs=256).intersection(copper).area < 1e-12 for path in paths)
 
 
-@pytest.mark.parametrize('rest', [False, True])
-@pytest.mark.parametrize('units', ['MM', 'IN'])
-def test_final_cleanup_board_sweeps_respect_copper_offset_boundary(rest, units):
-    gen, output, source, tools, boundary, copper = generator(rest=rest, units=units,
+def check_board_sweeps_respect_copper_offset_boundary(rest, units, small):
+    gen, output, source, tools, boundary, copper = generator(rest=rest, units=units, small=small,
                                                            offsets=(0.1, 0.1, 0.1))
     factor = 1 if units == 'MM' else 1 / 25.4
     gen.ui.rest_offset_choice_cb.get_value = lambda: True
@@ -161,6 +170,19 @@ def test_final_cleanup_board_sweeps_respect_copper_offset_boundary(rest, units):
     assert swept.difference(boundary).area < 1e-10 * factor**2
     assert swept.intersection(copper.buffer(0.1 * factor)).area < 1e-10 * factor**2
     assert output.ncc_cleanup_residual.area > 0
+
+
+@pytest.mark.parametrize('rest', [False, True])
+@pytest.mark.parametrize('units', ['MM', 'IN'])
+def test_final_cleanup_small_board_sweeps_respect_copper_offset_boundary(rest, units):
+    check_board_sweeps_respect_copper_offset_boundary(rest, units, small=True)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('rest', [False, True])
+@pytest.mark.parametrize('units', ['MM', 'IN'])
+def test_final_cleanup_board_sweeps_respect_copper_offset_boundary(rest, units):
+    check_board_sweeps_respect_copper_offset_boundary(rest, units, small=False)
 
 
 def test_final_cleanup_inaccessible_gap_no_path_and_abort():
@@ -259,6 +281,7 @@ def test_final_cleanup_cnc_preserves_appended_order_without_resimplifying():
     assert all(call.args[4] == 0 for call in calls)
 
 
+@pytest.mark.slow
 def test_final_cleanup_board_benchmark():
     timings = {}
     for rest in (False, True):
@@ -526,6 +549,7 @@ def test_shrink_does_not_reunion_single_buffer_component(monkeypatch):
     assert gen.parent_tool.clear_polygon_shrink(box(0, 0, 40, 30), 0.5, 32, connect=False).objects
 
 
+@pytest.mark.slow
 def test_board_generation_benchmark():
     report = {}
     overlaps = []
@@ -560,6 +584,7 @@ def test_board_generation_benchmark():
     assert all(copper_overlap < 1e-8 and outside < 1e-8 for copper_overlap, outside in overlaps)
 
 
+@pytest.mark.slow
 def test_shared_clearing_benchmark():
     boundary, copper = board()
     area = boundary.difference(copper)

@@ -17,6 +17,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+import pytest
 import shapely
 import shapely.affinity as affinity
 from shapely import MultiPolygon, Point, Polygon, STRtree, box
@@ -276,6 +277,7 @@ class TestStructure(ClipperTestCase):
         self.assertLessEqual(max_boundary_distance(result_mm, result_in_mm, max_segment=0.01), 1e-6)
 
 
+@pytest.mark.slow
 @unittest.skipUnless(HAVE_EAGLE, "the Eagle fixtures are missing")
 class TestEagle(ClipperTestCase):
     POINT = (2.5614, 2.6473)
@@ -499,6 +501,7 @@ class ParseTestCase(ClipperTestCase):
         self.assertTrue(any(r is not None for r in results), "fuse_parts() never returned a result: %r" % (results,))
 
 
+@pytest.mark.slow
 @unittest.skipUnless(HAVE_EAGLE, "the Eagle fixtures are missing")
 class TestParseEagle(ParseTestCase):
     POINT = (2.5614, 2.6473)

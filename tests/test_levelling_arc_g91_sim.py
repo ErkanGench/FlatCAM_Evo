@@ -49,6 +49,8 @@ import re
 import unittest
 from types import SimpleNamespace
 
+import pytest
+
 from appPlugins.Common.levelling_interp import level_gcode_line, new_levelling_state
 
 DEC = 4
@@ -572,9 +574,18 @@ class TestRandomArcs(unittest.TestCase):
                 self.assertEqual(state['arcs_split'], gen.n_arcs)
         return report
 
+    # The quick tests run the first 5 programs of the full tests (same seed, same checks).
+    def test_g90_only_ij_and_r_quick(self):
+        self.run_many(1, 5, g91=False)
+
+    @pytest.mark.slow
     def test_g90_only_ij_and_r(self):
         self.run_many(1, 25, g91=False)
 
+    def test_g90_and_g91_mixed_quick(self):
+        self.run_many(2, 5)
+
+    @pytest.mark.slow
     def test_g90_and_g91_mixed(self):
         self.run_many(2, 25)
 

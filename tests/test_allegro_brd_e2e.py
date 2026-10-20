@@ -1,3 +1,4 @@
+import functools
 import os
 import re
 import tempfile
@@ -21,6 +22,10 @@ from appParsers.ParseAllegroBrd import AllegroBrdParser
 from appParsers.ParseExcellon import Excellon
 from appParsers.ParseGerber import Gerber
 from defaults import AppDefaults
+
+import pytest
+
+pytestmark = pytest.mark.slow
 
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'orcad_17.2'
@@ -85,6 +90,12 @@ def _app(units='MM'):
         defaults=defaults, decimals=4, version='test', version_date='test',
         proc_container=Mock(), plotcanvas=plotcanvas, pool=Mock(), collection=Mock(), file_opened=Mock(),
         file_saved=Mock())
+
+
+@functools.lru_cache(maxsize=None)
+def _parsed_board_a():
+    # 1 parse for both test classes of board A: the import copies the geometry and does not change the parsed board
+    return AllegroBrdParser(app=_app('MM')).parse_file(BOARD_A)
 
 
 def _union(value):
@@ -168,7 +179,7 @@ class TestAllegro172Board(FixtureCase):
     def setUpClass(cls):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         cls.app = _app()
-        cls.parsed = AllegroBrdParser(app=cls.app).parse_file(BOARD_A)
+        cls.parsed = _parsed_board_a()
         cls.films = {name: cls.read_film(FIXTURES / film) for name, film in FILMS_A.items()}
         cls.films['older TOP'] = cls.read_film(FIXTURES / 'TOP.art')
         cls.films['older BOTTOM'] = cls.read_film(FIXTURES / 'BOTTOM.art')
@@ -310,7 +321,7 @@ class TestAllegroRoundTrip(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-        cls.parsed = AllegroBrdParser(app=_app('MM')).parse_file(BOARD_A)
+        cls.parsed = _parsed_board_a()
 
     def _import(self, units):
         app = _app(units)

@@ -22,6 +22,10 @@ from appParsers.ParseExcellon import Excellon
 from appParsers.ParseGerber import Gerber
 from defaults import AppDefaults
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 
 # The Eagle CAM references (GERBER/, inch) and Pcb39.TXT are shifted against the board coordinates by OFFSET mm.
 OFFSET = (14.62913, 9.88898)

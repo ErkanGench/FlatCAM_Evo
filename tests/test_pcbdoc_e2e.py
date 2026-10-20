@@ -17,6 +17,10 @@ from appParsers.ParseGerber import Gerber
 from appParsers.ParsePcbDoc import PcbDocParser
 from defaults import AppDefaults
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 
 class NativeGerberObject(GerberObject):
     def __init__(self, name, app):

@@ -415,6 +415,7 @@ def test_residual_boundaries_clear_a_sliver_without_constructing_a_workspace():
     assert swept.difference(domain).area < 1e-10
 
 
+@pytest.mark.slow
 def test_connected_cleanup_preserves_grouped_workspace_coverage():
     worker, params = setup((0.4,))
     params.paint_method = 0
@@ -544,6 +545,7 @@ def test_final_paint_cnc_preserves_sequence_and_no_resimplification():
     assert all(call.args[4] == 0 for call in calls)
 
 
+@pytest.mark.slow
 def test_final_paint_synthetic_board_benchmark():
     measurements = []
     for enabled in (False, True):

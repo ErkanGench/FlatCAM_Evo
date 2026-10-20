@@ -18,6 +18,10 @@ from appParsers.ParseGerber import Gerber
 from appParsers.ParseKiCadPcb import KiCadPcbParser
 from defaults import AppDefaults
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 
 @functools.lru_cache(maxsize=None)
 def _parsed_board():

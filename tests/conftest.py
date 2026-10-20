@@ -80,6 +80,8 @@ _HARDWARE_BLOCKED = 'real hardware access is blocked in tests; mark the test har
 
 def pytest_configure(config):
     config.addinivalue_line('markers', 'hardware: needs a connected E-Cut or GRBL board (FLATCAM_TEST_HARDWARE=1)')
+    # slow tests are never skipped. The fast default run is: pytest tests -m "not slow". A plain run does all tests.
+    config.addinivalue_line('markers', 'slow: takes a long time (benchmarks, big boards, subprocess runs); deselect with -m "not slow"')
     # pytest resets the warning filters for each test; this line keeps the SWIG filter in the tests
     config.addinivalue_line('filterwarnings', f'ignore:{_SWIG_WARNING}:DeprecationWarning')
 
