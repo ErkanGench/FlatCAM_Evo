@@ -2,6 +2,7 @@
 """
 Tests for the open-file dialog filters. On Linux the Qt file dialog matches the filter patterns case-sensitive,
 so each pattern must also be there in upper case (EasyEDA writes e.g. 'board.GTL', 'board.DRL').
+Also the Gerber save dialog: each file type needs a '*.ext' pattern and 'All Files (*.*)' must be the last group.
 
 Run: python tests/test_file_filters.py
 """
@@ -97,6 +98,65 @@ class DialogFilterTests(unittest.TestCase):
                 ext_filter = self.captured_filter(lambda stub: callback(stub, 'geometry'))
                 self.assertTrue(matches(ext_filter, filename))
                 self.assertTrue(matches(ext_filter, filename.upper()))
+
+
+class GerberSaveFilterTests(unittest.TestCase):
+    """Run the real Gerber export callback with a patched save dialog and check the filter it passes to Qt."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    @staticmethod
+    def make_stub():
+        from appObjects.GerberObject import GerberObject
+        from defaults import AppDefaults
+        stub = SimpleNamespace(log=MagicMock(), inform=MagicMock(), export_gerber=MagicMock(), app=MagicMock())
+        stub.app.options = {}
+        stub.app.defaults = dict(AppDefaults.factory_defaults)
+        stub.app.get_last_save_folder.return_value = ''
+        obj = GerberObject.__new__(GerberObject)
+        obj.obj_options = {'name': 'board'}
+        obj.app = stub.app
+        stub.app.collection.get_active.return_value = obj
+        return stub
+
+    @staticmethod
+    def export(stub, file_type):
+        """The user types 'board' and picks 'file_type'. Return the filter shown and the file name exported."""
+        from appHandlers.appIO import appIO
+
+        def save_dialog(**kwargs):
+            return 'board', next(g for g in kwargs['filter'].split(';;') if g.startswith(file_type))
+
+        with patch.object(QtWidgets.QFileDialog, 'getSaveFileName', side_effect=save_dialog) as dialog:
+            appIO.on_file_export_gerber(stub)
+        return dialog.call_args.kwargs['filter'], stub.export_gerber.call_args.args[1]
+
+    def test_each_file_type_shows_its_files_and_all_files_is_last(self):
+        ext_filter, _filename = self.export(self.make_stub(), 'Gerber File .gbr ')
+        groups = ext_filter.split(';;')
+        self.assertEqual('All Files (*.*)', groups[-1])
+        for group in groups[:-1]:
+            # 'Gerber File .gtl (*.gtl)' must show 'board.gtl'
+            filename = 'board' + group.split()[2]
+            self.assertTrue(matches(group, filename), group)
+
+    def test_the_chosen_file_type_adds_its_extension(self):
+        # .art is the last file type; it was joined to 'All Files' and saved 'board' without an extension
+        for file_type, filename in (('Gerber File .gtl ', 'board.gtl'), ('Gerber File .art ', 'board.art')):
+            self.assertEqual(filename, self.export(self.make_stub(), file_type)[1])
+
+    def test_last_used_file_type_is_first_and_all_files_stays_last(self):
+        stub = self.make_stub()
+        first_filter, _filename = self.export(stub, 'Gerber File .gtl ')
+        for _ in range(3):
+            ext_filter, _filename = self.export(stub, 'Gerber File .gtl ')
+            groups = ext_filter.split(';;')
+            self.assertEqual('Gerber File .gtl (*.gtl)', groups[0])
+            self.assertEqual('All Files (*.*)', groups[-1])
+            self.assertNotIn('', groups)
+            self.assertEqual(len(first_filter.split(';;')), len(groups))
 
 
 if __name__ == '__main__':

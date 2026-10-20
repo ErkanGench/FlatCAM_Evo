@@ -103,6 +103,12 @@ CNCJob Plot:
 - fixed: on_plot_kind_change does not take the combobox value as the tool diameter
 - fixed: a plot with a tool diameter (Update Plot) is marked as the full plot, so a later visibility toggle uses it again
 
+Preprocessors:
+
+- fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path)
+- the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters)
+- fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *'
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -114,6 +120,7 @@ Tests:
 - new unit tests for the Film tool (tests/test_film.py)
 - new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
 - new unit tests for the CNC job plot filter and the visibility toggle
+- new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
 
 18.10.2026
 

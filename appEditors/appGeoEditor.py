@@ -5045,6 +5045,10 @@ class FCCopy(FCShapeTool):
         # Create new geometry
         if len(self.draw_app.get_selected()) > self.sel_limit:
             self.util_geo = self.array_util_geometry((self.clicked_postion[0], self.clicked_postion[1]))
+        elif self.util_geo is None:
+            # the copies are made on the mouse move after the reference click; with no move (a second click on the
+            # reference point, to copy in place) make them here, for the destination
+            self.utility_geometry(data=self.destination)
 
         # when doing circular array we remove the last geometry item in the list because it is the temp_line
         if self.copy_tool.ui.mode_radio.get_value() == 'a' and \

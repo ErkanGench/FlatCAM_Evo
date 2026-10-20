@@ -1353,9 +1353,16 @@ class ToolIsolation(Geometry, AppTool):
                         return 'fail'
 
                     min_dist = min(polygon_gap_pairs(total_geo, self.decimals))
+                    # the distances are rounded to the decimals, so the smallest one can be larger than the real gap;
+                    # use the same safe value as the tool validation (find_optim_mp())
+                    min_dist -= 10 ** -self.decimals
                     app_obj.proc_container.update_view_text(' %d%%' % 100)
 
                     min_dist_truncated = self.app.dec_format(float(min_dist), self.decimals)
+                    if min_dist_truncated <= 0:
+                        # the smallest gap is below the resolution of the decimals
+                        app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."))
+                        return 'fail'
                     self.safe_tooldia = min_dist_truncated
 
                     self.optimal_found_sig.emit(min_dist_truncated)
@@ -1833,11 +1840,12 @@ class ToolIsolation(Geometry, AppTool):
             for tool in sel_tools:
                 tool_data = tools_storage[tool]['data']
 
-                work_geo = flatten_shapely_geometry(geometry)
-                if work_geo is None:
+                if geometry is None:
                     # we do isolation over all the geometry of the Gerber object
                     # because it is already fused together
                     work_geo = flatten_shapely_geometry(isolated_obj.solid_geometry)
+                else:
+                    work_geo = flatten_shapely_geometry(geometry)
 
                 iso_t = {
                     'ext':  0,
