@@ -565,6 +565,10 @@ class Geometry(object):
 
     # clear_polygon_lines() cuts the scan lines from bands of this many lines (measured: 8 is the fastest)
     SCAN_BAND_LINES = 8
+    # clear_polygon_seed() makes and cuts this many rings at a time (measured: 8 and 16 are the fastest); a margin
+    # of at least SEED_BAND_MIN_COORDS coordinates is cut without the parts that the rings cannot touch
+    SEED_BAND_RINGS = 16
+    SEED_BAND_MIN_COORDS = 2000
 
     obj_options: dict[str, Any]
     kind: str
@@ -1630,9 +1634,25 @@ class Geometry(object):
             seedpoint = path_margin.representative_point()
 
         last_update = 0.0
+        # The rings are made and cut SEED_BAND_RINGS at a time, up to the first one that does not touch the margin
+        # and not beyond the farthest vertex of the margin. The cut of a ring costs O(size of the margin): a large
+        # margin (the area of a board has a hole for each copper feature) is cut without the polygons and holes that
+        # no ring of the band can touch (seed_band_margin()). The same paths, bit for bit.
+        step = tooldia * (1 - overlap)
+        seed_point = Point(seedpoint)
+        seed_xy = shapely.get_coordinates(seed_point)[0]
+        margin_xy = shapely.get_coordinates(path_margin)
+        farthest = float(np.max(np.hypot(margin_xy[:, 0] - seed_xy[0], margin_xy[:, 1] - seed_xy[1])))
+        band_margin = None
+        if len(margin_xy) >= Geometry.SEED_BAND_MIN_COORDS:
+            band_margin = seed_band_margin(path_margin, seed_point)
+        # A ring vertex is on its circle and an edge is inside it by at most 1 - cos(pi / (4 * quad_segs)) of the
+        # radius; the simplification moves the edges by at most simplify_tol. tooldia is added as a safe distance.
+        inner_ratio = math.cos(math.pi / (4 * quad_segs))
+        touches = True
         # Grow from seed until outside the box. The polygons will
         # never have an interior, so take the exterior LinearRing.
-        while True:
+        while touches:
             if self.app.abort_flag:
                 # graceful abort requested by the user
                 raise grace
@@ -1645,22 +1665,32 @@ class Geometry(object):
                 self.temp_shapes.redraw()
                 last_update = monotonic()
 
-            path = Point(seedpoint).buffer(radius, quad_segs=quad_segs).exterior
-            path = path.simplify(simplify_tol)
-            path = path.intersection(path_margin)
-
-            # Touches polygon?
-            if path.is_empty:
+            radii = []
+            while len(radii) < Geometry.SEED_BAND_RINGS and radius * inner_ratio - simplify_tol - tooldia <= farthest:
+                radii.append(radius)
+                radius += step
+            if not radii:
+                # the next ring is beyond the farthest vertex of the margin: it does not touch the margin
                 break
+            rings = shapely.get_exterior_ring(shapely.buffer(seed_point, radii, quad_segs=quad_segs))
+            rings = shapely.simplify(rings, simplify_tol)
 
-            # path can be a collection of paths.
-            path_geometry = flatten_shapely_geometry(path, simplify_tolerance=simplify_tol)
-            for p in path_geometry:
-                geom_elems.insert(p)
-                if prog_plot:
-                    self.plot_temp_shapes(p)
+            band = path_margin
+            if band_margin is not None:
+                band = band_margin(radii[0] * inner_ratio - simplify_tol - tooldia, radii[-1] + tooldia)
 
-            radius += tooldia * (1 - overlap)
+            for path in shapely.intersection(rings, band):
+                # Touches polygon?
+                if path.is_empty:
+                    touches = False
+                    break
+
+                # path can be a collection of paths.
+                path_geometry = flatten_shapely_geometry(path, simplify_tolerance=simplify_tol)
+                for p in path_geometry:
+                    geom_elems.insert(p)
+                    if prog_plot:
+                        self.plot_temp_shapes(p)
 
         # Clean inside edges (contours) of the original polygon
         if contour:
@@ -8583,6 +8613,45 @@ def circle_quad_segs(steps_per_circle) -> int:
     :return:                    the Shapely buffer quad_segs (segments of a quarter circle)
     """
     return max(1, math.ceil(int(steps_per_circle) / 4))
+
+
+def seed_band_margin(margin, center):
+    """
+    Prepares the cut of the rings around a center point from a large margin (clear_polygon_seed()).
+
+    A ring does not touch a polygon or a hole that is entirely nearer to the center than the ring or entirely farther.
+    The kept polygons and holes keep their coordinates and the polygons that hold the bounds of the margin are always
+    kept (the same envelope): a ring cut from a band is the ring cut from the whole margin, bit for bit.
+
+    :param margin:  MultiPolygon
+    :param center:  Point
+    :return:        function(near, far) that returns the margin without the polygons and holes that are entirely
+                    nearer to the center than near or entirely farther than far
+    """
+    polygons = shapely.get_parts(margin)
+    polygons = polygons[~shapely.is_empty(polygons)]
+    rings, ring_polygon = shapely.get_rings(polygons, return_index=True)
+    # the first ring of each polygon is its exterior
+    is_exterior = np.ones(len(rings), dtype=bool)
+    is_exterior[1:] = ring_polygon[1:] != ring_polygon[:-1]
+    # the nearest point of the area inside each ring (0 when it holds the center) and its farthest vertex
+    ring_near = shapely.distance(center, shapely.polygons(rings))
+    center_xy = shapely.get_coordinates(center)[0]
+    xy, xy_ring = shapely.get_coordinates(rings, return_index=True)
+    ring_far = np.zeros(len(rings))
+    np.maximum.at(ring_far, xy_ring, np.hypot(xy[:, 0] - center_xy[0], xy[:, 1] - center_xy[1]))
+    bounds = shapely.bounds(polygons)
+    bounds_polygons = np.zeros(len(polygons), dtype=bool)
+    bounds_polygons[[np.argmin(bounds[:, 0]), np.argmin(bounds[:, 1]),
+                     np.argmax(bounds[:, 2]), np.argmax(bounds[:, 3])]] = True
+
+    def band(near, far):
+        touch = (ring_far >= near) & (ring_near <= far)
+        kept = (bounds_polygons | touch[is_exterior])[ring_polygon] & (is_exterior | touch)
+        __, parts = np.unique(ring_polygon[kept], return_inverse=True)
+        return shapely.multipolygons(shapely.polygons(rings[kept], indices=parts))
+
+    return band
 
 
 def get_bounds(geometry_list: list) -> list:
