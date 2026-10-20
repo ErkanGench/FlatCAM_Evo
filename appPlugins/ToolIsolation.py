@@ -1867,10 +1867,14 @@ class ToolIsolation(Geometry, AppTool):
                 milling_type = tool_data['tools_iso_milling_type']
 
                 tool_dia = tools_storage[tool]['tooldia']
+                iso_offsets = [tool_dia * ((2 * nr + 1) / 2.0000001) - (nr * overlap * tool_dia)
+                               for nr in range(passes)]
+                if negative_dia:
+                    iso_offsets = [-iso_offset for iso_offset in iso_offsets]
+                # the passes are buffered ahead, in parallel threads
+                buffers = isolated_obj.isolation_buffers(iso_offsets, geometry=work_geo)
                 for i in range(passes):
-                    iso_offset = tool_dia * ((2 * i + 1) / 2.0000001) - (i * overlap * tool_dia)
-                    if negative_dia:
-                        iso_offset = -iso_offset
+                    iso_offset = iso_offsets[i]
 
                     outname = "%s_%.*f" % (isolated_obj.obj_options["name"], self.decimals, float(tool_dia))
 
@@ -1891,7 +1895,8 @@ class ToolIsolation(Geometry, AppTool):
                     mill_dir = 0 if milling_type == 'cl' else 1
 
                     iso_geo = self.generate_envelope(isolated_obj, iso_offset, mill_dir, geometry=work_geo,
-                                                     env_iso_type=iso_t, nr_passes=i, prog_plot=prog_plot)
+                                                     env_iso_type=iso_t, nr_passes=i, prog_plot=prog_plot,
+                                                     buffers=buffers)
                     if iso_geo == 'fail':
                         self.app.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                         continue
@@ -2304,16 +2309,19 @@ class ToolIsolation(Geometry, AppTool):
             })
 
             solid_geo = []
+            iso_offsets = [tool_dia * ((2 * nr + 1) / 2.0000001) - (nr * overlap * tool_dia) for nr in range(passes)]
+            if negative_dia:
+                iso_offsets = [-iso_offset for iso_offset in iso_offsets]
+            # the passes are buffered ahead, in parallel threads
+            buffers = iso_obj.isolation_buffers(iso_offsets, geometry=work_geo)
             for nr_pass in range(passes):
-                iso_offset = tool_dia * ((2 * nr_pass + 1) / 2.0000001) - (nr_pass * overlap * tool_dia)
-                if negative_dia:
-                    iso_offset = -iso_offset
+                iso_offset = iso_offsets[nr_pass]
 
                 # if milling type is climb then the move is counter-clockwise around features
                 mill_dir = 0 if milling_type == 'cl' else 1
 
                 iso_geo = self.generate_envelope(iso_obj, iso_offset, mill_dir, geometry=work_geo, env_iso_type=iso_t,
-                                                 nr_passes=nr_pass, prog_plot=prog_plot)
+                                                 nr_passes=nr_pass, prog_plot=prog_plot, buffers=buffers)
                 if iso_geo == 'fail':
                     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                     continue
@@ -3063,7 +3071,7 @@ class ToolIsolation(Geometry, AppTool):
         return [interior for interior in poly.interiors]
 
     def generate_envelope(self, iso_obj, offset, invert, geometry=None, env_iso_type=2, nr_passes=0,
-                          prog_plot=False):
+                          prog_plot=False, buffers=None):
         """
         Isolation_geometry produces an envelope that is going on the left of the geometry
         (the copper features). To leave the least amount of burrs on the features
@@ -3085,13 +3093,15 @@ class ToolIsolation(Geometry, AppTool):
         :type nr_passes:        int
         :param prog_plot:       Type of plotting: "normal" or "progressive"
         :type prog_plot:        str
+        :param buffers:         the passes buffered ahead (iso_obj.isolation_buffers()), or None
+        :type buffers:          camlib.PassBuffers
         :return:                The buffered geometry
         :rtype:                 MultiPolygon or Polygon
         """
 
         try:
             geom_shp = iso_obj.isolation_geometry(offset, geometry=geometry, iso_type=env_iso_type,
-                                                  passes=nr_passes, prog_plot=prog_plot)
+                                                  passes=nr_passes, prog_plot=prog_plot, buffers=buffers)
         except Exception as e:
             self.app.log.error('ToolIsolation.generate_envelope() --> %s' % str(e))
             return 'fail'
