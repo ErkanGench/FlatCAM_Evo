@@ -18,8 +18,10 @@ from appParsers.DXF import dxf_to_shapes
 
 from numpy.linalg import solve
 
+import os
 import platform
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from copy import deepcopy
 from collections.abc import Iterable
@@ -3077,6 +3079,21 @@ class CNCjob(Geometry):
         attributes = AttrDict()
         attributes.update(self.postdata)
         attributes.update(kwargs)
+        return self.doformat_attributes(fun, attributes)
+
+    def doformat_attributes(self, fun, attributes):
+        """
+        Like doformat2() but with the attributes made by the caller: an AttrDict of the attributes of the current class
+        updated with the values of the line. For many lines that differ only in a few values (the points of a path),
+        the attributes are copied once instead of for every line.
+
+        :param fun:         One of the methods inside the preprocessor classes which get loaded here in the 'p' object
+        :type fun:          class 'function'
+        :param attributes:  the attributes given to the preprocessor method
+        :type attributes:   AttrDict
+        :return:            Gcode line
+        :rtype:             str
+        """
         try:
             ret = fun(attributes)
             return ret
@@ -4205,27 +4222,44 @@ class CNCjob(Geometry):
         self.app.log.warning("Number of paths for which to generate GCode: %s" % str(geo_len))
         old_disp_number = 0
 
-        current_pt = first_pt
+        oriented_path = []
         for pt, geo in optimized_path:
+            # If last point in geometry is the nearest but prefer the first one if last point == first point
+            # then reverse coordinates.
+            if pt != geo.coords[0] and pt == geo.coords[-1]:
+                geo = LineString(list(geo.coords)[::-1])
+            oriented_path.append((pt, geo))
+
+        # Single depth without extra cut: the oriented paths are simplified at once, on several threads, instead of
+        # one by one in linear2gcode() (a large part of the time); the same paths. Multi depth simplifies each depth
+        # in its own direction and the extra cut looks at the path before the simplification.
+        simplified = None
+        if not self.multidepth and self.extracut is False and self.tolerance > 0:
+            simplified = simplify_paths([geo for __, geo in oriented_path], self.tolerance)
+
+        # the G-code of the paths is joined at the end: added to the growing string, it was copied again and again
+        gcode_parts = [t_gcode]
+        current_pt = first_pt
+        for path_idx, (pt, geo) in enumerate(oriented_path):
             if self.app.abort_flag:
                 # graceful abort requested by the user
                 raise grace
 
             path_count += 1
 
-            # If last point in geometry is the nearest but prefer the first one if last point == first point
-            # then reverse coordinates.
-            if pt != geo.coords[0] and pt == geo.coords[-1]:
-                geo = LineString(list(geo.coords)[::-1])
-
             # ---------- Single depth/pass --------
             if not self.multidepth:
                 # calculate the cut distance
                 total_cut = total_cut + geo.length
 
-                t_gcode += self.create_gcode_single_pass(geo, current_tooldia, self.extracut,
-                                                         self.extracut_length, self.tolerance,
-                                                         z_move=self.z_move, old_point=current_pt)
+                if simplified is None:
+                    gcode_parts.append(self.create_gcode_single_pass(geo, current_tooldia, self.extracut,
+                                                                     self.extracut_length, self.tolerance,
+                                                                     z_move=self.z_move, old_point=current_pt))
+                else:
+                    gcode_parts.append(self.create_gcode_single_pass(simplified[path_idx], current_tooldia,
+                                                                     self.extracut, self.extracut_length, 0,
+                                                                     z_move=self.z_move, old_point=current_pt))
 
             # --------- Multi-pass ---------
             else:
@@ -4242,7 +4276,7 @@ class CNCjob(Geometry):
                 gc, geo = self.create_gcode_multi_pass(geo, current_tooldia, self.extracut,
                                                        self.extracut_length, self.tolerance,
                                                        z_move=self.z_move, postproc=p, old_point=current_pt)
-                t_gcode += gc
+                gcode_parts.append(gc)
 
             # calculate the total distance
             total_travel = total_travel + abs(distance(pt1=current_pt, pt2=pt))
@@ -4253,6 +4287,7 @@ class CNCjob(Geometry):
                 self.app.proc_container.update_view_text(' %d%%' % disp_number)
                 old_disp_number = disp_number
 
+        t_gcode = ''.join(gcode_parts)
         self.app.log.debug("Finished G-Code... %s paths traced." % path_count)
 
         # add move to end position
@@ -7078,6 +7113,11 @@ class CNCjob(Geometry):
         # Cutting...
         prev_x = first_x
         prev_y = first_y
+        # the attributes are copied once for the path and only x, y change from a point to the next one (doformat()
+        # copies all the attributes of this object for every line)
+        attributes = AttrDict()
+        attributes.update(self.postdata)
+        attributes['z_cut'] = z_cut
         for pt in path[1:]:
             if self.app.abort_flag:
                 # graceful abort requested by the user
@@ -7095,7 +7135,9 @@ class CNCjob(Geometry):
                 next_x = pt[0]
                 next_y = pt[1]
 
-            gcode += self.doformat(p.linear_code, x=next_x, y=next_y, z_cut=z_cut)  # Linear motion to point
+            attributes['x'] = next_x
+            attributes['y'] = next_y
+            gcode += self.doformat_attributes(p.linear_code, attributes) + "\n"  # Linear motion to point
             prev_x = pt[0]
             prev_y = pt[1]
 
@@ -8695,6 +8737,36 @@ def arc_angle(start, stop, direction):
 #             pass
 #
 #     return None
+
+
+def simplify_paths(paths, tolerance):
+    """
+    The same as [path.simplify(tolerance) for path in paths], made with vectorized calls on several threads (GEOS
+    releases the GIL). A geometry that is more than once in the list is simplified once, by one thread, and the same
+    simplified geometry is returned for each of its places.
+
+    :param paths:       list of Shapely geometries
+    :type paths:        list
+    :param tolerance:   simplification tolerance
+    :type tolerance:    float
+    :return:            the simplified geometries, in the same order
+    :rtype:             list
+    """
+    unique = {id(path): path for path in paths}
+    geoms = np.empty(len(unique), dtype=object)
+    geoms[:] = list(unique.values())
+
+    workers = min(os.cpu_count() or 1, len(geoms) // 16)
+    if workers < 2:
+        simplified = shapely.simplify(geoms, tolerance)
+    else:
+        # more pieces than threads: the paths are not equally long
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pieces = pool.map(lambda piece: shapely.simplify(piece, tolerance), np.array_split(geoms, workers * 4))
+            simplified = np.concatenate(list(pieces))
+
+    by_id = dict(zip(unique.keys(), simplified))
+    return [by_id[id(path)] for path in paths]
 
 
 def deepcopy_keep_geometry(obj):
