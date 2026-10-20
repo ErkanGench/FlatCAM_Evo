@@ -100,3 +100,21 @@ def test_load_drops_the_removed_autosave_keys(tmp_path):
     assert "global_autosave" not in defaults
     assert "global_autosave_timeout" not in defaults
     assert defaults["units"] == "IN"
+
+
+@pytest.mark.parametrize("saved, kept", [
+    # the broken factory value, as update_filters() left it after a .gtl export
+    ("Gerber File .gtl (.gtl);;Gerber File .gbr (.gbr);;Gerber File .art (.art)All Files (.*);;", False),
+    # the default from 2019-11 to 2025-10, as update_filters() left it after a .gtl export
+    ("Gerber File .gtl (*.gtl);;Gerber File .gbr (*.gbr);;Gerber File .art (*.art)All Files (*.*)", False),
+    ("Gerber File .gtl (*.gtl);;Gerber File .gbr (*.gbr);;All Files (*.*)", True),
+], ids=["broken", "legacy", "valid"])
+def test_load_replaces_the_broken_gerber_save_filters(tmp_path, saved, kept):
+    path = tmp_path / "current_defaults.FlatConfig"
+    path.write_text(json.dumps({"gerber_save_filters": saved, "units": "IN"}))
+    defaults = AppDefaults(beta=False)
+    defaults.load(str(path), SimpleNamespace(emit=lambda *args: None))
+    expected = saved if kept else AppDefaults.factory_defaults["gerber_save_filters"]
+    assert defaults["gerber_save_filters"] == expected
+    assert "All Files (*.*)" in defaults["gerber_save_filters"].split(";;")
+    assert defaults["units"] == "IN"

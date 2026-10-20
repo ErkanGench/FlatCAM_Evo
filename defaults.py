@@ -229,26 +229,26 @@ class AppDefaults:
 
         "gerber_def_units": 'IN',
         "gerber_def_zeros": 'L',
-        "gerber_save_filters": "Gerber File .gbr (.gbr);;Gerber File .bot (.bot);;Gerber File .bsm (.bsm);;"
-                               "Gerber File .cmp (.cmp);;Gerber File .crc (.crc);;Gerber File .crs (.crs);;"
-                               "Gerber File .gb0 (.gb0);;Gerber File .gb1 (.gb1);;Gerber File .gb2 (.gb2);;"
-                               "Gerber File .gb3 (.gb3);;Gerber File .gb4 (.gb4);;Gerber File .gb5 (.gb5);;"
-                               "Gerber File .gb6 (.gb6);;Gerber File .gb7 (.gb7);;Gerber File .gb8 (.gb8);;"
-                               "Gerber File .gb9 (.gb9);;Gerber File .gbd (.gbd);;Gerber File .gbl (.gbl);;"
-                               "Gerber File .gbo (.gbo);;Gerber File .gbp (.gbp);;Gerber File .gbs (.gbs);;"
-                               "Gerber File .gdl (.gdl);;Gerber File .gdo (.gdo);;Gerber File .ger (.ger);;"
-                               "Gerber File .gko (.gko);;Gerber File .gm1 (.gm1);;Gerber File .gm2 (.gm2);;"
-                               "Gerber File .gm3 (.gm3);;Gerber File .gme (.gme);;Gerber File .grb (.grb);;"
-                               "Gerber File .gtl (.gtl);;Gerber File .gto (.gto);;Gerber File .gtp (.gtp);;"
-                               "Gerber File .gts (.gts);;Gerber File .ly15 (.ly15);;Gerber File .ly2 (.ly2);;"
-                               "Gerber File .mil (.mil);;"
-                               "Gerber File .outline (.outline);;Gerber File .pho (.pho);;"
-                               "Gerber File .plc (.plc);;Gerber File .pls (.pls);;Gerber File .smb (.smb);;"
-                               "Gerber File .smt (.smt);;Gerber File .sol (.sol);;Gerber File .spb (.spb);;"
-                               "Gerber File .spt (.spt);;Gerber File .ssb (.ssb);;Gerber File .sst (.sst);;"
-                               "Gerber File .stc (.stc);;Gerber File .sts (.sts);;Gerber File .top (.top);;"
-                               "Gerber File .tsm (.tsm);;Gerber File .art (.art)"
-                               "All Files (.*)",
+        "gerber_save_filters": "Gerber File .gbr (*.gbr);;Gerber File .bot (*.bot);;Gerber File .bsm (*.bsm);;"
+                               "Gerber File .cmp (*.cmp);;Gerber File .crc (*.crc);;Gerber File .crs (*.crs);;"
+                               "Gerber File .gb0 (*.gb0);;Gerber File .gb1 (*.gb1);;Gerber File .gb2 (*.gb2);;"
+                               "Gerber File .gb3 (*.gb3);;Gerber File .gb4 (*.gb4);;Gerber File .gb5 (*.gb5);;"
+                               "Gerber File .gb6 (*.gb6);;Gerber File .gb7 (*.gb7);;Gerber File .gb8 (*.gb8);;"
+                               "Gerber File .gb9 (*.gb9);;Gerber File .gbd (*.gbd);;Gerber File .gbl (*.gbl);;"
+                               "Gerber File .gbo (*.gbo);;Gerber File .gbp (*.gbp);;Gerber File .gbs (*.gbs);;"
+                               "Gerber File .gdl (*.gdl);;Gerber File .gdo (*.gdo);;Gerber File .ger (*.ger);;"
+                               "Gerber File .gko (*.gko);;Gerber File .gm1 (*.gm1);;Gerber File .gm2 (*.gm2);;"
+                               "Gerber File .gm3 (*.gm3);;Gerber File .gme (*.gme);;Gerber File .grb (*.grb);;"
+                               "Gerber File .gtl (*.gtl);;Gerber File .gto (*.gto);;Gerber File .gtp (*.gtp);;"
+                               "Gerber File .gts (*.gts);;Gerber File .ly15 (*.ly15);;Gerber File .ly2 (*.ly2);;"
+                               "Gerber File .mil (*.mil);;"
+                               "Gerber File .outline (*.outline);;Gerber File .pho (*.pho);;"
+                               "Gerber File .plc (*.plc);;Gerber File .pls (*.pls);;Gerber File .smb (*.smb);;"
+                               "Gerber File .smt (*.smt);;Gerber File .sol (*.sol);;Gerber File .spb (*.spb);;"
+                               "Gerber File .spt (*.spt);;Gerber File .ssb (*.ssb);;Gerber File .sst (*.sst);;"
+                               "Gerber File .stc (*.stc);;Gerber File .sts (*.sts);;Gerber File .top (*.top);;"
+                               "Gerber File .tsm (*.tsm);;Gerber File .art (*.art);;"
+                               "All Files (*.*)",
 
         # Gerber Options
         "gerber_noncoppermargin": 0.1,
@@ -1160,6 +1160,13 @@ class AppDefaults:
             defaults['global_styling'] = 'default' if appearance == 'default' else 'custom'
             defaults['global_appearance'] = 'light' if appearance == 'default' else appearance
         
+        # The saved Gerber save filters had no separate 'All Files (*.*)' group (it was joined to the '.art' type)
+        # and, later, no '*' in the patterns. They were saved with the preferences at each exit, also in the files of
+        # the older versions (find_legacy_defaults_file()). Drop them so the factory value is used.
+        saved_filters = defaults.get('gerber_save_filters')
+        if saved_filters is not None and 'All Files (*.*)' not in str(saved_filters).split(';;'):
+            defaults.pop('gerber_save_filters')
+
         # ponytail: merge saved data over factory defaults. Missing keys get factory values,
         # user overrides (including falsy values) are preserved. No version gating.
         self.old_defaults_found = False
