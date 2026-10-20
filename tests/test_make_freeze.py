@@ -152,6 +152,15 @@ class TestMakeFreeze(unittest.TestCase):
         self.assertTrue((main_stage / "FlatCAM.exe").is_file())
         self.assertTrue((updater_stage / "FlatCAMUpdater.exe").is_file())
 
+    def test_optional_dynamic_packages_are_frozen_only_when_installed(self):
+        # OR-Tools loads its protobuf modules (routing_parameters_pb2 ...) by name; it is optional
+        with patch.object(make_freeze.importlib.util, "find_spec", lambda name: object()):
+            self.assertIn("ortools", make_freeze.main_packages())
+        with patch.object(make_freeze.importlib.util, "find_spec", lambda name: None):
+            packages = make_freeze.main_packages()
+        self.assertNotIn("ortools", packages)
+        self.assertIn("OpenGL", packages)
+
     def test_incomplete_updater_is_rejected_without_touching_existing_final_runtime(self):
         calls = []
         fake_freezer = _fake_freezer_class(calls, include_recovery=False)

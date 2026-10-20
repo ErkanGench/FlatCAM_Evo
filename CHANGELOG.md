@@ -20,6 +20,7 @@ Packaging:
 
 - fixed: the application frozen with make_freeze.py (cx_Freeze) did not start: PyOpenGL loads its platform module (OpenGL.platform.win32) by name, so cx_Freeze left it out; the OpenGL package is now included
 - fixed: the frozen application did not find its data: assets, locale, preprocessors and config are now copied into lib/, next to the modules, where the application looks for them (as the old freeze script did); config/configuration.txt was not copied at all
+- fixed: in the frozen application cncjob failed with "No module named 'ortools.constraint_solver.routing_parameters_pb2'": OR-Tools loads its protobuf modules by name, so cx_Freeze left them out; the ortools package is now included when it is installed
 - fixed: the frozen application logged "No translation file found for domain: 'strings'" at each start: it looked for the translations in library.zip first; the existing locale folder is now used at the first try
 
 Tcl and command line:
