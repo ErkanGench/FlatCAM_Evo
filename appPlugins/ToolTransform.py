@@ -10,6 +10,7 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCDoubleSpinner, NumericalEvalTupleEntry, OptionalInputSection
 from defaults import AppDefaults
+from appCommon.SafeEval import safe_eval
 
 import logging
 import numpy as np
@@ -198,7 +199,7 @@ class ToolTransform(AppTool):
         elif ref_val == 2:  # "Point" reference
             point_val = self.ui.point_entry.get_value()
             try:
-                px, py = eval('{}'.format(point_val))
+                px, py = safe_eval('{}'.format(point_val))
                 return px, py
             except Exception:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("Incorrect format for Point value. Needs format X,Y"))

@@ -5,6 +5,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     FCDoubleSpinner, FCComboBox2, NumericalEvalTupleEntry
 from defaults import AppDefaults
 from appParsers.feature_access import iter_features
+from appCommon.SafeEval import safe_eval
 
 import logging
 from copy import deepcopy
@@ -342,7 +343,7 @@ class DblSidedTool(AppTool):
             return
 
         # holes = self.alignment_holes.get_value()
-        holes = eval('[{}]'.format(self.ui.alignment_holes.text()))
+        holes = safe_eval('[{}]'.format(self.ui.alignment_holes.text()))
         if not holes:
             msg = '[WARNING_NOTCL] %s' % _("Alignment drill coordinates are missing.")
             self.app.inform.emit(msg)
@@ -449,7 +450,7 @@ class DblSidedTool(AppTool):
         if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier | QtCore.Qt.KeyboardModifier.ShiftModifier:
             alignment_holes = self.ui.alignment_holes.get_value()
             try:
-                eval_clip_val = eval(clip_val)
+                eval_clip_val = safe_eval(clip_val)
             except Exception as err:
                 self.app.log.debug("DblSidedTool.on_plugin_mouse_click_release() --> %s" % str(err))
                 return
@@ -547,7 +548,7 @@ class DblSidedTool(AppTool):
 
         # adjust the clipboard content too
         try:
-            old_clipb = eval(self.app.clipboard.text())
+            old_clipb = safe_eval(self.app.clipboard.text())
         except Exception:
             # self.log.error("App.on_mouse_and_key_modifiers() --> %s" % str(err))
             old_clipb = None

@@ -39,6 +39,7 @@ import builtins
 from appParsers.ParseGerber import Gerber
 from appDatabase import load_tools_database
 from defaults import AppDefaults
+from appCommon.SafeEval import safe_eval
 from camlib import (
     Geometry,
     flatten_shapely_geometry,
@@ -481,7 +482,7 @@ class ToolPaint(Geometry, AppTool):
             diameters = [float(tool_dia)]
         except (ValueError, TypeError):
             if isinstance(tool_dia, str):
-                diameters = [eval(x) for x in tool_dia.split(",") if x != '']
+                diameters = [safe_eval(x) for x in tool_dia.split(",") if x != '']
             else:
                 diameters = tool_dia
 

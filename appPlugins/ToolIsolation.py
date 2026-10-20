@@ -29,6 +29,7 @@ import builtins
 
 from appDatabase import load_tools_database
 from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs
+from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -456,7 +457,7 @@ class ToolIsolation(Geometry, AppTool):
             tool_dia_option = self.app.options.get(
                 "tools_iso_tooldia", app_defaults.get("tools_iso_tooldia", AppDefaults.factory_defaults.get("tools_iso_tooldia")))
             if isinstance(tool_dia_option, str):
-                dias = [float(eval(dia)) for dia in tool_dia_option.split(",") if dia != '']
+                dias = [float(safe_eval(dia)) for dia in tool_dia_option.split(",") if dia != '']
             else:
                 dias = tool_dia_option
 

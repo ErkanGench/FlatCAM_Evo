@@ -37,6 +37,7 @@ from appPlugins.ToolNCC.NccGen import NccGen
 from appDatabase import load_tools_database
 from defaults import AppDefaults
 from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs
+from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -517,7 +518,7 @@ class ToolNcc(Geometry, AppTool):
             dias = [float(tools_ncc_tools)]
         except (ValueError, TypeError):
             try:
-                dias = [float(eval(dia)) for dia in tools_ncc_tools.split(",") if dia != '']
+                dias = [float(safe_eval(dia)) for dia in tools_ncc_tools.split(",") if dia != '']
             except AttributeError:
                 dias = tools_ncc_tools
         except Exception:

@@ -41,6 +41,7 @@ from camlib import (
 )
 from defaults import AppDefaults
 from appParsers.feature_access import fused_solid
+from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -631,7 +632,7 @@ class PaintGen:
         sorted_paint_tools = []
         if tooldia is not None:
             try:
-                sorted_paint_tools = [float(eval(dia)) for dia in tooldia.split(",") if dia != '']
+                sorted_paint_tools = [float(safe_eval(dia)) for dia in tooldia.split(",") if dia != '']
             except AttributeError:
                 if not isinstance(tooldia, list):
                     sorted_paint_tools = [float(tooldia)]
