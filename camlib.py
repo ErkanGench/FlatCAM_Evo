@@ -10,6 +10,7 @@ from PyQt6 import QtWidgets     # noqa
 
 from appCommon.Common import GracefulException as grace
 from appCommon.SafeEval import safe_eval
+from appCommon.PathOrder import order_paths, order_points
 
 # from scipy.spatial import KDTree, Delaunay
 # from scipy.spatial import Delaunay
@@ -1498,6 +1499,8 @@ class Geometry(object):
 
         geoms = AppRTreeStorage()
         geoms.get_points = get_pts
+        # the paths are collected and go in the storage in 1 batch (bulk load) when all are made
+        new_paths = []
 
         # Can only result in a Polygon or MultiPolygon
         # NOTE: The resulting polygon can be "empty".
@@ -1505,9 +1508,9 @@ class Geometry(object):
         current = flatten_shapely_geometry(current)
 
         for p in current:
-            geoms.insert(p.exterior)
+            new_paths.append(p.exterior)
             for i in p.interiors:
-                geoms.insert(i)
+                new_paths.append(i)
 
         last_update = 0.0
         for cl_pol in current:
@@ -1538,12 +1541,12 @@ class Geometry(object):
                 for tiny_pol in cl_pol_list:
                     if tiny_pol.area > 0:
                         added_flag = True
-                        geoms.insert(tiny_pol.exterior)
+                        new_paths.append(tiny_pol.exterior)
                         if prog_plot:
                             self.plot_temp_shapes(tiny_pol.exterior)
 
                         for i in tiny_pol.interiors:
-                            geoms.insert(i)
+                            new_paths.append(i)
                             if prog_plot:
                                 self.plot_temp_shapes(i)
                 if added_flag is False:
@@ -1583,6 +1586,7 @@ class Geometry(object):
                 #     else:
                 #         break
 
+        geoms.insert_many(new_paths)
         if not geoms.objects:
             self.app.log.debug("camlib.Geometry.clear_polygon_shrink() --> Current Area is zero")
             return
@@ -1648,6 +1652,8 @@ class Geometry(object):
 
         geom_elems = AppRTreeStorage()
         geom_elems.get_points = get_pts
+        # the paths are collected and go in the storage in 1 batch (bulk load) when all are made
+        new_paths = []
 
         # Path margin
         buffered_margin = polygon_to_clear.buffer(-tooldia / 2, quad_segs=quad_segs)
@@ -1716,7 +1722,7 @@ class Geometry(object):
                 # path can be a collection of paths.
                 path_geometry = flatten_shapely_geometry(path, simplify_tolerance=simplify_tol)
                 for p in path_geometry:
-                    geom_elems.insert(p)
+                    new_paths.append(p)
                     if prog_plot:
                         self.plot_temp_shapes(p)
 
@@ -1734,9 +1740,11 @@ class Geometry(object):
 
             for g in outer_edges + inner_edges:
                 if g and not g.is_empty:
-                    geom_elems.insert(g)
+                    new_paths.append(g)
                     if prog_plot:
                         self.plot_temp_shapes(g)
+
+        geom_elems.insert_many(new_paths)
 
         if prog_plot:
             self.temp_shapes.redraw()
@@ -1802,6 +1810,8 @@ class Geometry(object):
 
         geoms = AppRTreeStorage()
         geoms.get_points = get_pts
+        # the paths are collected and go in the storage in 1 batch (bulk load) when all are made
+        new_paths = []
 
         lines_trimmed = []
 
@@ -1920,7 +1930,7 @@ class Geometry(object):
         for line in lines_t_geo:
             if isinstance(line, LineString) or isinstance(line, LinearRing):
                 if not line.is_empty:
-                    geoms.insert(line)
+                    new_paths.append(line)
             else:
                 self.app.log.debug("camlib.Geometry.clear_polygon_lines(). Not a line: %s" % str(type(line)))
 
@@ -1929,13 +1939,15 @@ class Geometry(object):
             margin_poly_geo = flatten_shapely_geometry(margin_poly, simplify_tolerance=simplify_tol)
             for poly in margin_poly_geo:
                 if isinstance(poly, Polygon) and not poly.is_empty:
-                    geoms.insert(poly.exterior)
+                    new_paths.append(poly.exterior)
                     if prog_plot:
                         self.plot_temp_shapes(poly.exterior)
                     for ints in poly.interiors:
-                        geoms.insert(ints)
+                        new_paths.append(ints)
                         if prog_plot:
                             self.plot_temp_shapes(ints)
+
+        geoms.insert_many(new_paths)
 
         if prog_plot:
             self.temp_shapes.redraw()
@@ -2013,6 +2025,8 @@ class Geometry(object):
 
         geoms = AppRTreeStorage()
         geoms.get_points = get_pts
+        # the paths are collected and go in the storage in 1 batch (bulk load) when all are made
+        new_paths = []
 
         lines_trimmed = []
 
@@ -2144,35 +2158,37 @@ class Geometry(object):
         try:
             for line_g in lines_geometry:
                 if isinstance(line_g, LineString) or isinstance(line_g, LinearRing):
-                    geoms.insert(line_g)
+                    new_paths.append(line_g)
                 else:
                     self.app.log.debug("camlib.Geometry.fill_with_lines(). Not a line: %s" % str(type(line_g)))
         except TypeError:
             # in case lines_trimmed are not iterable (Linestring, LinearRing)
-            geoms.insert(lines_geometry) if lines_geometry and not lines_geometry.is_empty else None
+            new_paths.append(lines_geometry) if lines_geometry and not lines_geometry.is_empty else None
 
         # Add margin (contour) to storage
         if contour:
             try:
                 for poly in margin_poly:
                     if isinstance(poly, Polygon) and not poly.is_empty:
-                        geoms.insert(poly.exterior)
+                        new_paths.append(poly.exterior)
                         if prog_plot:
                             self.plot_temp_shapes(poly.exterior)
                         for ints in poly.interiors:
-                            geoms.insert(ints)
+                            new_paths.append(ints)
                             if prog_plot:
                                 self.plot_temp_shapes(ints)
             except TypeError:
                 if isinstance(margin_poly, Polygon) and not margin_poly.is_empty:
                     marg_ext = margin_poly.exterior
-                    geoms.insert(marg_ext)
+                    new_paths.append(marg_ext)
                     if prog_plot:
                         self.plot_temp_shapes(margin_poly.exterior)
                     for ints in margin_poly.interiors:
-                        geoms.insert(ints)
+                        new_paths.append(ints)
                         if prog_plot:
                             self.plot_temp_shapes(ints)
+
+        geoms.insert_many(new_paths)
 
         if prog_plot:
             self.temp_shapes.redraw()
@@ -2255,6 +2271,8 @@ class Geometry(object):
         # optimized_paths = []
         optimized_paths = AppRTreeStorage()
         optimized_paths.get_points = get_pts
+        # the joined paths go in the storage in 1 batch (bulk load) at the end
+        joined_paths = []
         path_count = 0
         current_pt = (0, 0)
         try:
@@ -2312,7 +2330,7 @@ class Geometry(object):
                     # Have to lift tool. End path.
                     # log.debug("Path #%d not within boundary. Next." % path_count)
                     # optimized_paths.append(geo)
-                    optimized_paths.insert(LineString(np.concatenate(geo_coords)))
+                    joined_paths.append(LineString(np.concatenate(geo_coords)))
                     geo_coords = [candidate_coords]
 
                 current_pt = tuple(geo_coords[-1][-1].tolist())
@@ -2322,8 +2340,9 @@ class Geometry(object):
 
         except StopIteration:  # Nothing left in storage.
             # pass
-            optimized_paths.insert(LineString(np.concatenate(geo_coords)))
+            joined_paths.append(LineString(np.concatenate(geo_coords)))
 
+        optimized_paths.insert_many(joined_paths)
         return optimized_paths
 
     @staticmethod
@@ -2359,6 +2378,8 @@ class Geometry(object):
         # optimized_geometry = [geo]
         optimized_geometry = AppRTreeStorage()
         optimized_geometry.get_points = get_pts
+        # the joined paths go in the storage in 1 batch (bulk load) at the end
+        joined_paths = []
         # optimized_geometry.insert(geo)
         try:
             while True:
@@ -2427,20 +2448,21 @@ class Geometry(object):
                 storage.remove(right)
 
                 if isinstance(right, LinearRing):
-                    optimized_geometry.insert(right)
+                    joined_paths.append(right)
                 else:
                     # Cannot extend geo any further. Put it away.
-                    optimized_geometry.insert(geo)
+                    joined_paths.append(geo)
 
                     # Continue with right.
                     geo = right
 
         except StopIteration:  # Nothing found in storage.
-            optimized_geometry.insert(geo)
+            joined_paths.append(geo)
 
         # print path_count
         # log.debug("path_count = %d" % path_count)
 
+        optimized_geometry.insert_many(joined_paths)
         return optimized_geometry
 
     def convert_units(self, obj_units):
@@ -3376,21 +3398,17 @@ class CNCjob(Geometry):
         return path
 
     def geo_optimized_rtree(self, geometry: BaseGeometry | list[BaseGeometry]):
-        locations = []
+        """
+        The order to cut the paths of the geometry: a nearest neighbour walk from (0, 0) (see appCommon.PathOrder), then
+        a pass that shortens the rapid travel. A path can be cut from its first or its last point.
 
-        # ## Index first and last points in paths. What points to index.
-        def get_pts(o):
-            return [o.coords[0], o.coords[-1]]
-
-        # Create the indexed storage.
-        storage = AppRTreeStorage()
-        storage.get_points = get_pts
-
-        # Store the geometry
-        self.app.log.debug("Indexing geometry before generating G-Code...")
+        :return: list of (entry point, path) or 'fail' if there is no path
+        """
+        self.app.log.debug("Ordering the paths before generating G-Code...")
         self.app.inform.emit(_("Indexing geometry before generating G-Code..."))
 
         work_geo = geometry.geoms if isinstance(geometry, (MultiPolygon, MultiLineString)) else geometry
+        new_shapes = []
         try:
             for geo_shape in work_geo:
                 if self.app.abort_flag:
@@ -3398,49 +3416,30 @@ class CNCjob(Geometry):
                     raise grace
 
                 if geo_shape is not None:
-                    try:
-                        storage.insert(geo_shape)
-                    except Exception:
-                        pass
+                    new_shapes.append(geo_shape)
         except TypeError:
             if work_geo is not None:
-                try:
-                    storage.insert(work_geo)
-                except Exception:
-                    pass
-
-        current_pt = (0, 0)
-        pt, geo = storage.nearest(current_pt)
-        try:
-            while True:
-                storage.remove(geo)
-                locations.append((pt, geo))
-                current_pt = geo.coords[-1]
-                pt, geo = storage.nearest(current_pt)
-        except StopIteration:
-            pass
+                new_shapes.append(work_geo)
 
         # if there are no locations then go to the next tool
+        locations = order_paths(new_shapes, start=(0.0, 0.0))
         if not locations:
             return 'fail'
 
         return locations
 
     def exc_optimized_rtree(self, geometry):
-        locations = []
+        """
+        The order to drill the holes: a nearest neighbour walk from (0, 0) (see appCommon.PathOrder), then a pass that
+        shortens the rapid travel.
 
-        # ## Index first and last points in paths. What points to index.
-        def get_pts(o):
-            return [(o.x, o.y)]
-
-        # Create the indexed storage.
-        storage = AppRTreeStorage()
-        storage.get_points = get_pts
-
-        # Store the geometry
-        self.app.log.debug("Indexing geometry before generating G-Code...")
+        :return: list of (point (x, y), drill) or 'fail' if there is no drill
+        """
+        self.app.log.debug("Ordering the drills before generating G-Code...")
         self.app.inform.emit(_("Indexing geometry before generating G-Code..."))
 
+        new_shapes = []
+        coords = []
         for geo_shape in geometry:
             if self.app.abort_flag:
                 # graceful abort requested by the user
@@ -3448,26 +3447,17 @@ class CNCjob(Geometry):
 
             if geo_shape is not None:
                 try:
-                    storage.insert(geo_shape)
+                    coords.append((geo_shape.x, geo_shape.y))
                 except Exception:
-                    pass
-
-        current_pt = (0, 0)
-        pt, geo = storage.nearest(current_pt)
-        try:
-            while True:
-                storage.remove(geo)
-                locations.append((pt, geo))
-                current_pt = (geo.x, geo.y)
-                pt, geo = storage.nearest(current_pt)
-        except StopIteration:
-            pass
+                    # a shape without a point is left out
+                    continue
+                new_shapes.append(geo_shape)
 
         # if there are no locations then go to the next tool
-        if not locations:
+        if not new_shapes:
             return 'fail'
 
-        return locations
+        return [(coords[i], new_shapes[i]) for i in order_points(coords, start=(0.0, 0.0))]
 
     def check_zcut(self, zcut):
         if zcut > 0:
@@ -3776,6 +3766,8 @@ class CNCjob(Geometry):
             self.app.log.warning("Number of drills for which to generate GCode: %s" % str(geo_len))
 
             loc_nr = 0
+            # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+            drill_parts = []
             for point in optimized_path:
                 if self.app.abort_flag:
                     # graceful abort requested by the user
@@ -3802,26 +3794,26 @@ class CNCjob(Geometry):
 
                     if travel[0] is not None:
                         # move to next point
-                        t_gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                        drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                         # raise to safe Z (travel[0]) each time because safe Z may be different
                         self.z_move = travel[0]
-                        t_gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                        drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
 
                         # restore z_move
                         self.z_move = tool_dict['tools_drill_travelz']
                     else:
                         if prev_z is not None:
                             # move to next point
-                            t_gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                             # we assume that previously the z_move was altered therefore raise to
                             # the travel_z (z_move)
                             self.z_move = tool_dict['tools_drill_travelz']
-                            t_gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
                         else:
                             # move to next point
-                            t_gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                     # store prev_z
                     prev_z = travel[0]
@@ -3836,17 +3828,17 @@ class CNCjob(Geometry):
                 for depth in depths_list:
                     self.z_cut = depth
 
-                    t_gcode += self.doformat(p.down_code, x=locx, y=locy)
+                    drill_parts.append(self.doformat(p.down_code, x=locx, y=locy))
                     self.measured_down_distance += abs(self.z_cut) + abs(self.z_move)
 
                     if self.f_retract is False and cancel_up2zero is False:
-                        t_gcode += self.doformat(p.up_to_zero_code, x=locx, y=locy)
+                        drill_parts.append(self.doformat(p.up_to_zero_code, x=locx, y=locy))
                         self.measured_up_to_zero_distance += abs(self.z_cut)
                         self.measured_lift_distance += abs(self.z_move)
                     else:
                         self.measured_lift_distance += abs(self.z_cut) + abs(self.z_move)
 
-                    t_gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                    drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
 
                 # if self.multidepth and abs(self.z_cut) > abs(self.z_depthpercut):
                 #     doc = deepcopy(self.z_cut)
@@ -3897,6 +3889,7 @@ class CNCjob(Geometry):
                 if old_disp_number < disp_number <= 100:
                     self.app.proc_container.update_view_text(' %d%%' % disp_number)
                     old_disp_number = disp_number
+            t_gcode += ''.join(drill_parts)
         else:
             self.app.inform.emit('[ERROR_NOTCL] %s...' % _('G91 coordinates not implemented'))
             return 'fail'
@@ -4768,6 +4761,8 @@ class CNCjob(Geometry):
                     loc_nr = 0
                     locx = 0
                     locy = 0
+                    # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+                    drill_parts = []
                     for point in optimized_path:
                         if self.app.abort_flag:
                             # graceful abort requested by the user
@@ -4793,26 +4788,26 @@ class CNCjob(Geometry):
 
                             if travel[0] is not None:
                                 # move to next point
-                                tool_gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                                drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                                 # raise to safe Z (travel[0]) each time because safe Z may be different
                                 self.z_move = travel[0]
-                                tool_gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                                drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
 
                                 # restore z_move
                                 self.z_move = self.exc_tools[tool]['data']['tools_drill_travelz']
                             else:
                                 if prev_z is not None:
                                     # move to next point
-                                    tool_gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                                    drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                                     # we assume that previously the z_move was altered therefore raise to
                                     # the travel_z (z_move)
                                     self.z_move = self.exc_tools[tool]['data']['tools_drill_travelz']
-                                    tool_gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                                    drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
                                 else:
                                     # move to next point
-                                    tool_gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                                    drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                             # store prev_z
                             prev_z = travel[0]
@@ -4821,17 +4816,17 @@ class CNCjob(Geometry):
                         for depth in depths_list:
                             self.z_cut = depth
 
-                            tool_gcode += self.doformat(p.down_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.down_code, x=locx, y=locy))
                             measured_down_distance += abs(self.z_cut) + abs(self.z_move)
 
                             if self.f_retract is False:
-                                tool_gcode += self.doformat(p.up_to_zero_code, x=locx, y=locy)
+                                drill_parts.append(self.doformat(p.up_to_zero_code, x=locx, y=locy))
                                 measured_up_to_zero_distance += abs(self.z_cut)
                                 measured_lift_distance += abs(self.z_move)
                             else:
                                 measured_lift_distance += abs(self.z_cut) + abs(self.z_move)
 
-                            tool_gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
 
                         # if self.multidepth and abs(self.z_cut) > abs(self.z_depthpercut):
                         #     doc = deepcopy(self.z_cut)
@@ -4877,6 +4872,7 @@ class CNCjob(Geometry):
                         if old_disp_number < disp_number <= 100:
                             self.app.proc_container.update_view_text(' %d%%' % disp_number)
                             old_disp_number = disp_number
+                    tool_gcode += ''.join(drill_parts)
 
                     self.tools[tool]['last_point'] = (locx, locy)
                     self.tools[tool]['gcode'] = tool_gcode
@@ -5002,6 +4998,8 @@ class CNCjob(Geometry):
                 self.app.log.warning("Number of drills for which to generate GCode: %s" % str(geo_len))
 
                 loc_nr = 0
+                # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+                drill_parts = []
                 for point in optimized_path:
                     if self.app.abort_flag:
                         # graceful abort requested by the user
@@ -5027,26 +5025,26 @@ class CNCjob(Geometry):
 
                         if travel[0] is not None:
                             # move to next point
-                            gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                             # raise to safe Z (travel[0]) each time because safe Z may be different
                             self.z_move = travel[0]
-                            gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
 
                             # restore z_move
                             self.z_move = self.exc_tools[one_tool]['data']['tools_drill_travelz']
                         else:
                             if prev_z is not None:
                                 # move to next point
-                                gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                                drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                                 # we assume that previously the z_move was altered therefore raise to
                                 # the travel_z (z_move)
                                 self.z_move = self.exc_tools[one_tool]['data']['tools_drill_travelz']
-                                gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                                drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
                             else:
                                 # move to next point
-                                gcode += self.doformat(p.rapid_code, x=locx, y=locy)
+                                drill_parts.append(self.doformat(p.rapid_code, x=locx, y=locy))
 
                         # store prev_z
                         prev_z = travel[0]
@@ -5056,17 +5054,17 @@ class CNCjob(Geometry):
                     for depth in depths_list:
                         self.z_cut = depth
 
-                        gcode += self.doformat(p.down_code, x=locx, y=locy)
+                        drill_parts.append(self.doformat(p.down_code, x=locx, y=locy))
                         measured_down_distance += abs(self.z_cut) + abs(self.z_move)
 
                         if self.f_retract is False:
-                            gcode += self.doformat(p.up_to_zero_code, x=locx, y=locy)
+                            drill_parts.append(self.doformat(p.up_to_zero_code, x=locx, y=locy))
                             measured_up_to_zero_distance += abs(self.z_cut)
                             measured_lift_distance += abs(self.z_move)
                         else:
                             measured_lift_distance += abs(self.z_cut) + abs(self.z_move)
 
-                        gcode += self.doformat(p.lift_code, x=locx, y=locy)
+                        drill_parts.append(self.doformat(p.lift_code, x=locx, y=locy))
 
                     # if self.multidepth and abs(self.z_cut) > abs(self.z_depthpercut):
                     #     doc = deepcopy(self.z_cut)
@@ -5113,6 +5111,7 @@ class CNCjob(Geometry):
                     if old_disp_number < disp_number <= 100:
                         self.app.proc_container.update_view_text(' %d%%' % disp_number)
                         old_disp_number = disp_number
+                gcode += ''.join(drill_parts)
             else:
                 self.app.inform.emit('[ERROR_NOTCL] %s...' % _('G91 coordinates not implemented'))
                 return 'fail'
@@ -5368,13 +5367,16 @@ class CNCjob(Geometry):
         self.app.log.debug("Indexing geometry before generating G-Code...")
         self.app.inform.emit(_("Indexing geometry before generating G-Code..."))
 
+        new_shapes = []
         for geo_shape in flat_geometry:
             if self.app.abort_flag:
                 # graceful abort requested by the user
                 raise grace
 
             if geo_shape is not None:
-                storage.insert(geo_shape)
+                new_shapes.append(geo_shape)
+        # 1 batch (bulk load)
+        storage.insert_many(new_shapes)
 
         # self.input_geometry_bounds = geometry.bounds()
 
@@ -5446,6 +5448,8 @@ class CNCjob(Geometry):
 
         pt, geo = storage.nearest(current_pt)
 
+        # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+        path_parts = []
         try:
             while True:
                 if self.app.abort_flag:
@@ -5468,8 +5472,8 @@ class CNCjob(Geometry):
                     # calculate the cut distance
                     total_cut = total_cut + geo.length
 
-                    self.gcode += self.create_gcode_single_pass(geo, current_tooldia, extracut, extracut_length,
-                                                                tolerance, z_move=z_move, old_point=current_pt)
+                    path_parts.append(self.create_gcode_single_pass(geo, current_tooldia, extracut, extracut_length,
+                                                                    tolerance, z_move=z_move, old_point=current_pt))
 
                 # --------- Multi-pass ---------
                 else:
@@ -5486,7 +5490,7 @@ class CNCjob(Geometry):
                     gc, geo = self.create_gcode_multi_pass(geo, current_tooldia, extracut, extracut_length,
                                                            tolerance,  z_move=z_move, postproc=p,
                                                            old_point=current_pt)
-                    self.gcode += gc
+                    path_parts.append(gc)
 
                 # calculate the total distance
                 total_travel = total_travel + abs(distance(pt1=current_pt, pt2=pt))
@@ -5500,6 +5504,7 @@ class CNCjob(Geometry):
                     old_disp_number = disp_number
         except StopIteration:  # Nothing found in storage.
             pass
+        self.gcode += ''.join(path_parts)
 
         self.app.log.debug("Finished G-Code... %s paths traced." % path_count)
 
@@ -5960,6 +5965,8 @@ class CNCjob(Geometry):
         path_count = 0
         current_pt = (0, 0)
 
+        # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+        path_parts = []
         for pt, geo in optimized_path:
             if self.app.abort_flag:
                 # graceful abort requested by the user
@@ -5977,8 +5984,8 @@ class CNCjob(Geometry):
             if not multidepth:
                 # calculate the cut distance
                 total_cut += geo.length
-                self.gcode += self.create_gcode_single_pass(geo, current_tooldia, extracut, self.extracut_length,
-                                                            tolerance, z_move=z_move, old_point=current_pt)
+                path_parts.append(self.create_gcode_single_pass(geo, current_tooldia, extracut, self.extracut_length,
+                                                                tolerance, z_move=z_move, old_point=current_pt))
 
             # --------- Multi-pass ---------
             else:
@@ -5995,7 +6002,7 @@ class CNCjob(Geometry):
                 gc, geo = self.create_gcode_multi_pass(geo, current_tooldia, extracut, self.extracut_length,
                                                        tolerance, z_move=z_move, postproc=p,
                                                        old_point=current_pt)
-                self.gcode += gc
+                path_parts.append(gc)
 
             # calculate the travel distance
             total_travel += abs(distance(pt1=current_pt, pt2=pt))
@@ -6006,6 +6013,7 @@ class CNCjob(Geometry):
             if old_disp_number < disp_number <= 100:
                 self.app.proc_container.update_view_text(' %d%%' % disp_number)
                 old_disp_number = disp_number
+        self.gcode += ''.join(path_parts)
 
         self.app.log.debug("Finishing G-Code... %s paths traced." % path_count)
 
@@ -6102,13 +6110,16 @@ class CNCjob(Geometry):
 
         # Store the geometry
         self.app.log.debug("Indexing geometry before generating G-Code...")
+        new_shapes = []
         for geo_shape in flat_geometry:
             if self.app.abort_flag:
                 # graceful abort requested by the user
                 raise grace
 
             if geo_shape is not None:
-                storage.insert(geo_shape)
+                new_shapes.append(geo_shape)
+        # 1 batch (bulk load)
+        storage.insert_many(new_shapes)
 
         # Initial G-Code
         gcode = []
@@ -6190,10 +6201,13 @@ class CNCjob(Geometry):
             gcode += self.doformat(p.feedrate_xy_code)
 
             # Cutting...
+            # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+            cut_parts = []
             for pt in path[1:]:
                 next_x = pt[0]
                 next_y = pt[1]
-                gcode += self.doformat(p.linear_code, x=next_x, y=next_y)  # Linear motion to point
+                cut_parts.append(self.doformat(p.linear_code, x=next_x, y=next_y))  # Linear motion to point
+            gcode += ''.join(cut_parts)
 
             # Up to travelling height.
             gcode += self.doformat(p.spindle_off_code)  # Stop dispensing
@@ -6299,6 +6313,8 @@ class CNCjob(Geometry):
 
         depth = 0
         reverse = False
+        # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+        pass_parts = []
         while depth > z_cut:
 
             # Increase depth. Limit to z_cut.
@@ -6312,16 +6328,16 @@ class CNCjob(Geometry):
             # is inconsequential.
             if isinstance(geometry, LineString) or isinstance(geometry, LinearRing):
                 if extracut is False or not geometry.is_ring:
-                    gcode_multi_pass += self.linear2gcode(geometry, cdia, tolerance=tolerance, z_cut=depth, up=False,
-                                                          z_move=z_move, old_point=old_point)
+                    pass_parts.append(self.linear2gcode(geometry, cdia, tolerance=tolerance, z_cut=depth, up=False,
+                                                          z_move=z_move, old_point=old_point))
                 else:
-                    gcode_multi_pass += self.linear2gcode_extra(geometry, cdia, extracut_length, tolerance=tolerance,
+                    pass_parts.append(self.linear2gcode_extra(geometry, cdia, extracut_length, tolerance=tolerance,
                                                                 z_move=z_move, z_cut=depth, up=False,
-                                                                old_point=old_point)
+                                                                old_point=old_point))
 
             # Ignore multi-pass for points.
             elif isinstance(geometry, Point):
-                gcode_multi_pass += self.point2gcode(geometry, cdia, z_move=z_move, old_point=old_point)
+                pass_parts.append(self.point2gcode(geometry, cdia, z_move=z_move, old_point=old_point))
                 break  # Ignoring ...
             else:
                 self.app.log.warning("G-code generation not implemented for %s" % (str(type(geometry))))
@@ -6330,6 +6346,7 @@ class CNCjob(Geometry):
             if isinstance(geometry, LineString):
                 geometry = LineString(list(geometry.coords)[::-1])
                 reverse = True
+        gcode_multi_pass += ''.join(pass_parts)
 
         # If geometry is reversed, revert.
         if reverse:
@@ -7188,6 +7205,8 @@ class CNCjob(Geometry):
         attributes = AttrDict()
         attributes.update(self.postdata)
         attributes['z_cut'] = z_cut
+        # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+        cut_parts = []
         for pt in path[1:]:
             if self.app.abort_flag:
                 # graceful abort requested by the user
@@ -7207,9 +7226,10 @@ class CNCjob(Geometry):
 
             attributes['x'] = next_x
             attributes['y'] = next_y
-            gcode += self.doformat_attributes(p.linear_code, attributes) + "\n"  # Linear motion to point
+            cut_parts.append(self.doformat_attributes(p.linear_code, attributes) + "\n")  # Linear motion to point
             prev_x = pt[0]
             prev_y = pt[1]
+        gcode += ''.join(cut_parts)
 
         # Up to travelling height.
         if up:
@@ -7338,6 +7358,8 @@ class CNCjob(Geometry):
         # Cutting...
         prev_x = first_x
         prev_y = first_y
+        # the chunks are joined 1 time: a str += in a loop copies the whole string each time
+        cut_parts = []
         for pt in path[1:]:
             if self.app.abort_flag:
                 # graceful abort requested by the user
@@ -7356,9 +7378,10 @@ class CNCjob(Geometry):
                 next_x = pt[0]
                 next_y = pt[1]
 
-            gcode += self.doformat(p.linear_code, x=next_x, y=next_y, z_cut=z_cut)  # Linear motion to point
+            cut_parts.append(self.doformat(p.linear_code, x=next_x, y=next_y, z_cut=z_cut))  # Linear motion to point
             prev_x = next_x
             prev_y = next_y
+        gcode += ''.join(cut_parts)
 
         # this line is added to create an extra cut over the first point in patch
         # to make sure that we remove the copper leftovers
@@ -8401,8 +8424,7 @@ def order_cleanup_paths(paths, app=None):
     storage = AppRTreeStorage()
     # Index starts only: choosing a nearer end must not reverse cutting direction.
     storage.get_points = lambda path: [path.coords[0]]
-    for path in paths[1:-1]:
-        storage.insert(path)
+    storage.insert_many(paths[1:-1])
     ordered = [paths[0]]
     current = paths[0].coords[-1]
     for _ in range(len(paths) - 2):
@@ -9622,19 +9644,30 @@ def distance_euclidian(x1, y1, x2, y2):
     return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
 
-def new_rtree_index(entries=None):
+def new_rtree_index(entries=None, points=None, boxes=None):
     """
     Makes an rtree index with the quadratic split. The default R* variant reinserts entries after each delete:
     measured on 20000 points, the quadratic variant is 7.8x faster for a nearest + delete walk (paint_connect),
     2.6x faster for the inserts and also faster for the bulk load, the nearest and the window queries.
 
     :param entries: optional iterable of (id, bounds, obj) for a bulk load
+    :param points:  optional (N, 2) array of points for a bulk load from arrays; the id of a point is its row and the
+                    entries have no object (12x faster than a bulk load from a stream, on 55000 points)
+    :param boxes:   optional (N, 4) array of (xmin, ymin, xmax, ymax) for a bulk load from arrays; the id of a box is
+                    its row and the entries have no object
     :return:        rtree.index.Index
     """
     properties = rtindex.Property()
     properties.variant = rtindex.RT_Quadratic
     # the linear and quadratic variants need a fill factor below 0.5 (the default is 0.7, for R*)
     properties.fill_factor = 0.4
+    if boxes is not None and len(boxes):
+        boxes = np.ascontiguousarray(boxes, dtype=np.float64).reshape(-1, 4)
+        return rtindex.Index((np.arange(len(boxes), dtype=np.int64), np.ascontiguousarray(boxes[:, :2]),
+                              np.ascontiguousarray(boxes[:, 2:])), properties=properties)
+    if points is not None and len(points):
+        points = np.ascontiguousarray(points, dtype=np.float64).reshape(-1, 2)
+        return rtindex.Index((np.arange(len(points), dtype=np.int64), points, points), properties=properties)
     if entries is None:
         return rtindex.Index(properties=properties)
     return rtindex.Index(iter(entries), properties=properties)
@@ -9746,6 +9779,17 @@ class AppRTreeStorage(AppRTree):
         # super(AppRTreeStorage, self).insert(idx, obj)
         super().insert(idx, obj)
 
+    def insert_many(self, objs, skip_errors=False):
+        """
+        Inserts many objects in 1 call; the objects keep their order. An empty storage is bulk loaded from arrays
+        (measured on 5000 to 50000 paths: about 3x faster than an insert() for each object); see replace().
+
+        :param objs:        iterable of objects
+        :param skip_errors: if True, an object whose points cannot be read is left out (see replace())
+        :return:            None
+        """
+        self.replace(inserted=objs, skip_errors=skip_errors)
+
     # @profile
     def remove(self, obj):
         # See note about self.indexes in insert().
@@ -9763,7 +9807,7 @@ class AppRTreeStorage(AppRTree):
     DELETE_COST = 3
     INSERT_COST = 3
 
-    def replace(self, removed=(), inserted=()):
+    def replace(self, removed=(), inserted=(), skip_errors=False):
         """
         Removes and inserts many objects. When the deletes and inserts of their points cost more than a new index,
         the index is bulk loaded again from all the objects (the bulk load is about 3 times faster than the
@@ -9771,10 +9815,21 @@ class AppRTreeStorage(AppRTree):
 
         :param removed:     objects that are in the storage
         :param inserted:    new objects
+        :param skip_errors: if True, a new object whose points cannot be read (get_points() raises) is left out;
+                            for the callers that ignored an exception of insert() for each object
         :return:            None
         """
         removed = list(removed)
-        inserted = [(obj, list(self.get_points(obj))) for obj in inserted]
+        if skip_errors:
+            pairs = []
+            for obj in inserted:
+                try:
+                    pairs.append((obj, list(self.get_points(obj))))
+                except Exception:
+                    pass
+            inserted = pairs
+        else:
+            inserted = [(obj, list(self.get_points(obj))) for obj in inserted]
         if not removed and not inserted:
             return
 
@@ -9796,18 +9851,23 @@ class AppRTreeStorage(AppRTree):
         self.objects += [obj for obj, __ in inserted]
         self.indexes = {id(obj): objid for objid, obj in enumerate(self.objects)}
 
+        # the points of the inserted objects are already known
+        inserted_points = {id(obj): points for obj, points in inserted}
         self.obj2points = []
         self.points2obj = []
-        entries = []
+        coords = []
         for objid, obj in enumerate(self.objects):
-            ptids = []
-            for pt in self.get_points(obj):
-                ptid = len(self.points2obj)
-                entries.append((ptid, (pt[0], pt[1], pt[0], pt[1]), objid))
-                ptids.append(ptid)
-                self.points2obj.append(objid)
-            self.obj2points.append(ptids)
-        self.rti = new_rtree_index(entries if entries else None)
+            start = len(coords)
+            points = inserted_points.get(id(obj))
+            # only x, y (a point can have a z)
+            coords.extend((pt[0], pt[1]) for pt in (self.get_points(obj) if points is None else points))
+            self.obj2points.append(list(range(start, len(coords))))
+            self.points2obj.extend([objid] * (len(coords) - start))
+
+        # the point ids are the positions in points2obj, so the index entries need no object (an object of an entry
+        # is pickled, which is the most of the time of a bulk load from a stream)
+        points = np.asarray(coords, dtype=np.float64).reshape(-1, 2)
+        self.rti = new_rtree_index(points=points if len(points) else None)
 
     def get_objects(self):
         return (o for o in self.objects if o is not None)
@@ -9822,8 +9882,13 @@ class AppRTreeStorage(AppRTree):
           matching point.
         :rtype: tuple
         """
-        tidx = super(AppRTreeStorage, self).nearest(pt)
-        return (tidx.bbox[0], tidx.bbox[1]), self.objects[tidx.object]
+        # k=1 returns all the points at the smallest distance (ties); the lowest id is the first inserted point, so
+        # the result does not depend on how the index was built (insert() or bulk load)
+        tidx = min(self.rti.nearest(pt, 1, objects=True), key=lambda item: item.id, default=None)
+        if tidx is None:
+            raise StopIteration
+        # the id of an entry is the point id (an entry of a bulk load has no object)
+        return (tidx.bbox[0], tidx.bbox[1]), self.objects[self.points2obj[tidx.id]]
 
 # class myO:
 #     def __init__(self, coords):

@@ -394,9 +394,8 @@ class PaintGen:
 
             # add the lines from pads to the storage
             try:
-                for lin in pads_lines_list:
-                    if lin:
-                        p_poly.insert(lin)
+                # 1 batch (bulk load)
+                p_poly.insert_many([lin for lin in pads_lines_list if lin])
             except TypeError:
                 p_poly.insert(pads_lines_list)
 
@@ -438,9 +437,8 @@ class PaintGen:
             lines_union = linemerge(unary_union(copper_lines_list))     # noqa
             lines_geoms = lines_union.geoms if isinstance(lines_union, MultiLineString) else [lines_union]
             try:
-                for lin in lines_geoms:
-                    if lin:
-                        p_poly.insert(lin)
+                # 1 batch
+                p_poly.insert_many([lin for lin in lines_geoms if lin])
             except TypeError:
                 p_poly.insert(lines_geoms)
 

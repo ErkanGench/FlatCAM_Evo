@@ -205,6 +205,7 @@ def pad_paths(pad, diameter, data, units='MM'):
 
 def generate_program(job, tool, is_first=False):
     """Generate calibrated code, failing before publication if any dose cannot be delivered."""
+    import numpy as np
     from camlib import new_rtree_index, grace
 
     p = parameters(tool['data'], job.units)
@@ -297,14 +298,15 @@ def generate_program(job, tool, is_first=False):
             emit('M221 S100')
         emit('G92 %s0' % p['axis'])
     endpoints = [(tuple(path.coords[0]), tuple(path.coords[-1])) for path in paths]
-    index = new_rtree_index((i * 2 + end, (*point, *point), None)
-                            for i, pair in enumerate(endpoints) for end, point in enumerate(pair))
+    # the id of an end point is its row: i * 2 + end (bulk load from an array)
+    index = new_rtree_index(points=np.array([point[:2] for pair in endpoints for point in pair], dtype=np.float64))
     current = tuple(p['xy_toolchange']) if p['xy_toolchange'] else (0, 0)
     retracted = False
     for completed in range(len(paths)):
         if job.app.abort_flag:
             raise grace
-        nearest = next(index.nearest((*current, *current), 1))
+        # k=1 returns all the points at the smallest distance (ties): the lowest id keeps the order stable
+        nearest = min(index.nearest((*current, *current), 1))
         i, end = divmod(nearest, 2)
         for endpoint, point in enumerate(endpoints[i]):
             index.delete(i * 2 + endpoint, (*point, *point))

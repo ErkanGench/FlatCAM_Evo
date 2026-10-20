@@ -389,12 +389,12 @@ def merge_tool_lines(tools: Dict[Any, dict], snap_overlaps: bool = False,
         if snap_overlaps and len(lines) > 1:
             tolerance = 1e-7
             bounds = []
-            index = new_rtree_index()
+            for line in lines:
+                _check_abort(abort)
+                bounds.append(line.bounds)
+            # the id of a line is its position (bulk load from an array)
+            index = new_rtree_index(boxes=bounds)
             try:
-                for idx, line in enumerate(lines):
-                    _check_abort(abort)
-                    bounds.append(line.bounds)
-                    index.insert(idx, bounds[idx])
 
                 pairwise = False
                 for idx, line in enumerate(lines):

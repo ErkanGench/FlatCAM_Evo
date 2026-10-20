@@ -26,7 +26,6 @@ from shapely.affinity import scale, rotate, translate
 
 import numpy as np
 
-from rtree import index as rtindex
 
 import traceback
 import math
@@ -3126,7 +3125,6 @@ class AppExcEditor(QtCore.QObject):
 
         self.data_defaults = {}
 
-        self.rtree_exc_index = rtindex.Index()
         # flag to show if the object was modified
         self.is_modified = False
 
@@ -4229,6 +4227,7 @@ class AppExcEditor(QtCore.QObject):
         # and then add it to the storage elements (each storage elements is a member of a list
         for tool_dia in self.points_edit:
             storage_elem = AppGeoEditor.make_storage()
+            drill_shapes = []
             for point in self.points_edit[tool_dia]:
                 # make a '+' sign, the line length is the tool diameter
                 start_hor_line = ((point.x - (tool_dia / 2)), point.y)
@@ -4237,12 +4236,15 @@ class AppExcEditor(QtCore.QObject):
                 stop_vert_line = (point.x, (point.y + (tool_dia / 2)))
                 shape_geo = MultiLineString([(start_hor_line, stop_hor_line), (start_vert_line, stop_vert_line)])
                 if shape_geo is not None:
-                    self.add_exc_shape(DrawToolShape(shape_geo), storage_elem)
+                    drill_shapes.append(DrawToolShape(shape_geo))
+            # 1 batch for each tool
+            self.add_exc_shape(drill_shapes, storage_elem)
             self.storage_dict[tool_dia] = storage_elem
 
         # slots
         for tool_dia in self.slot_points_edit:
             buf_value = float(tool_dia) / 2
+            slot_shapes = []
             for elem_dict in self.slot_points_edit[tool_dia]:
 
                 line_geo = LineString([elem_dict['start'], elem_dict['stop']])
@@ -4253,7 +4255,10 @@ class AppExcEditor(QtCore.QObject):
                     self.storage_dict[tool_dia] = storage_elem
 
                 if shape_geo is not None:
-                    self.add_exc_shape(DrawToolShape(shape_geo), self.storage_dict[tool_dia])
+                    slot_shapes.append(DrawToolShape(shape_geo))
+            # 1 batch for each tool
+            if slot_shapes:
+                self.add_exc_shape(slot_shapes, self.storage_dict[tool_dia])
 
         self.replot()
 
@@ -4899,17 +4904,32 @@ class AppExcEditor(QtCore.QObject):
 
     def add_exc_shape(self, shp, storage):
         """
-        Adds a shape to a specified shape storage.
+        Adds a shape (or a list of shapes) to a specified shape storage. The shapes go in the storage in 1 batch: an
+        empty storage is bulk loaded.
 
         :param shp:       Shape to be added.
-        :type shp:        DrawToolShape
+        :type shp:        DrawToolShape, list
         :param storage:     object where to store the shapes
+        :return:            None
+        """
+        to_insert = []
+        self._collect_exc_shape(shp, to_insert)
+        if to_insert:
+            storage.insert_many(to_insert)
+
+    def _collect_exc_shape(self, shp, to_insert):
+        """
+        Checks a shape for add_exc_shape(). A utility shape goes to self.utility; a shape for the storage goes to
+        to_insert.
+
+        :param shp:         DrawToolShape or a list of them
+        :param to_insert:   list that collects the shapes for the storage
         :return:            None
         """
         # List of DrawToolShape?
         if isinstance(shp, list):
             for subshape in shp:
-                self.add_exc_shape(subshape, storage)
+                self._collect_exc_shape(subshape, to_insert)
             return
 
         assert isinstance(shp, DrawToolShape), \
@@ -4924,7 +4944,7 @@ class AppExcEditor(QtCore.QObject):
         if isinstance(shp, DrawToolUtilityShape):
             self.utility.append(shp)
         else:
-            storage.insert(shp)  # TODO: Check performance
+            to_insert.append(shp)
 
     def add_shape(self, shp):
         """
@@ -5363,14 +5383,17 @@ class AppExcEditor(QtCore.QObject):
             for dict_dia, geo_dict in self.storage_dict.items():
                 if self.dec_format(float(dict_dia)) == table_tooldia:
                     storage_elem = AppGeoEditor.make_storage()
+                    new_shapes = []
                     for shp in geo_dict.get_objects():
                         if isinstance(shp.geo, MultiLineString):
                             # it's a drill just add it as it is to storage
-                            self.add_exc_shape(shp, storage_elem)
+                            new_shapes.append(shp)
                         if isinstance(shp.geo, Polygon):
                             # it's a slot, convert drill to slot and then add it to storage
                             new_shape = convert_slot2drill(shp.geo, table_tooldia)
-                            self.add_exc_shape(DrawToolShape(new_shape), storage_elem)
+                            new_shapes.append(DrawToolShape(new_shape))
+                    # 1 batch for each tool
+                    self.add_exc_shape(new_shapes, storage_elem)
 
                     new_storage_dict[table_tooldia] = storage_elem
 

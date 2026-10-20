@@ -6,6 +6,25 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+21.10.2026
+
+Geometry Editor:
+
+- faster selection: a selection change only hides or shows the changed shapes and copies their canvas buffers (no new triangulation); the tree rows are selected in 1 pass with the signals blocked; the area selection tests all the shapes in 1 vectorized call; area selection of 289 of 1000 shapes: 418 s to 0.02 s
+- a click picks the nearest shape in 5 screen pixels (STRtree, like the Gerber Editor); a click on no shape clears the selection; inside nested polygons the smaller one is picked
+- faster delete: the tree is built in 1 batch and only the deleted shapes leave the canvas; delete of 529 of 2000 shapes: 4.5 s to 0.12 s
+- Simplify: the click selects, deselects (with the key) and clears like the Select tool; it no longer selects the same shape N times; the start shows the coordinates 1 time (it filled the text box once for each shape); the simplification is 1 vectorized call, 1 storage update and a plot of the changed shapes only; 529 shapes: start 1.4 s to 0.03 s, simplify 3.3 s to 0.3 s
+- the editor loads the shapes in 1 batch: 5000 shapes 4.0 s to 0.4 s
+- fixed: the save of the edits ran in a thread while the caller already read the bounds and plotted the object, so the plot could show the old geometry; the save now ends before the caller goes on
+- fixed: a click selection was cleared at once by the info update; the vertex count of the selection failed on polygons
+
+CNCJob:
+
+- R-tree path order of Geometry and Excellon jobs (appCommon/PathOrder.py): the walk goes on from the end where the tool leaves a path (it went on from the original last point after entering a path at its end), a grid with lazy delete replaces the R-tree in the walk, and a bounded 2-opt / Or-opt pass shortens the order; the same cuts and lifts; rapid travel on the sample board 8% to 29% shorter, 82% shorter on 20000 random polylines; the order step of 20000 paths: 5.1 s to 2.1 s
+- the nearest path on a tie is the first inserted one, so the G-code does not depend on how an index was built
+- the G-code of the paths, drills and points is collected in a list and joined 1 time; fixed: a job with 20000 polylines failed with MemoryError
+- the R-tree storages are bulk loaded from NumPy arrays (insert_many(), new_rtree_index(points=..., boxes=...)): clearing, paint, connect, cleanup order, solder paste, panelize and the Excellon editor; about 3 times faster than an insert for each object
+
 20.10.2026
 
 Security:
