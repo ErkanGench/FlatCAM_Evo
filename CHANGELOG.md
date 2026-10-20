@@ -15,11 +15,14 @@ Security:
 CNCJob:
 
 - fixed: the G-code file of a multi-tool drill job with a preprocessor without a header (Roland_MDX_20, Roland_MDX_540, ISEL_ICP_CNC) had no drill moves (merged PR #21 from gargamel778)
+- faster CNC job from a Geometry, with the same G-code: the paths are simplified in 1 vectorized call on more than 1 thread (simplify_paths), the G-code of the paths is joined 1 time at the end, the preprocessor attributes are copied 1 time for each path, codes_split() compiles its patterns 1 time and the copies of the tool dicts share the geometries (deepcopy_keep_geometry); Tcl cncjob of a 6-pass laser isolation (2.7 MB of G-code): 9.94 s to 4.35 s; 40-pass laser isolation (6.0 MB): 18.47 s to 8.14 s; a 3-depth GRBL_11 job: 1.3 times faster (merged PR #30 from ErkanGench)
+- Abort stops the CNC job also while the paths are oriented and simplified
 
 Milling and Geometry Editor:
 
 - fixed: Apply parameters to all tools read the Excellon tools table also for a Geometry target; it raised an error or copied the data of a wrong tool (merged PR #19 from ErkanGench)
 - fixed: Copy in the Geometry Editor works without a cursor move after the reference click (merged PR #19 from ErkanGench)
+- fixed: a CNC job made from a single-geometry object with 2 or more tools had the paths of the earlier tools again in the G-code of each next tool, so a laser burned them 2 times (27 cut moves instead of 18 with 2 tools); each tool keeps only its own G-code and the exported file has each path 1 time (merged PR #38 from ErkanGench)
 
 Export:
 
@@ -45,6 +48,15 @@ Isolation Plugin:
 - fixed: All and Area Selection generate isolation Geometry with Combine unchecked; separate passes use the Gerber object's geometry when no specific geometry is supplied (merged PR #16 from ErkanGench)
 - fixed: the Optimal tool diameter fits in the smallest gap: the proposed diameter was the rounded gap, up to half a unit of the last decimal above the real gap, so Check validity rejected it with "Incomplete isolation." (merged PR #17 from ErkanGench)
 - fixed: Isolation, NCC and Optimal give the same safe tool diameter: they measure the same geometry (no positive buffer) and round the gap to the app decimals; a gap of 0 or less shows "Could not find a safe tool diameter." instead of a 0 diameter; NCC keeps its recommendation below the real gap; Optimal clears the last results when it starts
+- faster rest machining: the check buffers of a pass are found with 1 STRtree query instead of a test against every other polygon; on a board with 2432 copper polygons: 0.2 mm, 1 pass 41.4 s to 1.9 s; 0.1 mm, 6 passes 148.6 s to 5.0 s; the paths and the polygons left for the next tool are the same (merged PR #31 from ErkanGench)
+- rest machining adapts to the density of the layout: for each pass a sample of up to 16 polygons selects bulk STRtree queries in limited batches (65536 possible pairs at most for 1 query) for a sparse layout, or a stop at the first collision for a dense layout; on a dense layout the PR #31 queries collected every pair
+- measured with tests/benchmark_isolation_rest.py (synthetic square pads, median of 3 rounds, Python 3.14.3, Shapely 2.2.0, GEOS 3.14.1): sparse layouts (1000 pads, 3 mm pitch, 0.2 mm tool, 1 and 3 passes) keep the time of PR #31, about 5 times faster than before PR #31; dense layouts (3000 pads, 0.3 mm pitch, 1, 3 and 10 mm tool with 1 pass, 1 mm tool with 3 passes) are 1.9 to 48 times faster than PR #31 and faster than the code before PR #31 in every case; in the dense 10 mm case the largest query result is 397 KiB instead of 73 MiB
+- the paths, their order and the polygons left for the next tool are the same in the 3 versions (compared by WKB, also on 96 random layouts); new tests check that a dense layout does not collect every pair
+
+NCC and Paint:
+
+- faster seed clearing (NCC, Paint and the Milling of holes): the rings are cut 16 at a time, and a large margin (2000 coordinates or more) is cut without the holes that the rings of the band cannot reach; each ring is the same, bit for bit; NCC seed path generation on a board with 2432 copper polygons: 42.3 s to 10.5 s (merged PR #31 from ErkanGench)
+- faster joining of the paths (paint_connect) with NumPy coordinate arrays: NCC standard 5.8 s to 1.6 s on the same board; the G-code of NCC and Paint is byte-identical (merged PR #31 from ErkanGench)
 
 G-Code preprocessors:
 
@@ -82,6 +94,9 @@ Tcl and command line:
 
 - fixed: a packaged application started in its install folder (a Start Menu shortcut) wrote relative file names into the install folder, because with cx_Freeze the modules are in its lib/ subfolder; the folder of the executable (the .app bundle on macOS) now also counts as the application, and the home folder is used
 - fixed: quit_app in a --shellfile hid the window but did not end the application: the script runs before the Qt event loop starts, and QApplication.quit() does nothing then; the quit is now also queued for the event loop
+- fixed: join_geometry makes the same object as Edit -> Join: MultiGeo objects stay MultiGeo and the tools with the same diameter and type are fused (preference geometry_merge_fuse_tools); a mix of MultiGeo and SingleGeo objects is refused; before, the joined isolation of a real board gave 3 times the G-code (124214 G1 moves instead of 40732) (merged PR #29 from ErkanGench)
+- fixed: Edit -> Join failed with "'Polygon' object is not iterable" or "'MultiLineString' object is not iterable" when a tool geometry was not a list (bbox, cutout) (merged PR #29 from ErkanGench)
+- Join fuses only the tools whose machining parameters (tools_*) are equal; a SingleGeo tool with an empty geometry of its own is kept
 
 19.10.2026
 
@@ -188,7 +203,8 @@ Preprocessors:
 
 Data Folder:
 
-- new: the FLATCAM_DATA_PATH environment variable sets the data folder (preferences, Tools Database, recent files, preprocessors, log and the updater files) instead of %APPDATA%/FlatCAM, ~/.FlatCAM or the portable 'config' folder; a second installation keeps its own settings, also on Linux and macOS, and a test or a script can start with a throw-away folder; a relative path is taken from the working folder at the start
+- new: the FLATCAM_DATA_PATH environment variable sets the data folder (preferences, Tools Database, recent files, preprocessors, log and the updater files) instead of %APPDATA%/FlatCAM, ~/.FlatCAM or the portable 'config' folder; a second installation keeps its own settings, also on Linux and macOS, and a test or a script can start with a throw-away folder; a relative path is taken from the working folder at the start (merged PR #28 from ErkanGench)
+- FLATCAM_DATA_PATH is read before the portable configuration: when the variable is set, config/configuration.txt is not read
 
 Translations:
 
