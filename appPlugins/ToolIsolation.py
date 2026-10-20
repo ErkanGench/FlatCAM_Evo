@@ -1833,11 +1833,12 @@ class ToolIsolation(Geometry, AppTool):
             for tool in sel_tools:
                 tool_data = tools_storage[tool]['data']
 
-                work_geo = flatten_shapely_geometry(geometry)
-                if work_geo is None:
+                if geometry is None:
                     # we do isolation over all the geometry of the Gerber object
                     # because it is already fused together
                     work_geo = flatten_shapely_geometry(isolated_obj.solid_geometry)
+                else:
+                    work_geo = flatten_shapely_geometry(geometry)
 
                 iso_t = {
                     'ext':  0,
