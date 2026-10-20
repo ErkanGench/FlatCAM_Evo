@@ -5204,7 +5204,73 @@ class FCTextAreaLineNumber(QtWidgets.QFrame):
             # self.setLineWrapMode(QPlainTextEdit.NoWrap)
             self.cursorPositionChanged.connect(self.highlight)
 
+            # Only the blocks (lines) that are shown are highlighted, the others when they are scrolled into view.
+            # Qt highlights every block when the text is set: a G-code of 94000 lines took 11 s to show.
+            # (first, last) numbers of the blocks shown
+            self.shown_blocks = (0, 300)
+            # True while highlight_shown_blocks() highlights: each block highlighted emits updateRequest again
+            self.highlighting_shown = False
             self.highlighter = self.MyHighlighter(parent=self.document(), theme=self.theme)
+            self.highlighter.editor = self
+            self.updateRequest.connect(self.highlight_shown_blocks)
+
+        def highlight_shown_blocks(self, *args):
+            """
+            Highlights the blocks shown that were never highlighted (their state is still -1).
+            Connected to the updateRequest signal: it is emitted on scroll, resize and text changes.
+            """
+            if self.highlighting_shown:
+                return
+
+            block = self.firstVisibleBlock()
+            if not block.isValid():
+                return
+            first = block.blockNumber()
+            height = self.viewport().height()
+            offset = self.contentOffset()
+            last = first
+            while block.isValid():
+                last = block.blockNumber()
+                if self.blockBoundingGeometry(block).translated(offset).top() > height:
+                    break
+                block = block.next()
+            self.shown_blocks = (first, last)
+
+            self.highlighting_shown = True
+            try:
+                block = self.document().findBlockByNumber(first)
+                while block.isValid() and block.blockNumber() <= last:
+                    if block.userState() == -1:
+                        self.highlighter.rehighlightBlock(block)
+                    block = block.next()
+            finally:
+                self.highlighting_shown = False
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            # a resize that changes only the height emits no updateRequest: the lines that come into view
+            self.highlight_shown_blocks()
+
+        def print(self, printer):
+            """
+            Prints the document. The blocks never shown are not highlighted yet: they are highlighted first, so the
+            printed text has the colors on every line.
+            """
+            block = self.document().firstBlock()
+            while block.isValid() and block.userState() != -1:
+                block = block.next()
+            # (once every block is highlighted, a second print or Print Preview render does not highlight again)
+            if block.isValid():
+                # without the editor the highlighter highlights every block
+                self.highlighter.editor = None
+                # each block highlighted emits updateRequest: highlight_shown_blocks() must not run for each of them
+                self.highlighting_shown = True
+                try:
+                    self.highlighter.rehighlight()
+                finally:
+                    self.highlighter.editor = self
+                    self.highlighting_shown = False
+            super().print(printer)
 
         class MyHighlighter(QtGui.QSyntaxHighlighter):
 
@@ -5213,6 +5279,8 @@ class FCTextAreaLineNumber(QtWidgets.QFrame):
                 self.parent = parent
                 self.theme = theme
                 self.highlightingRules = []
+                # the editor: only the blocks it shows are highlighted (see PlainTextEdit.highlight_shown_blocks())
+                self.editor = None
 
                 if highlight_rules is None:
                     reservedClasses = QtGui.QTextCharFormat()
@@ -5439,6 +5507,13 @@ class FCTextAreaLineNumber(QtWidgets.QFrame):
                 :return:
                 :rtype:
                 """
+                if self.editor is not None and self.currentBlockState() == -1:
+                    first, last = self.editor.shown_blocks
+                    if not first <= self.currentBlock().blockNumber() <= last:
+                        # never highlighted and not shown: it is highlighted when it is shown (its state stays -1).
+                        # A block highlighted before (state 0) is always highlighted here: Qt applies the formats
+                        # set by this call, so returning would remove its colors for good.
+                        return
 
                 # go in reverse from the last element to the first
                 for rule in self.highlightingRules[::-1]:

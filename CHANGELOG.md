@@ -222,12 +222,23 @@ Translations:
 - a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
 - fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
 - fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
+
 Project file:
 
 - the project save makes the WKT of all the geometries with vectorized Shapely calls, in pieces of about 10000 coordinates, instead of 1 call for each geometry while the JSON is written; a large project saves about 5x faster (compressed) and the GUI thread is blocked for much shorter times during the save
 - the coordinates are saved with the shortest text that reads back to the same number instead of 16 fixed decimals, which lost the last bits of a coordinate below 1; the files are smaller and older versions open them
 - a compressed project is written as compact JSON (no indentation, no sorted keys), which is faster for a project with many small items (a CNC job); a plain project keeps the indented JSON
 - fixed: closing the app while the project is saved did nothing (only a message); now the app closes when the save ends, the normal way (the settings are saved, a change made during the save is asked about); after a failed save the app stays open
+
+Code Editor:
+
+- the code editor (Source Editor, G-code Editor, Script Editor) highlights only the lines that are shown, the other lines when they are scrolled into view; Qt highlighted every line when the text was set: the View Source of a G-code of 94000 lines took 11 s, now 0.9 s; Print and Print Preview highlight every line first
+
+Project Tab:
+
+- fixed: View Source opened an empty Source Editor and left the app busy for an object without a source, e.g. a Geometry made by a tool; it shows a warning now
+- the context menu shows only the entries that apply to the selected objects: View Source for 1 object with a source, Edit and Save for 1 object (Batch Save for several CNCJob objects), Set Color for Gerber and Excellon objects, Enable Plot or Disable Plot by the plot state
+- fixed: the context menu entries hidden for a Script or a Document object stayed hidden for the next objects
 
 Tests:
 
@@ -250,6 +261,8 @@ Tests:
 - new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
 - new unit tests for the WKT of the project save (tests/test_project_save_wkt.py)
 - new unit tests for a close of the app during a project save (tests/test_shutdown_routing.py)
+- new unit tests for the highlighting of the code editor (tests/test_lazy_highlight.py)
+- new unit tests for the Project tab context menu and View Source (tests/test_project_context_menu.py)
 
 18.10.2026
 
