@@ -56,8 +56,9 @@ if __name__ == '__main__':
     freeze_support()
 
     portable = False
-    # Folder for user settings.
-    if sys.platform == 'win32':
+    # Resolve the override before reading the default or portable configuration.
+    data_path = data_path_from_env()
+    if data_path is None and sys.platform == 'win32':
         # #######################################################################################################
         # ####### CONFIG FILE WITH PARAMETERS REGARDING PORTABILITY #############################################
         # #######################################################################################################
@@ -83,11 +84,8 @@ if __name__ == '__main__':
             data_path = os.path.join(os.getenv('appdata'), 'FlatCAM')
         else:
             data_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__))) + '\\config'
-    else:
+    elif data_path is None:
         data_path = os.path.expanduser('~') + '/.FlatCAM'
-
-    # a folder set in the FLATCAM_DATA_PATH environment variable is used instead, as in App
-    data_path = data_path_from_env() or data_path
 
     if not os.path.exists(data_path):
         os.makedirs(data_path)

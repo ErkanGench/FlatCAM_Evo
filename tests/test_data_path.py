@@ -1,7 +1,9 @@
 """FLATCAM_DATA_PATH: a folder for the application settings instead of the default one."""
 import os
+from pathlib import Path
+import runpy
 import sys
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, mock_open
 
 import pytest
 
@@ -40,6 +42,7 @@ def test_reads_the_process_environment(tmp_path, monkeypatch):
 
 class SetupStub:
     """The attributes and the path helpers of App that App._setup_paths_and_config uses."""
+    headless = False
     version = appMain.App.version
     tools_database_path = appMain.App.tools_database_path
     defaults_path = appMain.App.defaults_path
@@ -107,6 +110,27 @@ def test_app_takes_a_relative_folder_from_the_working_folder_at_the_start(tmp_pa
     restarted = setup_paths()
 
     assert restarted.data_path == app.data_path
+
+
+@pytest.mark.parametrize('frozen', [False, True], ids=['source', 'frozen'])
+def test_startup_override_without_appdata(tmp_path, monkeypatch, frozen):
+    from appGUI import VisPyPatches
+
+    settings = tmp_path / 'settings'
+    monkeypatch.setenv('FLATCAM_DATA_PATH', str(settings))
+    monkeypatch.delenv('APPDATA', raising=False)
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setattr(sys, 'frozen', frozen, raising=False)
+    monkeypatch.setattr('multiprocessing.freeze_support', lambda: None)
+    monkeypatch.setattr('builtins.open', mock_open(read_data='portable=False\n'))
+
+    def stop_after_paths():
+        raise RuntimeError('startup paths ready')
+
+    monkeypatch.setattr(VisPyPatches, 'apply_patches', stop_after_paths)
+    with pytest.raises(RuntimeError, match='startup paths ready'):
+        runpy.run_path(str(Path(appMain.__file__).with_name('flatcam.py')), run_name='__main__')
+    assert settings.is_dir()
 
 
 @pytest.mark.parametrize('value', [None, '', '  '], ids=['unset', 'empty', 'blank'])
