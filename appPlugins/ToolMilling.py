@@ -86,6 +86,9 @@ LEGACY_MILL_TOOL_KEYS = {
     'tools_mill_tool_shape': ('tool_type', {'c1': 0, 'c2': 1, 'c3': 2, 'c4': 3, 'b': 4, 'v': 5}),
 }
 
+# FlatCAM 8.994 preprocessors that have another name now (renamed in baeb4b87e, 13ec36e50 and eb9e7b420)
+LEGACY_PREPROCESSOR_NAMES = {'grbl_11': 'GRBL_11', 'line_xyz': 'Line_xyz', 'Z_laser': 'GRBL_laser_z'}
+
 
 def legacy_mill_value(tool, key):
     """
@@ -93,12 +96,16 @@ def legacy_mill_value(tool, key):
 
     :param tool:    a tool of a Geometry: {'tooldia': ..., 'data': {...}, ...}
     :param key:     a modern 'tools_mill_*' key
-    :return:        (True, a copy of the value) or (False, None) when the tool has no recognized older setting
+    :return:        (True, a copy of the value; a renamed preprocessor gets its current name) or (False, None) when the
+                    tool has no recognized older setting
     """
     data = tool['data']
     for old_key in LEGACY_MILL_DATA_KEYS.get(key, ()):
         if old_key in data:
-            return True, deepcopy(data[old_key])
+            value = deepcopy(data[old_key])
+            if key == 'tools_mill_ppname_g' and isinstance(value, str):
+                value = LEGACY_PREPROCESSOR_NAMES.get(value, value)
+            return True, value
     if key in LEGACY_MILL_TOOL_KEYS:
         old_key, values = LEGACY_MILL_TOOL_KEYS[key]
         if old_key in tool:
@@ -3149,12 +3156,22 @@ class ToolMilling(Geometry, AppTool):
         # the tool data of objects made by older app versions (e.g. a Geometry in an older project) lacks the
         # options added later or keeps them under an older name; the CNC job reads them. A missing option gets the
         # value of its older name in the tool, and the application value only when the tool has neither.
+        missing_pp = set()
         for tool in tools_dict.values():
             data = tool['data']
             for key in AppDefaults.factory_defaults:
                 if not key.startswith('tools_mill_') or key in data:
                     continue
                 found, value = legacy_mill_value(tool, key)
+                if found and key == 'tools_mill_ppname_g' and value not in self.app.preprocessors:
+                    # a saved preprocessor that this app does not have (deleted, or a user preprocessor that is not
+                    # installed) counts as absent
+                    found = False
+                    if value not in missing_pp:
+                        missing_pp.add(value)
+                        self.app.log.warning("ToolMilling: the saved preprocessor %s is not available" % str(value))
+                        self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (
+                            _("The saved preprocessor is not available, the one from Preferences is used"), value))
                 data[key] = value if found else deepcopy(self.app.options.get(
                     key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
 

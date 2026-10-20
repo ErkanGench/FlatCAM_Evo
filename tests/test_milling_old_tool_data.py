@@ -5,7 +5,8 @@ later: 'tools_mill_laser_on' (2023-12) in an older FlatCAM Evo project. A FlatCA
 key: its tool data keeps the settings under older names ('cutz', 'feedrate'...) and the tool itself keeps 'tooldia',
 'offset', 'offset_value', 'type' and 'tool_type'. The CNC job failed with a KeyError.
 
-A missing option now gets, in this order: the value of its older name in the tool, the application value.
+A missing option now gets, in this order: the value of its older name in the tool, the application value. A saved
+preprocessor that was renamed gets its current name; one that the app does not have counts as absent.
 """
 import os
 from copy import deepcopy
@@ -20,7 +21,10 @@ from shapely import LineString
 from appPlugins.ToolMilling import ToolMilling, LEGACY_MILL_DATA_KEYS, LEGACY_MILL_TOOL_KEYS, legacy_mill_value
 from camlib import CNCjob
 from defaults import AppDefaults
+from preprocessors.GRBL_11 import GRBL_11
 from preprocessors.GRBL_laser import GRBL_laser
+from preprocessors.GRBL_laser_z import GRBL_laser_z
+from preprocessors.Line_xyz import Line_xyz
 from preprocessors.default import default
 from test_unify_regressions_0b import make_app
 
@@ -83,8 +87,9 @@ def flatcam_8_994_laser_tool():
 
 def milling_harness(tool, multigeo, **options):
     app = make_app(**options)
-    app.preprocessors['GRBL_laser'] = GRBL_laser()
-    app.preprocessors['default'] = default()
+    # a plain dict, as in the app: a preprocessor name that it does not have raises a KeyError
+    app.preprocessors = {'default': default(), 'GRBL_laser': GRBL_laser(), 'GRBL_11': GRBL_11(),
+                         'Line_xyz': Line_xyz(), 'GRBL_laser_z': GRBL_laser_z()}
     app.dec_format = lambda value, decimals: round(value, decimals)
     app.exc_areas = SimpleNamespace(travel_coordinates=lambda **kw: [(None, kw['end_point'])])
 
@@ -198,6 +203,48 @@ def test_application_value_only_for_absent_settings(multigeo):
     # an older name in this tool: its value, not the application value (here: Roughing, not Polishing)
     assert data['tools_mill_job_type'] == 0 and data['tools_mill_offset_type'] == 0
     assert data['tools_mill_endz'] == 15.0 and data['tools_mill_ppname_g'] == 'default'
+
+
+def make_cnc_job_with_preprocessor(tool, multigeo, **options):
+    """The CNC job, its G-code and the warnings that name the preprocessor saved in the tool."""
+    saved = tool['data']['ppname_g']
+    milling, jobs = milling_harness(tool, multigeo, **options)
+    milling.generate_cnc_job_handler(toolchange=False, plot=False, use_thread=False, from_tcl=True)
+    assert len(jobs) == 1
+    warnings = [c.args[0] for c in milling.app.inform.emit.call_args_list if saved in str(c.args[0])]
+    return jobs[0], milling.app.preprocessors, warnings
+
+
+@pytest.mark.parametrize('multigeo', [False, True])
+@pytest.mark.parametrize('saved, current', [('grbl_11', 'GRBL_11'), ('line_xyz', 'Line_xyz'),
+                                            ('Z_laser', 'GRBL_laser_z')])
+def test_renamed_flatcam_8_994_preprocessor(saved, current, multigeo):
+    # FlatCAM 8.994 had these preprocessors under another name
+    tool = flatcam_8_994_laser_tool() if current == 'GRBL_laser_z' else flatcam_8_994_cutout_tool()
+    tool['data']['ppname_g'] = saved
+
+    job, preprocessors, warnings = make_cnc_job_with_preprocessor(
+        tool, multigeo, **dict(OTHER_OPTIONS, tools_mill_ppname_g='default'))
+
+    assert tool['data']['tools_mill_ppname_g'] == current
+    assert job.pp_geometry_name == current and job.pp_geometry is preprocessors[current]
+    assert not warnings
+
+
+@pytest.mark.parametrize('multigeo', [False, True])
+def test_unavailable_saved_preprocessor_gets_the_application_one(multigeo):
+    # deleted after 8.994 (524b45617); a user preprocessor that is not installed is the same
+    tool = flatcam_8_994_cutout_tool(ppname_g='Toolchange_Custom')
+
+    job, preprocessors, warnings = make_cnc_job_with_preprocessor(
+        tool, multigeo, **dict(OTHER_OPTIONS, tools_mill_ppname_g='GRBL_11'))
+
+    assert tool['data']['tools_mill_ppname_g'] == 'GRBL_11'
+    assert job.pp_geometry_name == 'GRBL_11' and job.pp_geometry is preprocessors['GRBL_11']
+    # the other saved settings are kept
+    gcode = job.source_file
+    assert 'G01 Z-1.2000' in gcode and 'G01 Z-2.4000' in gcode and 'F120.00' in gcode
+    assert len(warnings) == 1 and warnings[0].startswith('[WARNING_NOTCL]')
 
 
 def test_older_tool_values_are_converted():
