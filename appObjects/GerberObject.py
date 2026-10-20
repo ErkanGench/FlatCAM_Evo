@@ -16,7 +16,7 @@ from appGUI.ObjectUI import GerberObjectUI
 from appParsers.ParseGerber import Gerber, drop_placeholder_record_keys
 from appObjects.AppObjectTemplate import FlatCAMObj, OffsetUiMixin, PropertiesPanelMixin, ObjectDeleted, ValidationError
 
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, clip_paths_to_area, area_outline_paths, boundary_passes_message
 from appCommon.SafeEval import safe_eval
 
 from shapely import MultiLineString, LinearRing, MultiPolygon, Polygon, LineString, Point
@@ -543,7 +543,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         self.app.app_obj.new_object("geometry", name, geo_init)
 
     def isolate(self, iso_type=None, geometry=None, dia=None, passes=None, overlap=None, outname=None, combine=None,
-                milling_type=None, plot=True):
+                milling_type=None, plot=True, boundary=None, trace_boundary=False):
         """
         Creates an isolation routing geometry object in the project.
 
@@ -556,6 +556,10 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         :param combine:         Boolean: if to combine passes in one resulting object in case of multiple passes
         :param milling_type:    type of milling: conventional or climbing
         :param plot: Boolean:   if to plot the resulting geometry object
+        :param boundary:        Polygon / MultiPolygon (e.g. the board area, camlib.outline_area()) or None. The paths
+                                are clipped to it, and the passes stop at the first one that is completely outside
+                                it (the next ones, further out, would be outside too)
+        :param trace_boundary:  Boolean: also add the outline of the boundary as a path (once)
         :return:                None
         """
 
@@ -623,6 +627,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
 
                 # every pass is added to the result; assigning inside the loop kept only the last pass
                 all_passes_geo = []
+                passes_made = passes
                 for nr_pass in range(passes):
                     iso_offset = dia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * dia)
 
@@ -635,7 +640,23 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                         if plot:
                             app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                         return 'fail'
+
+                    if boundary is not None:
+                        geom = clip_paths_to_area(geom, boundary)
+                        if not geom:
+                            # this pass is completely outside the boundary, and so are the next ones
+                            passes_made = nr_pass
+                            break
                     all_passes_geo += flatten_shapely_geometry(geom)
+
+                if boundary is not None:
+                    report = boundary_passes_message(iso_name, passes_made, passes)
+                    self.app.log.info("Isolation boundary: " + report)
+                    app_obj.inform.emit(report)
+                    if passes_made == 0:
+                        return 'fail'
+                    if trace_boundary:
+                        all_passes_geo += area_outline_paths(boundary)
 
                 geo_obj.solid_geometry = all_passes_geo
 
@@ -691,15 +712,32 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     else:
                         iso_name = outname
 
+                # if milling type is climb then the move is counter-clockwise around features
+                mill_dir = 1 if milling_type == 'cl' else 0
+                geom = self.generate_envelope(offset, mill_dir, geometry=work_geo, env_iso_type=iso_t, nr_passes=i)
+
+                if boundary is not None and geom != 'fail':
+                    geom = clip_paths_to_area(geom, boundary)
+                    if not geom:
+                        # this pass is completely outside the boundary, and so are the next ones
+                        report = boundary_passes_message(base_name, i, passes)
+                        self.app.log.info("Isolation boundary: " + report)
+                        self.app.inform.emit(report)
+                        if i == 0:
+                            return 'fail'
+                        break
+                    if i == passes - 1:
+                        report = boundary_passes_message(base_name, passes, passes)
+                        self.app.log.info("Isolation boundary: " + report)
+                        self.app.inform.emit(report)
+                    if trace_boundary and i == 0:
+                        geom += area_outline_paths(boundary)
+
                 def iso_init(geo_obj, app_obj):
                     # Propagate options
                     geo_obj.obj_options["tools_mill_tooldia"] = str(dia)
                     geo_obj.tool_type = self._app_option("tools_iso_tool_shape")
                     geo_obj.multigeo = True
-
-                    # if milling type is climb then the move is counter-clockwise around features
-                    mill_dir = 1 if milling_type == 'cl' else 0
-                    geom = self.generate_envelope(offset, mill_dir, geometry=work_geo, env_iso_type=iso_t, nr_passes=i)
 
                     if geom == 'fail':
                         if plot:

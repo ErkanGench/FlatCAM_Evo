@@ -1,4 +1,5 @@
 from tclCommands.TclCommand import TclCommandSignaled
+from camlib import outline_area
 
 import collections
 
@@ -32,7 +33,9 @@ class TclCommandIsolate(TclCommandSignaled):
         ('overlap', float),
         ('combine', str),
         ('outname', str),
-        ('iso_type', int)
+        ('iso_type', int),
+        ('boundary', str),
+        ('trace_boundary', str)
 
     ])
 
@@ -51,9 +54,14 @@ class TclCommandIsolate(TclCommandSignaled):
             ('combine', 'Combine all passes into one geometry. Can be True (1) or False (0)'),
             ('outname', 'Name of the resulting Geometry object.'),
             ('iso_type', 'A value of 0 will isolate exteriors, a value of 1 will isolate interiors '
-                         'and a value of 2 will do full isolation.')
+                         'and a value of 2 will do full isolation.'),
+            ('boundary', 'Name of a Gerber or Geometry object whose outline limits the isolation, e.g. the board '
+                         'outline (Edge Cuts). The paths outside it are cut off and the passes stop when one is '
+                         'completely outside it.'),
+            ('trace_boundary', 'Also add one path along the boundary outline. Can be True (1) or False (0).')
         ]),
-        'examples': ['isolate my_gerber -dia 0.1 -passes 2 -overlap 10 -combine True -iso_type 2 -outname out_geo']
+        'examples': ['isolate my_gerber -dia 0.1 -passes 2 -overlap 10 -combine True -iso_type 2 -outname out_geo',
+                     'isolate my_gerber -dia 0.1 -passes 50 -overlap 10 -boundary my_edge_cuts -trace_boundary True']
     }
 
     def execute(self, args, unnamed_args):
@@ -94,6 +102,20 @@ class TclCommandIsolate(TclCommandSignaled):
         if obj.kind != 'gerber':
             self.raise_tcl_error('Expected GerberObject, got %s %s.' % (name, type(obj)))
             return "fail"
+
+        if 'boundary' in args:
+            boundary_obj = self.app.collection.get_by_name(args['boundary'])
+            if boundary_obj is None:
+                self.raise_tcl_error("Object not found: %s" % args['boundary'])
+                return "fail"
+            args['boundary'] = outline_area(boundary_obj.solid_geometry)
+            if args['boundary'] is None:
+                self.raise_tcl_error("The object %s has no outline that encloses an area." %
+                                     boundary_obj.obj_options['name'])
+                return "fail"
+
+        if 'trace_boundary' in args:
+            args['trace_boundary'] = self.parse_bool(args['trace_boundary'])
 
         args.pop('name', None)
         return obj.isolate(plot=False, **args)

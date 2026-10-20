@@ -29,7 +29,8 @@ import appTranslation as fcTranslate
 import builtins
 
 from appDatabase import load_tools_database
-from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs
+from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs, outline_area, clip_paths_to_area, \
+    area_outline_paths, boundary_passes_message
 from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
@@ -260,6 +261,7 @@ class ToolIsolation(Geometry, AppTool):
         self.ui.select_combo.currentIndexChanged.connect(self.on_toggle_reference)
 
         self.ui.type_excobj_radio.activated_custom.connect(self.on_type_excobj_index_changed)
+        self.ui.type_boundary_radio.activated_custom.connect(self.on_type_boundary_index_changed)
         self.ui.apply_param_to_all.clicked.connect(self.on_apply_param_to_all_clicked)
 
         # adding Tools
@@ -283,6 +285,35 @@ class ToolIsolation(Geometry, AppTool):
         self.ui.exc_obj_combo.obj_type = {
             "gerber": "Gerber", "geometry": "Geometry"
         }[self.ui.type_excobj_radio.get_value()]
+
+    def on_type_boundary_index_changed(self, val):
+        obj_type = 0 if val == 'gerber' else 2
+        self.ui.boundary_obj_combo.setRootModelIndex(self.app.collection.index(obj_type, 0, QtCore.QModelIndex()))
+        self.ui.boundary_obj_combo.setCurrentIndex(0)
+        self.ui.boundary_obj_combo.obj_type = {
+            "gerber": "Gerber", "geometry": "Geometry"
+        }[self.ui.type_boundary_radio.get_value()]
+
+    def get_boundary_area(self):
+        """
+        The boundary area from the UI: the area enclosed by the outline of the selected object.
+
+        :return:    Polygon / MultiPolygon, None when the boundary is not used, or 'fail' (with a message)
+        """
+        if not self.ui.boundary_cb.get_value():
+            return None
+
+        boundary_obj = self.app.collection.get_by_name(self.ui.boundary_obj_combo.currentText())
+        if boundary_obj is None:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("No boundary object is selected."))
+            return 'fail'
+
+        area = outline_area(boundary_obj.solid_geometry)
+        if area is None:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (
+                _("The boundary object has no outline that encloses an area"), boundary_obj.obj_options['name']))
+            return 'fail'
+        return area
 
     def set_tool_ui(self):
         self.units = self.app.app_units.upper()
@@ -343,10 +374,14 @@ class ToolIsolation(Geometry, AppTool):
         self.ui.tools_frame.show()
 
         self.ui.type_excobj_radio.set_value('gerber')
+        self.ui.type_boundary_radio.set_value('gerber')
+        self.ui.boundary_cb.set_value(False)
+        self.ui.trace_boundary_cb.set_value(True)
 
         # run those once so the obj_type attribute is updated for the FCComboboxes
         # so the last loaded object is displayed
         self.on_type_excobj_index_changed(val="gerber")
+        self.on_type_boundary_index_changed(val="gerber")
         self.on_reference_combo_changed()
 
         self.ui.iso_order_combo.set_value(self.app.options.get(
@@ -1809,6 +1844,12 @@ class ToolIsolation(Geometry, AppTool):
             self.ui.simplify_cb.get_value()
         simplification_tol = args['simplification_tol'] if 'simplification_tol' in args else \
             self.ui.sim_tol_entry.get_value()
+        # boundary: None or the area (Polygon / MultiPolygon) the isolation is limited to
+        boundary = args['boundary'] if 'boundary' in args else self.get_boundary_area()
+        if boundary == 'fail':
+            return 'fail'
+        trace_boundary = boundary is not None and (
+            args['trace_boundary'] if 'trace_boundary' in args else self.ui.trace_boundary_cb.get_value())
 
         # update the Common Parameters values in the self.iso_tools
         for tool_iso in tools_storage:
@@ -1828,12 +1869,14 @@ class ToolIsolation(Geometry, AppTool):
             if use_rest:
                 self.combined_rest(iso_obj=isolated_obj, iso2geo=geometry, tools_storage=tools_storage,
                                    lim_area=limited_area, negative_dia=negative_dia,
-                                   simp_en=use_simplification, simp_tol=simplification_tol, plot=plot)
+                                   simp_en=use_simplification, simp_tol=simplification_tol, plot=plot,
+                                   boundary=boundary, trace_boundary=trace_boundary)
             else:
                 self.combined_normal(iso_obj=isolated_obj, iso2geo=geometry, tools_storage=tools_storage,
                                      sel_tools=sel_tools, iso_except=use_iso_except, lim_area=limited_area,
                                      negative_dia=negative_dia, extra_passes=use_extra_passes,
-                                     simp_en=use_simplification, simp_tol=simplification_tol, plot=plot)
+                                     simp_en=use_simplification, simp_tol=simplification_tol, plot=plot,
+                                     boundary=boundary, trace_boundary=trace_boundary)
 
         else:
             prog_plot = self.app.options.get(
@@ -1891,10 +1934,25 @@ class ToolIsolation(Geometry, AppTool):
                         self.app.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                         continue
 
+                    # the envelope, for the pad passes (with a boundary iso_geo becomes the clipped paths)
+                    envelope_geo = iso_geo
+                    if boundary is not None:
+                        iso_geo = clip_paths_to_area(iso_geo, boundary)
+                        if not iso_geo:
+                            # this pass is completely outside the boundary, and so are the next ones
+                            report = boundary_passes_message(outname, i, passes)
+                            self.app.log.info("Isolation boundary: " + report)
+                            self.app.inform.emit(report)
+                            break
+                        if i == passes - 1:
+                            report = boundary_passes_message(outname, passes, passes)
+                            self.app.log.info("Isolation boundary: " + report)
+                            self.app.inform.emit(report)
+
                     # Extra Pads isolations
                     pad_geo = []
                     if use_extra_passes > 0:
-                        solid_geo_union = unary_union(iso_geo)
+                        solid_geo_union = unary_union(envelope_geo)
                         extra_geo = []
                         for apid in isolated_obj.tools:
                             for t_geo_dict in isolated_obj.tools[apid]['geometry']:
@@ -1935,6 +1993,12 @@ class ToolIsolation(Geometry, AppTool):
                     if limited_area:
                         self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
                         iso_geo = self.area_intersection(iso_geo, intersection_geo=limited_area)
+
+                    if boundary is not None:
+                        # the extra pad passes
+                        iso_geo = clip_paths_to_area(iso_geo, boundary)
+                        if trace_boundary and i == 0:
+                            iso_geo += area_outline_paths(boundary)
 
                     # make sure that no empty geometry element is in the solid_geometry
                     new_solid_geo = flatten_shapely_geometry(iso_geo)
@@ -2003,7 +2067,7 @@ class ToolIsolation(Geometry, AppTool):
         # self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
 
     def combined_rest(self, iso_obj, iso2geo, tools_storage, lim_area, negative_dia=None,
-                      simp_en=False, simp_tol=0.001, plot=True):
+                      simp_en=False, simp_tol=0.001, plot=True, boundary=None, trace_boundary=False):
         """
         Isolate the provided Gerber object using "rest machining" strategy
 
@@ -2023,6 +2087,10 @@ class ToolIsolation(Geometry, AppTool):
         :type simp_tol:         float
         :param plot:            if to plot the resulting geometry object
         :type plot:             bool
+        :param boundary:        if not None, the area to which the isolation is limited
+        :type boundary:         Shapely Polygon or MultiPolygon
+        :param trace_boundary:  also add the outline of the boundary as a path
+        :type trace_boundary:   bool
         :return:                Isolated solid geometry
         :rtype:
         """
@@ -2123,6 +2191,12 @@ class ToolIsolation(Geometry, AppTool):
                         self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
                         solid_geo = self.area_intersection(solid_geo, intersection_geo=lim_area)
 
+                    if boundary is not None:
+                        solid_geo = clip_paths_to_area(solid_geo, boundary)
+                        # the boundary is traced once, with the first tool that has paths inside it
+                        if trace_boundary and solid_geo and not total_solid_geometry:
+                            solid_geo += area_outline_paths(boundary)
+
                     # make sure that no empty geometry element is in the solid_geometry
                     new_solid_geo = flatten_shapely_geometry(solid_geo)
 
@@ -2222,7 +2296,8 @@ class ToolIsolation(Geometry, AppTool):
             self.app.inform_shell.emit(msg)
 
     def combined_normal(self, iso_obj, iso2geo, tools_storage, lim_area, sel_tools, iso_except, extra_passes=None,
-                        negative_dia=None, simp_en=False, simp_tol=0.001, plot=True, prog_plot=None):
+                        negative_dia=None, simp_en=False, simp_tol=0.001, plot=True, prog_plot=None, boundary=None,
+                        trace_boundary=False):
         """
 
         :param iso_obj:         the isolated Gerber object
@@ -2249,6 +2324,11 @@ class ToolIsolation(Geometry, AppTool):
         :type plot:             bool
         :param prog_plot:       If True a progressive plot is used
         :type prog_plot:        bool
+        :param boundary:        if not None, the area to which the isolation is limited; the passes stop at the
+                                first one that is completely outside it
+        :type boundary:         Shapely Polygon or MultiPolygon
+        :param trace_boundary:  also add the outline of the boundary as a path
+        :type trace_boundary:   bool
         :return:                Isolated solid geometry
         :rtype:
         """
@@ -2299,6 +2379,9 @@ class ToolIsolation(Geometry, AppTool):
             })
 
             solid_geo = []
+            # with a boundary solid_geo holds the clipped paths; the envelopes are kept here for the pad passes
+            envelopes = []
+            passes_made = passes
             for nr_pass in range(passes):
                 iso_offset = tool_dia * ((2 * nr_pass + 1) / 2.0000001) - (nr_pass * overlap * tool_dia)
                 if negative_dia:
@@ -2313,14 +2396,33 @@ class ToolIsolation(Geometry, AppTool):
                     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                     continue
 
+                if boundary is not None:
+                    clipped = clip_paths_to_area(iso_geo, boundary)
+                    if not clipped:
+                        # this pass is completely outside the boundary, and so are the next ones
+                        passes_made = nr_pass
+                        break
+                    envelopes.extend(flatten_shapely_geometry(iso_geo))
+                    solid_geo.extend(clipped)
+                    continue
+
                 # generate_envelope() can return a list or a GeometrySequence; keep solid_geo flat so
                 # unary_union() for the extra pad passes works
                 solid_geo.extend(flatten_shapely_geometry(iso_geo))
 
+            if boundary is not None:
+                report = boundary_passes_message(outname, passes_made, passes)
+                self.app.log.info("Isolation boundary: " + report)
+                self.app.inform.emit(report)
+                if passes_made == 0:
+                    # no path of this tool is inside the boundary: no pad passes and no traced boundary either
+                    tools_storage.pop(tool, None)
+                    continue
+
             # Extra Pads isolations
             pad_geo = []
             if extra_passes is not None and extra_passes > 0:
-                solid_geo_union = unary_union(solid_geo)
+                solid_geo_union = unary_union(envelopes if boundary is not None else solid_geo)
                 extra_geo = []
                 for apid in iso_obj.tools:
                     for t_geo_dict in iso_obj.tools[apid]['geometry']:
@@ -2328,7 +2430,8 @@ class ToolIsolation(Geometry, AppTool):
                             if isinstance(t_geo_dict['follow'], Point):
                                 extra_geo.append(t_geo_dict['solid'])
 
-                for nr_pass in range(passes, extra_passes + passes):
+                # after the last pass made (with a boundary the passes can stop before the requested number)
+                for nr_pass in range(passes_made, extra_passes + passes_made):
                     pad_pass_geo = []
                     for geo in extra_geo:
                         iso_offset = tool_dia * ((2 * nr_pass + 1) / 2.0000001) - (nr_pass * overlap * tool_dia)
@@ -2352,6 +2455,12 @@ class ToolIsolation(Geometry, AppTool):
             if lim_area:
                 self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
                 solid_geo = self.area_intersection(solid_geo, intersection_geo=lim_area)
+
+            if boundary is not None:
+                # the extra pad passes
+                solid_geo = clip_paths_to_area(solid_geo, boundary)
+                if trace_boundary and not total_solid_geometry:
+                    solid_geo += area_outline_paths(boundary)
 
             # make sure that no empty geometry element is in the solid_geometry
             new_solid_geo = flatten_shapely_geometry(solid_geo)
@@ -3940,6 +4049,48 @@ class IsoUI:
 
         self.area_shape_label.hide()
         self.area_shape_radio.hide()
+
+        # Boundary: limit the isolation to the area enclosed by the outline of an object
+        self.boundary_cb = FCCheckBox(label=_('Boundary'))
+        self.boundary_cb.setToolTip(_("Limit the isolation to the area enclosed by the outline of an object,\n"
+                                      "e.g. the board outline (Edge Cuts Gerber) or a shape drawn in a Geometry.\n"
+                                      "The paths outside it are cut off, and the passes stop when one is\n"
+                                      "completely outside it. Useful with many passes: the outer passes\n"
+                                      "no longer spread far outside the board."))
+        self.boundary_cb.setObjectName("i_boundary")
+        gen_grid.addWidget(self.boundary_cb, 24, 0)
+
+        # Type of the boundary object
+        self.type_boundary_radio = RadioSet([{'label': _("Geometry"), 'value': 'geometry'},
+                                             {'label': _("Gerber"), 'value': 'gerber'}])
+        self.type_boundary_radio.setToolTip(
+            _("The type of the object whose outline is the boundary.\n"
+              "What is selected here will dictate the kind\n"
+              "of objects that will populate the 'Object' combobox.")
+        )
+        gen_grid.addWidget(self.type_boundary_radio, 24, 1)
+
+        # The boundary object
+        self.boundary_obj_combo = FCComboBox()
+        self.boundary_obj_combo.setToolTip(_("Object whose outline limits the isolation."))
+        self.boundary_obj_combo.setModel(self.app.collection)
+        self.boundary_obj_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
+        self.boundary_obj_combo.is_last = True
+        self.boundary_obj_combo.obj_type = "gerber"
+        gen_grid.addWidget(self.boundary_obj_combo, 26, 0, 1, 2)
+
+        # Also cut along the boundary
+        self.trace_boundary_cb = FCCheckBox(label=_('Trace the boundary'))
+        self.trace_boundary_cb.setToolTip(_("Also add one path along the boundary outline."))
+        self.trace_boundary_cb.setObjectName("i_trace_boundary")
+        gen_grid.addWidget(self.trace_boundary_cb, 28, 0, 1, 2)
+
+        self.boundary_ois = OptionalInputSection(self.boundary_cb,
+                                                 [
+                                                     self.type_boundary_radio,
+                                                     self.boundary_obj_combo,
+                                                     self.trace_boundary_cb
+                                                 ])
 
         GLay.set_common_column_size([tool_grid, new_tool_grid, tool_param_grid, v_grid, gen_grid], 0)
 
