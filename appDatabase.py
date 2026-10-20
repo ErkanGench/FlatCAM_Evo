@@ -3,6 +3,7 @@ from PyQt6 import QtGui, QtCore, QtWidgets
 from appGUI.GUIElements import FCEntry, FCButton, FCDoubleSpinner, FCComboBox, FCCheckBox, FCSpinner, \
     FCTree, RadioSet, FCFileSaveDialog, FCLabel, FCComboBox2, FCMessageBox, GLay
 from camlib import to_dict
+from appCommon.SafeEval import safe_eval
 
 import sys
 import json
@@ -2198,7 +2199,7 @@ class ToolsDB2(QtWidgets.QWidget):
         else:
             try:
                 tools_string = tool_diameter.split(",")
-                tools_diameters = [eval(a) for a in tools_string if a != '']
+                tools_diameters = [safe_eval(a) for a in tools_string if a != '']
                 dict_elem['tooldia'] = tools_diameters[0] if tools_diameters else 0.0
             except Exception as e:
                 self.app.log.error("ToolDB.on_tool_add() --> %s" % str(e))

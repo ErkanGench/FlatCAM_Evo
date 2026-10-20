@@ -66,6 +66,7 @@ from appCommon.Common import AppLogging
 from appCommon.StartDir import resolve_user_path, resolve_existing_paths
 from appCommon.DataPath import data_path_from_env, DATA_PATH_ENV
 from appCommon.RegisterFileKeywords import RegisterFK, Extensions, KeyWords
+from appCommon.SafeEval import safe_eval
 
 from appHandlers.appIO import appIO
 from appHandlers.appEdit import appEditor
@@ -1530,7 +1531,7 @@ class App(QtCore.QObject):
                     if i is not None:
                         # noinspection PyBroadException
                         try:
-                            command_tcl = eval(i)
+                            command_tcl = safe_eval(i)
                         except Exception:
                             command_tcl = i
 

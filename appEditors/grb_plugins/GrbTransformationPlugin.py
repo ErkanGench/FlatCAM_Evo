@@ -1,6 +1,7 @@
 
 from PyQt6 import QtGui, QtWidgets
 from appTool import AppToolEditor, AppTool
+from appCommon.SafeEval import safe_eval
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCDoubleSpinner, \
     FCInputDoubleSpinner, FCComboBox, NumericalEvalTupleEntry, FCCheckBox, OptionalInputSection
 
@@ -250,7 +251,7 @@ class TransformEditorTool(AppToolEditor):
         elif ref_val == 2:  # "Point" reference
             point_val = self.ui.point_entry.get_value()
             try:
-                px, py = eval('{}'.format(point_val))
+                px, py = safe_eval('{}'.format(point_val))
                 return px, py
             except Exception:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("Incorrect format for Point value. Needs format X,Y"))

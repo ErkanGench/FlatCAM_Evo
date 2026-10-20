@@ -112,6 +112,16 @@ Data Folder:
 
 - new: the FLATCAM_DATA_PATH environment variable sets the data folder (preferences, Tools Database, recent files, preprocessors, log and the updater files) instead of %APPDATA%/FlatCAM, ~/.FlatCAM or the portable 'config' folder; a second installation keeps its own settings, also on Linux and macOS, and a test or a script can start with a throw-away folder; a relative path is taken from the working folder at the start
 
+Translations:
+
+- new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language
+- check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings
+- stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt
+- new guide for the translators (docs/TRANSLATING.md)
+- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
+- fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
+- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -124,6 +134,9 @@ Tests:
 - new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
 - new unit tests for the CNC job plot filter and the visibility toggle
 - new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
+- new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py)
+- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
+- new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
 
 18.10.2026
 

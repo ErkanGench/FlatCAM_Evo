@@ -23,6 +23,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from camlib import Geometry, flatten_shapely_geometry
+from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -324,7 +325,7 @@ class ToolFollow(Geometry, AppTool):
                 try:
                     temp_tools = tool_dia.split(",")
                     tools_list = [
-                        float(eval(dia)) for dia in temp_tools if dia != ''
+                        float(safe_eval(dia)) for dia in temp_tools if dia != ''
                     ]
                 except Exception as e:
                     self.app.log.error("ToolFollow.follow_geo -> At least one tool diameter needed. -> %s" % str(e))
@@ -413,7 +414,7 @@ class ToolFollow(Geometry, AppTool):
                 try:
                     temp_tools = tool_dia.split(",")
                     tools_list = [
-                        float(eval(dia)) for dia in temp_tools if dia != ''
+                        float(safe_eval(dia)) for dia in temp_tools if dia != ''
                     ]
                 except Exception as e:
                     app_obj.log.error("ToolFollow.follow_geo -> At least one tool diameter needed. -> %s" % str(e))

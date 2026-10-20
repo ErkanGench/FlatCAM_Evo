@@ -11,6 +11,7 @@ from camlib import distance, arc, three_point_circle, flatten_shapely_geometry, 
 from appGUI.GUIElements import *
 
 from appTool import AppTool
+from appCommon.SafeEval import safe_eval
 from appEditors.grb_plugins.GrbPadPlugin import PadEditorTool
 
 from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
@@ -7941,7 +7942,7 @@ class TransformEditorTool(AppTool):
         elif ref_val == 2:  # "Point" reference
             point_val = self.point_entry.get_value()
             try:
-                px, py = eval('{}'.format(point_val))
+                px, py = safe_eval('{}'.format(point_val))
                 return px, py
             except Exception:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("Incorrect format for Point value. Needs format X,Y"))

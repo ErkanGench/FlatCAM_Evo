@@ -13,6 +13,8 @@ from PyQt6.QtCore import QPoint
 from copy import deepcopy
 import numpy as np
 
+from appCommon.SafeEval import safe_eval
+
 import builtins
 import gettext
 
@@ -486,7 +488,7 @@ class AppObjectOps(QtCore.QObject):
             dia_box_location = None
 
             try:
-                dia_box_location = eval(self.app.clipboard.text())
+                dia_box_location = safe_eval(self.app.clipboard.text())
             except Exception:
                 pass
 
@@ -504,7 +506,7 @@ class AppObjectOps(QtCore.QObject):
 
             if dia_box.ok is True:
                 try:
-                    location = eval(dia_box.location)
+                    location = safe_eval(dia_box.location)
 
                     if not isinstance(location, tuple):
                         self.inform.emit(_("Wrong coordinates. Enter coordinates in format: X,Y"))
