@@ -293,6 +293,18 @@ class ToolsISOPrefGroupUI(OptionsGroupUI):
 
         gen_grid.addWidget(self.valid_cb, 2, 0, 1, 3)
 
+        # Clear the copper left between the passes
+        self.clear_leftovers_cb = FCCheckBox(label=_('Clear leftovers'))
+        self.clear_leftovers_cb.setToolTip(
+            _("Where the passes around two features meet, the last band can be too\n"
+              "narrow for one more pass and wider than what the last pass cuts:\n"
+              "strips and triangles of copper are left, however many passes are made.\n"
+              "When checked, one more path along each of them clears them.\n"
+              "Full isolation with combined passes (not rest machining).")
+        )
+
+        gen_grid.addWidget(self.clear_leftovers_cb, 3, 0, 1, 3)
+
         # Simplification Tolerance
         self.simplify_cb = FCCheckBox('%s' % _("Simplify"))
         self.simplify_cb.setToolTip(

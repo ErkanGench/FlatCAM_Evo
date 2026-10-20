@@ -16,7 +16,7 @@ from appGUI.ObjectUI import GerberObjectUI
 from appParsers.ParseGerber import Gerber, drop_placeholder_record_keys
 from appObjects.AppObjectTemplate import FlatCAMObj, OffsetUiMixin, PropertiesPanelMixin, ObjectDeleted, ValidationError
 
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, isolation_leftover_paths
 from appCommon.SafeEval import safe_eval
 
 from shapely import MultiLineString, LinearRing, MultiPolygon, Polygon, LineString, Point
@@ -543,7 +543,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         self.app.app_obj.new_object("geometry", name, geo_init)
 
     def isolate(self, iso_type=None, geometry=None, dia=None, passes=None, overlap=None, outname=None, combine=None,
-                milling_type=None, plot=True):
+                milling_type=None, plot=True, clear_leftovers=None):
         """
         Creates an isolation routing geometry object in the project.
 
@@ -556,6 +556,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         :param combine:         Boolean: if to combine passes in one resulting object in case of multiple passes
         :param milling_type:    type of milling: conventional or climbing
         :param plot: Boolean:   if to plot the resulting geometry object
+        :param clear_leftovers: Boolean: add paths that clear the copper left between the passes where the passes of
+                                2 features meet (camlib.isolation_leftover_paths()); full isolation with combined passes
         :return:                None
         """
 
@@ -576,6 +578,9 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         overlap /= 100.0
 
         combine = self._app_option("tools_iso_combine_passes") if combine is None else bool(combine)
+
+        if clear_leftovers is None:
+            clear_leftovers = self._app_option("tools_iso_clear_leftovers", False)
 
         if milling_type is None:
             milling_type = self._app_option("tools_iso_milling_type")
@@ -623,6 +628,11 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
 
                 # every pass is added to the result; assigning inside the loop kept only the last pass
                 all_passes_geo = []
+                # the copper left between the passes is found from the complete passes of the full isolation, outwards
+                # (a negative tool diameter puts the passes inside the copper)
+                use_leftovers = bool(clear_leftovers) and iso_t == 2 and dia > 0
+                leftover_geo = []
+                prev_geom = None
                 for nr_pass in range(passes):
                     iso_offset = dia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * dia)
 
@@ -636,6 +646,16 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                             app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                         return 'fail'
                     all_passes_geo += flatten_shapely_geometry(geom)
+
+                    if use_leftovers:
+                        if prev_geom is not None:
+                            leftover_geo += isolation_leftover_paths(prev_geom, geom, dia / 2.0,
+                                                                     int(self.geo_steps_per_circle))
+                        prev_geom = geom
+
+                if use_leftovers:
+                    self.app.log.debug("GerberObject.isolate() -> %d paths clear the leftovers" % len(leftover_geo))
+                    all_passes_geo += leftover_geo
 
                 geo_obj.solid_geometry = all_passes_geo
 

@@ -32,7 +32,8 @@ class TclCommandIsolate(TclCommandSignaled):
         ('overlap', float),
         ('combine', str),
         ('outname', str),
-        ('iso_type', int)
+        ('iso_type', int),
+        ('clear_leftovers', str)
 
     ])
 
@@ -51,9 +52,13 @@ class TclCommandIsolate(TclCommandSignaled):
             ('combine', 'Combine all passes into one geometry. Can be True (1) or False (0)'),
             ('outname', 'Name of the resulting Geometry object.'),
             ('iso_type', 'A value of 0 will isolate exteriors, a value of 1 will isolate interiors '
-                         'and a value of 2 will do full isolation.')
+                         'and a value of 2 will do full isolation.'),
+            ('clear_leftovers', 'Also add paths that clear the copper left between the passes where the passes of '
+                                'two features meet (full isolation with combined passes). '
+                                'Can be True (1) or False (0)')
         ]),
-        'examples': ['isolate my_gerber -dia 0.1 -passes 2 -overlap 10 -combine True -iso_type 2 -outname out_geo']
+        'examples': ['isolate my_gerber -dia 0.1 -passes 2 -overlap 10 -combine True -iso_type 2 -outname out_geo',
+                     'isolate my_gerber -dia 0.1 -passes 20 -overlap 10 -clear_leftovers True']
     }
 
     def execute(self, args, unnamed_args):
@@ -85,6 +90,9 @@ class TclCommandIsolate(TclCommandSignaled):
             args['combine'] = self.parse_bool(par)
         else:
             args['combine'] = self.parse_bool(self._app_option('tools_iso_combine_passes'))
+
+        if 'clear_leftovers' in args:
+            args['clear_leftovers'] = self.parse_bool(args['clear_leftovers'])
 
         obj = self.app.collection.get_by_name(name)
         if obj is None:

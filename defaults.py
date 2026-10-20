@@ -435,6 +435,7 @@ class AppDefaults:
 
         "tools_iso_rest":           False,
         "tools_iso_combine_passes": True,
+        "tools_iso_clear_leftovers": False,
         "tools_iso_check_valid":    False,
         "tools_iso_isoexcept":      False,
         "tools_iso_selection":      0,

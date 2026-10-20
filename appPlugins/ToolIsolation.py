@@ -28,7 +28,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from appDatabase import load_tools_database
-from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs
+from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs, isolation_leftover_paths
 from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
@@ -370,6 +370,9 @@ class ToolIsolation(Geometry, AppTool):
             "tools_iso_milling_type", app_defaults.get("tools_iso_milling_type", AppDefaults.factory_defaults.get("tools_iso_milling_type"))))
         self.ui.combine_passes_cb.set_value(self.app.options.get(
             "tools_iso_combine_passes", app_defaults.get("tools_iso_combine_passes", AppDefaults.factory_defaults.get("tools_iso_combine_passes"))))
+        self.ui.clear_leftovers_cb.set_value(self.app.options.get(
+            "tools_iso_clear_leftovers",
+            app_defaults.get("tools_iso_clear_leftovers", AppDefaults.factory_defaults.get("tools_iso_clear_leftovers"))))
         self.ui.valid_cb.set_value(self.app.options.get(
             "tools_iso_check_valid", app_defaults.get("tools_iso_check_valid", AppDefaults.factory_defaults.get("tools_iso_check_valid"))))
         self.ui.simplify_cb.set_value(self.app.options.get(
@@ -1829,10 +1832,14 @@ class ToolIsolation(Geometry, AppTool):
                                    lim_area=limited_area, negative_dia=negative_dia,
                                    simp_en=use_simplification, simp_tol=simplification_tol, plot=plot)
             else:
+                # use_clear_leftovers: True/False (combined passes only)
+                use_clear_leftovers = args['clear_leftovers'] if 'clear_leftovers' in args else \
+                    self.ui.clear_leftovers_cb.get_value()
                 self.combined_normal(iso_obj=isolated_obj, iso2geo=geometry, tools_storage=tools_storage,
                                      sel_tools=sel_tools, iso_except=use_iso_except, lim_area=limited_area,
                                      negative_dia=negative_dia, extra_passes=use_extra_passes,
-                                     simp_en=use_simplification, simp_tol=simplification_tol, plot=plot)
+                                     simp_en=use_simplification, simp_tol=simplification_tol, plot=plot,
+                                     clear_leftovers=use_clear_leftovers)
 
         else:
             prog_plot = self.app.options.get(
@@ -2221,7 +2228,8 @@ class ToolIsolation(Geometry, AppTool):
             self.app.inform_shell.emit(msg)
 
     def combined_normal(self, iso_obj, iso2geo, tools_storage, lim_area, sel_tools, iso_except, extra_passes=None,
-                        negative_dia=None, simp_en=False, simp_tol=0.001, plot=True, prog_plot=None):
+                        negative_dia=None, simp_en=False, simp_tol=0.001, plot=True, prog_plot=None,
+                        clear_leftovers=False):
         """
 
         :param iso_obj:         the isolated Gerber object
@@ -2248,6 +2256,8 @@ class ToolIsolation(Geometry, AppTool):
         :type plot:             bool
         :param prog_plot:       If True a progressive plot is used
         :type prog_plot:        bool
+        :param clear_leftovers: add paths that clear the copper left between the passes (full isolation only)
+        :type clear_leftovers:  bool
         :return:                Isolated solid geometry
         :rtype:
         """
@@ -2298,6 +2308,10 @@ class ToolIsolation(Geometry, AppTool):
             })
 
             solid_geo = []
+            # the copper left between the passes is found from the complete passes of the full isolation, outwards
+            use_leftovers = clear_leftovers and iso_t == 2 and not negative_dia
+            leftover_geo = []
+            prev_geo = None
             for nr_pass in range(passes):
                 iso_offset = tool_dia * ((2 * nr_pass + 1) / 2.0000001) - (nr_pass * overlap * tool_dia)
                 if negative_dia:
@@ -2315,6 +2329,16 @@ class ToolIsolation(Geometry, AppTool):
                 # generate_envelope() can return a list or a GeometrySequence; keep solid_geo flat so
                 # unary_union() for the extra pad passes works
                 solid_geo.extend(flatten_shapely_geometry(iso_geo))
+
+                if use_leftovers:
+                    if prev_geo is not None:
+                        leftover_geo += isolation_leftover_paths(prev_geo, iso_geo, tool_dia / 2.0,
+                                                                 int(iso_obj.geo_steps_per_circle))
+                    prev_geo = iso_geo
+
+            if use_leftovers:
+                self.app.log.debug("ToolIsolation.combined_normal() -> %d paths clear the leftovers" %
+                                   len(leftover_geo))
 
             # Extra Pads isolations
             pad_geo = []
@@ -2340,6 +2364,7 @@ class ToolIsolation(Geometry, AppTool):
                     pad_geo.append(unary_union(pad_pass_geo).difference(solid_geo_union))
 
             solid_geo += pad_geo
+            solid_geo += leftover_geo
 
             # ############################################################
             # ########## AREA SUBTRACTION ################################
@@ -3767,6 +3792,19 @@ class IsoUI:
         self.combine_passes_cb.setObjectName("i_combine")
 
         gen_grid.addWidget(self.combine_passes_cb, 2, 0, 1, 2)
+
+        # Clear the copper left between the passes
+        self.clear_leftovers_cb = FCCheckBox(label=_('Clear leftovers'))
+        self.clear_leftovers_cb.setToolTip(
+            _("Where the passes around two features meet, the last band can be too\n"
+              "narrow for one more pass and wider than what the last pass cuts:\n"
+              "strips and triangles of copper are left, however many passes are made.\n"
+              "When checked, one more path along each of them clears them.\n"
+              "Full isolation with combined passes (not rest machining).")
+        )
+        self.clear_leftovers_cb.setObjectName("i_clear_leftovers")
+
+        gen_grid.addWidget(self.clear_leftovers_cb, 3, 0, 1, 2)
 
         # Check Tool validity
         self.valid_cb = FCCheckBox(label=_('Check validity'))
