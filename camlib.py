@@ -3397,6 +3397,23 @@ class CNCjob(Geometry):
         else:
             return zcut
 
+    def laser_min_power_warning(self, gcode):
+        """
+        Warn when the laser is not turned off between the cuts: with a laser minimum power above zero the 'laser'
+        preprocessors write the 'laser OFF' lines with this power (e.g. 'M03 S250 (laser OFF)') instead of 'M5'.
+
+        :param gcode:   the generated GCode
+        :type gcode:    str
+        :return:        None
+        """
+        if 'laser OFF' in gcode:
+            self.app.inform.emit('[WARNING] %s' %
+                                 (_("Laser Min Power is %s: the laser is not turned off between the cuts. "
+                                    "The 'laser OFF' lines set this power instead, so the laser can burn along the "
+                                    "travel moves and stay on if the job is interrupted. "
+                                    "Set Min Power to 0 to turn the laser off between the cuts.") %
+                                  str(self.laser_min_power)))
+
     def calculate_depths(self, step):
         if self.multidepth and abs(self.z_cut) > abs(self.z_depthpercut):
             if self.z_cut > 0:
@@ -3803,6 +3820,7 @@ class CNCjob(Geometry):
             t_gcode += self.doformat(p.end_code, x=0, y=0)
 
         self.app.inform.emit('%s %s' % (_("Finished G-Code generation for tool:"), str(tool)))
+        self.laser_min_power_warning(t_gcode)
 
         return t_gcode, (locx, locy), start_gcode
 
@@ -4268,6 +4286,7 @@ class CNCjob(Geometry):
             )
 
         self.gcode = t_gcode
+        self.laser_min_power_warning(self.gcode)
         return self.gcode, start_gcode
 
     def tcl_gcode_from_excellon_by_tool(self, exobj, tools="all", order='fwd', is_first=False):
@@ -5045,6 +5064,7 @@ class CNCjob(Geometry):
         self.gcode = gcode
 
         self.app.inform.emit('%s ...' % _("Finished G-Code generation"))
+        self.laser_min_power_warning(gcode)
         return gcode, start_gcode
 
     # no longer used
@@ -5896,6 +5916,7 @@ class CNCjob(Geometry):
         self.app.inform.emit(
             '%s... %s %s.' % (_("Finished G-Code generation"), str(path_count), _("paths traced"))
         )
+        self.laser_min_power_warning(self.gcode)
 
         if self.gcode == '':
             return 'fail', start_gcode

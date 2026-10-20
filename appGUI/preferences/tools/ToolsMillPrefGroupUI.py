@@ -411,7 +411,12 @@ class ToolsMillPrefGroupUI(OptionsGroupUI):
         # Laser power minimum
         self.las_min_pwr_label = FCLabel('%s:' % _('Min Power'))
         self.las_min_pwr_label.setToolTip(
-            _("The laser power when the laser is travelling.")
+            "%s\n%s" % (
+                _("The laser power when the laser is travelling."),
+                _("Above 0 the laser is not turned off between the cuts:\n"
+                  "the 'laser OFF' lines set this power instead.\n"
+                  "Keep it 0 to turn the laser off between the cuts.")
+            )
         )
 
         self.las_min_pwr_entry = FCSpinner()
