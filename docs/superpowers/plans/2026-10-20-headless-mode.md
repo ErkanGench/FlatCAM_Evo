@@ -1312,6 +1312,118 @@ rtk git commit -m "docs(headless): README section and changelog"
 
 ---
 
+### Task 10: Tcl commands do not plot
+
+Rule of the project: a Tcl command makes no plot; only `plot_all` and `plot_objects` draw. All object-creating commands pass `plot=False` to `new_object()` except `tclCommands/TclCommandInteriors.py:70`. In headless mode `plot_all` and `plot_objects` have nothing to draw on.
+
+**Files:**
+- Modify: `tclCommands/TclCommandInteriors.py:70`
+- Modify: `tclCommands/TclCommandPlotAll.py` (the `execute` method, line ~81)
+- Modify: `tclCommands/TclCommandPlotObjects.py` (the `execute` method, line ~78)
+- Test: `tests/test_tcl_no_plot.py`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+"""A Tcl command makes no plot: every new_object() call in tclCommands passes plot=False. Only plot_all and
+plot_objects draw, and in headless mode they draw nothing."""
+
+import ast
+import os
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TCL_DIR = os.path.join(REPO, 'tclCommands')
+
+
+def _new_object_calls_without_plot_false():
+    offenders = []
+    for name in sorted(os.listdir(TCL_DIR)):
+        if not name.endswith('.py'):
+            continue
+        path = os.path.join(TCL_DIR, name)
+        with open(path, encoding='utf-8') as f:
+            tree = ast.parse(f.read(), filename=path)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'new_object':
+                plot = [kw for kw in node.keywords if kw.arg == 'plot']
+                if not (plot and isinstance(plot[0].value, ast.Constant) and plot[0].value.value is False):
+                    offenders.append('%s:%d' % (name, node.lineno))
+    return offenders
+
+
+def test_every_new_object_call_of_a_tcl_command_passes_plot_false():
+    assert _new_object_calls_without_plot_false() == []
+
+
+def test_plot_all_draws_nothing_in_headless_mode():
+    from tclCommands.TclCommandPlotAll import TclCommandPlotAll
+    app = SimpleNamespace(headless=True, plot_all=Mock(), inform=Mock())
+    command = TclCommandPlotAll.__new__(TclCommandPlotAll)
+    command.app = app
+    command.execute({}, [])
+    app.plot_all.assert_not_called()
+    app.inform.emit.assert_called_once()
+
+
+def test_plot_objects_draws_nothing_in_headless_mode():
+    from tclCommands.TclCommandPlotObjects import TclCommandPlotObjects
+    obj = Mock()
+    app = SimpleNamespace(headless=True, inform=Mock(), collection=Mock(get_by_name=Mock(return_value=obj)))
+    command = TclCommandPlotObjects.__new__(TclCommandPlotObjects)
+    command.app = app
+    command.execute({}, ['a'])
+    obj.plot.assert_not_called()
+    app.inform.emit.assert_called_once()
+```
+
+Read `execute()` of both plot commands before you run the tests: if `execute` takes other argument names, or reads options such as `args['plot_status']` before it plots, change the `execute({}, ...)` calls of the test to pass what the command needs. The assertions stay.
+
+- [ ] **Step 2: Run it to make sure it fails**
+
+Run: `.venv\Scripts\python.exe -m pytest tests/test_tcl_no_plot.py -q`
+Expected: FAIL; the first test lists `TclCommandInteriors.py:70`, the 2 headless tests see a plot call.
+
+- [ ] **Step 3: Write the implementation**
+
+`tclCommands/TclCommandInteriors.py:70`:
+
+```python
+        result = self.app.app_obj.new_object('geometry', outname, geo_init, plot=False)
+```
+
+At the start of `execute()` of `TclCommandPlotAll` and of `TclCommandPlotObjects` (after the docstring):
+
+```python
+        if getattr(self.app, 'headless', False) is True:
+            # headless mode: there is no canvas, and a Tcl command makes no plot anyway
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Headless mode: nothing is plotted."))
+            return
+```
+
+If the file has no `_` (translation) defined, use the same translation setup as the other `tclCommands` files that use `_(...)` (search one and copy its import lines).
+
+- [ ] **Step 4: Run the tests**
+
+Run: `.venv\Scripts\python.exe -m pytest tests/test_tcl_no_plot.py tests/test_tcl_audit_regressions.py -q`
+Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+rtk git add tclCommands/TclCommandInteriors.py tclCommands/TclCommandPlotAll.py tclCommands/TclCommandPlotObjects.py tests/test_tcl_no_plot.py
+rtk git commit -m "fix(tcl): interiors makes no plot; plot_all / plot_objects draw nothing in headless mode"
+```
+
+Add a line to the `Headless mode:` block of `CHANGELOG.md` (Task 9 makes the block) in the same commit if Task 9 is done, else in Task 9:
+
+```markdown
+- fixed: the Tcl command interiors plotted its result; a Tcl command makes no plot (only plot_all and plot_objects draw), a test checks every command
+```
+
+---
+
 ## Not in this plan
 
 - Moving the plugins off their widgets (the forms stay real widgets on the offscreen platform).
