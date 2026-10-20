@@ -18,6 +18,7 @@ if '_' not in builtins.__dict__:
 
 from PyQt6 import QtCore
 from appGUI.GUIElements import FCMessageBox
+from appCommon.Headless import HeadlessExit
 
 
 class AppLifecycle(QtCore.QObject):
@@ -358,6 +359,11 @@ class AppLifecycle(QtCore.QObject):
         """
         from PyQt6.QtCore import QSettings
         from PyQt6 import QtCore, QtWidgets
+
+        if getattr(self.app, 'headless', False):
+            # headless mode: quit_app ends the run; the preferences and the window state of the user stay as they are
+            self.app.headless_exit_code = 0
+            raise HeadlessExit(0)
 
         if not self._confirm_tools_database():
             return False

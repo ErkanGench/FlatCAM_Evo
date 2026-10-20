@@ -48,6 +48,7 @@ from ast import literal_eval
 # ###################################      Imports part of FlatCAM       #############################################
 # App appGUI
 from appGUI.PlotCanvas import PlotCanvas
+from appGUI.NullCanvas import NullCanvas
 from appGUI.MainGUI import MainGUI
 from appGUI.VisPyVisuals import ShapeCollection
 from appGUI.GUIElements import (
@@ -342,10 +343,11 @@ class App(QtCore.QObject):
     custom_signal = pyqtSignal(object)
 
     # noinspection PyUnresolvedReferences
-    def __init__(self, qapp, user_defaults=True):
+    def __init__(self, qapp, user_defaults=True, headless=None):
         """
         Starts the application.
 
+        :param headless:    no window and no OpenGL; default the --headless option
         :return:    the application
         :rtype:     QtCore.QObject
         """
@@ -354,6 +356,13 @@ class App(QtCore.QObject):
 
         # Store qapp reference FIRST before any setup methods
         self.qapp = qapp
+
+        # headless mode (--headless): no window, no OpenGL canvas, the HeadlessRunner of flatcam.py runs the job
+        self.headless = App.cmd_line_headless if headless is None else headless
+        # True while the HeadlessRunner runs: the shell output then goes to stdout / stderr
+        self.headless_console = False
+        # set by quit_app / exit in headless mode
+        self.headless_exit_code = None
 
         # =========================================================================
         # DECLARE ALL INSTANCE ATTRIBUTES HERE
@@ -586,6 +595,9 @@ class App(QtCore.QObject):
         formatter = logging.Formatter('[%(levelname)s][%(threadName)s] %(message)s')
         handler = logging.StreamHandler()
         handler.setFormatter(formatter)
+        if self.headless:
+            # the console is the output of a headless run: only warnings and errors of the log go there
+            handler.setLevel(logging.WARNING)
         self.log.addHandler(handler)
 
     def _setup_state_variables(self):
@@ -708,7 +720,8 @@ class App(QtCore.QObject):
     def _setup_paths_and_config(self):
         """Phase 1: Setup paths, config files, and platform-specific settings."""
         # ################# Setup the listening thread for another instance launching with args ######################
-        if sys.platform == 'win32':
+        # a headless run never hands its arguments to an open instance (ArgsThread.my_loop() then ends this process)
+        if sys.platform == 'win32' and not self.headless:
             # make sure the thread is stored by using a self. otherwise it's garbage collected
             self.listen_th = QtCore.QThread()
             self.listen_th.start(priority=QtCore.QThread.Priority.LowestPriority)
@@ -949,7 +962,7 @@ class App(QtCore.QObject):
             del splash_settings
             show_splash = 1
 
-        if show_splash:
+        if show_splash and not self.headless:
             splash_pix = QtGui.QPixmap(self.resource_location + '/splash.png')
             splash_pix = splash_pix.scaled(
                 QtCore.QSize(622, 344),  # You can set this to your desired width and height
@@ -1163,7 +1176,8 @@ class App(QtCore.QObject):
             raise SystemError("Failed to start the Canvas")
 
         # add he PlotCanvas setup to the UI
-        self.on_plotcanvas_add(self.plotcanvas, self.ui.right_layout)
+        if not self.headless:
+            self.on_plotcanvas_add(self.plotcanvas, self.ui.right_layout)
 
         # ################   SHAPES STORAGE   #########################################################################
         # Storage for shapes, storage that can be used by FlatCAm tools for utility geometry
@@ -1339,7 +1353,7 @@ class App(QtCore.QObject):
         # ############################################### SYS TRAY ##################################################
         self.parent_w = QtWidgets.QWidget()
         self.trayIcon = None
-        if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")):
+        if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")) and not self.headless:
             self.trayIcon = AppSystemTray(app=self,
                                           icon=QtGui.QIcon(self.resource_location + '/app32.png'),
                                           parent=self.parent_w)
@@ -1498,6 +1512,11 @@ class App(QtCore.QObject):
         self.log.debug("END of constructor. Releasing control.")
         self.log.debug("... Resistance is futile. You will be assimilated ...")
         self.log.debug("... I disagree. While we live and breath, we can be free!\n")
+
+        if self.headless:
+            # no window, no tray, no update check; the HeadlessRunner of flatcam.py runs --shellvar, --shellfile,
+            # --command or the Tcl prompt
+            return
 
         # ########################################## SHOW GUI #######################################################
         if self.splash:
@@ -4044,6 +4063,12 @@ class App(QtCore.QObject):
 
         :return:            None
         """
+
+        if self.headless:
+            self.log.debug("Setting up canvas: none (headless)")
+            plotcanvas = NullCanvas(self)
+            self.app_cursor = plotcanvas.new_cursor()
+            return plotcanvas
 
         self.log.debug("Setting up canvas: VisPy")
 

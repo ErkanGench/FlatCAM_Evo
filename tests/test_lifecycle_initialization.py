@@ -276,6 +276,8 @@ class TestAppShutdownSequence(unittest.TestCase):
         mock_prefs.save_defaults = Mock()
         
         mock_app = Mock()
+        # a Mock attribute is truthy: this is the GUI mode, not the headless mode
+        mock_app.headless = False
         mock_app.preferencesUiManager = mock_prefs
         mock_app.defaults = Mock()
         mock_app.options = {}
@@ -311,6 +313,8 @@ class TestAppShutdownSequence(unittest.TestCase):
         from appHandlers.appLifecycle import AppLifecycle
 
         mock_app = Mock()
+        # a Mock attribute is truthy: this is the GUI mode, not the headless mode
+        mock_app.headless = False
         mock_app.options = {}
         lifecycle = AppLifecycle(app=mock_app)
         lifecycle._confirm_tools_database = Mock(return_value=True)
@@ -449,6 +453,8 @@ class TestFinalSaveSequence(unittest.TestCase):
         mock_prefs.save_defaults = Mock()
         
         mock_app = Mock()
+        # a Mock attribute is truthy: this is the GUI mode, not the headless mode
+        mock_app.headless = False
         mock_app.preferencesUiManager = mock_prefs
         mock_app.defaults = Mock()
         mock_app.options = {}
