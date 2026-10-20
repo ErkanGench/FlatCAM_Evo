@@ -1786,7 +1786,8 @@ class appIO(QtCore.QObject):
             svg_width = str(size[0])
             svg_height = str(size[1])
             minx = str(bounds[0])
-            miny = str(bounds[1] - size[1])
+            # the content is inside the group that flips the Y axis: it spans y from -ymax to -ymin
+            miny = str(-bounds[3])
             uom = obj.units.lower()
 
             # Add an SVG Header and footer to the svg output from shapely
