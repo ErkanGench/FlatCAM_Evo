@@ -9,6 +9,7 @@
 from tclCommands.TclCommand import TclCommand
 
 import collections
+import html
 
 import gettext
 import appTranslation as fcTranslate
@@ -111,7 +112,8 @@ class TclCommandHelp(TclCommand):
                     displayed_text = ['> %s' % cmd for cmd in sorted(self.app.shell.tcl_commands_storage)]
 
                 cmd_enum += '<br>'.join(displayed_text)
+                # the text goes to the shell as HTML: <command_name> would be taken for a tag and not shown
                 cmd_enum += '<br><br>%s<br>%s<br><br>' % (
-                    _("Type help <command_name> for usage."), _("Example: help open_gerber"))
+                    html.escape(_("Type help <command_name> for usage.")), html.escape(_("Example: help open_gerber")))
 
                 self.app.shell.append_raw(cmd_enum)

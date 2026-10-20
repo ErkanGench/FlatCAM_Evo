@@ -108,6 +108,15 @@ Preprocessors:
 - fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path)
 - the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters)
 - fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *'
+Translations:
+
+- new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language
+- check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings
+- stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt
+- new guide for the translators (docs/TRANSLATING.md)
+- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
+- fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
+- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
 
 Tests:
 
@@ -121,6 +130,9 @@ Tests:
 - new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
 - new unit tests for the CNC job plot filter and the visibility toggle
 - new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
+- new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py)
+- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
+- new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
 
 18.10.2026
 
