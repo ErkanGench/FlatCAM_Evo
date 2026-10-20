@@ -8840,6 +8840,112 @@ def seed_band_margin(margin, center):
     return band
 
 
+# a merged polygon without holes that covers less than this part of its bounding box is the band of an outline that
+# is not closed (see outline_area())
+OUTLINE_BAND_RATIO = 0.05
+
+
+def outline_area(geometry):
+    """
+    The area enclosed by the outlines in a geometry: e.g. the board area from the outline in an Edge Cuts Gerber
+    (the outline is drawn as a band, a polygon with a hole) or from a shape drawn in a Geometry object.
+    Polygons are merged and filled (their holes are ignored) and closed lines (rings, or line pieces that close a
+    loop together) give the area they enclose. Inner outlines (cutouts) are not taken out.
+    A merged polygon without holes that covers less than OUTLINE_BAND_RATIO of its bounding box is taken as the band
+    of an outline that is not closed (e.g. an Edge Cuts outline with a gap) and encloses nothing: as a boundary it
+    would remove nearly all the isolation.
+
+    :param geometry:    Shapely geometry or a (nested) list of them
+    :return:            Polygon or MultiPolygon, or None if nothing in the geometry encloses an area
+    """
+    polygons = []
+    lines = []
+    for geo in flatten_shapely_geometry(geometry):
+        if isinstance(geo, Polygon):
+            polygons.append(geo if geo.is_valid else shapely.make_valid(geo))
+        elif isinstance(geo, (LineString, LinearRing)):
+            lines.append(geo)
+
+    areas = []
+    # merge the polygons first: a Gerber loaded without buffering keeps one polygon for each segment of the outline
+    for geo in flatten_shapely_geometry(unary_union(polygons)):
+        if not isinstance(geo, Polygon):
+            continue
+        minx, miny, maxx, maxy = geo.bounds
+        if not geo.interiors and geo.area < OUTLINE_BAND_RATIO * (maxx - minx) * (maxy - miny):
+            continue
+        areas.append(Polygon(geo.exterior))
+
+    if lines:
+        # node the lines (the pieces may only touch) and take the faces they close
+        areas += list(shapely.ops.polygonize(unary_union(lines)))
+
+    areas = [a for a in areas if a.is_valid and not a.is_empty and a.area > 0]
+    if not areas:
+        return None
+
+    merged = unary_union(areas)
+    filled = [Polygon(p.exterior) for p in flatten_shapely_geometry(merged) if isinstance(p, Polygon)]
+    return unary_union(filled) if filled else None
+
+
+def clip_paths_to_area(geometry, area):
+    """
+    The parts of the tool paths of a geometry that lie inside an area. Polygons are taken as their outline rings (the
+    path the tool follows around them). Paths completely inside the area are kept as they are.
+
+    :param geometry:    Shapely geometry or a (nested) list of them (polygons and lines)
+    :param area:        Polygon or MultiPolygon (e.g. from outline_area())
+    :return:            list of LinearRing / LineString; empty if no path reaches into the area
+    """
+    shapely.prepare(area)
+    paths = []
+    for geo in flatten_shapely_geometry(geometry):
+        if isinstance(geo, Polygon):
+            rings = [geo.exterior] + list(geo.interiors)
+        elif isinstance(geo, (LineString, LinearRing)):
+            rings = [geo]
+        else:
+            continue
+
+        for ring in rings:
+            if area.contains(ring):
+                paths.append(ring)
+            elif area.intersects(ring):
+                paths += [g for g in flatten_shapely_geometry(ring.intersection(area))
+                          if isinstance(g, (LineString, LinearRing))]
+    return paths
+
+
+def area_outline_paths(area):
+    """
+    The outlines of an area (e.g. from outline_area()) as tool paths: one LinearRing per polygon exterior.
+    """
+    return [LinearRing(p.exterior.coords) for p in flatten_shapely_geometry(area) if isinstance(p, Polygon)]
+
+
+def boundary_passes_message(name, passes_made, passes):
+    """
+    The report of an isolation limited to a boundary. The passes stop at the first one that is completely outside the
+    boundary: then the copper-free area inside the boundary is cleared. If all the passes were made, it may not be.
+    If no pass was made, not even the first pass reaches into the boundary (e.g. the outline of another board).
+
+    :param name:        name of the isolation object (or the isolated object)
+    :param passes_made: the number of passes made
+    :param passes:      the number of passes requested
+    :return:            message in the format of app.inform ('[success] ...', '[WARNING_NOTCL] ...' or
+                        '[ERROR_NOTCL] ...')
+    """
+    if passes_made == 0:
+        return '[ERROR_NOTCL] %s: %s' % (name, _("No isolation path is inside the boundary. Check that the boundary "
+                                                 "object is the outline of this board."))
+    if passes_made < passes:
+        return '[success] %s: %s' % (name, _("%d of %d passes, the area inside the boundary is cleared.") %
+                                     (passes_made, passes))
+    return '[WARNING_NOTCL] %s: %s' % (name, _("all %d passes made; the area inside the boundary may not be cleared "
+                                               "yet (more passes are needed for it).") % passes)
+
+
 def get_bounds(geometry_list: list) -> list:
     """
     Will return limit values for a list of geometries

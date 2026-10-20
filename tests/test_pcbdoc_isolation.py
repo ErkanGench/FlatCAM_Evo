@@ -36,7 +36,7 @@ class TestPcbDocIsolation(unittest.TestCase):
             tool, source, [1], storage, geometry=source.solid_geometry, plot=False,
             combine=False, iso_except=False, e_passes=1, area_except=False,
             area_shape='square', rest=False, sel_type=0, tip_shape='C1',
-            iso_simplification=False, simplification_tol=0.001)
+            iso_simplification=False, simplification_tol=0.001, boundary=None)
         self.assertEqual(len(created), 1)
         self.assertTrue(created[0].multigeo)
         self.assertEqual(created[0].tools[1]['tooldia'], 0.2)
