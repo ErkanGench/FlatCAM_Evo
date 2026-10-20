@@ -1153,7 +1153,26 @@ class Geometry(object):
     #
     #     return self.flat_geometry, self.flat_geometry_rtree
 
-    def isolation_geometry(self, offset, geometry=None, iso_type=2, corner=None, passes=0, prog_plot=False):
+    def isolation_buffers(self, offsets, geometry=None):
+        """
+        Buffers the geometry for several isolation passes ahead, in parallel threads. It is given to
+        isolation_geometry() as 'buffers', which takes the buffered geometry of its pass from it.
+
+        :param offsets:     the offset distance of each pass
+        :type offsets:      list
+        :param geometry:    the geometry to work with, as for isolation_geometry()
+        :return:            the buffered geometry of each pass: PassBuffers.get(pass number)
+        :rtype:             PassBuffers
+        """
+        if geometry:
+            working_geo = geometry
+        else:
+            working_geo = self.solid_geometry
+
+        return PassBuffers(working_geo, offsets, int(self.geo_steps_per_circle), abort=lambda: self.app.abort_flag)
+
+    def isolation_geometry(self, offset, geometry=None, iso_type=2, corner=None, passes=0, prog_plot=False,
+                           buffers=None):
         """
         Creates contours around geometry at a given
         offset distance.
@@ -1166,6 +1185,7 @@ class Geometry(object):
                             0 = round; 1 = square; 2= beveled (line that connects the ends)
         :param passes:      current pass out of possible multiple passes for which the isolation is done
         :param prog_plot:   type of plotting: "normal" or "progressive"
+        :param buffers:     the passes buffered ahead by 'offset' (isolation_buffers()), or None
         :return:            The buffered geometry.
         :rtype:             Shapely.MultiPolygon or Shapely.Polygon
         """
@@ -1174,42 +1194,47 @@ class Geometry(object):
             # graceful abort requested by the user
             raise grace
 
-        geo_iso = []
-
-        if geometry:
-            working_geo = geometry
+        if buffers is not None:
+            # this pass is buffered with the next ones, in parallel threads
+            self.app.proc_container.update_view_text(' %s %d' % (_("Pass"), int(passes + 1)))
+            geo_iso = buffers.get(passes)
         else:
-            working_geo = self.solid_geometry
+            geo_iso = []
 
-        working_geo_shp = flatten_shapely_geometry(working_geo)
-        geo_len = len(working_geo_shp)
-
-        old_disp_number = 0
-        pol_nr = 0
-        # yet, it can be done by issuing a unary_union in the end, thus getting rid of the overlapping geo
-        for pol in working_geo_shp:
-            if self.app.abort_flag:
-                # graceful abort requested by the user
-                raise grace
-            if offset == 0:
-                temp_geo = pol
+            if geometry:
+                working_geo = geometry
             else:
-                corner_type = "round" if corner is None else corner
-                temp_geo = pol.buffer(offset, int(self.geo_steps_per_circle), join_style=corner_type)
+                working_geo = self.solid_geometry
 
-            geo_iso.append(temp_geo)
+            working_geo_shp = flatten_shapely_geometry(working_geo)
+            geo_len = len(working_geo_shp)
 
-            pol_nr += 1
+            old_disp_number = 0
+            pol_nr = 0
+            # yet, it can be done by issuing a unary_union in the end, thus getting rid of the overlapping geo
+            for pol in working_geo_shp:
+                if self.app.abort_flag:
+                    # graceful abort requested by the user
+                    raise grace
+                if offset == 0:
+                    temp_geo = pol
+                else:
+                    corner_type = "round" if corner is None else corner
+                    temp_geo = pol.buffer(offset, int(self.geo_steps_per_circle), join_style=corner_type)
 
-            # activity view update
-            disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
-            if old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %s %d: %d%%' %
-                                                         (_("Pass"), int(passes + 1), int(disp_number)))
-                old_disp_number = disp_number
+                geo_iso.append(temp_geo)
 
-        self.app.proc_container.update_view_text(' %s' % _("Buffering"))
-        geo_iso = unary_union(geo_iso)
+                pol_nr += 1
+
+                # activity view update
+                disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
+                if old_disp_number < disp_number <= 100:
+                    self.app.proc_container.update_view_text(' %s %d: %d%%' %
+                                                             (_("Pass"), int(passes + 1), int(disp_number)))
+                    old_disp_number = disp_number
+
+            self.app.proc_container.update_view_text(' %s' % _("Buffering"))
+            geo_iso = unary_union(geo_iso)
 
         self.app.proc_container.update_view_text('')
         # end of replaced block
@@ -8262,6 +8287,69 @@ def flatten_shapely_geometry(
 
     flatten(geometry)
     return flat_list
+
+
+class PassBuffers:
+    """
+    The buffered geometry of the isolation passes: for each pass, the union of the features buffered by the offset of
+    the pass, as Geometry.isolation_geometry() makes it.
+
+    The passes are buffered ahead, a batch at a time, in parallel threads (the vectorized Shapely calls release the
+    GIL). Each thread buffers its own copy of the geometry, made from WKB: GEOS geometries used by several threads at
+    the same time can corrupt the heap, because GEOS caches data in a geometry (e.g. its envelope) when it is first
+    needed.
+
+    The passes are asked for in increasing order, each one once. When the caller stops early, at most one batch minus
+    one pass was buffered for nothing.
+
+        buffers = PassBuffers(polygons, offsets, quad_segs)
+        for nr_pass in range(len(offsets)):
+            buffered = buffers.get(nr_pass)
+    """
+
+    def __init__(self, geometry, offsets, quad_segs, abort=None, workers=None):
+        """
+        :param geometry:    geometry or (nested) list of geometries to buffer
+        :param offsets:     the offset distance of each pass
+        :type offsets:      list
+        :param quad_segs:   the segments of a quarter circle, as given to buffer()
+        :type quad_segs:    int
+        :param abort:       callable that returns True when the user asked to stop (GracefulException is raised)
+        :param workers:     the number of threads; the number of processors if None
+        :type workers:      int
+        """
+        self._wkb = shapely.to_wkb(np.array(flatten_shapely_geometry(geometry), dtype=object))
+        self._offsets = list(offsets)
+        self._quad_segs = quad_segs
+        self._abort = abort
+        self._workers = workers or os.cpu_count() or 1
+        self._buffered = {}
+
+    def _buffer(self, nr_pass):
+        if self._abort is not None and self._abort():
+            # graceful abort requested by the user
+            raise grace
+
+        geoms = shapely.from_wkb(self._wkb)
+        offset = self._offsets[nr_pass]
+        if offset == 0:
+            return unary_union(geoms)
+        return unary_union(shapely.buffer(geoms, offset, quad_segs=self._quad_segs, join_style='round'))
+
+    def get(self, nr_pass):
+        """
+        :param nr_pass:     the number of the pass, from 0
+        :type nr_pass:      int
+        :return:            the union of the geometry buffered by the offset of the pass
+        """
+        if nr_pass not in self._buffered:
+            batch = list(range(nr_pass, min(nr_pass + self._workers, len(self._offsets))))
+            if len(batch) > 1:
+                with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                    self._buffered = dict(zip(batch, executor.map(self._buffer, batch)))
+            else:
+                self._buffered = {nr_pass: self._buffer(nr_pass)}
+        return self._buffered.pop(nr_pass)
 
 
 def trim_covered_ends(path, radius, parts, parts_tree, covered=None) -> tuple:

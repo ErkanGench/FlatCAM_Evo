@@ -169,7 +169,7 @@ class ToolsISOPrefGroupUI(OptionsGroupUI):
               "number (integer) of tool widths.")
         )
         self.passes_entry = FCSpinner()
-        self.passes_entry.set_range(1, 999)
+        self.passes_entry.set_range(1, 9999)
 
         tool_grid.addWidget(passlabel, 2, 0)
         tool_grid.addWidget(self.passes_entry, 2, 1, 1, 2)

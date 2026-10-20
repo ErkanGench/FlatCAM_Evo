@@ -18,7 +18,8 @@ class TestPcbDocIsolation(unittest.TestCase):
                                generate_envelope=Mock(return_value=[envelope]))
         tool.new_object = lambda *args, **kwargs: AppTool.new_object(tool, *args, **kwargs)
         source = SimpleNamespace(obj_options={'name': 'native'}, solid_geometry=[solid],
-                                 tools={0: {'type': 'REG', 'size': 0, 'geometry': entries}})
+                                 tools={0: {'type': 'REG', 'size': 0, 'geometry': entries}},
+                                 isolation_buffers=Mock())
         storage = {1: {'tooldia': 0.2, 'data': {
             'tools_iso_isotype': 'full', 'tools_iso_passes': 1,
             'tools_iso_overlap': 0, 'tools_iso_milling_type': 'cl'}}}

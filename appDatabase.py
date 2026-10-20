@@ -1019,7 +1019,7 @@ class ToolsDB2UI:
               "number (integer) of tool widths.")
         )
         self.iso_passes_entry = FCSpinner()
-        self.iso_passes_entry.set_range(1, 999)
+        self.iso_passes_entry.set_range(1, 9999)
         self.iso_passes_entry.setObjectName("gdb_i_passes")
 
         self.grid4.addWidget(passlabel, 0, 0)
