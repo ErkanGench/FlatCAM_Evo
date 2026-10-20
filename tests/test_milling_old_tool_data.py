@@ -8,6 +8,9 @@ key: its tool data keeps the settings under older names ('cutz', 'feedrate'...) 
 A missing option now gets, in this order: the value of its older name in the tool, the application value. A saved
 preprocessor that was renamed gets its current name; one that the app does not have counts as absent. An older combo
 box text gets its modern index; a text that is not recognized counts as absent.
+
+make_cnc_job() makes the job from the saved tool data alone, to check the value of every key. make_plugin_cnc_job()
+makes it like the Milling plugin, with its form.
 """
 import os
 from copy import deepcopy
@@ -115,11 +118,48 @@ def milling_harness(tool, multigeo, **options):
 
 
 def make_cnc_job(tool, multigeo, **options):
+    """
+    The CNC job from the saved tool data alone: from_tcl=True, without the form of the Milling plugin. No user action
+    makes it like this: the Tcl 'cncjob' command first writes its arguments (or the application options) into the main
+    keys of each tool (cut Z, feed rates, spindle speed, preprocessor...), and the plugin takes the general fields of a
+    multi-geometry job from its form (make_plugin_cnc_job()).
+    """
     milling, jobs = milling_harness(tool, multigeo, **options)
-    # the Tcl 'cncjob' command calls it like this
     result = milling.generate_cnc_job_handler(toolchange=False, plot=False, use_thread=False, from_tcl=True)
     assert result is None and len(jobs) == 1
     return jobs[0].source_file, milling
+
+
+class FormField:
+    """A field of the Milling plugin form."""
+    def __init__(self, value):
+        self.value = value
+
+    def get_value(self):
+        return deepcopy(self.value)
+
+
+# the general fields of the Milling plugin form that its CNC job reads: widget -> the option it shows
+PLUGIN_FORM = {'offset_entry': 'tools_mill_offset_value', 'toolchange_cb': 'tools_mill_toolchange',
+               'toolchangez_entry': 'tools_mill_toolchangez', 'toolchangexy_entry': 'tools_mill_toolchangexy',
+               'endz_entry': 'tools_mill_endz', 'endxy_entry': 'tools_mill_endxy',
+               'pdepth_entry': 'tools_mill_z_p_depth', 'feedrate_probe_entry': 'tools_mill_feedrate_probe',
+               'exclusion_cb': 'tools_mill_area_exclusion', 'area_shape_radio': 'tools_mill_area_shape',
+               'strategy_radio': 'tools_mill_area_strategy', 'over_z_entry': 'tools_mill_area_overz',
+               'pp_geo_name_cb': 'tools_mill_ppname_g'}
+
+
+def make_plugin_cnc_job(tool, multigeo, form=None, **options):
+    """
+    The CNC job of the Milling plugin (Generate CNCJob): from_tcl=False, with its form. The form shows the application
+    values (as when it showed nothing else since the plugin opened), changed by 'form' (option -> value).
+    """
+    milling, jobs = milling_harness(tool, multigeo, **options)
+    values = dict(milling.app.options, **(form or {}))
+    milling.ui = SimpleNamespace(**{widget: FormField(values[key]) for widget, key in PLUGIN_FORM.items()})
+    result = milling.generate_cnc_job_handler(toolchange=False, plot=False, use_thread=False)
+    assert result is None and len(jobs) == 1
+    return jobs[0], milling
 
 
 @pytest.mark.parametrize('multigeo', [False, True])
@@ -165,14 +205,35 @@ def test_cnc_job_uses_the_saved_flatcam_8_994_settings(multigeo):
     assert 'M4' not in gcode and 'G00 Z2.0000' in gcode
     assert 'G01 Z-1.2000' in gcode and 'G01 Z-2.4000' in gcode
     assert 'G01 F120.00' in gcode and 'G01 F60.00' in gcode
-    # nothing of the application options
-    for value in ('Z-0.5000', 'Z-0.3000', 'Z5.0000', 'F300.00', 'F30.00', 'Z25.0000'):
+    # nothing of the application options; the end move has 2 decimals
+    for value in ('Z-0.5000', 'Z-0.3000', 'Z5.0000', 'F300.00', 'F30.00', 'Z25.00'):
         assert value not in gcode
+    assert 'G00 Z15.00' in gcode
     data = tool['data']
     assert (data['tools_mill_cutz'], data['tools_mill_feedrate'], data['tools_mill_multidepth']) == (-2.4, 120.0, True)
     # the settings of the tool itself: 'Path', 'Rough', 'C1' and its diameter
     assert (data['tools_mill_offset_type'], data['tools_mill_job_type'], data['tools_mill_tool_shape']) == (0, 0, 0)
     assert data['tools_mill_tooldia'] == '1.75' and data['tools_mill_offset_value'] == 0.0
+
+
+@pytest.mark.parametrize('multigeo', [False, True])
+def test_milling_plugin_uses_the_saved_depth_passes_and_feed_rates(multigeo):
+    # Generate CNCJob in the Milling plugin, with the 'default' preprocessor in the application options and in the form;
+    # the application cut Z, passes, travel Z and feed rates differ from the saved ones
+    tool = flatcam_8_994_cutout_tool()
+
+    job, _milling = make_plugin_cnc_job(tool, multigeo, **dict(OTHER_OPTIONS, tools_mill_ppname_g='default'))
+
+    gcode = job.source_file
+    assert job.pp_geometry_name == 'default'
+    assert 'G00 Z2.0000' in gcode and 'G01 Z-1.2000' in gcode and 'G01 Z-2.4000' in gcode
+    assert 'G01 F120.00' in gcode and 'G01 F60.00' in gcode
+    for value in ('Z-0.5000', 'Z-0.3000', 'Z5.0000', 'F300.00', 'F30.00'):
+        assert value not in gcode
+    # a multi-geometry job takes the general fields (preprocessor, end Z, toolchange...) from the form, as for every
+    # project; a single-geometry job takes the saved ones
+    assert ('G00 Z25.00' if multigeo else 'G00 Z15.00') in gcode
+    assert tool['data']['tools_mill_endz'] == (OTHER_OPTIONS['tools_mill_endz'] if multigeo else 15.0)
 
 
 @pytest.mark.parametrize('multigeo', [False, True])
