@@ -13,19 +13,13 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from .manifest import ManifestError, select_channel, validate_relative_path
+from ..manifest import ManifestError, select_channel, validate_relative_path
+from ..common import DownloadCancelled, TransportError
 
 
 PUBLIC_HOST = "storage.rcs-rds.ro"
+DEFAULT_UPDATE_URL = "https://s.go.ro/zihniipc"
 _LINK_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,128}$")
-
-
-class TransportError(RuntimeError):
-    """Raised for deterministic public-share transport failures."""
-
-
-class DownloadCancelled(TransportError):
-    """Raised when a caller cancels a download."""
 
 
 @dataclass(frozen=True)

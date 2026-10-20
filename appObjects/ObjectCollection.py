@@ -403,56 +403,58 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # self.app.log.debug("Mouse button pressed on list")
         pass
 
+    @staticmethod
+    def has_source(obj):
+        """
+        Used by the project context menu and by App.on_view_source().
+
+        :param obj: an App object
+        :return:    True if View Source has a text to show for the object: the G-code of a CNCJob object, the source
+                    text of the other objects (a Geometry made by a tool has none)
+        """
+        if obj.kind == 'cncjob':
+            return True
+        source = getattr(obj, 'source_file', None)
+        return isinstance(source, str) and source != ''
+
     def on_menu_request(self, pos):
+        ui = self.app.ui
+        obj_selection = self.get_selected()
+        sel = len(obj_selection) > 0
 
-        sel = len(self.view.selectedIndexes()) > 0
-        self.app.ui.menuprojectenable.setEnabled(sel)
-        self.app.ui.menuprojectdisable.setEnabled(sel)
-        self.app.ui.menuprojectcolor.setEnabled(sel)
-        self.app.ui.menuprojectviewsource.setEnabled(sel)
+        entries = [ui.menuprojectenable, ui.menuprojectdisable, ui.menuprojectcolor.menuAction(),
+                   ui.menuprojectviewsource, ui.menuprojectedit, ui.menuprojectcopy, ui.menuprojectdelete,
+                   ui.menuprojectsave, ui.menuprojectproperties]
+        for entry in entries:
+            entry.setEnabled(sel)
+            # set again on each request: the entries hidden for a Script or a Document stayed hidden for the next
+            # objects
+            entry.setVisible(True)
 
-        self.app.ui.menuprojectcopy.setEnabled(sel)
-        self.app.ui.menuprojectedit.setEnabled(sel)
-
-        # #############################################
-        self.app.ui.menuprojectdelete.setEnabled(sel)
-        self.app.ui.menuprojectsave.setText(_('Save'))
-        # #############################################
-
-        self.app.ui.menuprojectsave.setEnabled(sel)
-        self.app.ui.menuprojectproperties.setEnabled(sel)
+        ui.menuprojectsave.setText(_('Save'))
 
         if sel:
-            self.app.ui.menuprojectedit.setVisible(True)
-            self.app.ui.menuprojectsave.setVisible(True)
-            self.app.ui.menuprojectviewsource.setVisible(True)
-            self.app.ui.menuprojectcolor.setEnabled(False)
+            # only the entries that apply to the selected objects
+            plotted = all(obj.kind in ['geometry', 'gerber', 'excellon', 'cncjob'] for obj in obj_selection)
+            all_cncjob = all(obj.kind == 'cncjob' for obj in obj_selection)
+            # View Source, Edit and Save work on the active object (Save on several CNCJob objects is a Batch Save)
+            single = obj_selection[0] if len(obj_selection) == 1 else None
 
-            obj_selection = self.get_selected()
+            ui.menuprojectenable.setVisible(
+                plotted and any(not obj.obj_options.get('plot', True) for obj in obj_selection))
+            ui.menuprojectdisable.setVisible(
+                plotted and any(obj.obj_options.get('plot', True) for obj in obj_selection))
+            ui.menuprojectcolor.menuAction().setVisible(
+                all(dispatch_attr(obj, 'has_plot_colors') for obj in obj_selection))
+            ui.menuprojectviewsource.setVisible(plotted and single is not None and self.has_source(single))
+            ui.menuprojectedit.setVisible(plotted and single is not None)
+            ui.menuprojectsave.setVisible(single is not None or all_cncjob)
+            ui.menuprojectproperties.setVisible(plotted)
 
-            for obj in obj_selection:
-                if obj.kind == 'gerber' or obj.kind == 'excellon':
-                    self.app.ui.menuprojectcolor.setEnabled(True)
+            if single is None and all_cncjob:
+                ui.menuprojectsave.setText(_('Batch Save'))
 
-                if obj.kind not in ['geometry', 'gerber', 'excellon', 'cncjob']:
-                    self.app.ui.menuprojectviewsource.setVisible(False)
-                    # meaning for Scripts and for Document type of FlatCAM object
-                    self.app.ui.menuprojectenable.setVisible(False)
-                    self.app.ui.menuprojectdisable.setVisible(False)
-                    self.app.ui.menuprojectedit.setVisible(False)
-                    self.app.ui.menuprojectproperties.setVisible(False)
-
-            len_objects = len(obj_selection)
-            cnt = 0
-            if len_objects > 1:
-                for o in obj_selection:
-                    if o.kind == 'cncjob':
-                        cnt += 1
-
-                if len_objects == cnt:
-                    self.app.ui.menuprojectsave.setText(_('Batch Save'))
-
-        self.app.ui.menuproject.popup(self.view.mapToGlobal(pos))
+        ui.menuproject.popup(self.view.mapToGlobal(pos))
 
     def index(self, row, column=0, parent=None, *args, **kwargs):
         if not self.hasIndex(row, column, parent):

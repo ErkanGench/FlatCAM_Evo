@@ -18,6 +18,7 @@ if '_' not in builtins.__dict__:
 
 from PyQt6 import QtCore
 from appGUI.GUIElements import FCMessageBox
+from appCommon.Headless import HeadlessExit
 
 
 class AppLifecycle(QtCore.QObject):
@@ -255,7 +256,9 @@ class AppLifecycle(QtCore.QObject):
         # project_save_pending stays set until the GUI has the result of a File -> Save; before that, the dirty
         # flag of a failed save is not restored yet
         if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
-            self.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
+            # the app closes when the save ends (check_project_file_size()); not after a failed save
+            self.app.close_after_save = True
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Saving the project. FlatCAM closes when the save ends."))
             return
 
         # with more than 1 project, ask about each project that has unsaved changes
@@ -357,7 +360,12 @@ class AppLifecycle(QtCore.QObject):
         :return: bool
         """
         from PyQt6.QtCore import QSettings
-        from PyQt6 import QtWidgets
+        from PyQt6 import QtCore, QtWidgets
+
+        if getattr(self.app, 'headless', False):
+            # headless mode: quit_app ends the run; the preferences and the window state of the user stay as they are
+            self.app.headless_exit_code = 0
+            raise HeadlessExit(0)
 
         if not self._confirm_tools_database():
             return False
@@ -475,6 +483,10 @@ class AppLifecycle(QtCore.QObject):
 
         # quit app directly - do NOT call back to App
         QtWidgets.QApplication.quit()
+        # QApplication.quit() does nothing while the event loop does not run: a --shellfile runs in App.__init__(),
+        # before app.exec(), and with only the line above `quit_app` left a hidden application running. The queued
+        # quit ends the application as soon as the event loop starts.
+        QtCore.QTimer.singleShot(0, QtWidgets.QApplication.quit)
         return True
 
     # --------------------------------------------------------------------------
@@ -650,16 +662,11 @@ class AppLifecycle(QtCore.QObject):
         :return: None
         """
         self.log.debug("version_check()")
-        from services.updater.checker import UpdateChecker
+        from services.updater.provider import checker_for, run_provider_check
 
-        checker = getattr(self.app, "update_checker", None)
-        if checker is None:
-            checker = UpdateChecker(self.app)
-            self.app.update_checker = checker
-        return checker.run_check(
-            forced=forced,
-            share_url=self.options.get("global_update_url", self.defaults.get("global_update_url")),
-        )
+        # The checker is rebuilt when the update source preference changed since it was cached.
+        checker = checker_for(self.app)
+        return run_provider_check(self.app, checker, forced=forced)
 
     # --------------------------------------------------------------------------
     # Method 12: start_delayed_quit
@@ -695,8 +702,15 @@ class AppLifecycle(QtCore.QObject):
             if os.stat(filename).st_size > 0:
                 self.app.save_in_progress = False
                 self.app.save_timer.stop()
+                # a close during the save is used by this save only (the quit can still be cancelled)
+                close_requested = getattr(self.app, 'close_after_save', False)
+                self.app.close_after_save = False
                 if should_quit:
                     self.app.app_quit.emit()
+                elif close_requested:
+                    # the app was closed during the save: close the main window now, as the user did (this
+                    # method can run in a worker thread)
+                    QtCore.QMetaObject.invokeMethod(self.app.ui, 'close', QtCore.Qt.ConnectionType.QueuedConnection)
         except Exception:
             traceback.print_exc()
 

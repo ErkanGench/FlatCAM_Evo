@@ -56,8 +56,9 @@ if __name__ == '__main__':
     freeze_support()
 
     portable = False
-    # Folder for user settings.
-    if sys.platform == 'win32':
+    # Resolve the override before reading the default or portable configuration.
+    data_path = data_path_from_env()
+    if data_path is None and sys.platform == 'win32':
         # #######################################################################################################
         # ####### CONFIG FILE WITH PARAMETERS REGARDING PORTABILITY #############################################
         # #######################################################################################################
@@ -83,11 +84,8 @@ if __name__ == '__main__':
             data_path = os.path.join(os.getenv('appdata'), 'FlatCAM')
         else:
             data_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__))) + '\\config'
-    else:
+    elif data_path is None:
         data_path = os.path.expanduser('~') + '/.FlatCAM'
-
-    # a folder set in the FLATCAM_DATA_PATH environment variable is used instead, as in App
-    data_path = data_path_from_env() or data_path
 
     if not os.path.exists(data_path):
         os.makedirs(data_path)
@@ -127,6 +125,16 @@ if __name__ == '__main__':
     VisPyPatches.apply_patches()
 
     def excepthook(exc_type, exc_value, exc_tb):
+        # The machine stops only when the application ends: an error in a GUI slot does not stop a running job.
+        # The headless run ends here; the GUI ends with QApplication.quit(), and aboutToQuit runs MachineSafety.stop_all().
+        if App.cmd_line_headless:
+            # first the machine: stop the motion, the spindle and the outputs of the connected controllers
+            from appCommon import MachineSafety
+            MachineSafety.stop_all()
+            # no window for a message box: the traceback goes to stderr and the run ends with exit code 1
+            sys.stderr.write("".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+            sys.stderr.flush()
+            os._exit(1)
         msg = '%s\n' % str(datetime.today())
         if exc_type != KeyboardInterrupt:
             msg += "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -163,9 +171,12 @@ if __name__ == '__main__':
                 # msgbox.setTextFormat(Qt.TextFormat.RichText)
                 msgbox.exec()
 
-                response = msgbox.clickedButton()
-                if response == bt_ret:
-                    pass
+                # Quit ends the application; Return lets it (and a running job) continue
+                if msgbox.clickedButton() == bt_yes:
+                    # stop the machine now: a window can refuse the close (an updater or a save is active)
+                    from appCommon import MachineSafety
+                    MachineSafety.stop_all()
+                    QtWidgets.QApplication.quit()
             except Exception:
                 QtWidgets.QApplication.quit()
         else:
@@ -173,6 +184,17 @@ if __name__ == '__main__':
         # or QtWidgets.QApplication.exit(0)
 
     sys.excepthook = excepthook
+
+    if App.cmd_line_headless:
+        # no display and no GPU: Qt draws nothing and needs no X11, Wayland or Windows desktop
+        os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+        if sys.platform == 'win32':
+            # the offscreen platform does not know the Windows fonts ("QFontDatabase: Cannot find font directory")
+            os.environ.setdefault('QT_QPA_FONTDIR', os.path.join(os.environ.get('WINDIR', 'C:\\Windows'), 'Fonts'))
+        from appCommon.Headless import quiet_logs, headless_qt_message_handler
+        quiet_logs()
+        # the Qt warnings are about widgets nobody sees; only the critical and fatal messages reach stderr
+        QtCore.qInstallMessageHandler(headless_qt_message_handler)
 
     app = QtWidgets.QApplication(sys.argv)
     app.aboutToQuit.connect(_install_shutdown_message_handler)
@@ -203,6 +225,10 @@ if __name__ == '__main__':
         app.setFont(font)
 
     fc = App(qapp=app)
+
+    if fc.headless:
+        from appCommon.Headless import HeadlessRunner
+        os._exit(HeadlessRunner(fc).run())
 
     # interrupt the Qt loop such that Python events have a chance to be responsive
     timer = QTimer()

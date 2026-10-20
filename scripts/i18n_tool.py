@@ -27,6 +27,7 @@ import re
 import struct
 import sys
 from collections import OrderedDict
+from string import Formatter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOMAIN = 'strings'
@@ -168,7 +169,12 @@ def read_po(path):
             entries.append(current)
         current, field = None, None
 
-    for raw in lines + ['']:
+    def parse_string(text, line_number):
+        if not re.fullmatch(r'"(?:[^"\\]|\\.)*"', text):
+            raise ValueError('%s:%d: invalid PO string: %s' % (path, line_number, text))
+        return unescape(text[1:-1])
+
+    for line_number, raw in enumerate(lines + [''], 1):
         line = raw.strip()
         if not line:
             if current is not None and field is not None:
@@ -202,12 +208,14 @@ def read_po(path):
             # (the comments of an obsolete entry are not marked with #~, its msgid is)
             current.obsolete = obsolete
             field = 'msgid'
-            current.msgid = unescape(line[6:].strip()[1:-1])
+            current.msgid = parse_string(line[6:].strip(), line_number)
         elif line.startswith('msgstr '):
             field = 'msgstr'
-            current.msgstr = unescape(line[7:].strip()[1:-1])
+            current.msgstr = parse_string(line[7:].strip(), line_number)
         elif line.startswith('"') and field:
-            setattr(current, field, getattr(current, field) + unescape(line[1:-1]))
+            setattr(current, field, getattr(current, field) + parse_string(line, line_number))
+        else:
+            raise ValueError('%s:%d: invalid or unsupported PO line: %s' % (path, line_number, raw))
     finish()
     header = entries[0] if entries and entries[0].msgid == '' else Entry()
     body = entries[1:] if entries and entries[0].msgid == '' else entries
@@ -434,7 +442,6 @@ def mo_is_current(lang):
 # ---------------------------------------------------------------------------------------------------------------------
 
 PRINTF = re.compile(r'%(?:\([A-Za-z_]\w*\))?[#0\- +]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[sdifeEgGxXorcu%]')
-BRACES = re.compile(r'\{[A-Za-z_0-9]*(?:[!:][^{}]*)?\}')
 # HTML tags (not text markers like <<WARNING>>, and not <center>: an argument of the Tcl scale and skew commands)
 TAGS = re.compile(r'</?(?:b|i|u|s|br|p|span|font|a|h[1-6]|div|ul|ol|li|table|tr|td|th|small|big|strong|em|sup|sub|'
                   r'pre|code|hr|img|tt|html|body|head|style)\b[^<>]*>', re.IGNORECASE)
@@ -444,7 +451,8 @@ ARGS = re.compile(r'<[a-z][a-z0-9_]*>')
 
 def placeholders(text):
     printf = sorted(p for p in PRINTF.findall(text) if p != '%%')
-    braces = sorted(BRACES.findall(text))
+    braces = sorted('{%s%s%s}' % (field, '!' + conversion if conversion else '', ':' + spec if spec else '')
+                    for __, field, spec, conversion in Formatter().parse(text) if field is not None)
     return printf, braces
 
 
@@ -479,8 +487,11 @@ def check_entry(msgid, msgstr):
     errors, warnings = [], []
     if not msgstr:
         return errors, warnings
-    p1, b1 = placeholders(msgid)
-    p2, b2 = placeholders(msgstr)
+    try:
+        p1, b1 = placeholders(msgid)
+        p2, b2 = placeholders(msgstr)
+    except ValueError as err:
+        return ['invalid brace formatting (%s)' % err], warnings
     format_error = None
     if p1:
         # a text formatted with %: the translation must format with the values the English text formats with

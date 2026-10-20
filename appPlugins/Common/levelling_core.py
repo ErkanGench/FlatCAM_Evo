@@ -188,11 +188,7 @@ class LevellingCoreMixin:
             except Exception as err:
                 self.app.log.debug("ToolLevelling._new_probing_shapes() -> %s" % str(err))
 
-        self.probing_shapes = ShapeCollection(
-            parent=self.app.plotcanvas.view.scene,
-            layers=1,
-            pool=self.app.pool
-        )
+        self.probing_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
 
     def _clear_probe_data(self):
         """Forget the probe points, the heights, the bilinear grid, the probing G-code and the owner."""

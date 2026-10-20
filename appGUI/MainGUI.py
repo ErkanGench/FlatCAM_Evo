@@ -4678,7 +4678,9 @@ class MainGUI(QtWidgets.QMainWindow):
             event.ignore()
             return
         if self.app.save_in_progress:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Application is saving the project. Please wait ..."))
+            # the app does not quit before the project file is written: it closes when the save ends
+            self.app.close_after_save = True
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Saving the project. FlatCAM closes when the save ends."))
         else:
             g_rect = self.geometry()
 

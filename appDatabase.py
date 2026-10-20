@@ -28,8 +28,8 @@ def _database_enum(value, labels, field):
     if type(value) is int and 0 <= value < len(labels):
         return value
     if isinstance(value, str):
-        for index, label in enumerate(labels):
-            if value in (label, _(label), str(index)):
+        for index, aliases in enumerate(labels):
+            if value in aliases or value == str(index):
                 return index
     raise ValueError('%s: unsupported value %r' % (field, value))
 
@@ -106,11 +106,13 @@ def normalize_tools_database(records, defaults):
 
     default_values = dict(_database_option_items(defaults))
     normalized = deepcopy(records)
-    target_labels = ['General', 'Milling', 'Drilling', 'Isolation', 'Paint', 'NCC', 'Cutout']
-    shape_labels = ['C1', 'C2', 'C3', 'C4', 'B', 'V', 'L']
-    job_labels = ['Roughing', 'Finishing', 'Isolation', 'Polishing']
-    offset_labels = ['Path', 'In', 'Out', 'Custom']
-    gap_labels = ['Bridge', 'Thin', 'M-Bites']
+    target_labels = [('General', _('General')), ('Milling', _('Milling')), ('Drilling', _('Drilling')),
+                     ('Isolation', _('Isolation')), ('Paint', _('Paint')), ('NCC', _('NCC')), ('Cutout', _('Cutout'))]
+    shape_labels = [(label,) for label in ('C1', 'C2', 'C3', 'C4', 'B', 'V', 'L')]
+    job_labels = [('Roughing', _('Roughing')), ('Finishing', _('Finishing')),
+                  ('Isolation', _('Isolation')), ('Polishing', _('Polishing'))]
+    offset_labels = [('Path', _('Path')), ('In', _('In')), ('Out', _('Out')), ('Custom', _('Custom'))]
+    gap_labels = [('Bridge', _('Bridge')), ('Thin', _('Thin')), ('M-Bites', _('M-Bites'))]
 
     for tool_id, tool in normalized.items():
         if (type(tool_id) is not str or not tool_id.isdecimal() or
@@ -1017,7 +1019,7 @@ class ToolsDB2UI:
               "number (integer) of tool widths.")
         )
         self.iso_passes_entry = FCSpinner()
-        self.iso_passes_entry.set_range(1, 999)
+        self.iso_passes_entry.set_range(1, 9999)
         self.iso_passes_entry.setObjectName("gdb_i_passes")
 
         self.grid4.addWidget(passlabel, 0, 0)

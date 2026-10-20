@@ -19,8 +19,10 @@ from appParsers.DXF import dxf_to_shapes
 
 from numpy.linalg import solve
 
+import os
 import platform
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 from copy import deepcopy
 from collections.abc import Iterable
@@ -566,6 +568,10 @@ class Geometry(object):
 
     # clear_polygon_lines() cuts the scan lines from bands of this many lines (measured: 8 is the fastest)
     SCAN_BAND_LINES = 8
+    # clear_polygon_seed() makes and cuts this many rings at a time (measured: 8 and 16 are the fastest); a margin
+    # of at least SEED_BAND_MIN_COORDS coordinates is cut without the parts that the rings cannot touch
+    SEED_BAND_RINGS = 16
+    SEED_BAND_MIN_COORDS = 2000
 
     obj_options: dict[str, Any]
     kind: str
@@ -1147,7 +1153,26 @@ class Geometry(object):
     #
     #     return self.flat_geometry, self.flat_geometry_rtree
 
-    def isolation_geometry(self, offset, geometry=None, iso_type=2, corner=None, passes=0, prog_plot=False):
+    def isolation_buffers(self, offsets, geometry=None):
+        """
+        Buffers the geometry for several isolation passes ahead, in parallel threads. It is given to
+        isolation_geometry() as 'buffers', which takes the buffered geometry of its pass from it.
+
+        :param offsets:     the offset distance of each pass
+        :type offsets:      list
+        :param geometry:    the geometry to work with, as for isolation_geometry()
+        :return:            the buffered geometry of each pass: PassBuffers.get(pass number)
+        :rtype:             PassBuffers
+        """
+        if geometry:
+            working_geo = geometry
+        else:
+            working_geo = self.solid_geometry
+
+        return PassBuffers(working_geo, offsets, int(self.geo_steps_per_circle), abort=lambda: self.app.abort_flag)
+
+    def isolation_geometry(self, offset, geometry=None, iso_type=2, corner=None, passes=0, prog_plot=False,
+                           buffers=None):
         """
         Creates contours around geometry at a given
         offset distance.
@@ -1160,6 +1185,7 @@ class Geometry(object):
                             0 = round; 1 = square; 2= beveled (line that connects the ends)
         :param passes:      current pass out of possible multiple passes for which the isolation is done
         :param prog_plot:   type of plotting: "normal" or "progressive"
+        :param buffers:     the passes buffered ahead by 'offset' (isolation_buffers()), or None
         :return:            The buffered geometry.
         :rtype:             Shapely.MultiPolygon or Shapely.Polygon
         """
@@ -1168,42 +1194,47 @@ class Geometry(object):
             # graceful abort requested by the user
             raise grace
 
-        geo_iso = []
-
-        if geometry:
-            working_geo = geometry
+        if buffers is not None:
+            # this pass is buffered with the next ones, in parallel threads
+            self.app.proc_container.update_view_text(' %s %d' % (_("Pass"), int(passes + 1)))
+            geo_iso = buffers.get(passes)
         else:
-            working_geo = self.solid_geometry
+            geo_iso = []
 
-        working_geo_shp = flatten_shapely_geometry(working_geo)
-        geo_len = len(working_geo_shp)
-
-        old_disp_number = 0
-        pol_nr = 0
-        # yet, it can be done by issuing a unary_union in the end, thus getting rid of the overlapping geo
-        for pol in working_geo_shp:
-            if self.app.abort_flag:
-                # graceful abort requested by the user
-                raise grace
-            if offset == 0:
-                temp_geo = pol
+            if geometry:
+                working_geo = geometry
             else:
-                corner_type = "round" if corner is None else corner
-                temp_geo = pol.buffer(offset, int(self.geo_steps_per_circle), join_style=corner_type)
+                working_geo = self.solid_geometry
 
-            geo_iso.append(temp_geo)
+            working_geo_shp = flatten_shapely_geometry(working_geo)
+            geo_len = len(working_geo_shp)
 
-            pol_nr += 1
+            old_disp_number = 0
+            pol_nr = 0
+            # yet, it can be done by issuing a unary_union in the end, thus getting rid of the overlapping geo
+            for pol in working_geo_shp:
+                if self.app.abort_flag:
+                    # graceful abort requested by the user
+                    raise grace
+                if offset == 0:
+                    temp_geo = pol
+                else:
+                    corner_type = "round" if corner is None else corner
+                    temp_geo = pol.buffer(offset, int(self.geo_steps_per_circle), join_style=corner_type)
 
-            # activity view update
-            disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
-            if old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %s %d: %d%%' %
-                                                         (_("Pass"), int(passes + 1), int(disp_number)))
-                old_disp_number = disp_number
+                geo_iso.append(temp_geo)
 
-        self.app.proc_container.update_view_text(' %s' % _("Buffering"))
-        geo_iso = unary_union(geo_iso)
+                pol_nr += 1
+
+                # activity view update
+                disp_number = int(np.interp(pol_nr, [0, geo_len], [0, 100]))
+                if old_disp_number < disp_number <= 100:
+                    self.app.proc_container.update_view_text(' %s %d: %d%%' %
+                                                             (_("Pass"), int(passes + 1), int(disp_number)))
+                    old_disp_number = disp_number
+
+            self.app.proc_container.update_view_text(' %s' % _("Buffering"))
+            geo_iso = unary_union(geo_iso)
 
         self.app.proc_container.update_view_text('')
         # end of replaced block
@@ -1631,9 +1662,25 @@ class Geometry(object):
             seedpoint = path_margin.representative_point()
 
         last_update = 0.0
+        # The rings are made and cut SEED_BAND_RINGS at a time, up to the first one that does not touch the margin
+        # and not beyond the farthest vertex of the margin. The cut of a ring costs O(size of the margin): a large
+        # margin (the area of a board has a hole for each copper feature) is cut without the polygons and holes that
+        # no ring of the band can touch (seed_band_margin()). The same paths, bit for bit.
+        step = tooldia * (1 - overlap)
+        seed_point = Point(seedpoint)
+        seed_xy = shapely.get_coordinates(seed_point)[0]
+        margin_xy = shapely.get_coordinates(path_margin)
+        farthest = float(np.max(np.hypot(margin_xy[:, 0] - seed_xy[0], margin_xy[:, 1] - seed_xy[1])))
+        band_margin = None
+        if len(margin_xy) >= Geometry.SEED_BAND_MIN_COORDS:
+            band_margin = seed_band_margin(path_margin, seed_point)
+        # A ring vertex is on its circle and an edge is inside it by at most 1 - cos(pi / (4 * quad_segs)) of the
+        # radius; the simplification moves the edges by at most simplify_tol. tooldia is added as a safe distance.
+        inner_ratio = math.cos(math.pi / (4 * quad_segs))
+        touches = True
         # Grow from seed until outside the box. The polygons will
         # never have an interior, so take the exterior LinearRing.
-        while True:
+        while touches:
             if self.app.abort_flag:
                 # graceful abort requested by the user
                 raise grace
@@ -1646,22 +1693,32 @@ class Geometry(object):
                 self.temp_shapes.redraw()
                 last_update = monotonic()
 
-            path = Point(seedpoint).buffer(radius, quad_segs=quad_segs).exterior
-            path = path.simplify(simplify_tol)
-            path = path.intersection(path_margin)
-
-            # Touches polygon?
-            if path.is_empty:
+            radii = []
+            while len(radii) < Geometry.SEED_BAND_RINGS and radius * inner_ratio - simplify_tol - tooldia <= farthest:
+                radii.append(radius)
+                radius += step
+            if not radii:
+                # the next ring is beyond the farthest vertex of the margin: it does not touch the margin
                 break
+            rings = shapely.get_exterior_ring(shapely.buffer(seed_point, radii, quad_segs=quad_segs))
+            rings = shapely.simplify(rings, simplify_tol)
 
-            # path can be a collection of paths.
-            path_geometry = flatten_shapely_geometry(path, simplify_tolerance=simplify_tol)
-            for p in path_geometry:
-                geom_elems.insert(p)
-                if prog_plot:
-                    self.plot_temp_shapes(p)
+            band = path_margin
+            if band_margin is not None:
+                band = band_margin(radii[0] * inner_ratio - simplify_tol - tooldia, radii[-1] + tooldia)
 
-            radius += tooldia * (1 - overlap)
+            for path in shapely.intersection(rings, band):
+                # Touches polygon?
+                if path.is_empty:
+                    touches = False
+                    break
+
+                # path can be a collection of paths.
+                path_geometry = flatten_shapely_geometry(path, simplify_tolerance=simplify_tol)
+                for p in path_geometry:
+                    geom_elems.insert(p)
+                    if prog_plot:
+                        self.plot_temp_shapes(p)
 
         # Clean inside edges (contours) of the original polygon
         if contour:
@@ -2209,8 +2266,11 @@ class Geometry(object):
         storage.remove(geo)
 
         # ponytail: accumulate coordinates; materialize once per completed path.
-        geo_coords = list(geo.coords)
-        current_pt = geo_coords[-1]
+        # The coordinates are kept as NumPy arrays: a LineString made from 1 array is several times faster than one
+        # made from a list of coordinate tuples, and get_coordinates() is faster than the coords tuples.
+        include_z = geo.has_z
+        geo_coords = [shapely.get_coordinates(geo, include_z=include_z)]
+        current_pt = tuple(geo_coords[-1][-1].tolist())
         boundary_edge = boundary.boundary
         # Each walk is tested against the full boundary: prepared geometries test it in O(log n), not O(n).
         shapely.prepare(boundary)
@@ -2224,13 +2284,13 @@ class Geometry(object):
                 pt, candidate = storage.nearest(current_pt)
                 storage.remove(candidate)
 
-                candidate_coords = list(candidate.coords)
+                candidate_coords = shapely.get_coordinates(candidate, include_z=include_z)
 
                 # If last point in geometry is the nearest
                 # then reverse coordinates.
                 # but prefer the first one if last == first
-                if pt != candidate_coords[0] and pt == candidate_coords[-1]:
-                    candidate_coords.reverse()
+                if pt != tuple(candidate_coords[0].tolist()) and pt == tuple(candidate_coords[-1].tolist()):
+                    candidate_coords = candidate_coords[::-1]
 
                 # Straight line from current_pt to pt.
                 # Is the toolpath inside the geometry?
@@ -2245,24 +2305,24 @@ class Geometry(object):
                     # log.debug("Walk to path #%d is inside. Joining." % path_count)
 
                     # Completely inside. Append...
-                    geo_coords.extend(candidate_coords)
+                    geo_coords.append(candidate_coords)
 
                 else:
 
                     # Have to lift tool. End path.
                     # log.debug("Path #%d not within boundary. Next." % path_count)
                     # optimized_paths.append(geo)
-                    optimized_paths.insert(LineString(geo_coords))
-                    geo_coords = candidate_coords
+                    optimized_paths.insert(LineString(np.concatenate(geo_coords)))
+                    geo_coords = [candidate_coords]
 
-                current_pt = geo_coords[-1]
+                current_pt = tuple(geo_coords[-1][-1].tolist())
 
                 # Next
                 # pt, geo = storage.nearest(current_pt)
 
         except StopIteration:  # Nothing left in storage.
             # pass
-            optimized_paths.insert(LineString(geo_coords))
+            optimized_paths.insert(LineString(np.concatenate(geo_coords)))
 
         return optimized_paths
 
@@ -2850,6 +2910,18 @@ class AttrDict(dict):
         self.__dict__ = self
 
 
+# G-code read back by CNCjob.codes_split(), compiled once: it is called for every line of the G-code
+GCODE_ROLAND_Z_RE = re.compile(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$")
+GCODE_HPGL_PA_RE = re.compile(r"^PA(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$")
+GCODE_HPGL_PEN_RE = re.compile(r"^(P[U|D])")
+GCODE_HPGL_SP_RE = re.compile(r"^SP\d*")
+GCODE_XY_RE = re.compile(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)")
+GCODE_LASER_M345_RE = re.compile(r"^(M0?[3-5])")
+GCODE_LASER_M10X_RE = re.compile(r"^(M10[6|7])")
+# 1 word (letter and number), matched at a position of the line
+GCODE_WORD_RE = re.compile(r'\s*([A-Z])\s*([+\-.\d\s]+)')
+
+
 class CNCjob(Geometry):
     """
     Represents work to be done by a CNC machine.
@@ -3078,6 +3150,21 @@ class CNCjob(Geometry):
         attributes = AttrDict()
         attributes.update(self.postdata)
         attributes.update(kwargs)
+        return self.doformat_attributes(fun, attributes)
+
+    def doformat_attributes(self, fun, attributes):
+        """
+        Like doformat2() but with the attributes made by the caller: an AttrDict of the attributes of the current class
+        updated with the values of the line. For many lines that differ only in a few values (the points of a path),
+        the attributes are copied once instead of for every line.
+
+        :param fun:         One of the methods inside the preprocessor classes which get loaded here in the 'p' object
+        :type fun:          class 'function'
+        :param attributes:  the attributes given to the preprocessor method
+        :type attributes:   AttrDict
+        :return:            Gcode line
+        :rtype:             str
+        """
         try:
             ret = fun(attributes)
             return ret
@@ -4206,27 +4293,46 @@ class CNCjob(Geometry):
         self.app.log.warning("Number of paths for which to generate GCode: %s" % str(geo_len))
         old_disp_number = 0
 
-        current_pt = first_pt
+        oriented_path = []
         for pt, geo in optimized_path:
+            if self.app.abort_flag:
+                raise grace
+            # If last point in geometry is the nearest but prefer the first one if last point == first point
+            # then reverse coordinates.
+            if pt != geo.coords[0] and pt == geo.coords[-1]:
+                geo = LineString(list(geo.coords)[::-1])
+            oriented_path.append((pt, geo))
+
+        # Single depth without extra cut: the oriented paths are simplified at once, on several threads, instead of
+        # one by one in linear2gcode() (a large part of the time); the same paths. Multi depth simplifies each depth
+        # in its own direction and the extra cut looks at the path before the simplification.
+        simplified = None
+        if not self.multidepth and self.extracut is False and self.tolerance > 0:
+            simplified = simplify_paths([geo for __, geo in oriented_path], self.tolerance, app=self.app)
+
+        # the G-code of the paths is joined at the end: added to the growing string, it was copied again and again
+        gcode_parts = [t_gcode]
+        current_pt = first_pt
+        for path_idx, (pt, geo) in enumerate(oriented_path):
             if self.app.abort_flag:
                 # graceful abort requested by the user
                 raise grace
 
             path_count += 1
 
-            # If last point in geometry is the nearest but prefer the first one if last point == first point
-            # then reverse coordinates.
-            if pt != geo.coords[0] and pt == geo.coords[-1]:
-                geo = LineString(list(geo.coords)[::-1])
-
             # ---------- Single depth/pass --------
             if not self.multidepth:
                 # calculate the cut distance
                 total_cut = total_cut + geo.length
 
-                t_gcode += self.create_gcode_single_pass(geo, current_tooldia, self.extracut,
-                                                         self.extracut_length, self.tolerance,
-                                                         z_move=self.z_move, old_point=current_pt)
+                if simplified is None:
+                    gcode_parts.append(self.create_gcode_single_pass(geo, current_tooldia, self.extracut,
+                                                                     self.extracut_length, self.tolerance,
+                                                                     z_move=self.z_move, old_point=current_pt))
+                else:
+                    gcode_parts.append(self.create_gcode_single_pass(simplified[path_idx], current_tooldia,
+                                                                     self.extracut, self.extracut_length, 0,
+                                                                     z_move=self.z_move, old_point=current_pt))
 
             # --------- Multi-pass ---------
             else:
@@ -4243,7 +4349,7 @@ class CNCjob(Geometry):
                 gc, geo = self.create_gcode_multi_pass(geo, current_tooldia, self.extracut,
                                                        self.extracut_length, self.tolerance,
                                                        z_move=self.z_move, postproc=p, old_point=current_pt)
-                t_gcode += gc
+                gcode_parts.append(gc)
 
             # calculate the total distance
             total_travel = total_travel + abs(distance(pt1=current_pt, pt2=pt))
@@ -4254,6 +4360,7 @@ class CNCjob(Geometry):
                 self.app.proc_container.update_view_text(' %d%%' % disp_number)
                 old_disp_number = disp_number
 
+        t_gcode = ''.join(gcode_parts)
         self.app.log.debug("Finished G-Code... %s paths traced." % path_count)
 
         # add move to end position
@@ -6256,7 +6363,7 @@ class CNCjob(Geometry):
                 return {'X': float(dot[1]), 'Y': float(dot[2]), '_paste_dot': float(dot[3])}
 
         if 'Roland' in self.pp_excellon_name or 'Roland' in self.pp_geometry_name:
-            match_z = re.search(r"^Z(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+            match_z = GCODE_ROLAND_Z_RE.search(gline)
             if match_z:
                 command['G'] = 0
                 command['X'] = float(match_z.group(1).replace(" ", "")) * 0.01
@@ -6264,12 +6371,12 @@ class CNCjob(Geometry):
                 command['Z'] = float(match_z.group(3).replace(" ", "")) * 0.025
 
         elif 'hpgl' in self.pp_excellon_name or 'hpgl' in self.pp_geometry_name:
-            match_pa = re.search(r"^PA(\s*-?\d+\.\d+?),(\s*\s*-?\d+\.\d+?)*;$", gline)
+            match_pa = GCODE_HPGL_PA_RE.search(gline)
             if match_pa:
                 command['G'] = 0
                 command['X'] = float(match_pa.group(1).replace(" ", "")) / 40
                 command['Y'] = float(match_pa.group(2).replace(" ", "")) / 40
-            match_pen = re.search(r"^(P[U|D])", gline)
+            match_pen = GCODE_HPGL_PEN_RE.search(gline)
             if match_pen:
                 if match_pen.group(1) == 'PU':
                     # the value does not matter, only that it is positive so the gcode_parse() know it is > 0,
@@ -6277,18 +6384,19 @@ class CNCjob(Geometry):
                     command['Z'] = 1
                 else:
                     command['Z'] = 0
-            match_toolchange = re.search(r"^SP\d*", gline)
+            match_toolchange = GCODE_HPGL_SP_RE.search(gline)
             if match_toolchange:
                 command['Z'] = 1
 
         elif 'laser' in self.pp_excellon_name.lower() or 'laser' in self.pp_geometry_name.lower() or \
                 (self.pp_solderpaste_name is not None and 'paste' in self.pp_solderpaste_name.lower()):
-            match_lsr = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+            # (the coordinates are searched only in a line that has an X)
+            match_lsr = GCODE_XY_RE.search(gline) if 'X' in gline else None
             if match_lsr:
                 command['X'] = float(match_lsr.group(1).replace(" ", ""))
                 command['Y'] = float(match_lsr.group(2).replace(" ", ""))
 
-            match_lsr_pos = re.search(r"^(M0?[3-5])", gline)
+            match_lsr_pos = GCODE_LASER_M345_RE.match(gline)
             if match_lsr_pos:
                 if 'M05' in match_lsr_pos.group(1) or 'M5' in match_lsr_pos.group(1):
                     # the value does not matter, only that it is positive so the gcode_parse() know it is > 0,
@@ -6297,32 +6405,28 @@ class CNCjob(Geometry):
                 else:
                     command['Z'] = 0
 
-            match_lsr_pos_2 = re.search(r"^(M10[6|7])", gline)
+            match_lsr_pos_2 = GCODE_LASER_M10X_RE.match(gline)
             if match_lsr_pos_2:
                 if 'M107' in match_lsr_pos_2.group(1):
                     command['Z'] = 1
                 else:
                     command['Z'] = 0
 
-            match_lsr_pos_3 = re.search(r"^.*(laser OFF).*", gline)
-            if match_lsr_pos_3:
-                if 'laser OFF' in match_lsr_pos_3.group(1):
-                    command['Z'] = 1
-                else:
-                    command['Z'] = 0
+            if 'laser OFF' in gline:
+                command['Z'] = 1
 
         elif self.pp_solderpaste_name is not None:
             if 'Paste' in self.pp_solderpaste_name:
-                match_paste = re.search(r"X([+-]?\d+.[+-]?\d+)\s*Y([+-]?\d+.[+-]?\d+)", gline)
+                match_paste = GCODE_XY_RE.search(gline)
                 if match_paste:
                     command['X'] = float(match_paste.group(1).replace(" ", ""))
                     command['Y'] = float(match_paste.group(2).replace(" ", ""))
         else:
-            match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+            # the words are matched one after the other, from the end of the previous one
+            match = GCODE_WORD_RE.match(gline)
             while match:
                 command[match.group(1)] = float(match.group(2).replace(" ", ""))
-                gline = gline[match.end():]
-                match = re.search(r'^\s*([A-Z])\s*([+\-.\d\s]+)', gline)
+                match = GCODE_WORD_RE.match(gline, match.end())
         return command
 
     def gcode_parse(self, force_parsing=None, tool_data=None):
@@ -7079,6 +7183,11 @@ class CNCjob(Geometry):
         # Cutting...
         prev_x = first_x
         prev_y = first_y
+        # the attributes are copied once for the path and only x, y change from a point to the next one (doformat()
+        # copies all the attributes of this object for every line)
+        attributes = AttrDict()
+        attributes.update(self.postdata)
+        attributes['z_cut'] = z_cut
         for pt in path[1:]:
             if self.app.abort_flag:
                 # graceful abort requested by the user
@@ -7096,7 +7205,9 @@ class CNCjob(Geometry):
                 next_x = pt[0]
                 next_y = pt[1]
 
-            gcode += self.doformat(p.linear_code, x=next_x, y=next_y, z_cut=z_cut)  # Linear motion to point
+            attributes['x'] = next_x
+            attributes['y'] = next_y
+            gcode += self.doformat_attributes(p.linear_code, attributes) + "\n"  # Linear motion to point
             prev_x = pt[0]
             prev_y = pt[1]
 
@@ -8178,6 +8289,69 @@ def flatten_shapely_geometry(
     return flat_list
 
 
+class PassBuffers:
+    """
+    The buffered geometry of the isolation passes: for each pass, the union of the features buffered by the offset of
+    the pass, as Geometry.isolation_geometry() makes it.
+
+    The passes are buffered ahead, a batch at a time, in parallel threads (the vectorized Shapely calls release the
+    GIL). Each thread buffers its own copy of the geometry, made from WKB: GEOS geometries used by several threads at
+    the same time can corrupt the heap, because GEOS caches data in a geometry (e.g. its envelope) when it is first
+    needed.
+
+    The passes are asked for in increasing order, each one once. When the caller stops early, at most one batch minus
+    one pass was buffered for nothing.
+
+        buffers = PassBuffers(polygons, offsets, quad_segs)
+        for nr_pass in range(len(offsets)):
+            buffered = buffers.get(nr_pass)
+    """
+
+    def __init__(self, geometry, offsets, quad_segs, abort=None, workers=None):
+        """
+        :param geometry:    geometry or (nested) list of geometries to buffer
+        :param offsets:     the offset distance of each pass
+        :type offsets:      list
+        :param quad_segs:   the segments of a quarter circle, as given to buffer()
+        :type quad_segs:    int
+        :param abort:       callable that returns True when the user asked to stop (GracefulException is raised)
+        :param workers:     the number of threads; the number of processors if None
+        :type workers:      int
+        """
+        self._wkb = shapely.to_wkb(np.array(flatten_shapely_geometry(geometry), dtype=object))
+        self._offsets = list(offsets)
+        self._quad_segs = quad_segs
+        self._abort = abort
+        self._workers = workers or os.cpu_count() or 1
+        self._buffered = {}
+
+    def _buffer(self, nr_pass):
+        if self._abort is not None and self._abort():
+            # graceful abort requested by the user
+            raise grace
+
+        geoms = shapely.from_wkb(self._wkb)
+        offset = self._offsets[nr_pass]
+        if offset == 0:
+            return unary_union(geoms)
+        return unary_union(shapely.buffer(geoms, offset, quad_segs=self._quad_segs, join_style='round'))
+
+    def get(self, nr_pass):
+        """
+        :param nr_pass:     the number of the pass, from 0
+        :type nr_pass:      int
+        :return:            the union of the geometry buffered by the offset of the pass
+        """
+        if nr_pass not in self._buffered:
+            batch = list(range(nr_pass, min(nr_pass + self._workers, len(self._offsets))))
+            if len(batch) > 1:
+                with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+                    self._buffered = dict(zip(batch, executor.map(self._buffer, batch)))
+            else:
+                self._buffered = {nr_pass: self._buffer(nr_pass)}
+        return self._buffered.pop(nr_pass)
+
+
 def trim_covered_ends(path, radius, parts, parts_tree, covered=None) -> tuple:
     """Return one cutting run and its stock-reaching segments, without adding a lift."""
     coords = np.asarray(path.coords)
@@ -8627,6 +8801,45 @@ def circle_quad_segs(steps_per_circle) -> int:
     return max(1, math.ceil(int(steps_per_circle) / 4))
 
 
+def seed_band_margin(margin, center):
+    """
+    Prepares the cut of the rings around a center point from a large margin (clear_polygon_seed()).
+
+    A ring does not touch a polygon or a hole that is entirely nearer to the center than the ring or entirely farther.
+    The kept polygons and holes keep their coordinates and the polygons that hold the bounds of the margin are always
+    kept (the same envelope): a ring cut from a band is the ring cut from the whole margin, bit for bit.
+
+    :param margin:  MultiPolygon
+    :param center:  Point
+    :return:        function(near, far) that returns the margin without the polygons and holes that are entirely
+                    nearer to the center than near or entirely farther than far
+    """
+    polygons = shapely.get_parts(margin)
+    polygons = polygons[~shapely.is_empty(polygons)]
+    rings, ring_polygon = shapely.get_rings(polygons, return_index=True)
+    # the first ring of each polygon is its exterior
+    is_exterior = np.ones(len(rings), dtype=bool)
+    is_exterior[1:] = ring_polygon[1:] != ring_polygon[:-1]
+    # the nearest point of the area inside each ring (0 when it holds the center) and its farthest vertex
+    ring_near = shapely.distance(center, shapely.polygons(rings))
+    center_xy = shapely.get_coordinates(center)[0]
+    xy, xy_ring = shapely.get_coordinates(rings, return_index=True)
+    ring_far = np.zeros(len(rings))
+    np.maximum.at(ring_far, xy_ring, np.hypot(xy[:, 0] - center_xy[0], xy[:, 1] - center_xy[1]))
+    bounds = shapely.bounds(polygons)
+    bounds_polygons = np.zeros(len(polygons), dtype=bool)
+    bounds_polygons[[np.argmin(bounds[:, 0]), np.argmin(bounds[:, 1]),
+                     np.argmax(bounds[:, 2]), np.argmax(bounds[:, 3])]] = True
+
+    def band(near, far):
+        touch = (ring_far >= near) & (ring_near <= far)
+        kept = (bounds_polygons | touch[is_exterior])[ring_polygon] & (is_exterior | touch)
+        __, parts = np.unique(ring_polygon[kept], return_inverse=True)
+        return shapely.multipolygons(shapely.polygons(rings[kept], indices=parts))
+
+    return band
+
+
 def get_bounds(geometry_list: list) -> list:
     """
     Will return limit values for a list of geometries
@@ -8737,6 +8950,68 @@ def arc_angle(start, stop, direction):
 #     return None
 
 
+def simplify_paths(paths, tolerance, app=None):
+    """
+    The same as [path.simplify(tolerance) for path in paths], made with vectorized calls on several threads (GEOS
+    releases the GIL). A geometry that is more than once in the list is simplified once, by one thread, and the same
+    simplified geometry is returned for each of its places.
+
+    :param paths:       list of Shapely geometries
+    :type paths:        list
+    :param tolerance:   simplification tolerance
+    :type tolerance:    float
+    :param app:         optional application for cancellation checks between simplification chunks
+    :return:            the simplified geometries, in the same order
+    :rtype:             list
+    """
+    def simplify_piece(piece):
+        if app is not None and app.abort_flag:
+            raise grace
+        result = shapely.simplify(piece, tolerance)
+        if app is not None and app.abort_flag:
+            raise grace
+        return result
+
+    unique = {id(path): path for path in paths}
+    geoms = np.empty(len(unique), dtype=object)
+    geoms[:] = list(unique.values())
+
+    workers = min(os.cpu_count() or 1, len(geoms) // 16)
+    chunks = np.array_split(geoms, max(1, workers * 4))
+    if workers < 2:
+        simplified = np.concatenate([simplify_piece(piece) for piece in chunks])
+    else:
+        # more pieces than threads: the paths are not equally long
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pieces = pool.map(simplify_piece, chunks)
+            simplified = np.concatenate(list(pieces))
+
+    by_id = dict(zip(unique.keys(), simplified))
+    return [by_id[id(path)] for path in paths]
+
+
+def deepcopy_keep_geometry(obj):
+    """
+    Like deepcopy() but the Shapely geometries are shared instead of copied: they are immutable and the copy of a
+    geometry goes through WKB (seconds for the tools of a big isolation). The dicts, lists and tuples that hold them
+    are copied.
+
+    :param obj:     dicts, lists and tuples with Shapely geometries in them (and anything else that deepcopy() copies)
+    :return:        the copy
+    """
+    memo = {}
+    seen = set()
+    stack = [obj]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, BaseGeometry):
+            memo[id(item)] = item
+        elif isinstance(item, (dict, list, tuple)) and id(item) not in seen:
+            seen.add(id(item))
+            stack.extend(item.values() if isinstance(item, dict) else item)
+    return deepcopy(obj, memo)
+
+
 def to_dict(obj):
     """
     Makes the following types into serializable form:
@@ -8760,6 +9035,75 @@ def to_dict(obj):
             "__inst__": sdumps(obj)
         }
     return obj
+
+
+# the WKT of a project is made in pieces of about this many coordinates (see geometry_wkt_cache())
+WKT_PIECE_COORDS = 10000
+
+
+def geometry_wkt_cache(data):
+    """
+    Make the WKT of all the Shapely geometries in a project dictionary (in nested dicts, lists and tuples) with
+    vectorized shapely.to_wkt() calls, instead of 1 call per geometry while the JSON is written.
+    Use the result with project_json_default().
+
+    The numbers get the shortest text that reads back to the same float (up to 20 decimals, trimmed). The 16 fixed
+    decimals of shapely.wkt.dumps() are longer and can lose the last bit of a coordinate below 1.
+    The format is still WKT, so older versions of the app read it.
+
+    to_wkt() holds the GIL and the project is saved in a worker thread: the geometries are converted in pieces
+    of about WKT_PIECE_COORDS coordinates, so the GUI thread runs between the pieces.
+
+    The cache keeps a reference to each geometry: an id() is unique only among the objects that exist at the same
+    time, and the project can change while it is saved.
+
+    :param data:    the project dictionary
+    :return:        dict: id(geometry) -> (geometry, WKT text)
+    """
+    geoms = {}
+    stack = [data]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, BaseGeometry):
+            geoms[id(item)] = item
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+
+    if not geoms:
+        return {}
+
+    arr = np.empty(len(geoms), dtype=object)
+    arr[:] = list(geoms.values())
+    ends = np.cumsum(shapely.get_num_coordinates(arr))
+    cuts = np.unique(np.searchsorted(ends, np.arange(WKT_PIECE_COORDS, ends[-1], WKT_PIECE_COORDS), side='right'))
+    texts = []
+    for part in np.split(arr, cuts):
+        if len(part):
+            texts.extend(shapely.to_wkt(part, rounding_precision=20, trim=True))
+    return {key: (geom, text) for (key, geom), text in zip(geoms.items(), texts)}
+
+
+def project_json_default(wkt_cache):
+    """
+    The 'default' function of json.dump() for a project save: like to_dict(), but the WKT of a geometry comes
+    from a geometry_wkt_cache() of the same data.
+
+    :param wkt_cache:   the dict made by geometry_wkt_cache()
+    :return:            a function for the 'default' parameter of json.dump()
+    """
+    def default(obj):
+        if isinstance(obj, BaseGeometry):
+            entry = wkt_cache.get(id(obj))
+            # the cached text only for the same geometry: a geometry that replaced it can have the same id()
+            if entry is not None and entry[0] is obj:
+                return {
+                    "__class__": "Shply",
+                    "__inst__": entry[1]
+                }
+        return to_dict(obj)
+    return default
 
 
 def dict2obj(d):

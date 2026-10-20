@@ -1,7 +1,7 @@
 from tclCommands.TclCommand import TclCommandSignaled
 
 import collections
-from copy import deepcopy
+from camlib import deepcopy_keep_geometry
 
 
 class TclCommandCncjob(TclCommandSignaled):
@@ -264,7 +264,7 @@ class TclCommandCncjob(TclCommandSignaled):
             return self.check_result(obj.generatecncjob(use_thread=False, plot=False, **args))
         else:
             # Update the local_tools_dict values with the args value
-            local_tools_dict = deepcopy(obj.tools)
+            local_tools_dict = deepcopy_keep_geometry(obj.tools)
 
             for tool_uid in list(local_tools_dict.keys()):
                 if 'data' in local_tools_dict[tool_uid]:

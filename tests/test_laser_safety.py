@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 from shapely.geometry import LineString
 
-from camlib import CNCjob, Geometry
+from camlib import AttrDict, CNCjob, Geometry
 from defaults import AppDefaults
 from test_unify_regressions_0b import make_app, make_excellon
 
@@ -70,6 +70,33 @@ def test_warning_only_for_gcode_with_laser_off_lines():
     msgs = laser_warnings(app)
     assert len(msgs) == 2
     assert all('250' in m for m in msgs)
+
+
+@pytest.mark.parametrize('pp_name', ['GRBL_laser', 'GRBL_laser_z', 'grbl_laser_eleks_drd'])
+def test_grbl_laser_activation_does_not_reuse_previous_power(pp_name):
+    pp = getattr(importlib.import_module('preprocessors.%s' % pp_name), pp_name)()
+    p = AttrDict(units='MM', coords_decimals=4, fr_decimals=2, feedrate=1000, feedrate_rapid=1500,
+                 steps_per_circle=64, obj_options={'type': 'Geometry', 'xmin': 0, 'xmax': 1, 'ymin': 0, 'ymax': 1},
+                 pp_geometry_name=pp_name, spindledir='CW', laser_min_power=250)
+    methods = (pp.start_code, pp.down_code) if pp_name == 'grbl_laser_eleks_drd' else \
+        (pp.spindle_code, pp.down_code)
+
+    for laser_on_code in ('M03', 'M04'):
+        p['laser_on_code'] = laser_on_code
+        for power in (500, 0, 0.0, None):
+            p['spindlespeed'] = power
+            for method in methods:
+                lines = [line.split(';')[0] for line in method(p).splitlines()
+                         if line.startswith(laser_on_code)]
+                # A previous S500 (or minimum travel power) must not survive zero-power activation.
+                assert lines == ['%s S%d' % (laser_on_code, power or 0)]
+
+        expected_lift = 'M05;lift' if pp_name == 'grbl_laser_eleks_drd' else \
+            '%s S250 (laser OFF)\n' % laser_on_code
+        assert pp.lift_code(p) == expected_lift
+        p['laser_min_power'] = 0
+        assert pp.lift_code(p) == ('M05;lift' if pp_name == 'grbl_laser_eleks_drd' else 'M5')
+        p['laser_min_power'] = 250
 
 
 @pytest.mark.parametrize('min_power', [250, 0])

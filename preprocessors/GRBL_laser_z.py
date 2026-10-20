@@ -88,7 +88,7 @@ class GRBL_laser_z(PreProc):
         if p.spindlespeed:
             return '%s S%s' % (str(p.laser_on_code), str(p.spindlespeed))
         else:
-            return str(p.laser_on_code)
+            return '%s S0' % str(p.laser_on_code)
 
     def toolchange_code(self, p):
         return 'G0 Z' + self.coordinate_format % (p.coords_decimals, p.z_move)
@@ -134,7 +134,7 @@ class GRBL_laser_z(PreProc):
         if p.spindlespeed:
             return '%s S%s' % (str(p.laser_on_code), str(p.spindlespeed))
         else:
-            return str(p.laser_on_code)
+            return '%s S0' % str(p.laser_on_code)
 
     def dwell_code(self, p):
         return ''

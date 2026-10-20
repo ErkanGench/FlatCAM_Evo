@@ -6,14 +6,6 @@ from PyQt6.QtCore import QSettings
 from appGUI.GUIElements import RadioSet, FCCheckBox, FCButton, FCComboBox, FCEntry, FCSpinner, FCColorEntry, \
     FCSliderWithSpinner, FCDoubleSpinner, FloatEntry, FCTextArea, FCLabel, GLay
 
-import gettext
-import appTranslation as fcTranslate
-import builtins
-
-fcTranslate.apply_language('strings')
-if '_' not in builtins.__dict__:
-    _ = gettext.gettext
-
 
 class OptionUI:
 
@@ -49,9 +41,9 @@ class BasicOptionUI(OptionUI):
             fmt = "<b>%s</b>" % fmt
         if self.label_color:
             fmt = "<span style=\"color:%s;\">%s</span>" % (self.label_color, fmt)
-        label_widget = FCLabel(fmt % _(self.label_text))
+        label_widget = FCLabel(fmt % self.label_text)
         if self.label_tooltip is not None:
-            label_widget.setToolTip(_(self.label_tooltip))
+            label_widget.setToolTip(self.label_tooltip)
         return label_widget
 
     def build_entry_widget(self) -> QtWidgets.QWidget:
@@ -98,13 +90,13 @@ class TextAreaOptionUI(OptionUI):
         self.textarea_widget = self.build_textarea_widget()
 
     def build_label_widget(self):
-        label = FCLabel("%s:" % _(self.label_text))
-        label.setToolTip(_(self.label_tooltip))
+        label = FCLabel("%s:" % self.label_text)
+        label.setToolTip(self.label_tooltip)
         return label
 
     def build_textarea_widget(self):
         textarea = FCTextArea()
-        textarea.setPlaceholderText(_(self.label_tooltip))
+        textarea.setPlaceholderText(self.label_tooltip)
 
         q_settings = QSettings("Open Source", "FlatCAM_EVO")
         if q_settings.contains("textbox_font_size"):
@@ -135,8 +127,8 @@ class CheckboxOptionUI(OptionUI):
         self.checkbox_widget = self.build_checkbox_widget()
 
     def build_checkbox_widget(self):
-        checkbox = FCCheckBox('%s' % _(self.label_text))
-        checkbox.setToolTip(_(self.label_tooltip))
+        checkbox = FCCheckBox('%s' % self.label_text)
+        checkbox.setToolTip(self.label_tooltip)
         return checkbox
 
     def add_to_grid(self, grid: QtWidgets.QGridLayout, row: int) -> int:
@@ -275,8 +267,8 @@ class HeadingOptionUI(OptionUI):
         self.color = color if color else ""
 
     def build_heading_widget(self):
-        heading = FCLabel('%s' % _(self.label_text), color=str(self.color), bold=True)
-        heading.setToolTip(_(self.label_tooltip))
+        heading = FCLabel('%s' % self.label_text, color=str(self.color), bold=True)
+        heading.setToolTip(self.label_tooltip)
         return heading
 
     def add_to_grid(self, grid: QtWidgets.QGridLayout, row: int) -> int:
@@ -315,9 +307,9 @@ class FullWidthButtonOptionUI(OptionUI):
         self.button_widget = self.build_button_widget()
 
     def build_button_widget(self):
-        button = FCButton(_(self.label_text))
+        button = FCButton(self.label_text)
         if self.label_tooltip is not None:
-            button.setToolTip(_(self.label_tooltip))
+            button.setToolTip(self.label_tooltip)
         return button
 
     def add_to_grid(self, grid: QtWidgets.QGridLayout, row: int) -> int:

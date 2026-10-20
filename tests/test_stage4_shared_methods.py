@@ -2,7 +2,7 @@
 mixin). Headless: ShapeCollection is patched, the ObjectUI is a Mock."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 import numpy as np
 import pytest
@@ -60,7 +60,8 @@ def test_shape_and_annotation_ownership_without_backend_flag(no_shape_collection
     assert obj.annotation is canvas.new_text_group.return_value
 
     obj = make_obj(GeometryObject)
-    obj.app.plotcanvas.new_shape_collection.assert_called_once_with(layers=1)
+    # temp_shapes (Geometry) and mark_shapes (FlatCAMObj), both made through the canvas
+    assert obj.app.plotcanvas.new_shape_collection.call_args_list == [call(layers=1), call(layers=1)]
 
     obj = make_obj(GerberObject)
     assert not hasattr(obj, 'axes')

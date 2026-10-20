@@ -12,7 +12,6 @@ from PyQt6.QtCore import QSettings, pyqtSlot  # noqa
 from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject  # noqa
 
 import logging
-import hashlib
 import os.path
 import sys
 import threading
@@ -49,6 +48,7 @@ from ast import literal_eval
 # ###################################      Imports part of FlatCAM       #############################################
 # App appGUI
 from appGUI.PlotCanvas import PlotCanvas
+from appGUI.NullCanvas import NullCanvas
 from appGUI.MainGUI import MainGUI
 from appGUI.VisPyVisuals import ShapeCollection
 from appGUI.GUIElements import (
@@ -77,11 +77,14 @@ from appHandlers.appSignalConnector import AppSignalConnector
 from appHandlers.appUIActions import AppUIActions
 from appHandlers.appLifecycle import AppLifecycle
 
-from services.updater.checker import UpdateChecker
+from services.updater.digi.release import prepare_releases, validate_release_roots
+from services.updater.github.checker import GitHubUpdateChecker
+from services.updater.github.staging import stage_update
+from services.updater.digi.staging import stage_update_archive
+from services.updater.provider import PROVIDER_DIGI, checker_for, create_update_checker, update_provider
 from services.updater.launcher import launch_rollback, launch_update
 from services.updater.recovery import load_restore_point, restore_dir_for_install
-from services.updater.release import prepare_releases, validate_release_roots
-from services.updater.transport import DigiPublicShareTransport, DownloadCancelled
+from services.updater.common import DownloadCancelled
 
 from Bookmark import BookmarkManager
 # from appDatabase import ToolsDB2
@@ -143,28 +146,6 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
-def _stage_update_archive(payload, data_path, transport, *, cancel_cb=None, progress_cb=None):
-    """Download one verified full archive into a stable, disposable staging area."""
-    manifest = payload["manifest"]
-    install_key = hashlib.sha1(str(Path(sys.executable).resolve().parent).encode()).hexdigest()[:8]
-    staging_root = Path(data_path) / "update" / f"staging_{install_key}"
-    archive_path = staging_root / manifest.archive.filename
-    shutil.rmtree(staging_root, ignore_errors=True)
-    try:
-        return transport.download_archive(
-            payload["channel"],
-            manifest.archive.filename,
-            archive_path,
-            expected_size=manifest.archive.size,
-            expected_sha256=manifest.archive.sha256,
-            progress_cb=progress_cb,
-            cancel_cb=cancel_cb,
-        )
-    except Exception:
-        shutil.rmtree(staging_root, ignore_errors=True)
-        raise
-
-
 def _release_build_identity(app, fallback=""):
     for name in ("build_string", "build", "version_date"):
         try:
@@ -193,10 +174,16 @@ class App(QtCore.QObject):
     # #################################### Get Cmd Line Options #####################################################
     cmd_line_shellfile = ''
     cmd_line_shellvar = ''
+    cmd_line_command = ''
+    cmd_line_headless = False
 
     cmd_line_help = (
         "FlatCam.py --shellfile=<cmd_line_shellfile>\n"
-        "FlatCam.py --shellvar=<1,'C:\\path',23>"
+        "FlatCam.py --shellvar=<1,'C:\\path',23>\n"
+        "FlatCam.py --command=\"<Tcl commands, separated by ;>\"\n"
+        "FlatCam.py --headless [--shellfile=...] [--shellvar=...] [--command=...]\n"
+        "    no window and no OpenGL; without --shellfile and --command the Tcl commands are read from stdin.\n"
+        "    Exit code: 0 done, 1 a Tcl command failed, 2 bad command line, N for 'exit N'."
     )
     try:
         # Multiprocessing pool will spawn additional processes with 'multiprocessing-fork' flag
@@ -206,6 +193,8 @@ class App(QtCore.QObject):
             [
                 "shellfile=",
                 "shellvar=",
+                "command=",
+                "headless",
                 "multiprocessing-fork="
             ]
         )
@@ -221,6 +210,10 @@ class App(QtCore.QObject):
             cmd_line_shellfile = arg
         elif opt == '--shellvar':
             cmd_line_shellvar = arg
+        elif opt == '--command':
+            cmd_line_command = arg
+        elif opt == '--headless':
+            cmd_line_headless = True
 
     # The application does os.chdir() into its own folder when it starts, so a relative file name would no longer be
     # found. Make the --shellfile absolute here and refuse to start on a file that cannot be read: a failure later in
@@ -249,7 +242,8 @@ class App(QtCore.QObject):
     date = date.replace(' ', '_')
 
     # ############################################ URLS's ###########################################################
-    # Retained for compatibility with older integrations; updater checks use the Digi share.
+    # Retained for compatibility with older integrations; the GitHub Releases updater is the
+    # default and the Digi share is the legacy provider.
     version_url = "http://flatcam.org/version"
 
     # App URL
@@ -270,6 +264,8 @@ class App(QtCore.QObject):
 
     # flag is True if saving action has been triggered
     save_in_progress = False
+    # flag is True if the app was closed while the project was saved; it closes when the save ends
+    close_after_save = False
     _release_preparation_in_progress = False
 
     # #######################################    APP Signals   ######################################################
@@ -351,10 +347,11 @@ class App(QtCore.QObject):
     custom_signal = pyqtSignal(object)
 
     # noinspection PyUnresolvedReferences
-    def __init__(self, qapp, user_defaults=True):
+    def __init__(self, qapp, user_defaults=True, headless=None):
         """
         Starts the application.
 
+        :param headless:    no window and no OpenGL; default the --headless option
         :return:    the application
         :rtype:     QtCore.QObject
         """
@@ -363,6 +360,13 @@ class App(QtCore.QObject):
 
         # Store qapp reference FIRST before any setup methods
         self.qapp = qapp
+
+        # headless mode (--headless): no window, no OpenGL canvas, the HeadlessRunner of flatcam.py runs the job
+        self.headless = App.cmd_line_headless if headless is None else headless
+        # True while the HeadlessRunner runs: the shell output then goes to stdout / stderr
+        self.headless_console = False
+        # set by quit_app / exit in headless mode
+        self.headless_exit_code = None
 
         # =========================================================================
         # DECLARE ALL INSTANCE ATTRIBUTES HERE
@@ -564,6 +568,7 @@ class App(QtCore.QObject):
         self._update_dialog = None
         self._update_progress_dialog = None
         self._update_in_progress = False
+        self._update_cancel_event = None
         self._rollback_in_progress = False
         self._release_preparation_in_progress = False
 
@@ -594,6 +599,9 @@ class App(QtCore.QObject):
         formatter = logging.Formatter('[%(levelname)s][%(threadName)s] %(message)s')
         handler = logging.StreamHandler()
         handler.setFormatter(formatter)
+        if self.headless:
+            # the console is the output of a headless run: only warnings and errors of the log go there
+            handler.setLevel(logging.WARNING)
         self.log.addHandler(handler)
 
     def _setup_state_variables(self):
@@ -716,7 +724,8 @@ class App(QtCore.QObject):
     def _setup_paths_and_config(self):
         """Phase 1: Setup paths, config files, and platform-specific settings."""
         # ################# Setup the listening thread for another instance launching with args ######################
-        if sys.platform == 'win32':
+        # a headless run never hands its arguments to an open instance (ArgsThread.my_loop() then ends this process)
+        if sys.platform == 'win32' and not self.headless:
             # make sure the thread is stored by using a self. otherwise it's garbage collected
             self.listen_th = QtCore.QThread()
             self.listen_th.start(priority=QtCore.QThread.Priority.LowestPriority)
@@ -937,10 +946,7 @@ class App(QtCore.QObject):
         # #################################### SETUP OBJECT CLASSES #################################################
         # Need lifecycle initialized before setup_objclasses
         self.lifecycle = AppLifecycle(app=self)
-        self.update_checker = UpdateChecker(
-            app=self,
-            share_url=self.options.get("global_update_url", self.defaults.get("global_update_url")),
-        )
+        self.update_checker = create_update_checker(self)
         self.setup_obj_classes()
 
         # ###################################### CREATE MULTIPROCESSING POOL #######################################
@@ -968,7 +974,7 @@ class App(QtCore.QObject):
             del splash_settings
             show_splash = 1
 
-        if show_splash:
+        if show_splash and not self.headless:
             splash_pix = QtGui.QPixmap(self.resource_location + '/splash.png')
             splash_pix = splash_pix.scaled(
                 QtCore.QSize(622, 344),  # You can set this to your desired width and height
@@ -1182,21 +1188,22 @@ class App(QtCore.QObject):
             raise SystemError("Failed to start the Canvas")
 
         # add he PlotCanvas setup to the UI
-        self.on_plotcanvas_add(self.plotcanvas, self.ui.right_layout)
+        if not self.headless:
+            self.on_plotcanvas_add(self.plotcanvas, self.ui.right_layout)
 
         # ################   SHAPES STORAGE   #########################################################################
         # Storage for shapes, storage that can be used by FlatCAm tools for utility geometry
         # VisPy visuals
         try:
-            self.tool_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+            self.tool_shapes = self.plotcanvas.new_shape_collection(layers=1)
         except AttributeError:
             self.tool_shapes = None
 
         # Storage for Hover Shapes
-        self.hover_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+        self.hover_shapes = self.plotcanvas.new_shape_collection(layers=1)
 
         # Storage for Selection shapes
-        self.sel_shapes = ShapeCollection(parent=self.plotcanvas.view.scene, layers=1, pool=self.pool)
+        self.sel_shapes = self.plotcanvas.new_shape_collection(layers=1)
         # #############################################################################################################
 
         end_plot_time = time.time()
@@ -1358,7 +1365,7 @@ class App(QtCore.QObject):
         # ############################################### SYS TRAY ##################################################
         self.parent_w = QtWidgets.QWidget()
         self.trayIcon = None
-        if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")):
+        if self.options.get("global_systray_icon", self.defaults.get("global_systray_icon")) and not self.headless:
             self.trayIcon = AppSystemTray(app=self,
                                           icon=QtGui.QIcon(self.resource_location + '/app32.png'),
                                           parent=self.parent_w)
@@ -1491,12 +1498,37 @@ class App(QtCore.QObject):
 
         self.log.debug("Finished connecting Signals.")
 
+    def shellvar_commands(self):
+        """
+        :return: the Tcl commands that set shellvar_0, shellvar_1 ... from the --shellvar option
+        """
+        commands = []
+        if not self.cmd_line_shellvar:
+            return commands
+        for cnt, i in enumerate(self.cmd_line_shellvar.split(',')):
+            # noinspection PyBroadException
+            try:
+                command_tcl = safe_eval(i)
+            except Exception:
+                command_tcl = i
+            command_tcl_formatted = 'set shellvar_{nr} "{cmd}"'.format(cmd=str(command_tcl), nr=str(cnt))
+            # if there are Windows paths then replace the path separator with a Unix like one
+            if sys.platform == 'win32':
+                command_tcl_formatted = command_tcl_formatted.replace('\\', '/')
+            commands.append(command_tcl_formatted)
+        return commands
+
     def _setup_startup(self):
         """Phase 1: Show GUI and process startup arguments."""
         # ##################################### Finished the CONSTRUCTOR ############################################
         self.log.debug("END of constructor. Releasing control.")
         self.log.debug("... Resistance is futile. You will be assimilated ...")
         self.log.debug("... I disagree. While we live and breath, we can be free!\n")
+
+        if self.headless:
+            # no window, no tray, no update check; the HeadlessRunner of flatcam.py runs --shellvar, --shellfile,
+            # --command or the Tcl prompt
+            return
 
         # ########################################## SHOW GUI #######################################################
         if self.splash:
@@ -1517,7 +1549,7 @@ class App(QtCore.QObject):
             self.trayIcon.show()
 
         self.refresh_rollback_action()
-        if not self.beta and self.options.get("global_version_check", self.defaults.get("global_version_check")):
+        if self.options.get("global_version_check", self.defaults.get("global_version_check")):
             self.log.info(f"Checking for updates in background (this is version {self.version}).")
             self._queue_version_check()
 
@@ -1525,23 +1557,7 @@ class App(QtCore.QObject):
         # test if the program was started with a script as parameter
         if self.cmd_line_shellvar:
             try:
-                cnt = 0
-                command_tcl = 0
-                for i in self.cmd_line_shellvar.split(','):
-                    if i is not None:
-                        # noinspection PyBroadException
-                        try:
-                            command_tcl = safe_eval(i)
-                        except Exception:
-                            command_tcl = i
-
-                    command_tcl_formatted = 'set shellvar_{nr} "{cmd}"'.format(cmd=str(command_tcl), nr=str(cnt))
-
-                    cnt += 1
-
-                    # if there are Windows paths then replace the path separator with a Unix like one
-                    if sys.platform == 'win32':
-                        command_tcl_formatted = command_tcl_formatted.replace('\\', '/')
+                for command_tcl_formatted in self.shellvar_commands():
                     self.shell.exec_command(command_tcl_formatted, no_echo=True)
             except Exception as ext:
                 print("ERROR: ", ext)
@@ -1565,6 +1581,11 @@ class App(QtCore.QObject):
             except Exception as ext:
                 print("ERROR: ", ext)
                 sys.exit(2)
+
+        if self.cmd_line_command:
+            if self.ui.shell_dock.isHidden():
+                self.ui.shell_dock.show()
+            self.shell.exec_command(self.cmd_line_command)
 
         # accept some type file as command line parameter: FlatCAM project, FlatCAM preferences or scripts
         # the path/file_name must be enclosed in quotes, if it contains spaces
@@ -2816,6 +2837,11 @@ class App(QtCore.QObject):
         dialog = getattr(self, "_update_progress_dialog", None)
         if dialog is not None:
             try:
+                # QProgressDialog emits canceled when it closes; a programmatic close is not a user cancel.
+                dialog.canceled.disconnect()
+            except (AttributeError, RuntimeError, TypeError):
+                pass
+            try:
                 dialog.close()
             except (AttributeError, RuntimeError):
                 pass
@@ -2827,7 +2853,14 @@ class App(QtCore.QObject):
             return
         try:
             dialog.setLabelText(text)
-            dialog.setValue(value)
+            if value < 0:
+                # A negative value means the transport cannot report a total yet.
+                if dialog.maximum() != 0:
+                    dialog.setRange(0, 0)
+                return
+            if dialog.maximum() == 0:
+                dialog.setRange(0, 100)
+            dialog.setValue(min(value, dialog.maximum()))
         except (AttributeError, RuntimeError):
             pass
 
@@ -2953,12 +2986,23 @@ class App(QtCore.QObject):
     def on_update_check_result(self, payload):
         self._check_in_progress = False
         if payload.get("status") == "up_to_date" and self._manual_update_requested:
-            self.inform.emit('[success] %s' % _("The application is up to date!"))
-        self._manual_update_requested = False
+            if payload.get("no_releases"):
+                self.inform.emit('[WARNING_NOTCL] %s' % _("No releases have been published yet."))
+            else:
+                self.inform.emit('[success] %s' % _("The application is up to date!"))
+        if payload.get("status") != "update_available":
+            self._manual_update_requested = False
 
     def on_update_available(self, payload):
         if self._update_operation_active():
             self.log.info("Ignoring duplicate update offer while an update operation is active.")
+            return
+
+        manual_request = bool(getattr(self, "_manual_update_requested", False))
+        self._manual_update_requested = False
+        if payload.get("manual") and not manual_request:
+            # Automatic checks must not nag about installs that are always replaced by hand.
+            self.log.info("A manual update is available; automatic checks stay nonintrusive.")
             return
 
         dialog = UpdateDialog(parent=self.ui, payload=payload)
@@ -2972,6 +3016,8 @@ class App(QtCore.QObject):
                 if self._updater_shutdown_preflight():
                     self.quit_application()
                 return
+            if payload.get("manual"):
+                return
 
             self._start_update_download(payload)
 
@@ -2983,6 +3029,7 @@ class App(QtCore.QObject):
             return
         self._update_in_progress = True
         cancel_event = threading.Event()
+        self._update_cancel_event = cancel_event
         progress = QtWidgets.QProgressDialog(
             _("Downloading update..."), _("Cancel"), 0, 100, self.ui
         )
@@ -2990,6 +3037,11 @@ class App(QtCore.QObject):
         progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         progress.setAutoClose(False)
         progress.setAutoReset(False)
+        asset = payload.get("asset") if isinstance(payload.get("asset"), dict) else {}
+        known_size = asset.get("size") if payload.get("install") == "windows_asset" else None
+        if not known_size:
+            # Source archives only report their total while streaming.
+            progress.setRange(0, 0)
         progress.canceled.connect(cancel_event.set)
         self._update_progress_dialog = progress
         progress.show()
@@ -3002,46 +3054,88 @@ class App(QtCore.QObject):
         except Exception as exc:
             self.log.error("Could not queue update download: %s" % str(exc))
             self._update_in_progress = False
+            self._update_cancel_event = None
             self._close_update_progress()
             self.inform.emit('[ERROR_NOTCL] %s' % _("Update download could not be started."))
 
     def _download_update_worker(self, payload, cancel_event):
-        checker = getattr(self, "update_checker", None)
-        if checker is None:
-            checker = UpdateChecker(app=self)
-            self.update_checker = checker
+        # The offer records the provider and address that produced it; a later preference change must
+        # not route its download through the other provider.
+        provider = payload.get("provider") or update_provider(self)
+        checker = checker_for(self)
+        if getattr(checker, "provider", provider) != provider:
+            checker = create_update_checker(self, provider=provider, url=payload.get("provider_url"))
         options = self.options
         defaults = self.defaults
-        share_url = options.get(
+        repository_url = payload.get("provider_url") or options.get(
             "global_update_url",
             defaults.get(
                 "global_update_url",
                 AppDefaults.factory_defaults.get("global_update_url"),
             ),
         )
+        share_url = payload.get("provider_url") or options.get(
+            "global_legacy_update_url",
+            defaults.get(
+                "global_legacy_update_url",
+                AppDefaults.factory_defaults.get("global_legacy_update_url"),
+            ),
+        )
 
         def progress(written, total):
-            total = total or payload["manifest"].archive.size or 0
-            value = 100 if total and written >= total else int((written * 100) / total) if total else 0
-            self.update_progress.emit(min(value, 100), _("Downloading update: %s%%") % value)
+            if not total:
+                self.update_progress.emit(-1, _("Downloading update..."))
+                return
+            value = min(int((written * 100) / total), 100)
+            self.update_progress.emit(value, _("Downloading update: %s%%") % value)
 
         try:
-            transport = checker.create_transport(
+            if provider == PROVIDER_DIGI:
+                transport = checker.create_transport(self, share_url=share_url)
+                archive_path = stage_update_archive(
+                    payload,
+                    self.data_path,
+                    transport,
+                    cancel_cb=cancel_event.is_set,
+                    progress_cb=progress,
+                )
+                if cancel_event.is_set():
+                    shutil.rmtree(str(archive_path.parent), ignore_errors=True)
+                    self.update_staged.emit({"canceled": True, "payload": payload})
+                    return
+                self.update_staged.emit({
+                    "canceled": False,
+                    "payload": payload,
+                    "staging_dir": str(archive_path.parent),
+                    "archive_path": str(archive_path),
+                    "manifest": payload["manifest"],
+                    "channel": payload.get("channel"),
+                })
+                return
+
+            transport = checker.create_transport(self, repository_url=repository_url)
+            staged = stage_update(
                 self,
-                share_url=share_url,
-            )
-            archive_path = _stage_update_archive(
                 payload,
-                self.data_path,
-                transport,
+                transport=transport,
                 cancel_cb=cancel_event.is_set,
                 progress_cb=progress,
             )
+            if cancel_event.is_set():
+                shutil.rmtree(str(staged.staging_dir), ignore_errors=True)
+                self.update_staged.emit({"canceled": True, "payload": payload})
+                return
             self.update_staged.emit({
-                "archive_path": str(archive_path),
-                "staging_dir": str(archive_path.parent),
                 "canceled": False,
                 "payload": payload,
+                "stage": staged,
+                "staging_dir": str(staged.staging_dir),
+                "archive_path": str(staged.archive_path),
+                "manifest": staged.manifest,
+                "channel": staged.channel,
+                "install": staged.install,
+                "trust": staged.trust,
+                "dependencies": staged.dependencies,
             })
         except DownloadCancelled:
             self.update_staged.emit({"canceled": True, "payload": payload})
@@ -3049,33 +3143,107 @@ class App(QtCore.QObject):
             self.log.error("Update download failed: %s" % str(exc))
             self.update_staged.emit({"canceled": False, "payload": payload, "error": str(exc)})
 
+    def _cleanup_staged_update(self, data):
+        staging_dir = data.get("staging_dir")
+        if staging_dir:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+    @staticmethod
+    def _dependency_warning(dependencies):
+        detail = []
+        for label, key in (("Added", "added"), ("Removed", "removed")):
+            values = dependencies.get(key) or []
+            if values:
+                detail.append("%s: %s" % (label, ", ".join(sorted(str(value) for value in values))))
+        return "\n".join(detail)
+
+    def _confirm_staged_update(self, manifest, channel, dependencies, trust):
+        """Ask on the GUI thread before the external helper may touch the installation."""
+        dependencies = dependencies if isinstance(dependencies, dict) else {}
+        warning = ""
+        if channel == "linux" and dependencies.get("changed"):
+            warning = _(
+                "The application requirements changed. Update the Python environment and "
+                "restart afterwards; otherwise FlatCAM may fail to start. FlatCAM does not "
+                "run pip or change the environment itself."
+            )
+            detail = self._dependency_warning(dependencies)
+            if detail:
+                warning = "%s\n%s" % (warning, detail)
+        if not trust and not warning:
+            return True
+
+        version = manifest.get("version", "") if isinstance(manifest, dict) else getattr(manifest, "version", "")
+        build = manifest.get("build", "") if isinstance(manifest, dict) else getattr(manifest, "build_string", "")
+        message = ["%s (%s)" % (version, build)]
+        if trust:
+            message.append(_("Trust: %s") % trust)
+        if warning:
+            message.append(warning)
+        default = (
+            QtWidgets.QMessageBox.StandardButton.Cancel
+            if warning
+            else QtWidgets.QMessageBox.StandardButton.Yes
+        )
+        box = QtWidgets.QMessageBox(self.ui)
+        box.setWindowTitle(_("Install update"))
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText("\n\n".join(message))
+        box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+        box.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(default)
+        answer = box.exec()
+        return answer == QtWidgets.QMessageBox.StandardButton.Yes
+
     def on_update_staged(self, data):
         self._close_update_progress()
-        self._update_in_progress = False
-        staging_dir = data.get("staging_dir")
-        if data.get("canceled"):
-            self.inform.emit('[WARNING_NOTCL] %s' % _("Update download canceled."))
-            return
+        self._update_in_progress = True
+        launched = False
+        try:
+            cancel_event = getattr(self, "_update_cancel_event", None)
+            if data.get("canceled") or (cancel_event is not None and cancel_event.is_set()):
+                self._cleanup_staged_update(data)
+                self.inform.emit('[WARNING_NOTCL] %s' % _("Update download canceled."))
+                return
 
-        archive_path = data.get("archive_path")
-        payload = data.get("payload", {})
-        if not archive_path or not payload.get("manifest"):
-            if staging_dir:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            self.inform.emit('[ERROR_NOTCL] %s' % _("Update download failed; the installation was not changed."))
-            return
-        if not self._updater_shutdown_preflight():
-            if staging_dir:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            return
+            stage = data.get("stage")
+            manifest = data.get("manifest")
+            archive_path = data.get("archive_path")
+            payload = data.get("payload") or {}
+            if manifest is None:
+                manifest = payload.get("manifest")
+            if archive_path is None and stage is not None:
+                archive_path = str(stage.archive_path)
+            if data.get("error") or not manifest or not archive_path:
+                self._cleanup_staged_update(data)
+                self.inform.emit('[ERROR_NOTCL] %s' % _("Update download failed; the installation was not changed."))
+                return
 
-        success = launch_update(self, payload["manifest"], archive_path)
-        if not success:
-            if staging_dir:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-            self.inform.emit('[WARNING_NOTCL] %s' % _("The updater could not be started."))
-            return
-        self.quit_application(mode="updater")
+            channel = data.get("channel") or getattr(stage, "channel", "")
+            trust = data.get("trust") or getattr(stage, "trust", "")
+            dependencies = data.get("dependencies") or getattr(stage, "dependencies", {})
+            if not self._confirm_staged_update(manifest, channel, dependencies, trust):
+                self._cleanup_staged_update(data)
+                self.inform.emit('[WARNING_NOTCL] %s' % _("Update was canceled; the installation was not changed."))
+                return
+            if not self._updater_shutdown_preflight():
+                self._cleanup_staged_update(data)
+                return
+
+            if not launch_update(self, manifest, archive_path):
+                self._cleanup_staged_update(data)
+                self.inform.emit('[WARNING_NOTCL] %s' % _("The updater could not be started."))
+                return
+            # The launcher owns a verified archive copy, so the download stage is disposable.
+            self._cleanup_staged_update(data)
+            launched = True
+            self.quit_application(mode="updater")
+        finally:
+            self._update_cancel_event = None
+            if not launched:
+                self._update_in_progress = False
 
     def _load_rollback_restore_point(self):
         install_dir = (
@@ -3534,6 +3702,13 @@ class App(QtCore.QObject):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Select an Gerber or Excellon file to view it's source file."))
             return 'fail'
 
+        # checked before the Source Editor tab is added: for an object without a source (e.g. a Geometry made by a
+        # tool) the tab stayed empty and the app stayed busy
+        if not self.collection.has_source(obj):
+            self.inform.emit('[WARNING_NOTCL] %s: %s' % (_("The object has no source file to show"),
+                                                         obj.obj_options['name']))
+            return 'fail'
+
         self.inform.emit('%s' % _("Viewing the source code of the selected object."))
         self.proc_container.view.set_busy('%s...' % _("Loading"))
 
@@ -3907,6 +4082,12 @@ class App(QtCore.QObject):
 
         :return:            None
         """
+
+        if self.headless:
+            self.log.debug("Setting up canvas: none (headless)")
+            plotcanvas = NullCanvas(self)
+            self.app_cursor = plotcanvas.new_cursor()
+            return plotcanvas
 
         self.log.debug("Setting up canvas: VisPy")
 

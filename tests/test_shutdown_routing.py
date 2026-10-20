@@ -33,7 +33,7 @@ def shutdown(qt_app, monkeypatch):
     window.on_toggle_gui = Mock()
     app = Mock(ui=window, resource_location='', save_in_progress=False,
                should_we_save=True, _check_in_progress=False, _check_queued=False,
-               project_save_pending=False, projects=None)
+               project_save_pending=False, close_after_save=False, projects=None)
     app._update_operation_active.return_value = False
     app.collection.get_list.return_value = [object()]
     window.app = app
@@ -116,6 +116,74 @@ def test_editor_exit_still_finishes_editing_without_closing(shutdown):
     assert shutdown.editor.menuRole() == QtGui.QAction.MenuRole.NoRole
     shutdown.final_save.assert_not_called()
     assert shutdown.window.isVisible()
+
+
+def end_save(s, tmp_path, should_quit=False):
+    """The save timer finds the written project file (AppLifecycle.check_project_file_size)."""
+    project = tmp_path / 'Board.FlatPrj'
+    project.write_bytes(b'{}')
+    s.app.save_timer = Mock()
+    s.lifecycle.check_project_file_size(str(project), should_quit=should_quit)
+    QtWidgets.QApplication.processEvents()
+
+
+def test_close_during_a_save_closes_the_app_when_the_save_ends(shutdown, tmp_path):
+    s = shutdown
+    s.app.should_we_save = False
+    s.app.save_in_progress = True
+    s.action.trigger()
+    # the save goes on: the window stays open and nothing is asked yet
+    assert s.window.isVisible()
+    s.final_save.assert_not_called()
+    assert s.app.close_after_save is True
+
+    end_save(s, tmp_path)
+
+    assert s.app.save_in_progress is False
+    assert s.app.close_after_save is False
+    # the window is closed the same way as the user did: the settings are saved and the app quits
+    s.final_save.assert_called_once_with()
+    assert s.settings.setValue.called
+    s.lifecycle.quit_application.assert_called_once_with()
+
+
+def test_close_during_a_failed_save_keeps_the_app_open(shutdown, tmp_path):
+    from appHandlers.appIO import appIO
+    s = shutdown
+    # the worker of the save ended with a failure; the GUI does not have the result yet
+    s.app.project_save_pending = True
+    s.action.trigger()
+    s.final_save.assert_called_once_with()
+    assert s.app.close_after_save is True
+
+    appIO(s.app)._on_project_save_done(str(tmp_path / 'Board.FlatPrj'), False, False, True)
+    assert s.app.close_after_save is False
+    assert s.app.should_we_save is True
+
+    # a later save does not close the app
+    s.app.save_in_progress = True
+    end_save(s, tmp_path)
+    s.final_save.assert_called_once_with()
+    s.lifecycle.quit_application.assert_not_called()
+    assert s.window.isVisible()
+
+
+def test_save_that_quits_does_not_close_the_window_again(shutdown, tmp_path):
+    s = shutdown
+    s.app.save_in_progress = True
+    s.action.trigger()
+    assert s.app.close_after_save is True
+
+    end_save(s, tmp_path, should_quit=True)
+
+    s.app.app_quit.emit.assert_called_once_with()
+    s.final_save.assert_not_called()
+    # the quit can be cancelled (the Tools Database question): a later save does not close the app
+    assert s.app.close_after_save is False
+    s.app.save_in_progress = True
+    end_save(s, tmp_path)
+    s.final_save.assert_not_called()
+    assert s.window.isVisible()
 
 
 def test_obsolete_ctrl_q_noop_is_removed():

@@ -59,6 +59,8 @@ class grbl_laser_eleks_drd(PreProc):
         gcode += p.laser_on_code
         if p.spindlespeed:
             gcode += ' ' + 'S%d' % p.spindlespeed
+        else:
+            gcode += ' S0'
         gcode += ';' + p.spindledir
         return gcode
 
@@ -70,6 +72,7 @@ class grbl_laser_eleks_drd(PreProc):
 
     def down_code(self, p):
         gcode = p.laser_on_code
+        gcode += ' S%d' % (p.spindlespeed or 0)
         gcode += ';down'
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
             gcode += '\n'

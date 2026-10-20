@@ -93,11 +93,7 @@ class TestStreamAbort(unittest.TestCase):
         tool, fake = self._error_run()
         self.assertTrue(tool._grbl_stream_dirty)
         tool.on_grbl_reset()
-        self.assertTrue(tool._grbl_reset_pending)
-        self.assertTrue(tool._grbl_stream_dirty)
-        op = tool._grbl_reserve('home', motion=True, allow_in_recovery=True)
-        self.assertIsNotNone(op)
-        self.assertTrue(tool._grbl_confirm_reset(op))      # the fake answers the reset byte with its banner
+        # the reset worker (inline here) reads the banner that the fake sends for the reset byte
         self.assertFalse(tool._grbl_stream_dirty)
         self.assertFalse(tool._grbl_reset_pending)
         self.assertEqual(tool._grbl_recovery, 'needs_home')

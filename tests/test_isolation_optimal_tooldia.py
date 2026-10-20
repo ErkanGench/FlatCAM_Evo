@@ -1,7 +1,7 @@
-"""Isolation plugin: the tool diameter found by the Optimal button (find_safe_tooldia_worker).
+"""Isolation and NCC: safe tool recommendations must agree with Check validity.
 
 The distances between the copper polygons are rounded to the app decimals, so the smallest one can be up to half a unit
-of the last decimal larger than the real gap (0.15996 -> 0.16). The tests build the real ToolIsolation headless
+of the last decimal larger than the real gap (0.15996 -> 0.16). The tests build the real plugins headless
 (offscreen Qt, MagicMock app) and drive the Optimal button and the Check validity step
 (find_safe_tooldia_multiprocessing) on pads with known gaps.
 """
@@ -24,6 +24,8 @@ from shapely import box  # noqa: E402
 from appMain import App  # noqa: E402
 from defaults import AppDefaults  # noqa: E402
 from appPlugins.ToolIsolation import ToolIsolation  # noqa: E402
+from appPlugins.ToolNCC.Ncc import ToolNcc  # noqa: E402
+from appPlugins.ToolOptimal import ToolOptimal  # noqa: E402
 from test_plugin_geometry_bases import make_tool_app  # noqa: E402
 
 DEC = 4
@@ -36,20 +38,20 @@ def gerber_tools(gap):
     return {10: {'geometry': [{'solid': p} for p in pads]}}
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def qapp():
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
-@pytest.fixture
-def tool(qapp):
+@pytest.fixture(params=[ToolIsolation, ToolNcc])
+def tool(qapp, request):
     app = make_tool_app()
     app.abort_flag = False
     app.dec_format = functools.partial(App.dec_format, app)
     # run the jobs in place of the worker thread and of the process pool
     app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
     app.pool.apply_async.side_effect = lambda fcn, args: MagicMock(get=lambda: fcn(*args))
-    t = ToolIsolation(app)
+    t = request.param(app)
     t.decimals = DEC
     app.collection = MagicMock()
     return t
@@ -75,8 +77,9 @@ def test_optimal_tool_fits_in_the_smallest_gap(tool, gap):
     assert dia < gap
     assert dia >= gap - 1.5 * UNIT - 1e-12
     assert dia == round(dia, DEC)
-    # the Optimal button puts the diameter in the New Tool entry
-    assert tool.ui.new_tooldia_entry.get_value() == dia
+    # Isolation wires the New Tool entry during construction; NCC wires it on run().
+    if isinstance(tool, ToolIsolation):
+        assert tool.ui.new_tooldia_entry.get_value() == dia
 
 
 def test_gap_rounded_up_gives_a_tool_below_the_gap(tool):
@@ -85,11 +88,21 @@ def test_gap_rounded_up_gives_a_tool_below_the_gap(tool):
     assert any('0.1599' in m for m in messages(tool) if m.startswith('[success]'))
 
 
-@pytest.mark.parametrize('gap', [0.15996, 0.2, 0.123449])
-def test_optimal_tool_passes_the_check_validity(tool, gap):
+@pytest.mark.parametrize('gap, decimals, units', [(0.15996, 4, 'MM'), (0.2, 4, 'MM'), (0.123449, 4, 'MM'),
+                                                (0.2000501, 4, 'MM'), (0.20000501, 5, 'MM'),
+                                                (0.20000051, 6, 'MM'), (0.20000006, 7, 'MM'),
+                                                (0.200000006, 8, 'MM'), (0.00000006, 8, 'MM'),
+                                                (0.0079945, 4, 'IN')])
+def test_optimal_tool_passes_the_check_validity(tool, gap, decimals, units):
+    tool.decimals = decimals
+    tool.app.decimals = decimals
+    tool.app.app_units = units
     dia = find_optimal(tool, gap)
+    assert dia is not None
+    assert 0 < dia < gap
     data = {k: deepcopy(v) for k, v in AppDefaults().defaults.items() if k.startswith('tools_')}
-    tool.iso_tools = {1: {'tooldia': dia, 'data': data, 'solid_geometry': []}}
+    storage = 'iso_tools' if isinstance(tool, ToolIsolation) else 'ncc_tools'
+    setattr(tool, storage, {1: {'tooldia': dia, 'data': data, 'solid_geometry': []}})
     tool.build_ui()
     tool.app.inform.emit.reset_mock()
     tool.validation_status = True
@@ -102,6 +115,53 @@ def test_optimal_tool_passes_the_check_validity(tool, gap):
 
 
 def test_gap_below_the_resolution_gives_no_tool(tool):
+    assert find_optimal(tool, 0.2) is not None
+    tool.app.inform.emit.reset_mock()
     assert find_optimal(tool, 0.00004) is None
     assert tool.safe_tooldia is None
     assert any(m.startswith('[ERROR_NOTCL]') for m in messages(tool))
+
+
+def test_validation_rejects_unrepresentable_gap(tool):
+    msg, _ = tool.find_optim_mp(gerber_tools(0.00004), DEC)
+    assert msg.startswith('[ERROR_NOTCL]')
+
+
+def test_validation_rejects_oversized_tool(tool):
+    dia = find_optimal(tool, 0.15996)
+    assert dia is not None
+    data = {k: deepcopy(v) for k, v in AppDefaults().defaults.items() if k.startswith('tools_')}
+    storage = 'iso_tools' if isinstance(tool, ToolIsolation) else 'ncc_tools'
+    setattr(tool, storage, {1: {'tooldia': dia + UNIT, 'data': data, 'solid_geometry': []}})
+    tool.build_ui()
+    tool.app.inform.emit.reset_mock()
+    tool.find_safe_tooldia_multiprocessing()
+    assert any(m.startswith('[WARNING]') for m in messages(tool))
+    assert 'Tool validation passed.' not in messages(tool)
+
+
+@pytest.mark.parametrize('gap', [0.15996, 0.00004, 0.0001])
+def test_standalone_optimal_reports_only_positive_safe_diameters(qapp, gap):
+    app = make_tool_app()
+    app.abort_flag = False
+    app.dec_format = functools.partial(App.dec_format, app)
+    app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
+    t = ToolOptimal(app)
+    t.ui.precision_spinner.set_value(DEC)
+    app.collection = MagicMock()
+    obj = app.collection.index.return_value.internalPointer.return_value.obj
+    obj.kind = 'gerber'
+    obj.tools = gerber_tools(0.2)
+    t.find_minimum_distance()
+    assert float(t.ui.result_entry.get_value()) > 0
+    app.inform.emit.reset_mock()
+    app.proc_container.new.return_value.done.reset_mock()
+    obj.tools = gerber_tools(gap)
+    t.find_minimum_distance()
+    if gap > UNIT:
+        assert 0 < float(t.ui.result_entry.get_value()) < gap
+    else:
+        assert t.ui.result_entry.get_value() == ''
+        assert any(m.startswith('[ERROR_NOTCL]') for m in messages(t))
+        assert not any(m.startswith('[success]') for m in messages(t))
+    app.proc_container.new.return_value.done.assert_called_once()

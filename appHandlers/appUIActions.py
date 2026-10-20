@@ -296,6 +296,7 @@ class AppUIActions(QtCore.QObject):
                     {'name': "Ali Khalil", 'description': '', 'email': ''},
                     {'name': "Maftei Albert-Alexandru", 'description': '', 'email': ''},
                     {'name': "@gargamel778", 'description': '', 'email': ''},
+                    {'name': "@ErkanGench", 'description': '', 'email': ''},
                 ]
 
                 self.prog_grid_lay = GLay(v_spacing=5, h_spacing=3, c_stretch=[0, 0, 1])
@@ -1007,7 +1008,8 @@ class AppUIActions(QtCore.QObject):
             return
 
         plot_container_3d = QtWidgets.QVBoxLayout()
-        plot_container_3d.setContentsMargins(0, 0, 0, 0)
+        # a gap on the right: without the G-code console the canvas touched the border of the window
+        plot_container_3d.setContentsMargins(0, 0, 6, 0)
         self.app.area_3d_tab.setLayout(plot_container_3d)
 
         try:

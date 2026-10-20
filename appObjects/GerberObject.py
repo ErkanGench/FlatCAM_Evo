@@ -633,13 +633,16 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 use_leftovers = bool(clear_leftovers) and iso_t == 2 and dia > 0
                 leftover_geo = []
                 prev_geom = None
+                iso_offsets = [dia * ((2 * nr + 1) / 2.0) - (nr * overlap * dia) for nr in range(passes)]
+                # the passes are buffered ahead, in parallel threads
+                buffers = self.isolation_buffers(iso_offsets, geometry=work_geo)
                 for nr_pass in range(passes):
-                    iso_offset = dia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * dia)
+                    iso_offset = iso_offsets[nr_pass]
 
                     # if milling type is climb then the move is counter-clockwise around features
                     mill_dir = 1 if milling_type == 'cl' else 0
                     geom = self.generate_envelope(iso_offset, mill_dir, geometry=work_geo, env_iso_type=iso_t,
-                                                  nr_passes=nr_pass)
+                                                  nr_passes=nr_pass, buffers=buffers)
 
                     if geom == 'fail':
                         if plot:
@@ -687,9 +690,12 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
             if self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot) == 'fail':
                 return 'fail'
         else:
+            iso_offsets = [dia * ((2 * nr + 1) / 2.0) - (nr * overlap * dia) for nr in range(passes)]
+            # the passes are buffered ahead, in parallel threads
+            buffers = self.isolation_buffers(iso_offsets, geometry=work_geo)
             for i in range(passes):
 
-                offset = dia * ((2 * i + 1) / 2.0) - (i * overlap * dia)
+                offset = iso_offsets[i]
                 if passes > 1:
                     if outname is None:
                         if self.iso_type == 0:
@@ -719,7 +725,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
 
                     # if milling type is climb then the move is counter-clockwise around features
                     mill_dir = 1 if milling_type == 'cl' else 0
-                    geom = self.generate_envelope(offset, mill_dir, geometry=work_geo, env_iso_type=iso_t, nr_passes=i)
+                    geom = self.generate_envelope(offset, mill_dir, geometry=work_geo, env_iso_type=iso_t, nr_passes=i,
+                                                  buffers=buffers)
 
                     if geom == 'fail':
                         if plot:
@@ -770,7 +777,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 if self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot) == 'fail':
                     return 'fail'
 
-    def generate_envelope(self, offset, invert, geometry=None, env_iso_type=2, nr_passes=0):
+    def generate_envelope(self, offset, invert, geometry=None, env_iso_type=2, nr_passes=0, buffers=None):
         # isolation_geometry produces an envelope that is going on the left of the geometry
         # (the copper features). To leave the least amount of burrs on the features
         # the tool needs to travel on the right side of the features (this is called conventional milling)
@@ -779,7 +786,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         # to cut on the right side of the leftover copper i.e. on the left side of the features.
 
         try:
-            geom = self.isolation_geometry(offset, geometry=geometry, iso_type=env_iso_type, passes=nr_passes)
+            geom = self.isolation_geometry(offset, geometry=geometry, iso_type=env_iso_type, passes=nr_passes,
+                                           buffers=buffers)
         except Exception as e:
             self.app.log.error('GerberObject.isolate().generate_envelope() --> %s' % str(e))
             return 'fail'

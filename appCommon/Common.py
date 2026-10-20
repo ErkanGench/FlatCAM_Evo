@@ -14,8 +14,8 @@ from PyQt6 import QtCore
 
 from shapely import Polygon, Point, LineString
 from shapely.ops import unary_union
-
 from appGUI.VisPyVisuals import ShapeCollection
+
 from appTool import AppTool
 
 from copy import deepcopy
@@ -242,8 +242,7 @@ class ExclusionAreas(QtCore.QObject):
         # Storage for shapes, storage that can be used by FlatCAm tools for utility geometry
         # VisPy visuals
         try:
-            self.exclusion_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1,
-                                                    pool=self.app.pool)
+            self.exclusion_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
         except AttributeError:
             self.exclusion_shapes = None
 

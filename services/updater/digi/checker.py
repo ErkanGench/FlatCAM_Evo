@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 import sys
 import traceback
 from pathlib import Path
 
-from .manifest import (
+from ..manifest import (
     ManifestError,
     compare_versions,
     is_newer,
@@ -15,68 +14,14 @@ from .manifest import (
     parse_version,
     select_channel,
 )
-from .recovery import is_release_blocked, restore_dir_for_install
-
-
-_log = logging.getLogger(__name__)
-
-
-def _app_log(app, level: str, message: str) -> None:
-    logger = getattr(app, "log", None)
-    method = getattr(logger, level, None)
-    if callable(method):
-        try:
-            method(message)
-            return
-        except Exception:
-            pass
-    method = getattr(_log, level, None)
-    if callable(method):
-        method(message)
-
-
-def _inform(app, message: str, level: str = "warning") -> None:
-    _app_log(app, level, message)
-    signal = getattr(app, "inform", None)
-    emit = getattr(signal, "emit", None)
-    if callable(emit):
-        try:
-            emit(f"[{level.upper()}] {message}")
-        except Exception:
-            pass
-
-
-def _emit(app, signal_name: str, payload: dict) -> None:
-    signal = getattr(app, signal_name, None)
-    emit = getattr(signal, "emit", None)
-    if callable(emit):
-        try:
-            emit(payload)
-        except Exception:
-            _app_log(app, "debug", f"UpdateChecker: {signal_name}.emit() failed.")
-
-
-def _local_build(app) -> str:
-    for name in ("build_string", "build", "version_date"):
-        try:
-            value = getattr(app, name, None)
-        except RuntimeError:
-            value = None
-        if value:
-            return str(value)
-    return ""
-
-
-def _install_root(app) -> Path:
-    configured = getattr(app, "install_root", None)
-    if configured:
-        return Path(configured)
-    try:
-        from .launcher import _install_root
-
-        return Path(_install_root())
-    except Exception:
-        return Path(sys.executable).resolve().parent
+from ..recovery import is_release_blocked, restore_dir_for_install
+from ..common import (
+    app_log as _app_log,
+    emit as _emit,
+    inform as _inform,
+    install_root as _install_root,
+    local_build as _local_build,
+)
 
 
 class UpdateChecker:
@@ -126,6 +71,9 @@ class UpdateChecker:
             "current": current,
             "current_version": current["version"],
             "current_build": current["build"],
+            # The offer carries its source so the download uses the same provider and address.
+            "provider": "digi",
+            "provider_url": getattr(self, "_offer_url", None) or self.share_url,
         }
         if error:
             payload["error"] = error
@@ -134,6 +82,7 @@ class UpdateChecker:
     def run_check(self, app=None, *, forced=False, share_url=None):
         """Run one check and return a result safe for a worker task."""
         app = app or self.app
+        self._offer_url = self.share_url if share_url is None else share_url
         try:
             return self._check(app, forced=forced, share_url=share_url)
         except Exception as exc:

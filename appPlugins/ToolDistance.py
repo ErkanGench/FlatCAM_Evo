@@ -84,7 +84,7 @@ class Distance(AppTool):
             app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
 
         # VisPy visuals
-        self.sel_shapes = ShapeCollection(parent=self.app.plotcanvas.view.scene, layers=1, pool=self.app.pool)
+        self.sel_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
         
         # Signals
         self.ui.measure_btn.clicked.connect(self.on_start_measuring)

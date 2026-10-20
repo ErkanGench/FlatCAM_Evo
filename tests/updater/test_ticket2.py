@@ -28,7 +28,7 @@ from services.updater.recovery import (
     load_restore_point,
     restore_dir_for_install,
 )
-from services.updater.release import DEFAULT_EXCLUSION_POLICY
+from services.updater.archive import DEFAULT_EXCLUSION_POLICY
 import services.updater.launcher as launcher_mod
 import updater_app
 

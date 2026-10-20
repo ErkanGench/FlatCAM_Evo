@@ -210,8 +210,9 @@ class TestDoubleInit_0B2:
     def test_camlib_init_runs_once(self, cls, no_shape_collection):
         app = make_app()
         cls('obj', app)
-        # Geometry.__init__ creates 1 temp_shapes collection per run
-        assert _temp_shapes_count(app) == 1
+        # Geometry.__init__ creates 1 temp_shapes collection per run, FlatCAMObj.__init__ 1 mark_shapes collection
+        # (both through plotcanvas.new_shape_collection() since the headless mode)
+        assert _temp_shapes_count(app) == 2
 
     def test_cncjob_object_keeps_constructor_state(self, no_shape_collection):
         app = make_app()

@@ -193,6 +193,17 @@ def _validate_archive_reference(archive_path: Path, manifest: dict) -> None:
         raise ValueError("archive hash does not match manifest")
 
 
+def _copy_job_archive(job_root: Path, archive_path: Path) -> Path:
+    """Copy the verified archive into the job so the caller may delete its staging."""
+    source = Path(archive_path).resolve()
+    destination = (Path(job_root) / "archive" / source.name).resolve()
+    if _path_key(source) == _path_key(destination) or _paths_overlap(source, job_root):
+        return source
+    destination.parent.mkdir(parents=True)
+    shutil.copy2(source, destination)
+    return destination
+
+
 def _default_relaunch_argv() -> list[str]:
     if _is_frozen():
         return [str(sys.executable), *sys.argv[1:]]
@@ -302,6 +313,7 @@ def _prepare_job_paths(app, install_root: Path, prefix: str) -> tuple[Path, Path
 
 def launch_update(app, manifest, archive_path, *, relaunch_argv=None) -> bool:
     """Write and launch a full-archive update job."""
+    job_root = None
     try:
         install_root = _install_root()
         archive_path = Path(archive_path)
@@ -319,6 +331,8 @@ def launch_update(app, manifest, archive_path, *, relaunch_argv=None) -> bool:
         job_root, staging, backup, restore, ack = _prepare_job_paths(
             app, install_root, "flatcam-update-"
         )
+        job_archive = _copy_job_archive(job_root, archive_path)
+        _validate_archive_reference(job_archive, manifest_data)
         mode = "frozen" if _is_frozen() else "source"
         if mode == "frozen":
             cwd, executable, runtime, helper = _runtime(app, install_root)
@@ -334,7 +348,7 @@ def launch_update(app, manifest, archive_path, *, relaunch_argv=None) -> bool:
             "action": "update",
             "mode": mode,
             "install_dir": str(install_root),
-            "archive_path": str(archive_path.resolve()),
+            "archive_path": str(job_archive),
             "staging_dir": str(staging),
             "backup_dir": str(backup),
             "restore_dir": str(restore),
@@ -358,11 +372,14 @@ def launch_update(app, manifest, archive_path, *, relaunch_argv=None) -> bool:
             else [str(executable), str(helper), "--job", str(job_path)]
         )
         if not _launch_process(command, cwd, ack):
+            shutil.rmtree(job_root, ignore_errors=True)
             _app_log(app, "error", "launch_update: updater did not acknowledge startup")
             return False
         _app_log(app, "info", f"launch_update: updater started for {install_root}")
         return True
     except Exception as exc:
+        if job_root is not None:
+            shutil.rmtree(job_root, ignore_errors=True)
         _app_log(app, "error", f"launch_update: {exc}")
         return False
 

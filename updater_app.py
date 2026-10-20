@@ -470,6 +470,9 @@ def _extract_archive(archive_path: Path, staging_dir: Path, manifest: dict) -> N
                 os.fsync(target.fileno())
             if written != entry["size"] or digest.hexdigest() != entry["sha256"]:
                 raise ValueError(f"staged file checksum mismatch: {entry['path']}")
+            permissions = (info.external_attr >> 16) & 0o777
+            if permissions:
+                os.chmod(destination, permissions)
 
 
 def _is_staging_metadata(path: Path) -> bool:
@@ -1013,6 +1016,12 @@ def _apply_job(job: dict, job_path: Path) -> int:
         if job["mode"] == "frozen":
             executable = safe_join(install, job["exe_name"], label="application executable")
             if not wait_for_file_unlock(executable):
+                _cleanup_tree(paths.get("runtime_dir"))
+                return 2
+        if job["mode"] == "source" and manifest["channel"] == "linux":
+            git_marker = install / ".git"
+            if git_marker.exists() or git_marker.is_symlink():
+                _log("error", "Refusing to update a Linux source installation that is a Git worktree: %s", git_marker)
                 _cleanup_tree(paths.get("runtime_dir"))
                 return 2
         _extract_archive(paths["archive_path"], paths["staging_dir"], manifest)

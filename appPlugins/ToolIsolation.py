@@ -20,6 +20,7 @@ import numpy as np
 import sys
 import math
 
+import shapely
 from shapely import LineString, MultiLineString, Polygon, MultiPolygon, Point, LinearRing
 from shapely.ops import unary_union
 
@@ -1207,12 +1208,11 @@ class ToolIsolation(Geometry, AppTool):
         for ap in list(aperture_storage.keys()):
             if 'geometry' in aperture_storage[ap]:
                 for geo_el in aperture_storage[ap]['geometry']:
-                    if 'solid' in geo_el and geo_el['solid'] is not None:
-                        buff_geo = geo_el['solid'].buffer(0.0000001)
-                        if buff_geo.is_valid:
-                            total_geo.append(buff_geo)
+                    if 'solid' in geo_el and geo_el['solid'] is not None and geo_el['solid'].is_valid:
+                        total_geo.append(geo_el['solid'])
 
-        total_geo = unary_union(total_geo)
+        # Measure the same geometry as Optimal; a positive buffer changes the rounded gap.
+        total_geo = MultiPolygon(total_geo).buffer(0)
         total_geo = flatten_shapely_geometry(total_geo)
 
         if len(total_geo) <= 1:
@@ -1221,6 +1221,9 @@ class ToolIsolation(Geometry, AppTool):
 
         min_dist = min(polygon_gap_pairs(total_geo, decimals))
         min_dist -= 10 ** -decimals  # make sure that this works for isolation case
+        min_dist = round(min_dist, decimals)
+        if min_dist <= 0:
+            return '[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."), np.inf
 
         return msg, min_dist
 
@@ -1271,6 +1274,8 @@ class ToolIsolation(Geometry, AppTool):
                 res = p.get()
 
                 if res[0] != 'ok':
+                    self.safe_tooldia = None
+                    self.validation_status = False
                     app_obj.inform.emit(res[0])
                     return 'fail'
 
@@ -1313,6 +1318,7 @@ class ToolIsolation(Geometry, AppTool):
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
     def find_safe_tooldia_worker(self):
+        self.safe_tooldia = None
         self.app.inform.emit(_("Checking tools for validity."))
         self.units = self.app.app_units.upper()
 
@@ -1350,7 +1356,7 @@ class ToolIsolation(Geometry, AppTool):
                     total_geo = flatten_shapely_geometry(total_geo)
 
                     geo_len = len(total_geo)
-                    if geo_len == 1:
+                    if geo_len <= 1:
                         msg = _("The Gerber object has one Polygon as geometry.\n"
                                 "There are no distances between geometry elements to be found.")
                         app_obj.inform.emit('[ERROR_NOTCL] %s' % msg)
@@ -1868,10 +1874,14 @@ class ToolIsolation(Geometry, AppTool):
                 milling_type = tool_data['tools_iso_milling_type']
 
                 tool_dia = tools_storage[tool]['tooldia']
+                iso_offsets = [tool_dia * ((2 * nr + 1) / 2.0000001) - (nr * overlap * tool_dia)
+                               for nr in range(passes)]
+                if negative_dia:
+                    iso_offsets = [-iso_offset for iso_offset in iso_offsets]
+                # the passes are buffered ahead, in parallel threads
+                buffers = isolated_obj.isolation_buffers(iso_offsets, geometry=work_geo)
                 for i in range(passes):
-                    iso_offset = tool_dia * ((2 * i + 1) / 2.0000001) - (i * overlap * tool_dia)
-                    if negative_dia:
-                        iso_offset = -iso_offset
+                    iso_offset = iso_offsets[i]
 
                     outname = "%s_%.*f" % (isolated_obj.obj_options["name"], self.decimals, float(tool_dia))
 
@@ -1892,7 +1902,8 @@ class ToolIsolation(Geometry, AppTool):
                     mill_dir = 0 if milling_type == 'cl' else 1
 
                     iso_geo = self.generate_envelope(isolated_obj, iso_offset, mill_dir, geometry=work_geo,
-                                                     env_iso_type=iso_t, nr_passes=i, prog_plot=prog_plot)
+                                                     env_iso_type=iso_t, nr_passes=i, prog_plot=prog_plot,
+                                                     buffers=buffers)
                     if iso_geo == 'fail':
                         self.app.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                         continue
@@ -2312,16 +2323,19 @@ class ToolIsolation(Geometry, AppTool):
             use_leftovers = clear_leftovers and iso_t == 2 and not negative_dia
             leftover_geo = []
             prev_geo = None
+            iso_offsets = [tool_dia * ((2 * nr + 1) / 2.0000001) - (nr * overlap * tool_dia) for nr in range(passes)]
+            if negative_dia:
+                iso_offsets = [-iso_offset for iso_offset in iso_offsets]
+            # the passes are buffered ahead, in parallel threads
+            buffers = iso_obj.isolation_buffers(iso_offsets, geometry=work_geo)
             for nr_pass in range(passes):
-                iso_offset = tool_dia * ((2 * nr_pass + 1) / 2.0000001) - (nr_pass * overlap * tool_dia)
-                if negative_dia:
-                    iso_offset = -iso_offset
+                iso_offset = iso_offsets[nr_pass]
 
                 # if milling type is climb then the move is counter-clockwise around features
                 mill_dir = 0 if milling_type == 'cl' else 1
 
                 iso_geo = self.generate_envelope(iso_obj, iso_offset, mill_dir, geometry=work_geo, env_iso_type=iso_t,
-                                                 nr_passes=nr_pass, prog_plot=prog_plot)
+                                                 nr_passes=nr_pass, prog_plot=prog_plot, buffers=buffers)
                 if iso_geo == 'fail':
                     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
                     continue
@@ -3082,7 +3096,7 @@ class ToolIsolation(Geometry, AppTool):
         return [interior for interior in poly.interiors]
 
     def generate_envelope(self, iso_obj, offset, invert, geometry=None, env_iso_type=2, nr_passes=0,
-                          prog_plot=False):
+                          prog_plot=False, buffers=None):
         """
         Isolation_geometry produces an envelope that is going on the left of the geometry
         (the copper features). To leave the least amount of burrs on the features
@@ -3104,13 +3118,15 @@ class ToolIsolation(Geometry, AppTool):
         :type nr_passes:        int
         :param prog_plot:       Type of plotting: "normal" or "progressive"
         :type prog_plot:        str
+        :param buffers:         the passes buffered ahead (iso_obj.isolation_buffers()), or None
+        :type buffers:          camlib.PassBuffers
         :return:                The buffered geometry
         :rtype:                 MultiPolygon or Polygon
         """
 
         try:
             geom_shp = iso_obj.isolation_geometry(offset, geometry=geometry, iso_type=env_iso_type,
-                                                  passes=nr_passes, prog_plot=prog_plot)
+                                                  passes=nr_passes, prog_plot=prog_plot, buffers=buffers)
         except Exception as e:
             self.app.log.error('ToolIsolation.generate_envelope() --> %s' % str(e))
             return 'fail'
@@ -3182,64 +3198,111 @@ class ToolIsolation(Geometry, AppTool):
         work_geo = []
 
         geo_len = len(geometry)
+        geo_array = np.empty(geo_len, dtype=object)
+        geo_array[:] = list(geometry)
+        # Sparse passes use bulk queries; dense passes stop at the first collision instead of collecting every pair.
+        geo_indexes = np.arange(geo_len)
+        geo_tree = None
+        pass_offsets = []
+        pass_intersects = []
+        first_pass_iso = [None] * geo_len
+        abandoned = np.zeros(geo_len, dtype=bool)
+        for nr_pass in range(passes):
+            iso_offset = tooldia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * tooldia)
+            if negative_dia:
+                iso_offset = -iso_offset
+
+            buf_chek = iso_offset * 1.99999
+            # (quad_segs=16: as geo.buffer())
+            check_geo = shapely.buffer(geo_array[geo_indexes], buf_chek, quad_segs=16)
+            check_tree = shapely.STRtree(check_geo)
+            intersect_flags = np.zeros(geo_len, dtype=bool)
+            # ponytail: cap each bulk query at 65536 possible pairs (or one query polygon for a larger index).
+            # A missed dense cluster can cost extra queries, but cannot create a quadratic temporary array.
+            batch_size = max(1, 65536 // max(1, len(check_geo)))
+            sample_indexes = np.linspace(0, geo_len, min(16, batch_size, geo_len), endpoint=False, dtype=int)
+            other_idx, check_idx = check_tree.query(geo_array[sample_indexes], predicate='intersects')
+            check_idx = geo_indexes[check_idx]
+            intersect_flags[check_idx[check_idx != sample_indexes[other_idx]]] = True
+
+            if len(check_idx) > 8 * len(sample_indexes):
+                if geo_tree is None:
+                    geo_tree = shapely.STRtree(geo_array)
+                # Keep collisions already found by the sample; only unresolved check buffers need a search.
+                for check_pos in np.flatnonzero(~intersect_flags[geo_indexes]):
+                    idx = geo_indexes[check_pos]
+                    check = check_geo[check_pos]
+                    for other_idx in geo_tree.query(check):
+                        if other_idx != idx and check.intersects(geo_array[other_idx]):
+                            intersect_flags[idx] = True
+                            break
+            else:
+                query_mask = np.ones(geo_len, dtype=bool)
+                query_mask[sample_indexes] = False
+                query_indexes = np.flatnonzero(query_mask)
+                # The index holds check buffers and the original polygons are the prepared queries, so a large
+                # ground pour is prepared once per query rather than walked for every nearby check buffer.
+                for start in range(0, len(query_indexes), batch_size):
+                    batch = query_indexes[start:start + batch_size]
+                    other_idx, check_idx = check_tree.query(geo_array[batch], predicate='intersects')
+                    check_idx = geo_indexes[check_idx]
+                    intersect_flags[check_idx[check_idx != batch[other_idx]]] = True
+            pass_offsets.append(iso_offset)
+            pass_intersects.append(intersect_flags)
+
+            if nr_pass != 0:
+                continue
+
+            for idx, geo in enumerate(geometry):
+                # if we had an intersection do nothing, else the geo is isolated in the first pass
+                if intersect_flags[idx]:
+                    continue
+
+                temp_geo = geo.buffer(iso_offset)
+                first_pass_iso[idx] = temp_geo
+                # this test is done only for the first pass because this is where is relevant
+                # test if in the first pass, the geo that is isolated has interiors and if it has then test if the
+                # resulting isolated geometry (buffered) number of subgeo is the same as the exterior + interiors
+                # if not it means that the geo interiors most likely could not be isolated with this tool so we
+                # abandon the whole isolation for this geo and add this geo to the not_isolated_geo
+                if forced_rest is False:
+                    if geo.interiors:
+                        len_interiors = len(geo.interiors)
+                        if len_interiors > 1:
+                            total_poly_len = 1 + len_interiors  # one exterior + len_interiors of interiors
+
+                            if isinstance(temp_geo, Polygon):
+                                # calculate the number of subgeos in the buffered geo
+                                temp_geo_len = len([1] + list(temp_geo.interiors))  # one exterior + interiors
+                                if total_poly_len != temp_geo_len:
+                                    # some interiors could not be isolated
+                                    abandoned[idx] = True
+                            else:
+                                try:
+                                    temp_geo_len = len(temp_geo)
+                                    if total_poly_len != temp_geo_len:
+                                        # some interiors could not be isolated
+                                        abandoned[idx] = True
+                                except TypeError:
+                                    # this means that the buffered geo (temp_geo) is not iterable
+                                    # (one geo element only) therefore failure:
+                                    # we have more interiors but the resulting geo is only one
+                                    abandoned[idx] = True
+
+            # the next passes are tested only for the geos that are not abandoned
+            geo_indexes = np.flatnonzero(~abandoned)
+
         for idx, geo in enumerate(geometry):
             good_pass_iso = []
 
-            geo_idx_list = list(range(geo_len))
-            # we don't want to test intersection with itself
-            del geo_idx_list[idx]
-
-            for nr_pass in range(passes):
-
-                iso_offset = tooldia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * tooldia)
-                if negative_dia:
-                    iso_offset = -iso_offset
-
-                buf_chek = iso_offset * 1.99999
-                check_geo = geo.buffer(buf_chek)
-
-                intersect_flag = False
-                # find if current pass for current geo is valid (no intersection with other geos)
-                for geo_search_idx in geo_idx_list:
-                    if check_geo.intersects(geometry[geo_search_idx]):
-                        intersect_flag = True
-                        break
-
-                # if we had an intersection do nothing, else add the geo to the good pass isolation's
-                if intersect_flag is False:
-                    temp_geo = geo.buffer(iso_offset)
-                    # this test is done only for the first pass because this is where is relevant
-                    # test if in the first pass, the geo that is isolated has interiors and if it has then test if the
-                    # resulting isolated geometry (buffered) number of subgeo is the same as the exterior + interiors
-                    # if not it means that the geo interiors most likely could not be isolated with this tool so we
-                    # abandon the whole isolation for this geo and add this geo to the not_isolated_geo
-                    if nr_pass == 0 and forced_rest is False:
-                        if geo.interiors:
-                            len_interiors = len(geo.interiors)
-                            if len_interiors > 1:
-                                total_poly_len = 1 + len_interiors  # one exterior + len_interiors of interiors
-
-                                if isinstance(temp_geo, Polygon):
-                                    # calculate the number of subgeos in the buffered geo
-                                    temp_geo_len = len([1] + list(temp_geo.interiors))  # one exterior + interiors
-                                    if total_poly_len != temp_geo_len:
-                                        # some interiors could not be isolated
-                                        break
-                                else:
-                                    try:
-                                        temp_geo_len = len(temp_geo)
-                                        if total_poly_len != temp_geo_len:
-                                            # some interiors could not be isolated
-                                            break
-                                    except TypeError:
-                                        # this means that the buffered geo (temp_geo) is not iterable
-                                        # (one geo element only) therefore failure:
-                                        # we have more interiors but the resulting geo is only one
-                                        break
-
-                    good_pass_iso.append(temp_geo)
-                    if plot and prog_plot == 'progressive':
-                        prog_plot_handler(temp_geo)
+            if not abandoned[idx]:
+                for nr_pass in range(passes):
+                    # if we had an intersection do nothing, else add the geo to the good pass isolation's
+                    if not pass_intersects[nr_pass][idx]:
+                        temp_geo = first_pass_iso[idx] if nr_pass == 0 else geo.buffer(pass_offsets[nr_pass])
+                        good_pass_iso.append(temp_geo)
+                        if plot and prog_plot == 'progressive':
+                            prog_plot_handler(temp_geo)
 
             if good_pass_iso:
                 work_geo += good_pass_iso
@@ -3661,7 +3724,7 @@ class IsoUI:
               "number (integer) of tool widths.")
         )
         self.passes_entry = FCSpinner(callback=self.confirmation_message_int)
-        self.passes_entry.set_range(1, 999)
+        self.passes_entry.set_range(1, 9999)
         self.passes_entry.setObjectName("i_passes")
 
         tool_param_grid.addWidget(passlabel, 6, 0)

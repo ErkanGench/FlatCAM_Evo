@@ -83,10 +83,14 @@ def _open_zstd_writer(target, level):
             yield stream
 
 
-def _dump_json(stream, data, default, allow_nan):
+def _dump_json(stream, data, default, allow_nan, compact=False):
     text = io.TextIOWrapper(stream, encoding='utf-8', newline='\n')
     try:
-        json.dump(data, text, default=default, indent=2, sort_keys=True, allow_nan=allow_nan)
+        if compact:
+            # no indentation and no sorted keys: less text to make and to compress
+            json.dump(data, text, default=default, separators=(',', ':'), allow_nan=allow_nan)
+        else:
+            json.dump(data, text, default=default, indent=2, sort_keys=True, allow_nan=allow_nan)
     finally:
         # detach() flushes the text and leaves the binary stream open for its owner to close
         text.detach()
@@ -97,8 +101,9 @@ def _write_json(filename, data, default, compression_level, allow_nan):
         if compression_level is None:
             _dump_json(target, data, default, allow_nan)
         else:
+            # a compressed file is not read as text, so its JSON is compact
             with _open_zstd_writer(target, compression_level) as stream:
-                _dump_json(stream, data, default, allow_nan)
+                _dump_json(stream, data, default, allow_nan, compact=True)
 
 
 def _clean_floats(obj):

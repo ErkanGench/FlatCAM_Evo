@@ -10,7 +10,7 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -59,6 +59,8 @@ class SenderView3dTest(unittest.TestCase):
         self.assertEqual(view.path.pos.dtype, np.float32)
         self.assertEqual(view.path.pos.shape, (0, 3))
         self.assertEqual(view.accepted.pos.shape, (0, 3))
+        # VisPy reduces the color array at draw time: an empty (0, 4) array raises ValueError
+        view.path._interpret_color()
 
     def test_chord_lines_are_grey(self):
         view = SenderView3d(fake_canvas())
@@ -424,9 +426,10 @@ class ShowIn3dTest(unittest.TestCase):
         for _load in range(2):
             tool.on_show_3d()
         tool.app.plotcanvas3d.fit_view.assert_not_called()
-        tool.app.plotcanvas3d.view.camera.set_view.assert_not_called()
-        tool.on_fit_view()
+        # the sender view starts in the isometric view 1 time; a reload does not change the camera
         tool.app.plotcanvas3d.view.camera.set_view.assert_called_once_with('iso')
+        tool.on_fit_view()
+        self.assertEqual(tool.app.plotcanvas3d.view.camera.set_view.call_count, 2)
         args = tool.app.plotcanvas3d.fit_view.call_args.kwargs
         np.testing.assert_equal(args['points'], tool.view3d.path.pos)
         self.assertEqual(args['margin'], 0.1)
@@ -521,10 +524,8 @@ class ShowIn3dTest(unittest.TestCase):
                 tool = show_tool(lines, 'send')
                 tool.on_show_3d()
                 camera = tool.app.plotcanvas3d.view.camera
-                if lines == SPLIT_ARC_JOB:
-                    camera.set_view.assert_called_once_with('iso')
-                else:
-                    camera.set_view.assert_not_called()
+                # the start sets the isometric view; the fit to the toolpath sets it again only with moves
+                self.assertEqual(camera.set_view.call_args_list, [call('iso')] * (2 if lines == SPLIT_ARC_JOB else 1))
 
     def test_failed_build_clears_the_toolpath(self):
         tool = show_tool(SPLIT_ARC_JOB, 'send')

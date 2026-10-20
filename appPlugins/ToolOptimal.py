@@ -215,6 +215,16 @@ class ToolOptimal(AppTool):
     def find_minimum_distance(self):
         self.units = self.app.app_units.upper()
         self.decimals = int(self.ui.precision_spinner.get_value())
+        self.ui.result_entry.set_value('')
+        self.ui.freq_entry.set_value(0)
+        for text_box in (self.ui.locations_textb, self.ui.distances_textb, self.ui.locations_sec_textb):
+            with QtCore.QSignalBlocker(text_box):
+                text_box.clear()
+        self.selected_text = ''
+        self.selected_locations_text = ''
+        self.ui.locate_button.setDisabled(True)
+        self.ui.locate_sec_button.setDisabled(True)
+        self.min_dict = {}
 
         selection_index = self.ui.gerber_object_combo.currentIndex()
 
@@ -258,7 +268,7 @@ class ToolOptimal(AppTool):
                 total_geo = flatten_shapely_geometry(total_geo)
 
                 geo_len = len(total_geo)
-                if geo_len == 1:
+                if geo_len <= 1:
                     app_obj.inform.emit('[ERROR_NOTCL] %s' %
                                         _("The Gerber object has one Polygon as geometry.\n"
                                           "There are no distances between geometry elements to be found."))
@@ -274,7 +284,11 @@ class ToolOptimal(AppTool):
                 min_list = list(plugin_instance.min_dict.keys())
                 min_dist = min(min_list)
                 rep_min_dist = min_dist - 10**-self.decimals  # make sure that this will work for isolation case
-                min_dist_string = str(app_obj.dec_format(rep_min_dist, self.decimals))
+                safe_dia = app_obj.dec_format(rep_min_dist, self.decimals)
+                if safe_dia <= 0:
+                    app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."))
+                    return 'fail'
+                min_dist_string = str(safe_dia)
                 plugin_instance.ui.result_entry.set_value(min_dist_string)
 
                 freq = len(plugin_instance.min_dict[min_dist])
@@ -288,10 +302,10 @@ class ToolOptimal(AppTool):
 
                 app_obj.inform.emit('[success] %s' % _("Optimal Tool. Finished successfully."))
             except Exception as ee:
-                proc.done()
                 app_obj.log.error(str(ee))
                 return
-            proc.done()
+            finally:
+                proc.done()
 
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app, self]})
 

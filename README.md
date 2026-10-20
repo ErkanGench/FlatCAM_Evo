@@ -627,6 +627,7 @@ Use `help <command>` in the shell for the exact option names and their defaults.
 
 ```bash
 python flatcam.py [files...] [--shellfile=<script>] [--shellvar=<value1,value2,...>]
+                    [--command=<cmd1; cmd2>] [--headless]
 ```
 
 | Option | Meaning |
@@ -634,10 +635,34 @@ python flatcam.py [files...] [--shellfile=<script>] [--shellvar=<value1,value2,.
 | `files` | Opens each file by its extension: `.FlatPrj` (project), `.FlatScript` / `.tcl` (runs the script), `.FlatConfig`, and the Gerber, Excellon and G-code extensions of the file associations (Preferences > Utilities). Put a path with spaces between quotes. |
 | `--shellfile=<path>` | Runs the Tcl script file after the program starts. |
 | `--shellvar=<a,b,c>` | Defines the Tcl variables `shellvar_0`, `shellvar_1`, ... with these values, for use in the script. |
+| `--command=<cmds>` | Runs the Tcl commands (separated by `;`) after the `--shellfile`. |
+| `--headless` | Runs with no window and no OpenGL. See [Headless mode](#headless-mode). |
 
 On Windows, a second start of the program sends its file arguments to the program that already runs.
 
 End a script with `quit_app` to close the program when the script is done.
+
+### Headless mode
+
+`--headless` runs FlatCAM with no window and no OpenGL, for example on a build server or in a container with no display.
+
+```bash
+python flatcam.py --headless --shellfile=job.FlatScript --shellvar=board.gbr,out.nc
+python flatcam.py --headless --command="open_gerber board.gbr -outname b; isolate b -dia 0.2 -outname iso"
+python flatcam.py --headless            # a Tcl prompt; or pipe the commands: ... --headless < job.tcl
+```
+
+- The order is: `--shellvar` (sets `shellvar_0`, `shellvar_1` ...), `--shellfile`, `--command`. Without `--shellfile` and `--command`, the commands are read from stdin.
+- Relative file names are relative to the folder where FlatCAM was started.
+- The output of the commands goes to stdout, errors go to stderr.
+- `quit_app` or `exit N` ends the run. The preferences of the user are read but not changed.
+- Exit codes: `0` done, `1` a Tcl command failed, `2` bad command line or unreadable `--shellfile`, `N` for `exit N`.
+- Windows frozen build: use `FlatCAM-cli.exe` (it has a console). `FlatCAM.exe` has no console output.
+- Linux: Qt needs these libraries even with no display: `libgl1 libegl1 libglu1-mesa libxkbcommon0 libfontconfig1 libdbus-1-3`. Example for Debian and Ubuntu:
+
+```bash
+apt-get install -y libgl1 libegl1 libglu1-mesa libxkbcommon0 libfontconfig1 libdbus-1-3
+```
 
 ### Tcl command reference
 

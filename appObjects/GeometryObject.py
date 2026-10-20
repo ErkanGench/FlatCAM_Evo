@@ -1572,7 +1572,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         :param geo_list:    List of GerberObject Objects to join.
         :param geo_final:   Destination GerberObject object.
         :param multi_geo:   if the merged geometry objects are of type MultiGeo
-        :param fuse_tools:  If True will try to fuse tools of the same type for the Geometry objects
+        :param fuse_tools:  If True will try to fuse tools of the same type and with equal tool parameters
         :param log:         A logging object
         :return: None
         """
@@ -1604,12 +1604,9 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 else:
                     geo_final.multigeo = True
 
-                try:
-                    new_solid_geometry += deepcopy(geo_obj.solid_geometry.geoms)
-                except Exception as e:
-                    new_solid_geometry.append(geo_obj.solid_geometry)
-                    if log:
-                        log.error("GeometryObject.merge() --> %s" % str(e))
+                # the solid geometry can be a list (e.g. the isolation geometry), a multi-geometry or a single geometry
+                if geo_obj.solid_geometry is not None:
+                    new_solid_geometry += deepcopy(flatten_shapely_geometry(geo_obj.solid_geometry))
 
                 # find the tool_uid maximum value in the geo_final
                 try:
@@ -1629,7 +1626,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
 
         if new_tools and fuse_tools is True:
             # merge the geometries of the tools that share the same tool diameter and the same tool_type
-            # and the same type
+            # and the same type, but keep different machining parameters separate
             final_tools = {}
             same_dia = defaultdict(list)
             same_type = defaultdict(list)
@@ -1655,17 +1652,35 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                         intersection = reduce(np.intersect1d, (dia_list, type_list, tool_type_list)).tolist()
                         # intersection = list(set(dia_list) & set(type_list) & set(tool_type_list))
                         if intersection:
-                            intersect_list.append(intersection)
+                            parameter_groups = []
+                            for tool_uid in intersection:
+                                parameters = {
+                                    k: v for k, v in new_tools[tool_uid]['data'].items()
+                                    if str(k).startswith('tools_')
+                                }
+                                for group_parameters, tool_group in parameter_groups:
+                                    try:
+                                        equal = bool(parameters == group_parameters)
+                                    except Exception:
+                                        equal = False
+                                    if equal:
+                                        tool_group.append(tool_uid)
+                                        break
+                                else:
+                                    parameter_groups.append((parameters, [tool_uid]))
+                            intersect_list.extend(group for _, group in parameter_groups)
 
             new_tool_nr = 1
             for i_lst in intersect_list:
                 new_solid_geo = []
                 last_tool = None
                 for old_tool in i_lst:
-                    new_solid_geo += new_tools[old_tool]['solid_geometry']
+                    # the tool geometry can be a list, a multi-geometry (e.g. the cutout) or a single geometry
+                    new_solid_geo += flatten_shapely_geometry(new_tools[old_tool]['solid_geometry'])
                     last_tool = old_tool
 
-                if new_solid_geo and last_tool:
+                # SingleGeo tools use the object's geometry, so their own geometry can be empty.
+                if last_tool is not None and (new_solid_geo or not geo_final.multigeo):
                     final_tools[new_tool_nr] = \
                         {
                             k: deepcopy(new_tools[last_tool][k]) for k in new_tools[last_tool] if k != 'solid_geometry'

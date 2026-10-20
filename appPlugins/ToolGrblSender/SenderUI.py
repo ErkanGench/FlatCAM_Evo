@@ -320,6 +320,17 @@ class GrblSenderUI:
         grbl_ctrl2_grid.addWidget(self.jog_fr_label, 1, 0)
         grbl_ctrl2_grid.addWidget(self.jog_fr_entry, 1, 1)
 
+        self.continuous_jog_cb = FCCheckBox(_("Continuous"))
+        self.continuous_jog_cb.setToolTip(_("Hold a jog arrow to move. Release it to brake to a stop."))
+        self.continuous_jog_cb.setChecked(False)
+        self.continuous_jog_cb.hide()
+        grbl_ctrl2_grid.addWidget(self.continuous_jog_cb, 2, 0, 1, 2)
+
+        self.ecut_motion_button = FCButton(_("E-Cut settings"))
+        self.ecut_motion_button.setToolTip(_("Motion, motor calibration, spindle and input/output settings."))
+        self.ecut_motion_button.hide()
+        grbl_ctrl2_grid.addWidget(self.ecut_motion_button, 3, 0, 1, 2)
+
         # #############################################################################################################
         # GRBL SENDER
         # #############################################################################################################
@@ -431,23 +442,42 @@ class GrblSenderUI:
         run_grid.addWidget(self.sim_button, 1, 1)
         run_grid.addWidget(self.check_mode_cb, 1, 2, 1, 2)
 
+        # the button shows the spindle state: it also changes when a command or a job starts or stops the spindle
+        self.spindle_button = FCButton(_("Spindle"))
+        self.spindle_button.setCheckable(True)
+        self.spindle_button.setToolTip(_("Start the spindle clockwise (M3) with the RPM value, or stop it (M5).\n"
+                                         "The button is ON while the spindle runs."))
+        self.spindle_button.setStyleSheet("QPushButton:checked {background-color: green; color: white;}")
+        self.spindle_rpm_entry = FCSpinner()
+        self.spindle_rpm_entry.set_range(0, 100000)
+        self.spindle_rpm_entry.set_step(1000)
+        self.spindle_rpm_entry.set_value(10000)
+        # no suffix: FCSpinner reads only the number from the text, so a ' RPM' suffix gives 0
+        self.spindle_rpm_entry.setToolTip(_("The spindle speed for the Spindle button."))
+        run_grid.addWidget(self.spindle_button, 2, 0, 1, 2)
+        # the RPM field and its label share 2 columns: in 1 column the field was too narrow for its digits
+        rpm_lay = QtWidgets.QHBoxLayout()
+        rpm_lay.addWidget(self.spindle_rpm_entry, stretch=1)
+        rpm_lay.addWidget(FCLabel(_("RPM")))
+        run_grid.addLayout(rpm_lay, 2, 2, 1, 2)
+
         self.progress_bar = QtWidgets.QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        run_grid.addWidget(self.progress_bar, 2, 0, 1, 4)
+        run_grid.addWidget(self.progress_bar, 3, 0, 1, 4)
         self.status_label = FCLabel(_("Idle"))
-        run_grid.addWidget(self.status_label, 3, 0, 1, 4)
+        run_grid.addWidget(self.status_label, 4, 0, 1, 4)
 
         # overrides: name, real-time byte
         self.ov_label = FCLabel('%s' % _("Overrides"), bold=True)
-        run_grid.addWidget(self.ov_label, 4, 0, 1, 4)
+        run_grid.addWidget(self.ov_label, 5, 0, 1, 4)
         self.ov_buttons = {}
         ov_rows = [
             (_("Feed"), [('-10', b'\x92'), ('-1', b'\x94'), ('100%', b'\x90'), ('+1', b'\x93'), ('+10', b'\x91')]),
             (_("Rapid"), [('25%', b'\x97'), ('50%', b'\x96'), ('100%', b'\x95')]),
             (_("Spindle"), [('-10', b'\x9b'), ('-1', b'\x9d'), ('100%', b'\x99'), ('+1', b'\x9c'), ('+10', b'\x9a')]),
         ]
-        for row_idx, (name, items) in enumerate(ov_rows, start=5):
+        for row_idx, (name, items) in enumerate(ov_rows, start=6):
             run_grid.addWidget(FCLabel('%s:' % name), row_idx, 0)
             h_lay = QtWidgets.QHBoxLayout()
             for text, byte in items:
@@ -457,16 +487,16 @@ class GrblSenderUI:
                 self.ov_buttons[(name, text)] = (btn, byte)
             run_grid.addLayout(h_lay, row_idx, 1, 1, 3)
         self.ov_values_label = FCLabel('F: 100%  R: 100%  S: 100%')
-        run_grid.addWidget(self.ov_values_label, 8, 0, 1, 4)
+        run_grid.addWidget(self.ov_values_label, 9, 0, 1, 4)
 
         self.save_levelled_button = FCButton(_("Save levelled G-code"))
         self.save_levelled_button.setIcon(QtGui.QIcon(self.app.resource_location + '/save_as.png'))
         self.save_levelled_button.setToolTip(_("Save the G-code that the sender streams, after the levelling."))
-        run_grid.addWidget(self.save_levelled_button, 9, 0, 1, 4)
+        run_grid.addWidget(self.save_levelled_button, 10, 0, 1, 4)
 
         self.view3d_button = FCButton(_("Show in Plot 3D"))
         self.view3d_button.setToolTip(_("Show the toolpath, the tool and the height map in the Plot 3D tab."))
-        run_grid.addWidget(self.view3d_button, 10, 0, 1, 4)
+        run_grid.addWidget(self.view3d_button, 11, 0, 1, 4)
 
         self.al_group_label = FCLabel('%s' % _("Autolevelling"), color='blue', bold=True)
         self.tools_box.addWidget(self.al_group_label)

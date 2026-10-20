@@ -13,9 +13,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6 import QtWidgets
 
-from services.updater import release as release_module
+from services.updater.digi import release as release_module
 from services.updater.manifest import ManifestError, parse_manifest
-from services.updater.release import prepare_releases
+from services.updater.digi.release import prepare_releases
 
 
 class Signal:
@@ -136,7 +136,8 @@ def test_general_preferences_expose_non_persisted_prepare_control(qapp):
     finally:
         OptionsGroupUI.app = previous_app
 
-    assert group.prepare_update_files_btn.text() == "Prepare Update Files"
+    assert group.prepare_update_files_btn.text() == "Prepare Update Files (Digi Legacy)"
+    assert "Digi legacy" in group.prepare_update_files_btn.toolTip()
     assert "does not upload" in group.prepare_update_files_btn.toolTip()
 
 

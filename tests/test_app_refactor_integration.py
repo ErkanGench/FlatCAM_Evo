@@ -620,6 +620,8 @@ class TestControlledAppStartup(unittest.TestCase):
         app.ui.menuobjects_unselall.trigger()
         self.assertEqual(app.collection.selections, [True, False])
         self.assertEqual(app.trayIcon.show_count, 1)
+        # Startup may queue an automatic update check; keep this routing assertion focused.
+        app.workers.tasks.clear()
         app.worker_task.emit({'fcn': ARG, 'params': []})
         self.assertEqual(app.workers.tasks, [{'fcn': ARG, 'params': []}])
 

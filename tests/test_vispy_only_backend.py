@@ -15,7 +15,7 @@ def canvas_app(engine='2D', pan='2', cursor='small', snap=True):
     return SimpleNamespace(
         options={'global_graphic_engine': engine, 'global_pan_button': pan,
                  'global_cursor_type': cursor},
-        defaults={}, log=Mock(), inform=Mock(),
+        defaults={}, log=Mock(), inform=Mock(), headless=False,
         ui=SimpleNamespace(keyPressEvent=Mock(), grid_snap_btn=Mock(isChecked=Mock(return_value=snap))),
         on_mouse_move_over_plot=Mock(), on_mouse_click_over_plot=Mock(),
         on_mouse_click_release_over_plot=Mock(), on_mouse_double_click_over_plot=Mock()
@@ -90,7 +90,7 @@ def test_setup_gui_collections_and_failure_cleanup(monkeypatch, failed):
     values = {'global_serial': 'existing-serial-number', 'global_graphic_engine': '2D'}
     options.get.side_effect = values.get
     app = Mock(options=options, resource_location='assets', version='test', date='test',
-               data_path='.', _current_theme='default', _show_splash=True)
+               data_path='.', _current_theme='default', _show_splash=True, headless=False)
     canvas = Mock()
     app.on_plotcanvas_setup.return_value = 'fail' if failed else canvas
     settings = Mock()
@@ -108,8 +108,9 @@ def test_setup_gui_collections_and_failure_cleanup(monkeypatch, failed):
     for name in ('MainGUI', 'FCShell', 'RegisterFK', 'PreferencesUIManager', 'ObjectCollection',
                  'AppObject', 'FCVisibleProcessContainer', 'ProjectManager', 'ProjectSelector'):
         monkeypatch.setattr(appMain, name, Mock())
-    shapes = Mock(side_effect=[Mock(), Mock(), Mock()])
-    monkeypatch.setattr(appMain, 'ShapeCollection', shapes)
+    # the shape collections are made by the canvas (plotcanvas.new_shape_collection)
+    canvas.new_shape_collection.side_effect = [Mock(), Mock(), Mock()]
+    shapes = canvas.new_shape_collection
     pool_constructor = Mock(side_effect=AssertionError('Replacement pool created during GUI setup'))
     monkeypatch.setattr(appMain, 'Pool', pool_constructor)
 
@@ -128,7 +129,7 @@ def test_setup_gui_collections_and_failure_cleanup(monkeypatch, failed):
         appMain.App._setup_gui(app)
         assert app.plotcanvas is canvas
         app.on_plotcanvas_add.assert_called_once_with(canvas, app.ui.right_layout)
-        assert shapes.call_args_list == [call(parent=canvas.view.scene, layers=1, pool=app.pool)] * 3
+        assert shapes.call_args_list == [call(layers=1)] * 3
         assert len({id(app.tool_shapes), id(app.hover_shapes), id(app.sel_shapes)}) == 3
         app.clear_pool.assert_not_called()
 

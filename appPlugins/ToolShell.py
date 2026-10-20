@@ -12,6 +12,7 @@ from PyQt6.QtGui import QTextCursor, QPixmap
 from PyQt6.QtWidgets import QVBoxLayout, QWidget, QHBoxLayout
 
 from appGUI.GUIElements import _BrowserTextEdit, _ExpandableTextEdit, FCLabel
+from appCommon.Headless import console_write
 from defaults import AppDefaults
 
 import html
@@ -125,6 +126,11 @@ class TermWidget(QWidget):
         """
         Convert text to HTML for inserting it to browser
         """
+        if getattr(self.app, 'headless_console', False):
+            # headless mode: the widget is never shown, the console is the output
+            console_write(style, text)
+            return
+
         assert style in ('in', 'out', 'err', 'warning', 'success', 'selected', 'raw')
 
         if style != 'raw':

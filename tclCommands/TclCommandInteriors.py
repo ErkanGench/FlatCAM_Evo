@@ -67,5 +67,5 @@ class TclCommandInteriors(TclCommandSignaled):
             geo_obj.solid_geometry = obj_interiors
 
         obj_interiors = obj.get_interiors()
-        result = self.app.app_obj.new_object('geometry', outname, geo_init)
+        result = self.app.app_obj.new_object('geometry', outname, geo_init, plot=False)
         return 'fail' if result == 'fail' or result is False else None

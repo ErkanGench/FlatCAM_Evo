@@ -30,13 +30,15 @@ def _is_inside(path, folder):
         return False
 
 
-def compute_start_dir(cwd, app_dir, frozen, home, system_root=None):
+def compute_start_dir(cwd, app_dir, frozen, home, system_root=None, exe_dir=None):
     """
     :param cwd: the working directory at the start of the application, None if it could not be read
     :param app_dir: the application folder
     :param frozen: True for a packaged application (PyInstaller, cx_freeze ...)
     :param home: the home folder of the user
     :param system_root: the Windows folder (%SystemRoot%), None elsewhere
+    :param exe_dir: for a packaged application, the folder of the executable (the install folder, a Start Menu
+    shortcut starts there) or the .app bundle on macOS. With cx_freeze app_dir is its lib/ subfolder.
     :return: the folder that relative file names are resolved against.
     The home folder replaces a working directory that is no place for the user's files: none, the root of the file
     system (a packaged application started from the Finder / Dock, an AppImage or a launcher on Linux, ``C:\\`` or
@@ -51,7 +53,7 @@ def compute_start_dir(cwd, app_dir, frozen, home, system_root=None):
         return home
     if system_root and _is_inside(cwd, system_root):
         return home
-    if frozen and _is_inside(cwd, app_dir):
+    if frozen and any(_is_inside(cwd, folder) for folder in (app_dir, exe_dir) if folder):
         return home
     return cwd
 
@@ -73,6 +75,15 @@ def _application_dir():
     return folder
 
 
+def _executable_dir():
+    folder = os.path.dirname(os.path.realpath(sys.executable))
+    # macOS: <name>.app/Contents/MacOS/<exe>; the whole bundle is the application
+    parts = folder.replace('\\', '/').split('/')
+    if len(parts) >= 3 and parts[-1] == 'MacOS' and parts[-2] == 'Contents' and parts[-3].endswith('.app'):
+        folder = os.path.dirname(os.path.dirname(folder))
+    return folder
+
+
 APP_DIR = _application_dir()
 
 START_DIR = compute_start_dir(
@@ -81,6 +92,7 @@ START_DIR = compute_start_dir(
     frozen=getattr(sys, 'frozen', False),
     home=os.path.expanduser('~'),
     system_root=os.environ.get('SystemRoot'),
+    exe_dir=_executable_dir() if getattr(sys, 'frozen', False) else None,
 )
 
 

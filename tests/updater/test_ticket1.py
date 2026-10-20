@@ -18,11 +18,9 @@ from services.updater.manifest import (
     select_channel,
     validate_relative_path,
 )
-from services.updater.release import (
-    DEFAULT_EXCLUSION_POLICY,
-    prepare_releases,
-)
-from services.updater.transport import (
+from services.updater.archive import DEFAULT_EXCLUSION_POLICY
+from services.updater.digi.release import prepare_releases
+from services.updater.digi.transport import (
     DigiPublicShareTransport,
     DownloadCancelled,
     TransportError,

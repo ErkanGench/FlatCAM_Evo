@@ -66,6 +66,9 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
     tool.apply_autolevel_sig = MagicMock()
     tool.show_probing_geo_sig = MagicMock()
     tool.grbl_port_closed_sig = MagicMock()
+    tool.ecut_tool_change_sig = MagicMock()
+    tool.ecut_motion_result_sig = MagicMock()
+    tool.ecut_connect_result_sig = MagicMock()
     # publish results at once (in tests the worker runs inline, in the main thread)
     tool.al_result_ready_sig = MagicMock()
     tool.al_result_ready_sig.emit.side_effect = lambda result: tool._on_al_result_ready(result)
@@ -99,6 +102,7 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
         tool.probe_finished_sig.emit.side_effect = tool._on_probe_finished
     tool.stream_progress_sig = MagicMock()
     tool.status_report_sig = MagicMock()
+    tool.spindle_state_sig = MagicMock()
     tool.stream_ended_sig = MagicMock()
     tool.frame_ready_sig = MagicMock()
     return tool
@@ -1070,6 +1074,9 @@ class TestGrblHoming(unittest.TestCase):
         tool.on_grbl_reset()
         self.assertEqual(tool._grbl_recovery, 'needs_reset')
         self.assertTrue(tool._grbl_reset_pending)
+        run_worker(tool)  # the reset worker reads the banner: the stop needs Home
+        self.assertEqual(tool._grbl_recovery, 'needs_home')
+        self.assertFalse(tool._grbl_reset_pending)
         tool.on_grbl_homing()
         run_worker(tool)
         self.assertIn('$H', fake.commands())
@@ -1470,12 +1477,13 @@ class TestGrblProbeRun(unittest.TestCase):
         tool.on_grbl_autolevel()
         self.assertEqual(tool.app.worker_task.emit.call_count, 1)
         tool.on_grbl_reset()
+        run_worker(tool)  # the reset worker
         tool.on_grbl_homing()
         run_worker(tool)
         self.assertIsNone(tool._grbl_recovery)
         fake.replies.clear()
         tool.on_grbl_autolevel()
-        self.assertEqual(tool.app.worker_task.emit.call_count, 3)
+        self.assertEqual(tool.app.worker_task.emit.call_count, 4)
 
     def test_cancel_between_steps_writes_nothing_after_stop(self):
         def hook():
@@ -1664,7 +1672,8 @@ class TestSignalsOnce(unittest.TestCase):
             for _i in range(3):
                 tool.connect_signals_at_init()
         for sig in (tool.build_al_table_sig, tool.show_probing_geo_sig,
-                    tool.grbl_port_closed_sig, tool.al_result_ready_sig, tool.app.proj_selection_changed):
+                    tool.grbl_port_closed_sig, tool.ecut_tool_change_sig,
+                    tool.al_result_ready_sig, tool.app.proj_selection_changed):
             self.assertEqual(sig.connect.call_count, 1)
         # set_tool_ui and _grbl_disconnect
         self.assertEqual(tool.app.cleanup.connect.call_count, 2)
@@ -1678,12 +1687,31 @@ class TestSignalsOnce(unittest.TestCase):
                     tool.al_result_ready_sig, tool.app.proj_selection_changed):
             self.assertEqual(sig.connect.call_count, 1)
 
-    def test_port_force_closes_on_app_quit(self):
+    def test_controller_stops_on_app_quit(self):
+        from appCommon import MachineSafety
         tool = make_audit_tool()
         qt_app = MagicMock()
+        self.addCleanup(MachineSafety.unregister, tool._grbl_shutdown)
         with patch('appPlugins.ToolLevelling.QtWidgets.QApplication.instance', return_value=qt_app):
             tool.connect_signals_at_init()
-        qt_app.aboutToQuit.connect.assert_called_once_with(tool._grbl_force_close)
+        # the quit runs the machine stop (feed hold, soft reset, close) exactly once
+        stops = [c for c in qt_app.aboutToQuit.connect.call_args_list if c.args == (MachineSafety.stop_all,)]
+        self.assertEqual(len(stops), 1)
+        self.assertIn(tool._grbl_shutdown, MachineSafety._stoppers)
+
+    def test_machine_safety_stops_every_controller(self):
+        from appCommon import MachineSafety
+        tool = make_audit_tool()
+        fake = FakeGrbl()
+        tool.grbl_ser_port = fake
+        tool._grbl_connected = True
+        failing = MagicMock(side_effect=RuntimeError('broken controller'))
+        for stopper in (failing, tool._grbl_shutdown):
+            MachineSafety.register(stopper)
+            self.addCleanup(MachineSafety.unregister, stopper)
+        MachineSafety.stop_all()  # a failing stop function does not stop the others
+        self.assertEqual(fake.written[-2:], [b'!', b'\x18'])
+        self.assertFalse(fake.is_open)
 
 
 class TestProbingShapes(unittest.TestCase):
@@ -1698,12 +1726,12 @@ class TestProbingShapes(unittest.TestCase):
         old.clear.assert_called_once_with(update=True)
         self.assertIsNot(tool.probing_shapes, old)
 
-    def test_vispy_collection_uses_scene_and_pool(self):
+    def test_probing_collection_comes_from_the_canvas(self):
         tool = make_audit_tool()
-        with patch('appPlugins.Common.levelling_core.ShapeCollection') as shape_cls:
-            tool._new_probing_shapes('job')
-        shape_cls.assert_called_once_with(parent=tool.app.plotcanvas.view.scene, layers=1, pool=tool.app.pool)
-        self.assertIs(tool.probing_shapes, shape_cls.return_value)
+        tool._new_probing_shapes('job')
+        factory = tool.app.plotcanvas.new_shape_collection
+        factory.assert_called_once_with(layers=1)
+        self.assertIs(tool.probing_shapes, factory.return_value)
 
     def test_kept_map_is_replotted_when_plotting_is_on(self):
         storage = {1: {'point': Point(0.0, 0.0), 'geo': None, 'height': 0.2}}

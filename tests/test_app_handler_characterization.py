@@ -577,6 +577,8 @@ class TestLifecycle(AppTestCase):
         app.version_url = "https://example.invalid/version"
         app.version = 1
         app.os = "test"
+        # an enabled check; a disabled one ends before the transport and emits nothing
+        app.options["global_version_check"] = True
         with patch("urllib.request.urlopen", side_effect=OSError("offline")):
             invoke("lifecycle", handler, "version_check")
         self.assertIn("Failed checking", app.inform.emissions[-1][0])

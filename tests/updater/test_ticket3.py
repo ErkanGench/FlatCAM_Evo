@@ -17,8 +17,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtWidgets
 
 from services.updater.manifest import ArchiveInfo, FileEntry, Manifest
+from services.updater.github.transport import DEFAULT_REPOSITORY as DEFAULT_UPDATE_URL
 
-DEFAULT_UPDATE_URL = "https://s.go.ro/zihniipc"
 CONFIGURED_UPDATE_URL = "https://updates.example.invalid/flatcam"
 
 
@@ -97,11 +97,12 @@ def _checker_app(tmp_path, enabled=True):
     )
 
 
-def _startup_app(auto_updates):
+def _startup_app(auto_updates, beta=False):
     from appMain import App
     from defaults import AppDefaults
 
     app = App.__new__(App)
+    app.headless = False
     app.log = MagicMock()
     app.cmd_line_shellvar = ""
     app.cmd_line_shellfile = ""
@@ -112,11 +113,11 @@ def _startup_app(auto_updates):
         "global_systray_icon": False,
         "global_version_check": auto_updates,
     }
-    app.beta = False
+    app.beta = beta
     app.version = "1.0"
     app.refresh_rollback_action = MagicMock()
     app._queue_version_check = MagicMock()
-    app.defaults = AppDefaults(beta=False, version="1.0")
+    app.defaults = AppDefaults(beta=beta, version="1.0")
     app.inform = FakeSignal()
     return app
 
@@ -141,6 +142,19 @@ def test_startup_update_toggle_gates_automatic_queueing(monkeypatch):
     enabled._queue_version_check.assert_called_once_with()
 
 
+@pytest.mark.parametrize("beta", (False, True))
+def test_startup_queues_updates_for_beta_and_release_builds(monkeypatch, beta):
+    from appMain import App
+
+    monkeypatch.setattr(App, "args", [])
+    monkeypatch.setattr("appMain.QSettings", MagicMock())
+    app = _startup_app(True, beta=beta)
+
+    App._setup_startup(app)
+
+    app._queue_version_check.assert_called_once_with()
+
+
 def test_manual_update_check_remains_available_when_automatic_checks_are_disabled():
     from appMain import App
 
@@ -151,101 +165,130 @@ def test_manual_update_check_remains_available_when_automatic_checks_are_disable
     app._queue_version_check.assert_called_once_with(forced=True)
 
 
-def test_factory_defaults_seed_the_update_share_url():
+def test_factory_defaults_seed_the_github_update_repository():
     from defaults import AppDefaults
 
     assert AppDefaults.factory_defaults["global_update_url"] == DEFAULT_UPDATE_URL
 
 
-def test_update_check_uses_the_configured_share_url(monkeypatch, tmp_path):
+def test_update_check_uses_the_configured_repository_url(monkeypatch, tmp_path):
     from appHandlers.appLifecycle import AppLifecycle
-    from services.updater import transport as transport_module
+    from services.updater.github import checker as checker_module
 
-    app = _checker_app(tmp_path)
-    app.options["global_update_url"] = CONFIGURED_UPDATE_URL
-    captured_urls = []
+    app = SimpleNamespace(
+        options={"global_version_check": True, "global_update_url": CONFIGURED_UPDATE_URL},
+        defaults={"global_version_check": True},
+        version="1.0",
+        build_string="build-1",
+        os="win32",
+        data_path=str(tmp_path),
+        log=MagicMock(),
+        inform=FakeSignal(),
+        update_available=FakeSignal(),
+        update_check_result=FakeSignal(),
+    )
+    captured = []
 
     class ConfiguredTransport:
-        def __init__(self, short_url, **kwargs):
-            captured_urls.append(short_url)
+        def __init__(self, repository, **kwargs):
+            captured.append(repository)
 
-        def download_bytes(self, channel, filename, **kwargs):
-            return _manifest_json(_manifest(channel=channel))
+        def list_releases(self):
+            return ()
 
-    monkeypatch.setattr(transport_module, "DigiPublicShareTransport", ConfiguredTransport)
+    monkeypatch.setattr(checker_module, "GitHubReleaseTransport", ConfiguredTransport)
     app.update_checker = None
 
     result = AppLifecycle(app).version_check(forced=True)
 
-    assert result["status"] == "update_available"
-    assert captured_urls == [CONFIGURED_UPDATE_URL]
+    assert result["status"] == "up_to_date"
+    assert captured == [CONFIGURED_UPDATE_URL]
 
 
-def test_download_worker_uses_the_configured_share_url(monkeypatch, tmp_path):
+def _staged_update(tmp_path, **overrides):
+    from services.updater.github.staging import StagedUpdate
+
+    directory = tmp_path / "staging"
+    directory.mkdir(parents=True, exist_ok=True)
+    archive = directory / "flatcam-evo-windows-x64-update.zip"
+    archive.write_bytes(b"full release archive")
+    manifest = {
+        "version": "2.0",
+        "build": "build-2",
+        "archive": {"filename": archive.name, "size": archive.stat().st_size, "sha256": "a" * 64},
+        "files": [],
+        "deletions": [],
+    }
+    values = dict(
+        staging_dir=directory,
+        archive_path=archive,
+        manifest=manifest,
+        channel="windows",
+        install="windows_asset",
+        trust="Update archive verified against the published GitHub SHA-256 digest.",
+        dependencies={"changed": False, "added": [], "removed": []},
+    )
+    values.update(overrides)
+    return StagedUpdate(**values)
+
+
+def test_download_worker_uses_the_configured_repository_and_injected_transport(monkeypatch, tmp_path):
     from appMain import App
-    from services.updater.checker import UpdateChecker
-    from services.updater import transport as transport_module
 
-    captured_urls = []
+    captured = {}
 
-    class ConfiguredTransport:
-        def __init__(self, short_url, **kwargs):
-            captured_urls.append(short_url)
+    class RecordingChecker:
+        def create_transport(self, app, *, repository_url=None):
+            captured["repository_url"] = repository_url
+            return "transport-sentinel"
 
-        def download_archive(self, channel, filename, destination, **kwargs):
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(b"configured archive")
-            return destination
+    def fake_stage(app, payload, *, transport, cancel_cb=None, progress_cb=None):
+        captured["transport"] = transport
+        captured["staged"] = _staged_update(tmp_path)
+        return captured["staged"]
 
-    monkeypatch.setattr(transport_module, "DigiPublicShareTransport", ConfiguredTransport)
+    monkeypatch.setattr("appMain.stage_update", fake_stage)
     app = _fake_app(tmp_path)
     app.options = {"global_update_url": CONFIGURED_UPDATE_URL}
-    app.update_checker = UpdateChecker(app)
+    app.update_checker = RecordingChecker()
 
-    App._download_update_worker(
-        app,
-        {"manifest": _manifest(), "channel": "windows"},
-        SimpleNamespace(is_set=lambda: False),
-    )
+    App._download_update_worker(app, {"status": "update_available"}, SimpleNamespace(is_set=lambda: False))
 
-    assert captured_urls == [CONFIGURED_UPDATE_URL]
-    assert app.update_staged.emissions[0][0]["canceled"] is False
+    assert captured["repository_url"] == CONFIGURED_UPDATE_URL
+    assert captured["transport"] == "transport-sentinel"
+    result = app.update_staged.emissions[0][0]
+    assert result["canceled"] is False
+    assert result["stage"] is captured["staged"]
+    assert result["manifest"]["version"] == "2.0"
+    assert result["trust"] == "Update archive verified against the published GitHub SHA-256 digest."
+    assert result["dependencies"] == {"changed": False, "added": [], "removed": []}
+    assert result["archive_path"] == str(captured["staged"].archive_path)
 
 
-def test_download_worker_uses_factory_url_when_option_and_default_are_missing(monkeypatch, tmp_path):
+def test_download_worker_falls_back_to_the_github_repository(monkeypatch, tmp_path):
     from appMain import App
-    from services.updater.checker import UpdateChecker
-    from services.updater import transport as transport_module
 
-    captured_urls = []
+    captured = {}
 
-    class ConfiguredTransport:
-        def __init__(self, short_url, **kwargs):
-            captured_urls.append(short_url)
+    class RecordingChecker:
+        def create_transport(self, app, *, repository_url=None):
+            captured["repository_url"] = repository_url
+            return object()
 
-        def download_archive(self, channel, filename, destination, **kwargs):
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(b"factory archive")
-            return destination
-
-    monkeypatch.setattr(transport_module, "DigiPublicShareTransport", ConfiguredTransport)
+    monkeypatch.setattr("appMain.stage_update", lambda *args, **kwargs: _staged_update(tmp_path))
     app = _fake_app(tmp_path)
     app.options = {}
     app.defaults = {}
-    app.update_checker = UpdateChecker(app)
+    app.update_checker = RecordingChecker()
 
-    App._download_update_worker(
-        app,
-        {"manifest": _manifest(), "channel": "windows"},
-        SimpleNamespace(is_set=lambda: False),
-    )
+    App._download_update_worker(app, {"status": "update_available"}, SimpleNamespace(is_set=lambda: False))
 
-    assert captured_urls == [DEFAULT_UPDATE_URL]
+    assert captured["repository_url"] == DEFAULT_UPDATE_URL
     assert app.update_staged.emissions[0][0]["canceled"] is False
 
 
 def test_automatic_check_respects_preference_but_forced_check_runs(tmp_path):
-    from services.updater.checker import UpdateChecker
+    from services.updater.digi.checker import UpdateChecker
 
     app = _checker_app(tmp_path, enabled=False)
     transport = FakeTransport(_manifest())
@@ -260,7 +303,7 @@ def test_automatic_check_respects_preference_but_forced_check_runs(tmp_path):
 
 
 def test_checker_reports_up_to_date_and_newer_build_on_same_version(tmp_path):
-    from services.updater.checker import UpdateChecker
+    from services.updater.digi.checker import UpdateChecker
 
     app = _checker_app(tmp_path)
     transport = FakeTransport(_manifest(version="1.0", build="build-2"))
@@ -276,7 +319,7 @@ def test_checker_reports_up_to_date_and_newer_build_on_same_version(tmp_path):
 
 
 def test_forced_up_to_date_result_is_reported_to_the_user(tmp_path):
-    from services.updater.checker import UpdateChecker
+    from services.updater.digi.checker import UpdateChecker
 
     app = _checker_app(tmp_path)
     transport = FakeTransport(_manifest(version="1.0", build="build-1"))
@@ -297,7 +340,7 @@ def test_forced_up_to_date_result_is_reported_to_the_user(tmp_path):
 
 
 def test_checker_maps_darwin_to_linux_and_does_not_submit_statistics(tmp_path):
-    from services.updater.checker import UpdateChecker
+    from services.updater.digi.checker import UpdateChecker
 
     app = _checker_app(tmp_path)
     app.version_url = "https://legacy.invalid/version"
@@ -313,7 +356,7 @@ def test_checker_maps_darwin_to_linux_and_does_not_submit_statistics(tmp_path):
 
 @pytest.mark.parametrize("source", [OSError("offline"), ValueError("bad manifest")])
 def test_checker_converts_network_and_malformed_failures_to_safe_results(tmp_path, source):
-    from services.updater.checker import UpdateChecker
+    from services.updater.digi.checker import UpdateChecker
 
     app = _checker_app(tmp_path)
     transport = FakeTransport(_manifest(), error=source)
@@ -328,7 +371,7 @@ def test_checker_converts_network_and_malformed_failures_to_safe_results(tmp_pat
 
 
 def test_checker_skips_exactly_blocked_release(tmp_path):
-    from services.updater.checker import UpdateChecker
+    from services.updater.digi.checker import UpdateChecker
     from services.updater.recovery import blocked_release_path, restore_dir_for_install
 
     app = _checker_app(tmp_path)
@@ -384,46 +427,20 @@ def qapp():
     yield app
 
 
-class ArchiveTransport:
-    def __init__(self, payload=b"archive"):
-        self.payload = payload
-        self.calls = []
+def test_download_worker_reports_cancellation_and_resets_state(tmp_path):
+    from appMain import App
+    from services.updater.common import DownloadCancelled
 
-    def download_archive(self, channel, filename, destination, **kwargs):
-        self.calls.append((channel, filename, destination, kwargs))
-        if kwargs.get("cancel_cb") and kwargs["cancel_cb"]():
-            from services.updater.transport import DownloadCancelled
+    app = _fake_app(tmp_path)
+    app.update_checker = SimpleNamespace(create_transport=lambda app, repository_url=None: object())
+    with patch("appMain.stage_update", side_effect=DownloadCancelled("cancelled")):
+        App._download_update_worker(
+            app,
+            {"status": "update_available"},
+            SimpleNamespace(is_set=lambda: False),
+        )
 
-            raise DownloadCancelled("cancelled")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(self.payload)
-        if kwargs.get("progress_cb"):
-            kwargs["progress_cb"](len(self.payload), len(self.payload))
-        return destination
-
-
-def test_archive_staging_cancel_failure_and_success_are_atomic(tmp_path):
-    from appMain import _stage_update_archive
-    from services.updater.transport import DownloadCancelled
-
-    payload = {"manifest": _manifest(), "channel": "windows"}
-    transport = ArchiveTransport()
-    result = _stage_update_archive(payload, tmp_path, transport)
-    assert result.is_file()
-    assert result.read_bytes() == b"archive"
-
-    cancel_transport = ArchiveTransport()
-    with pytest.raises(DownloadCancelled):
-        _stage_update_archive(payload, tmp_path, cancel_transport, cancel_cb=lambda: True)
-    assert not (tmp_path / "update").exists() or not list((tmp_path / "update").rglob("*.part"))
-
-    class FailingTransport(ArchiveTransport):
-        def download_archive(self, *args, **kwargs):
-            raise OSError("download failed")
-
-    with pytest.raises(OSError):
-        _stage_update_archive(payload, tmp_path, FailingTransport())
-    assert not list((tmp_path / "update").glob("staging_*"))
+    assert app.update_staged.emissions[0][0]["canceled"] is True
 
 
 def _fake_app(tmp_path):
@@ -444,6 +461,7 @@ def _fake_app(tmp_path):
     app._update_dialog = None
     app._update_progress_dialog = None
     app._update_in_progress = False
+    app._update_cancel_event = None
     app._rollback_in_progress = False
     app._shutdown_requested = False
     app.quit_application = MagicMock()
@@ -507,24 +525,29 @@ def test_empty_staging_paths_are_not_removed_on_cancel_or_launch_failure(monkeyp
 
 def test_download_worker_uses_the_checker_transport_factory(monkeypatch, tmp_path):
     from appMain import App
-    from services.updater.checker import UpdateChecker
+    from services.updater.github.checker import GitHubUpdateChecker
 
-    class FailingDigiTransport:
-        def download_archive(self, *args, **kwargs):
-            raise AssertionError("the worker bypassed the checker transport factory")
+    class StagingTransport:
+        pass
 
-    fake = ArchiveTransport()
+    transport = StagingTransport()
+    captured = {}
+
+    def fake_stage(app, payload, *, transport, cancel_cb=None, progress_cb=None):
+        captured["transport"] = transport
+        return _staged_update(tmp_path)
+
+    monkeypatch.setattr("appMain.stage_update", fake_stage)
     app = _fake_app(tmp_path)
-    app.update_checker = UpdateChecker(app, transport_factory=lambda _app: fake)
-    monkeypatch.setattr("appMain.DigiPublicShareTransport", FailingDigiTransport)
+    app.update_checker = GitHubUpdateChecker(app, transport_factory=lambda _app: transport)
 
     App._download_update_worker(
         app,
-        {"manifest": _manifest(), "channel": "windows"},
+        {"status": "update_available"},
         SimpleNamespace(is_set=lambda: False),
     )
 
-    assert fake.calls
+    assert captured["transport"] is transport
     assert app.update_staged.emissions[0][0]["canceled"] is False
 
 
@@ -621,38 +644,37 @@ def test_rollback_action_requires_valid_restore_point_and_waits_for_ack(monkeypa
     app.quit_application.assert_called_once_with(mode="updater")
 
 
-def test_download_worker_emits_error_when_transport_setup_fails(tmp_path):
-    """Regression: create_transport raises ValueError for empty share_url.
+def test_download_worker_emits_error_when_staging_fails(tmp_path):
+    """Regression: staging failures must stay inside the worker.
 
-    Before the fix the call sat outside the try block so the ValueError
-    escaped the worker unhandled, no update_staged was emitted, and
-    _update_in_progress stayed True forever (blocking MainGUI.closeEvent).
+    Before the fix transport setup failures escaped unhandled, no
+    update_staged was emitted, and _update_in_progress stayed True
+    forever (blocking MainGUI.closeEvent).
     """
     from appMain import App
-    from services.updater.checker import UpdateChecker
+    from services.updater.common import TransportError
 
     app = _fake_app(tmp_path)
     app.options = {"global_update_url": ""}
-    app.update_checker = UpdateChecker(app)
+    app.update_checker = SimpleNamespace(create_transport=lambda app, repository_url=None: object())
 
-    # Must not raise — the worker catches setup failures and emits an
-    # error payload via update_staged so the caller can reset state.
-    App._download_update_worker(
-        app,
-        {"manifest": _manifest(), "channel": "windows"},
-        SimpleNamespace(is_set=lambda: False),
-    )
+    with patch("appMain.stage_update", side_effect=TransportError("staging failed")):
+        # Must not raise — the worker catches staging failures and emits an
+        # error payload via update_staged so the caller can reset state.
+        App._download_update_worker(
+            app,
+            {"status": "update_available"},
+            SimpleNamespace(is_set=lambda: False),
+        )
 
     assert len(app.update_staged.emissions) == 1
     data = app.update_staged.emissions[0][0]
     assert data["canceled"] is False
-    assert "error" in data
-    assert "share URL" in data["error"] or "configured" in data["error"].lower()
+    assert "staging failed" in data["error"]
 
     # Exercise the stuck-state fix: on_update_staged must reset the active
     # flag and close the progress dialog even when the worker failed before
-    # downloading anything. Without the fix the flag stayed True forever,
-    # blocking MainGUI.closeEvent.
+    # downloading anything.
     app._update_in_progress = True
     app._close_update_progress = MagicMock()
     App.on_update_staged(app, data)

@@ -61,3 +61,49 @@ def pytest_runtest_setup(item):
 def pytest_runtest_call(item):
     # unittest runs setUp in the call phase: a QApplication made in setUpClass is here
     _install_window_filter()
+
+
+# Hardware tests (a connected E-Cut USB board or a GRBL serial board) do not run by default.
+# Mark such a test with @pytest.mark.hardware and set FLATCAM_TEST_HARDWARE=1 to run it.
+# All other tests cannot open a real HID device or serial port: a board that is connected stays untouched.
+import pytest  # noqa: E402
+
+HARDWARE_TESTS = os.environ.get('FLATCAM_TEST_HARDWARE') == '1'
+_HARDWARE_BLOCKED = 'real hardware access is blocked in tests; mark the test hardware and set FLATCAM_TEST_HARDWARE=1'
+
+
+def pytest_configure(config):
+    config.addinivalue_line('markers', 'hardware: needs a connected E-Cut or GRBL board (FLATCAM_TEST_HARDWARE=1)')
+
+
+def pytest_collection_modifyitems(config, items):
+    if HARDWARE_TESTS:
+        return
+    skip = pytest.mark.skip(reason='hardware test: set FLATCAM_TEST_HARDWARE=1 to run it')
+    for item in items:
+        if item.get_closest_marker('hardware'):
+            item.add_marker(skip)
+
+
+class _BlockedHid:
+    """Stands in for the hidapi module: any use fails, so no test reaches a real USB board."""
+
+    def __getattr__(self, name):
+        raise RuntimeError(_HARDWARE_BLOCKED)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_hardware(request, monkeypatch):
+    if HARDWARE_TESTS and request.node.get_closest_marker('hardware'):
+        return
+    monkeypatch.setitem(sys.modules, 'hid', _BlockedHid())
+    try:
+        import serial
+    except ImportError:
+        return
+
+    def blocked_open(self, *args, **kwargs):
+        raise serial.SerialException(_HARDWARE_BLOCKED)
+
+    # the platform class of serial.Serial; loop:// and the test fakes use other classes
+    monkeypatch.setattr(serial.Serial, 'open', blocked_open)

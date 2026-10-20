@@ -6,6 +6,98 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+20.10.2026
+
+Security:
+
+- fixed: opening a Gerber file, a project or the preferences, pasting from the clipboard or typing in an entry no longer runs Python code; the aperture macro expressions, the tool diameters, the toolchange and end X,Y values, the clipboard coordinates, the entry fields, --shellvar and the portable flag are read with safe_eval() (literals and arithmetic only) in place of eval() (merged PR #15 from ErkanGench)
+
+CNCJob:
+
+- fixed: the G-code file of a multi-tool drill job with a preprocessor without a header (Roland_MDX_20, Roland_MDX_540, ISEL_ICP_CNC) had no drill moves (merged PR #21 from gargamel778)
+- faster CNC job from a Geometry, with the same G-code: the paths are simplified in 1 vectorized call on more than 1 thread (simplify_paths), the G-code of the paths is joined 1 time at the end, the preprocessor attributes are copied 1 time for each path, codes_split() compiles its patterns 1 time and the copies of the tool dicts share the geometries (deepcopy_keep_geometry); Tcl cncjob of a 6-pass laser isolation (2.7 MB of G-code): 9.94 s to 4.35 s; 40-pass laser isolation (6.0 MB): 18.47 s to 8.14 s; a 3-depth GRBL_11 job: 1.3 times faster (merged PR #30 from ErkanGench)
+- Abort stops the CNC job also while the paths are oriented and simplified
+
+Milling and Geometry Editor:
+
+- fixed: Apply parameters to all tools read the Excellon tools table also for a Geometry target; it raised an error or copied the data of a wrong tool (merged PR #19 from ErkanGench)
+- fixed: Copy in the Geometry Editor works without a cursor move after the reference click (merged PR #19 from ErkanGench)
+- fixed: a CNC job made from a single-geometry object with 2 or more tools had the paths of the earlier tools again in the G-code of each next tool, so a laser burned them 2 times (27 cut moves instead of 18 with 2 tools); each tool keeps only its own G-code and the exported file has each path 1 time (merged PR #38 from ErkanGench)
+
+Export:
+
+- fixed: File > Export > Export Gerber lists each Gerber file type and All Files again: the ';;' separator and the '*' of the patterns were missing (merged PR #14 from ErkanGench)
+- fixed: the viewBox of an exported SVG contains the drawing; a viewer showed an empty page (merged PR #23 from gargamel778)
+
+Translations:
+
+- fixed: the labels and tooltips of the General preferences are marked with _() where they are defined, so the extractor finds them; the Tools Database accepts an English label, its translation or its index
+- i18n_tool: a bad PO string or line gives an error with the line number; bad brace formatting in a translation is an error of that entry
+
+Machine Sender:
+
+- new (experimental, not ready for production; bench tests only): E-Cut USB motion controller support (appPlugins/Common/ecut): connect, jog (also continuous: hold the arrow), streaming, spindle, inputs and outputs, soft limits and the motion settings of the board
+- new: a manual tool change dialog; the spindle stays off until a spindle command
+- new: the connected controllers stop (motion, spindle, outputs) when the application closes or crashes (appCommon/MachineSafety)
+- fixed: GRBL reset waits for the controller banner in a worker; after a stop the controller asks for Home; the status report reads the accessory state (spindle, coolant)
+- fixed: the 3D view of the sender with an empty path raised an error in VisPy
+- hardware tests run only with FLATCAM_TEST_HARDWARE=1; the other tests cannot open a real HID device or serial port
+
+Isolation Plugin:
+
+- fixed: All and Area Selection generate isolation Geometry with Combine unchecked; separate passes use the Gerber object's geometry when no specific geometry is supplied (merged PR #16 from ErkanGench)
+- fixed: the Optimal tool diameter fits in the smallest gap: the proposed diameter was the rounded gap, up to half a unit of the last decimal above the real gap, so Check validity rejected it with "Incomplete isolation." (merged PR #17 from ErkanGench)
+- fixed: Isolation, NCC and Optimal give the same safe tool diameter: they measure the same geometry (no positive buffer) and round the gap to the app decimals; a gap of 0 or less shows "Could not find a safe tool diameter." instead of a 0 diameter; NCC keeps its recommendation below the real gap; Optimal clears the last results when it starts
+- faster rest machining: the check buffers of a pass are found with 1 STRtree query instead of a test against every other polygon; on a board with 2432 copper polygons: 0.2 mm, 1 pass 41.4 s to 1.9 s; 0.1 mm, 6 passes 148.6 s to 5.0 s; the paths and the polygons left for the next tool are the same (merged PR #31 from ErkanGench)
+- rest machining adapts to the density of the layout: for each pass a sample of up to 16 polygons selects bulk STRtree queries in limited batches (65536 possible pairs at most for 1 query) for a sparse layout, or a stop at the first collision for a dense layout; on a dense layout the PR #31 queries collected every pair
+- measured with tests/benchmark_isolation_rest.py (synthetic square pads, median of 3 rounds, Python 3.14.3, Shapely 2.2.0, GEOS 3.14.1): sparse layouts (1000 pads, 3 mm pitch, 0.2 mm tool, 1 and 3 passes) keep the time of PR #31, about 5 times faster than before PR #31; dense layouts (3000 pads, 0.3 mm pitch, 1, 3 and 10 mm tool with 1 pass, 1 mm tool with 3 passes) are 1.9 to 48 times faster than PR #31 and faster than the code before PR #31 in every case; in the dense 10 mm case the largest query result is 397 KiB instead of 73 MiB
+- the paths, their order and the polygons left for the next tool are the same in the 3 versions (compared by WKB, also on 96 random layouts); new tests check that a dense layout does not collect every pair
+
+NCC and Paint:
+
+- faster seed clearing (NCC, Paint and the Milling of holes): the rings are cut 16 at a time, and a large margin (2000 coordinates or more) is cut without the holes that the rings of the band cannot reach; each ring is the same, bit for bit; NCC seed path generation on a board with 2432 copper polygons: 42.3 s to 10.5 s (merged PR #31 from ErkanGench)
+- faster joining of the paths (paint_connect) with NumPy coordinate arrays: NCC standard 5.8 s to 1.6 s on the same board; the G-code of NCC and Paint is byte-identical (merged PR #31 from ErkanGench)
+
+G-Code preprocessors:
+
+- fixed: the final X-Y move is made at least at Travel Z when End Z is lower; the tool lowers to End Z only after reaching End X-Y, avoiding travel across the board below the configured clearance height (merged PR #12 from ErkanGench)
+- fixed: Line_xyz, ISEL_ICP_CNC and Berta_CNC raised inside the preprocessor, so the start block or the tool change lines were missing from the G-code without an error (merged PR #22 from gargamel778)
+
+Application updater:
+
+- new: updates can be downloaded from GitHub Releases; Digi remains available as the legacy update provider
+- fixed: update offers keep the provider they were checked with; existing custom Digi share URLs are migrated to the legacy provider setting
+
+Laser G-Code:
+
+- fixed: GRBL_laser, GRBL_laser_z and grbl_laser_eleks_drd emit explicit S0 for zero or unset cutting power, preventing laser activation from reusing the controller's previous power; intentional minimum travel power is preserved
+- fixed: the Tcl commands cncjob and drillcncjob accept -spindlespeed as laser power when -las_power is omitted; an explicit -las_power takes priority (merged PR #13 from ErkanGench)
+- new: Drilling and Milling G-Code generation (including the Tcl commands) warns when the 'laser OFF' commands retain a nonzero Min Power; the tooltips explain this behavior; the generated G-Code and intentional minimum-power behavior are unchanged (merged PR #11 from ErkanGench)
+- fixed: the laser Min Power warning names only the tool whose G-code has the 'laser OFF' commands; a single-geometry job with more tools reported the Min Power of an earlier tool for the next one (merged PR #25 from ErkanGench)
+
+Headless mode:
+
+- new: flatcam.py --headless runs a FlatScript (--shellfile), Tcl commands (--command) or a Tcl prompt on stdin with no window and no OpenGL (Qt offscreen platform), for build servers and containers with no display; the output goes to stdout, the errors to stderr; exit code 0 done, 1 a Tcl command failed, 2 bad command line, N for 'exit N'
+- new: --command="cmd1; cmd2" runs Tcl commands after the --shellfile, also in GUI mode
+- in headless mode quit_app ends the run and the preferences of the user are not saved; a headless run never hands its arguments to an open FlatCAM window
+- the frozen Windows build has FlatCAM-cli.exe, a console executable for headless runs
+- fixed: the Tcl command interiors plotted its result; a Tcl command makes no plot (only plot_all and plot_objects draw), a test checks every command
+
+Packaging:
+
+- fixed: the application frozen with make_freeze.py (cx_Freeze) did not start: PyOpenGL loads its platform module (OpenGL.platform.win32) by name, so cx_Freeze left it out; the OpenGL package is now included
+- fixed: the frozen application did not find its data: assets, locale, preprocessors and config are now copied into lib/, next to the modules, where the application looks for them (as the old freeze script did); config/configuration.txt was not copied at all
+- fixed: in the frozen application cncjob failed with "No module named 'ortools.constraint_solver.routing_parameters_pb2'": OR-Tools loads its protobuf modules by name, so cx_Freeze left them out; the ortools package is now included when it is installed
+- fixed: the frozen application logged "No translation file found for domain: 'strings'" at each start: it looked for the translations in library.zip first; the existing locale folder is now used at the first try
+
+Tcl and command line:
+
+- fixed: a packaged application started in its install folder (a Start Menu shortcut) wrote relative file names into the install folder, because with cx_Freeze the modules are in its lib/ subfolder; the folder of the executable (the .app bundle on macOS) now also counts as the application, and the home folder is used
+- fixed: quit_app in a --shellfile hid the window but did not end the application: the script runs before the Qt event loop starts, and QApplication.quit() does nothing then; the quit is now also queued for the event loop
+- fixed: join_geometry makes the same object as Edit -> Join: MultiGeo objects stay MultiGeo and the tools with the same diameter and type are fused (preference geometry_merge_fuse_tools); a mix of MultiGeo and SingleGeo objects is refused; before, the joined isolation of a real board gave 3 times the G-code (124214 G1 moves instead of 40732) (merged PR #29 from ErkanGench)
+- fixed: Edit -> Join failed with "'Polygon' object is not iterable" or "'MultiLineString' object is not iterable" when a tool geometry was not a list (bbox, cutout) (merged PR #29 from ErkanGench)
+- Join fuses only the tools whose machining parameters (tools_*) are equal; a SingleGeo tool with an empty geometry of its own is kept
+
 19.10.2026
 
 DXF and SVG Import:
@@ -105,15 +197,24 @@ CNCJob Plot:
 
 Preprocessors:
 
-- fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path)
-- the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters)
-- fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *'
+- fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path) (merged PR #20 from ErkanGench)
+- the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters) (merged PR #20 from ErkanGench)
+- fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *' (merged PR #20 from ErkanGench)
+
 Data Folder:
 
-- new: the FLATCAM_DATA_PATH environment variable sets the data folder (preferences, Tools Database, recent files, preprocessors, log and the updater files) instead of %APPDATA%/FlatCAM, ~/.FlatCAM or the portable 'config' folder; a second installation keeps its own settings, also on Linux and macOS, and a test or a script can start with a throw-away folder; a relative path is taken from the working folder at the start
+- new: the FLATCAM_DATA_PATH environment variable sets the data folder (preferences, Tools Database, recent files, preprocessors, log and the updater files) instead of %APPDATA%/FlatCAM, ~/.FlatCAM or the portable 'config' folder; a second installation keeps its own settings, also on Linux and macOS, and a test or a script can start with a throw-away folder; a relative path is taken from the working folder at the start (merged PR #28 from ErkanGench)
+- FLATCAM_DATA_PATH is read before the portable configuration: when the variable is set, config/configuration.txt is not read
 
 Translations:
 
+- new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language (merged PR #27 from ErkanGench)
+- check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings (merged PR #27 from ErkanGench)
+- stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt (merged PR #27 from ErkanGench)
+- new guide for the translators (docs/TRANSLATING.md) (merged PR #27 from ErkanGench)
+- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form (merged PR #27 from ErkanGench)
+- fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated (merged PR #27 from ErkanGench)
+- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped (merged PR #27 from ErkanGench)
 - new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language
 - check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings
 - stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt
@@ -121,6 +222,23 @@ Translations:
 - a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
 - fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
 - fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
+
+Project file:
+
+- the project save makes the WKT of all the geometries with vectorized Shapely calls, in pieces of about 10000 coordinates, instead of 1 call for each geometry while the JSON is written; a large project saves about 5x faster (compressed) and the GUI thread is blocked for much shorter times during the save
+- the coordinates are saved with the shortest text that reads back to the same number instead of 16 fixed decimals, which lost the last bits of a coordinate below 1; the files are smaller and older versions open them
+- a compressed project is written as compact JSON (no indentation, no sorted keys), which is faster for a project with many small items (a CNC job); a plain project keeps the indented JSON
+- fixed: closing the app while the project is saved did nothing (only a message); now the app closes when the save ends, the normal way (the settings are saved, a change made during the save is asked about); after a failed save the app stays open
+
+Code Editor:
+
+- the code editor (Source Editor, G-code Editor, Script Editor) highlights only the lines that are shown, the other lines when they are scrolled into view; Qt highlighted every line when the text was set: the View Source of a G-code of 94000 lines took 11 s, now 0.9 s; Print and Print Preview highlight every line first
+
+Project Tab:
+
+- fixed: View Source opened an empty Source Editor and left the app busy for an object without a source, e.g. a Geometry made by a tool; it shows a warning now
+- the context menu shows only the entries that apply to the selected objects: View Source for 1 object with a source, Edit and Save for 1 object (Batch Save for several CNCJob objects), Set Color for Gerber and Excellon objects, Enable Plot or Disable Plot by the plot state
+- fixed: the context menu entries hidden for a Script or a Document object stayed hidden for the next objects
 
 Tests:
 
@@ -133,10 +251,18 @@ Tests:
 - new unit tests for the Film tool (tests/test_film.py)
 - new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
 - new unit tests for the CNC job plot filter and the visibility toggle
+- new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py) (merged PR #20 from ErkanGench)
+- new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py) (merged PR #27 from ErkanGench)
+- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py) (merged PR #27 from ErkanGench)
+- new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py) (merged PR #27 from ErkanGench)
 - new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
 - new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py)
 - new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
 - new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
+- new unit tests for the WKT of the project save (tests/test_project_save_wkt.py)
+- new unit tests for a close of the app during a project save (tests/test_shutdown_routing.py)
+- new unit tests for the highlighting of the code editor (tests/test_lazy_highlight.py)
+- new unit tests for the Project tab context menu and View Source (tests/test_project_context_menu.py)
 
 18.10.2026
 
@@ -391,8 +517,8 @@ Plot 3D:
 
 Tcl and command line:
 
-- fixed: a relative file name in a Tcl command (write_gcode, save_project, open_gerber, export_svg ...) was resolved against the application folder, because the application changes into it at startup; for a packaged application that wrote into the application bundle and broke its code signature. It is now resolved against the folder FlatCAM was started from (the home folder when that is the root folder, a folder inside the Windows folder, or the application itself); after set_path or a Tcl cd the new working folder is used; a leading ~ is expanded
-- fixed: a relative --shellfile or a relative file to open given on the command line was not found for the same reason; an unreadable --shellfile now ends the program with an error before the GUI starts (it started the GUI and then crashed on exit)
+- fixed: a relative file name in a Tcl command (write_gcode, save_project, open_gerber, export_svg ...) was resolved against the application folder, because the application changes into it at startup; for a packaged application that wrote into the application bundle and broke its code signature. It is now resolved against the folder FlatCAM was started from (the home folder when that is the root folder, a folder inside the Windows folder, or the application itself); after set_path or a Tcl cd the new working folder is used; a leading ~ is expanded (merged PR #10 from gargamel778)
+- fixed: a relative --shellfile or a relative file to open given on the command line was not found for the same reason; an unreadable --shellfile now ends the program with an error before the GUI starts (it started the GUI and then crashed on exit) (merged PR #10 from gargamel778)
 
 16.10.2026
 

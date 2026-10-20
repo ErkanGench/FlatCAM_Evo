@@ -62,6 +62,16 @@ class TestProjectFile(unittest.TestCase):
         loaded = load_project_file(self.filename, object_hook=dict2obj)
         self.assertEqual(loaded['version'], 9.0)
 
+    def test_compressed_json_is_compact_and_plain_json_is_indented(self):
+        data = {"version": 9.0, "options": {"units": "MM"}, "objs": []}
+        save_project_file(self.filename, data, default=to_dict, compression_level=3)
+        with ProjectFile.open_project_stream(self.filename) as stream:
+            # no indentation, and the keys stay in their order
+            self.assertEqual(stream.read(), b'{"version":9.0,"options":{"units":"MM"},"objs":[]}')
+        save_project_file(self.filename, data, default=to_dict, compression_level=None)
+        with open(self.filename, 'rb') as f:
+            self.assertEqual(f.read(), json.dumps(data, indent=2, sort_keys=True).encode('utf-8'))
+
     def test_out_of_range_level_is_clamped(self):
         self.check_round_trip(0)
         self.check_round_trip(99)
