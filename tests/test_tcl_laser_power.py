@@ -70,8 +70,8 @@ def drillcncjob_gcode(*argv):
 @pytest.mark.parametrize('argv, expected', [
     (('-spindlespeed', '500'), {'M03 S500'}),
     (('-las_power', '300', '-spindlespeed', '500'), {'M03 S300'}),
-    ((), {'M03'}),
-    (('-spindlespeed',), {'M03'}),
+    ((), {'M03 S0'}),
+    (('-spindlespeed',), {'M03 S0'}),
 ], ids=['spindlespeed', 'las_power_first', 'no_power', 'bare_spindlespeed'])
 def test_cncjob_laser_power(argv, expected):
     assert laser_on_lines(cncjob_gcode(*argv)) == expected
@@ -80,7 +80,7 @@ def test_cncjob_laser_power(argv, expected):
 @pytest.mark.parametrize('argv, expected', [
     (('-spindlespeed', '500'), {'M03 S500.0'}),
     (('-las_power', '300', '-spindlespeed', '500'), {'M03 S300.0'}),
-    ((), {'M03'}),
+    ((), {'M03 S0'}),
 ], ids=['spindlespeed', 'las_power_first', 'no_power'])
 def test_drillcncjob_laser_power(argv, expected):
     assert laser_on_lines(drillcncjob_gcode(*argv)) == expected
