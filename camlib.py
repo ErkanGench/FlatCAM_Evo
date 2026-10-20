@@ -5774,6 +5774,8 @@ class CNCjob(Geometry):
 
         if not append:
             self.gcode = ""
+        # with append, self.gcode starts with the G-code of the previous tools; the Min Power warning is for this one
+        tool_gcode_start = len(self.gcode)
 
         # tell preprocessor the number of tool (for toolchange)
         self.tool = tool_no
@@ -5916,7 +5918,7 @@ class CNCjob(Geometry):
         self.app.inform.emit(
             '%s... %s %s.' % (_("Finished G-Code generation"), str(path_count), _("paths traced"))
         )
-        self.laser_min_power_warning(self.gcode)
+        self.laser_min_power_warning(self.gcode[tool_gcode_start:])
 
         if self.gcode == '':
             return 'fail', start_gcode
