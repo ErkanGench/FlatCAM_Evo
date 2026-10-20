@@ -2066,19 +2066,26 @@ class ToolMilling(Geometry, AppTool):
         return [str(x.text()) for x in self.ui.tools_table_mill_exc.selectedItems()]
 
     def on_apply_param_to_all_clicked(self):
-        if self.ui.tools_table_mill_exc.rowCount() == 0:
+        # the tools table of the current target; the hidden Excellon table is not cleared for a Geometry target
+        if self.ui.target_radio.get_value() == 'geo':
+            tools_table = self.ui.tools_table_mill_geo
+        else:
+            tools_table = self.ui.tools_table_mill_exc
+
+        if tools_table.rowCount() == 0:
             # there is no tool in tool table so, we can't save the GUI elements values to storage
-            self.app.log.debug("ToolDrilling.on_apply_param_to_all_clicked() --> no tool in Tools Table, aborting.")
+            self.app.log.debug("ToolMilling.on_apply_param_to_all_clicked() --> no tool in Tools Table, aborting.")
             return
 
-        self.ui_disconnect()
-
-        row = self.ui.tools_table_mill_exc.currentRow()
+        row = tools_table.currentRow()
         if row < 0:
             row = 0
 
-        tooluid_item = int(self.ui.tools_table_mill_exc.item(row, 3).text())
-        temp_tool_data = {}
+        # the 2 rows with the totals of the Excellon tools table have no tool UID, or a stale one: setRowCount() keeps
+        # the items of the rows built before for an object with more tools
+        uid_item = tools_table.item(row, 3)
+        tooluid_item = int(uid_item.text()) if uid_item is not None and uid_item.text() else None
+        temp_tool_data = None
 
         for tooluid_key, tooluid_val in self.target_obj.tools.items():
             if int(tooluid_key) == tooluid_item:
@@ -2086,6 +2093,12 @@ class ToolMilling(Geometry, AppTool):
                 # the current row in the tool table
                 temp_tool_data = tooluid_val['data']
                 break
+
+        if temp_tool_data is None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No Tool Selected"))
+            return
+
+        self.ui_disconnect()
 
         for tooluid_key, tooluid_val in self.target_obj.tools.items():
             tooluid_val['data'] = deepcopy(temp_tool_data)

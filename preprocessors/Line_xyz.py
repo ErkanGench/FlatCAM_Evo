@@ -19,7 +19,7 @@ class Line_xyz(PreProc):
     def start_code(self, p):
         units = ' ' + str(p['units']).lower()
         coords_xy = p['xy_toolchange']
-        end_coords_xy = p['end_xy']
+        end_coords_xy = p['xy_end']
         gcode = '(This preprocessor has all the coordinates on the same line: X, Y, Z.)\n\n'
 
         xmin = '%.*f' % (p.coords_decimals, p['obj_options']['xmin'])

@@ -1,0 +1,78 @@
+"""Geometry Editor: the Copy tool makes the copies also when the cursor did not move after the reference click."""
+import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from shapely.geometry import LineString, box
+
+from appEditors.appGeoEditor import FCCopy, DrawToolShape
+
+
+def radio(value):
+    return SimpleNamespace(get_value=lambda: value)
+
+
+def copy_tool(selected, mode='n'):
+    """An FCCopy with the shapes already selected, without the Copy plugin GUI."""
+    editor = SimpleNamespace(selected=list(selected), app=SimpleNamespace(inform=Mock(), jump_signal=Mock()))
+    editor.get_selected = lambda: editor.selected
+
+    tool = FCCopy.__new__(FCCopy)
+    tool.draw_app = editor
+    tool.complete = False
+    tool.points = []
+    tool.geometry = None
+    tool.origin = None
+    tool.destination = None
+    tool.util_geo = None
+    tool.clicked_postion = None
+    tool.has_selection = True
+    tool.sel_limit = 30
+    tool.draw_cursor_data = Mock()
+    tool.copy_tool = SimpleNamespace(ui=SimpleNamespace(
+        mode_radio=radio(mode), array_type_radio=radio('linear'), axis_radio=radio('X'), pitch_entry=radio(10.0),
+        linear_angle_spinner=radio(0.0), array_size_entry=radio(3)))
+    tool.selection_shape = tool.selection_bbox()
+    return tool
+
+
+class TestGeoEditorCopy(unittest.TestCase):
+
+    def setUp(self):
+        self.square = DrawToolShape(box(0, 0, 1, 1))
+        self.line = DrawToolShape(LineString([(0, 0), (2, 0)]))
+
+    def test_second_click_without_cursor_move_copies_to_the_destination(self):
+        tool = copy_tool([self.square, self.line])
+        tool.click((0.0, 0.0))      # reference point
+        tool.click((3.0, 1.0))      # destination, no mouse move event in between
+        self.assertTrue(tool.complete)
+        self.assertEqual([shp.geo.bounds for shp in tool.geometry], [(3.0, 1.0, 4.0, 2.0), (3.0, 1.0, 5.0, 1.0)])
+        # the source shapes are not changed
+        self.assertEqual(self.square.geo.bounds, (0.0, 0.0, 1.0, 1.0))
+
+    def test_second_click_on_the_reference_copies_in_place(self):
+        # 2 clicks at the same point, slower than a double click (VisPy gives no 2nd mouse_press for a double click)
+        tool = copy_tool([self.square])
+        tool.click((0.5, 0.5))
+        tool.click((0.5, 0.5))
+        self.assertTrue(tool.complete)
+        self.assertEqual([shp.geo.bounds for shp in tool.geometry], [(0.0, 0.0, 1.0, 1.0)])
+        self.assertIsNot(tool.geometry[0].geo, self.square.geo)
+
+    def test_linear_array_without_cursor_move(self):
+        tool = copy_tool([self.square], mode='a')
+        tool.click((0.0, 0.0))
+        tool.click((1.0, 0.0))
+        self.assertEqual([shp.geo.bounds[0] for shp in tool.geometry], [1.0, 11.0, 21.0])
+
+    def test_copy_after_a_cursor_move_uses_the_moved_geometry(self):
+        tool = copy_tool([self.square])
+        tool.click((0.0, 0.0))
+        tool.utility_geometry(data=(2.0, 2.0))      # the mouse move before the click
+        tool.click((2.0, 2.0))
+        self.assertEqual([shp.geo.bounds for shp in tool.geometry], [(2.0, 2.0, 3.0, 3.0)])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -93,7 +93,7 @@ class Berta_CNC(PreProc):
 
         gcode += '(Z Start: ' + str(p['startz']) + units + ')\n'
         gcode += '(Z End: ' + str(p['z_end']) + units + ')\n'
-        if coords_xy is not None:
+        if end_coords_xy is not None:
             gcode += '(X,Y End: ' + "%.*f, %.*f" % (p.decimals, end_coords_xy[0],
                                                     p.decimals, end_coords_xy[1]) + units + ')\n'
         else:

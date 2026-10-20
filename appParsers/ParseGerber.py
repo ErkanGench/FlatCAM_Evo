@@ -1929,10 +1929,10 @@ class Gerber(Geometry):
             # Ensure last_path_aperture is valid before accessing tools
             if last_path_aperture is None or last_path_aperture not in self.tools:
                 self.app.inform.emit(
-                    '[ERROR] %s' % _(
+                    '[ERROR] %s' % (_(
                         "Gerber implementation format not supported. "
                         "Undefined aperture at line: %s. "
-                        "Report to developers." % str(line_num)))
+                        "Report to developers.") % str(line_num)))
                 path = [path[-1]]
                 return path, last_path_aperture
             

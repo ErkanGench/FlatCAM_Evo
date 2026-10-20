@@ -1051,12 +1051,12 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             # detect if using multi-tool and make the Gcode summation correctly for each case
             if self.multitool is True:
                 try:
-                    if self.obj_options['type'].lower() == 'geometry':
-                        for tooluid_key in self.tools:
-                            for key, value in self.tools[tooluid_key].items():
-                                if key == 'gcode':
-                                    gcode += value
-                                    break
+                    # Geometry and Excellon jobs alike: the code is generated per tool
+                    for tooluid_key in self.tools:
+                        for key, value in self.tools[tooluid_key].items():
+                            if key == 'gcode':
+                                gcode += value
+                                break
                 except TypeError:
                     pass
             else:

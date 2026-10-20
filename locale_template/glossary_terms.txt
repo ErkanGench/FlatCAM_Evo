@@ -1,0 +1,111 @@
+# Key terms of FlatCAM Evo for translators: one term per line, a TAB, then a note.
+# "python scripts/i18n_tool.py glossary [<lang> ...]" lists how each language translates them today (the translation
+# of the string that is exactly the term); "--out glossary.csv" writes the table to a spreadsheet file instead. Keep a
+# term translated the same way everywhere; a translator who changes a term here should change it in the whole .po.
+# Every term is a string of the program (tests/test_i18n_tool.py checks it).
+Gerber	file format name (copper, mask, silkscreen layers of a PCB): usually kept in Latin letters
+Excellon	file format name (drill holes and slots): usually kept in Latin letters
+GCode	the program a CNC machine runs (also written G-code): usually kept in Latin letters
+CNCJob	a FlatCAM object that holds G-code; kept as the object type name in many languages
+Geometry	a FlatCAM object made of paths and shapes (toolpaths)
+Object	an item of the project (a Gerber, Excellon, Geometry, CNCJob, Script or Document object)
+Project	the FlatCAM project file (.FlatPrj) with all its objects
+Isolation	cutting around the copper traces so that they are electrically separated (isolation routing)
+Isolation Routing	same as Isolation
+Isolation Type	which parts are isolated: exteriors, interiors or both
+NCC	short for Non-Copper Clearing
+Non-Copper Clearing	removing all copper that is not part of the circuit
+Paint	filling an area with toolpaths
+Cutout	cutting the board out of the copper-clad plate, usually leaving small bridges
+Bridge	a small uncut part that keeps the board attached to the plate
+Gaps	the bridges of a cutout
+Gap size	width of a bridge
+Milling	cutting with a rotating end mill
+Drilling	making holes with drill bits
+Tool	a CUTTING tool (end mill, drill bit, laser spot); "tools" in menus can also mean the plugins - check the context
+Tools	plural of Tool; check whether cutting tools or software tools are meant
+Tools Table	the table of the cutting tools (bits) of an object, not of software tools
+Tools Database	the saved cutting tools (bits) and their parameters
+Tool Dia	diameter of the cutting tool
+Tool Diameter	diameter of the cutting tool
+V-Tip Dia	diameter of the tip of a V-shaped engraving bit
+V-Tip Angle	angle of a V-shaped engraving bit
+Feedrate	speed of the tool while cutting
+Feedrate X-Y	cutting speed in the horizontal plane
+Feedrate Z	speed of the tool going down into the material
+Feedrate Rapids	speed of the fast moves between cuts
+Spindle speed	rotation speed of the spindle (RPM); for a laser: its power
+Laser Power	power of the laser
+Min Power	laser power used while the laser should be off between cuts; anything but 0 keeps the laser on
+Preprocessor	the module that writes G-code for a given machine/controller (GRBL, Marlin...)
+Tool change	stopping to change the bit
+Toolchange Z	height where the bit is changed
+Travel Z	height of the tool during moves between cuts
+Cut Z	depth of the cut
+End move Z	height of the tool at the end of the job
+End move X,Y	position of the tool at the end of the job
+Depth	cutting depth
+Multi-Depth	cutting the depth in several passes
+Passes	number of cuts next to each other (isolation) or one above the other (multi-depth)
+Overlap	how much neighbouring passes overlap
+Offset	distance added to a toolpath or a position
+Margin	extra distance around a shape
+Climb	climb milling (cutting direction)
+Conventional	conventional milling (cutting direction)
+Rest Machining	clearing with smaller tools only what bigger tools could not reach
+Seed	a clearing method that grows outwards from a point
+Lines	a clearing method with parallel lines
+Standard	a clearing method that follows the outline inwards
+Apertures	the shapes of a Gerber file (pads, traces) and their sizes
+Pad	copper area where a component pin is soldered
+Slot	an elongated (oval) hole
+Slots	plural of Slot
+Drill	a drill hole, or the drill bit
+Drills	the drill holes of an Excellon object
+Holes	holes in the board
+Copper	the copper layer of the board
+Copper Thieving	adding copper patterns in empty areas so plating is even
+Fiducials	alignment marks for machines
+Film	printing a layer as a film (for photo etching)
+Panelization	putting several copies of a board on one plate
+Mirror	mirroring an object (for the bottom side)
+Align	aligning objects to each other
+Alignment	aligning, or the alignment holes of a two-sided board
+Levelling	adjusting the G-code to the measured height of the board surface
+Autolevelling	same as Levelling, measured automatically with a probe
+Polygon	a closed shape
+Buffer	growing or shrinking a shape by a distance
+Bounding Box	the smallest rectangle around an object
+Combine	making one toolpath from several passes
+Interiors	the holes inside a copper area
+Edge	the outline of the board
+Clearance	free distance kept around something
+Dwell	waiting a moment (e.g. after the spindle starts)
+Canvas	the drawing area where the objects are shown
+Plot	drawing an object on the canvas
+Grid	the snapping grid of the canvas
+Snap	jumping to the grid or to points while drawing
+Units	millimetres or inches
+Origin	the zero point
+Coordinates	X, Y position
+Scale	resizing
+Rotate	turning by an angle
+Skew	slanting a shape
+Preferences	the settings of the application
+Editor	an editor of an object (Gerber, Excellon, Geometry, G-code editor)
+Undo	undoing the last action
+Redo	doing again what was undone
+Selection	the selected objects or shapes
+Reference	the object or point used as reference
+Area	a region of the board
+Shape	a drawn shape
+Distance	measuring distance
+Properties	the information of an object
+Script	a Tcl script
+Command Line	the Tcl command line (shell)
+Open	opening a file
+Save	saving a file
+Import	reading a file into the project
+Export	writing an object to a file
+Generate Geometry	making the toolpaths
+Generate CNCJob object	making the G-code

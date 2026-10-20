@@ -138,3 +138,57 @@ def test_drillcncjob_tcl_command_warns_when_the_laser_off_lines_keep_the_laser_o
                                         'las_min_pwr': min_power}, [])
     assert ('(laser OFF)' in job.source_file) is bool(min_power)
     assert len(laser_warnings(app)) == (1 if min_power else 0)
+
+
+def laser_warnings_per_tool(app):
+    """The laser Min Power warnings, grouped by the tool whose G-code was being generated."""
+    per_tool = []
+    for c in app.inform.emit.call_args_list:
+        msg = str(c.args[0]) if c.args else ''
+        if msg.startswith('Starting G-Code for tool with diameter'):
+            per_tool.append([])
+        elif msg.startswith('[WARNING]') and 'laser OFF' in msg:
+            per_tool[-1].append(msg)
+    return per_tool
+
+
+@pytest.mark.parametrize('first_min_power, second_min_power', [(250, 0), (0, 250)])
+def test_multi_tool_single_geometry_job_warns_only_for_the_tool_that_keeps_the_laser_on(first_min_power,
+                                                                                        second_min_power):
+    # The Milling tool makes the G-code of a single geometry with 2 tools by calling generate_from_geometry_2() for
+    # each tool on the same CNCjob, which appends to CNCjob.gcode: the 'laser OFF' lines of the first tool are still
+    # there when the G-code of the second tool is checked.
+    from appPlugins.ToolMilling import ToolMilling
+
+    class Milling(SimpleNamespace):
+        """The real ToolMilling methods, without its GUI."""
+        def __getattr__(self, name):
+            return getattr(ToolMilling, name).__get__(self, type(self))
+
+    app = laser_app()
+    tools = {}
+    for uid, (tooldia, min_power) in enumerate(((0.1, first_min_power), (0.2, second_min_power)), 1):
+        data = {key: value for key, value in AppDefaults.factory_defaults.items() if key.startswith('tools_mill_')}
+        data.update(tools_mill_tooldia=tooldia, tools_mill_offset_type=0, tools_mill_optimization_type='R',
+                    tools_mill_ppname_g='GRBL_laser', tools_mill_min_power=min_power, tools_mill_cutz=0,
+                    tools_mill_spindlespeed=500, tools_mill_multidepth=False, tools_mill_toolchange=False)
+        tools[uid] = {'tooldia': tooldia, 'data': data, 'solid_geometry': mill_paths()}
+    geo = SimpleNamespace(multigeo=False, tools=tools, solid_geometry=mill_paths(),
+                          obj_options=dict(tools[1]['data'], name='geo', xmin=0, ymin=0, xmax=7, ymax=0))
+    jobs = []
+
+    def new_object(kind, name, init, **kwargs):
+        job = laser_job(app)
+        job.kind, job.tools, job.gc_start = kind, {}, ''
+        assert init(job, app) != 'fail'
+        jobs.append(job)
+        return job
+
+    milling = Milling(app=app, units='MM', decimals=4, new_object=new_object)
+    milling.generate_cnc_job_handler(geo_obj=geo, tools_dict=tools, use_thread=False, plot=False, from_tcl=True)
+
+    assert len(jobs) == 1
+    assert 'S250 (laser OFF)' in jobs[0].source_file
+    warnings = laser_warnings_per_tool(app)
+    assert [len(w) for w in warnings] == [1 if first_min_power else 0, 1 if second_min_power else 0]
+    assert all('Laser Min Power is 250:' in m for w in warnings for m in w)
