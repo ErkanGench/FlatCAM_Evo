@@ -101,6 +101,29 @@ class TestPo(unittest.TestCase):
         self.assertEqual('Fuzzy one', catalog.gettext('Fuzzy one'))
         self.assertEqual('Old', catalog.gettext('Old'))
 
+    def test_read_rejects_malformed_strings_with_the_file_and_line(self):
+        for invalid in ('msgid "Title', 'msgstr "Titel', 'msgstr Titel"',
+                        'msgstr "Ti"tel"', 'msgstr "Titel" trailing',
+                        '"unfinished continuation', '#~ msgstr "Titel', 'msgstr"Titel"'):
+            with self.subTest(line=invalid):
+                with open(self.po, 'w', encoding='utf-8') as f:
+                    f.write('msgid ""\nmsgstr ""\n\nmsgid "Title"\n' + invalid + '\n')
+                with self.assertRaises(ValueError) as raised:
+                    t.read_po(self.po)
+                self.assertIn(self.po + ':5:', str(raised.exception))
+
+    def test_compile_does_not_overwrite_a_catalog_when_po_syntax_is_invalid(self):
+        mo = os.path.join(self.dir, 'strings.mo')
+        t.compile_mo(self.po, mo)
+        with open(mo, 'rb') as f:
+            original = f.read()
+        with open(self.po, 'w', encoding='utf-8') as f:
+            f.write('msgid "Title"\nmsgstr "Titel\n')
+        with self.assertRaises(ValueError):
+            t.compile_mo(self.po, mo)
+        with open(mo, 'rb') as f:
+            self.assertEqual(original, f.read())
+
     def test_merge(self):
         lang_dir = os.path.join(self.dir, 'locale', 'xx', 'LC_MESSAGES')
         os.makedirs(lang_dir)
@@ -250,6 +273,20 @@ class TestChecks(unittest.TestCase):
         self.assertTrue(errors('%s at 100%%', '%s 100 % de'))          # a single % in a formatted text
         self.assertTrue(errors('%(count)s done', '%(sayi)s bitti'))    # KeyError
         self.assertTrue(errors('Name: {name}', 'Ad: {ad}'))
+
+    def test_brace_checks_reject_invalid_syntax_and_escaped_fields(self):
+        for translated in ('Name: {name} {', 'Name: {name} }', 'Name: {{name}}',
+                           'Name: {name!}', 'Name: {name:{width}'):
+            with self.subTest(translation=translated):
+                errors, __ = t.check_entry('Name: {name}', translated)
+                self.assertTrue(errors)
+        self.assertTrue(t.check_entry('Name: {user.name}', 'Name: {user.other}')[0])
+
+    def test_brace_checks_allow_escaped_literals_and_reordered_fields(self):
+        self.assertEqual(([], []), t.check_entry(
+            '{{literal}} {name!r:>10} {count}', '{count} {name!r:>10} {{translated literal}}'))
+        self.assertEqual(([], []), t.check_entry('{value:{width}.{precision}f}', '{value:{width}.{precision}f}'))
+        self.assertEqual(([], []), t.check_entry('First: {} second: {}', '{} then {}'))
 
     def test_warnings_are_shown_as_they_are(self):
         def only_warnings(msgid, msgstr):

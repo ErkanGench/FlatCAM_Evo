@@ -126,47 +126,47 @@ class GeneralAppSettingsGroupUI(OptionsGroupUI2):
 
     def build_options(self) -> [OptionUI]:
         return [
-            HeadingOptionUI(label_text="Grid Settings", color="brown", label_tooltip=None),
+            HeadingOptionUI(label_text=_("Grid Settings"), color="brown", label_tooltip=None),
             DoubleSpinnerOptionUI(
                 option="global_gridx",
-                label_text="X value",
-                label_tooltip="This is the Grid snap value on X axis.",
+                label_text=_("X value"),
+                label_tooltip=_("This is the Grid snap value on X axis."),
                 step=0.1,
                 decimals=self.decimals
             ),
             DoubleSpinnerOptionUI(
                 option="global_gridy",
-                label_text='Y value',
-                label_tooltip="This is the Grid snap value on Y axis.",
+                label_text=_('Y value'),
+                label_tooltip=_("This is the Grid snap value on Y axis."),
                 step=0.1,
                 decimals=self.decimals
             ),
             DoubleSpinnerOptionUI(
                 option="global_snap_max",
-                label_text="Snap Max",
-                label_tooltip="Max. magnet distance",
+                label_text=_("Snap Max"),
+                label_tooltip=_("Max. magnet distance"),
                 step=0.1,
                 decimals=self.decimals
             ),
             SeparatorOptionUI(),
 
-            HeadingOptionUI(label_text="Workspace Settings", label_tooltip=None),
+            HeadingOptionUI(label_text=_("Workspace Settings"), label_tooltip=None),
             CheckboxOptionUI(
                 option="global_workspace",
-                label_text="Active",
-                label_tooltip="Draw a delimiting rectangle on canvas.\n"
-                              "The purpose is to illustrate the limits for our work."
+                label_text=_("Active"),
+                label_tooltip=_("Draw a delimiting rectangle on canvas.\n"
+                                "The purpose is to illustrate the limits for our work.")
             ),
             ComboboxOptionUI(
                 option="global_workspaceT",
-                label_text="Size",
-                label_tooltip="Select the type of rectangle to be used on canvas,\nas valid workspace.",
+                label_text=_("Size"),
+                label_tooltip=_("Select the type of rectangle to be used on canvas,\nas valid workspace."),
                 choices=list(self.pagesize.keys())
             ),
             RadioSetOptionUI(
                 option="global_workspace_orientation",
-                label_text="Orientation",
-                label_tooltip="Can be:\n- Portrait\n- Landscape",
+                label_text=_("Orientation"),
+                label_tooltip=_("Can be:\n- Portrait\n- Landscape"),
                 choices=[
                     {'label': _('Portrait'), 'value': 'p'},
                     {'label': _('Landscape'), 'value': 'l'},
@@ -175,37 +175,37 @@ class GeneralAppSettingsGroupUI(OptionsGroupUI2):
             # FIXME enabling OptionalInputSection ??
             SeparatorOptionUI(),
 
-            HeadingOptionUI(label_text="Font Size", label_tooltip=None),
+            HeadingOptionUI(label_text=_("Font Size"), label_tooltip=None),
             SpinnerOptionUI(
                 option="notebook_font_size",
-                label_text="Notebook",
-                label_tooltip="This sets the font size for the elements found in the Notebook.\n"
-                              "The notebook is the collapsible area in the left side of the GUI,\n"
-                              "and include the Project, Selected and Tool tabs.",
+                label_text=_("Notebook"),
+                label_tooltip=_("This sets the font size for the elements found in the Notebook.\n"
+                                "The notebook is the collapsible area in the left side of the GUI,\n"
+                                "and include the Project, Selected and Tool tabs."),
                 min_value=8, max_value=40, step=1
             ),
             SpinnerOptionUI(
                 option="axis_font_size",
-                label_text="Axis",
-                label_tooltip="This sets the font size for canvas axis.",
+                label_text=_("Axis"),
+                label_tooltip=_("This sets the font size for canvas axis."),
                 min_value=8, max_value=40, step=1
             ),
             SpinnerOptionUI(
                 option="textbox_font_size",
-                label_text="Textbox",
-                label_tooltip="This sets the font size for the Textbox GUI\n"
-                              "elements that are used in the application.",
+                label_text=_("Textbox"),
+                label_tooltip=_("This sets the font size for the Textbox GUI\n"
+                                "elements that are used in the application."),
                 min_value=8, max_value=40, step=1
             ),
             SeparatorOptionUI(),
 
-            HeadingOptionUI(label_text="Mouse Settings", label_tooltip=None),
+            HeadingOptionUI(label_text=_("Mouse Settings"), label_tooltip=None),
             RadioSetOptionUI(
                 option="global_cursor_type",
-                label_text="Cursor Shape",
-                label_tooltip="Choose a mouse cursor shape.\n"
-                              "- Small -> with a customizable size.\n"
-                              "- Big -> Infinite lines",
+                label_text=_("Cursor Shape"),
+                label_tooltip=_("Choose a mouse cursor shape.\n"
+                                "- Small -> with a customizable size.\n"
+                                "- Big -> Infinite lines"),
                 choices=[
                     {"label": _("Small"), "value": "small"},
                     {"label": _("Big"), "value": "big"}
@@ -213,40 +213,40 @@ class GeneralAppSettingsGroupUI(OptionsGroupUI2):
             ),
             SpinnerOptionUI(
                 option="global_cursor_size",
-                label_text="Cursor Size",
-                label_tooltip="Set the size of the mouse cursor, in pixels.",
+                label_text=_("Cursor Size"),
+                label_tooltip=_("Set the size of the mouse cursor, in pixels."),
                 min_value=10, max_value=70, step=1
             ),
             SpinnerOptionUI(
                 option="global_cursor_width",
-                label_text="Cursor Width",
-                label_tooltip="Set the line width of the mouse cursor, in pixels.",
+                label_text=_("Cursor Width"),
+                label_tooltip=_("Set the line width of the mouse cursor, in pixels."),
                 min_value=1, max_value=10, step=1
             ),
             CheckboxOptionUI(
                 option="global_cursor_color_enabled",
-                label_text="Cursor Color",
-                label_tooltip="Check this box to color mouse cursor."
+                label_text=_("Cursor Color"),
+                label_tooltip=_("Check this box to color mouse cursor.")
             ),
             ColorOptionUI(
                 option="global_cursor_color",
-                label_text="Cursor Color",
-                label_tooltip="Set the color of the mouse cursor."
+                label_text=_("Cursor Color"),
+                label_tooltip=_("Set the color of the mouse cursor.")
             ),
             # FIXME enabling of cursor color
             RadioSetOptionUI(
                 option="global_pan_button",
-                label_text="Pan Button",
-                label_tooltip="Select the mouse button to use for panning:\n"
-                              "- MMB --> Middle Mouse Button\n"
-                              "- RMB --> Right Mouse Button",
+                label_text=_("Pan Button"),
+                label_tooltip=_("Select the mouse button to use for panning:\n"
+                                "- MMB --> Middle Mouse Button\n"
+                                "- RMB --> Right Mouse Button"),
                 choices=[{'label': _('MMB'), 'value': '3'},
                          {'label': _('RMB'), 'value': '2'}]
             ),
             RadioSetOptionUI(
                 option="global_mselect_key",
-                label_text="Multiple Selection",
-                label_tooltip="Select the key used for multiple selection.",
+                label_text=_("Multiple Selection"),
+                label_tooltip=_("Select the key used for multiple selection."),
                 choices=[{'label': _('CTRL'),  'value': 'Control'},
                          {'label': _('SHIFT'), 'value': 'Shift'}]
             ),
@@ -254,37 +254,37 @@ class GeneralAppSettingsGroupUI(OptionsGroupUI2):
 
             CheckboxOptionUI(
                 option="global_delete_confirmation",
-                label_text="Delete object confirmation",
-                label_tooltip="When checked the application will ask for user confirmation\n"
-                              "whenever the Delete object(s) event is triggered, either by\n"
-                              "menu shortcut or key shortcut."
+                label_text=_("Delete object confirmation"),
+                label_tooltip=_("When checked the application will ask for user confirmation\n"
+                                "whenever the Delete object(s) event is triggered, either by\n"
+                                "menu shortcut or key shortcut.")
             ),
             CheckboxOptionUI(
                 option="global_open_style",
-                label_text='"Open" behavior',
-                label_tooltip="When checked the path for the last saved file is used when saving files,\n"
-                              "and the path for the last opened file is used when opening files.\n\n"
-                              "When unchecked the path for opening files is the one used last: either the\n"
-                              "path for saving files or the path for opening files."
+                label_text=_('"Open" behavior'),
+                label_tooltip=_("When checked the path for the last saved file is used when saving files,\n"
+                                "and the path for the last opened file is used when opening files.\n\n"
+                                "When unchecked the path for opening files is the one used last: either the\n"
+                                "path for saving files or the path for opening files.")
             ),
             CheckboxOptionUI(
                 option="global_toggle_tooltips",
-                label_text="Enable ToolTips",
-                label_tooltip="Check this box if you want to have toolTips displayed\n"
-                              "when hovering with mouse over items throughout the App."
+                label_text=_("Enable ToolTips"),
+                label_tooltip=_("Check this box if you want to have toolTips displayed\n"
+                                "when hovering with mouse over items throughout the App.")
             ),
             SpinnerOptionUI(
                 option="global_bookmarks_limit",
-                label_text="Bookmarks limit",
-                label_tooltip="The maximum number of bookmarks that may be installed in the menu.\n"
-                              "The number of bookmarks in the bookmark manager may be greater\n"
-                              "but the menu will hold only so much.",
+                label_text=_("Bookmarks limit"),
+                label_tooltip=_("The maximum number of bookmarks that may be installed in the menu.\n"
+                                "The number of bookmarks in the bookmark manager may be greater\n"
+                                "but the menu will hold only so much."),
                 min_value=0, max_value=9999, step=1
             ),
             ComboboxOptionUI(
                 option="global_activity_icon",
-                label_text="Activity Icon",
-                label_tooltip="Select the GIF that show activity when FlatCAM is active.",
+                label_text=_("Activity Icon"),
+                label_tooltip=_("Select the GIF that show activity when FlatCAM is active."),
                 choices=['Ball black', 'Ball green', 'Arrow green', 'Eclipse green']
             )
 
