@@ -3070,6 +3070,17 @@ class ToolMilling(Geometry, AppTool):
 
         tools_dict = self.sel_tools if tools_dict is None else tools_dict
 
+        # the tool data of objects made by older app versions (e.g. a Geometry in an older project) lacks the
+        # options added later; the CNC job reads them, so they get the application value
+        for tool in tools_dict.values():
+            data = tool['data']
+            if 'tools_mill_tooldia' not in data and 'tooldia' in tool:
+                data['tools_mill_tooldia'] = tool['tooldia']
+            for key in AppDefaults.factory_defaults:
+                if key.startswith('tools_mill_') and key not in data:
+                    data[key] = deepcopy(self.app.options.get(
+                        key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
+
         if not geo_obj.tools:
             seg_x = seg_x if seg_x is not None else float(geo_obj.obj_options['seg_x'])
             seg_y = seg_y if seg_y is not None else float(geo_obj.obj_options['seg_y'])
