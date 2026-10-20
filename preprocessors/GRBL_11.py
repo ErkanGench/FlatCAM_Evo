@@ -237,11 +237,8 @@ G00 Z{z_toolchange}
                ' F' + str(self.feedrate_format % (p.fr_decimals, p.feedrate))
 
     def end_code(self, p):
-        coords_xy = p['xy_end']
-        gcode = ('G00 Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + "\n")
-
-        if coords_xy and coords_xy != '':
-            gcode += 'G00 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1]) + "\n"
+        # End Z and the end position; the X-Y move is not made below the Travel Z
+        gcode = self.end_moves_code(p, rapid='G00')
         return gcode
 
     def feedrate_code(self, p):
