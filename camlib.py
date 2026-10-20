@@ -4270,6 +4270,8 @@ class CNCjob(Geometry):
 
         oriented_path = []
         for pt, geo in optimized_path:
+            if self.app.abort_flag:
+                raise grace
             # If last point in geometry is the nearest but prefer the first one if last point == first point
             # then reverse coordinates.
             if pt != geo.coords[0] and pt == geo.coords[-1]:
@@ -4281,7 +4283,7 @@ class CNCjob(Geometry):
         # in its own direction and the extra cut looks at the path before the simplification.
         simplified = None
         if not self.multidepth and self.extracut is False and self.tolerance > 0:
-            simplified = simplify_paths([geo for __, geo in oriented_path], self.tolerance)
+            simplified = simplify_paths([geo for __, geo in oriented_path], self.tolerance, app=self.app)
 
         # the G-code of the paths is joined at the end: added to the growing string, it was copied again and again
         gcode_parts = [t_gcode]
@@ -8821,7 +8823,7 @@ def arc_angle(start, stop, direction):
 #     return None
 
 
-def simplify_paths(paths, tolerance):
+def simplify_paths(paths, tolerance, app=None):
     """
     The same as [path.simplify(tolerance) for path in paths], made with vectorized calls on several threads (GEOS
     releases the GIL). A geometry that is more than once in the list is simplified once, by one thread, and the same
@@ -8831,20 +8833,30 @@ def simplify_paths(paths, tolerance):
     :type paths:        list
     :param tolerance:   simplification tolerance
     :type tolerance:    float
+    :param app:         optional application for cancellation checks between simplification chunks
     :return:            the simplified geometries, in the same order
     :rtype:             list
     """
+    def simplify_piece(piece):
+        if app is not None and app.abort_flag:
+            raise grace
+        result = shapely.simplify(piece, tolerance)
+        if app is not None and app.abort_flag:
+            raise grace
+        return result
+
     unique = {id(path): path for path in paths}
     geoms = np.empty(len(unique), dtype=object)
     geoms[:] = list(unique.values())
 
     workers = min(os.cpu_count() or 1, len(geoms) // 16)
+    chunks = np.array_split(geoms, max(1, workers * 4))
     if workers < 2:
-        simplified = shapely.simplify(geoms, tolerance)
+        simplified = np.concatenate([simplify_piece(piece) for piece in chunks])
     else:
         # more pieces than threads: the paths are not equally long
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            pieces = pool.map(lambda piece: shapely.simplify(piece, tolerance), np.array_split(geoms, workers * 4))
+            pieces = pool.map(simplify_piece, chunks)
             simplified = np.concatenate(list(pieces))
 
     by_id = dict(zip(unique.keys(), simplified))

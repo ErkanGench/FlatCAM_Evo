@@ -151,6 +151,31 @@ def tool_gcode(pp_name, paths, per_path=False, **data_changes):
 
 
 class TestGeometryToolGcode:
+    @pytest.mark.parametrize('workers', [1, 2])
+    @pytest.mark.parametrize('count', [5, 300])
+    @pytest.mark.parametrize('cancel_before', [False, True])
+    def test_cancel_stops_simplification(self, count, cancel_before, workers):
+        job = gcode_job('default')
+        tools = milling_tools(noisy_paths(count))
+        original_simplify = shapely.simplify
+
+        def emit(message):
+            if cancel_before and 'Starting G-Code for tool with diameter' in message:
+                job.app.abort_flag = True
+
+        def simplify(piece, tolerance):
+            job.app.abort_flag = True
+            return original_simplify(piece, tolerance)
+
+        with patch.object(job.app.inform, 'emit', side_effect=emit), \
+                patch.object(camlib.os, 'cpu_count', return_value=workers), \
+                patch.object(shapely, 'simplify', side_effect=simplify) as mock:
+            with pytest.raises(camlib.grace):
+                job.geometry_tool_gcode_gen(1, tools, (0, 0), (0, 0), 0.005, is_first=True, is_last=True)
+        assert mock.call_count == (0 if cancel_before else 1)
+        if not cancel_before and count == 300:
+            assert len(mock.call_args.args[0]) < count
+
     @pytest.mark.parametrize('pp_name', ['GRBL_laser', 'default'])
     @pytest.mark.parametrize('opt_type', ['R', 'N'])
     def test_simplified_at_once_same_gcode(self, pp_name, opt_type):
