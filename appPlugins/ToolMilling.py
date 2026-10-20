@@ -56,6 +56,7 @@ LEGACY_MILL_DATA_KEYS = {
     'tools_mill_feedrate_rapid': ('feedrate_rapid',),
     'tools_mill_spindlespeed': ('spindlespeed',),    # a laser preprocessor: the laser power, as now
     'tools_mill_spindledir': ('spindledir',),
+    'tools_mill_laser_on': ('spindledir',),     # the laser preprocessors of 8.994 used it: M03 for CW, M04 for CCW
     'tools_mill_dwell': ('dwell',),
     'tools_mill_dwelltime': ('dwelltime',),
     'tools_mill_ppname_g': ('ppname_g',),
@@ -78,10 +79,13 @@ LEGACY_MILL_DATA_KEYS = {
 
 # The older value of these settings in the tool data can be the text of a combo box: the development builds of
 # 21-28.10.2020 (0b94eef84 to eb7de1173, before the FlatCAM 8.994 release) saved the polish method as 'Standard', 'Seed'
-# or 'Lines' (translated in another interface language); the 8.994 release and FlatCAM Evo save the index.
+# or 'Lines' (translated in another interface language); the 8.994 release and FlatCAM Evo save the index. The laser ON
+# code comes from the 8.994 spindle direction (its GRBL_laser and Z_laser sent M03 for CW, M04 for CCW); FlatCAM Evo
+# before 12.2023 always sent M3, so its 'tools_mill_spindledir' does not give it.
 # modern key -> the modern value of each older text
 LEGACY_MILL_DATA_TEXTS = {
     'tools_mill_polish_method': {'standard': 0, 'seed': 1, 'lines': 2},
+    'tools_mill_laser_on': {'cw': 'M03', 'ccw': 'M04'},
 }
 
 # FlatCAM 8.994 keeps these settings in the tool itself, next to its data. The offset, type and tool_type are combo box
@@ -100,15 +104,15 @@ LEGACY_MILL_TOOL_KEYS = {
 LEGACY_PREPROCESSOR_NAMES = {'grbl_11': 'GRBL_11', 'line_xyz': 'Line_xyz', 'Z_laser': 'GRBL_laser_z'}
 
 
-def legacy_index(value, values):
+def legacy_choice(value, choices):
     """
-    The modern index of an older combo box value: its English text ('Path', 'Iso', 'C1', 'Standard'...; spaces and case
-    are ignored, 8.994 sometimes saved them with spaces) or already a modern index. None when it is not recognized (e.g.
-    a translated text).
+    The modern value of an older combo box choice: its English text ('Path', 'Iso', 'C1', 'Standard', 'CW'...; spaces
+    and case are ignored, 8.994 sometimes saved them with spaces) or an int that is already a modern index. None when it
+    is not recognized (e.g. a translated text).
     """
     if type(value) is int:
-        return value if value in values.values() else None
-    return values.get(str(value).strip().lower())
+        return value if value in choices.values() else None
+    return choices.get(str(value).strip().lower())
 
 
 def legacy_mill_value(tool, key):
@@ -117,8 +121,8 @@ def legacy_mill_value(tool, key):
 
     :param tool:    a tool of a Geometry: {'tooldia': ..., 'data': {...}, ...}
     :param key:     a modern 'tools_mill_*' key
-    :return:        (True, a copy of the value; a renamed preprocessor gets its current name, a text its modern index)
-                    or (False, None) when the tool has no recognized older setting
+    :return:        (True, a copy of the value; a renamed preprocessor gets its current name, a combo box text its
+                    modern value) or (False, None) when the tool has no recognized older setting
     """
     data = tool['data']
     for old_key in LEGACY_MILL_DATA_KEYS.get(key, ()):
@@ -127,7 +131,7 @@ def legacy_mill_value(tool, key):
             if key == 'tools_mill_ppname_g' and isinstance(value, str):
                 value = LEGACY_PREPROCESSOR_NAMES.get(value, value)
             elif key in LEGACY_MILL_DATA_TEXTS:
-                value = legacy_index(value, LEGACY_MILL_DATA_TEXTS[key])
+                value = legacy_choice(value, LEGACY_MILL_DATA_TEXTS[key])
                 if value is None:
                     return False, None
             return True, value
@@ -136,7 +140,7 @@ def legacy_mill_value(tool, key):
         if old_key in tool:
             if values is None:
                 return True, deepcopy(tool[old_key])
-            value = legacy_index(tool[old_key], values)
+            value = legacy_choice(tool[old_key], values)
             if value is not None:
                 return True, value
     return False, None

@@ -168,8 +168,9 @@ def test_cnc_job_from_tool_data_without_the_laser_on_option(multigeo):
 
     gcode, _milling = make_cnc_job({'tooldia': 0.1, 'data': data}, multigeo, tools_mill_laser_on='M4')
 
-    # the laser is turned on with the code of the application options and the power of the tool data
-    assert 'M4 S800' in gcode
+    # the laser is turned on with the code of the application options and the power of the tool data; its
+    # tools_mill_spindledir (CW) does not give the code: FlatCAM Evo before 12.2023 always sent M3
+    assert 'M4 S800' in gcode and data['tools_mill_spindledir'] == 'CW'
     assert data['tools_mill_laser_on'] == 'M4'
     # the probe depth comes from its older name
     assert data['tools_mill_z_p_depth'] == -0.03
@@ -184,9 +185,10 @@ def test_cnc_job_from_flatcam_8_994_tool_data(multigeo):
 
     gcode, _milling = make_cnc_job(tool, multigeo, **dict(OTHER_OPTIONS, tools_mill_ppname_g='default'))
 
-    # the saved laser preprocessor and laser power; 8.994 has no setting for the laser ON code: application value
-    assert 'M4 S1000' in gcode and 'S500' not in gcode
-    assert data['tools_mill_ppname_g'] == 'GRBL_laser' and data['tools_mill_laser_on'] == 'M4'
+    # the saved laser preprocessor and laser power; the laser ON code of the saved spindle direction (CW), as in 8.994,
+    # not the application one (M4)
+    assert 'M03 S1000' in gcode and 'M4 S' not in gcode and 'S500' not in gcode
+    assert data['tools_mill_ppname_g'] == 'GRBL_laser' and data['tools_mill_laser_on'] == 'M03'
     # the tool diameter comes from the tool, not from the application option
     assert data['tools_mill_tooldia'] == 0.1 != OTHER_OPTIONS['tools_mill_tooldia']
     assert data['tools_mill_job_type'] == 2 and data['tools_mill_tool_shape'] == 5   # 'Iso', 'V'
@@ -237,6 +239,26 @@ def test_milling_plugin_uses_the_saved_depth_passes_and_feed_rates(multigeo):
 
 
 @pytest.mark.parametrize('multigeo', [False, True])
+@pytest.mark.parametrize('spindledir, laser_on', [('CW', 'M03'), ('CCW', 'M04')])
+def test_milling_plugin_turns_the_saved_laser_on_like_8_994(spindledir, laser_on, multigeo):
+    # Generate CNCJob for a saved GRBL_laser isolation (cut Z 0, power 1000, F1000); the application options have the
+    # 'default' preprocessor, the laser ON code M4 and the power 500
+    tool = flatcam_8_994_laser_tool()
+    tool['data']['spindledir'] = spindledir
+    # a multi-geometry job takes the preprocessor of the form (here GRBL_laser, chosen by the user), a single-geometry
+    # job the saved one (the form shows the application 'default')
+    form = {'tools_mill_ppname_g': 'GRBL_laser'} if multigeo else {}
+
+    job, _milling = make_plugin_cnc_job(tool, multigeo, form=form, **dict(OTHER_OPTIONS, tools_mill_ppname_g='default'))
+
+    gcode = job.source_file
+    assert job.pp_geometry_name == 'GRBL_laser'
+    # 8.994 turned the laser on with M03 for CW and M04 for CCW
+    assert '%s S1000' % laser_on in gcode and 'G1 F1000.00' in gcode
+    assert 'M4 S' not in gcode and 'S500' not in gcode
+
+
+@pytest.mark.parametrize('multigeo', [False, True])
 def test_modern_key_wins_over_its_older_name(multigeo):
     # a key with both names: the modern one is used, also when its value is falsy
     tool = flatcam_8_994_cutout_tool(tools_mill_cutz=-0.1, tools_mill_multidepth=False, tools_mill_feedrate=200.0,
@@ -261,11 +283,12 @@ def test_application_value_only_for_absent_settings(multigeo):
 
     data = tool['data']
     # no older name in this tool: the application value
-    assert data['tools_mill_laser_on'] == 'M4' and data['tools_mill_min_power'] == 7.0
-    assert data['tools_mill_polish'] is True
-    # an older name in this tool: its value, not the application value (here: Roughing, not Polishing)
+    assert data['tools_mill_min_power'] == 7.0 and data['tools_mill_polish'] is True
+    # an older name in this tool: its value, not the application value (here: Roughing, not Polishing; M03 for the
+    # CW spindle direction, not M4)
     assert data['tools_mill_job_type'] == 0 and data['tools_mill_offset_type'] == 0
     assert data['tools_mill_endz'] == 15.0 and data['tools_mill_ppname_g'] == 'default'
+    assert data['tools_mill_laser_on'] == 'M03'
 
 
 def make_cnc_job_with_preprocessor(tool, multigeo, **options):
@@ -326,6 +349,10 @@ def test_older_tool_values_are_converted():
     assert legacy_mill_value({'type': 'Polish', 'data': {}}, 'tools_mill_job_type') == (False, None)
     # a valid falsy older value is used
     assert legacy_mill_value({'data': {'spindlespeed': 0}}, 'tools_mill_spindlespeed') == (True, 0)
+    # the laser ON code from the 8.994 spindle direction, not from tools_mill_spindledir (FlatCAM Evo before 12.2023)
+    assert legacy_mill_value({'data': {'spindledir': 'CCW'}}, 'tools_mill_laser_on') == (True, 'M04')
+    assert legacy_mill_value({'data': {'tools_mill_spindledir': 'CCW'}}, 'tools_mill_laser_on') == (False, None)
+    assert legacy_mill_value({'data': {'spindledir': 'Left'}}, 'tools_mill_laser_on') == (False, None)
 
 
 @pytest.mark.parametrize('saved, app_value, expected', [
@@ -348,7 +375,9 @@ def test_saved_polish_method(saved, app_value, expected):
 def test_older_names_are_application_options():
     for key in list(LEGACY_MILL_DATA_KEYS) + list(LEGACY_MILL_TOOL_KEYS):
         assert key in MILL_OPTIONS, key
+    # one modern key for each older name; the 8.994 spindle direction also gives the laser ON code
     older = [name for names in LEGACY_MILL_DATA_KEYS.values() for name in names]
+    older.remove('spindledir')
     assert len(older) == len(set(older))
     # the older texts are converted for an older name of the tool data
     assert set(LEGACY_MILL_DATA_TEXTS) <= set(LEGACY_MILL_DATA_KEYS)
