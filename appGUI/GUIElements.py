@@ -23,6 +23,8 @@ import html
 import sys
 import inspect
 
+from appCommon.SafeEval import safe_eval
+
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -629,13 +631,13 @@ class LengthEntry(FCLineEdit):
             units = raw[-2:]
             units = self.scales[self.output_units][units.upper()]
             value = raw[:-2]
-            return float(eval(value)) * units
+            return float(safe_eval(value)) * units
         except IndexError:
             value = raw
-            return float(eval(value))
+            return float(safe_eval(value))
         except KeyError:
             value = raw
-            return float(eval(value))
+            return float(safe_eval(value))
         except Exception:
             log.warning("Could not parse value in entry: %s" % str(raw))
             return None
@@ -683,7 +685,7 @@ class FloatEntry(FCLineEdit):
         raw = str(self.text()).strip(' ')
 
         try:
-            evaled = eval(raw)
+            evaled = safe_eval(raw)
             return float(evaled)
         except Exception as e:
             if raw != '':
@@ -729,7 +731,7 @@ class FloatEntry2(FCLineEdit):
         raw = str(self.text()).strip(' ')
 
         try:
-            evaled = eval(raw)
+            evaled = safe_eval(raw)
             return float(evaled)
         except Exception as e:
             if raw != '':
@@ -894,7 +896,7 @@ class FCEntry3(FCEntry):
         value = str(self.text()).strip(' ')
 
         try:
-            return float(eval(value))
+            return float(safe_eval(value))
         except Exception as e:
             log.error("Could not parse value in entry: %s" % str(e))
             return None
@@ -935,7 +937,7 @@ class EvalEntry(FCLineEdit):
     def get_value(self):
         raw = str(self.text()).strip(' ')
         try:
-            evaled = eval(raw)
+            evaled = safe_eval(raw)
         except Exception as e:
             if raw != '':
                 log.error("Could not evaluate val: %s, error: %s" % (str(raw), str(e)))
@@ -975,7 +977,7 @@ class EvalEntry2(FCLineEdit):
         raw = str(self.text()).strip(' ')
 
         try:
-            evaled = eval(raw)
+            evaled = safe_eval(raw)
         except Exception as e:
             if raw != '':
                 log.error("Could not evaluate val: %s, error: %s" % (str(raw), str(e)))
@@ -1006,7 +1008,7 @@ class NumericalEvalEntry(FCEntry):
         raw = str(self.text()).strip(' ')
         raw = raw.replace(',', '.')
         try:
-            evaled = eval(raw)
+            evaled = safe_eval(raw)
         except Exception as e:
             if raw != '':
                 log.error("Could not evaluate val: %s, error: %s" % (str(raw), str(e)))
@@ -1029,7 +1031,7 @@ class NumericalEvalTupleEntry(EvalEntry):
     def get_value(self):
         raw = str(self.text()).strip(' ')
         try:
-            evaled = eval(raw)
+            evaled = safe_eval(raw)
         except Exception as e:
             if raw != '':
                 log.error("Could not evaluate val: %s, error: %s" % (str(raw), str(e)))

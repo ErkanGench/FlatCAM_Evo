@@ -11,6 +11,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     RadioSet, FCDoubleSpinner, NumericalEvalEntry
 from defaults import AppDefaults
 from camlib import flatten_shapely_geometry
+from appCommon.SafeEval import safe_eval
 
 import logging
 from copy import deepcopy
@@ -161,7 +162,7 @@ class ToolEtchCompensation(AppTool):
 
     def on_oz_conversion(self, txt):
         try:
-            val = eval(txt)
+            val = safe_eval(txt)
             # oz thickness to mils by multiplying with 1.37
             # mils to microns by multiplying with 25.4
             val *= 34.798
@@ -172,7 +173,7 @@ class ToolEtchCompensation(AppTool):
 
     def on_mils_conversion(self, txt):
         try:
-            val = eval(txt)
+            val = safe_eval(txt)
             val *= 25.4
         except Exception:
             self.ui.mils_to_um_entry.set_value('')

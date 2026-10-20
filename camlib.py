@@ -9,6 +9,7 @@ import shapely
 from PyQt6 import QtWidgets     # noqa
 
 from appCommon.Common import GracefulException as grace
+from appCommon.SafeEval import safe_eval
 
 # from scipy.spatial import KDTree, Delaunay
 # from scipy.spatial import Delaunay
@@ -201,7 +202,7 @@ class ApertureMacro:
                 val = re.sub(r'[xX]', "*", val)
 
                 # Eval() and store.
-                self.loc_vars[var] = eval(val)
+                self.loc_vars[var] = safe_eval(val)
                 continue
 
             # ## Primitives
@@ -219,7 +220,7 @@ class ApertureMacro:
 
                 # Make all others 0
                 part = re.sub(r'\$[0-9a-zA-Z](?![0-9a-zA-Z])', "0", part)
-                self.primitives.append([eval(x) for x in part.split(",")])
+                self.primitives.append([safe_eval(x) for x in part.split(",")])
 
                 continue
 
@@ -3549,7 +3550,7 @@ class CNCjob(Geometry):
 
                 # and now, xy_toolchange is made into a list of floats in format [x, y]
                 if self.xy_toolchange:
-                    self.xy_toolchange = [float(eval(a)) for a in self.xy_toolchange.split(",")]
+                    self.xy_toolchange = [float(safe_eval(a)) for a in self.xy_toolchange.split(",")]
 
                 if self.xy_toolchange and len(self.xy_toolchange) != 2:
                     self.app.inform.emit('[ERROR] %s' % _("The Toolchange X,Y format has to be (x, y)."))
@@ -3574,7 +3575,7 @@ class CNCjob(Geometry):
 
                 # and now, xy_end is made into a list of floats in format [x, y]
                 if self.xy_end:
-                    self.xy_end = [float(eval(a)) for a in self.xy_end.split(",")]
+                    self.xy_end = [float(safe_eval(a)) for a in self.xy_end.split(",")]
 
                 if self.xy_end and len(self.xy_end) != 2:
                     self.app.inform.emit('[ERROR] %s' % _("The End X,Y format has to be (x, y)."))
@@ -4041,7 +4042,7 @@ class CNCjob(Geometry):
 
                 # and now, xy_end is made into a list of floats in format [x, y]
                 if self.xy_end:
-                    self.xy_end = [float(eval(a)) for a in self.xy_end.split(",")]
+                    self.xy_end = [float(safe_eval(a)) for a in self.xy_end.split(",")]
 
                 if self.xy_end and len(self.xy_end) != 2:
                     self.app.inform.emit('[ERROR] %s' % _("The End X,Y format has to be (x, y)."))
@@ -4061,7 +4062,7 @@ class CNCjob(Geometry):
 
                 # and now, xy_toolchange is made into a list of floats in format [x, y]
                 if self.xy_toolchange:
-                    self.xy_toolchange = [float(eval(a)) for a in self.xy_toolchange.split(",")]
+                    self.xy_toolchange = [float(safe_eval(a)) for a in self.xy_toolchange.split(",")]
 
                 if self.xy_toolchange and len(self.xy_toolchange) != 2:
                     self.app.inform.emit('[ERROR] %s' % _("The Toolchange X,Y format has to be (x, y)."))
@@ -4331,7 +4332,7 @@ class CNCjob(Geometry):
                 self.xy_toolchange = re.sub(r'[()\[\]]', '', str(self.xy_toolchange)) if self.xy_toolchange else None
 
                 if self.xy_toolchange:
-                    self.xy_toolchange = [float(eval(a)) for a in self.xy_toolchange.split(",")]
+                    self.xy_toolchange = [float(safe_eval(a)) for a in self.xy_toolchange.split(",")]
 
                 if self.xy_toolchange and len(self.xy_toolchange) != 2:
                     self.app.inform.emit('[ERROR]%s' %
@@ -4345,7 +4346,7 @@ class CNCjob(Geometry):
         # XY_end parameter
         self.xy_end = re.sub(r'[()\[\]]', '', str(self.xy_end)) if self.xy_end else None
         if self.xy_end and self.xy_end != '':
-            self.xy_end = [float(eval(a)) for a in self.xy_end.split(",")]
+            self.xy_end = [float(safe_eval(a)) for a in self.xy_end.split(",")]
         if self.xy_end and len(self.xy_end) < 2:
             self.app.inform.emit('[ERROR]  %s' % _("The End Move X,Y field in Edit -> Preferences has to be "
                                                    "in the format (x, y) but now there is only one value, not two."))
@@ -5162,7 +5163,7 @@ class CNCjob(Geometry):
             "geometry_endxy", self._app_option("tools_mill_endxy", endxy))
 
         if self.xy_end and self.xy_end != '':
-            self.xy_end = [float(eval(a)) for a in self.xy_end.split(",")]
+            self.xy_end = [float(safe_eval(a)) for a in self.xy_end.split(",")]
 
         if self.xy_end and len(self.xy_end) < 2:
             self.app.inform.emit('[ERROR]  %s' % _("The End Move X,Y field in Edit -> Preferences has to be "
@@ -5188,7 +5189,7 @@ class CNCjob(Geometry):
                         "geometry_toolchangexy", self._app_option("tools_mill_toolchangexy", toolchangexy))
 
                 if self.xy_toolchange and self.xy_toolchange != '':
-                    self.xy_toolchange = [float(eval(a)) for a in self.xy_toolchange.split(",")]
+                    self.xy_toolchange = [float(safe_eval(a)) for a in self.xy_toolchange.split(",")]
 
                 if len(self.xy_toolchange) < 2:
                     self.app.inform.emit('[ERROR]  %s' % _("The Toolchange X,Y field in Edit -> Preferences has to be "
@@ -5576,7 +5577,7 @@ class CNCjob(Geometry):
         else:
             try:
                 tools_string = self._app_option("tools_mill_tooldia").split(",")
-                tools_diameters = [eval(a) for a in tools_string if a != '']
+                tools_diameters = [safe_eval(a) for a in tools_string if a != '']
                 default_dia = tools_diameters[0] if tools_diameters else 0.0
             except Exception as e:
                 self.app.log.error("camlib.CNCJob.generate_from_geometry_2() --> %s" % str(e))
@@ -5614,7 +5615,7 @@ class CNCjob(Geometry):
         self.xy_end = re.sub(r'[()\[\]]', '', str(self.xy_end)) if self.xy_end else None
 
         if self.xy_end is not None and self.xy_end != '':
-            self.xy_end = [float(eval(a)) for a in self.xy_end.split(",")]
+            self.xy_end = [float(safe_eval(a)) for a in self.xy_end.split(",")]
 
         if self.xy_end and len(self.xy_end) < 2:
             self.app.inform.emit('[ERROR]  %s' % _("The End Move X,Y field in Edit -> Preferences has to be "
@@ -5641,7 +5642,7 @@ class CNCjob(Geometry):
                 )
 
                 if self.xy_toolchange and self.xy_toolchange != '':
-                    self.xy_toolchange = [float(eval(a)) for a in self.xy_toolchange.split(",")]
+                    self.xy_toolchange = [float(safe_eval(a)) for a in self.xy_toolchange.split(",")]
 
                     if len(self.xy_toolchange) < 2:
                         self.app.inform.emit(
@@ -6380,7 +6381,7 @@ class CNCjob(Geometry):
                 pos_xy = toolchange_xy_drill
                 # if it's a string
                 try:
-                    pos_xy = [float(eval(a)) for a in pos_xy.split(",")]
+                    pos_xy = [float(safe_eval(a)) for a in pos_xy.split(",")]
                 except Exception:
                     if len(pos_xy) != 2:
                         pos_xy = (0, 0)
@@ -6391,7 +6392,7 @@ class CNCjob(Geometry):
                 pos_xy = toolchange_xy_mill
                 # if it's a string
                 try:
-                    pos_xy = [float(eval(a)) for a in pos_xy.split(",")]
+                    pos_xy = [float(safe_eval(a)) for a in pos_xy.split(",")]
                 except Exception:
                     if len(pos_xy) != 2:
                         pos_xy = (0, 0)

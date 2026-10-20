@@ -3,6 +3,7 @@ from PyQt6 import QtCore, QtGui
 
 from appObjects.ObjectCollection import GeometryObject, GerberObject, ExcellonObject
 from appGUI.GUIElements import DialogBoxChoice
+from appCommon.SafeEval import safe_eval
 from appHandlers.appObjectOps import _finish_origin_move
 
 from copy import deepcopy
@@ -70,7 +71,7 @@ class appEditor(QtCore.QObject):
             try:
                 dias = str(tool_dia).strip('[').strip(']')
                 tools_string = dias.split(",")
-                tools_diameters = [eval(a) for a in tools_string if a != '']
+                tools_diameters = [safe_eval(a) for a in tools_string if a != '']
             except Exception as e:
                 self.log.error("appEditor.build_geometry_tool_table() --> %s" % str(e))
                 return None

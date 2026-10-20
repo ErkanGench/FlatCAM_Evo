@@ -17,6 +17,7 @@ from appParsers.ParseGerber import Gerber, drop_placeholder_record_keys
 from appObjects.AppObjectTemplate import FlatCAMObj, OffsetUiMixin, PropertiesPanelMixin, ObjectDeleted, ValidationError
 
 from camlib import flatten_shapely_geometry
+from appCommon.SafeEval import safe_eval
 
 from shapely import MultiLineString, LinearRing, MultiPolygon, Polygon, LineString, Point
 from shapely.ops import unary_union
@@ -810,7 +811,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 try:
                     temp_tools = tool_dia_default.split(",")
                     tools_list = [
-                        float(eval(dia)) for dia in temp_tools if dia != ''
+                        float(safe_eval(dia)) for dia in temp_tools if dia != ''
                     ]
                 except Exception as er:
                     self.app.log.error("GerberObject.follow_geo -> At least one tool diameter needed. -> %s" % str(er))

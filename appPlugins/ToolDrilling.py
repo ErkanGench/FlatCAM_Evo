@@ -13,6 +13,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     OptionalInputSection, OptionalHideInputSection
 from appDatabase import load_tools_database
 from camlib import Geometry, flatten_shapely_geometry
+from appCommon.SafeEval import safe_eval
 
 
 import logging
@@ -2252,7 +2253,7 @@ class ToolDrilling(Geometry, AppTool):
                 if cnc_job_obj.xy_toolchange != '':
                     tcxy_temp = re.sub(r'[()\[\]]', '', str(cnc_job_obj.xy_toolchange))
                     if tcxy_temp:
-                        x_tc, y_tc = [float(eval(a)) for a in tcxy_temp.split(",")]
+                        x_tc, y_tc = [float(safe_eval(a)) for a in tcxy_temp.split(",")]
             except Exception:
                 x_tc, y_tc = [0, 0]
                 self.app.inform.emit('[ERROR]%s' % _("The Toolchange X,Y format has to be (x, y)."))
