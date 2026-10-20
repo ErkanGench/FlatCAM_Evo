@@ -1,0 +1,458 @@
+"""Firmware-command sequences with synthetic switch status; no hardware opens."""
+import struct
+
+import pytest
+
+from appPlugins.Common.ecut import EcutAPI, EcutError, SignalPolarity, AxisDirection, State, decode_rx_report, ecut_crc60
+from test_ecut_capabilities import IoBoard
+from test_ecut_verified import report
+
+
+@pytest.fixture(autouse=True)
+def synthetic_sensor_sequences_only(monkeypatch):
+    # These model-only tests do not establish a captured Mach3 sensor cycle.
+    from appPlugins.Common.ecut import ecut_controller
+    monkeypatch.setattr(ecut_controller, '_SENSOR_CYCLE_CAPTURE_VERIFIED', True)
+
+
+class SensorBoard(IoBoard):
+    def __init__(self, contact=True):
+        super().__init__()
+        self.positions = [0] * 6
+        self.contact = contact
+        self.active = False
+    def cmd(self, opcode, params=b''):
+        super().cmd(opcode, params)
+        if int(opcode) in (0xae, 0xa6, 0xb4):
+            offsets = (4, 12, 20, 38, 46, 54)
+            targets = []
+            for offset in offsets:
+                low, high = struct.unpack_from('>II', params, offset)
+                q = (high << 32) | low
+                if q >= 1 << 63:
+                    q -= 1 << 64
+                targets.append(q // 65536)
+            axis = 2 if int(opcode) == 0xae else int.from_bytes(params[32:34], 'big')
+            desired = targets[axis]
+            if self.contact and desired < self.positions[axis]:
+                self.positions[axis] = -128
+                self.active = True
+            else:
+                self.positions[axis] = desired
+                self.active = False
+    def poll(self):
+        data = bytearray(report(tuple(self.positions), outputs=self.outputs))
+        struct.pack_into('>H', data, 31, 1 << 5 if self.active else 0)
+        struct.pack_into('>I', data, 61, ecut_crc60(data[1:61]))
+        return decode_rx_report(data)
+
+
+def sensor_api(contact=True):
+    api = EcutAPI()
+    api._usb = SensorBoard(contact)
+    api.configure_input('PROBE', pin=5, polarity=SignalPolarity.ACTIVE_HIGH, debounce_ms=0)
+    api.configure_input('Z_HOME', pin=5, polarity=SignalPolarity.ACTIVE_HIGH, debounce_ms=0)
+    api.configure_input('Z_LIMIT_MINUS', pin=5, polarity=SignalPolarity.ACTIVE_HIGH, debounce_ms=0)
+    api.config.probe.max_travel_mm = .005
+    api.config.probe.retract_mm = .005
+    api.config.probe.fast_velocity_mm_s = .1
+    api.config.probe.slow_velocity_mm_s = .05
+    api.config.homing[2].enabled = True
+    api.config.homing[2].direction = AxisDirection.REVERSE
+    api.config.homing[2].hw_limit_when_homing = False
+    api.config.homing[2].max_travel_mm = .005
+    api.config.homing[2].retract_mm = .005
+    # The probe input is separate in production. Disable the limit role for probe tests.
+    api.config.inputs['Z_LIMIT_MINUS'].enabled = False
+    api.push_config()
+    return api
+
+
+def test_probe_returns_measured_contact_and_retracts_not_planned_endpoint():
+    api = sensor_api()
+    point = api.probe(2, -.005)
+    assert point[2] == -.0025
+    assert point[2] != -.005
+    assert api.last_probe_result['position_source'] == 'stationary_controller_report'
+    assert api.last_probe_result['firmware_latched'] is False
+    assert not api.read_inputs()['PROBE']
+    assert any(op == 0xae for op, _ in api._usb.commands)
+    assert any(op == 0xac for op, _ in api._usb.commands)
+
+
+def test_probe_initializes_native_bounds_and_stops_before_reading_contact_position():
+    api = sensor_api()
+    api.probe(2, -.005)
+    commands = [op for op, _ in api._usb.commands]
+    first_probe = commands.index(0xae)
+    assert 0xb5 in commands[:first_probe]
+    second_probe = commands.index(0xae, first_probe + 1)
+    assert 0xc9 in commands[first_probe + 1:second_probe]
+
+
+def test_sensor_wait_detects_finite_endpoint_while_native_busy_remains_set(monkeypatch):
+    api = sensor_api(False)
+    api._running = True
+    api._set_state(State.RUNNING)
+    frame = decode_rx_report(report(status=0x81))
+    monkeypatch.setattr(api, 'poll', lambda: frame)
+    with pytest.raises(EcutError, match='No contact'):
+        api._wait_switch('PROBE', True, [0] * 6, .01)
+
+
+def test_probe_no_hit_raises_and_never_creates_a_valid_sample():
+    api = sensor_api(contact=False)
+    with pytest.raises(EcutError, match='[Nn]o contact'):
+        api.probe(2, -.005)
+    assert api.last_probe_result is None
+    assert api.state == State.ERROR
+    assert api._usb.outputs == 0
+
+
+def test_homing_shared_limit_sensor_stops_backoffs_and_sets_offset():
+    api = sensor_api()
+    api.config.inputs['PROBE'].enabled = False
+    api.config.inputs['Z_LIMIT_MINUS'].enabled = True
+    api.config.homing[2].home_offset_mm = 1
+    api.push_config()
+    api.home_axis(2)
+    assert api.position_steps[2] == 51200
+    assert api.homed_axes == (2,)
+    assert not api.read_inputs()['Z_HOME']
+    commands = [op for op, _ in api._usb.commands]
+    assert 0xa6 in commands and 0xb4 in commands and 0xc9 in commands
+
+
+def test_homing_without_switch_hit_does_not_mark_axis_homed():
+    api = sensor_api(contact=False)
+    with pytest.raises(EcutError, match='[Nn]o contact|not reached'):
+        api.home_axis(2)
+    assert api.homed_axes == ()
+    assert api.state == State.ERROR
+
+
+@pytest.mark.parametrize('code', ['G38.2', 'G31'])
+def test_gcode_probe_uses_feed_and_returns_to_program_after_retract(code):
+    api = sensor_api()
+    api.run_gcode([f'G21 G91 {code} Z-.005 F6', 'G90 G1 Z0 F6'])
+    assert api.last_probe_result['position_mm'][2] == -.0025
+    assert api.position_steps[2] == 0
+    assert api.state == State.IDLE
+
+
+def test_gcode_probe_unconfigured_refused_before_prior_move():
+    api = sensor_api()
+    api.config.inputs['PROBE'].enabled = False
+    api.push_config()
+    api._usb.commands.clear()
+    with pytest.raises(EcutError, match='[Pp]rob'):
+        api.run_gcode(['G91 G1 X.001 F6', 'G38.2 Z-.005 F6'])
+    assert api._usb.commands == []
+
+
+def test_gcode_missing_probe_contact_aborts_remaining_program():
+    api = sensor_api(False)
+    with pytest.raises(EcutError, match='No contact'):
+        api.run_gcode(['G91 G38.2 Z-.005 F6', 'G1 X.001 F6'])
+    assert api._usb.positions[0] == 0
+    assert api.last_probe_result is None
+    assert api.state == State.ERROR
+
+
+def test_rejected_new_probe_invalidates_previous_contact_sample():
+    api = sensor_api()
+    api.probe(2, -.005)
+    api._usb.active = True
+    with pytest.raises(EcutError, match='already active'):
+        api.probe(2, -.005)
+    assert api.last_probe_result is None
+
+
+def test_gcode_slow_probe_pass_does_not_exceed_program_feed():
+    api = sensor_api()
+    api.run_gcode(['G91 G38.2 Z-.005 F.6'])
+    # First seek, retract, second seek, retract. Seek F.6 = .01 mm/s.
+    limits = [p for op, p in api._usb.commands if op == 0x4b]
+    maximum = int(.01 * abs(api._axis_scale(2)) * 65536 / 1000)
+    assert struct.unpack_from('>I', limits[0], 46)[0] <= maximum
+    assert struct.unpack_from('>I', limits[2], 46)[0] <= maximum
+
+
+def test_probe_preparation_interlock_never_restarts_motion(monkeypatch):
+    api = sensor_api()
+    api._usb.commands.clear()
+    def interrupted_position():
+        api.estop()
+        return [0] * 6
+    monkeypatch.setattr(api, '_measured_counts', interrupted_position)
+    with pytest.raises(EcutError):
+        api.probe(2, -.005)
+    assert api.state == State.ESTOP
+    assert not any(op in (0xae, 0xa6, 0xb4) for op, _ in api._usb.commands)
+
+
+def test_homing_preparation_interlock_never_sends_target(monkeypatch):
+    api = sensor_api()
+    api._usb.commands.clear()
+    def interrupted_position():
+        api.estop()
+        return [0] * 6
+    monkeypatch.setattr(api, '_measured_counts', interrupted_position)
+    with pytest.raises(EcutError):
+        api.home_axis(2)
+    assert api.state == State.ESTOP
+    assert not any(op in (0xae, 0xa6, 0xb4) for op, _ in api._usb.commands)
+
+
+def test_failed_rehome_invalidates_existing_reference():
+    api = sensor_api()
+    api.home_axis(2)
+    assert api.homed_axes == (2,)
+    api._usb.contact = False
+    with pytest.raises(EcutError):
+        api.home_axis(2)
+    assert api.homed_axes == ()
+
+
+def test_pause_stops_native_motion_and_invalidates_sensor_cycle():
+    from appPlugins.Common.ecut import Cmd
+    api = sensor_api()
+    api._running = True
+    api._set_state(State.RUNNING)
+    api._native_move(Cmd.PROBE, [0, 0, -256, 0, 0, 0], 2, .1, 0)
+    api.pause()
+    assert api.state == State.ERROR
+    assert not api._running
+    assert any(op == 0xc8 for op, _ in api._usb.commands[-2:])
+
+
+def test_reinitialization_invalidates_cached_probe_and_home_results():
+    api = sensor_api()
+    api.home_axis(2)
+    api.probe(2, -.005)
+    api.reset()
+    # the reset keeps the counts and the axis scale, so the machine home stays valid
+    assert api.homed_axes == (2,)
+    assert api.last_probe_result is None
+
+
+def test_reinitialization_does_not_reuse_debounced_inactive_probe():
+    api = sensor_api()
+    assert api.read_inputs()['PROBE'] is False
+    api.config.inputs['PROBE'].debounce_ms = 10000
+    api._usb.active = True
+    api.push_config()
+    api._usb.commands.clear()
+    with pytest.raises(EcutError, match='active or unavailable'):
+        api.probe(2, -.005)
+    assert not any(op == 0xae for op, _ in api._usb.commands)
+
+
+def test_probe_grid_collects_samples_and_finishes_at_safe_z():
+    api = sensor_api()
+    samples = api.probe_grid([(.001, .002), (.002, .001)], .001)
+    assert samples == [(.001, .002, -.0025), (.002, .001, -.0025)]
+    assert api.position_steps[2] == round(.001 * api._axis_scale(2))
+    assert api.state == State.IDLE
+
+
+def test_probe_grid_without_probe_does_not_move_to_first_point():
+    api = sensor_api()
+    api.config.inputs['PROBE'].enabled = False
+    api.push_config()
+    api._usb.commands.clear()
+    with pytest.raises(EcutError, match='[Pp]rob'):
+        api.probe_grid([(.001, .002)], .001)
+    assert api._usb.commands == []
+
+
+def test_empty_probe_grid_does_not_move():
+    api = sensor_api()
+    api._usb.commands.clear()
+    assert api.probe_grid([], .001) == []
+    assert api._usb.commands == []
+
+
+def test_raw_active_probe_cannot_be_hidden_by_pending_debounce():
+    api = sensor_api()
+    api.config.inputs['PROBE'].debounce_ms = 20
+    api.push_config()
+    assert api.read_inputs()['PROBE'] is False
+    api._usb.active = True
+    api._usb.commands.clear()
+    with pytest.raises(EcutError, match='active or unavailable'):
+        api.probe(2, -.005)
+    assert not any(op == 0xae for op, _ in api._usb.commands)
+
+
+def test_probe_release_at_endpoint_waits_for_configured_debounce():
+    api = sensor_api()
+    api.config.inputs['PROBE'].debounce_ms = 20
+    api.push_config()
+    assert api.probe(2, -.005)[2] == -.0025
+
+
+def test_public_sensor_operations_refuse_until_mach3_cycle_capture(monkeypatch):
+    from appPlugins.Common.ecut import ecut_controller
+    api = sensor_api()
+    monkeypatch.setattr(ecut_controller, '_SENSOR_CYCLE_CAPTURE_VERIFIED', False)
+    api._usb.commands.clear()
+    calls = [lambda: api.home_axis(2), lambda: api.probe(2, -.005),
+             lambda: api.probe_grid([(.001, .002)], .001),
+             lambda: api.run_gcode(['G91 G1 X.001 F6', 'G38.2 Z-.005 F6'])]
+    for call in calls:
+        with pytest.raises(EcutError, match='Mach3.*capture'):
+            call()
+    assert api._usb.commands == []
+
+
+@pytest.mark.parametrize('operation', ['home', 'probe'])
+@pytest.mark.parametrize('interrupt', ['stop', 'reset'])
+def test_final_sensor_completion_cannot_publish_result_after_stop_or_reset(operation, interrupt):
+    from appPlugins.Common.ecut import Cmd
+    api = sensor_api()
+    api._usb.commands.clear()
+    triggered = []
+
+    def interrupt_final_status(frame):
+        if triggered:
+            return
+        commands = [int(op) for op, _ in api._usb.commands]
+        final_home_stop = operation == 'home' and commands and commands[-1] == int(Cmd.SET_POSITION)
+        final_probe_finish = operation == 'probe' and commands.count(0xac) == 2
+        if final_home_stop or final_probe_finish:
+            triggered.append(len(commands))
+            getattr(api, interrupt)()
+
+    api.on_rx_frame(interrupt_final_status)
+    with pytest.raises(EcutError, match='Sensor operation stopped'):
+        if operation == 'home':
+            api.home_axis(2)
+        else:
+            api.probe(2, -.005)
+    assert triggered
+    assert api.homed_axes == ()
+    assert api.last_probe_result is None
+    assert api.state == State.ERROR
+    if operation == 'home':
+        assert not any(int(op) in (Cmd.PROBE, Cmd.HOME, Cmd.JOG_ON) for op, _ in api._usb.commands[triggered[0]:])
+
+
+@pytest.mark.parametrize('operation', ['home', 'probe'])
+@pytest.mark.parametrize('interrupt', ['stop', 'reset', 'estop'])
+@pytest.mark.parametrize('boundary', ['search', 'retract'])
+def test_sensor_search_and_retract_cancellation_never_sends_later_target(operation, interrupt, boundary):
+    from appPlugins.Common.ecut import Cmd
+    api = sensor_api()
+    api._usb.commands.clear()
+    triggered = []
+    after_interrupt = []
+
+    def interrupt_status(frame):
+        if triggered:
+            return
+        commands = [int(op) for op, _ in api._usb.commands]
+        if not commands:
+            return
+        if operation == 'home':
+            reached = commands[-1] == (Cmd.HOME if boundary == 'search' else Cmd.JOG_ON)
+        else:
+            reached = commands.count(Cmd.PROBE) == (1 if boundary == 'search' else 2)
+        if reached:
+            triggered.append(True)
+            getattr(api, interrupt)()
+            after_interrupt.append(len(api._usb.commands))
+
+    api.on_rx_frame(interrupt_status)
+    with pytest.raises(EcutError):
+        if operation == 'home':
+            api.home_axis(2)
+        else:
+            api.probe(2, -.005)
+    assert triggered
+    assert api.homed_axes == ()
+    assert api.last_probe_result is None
+    assert api.state == (State.ESTOP if interrupt == 'estop' else State.ERROR)
+    assert not any(int(op) in (Cmd.PROBE, Cmd.HOME, Cmd.JOG_ON, Cmd.SET_POSITION)
+                   for op, _ in api._usb.commands[after_interrupt[0]:])
+
+
+@pytest.mark.parametrize('operation', ['home', 'probe'])
+@pytest.mark.parametrize('status', ['missing', 'unchanged'])
+def test_sensor_missing_contact_times_out_without_reusing_old_status(monkeypatch, operation, status):
+    from types import SimpleNamespace
+    from appPlugins.Common.ecut import ecut_controller, Cmd
+    api = sensor_api(contact=False)
+    previous = api.last_rx_frame
+    original_poll = api._usb.poll
+    ticks = iter(range(1000))
+    monkeypatch.setattr(ecut_controller, 'time', SimpleNamespace(
+        monotonic=lambda: next(ticks) / 10, sleep=lambda seconds: None))
+
+    def no_contact_status():
+        if any(int(op) in (Cmd.PROBE, Cmd.HOME) for op, _ in api._usb.commands):
+            return None if status == 'missing' else previous
+        return original_poll()
+
+    monkeypatch.setattr(api._usb, 'poll', no_contact_status)
+    with pytest.raises(EcutError, match='timeout waiting for'):
+        if operation == 'home':
+            api.home_axis(2)
+        else:
+            api.probe(2, -.005)
+    assert api.last_probe_result is None
+    assert api.homed_axes == ()
+    assert api.state == State.ERROR
+    assert api._usb.outputs == 0
+    assert sum(int(op) in (Cmd.PROBE, Cmd.HOME, Cmd.JOG_ON) for op, _ in api._usb.commands) == 1
+
+
+@pytest.mark.parametrize('operation', ['home', 'probe'])
+@pytest.mark.parametrize('failure', ['removed_read', 'ambiguous_write'])
+def test_sensor_usb_fault_never_replays_target_or_publishes_sample(monkeypatch, operation, failure):
+    from appPlugins.Common.ecut import Cmd, EcutUsbError
+    api = sensor_api()
+    api._usb.commands.clear()
+    original_poll = api._usb.poll
+    original_cmd = api._usb.cmd
+
+    def failing_poll():
+        if any(int(op) in (Cmd.PROBE, Cmd.HOME) for op, _ in api._usb.commands):
+            raise EcutUsbError('device removed during sensor search')
+        return original_poll()
+
+    def uncertain_cmd(opcode, params=b''):
+        original_cmd(opcode, params)
+        if int(opcode) in (Cmd.PROBE, Cmd.HOME):
+            raise EcutUsbError('ambiguous target write')
+
+    if failure == 'removed_read':
+        monkeypatch.setattr(api._usb, 'poll', failing_poll)
+    else:
+        monkeypatch.setattr(api._usb, 'cmd', uncertain_cmd)
+    with pytest.raises(EcutUsbError):
+        if operation == 'home':
+            api.home_axis(2)
+        else:
+            api.probe(2, -.005)
+    assert api.state == State.ERROR
+    assert api.last_probe_result is None
+    assert api.homed_axes == ()
+    assert api._usb.outputs == 0
+    assert sum(int(op) in (Cmd.PROBE, Cmd.HOME, Cmd.JOG_ON) for op, _ in api._usb.commands) == 1
+
+
+def test_shared_home_limit_stays_an_interlock_when_homing_exemption_is_disabled():
+    from appPlugins.Common.ecut import Cmd
+    api = sensor_api()
+    api.config.inputs['PROBE'].enabled = False
+    api.config.inputs['Z_LIMIT_MINUS'].enabled = True
+    api.config.homing[2].hw_limit_when_homing = True
+    api.push_config()
+    api._usb.commands.clear()
+    with pytest.raises(EcutError):
+        api.home_axis(2)
+    assert api.state == State.ESTOP
+    assert api.homed_axes == ()
+    assert 'Z_LIMIT_MINUS' in api.fault_reason
+    assert not any(int(op) in (Cmd.JOG_ON, Cmd.SET_POSITION) for op, _ in api._usb.commands)

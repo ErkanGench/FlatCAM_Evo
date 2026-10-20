@@ -5,16 +5,19 @@
 # License:  MIT Licence                                    #
 # ##########################################################
 
+import logging
 import math
 import random
 import time
+from pathlib import Path
 
-from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6 import QtWidgets, QtCore, QtGui, sip
 
 import serial
 import serial.tools.list_ports
 
 from appTool import AppTool
+from appCommon import MachineSafety
 from defaults import AppDefaults
 from appGUI.GUIElements import (
     VerticalScrollArea, FCFileSaveDialog, FCMessageBox, FCTextAreaLineNumber, RadioSet, FCSpinner)
@@ -27,7 +30,8 @@ from appPlugins.Common.grbl_protocol import (
 from appPlugins.Common.gcode_segment import split_long_moves, parse_toolpath, _words, _g_key
 from appPlugins.Common.levelling_interp import build_bilinear_grid
 from appPlugins.ToolGrblSender import SenderGen
-from appPlugins.ToolGrblSender.SenderGrbl import GrblClientMixin, stream_lines, validate_stream_lines
+from appPlugins.ToolGrblSender.SenderGrbl import (
+    GrblClientMixin, STATUS_POLL, is_controller_banner, stream_lines, validate_stream_lines)
 from appPlugins.ToolGrblSender.SenderUI import GrblSenderUI
 from appPlugins.ToolGrblSender.SenderSimulation import SimulationDialog, VirtualGrbl
 from appPlugins.ToolGrblSender.SenderView3d import SenderView3d, TOOL_COLOR
@@ -39,6 +43,18 @@ import builtins
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
+
+log = logging.getLogger('base')
+
+
+def _qt_deleted(obj):
+    """:return: True if obj is a Qt object that Qt has deleted (False for None and for other objects)."""
+    if obj is None:
+        return False
+    try:
+        return sip.isdeleted(obj)
+    except TypeError:  # not a Qt object
+        return False
 
 
 class GrblConsole(QtWidgets.QWidget):
@@ -291,6 +307,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     stream_progress_sig = QtCore.pyqtSignal(int, int)
     # a parsed status report (dict) from a worker
     status_report_sig = QtCore.pyqtSignal(object)
+    # the spindle runs (True) or stopped (False): an accepted M3/M4/M5 line, from a worker
+    spindle_state_sig = QtCore.pyqtSignal(bool)
     # how the stream worker ended: 'finished', 'stopped', 'check_passed', ... (see _on_stream_ended)
     stream_ended_sig = QtCore.pyqtSignal(str)
     # a text line for the console, from any thread
@@ -298,6 +316,30 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     preview_ready_sig = QtCore.pyqtSignal(object)
     probe_finished_sig = QtCore.pyqtSignal(object, object)
     simulation_event_sig = QtCore.pyqtSignal(object, str, object)
+    ecut_tool_change_sig = QtCore.pyqtSignal(object, int, object)
+    ecut_motion_result_sig = QtCore.pyqtSignal(object)
+    ecut_connect_result_sig = QtCore.pyqtSignal(object)
+
+    @property
+    def view3d(self):
+        """The 3D view, or None. A closed Plot 3D tab deletes the canvas: then the view is gone too."""
+        view = self.__dict__.get('_view3d')
+        if view is not None and _qt_deleted(getattr(view.canvas, 'native', None)):
+            self.__dict__['_view3d'] = None
+            return None
+        return view
+
+    @view3d.setter
+    def view3d(self, view):
+        self.__dict__['_view3d'] = view
+
+    @staticmethod
+    def _on_plugin_destroyed(stop):
+        try:
+            stop()
+        except Exception:
+            log.exception('ToolGrblSender._on_plugin_destroyed() -> the controller did not stop')
+        MachineSafety.unregister(stop)
 
     def __init__(self, app):
         self.app = app
@@ -336,7 +378,20 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self._controller_state = 'Idle'
 
         self.ui = GrblSenderUI(layout=self.layout, app=self.app)
+        self.ui.spindle_button.setChecked(self.__dict__.get('_spindle_on', False))
         self.pluginName = self.ui.pluginName
+        self._continuous_jog = None
+        self._continuous_jog_click_button = None
+        self._continuous_jog_timer = QtCore.QTimer(self)
+        self._continuous_jog_timer.setInterval(50)
+        self._continuous_jog_timer.timeout.connect(self._refresh_continuous_jog)
+        self._ecut_motion_dialog = None
+        self._ecut_motion_port = None
+        self._ecut_motion_revision = None
+        self._ecut_motion_loading = False
+        self._ecut_motion_io_timer = QtCore.QTimer(self)
+        self._ecut_motion_io_timer.setInterval(100)
+        self._ecut_motion_io_timer.timeout.connect(self._refresh_ecut_motion_io)
 
         self._al_core_signals_connected = False
         self.connect_signals_at_init()
@@ -345,6 +400,11 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self._sim_ui_timer.setInterval(100)
         self._sim_ui_timer.timeout.connect(self._update_sim_button)
         self._sim_ui_timer.start()
+        # an idle controller: its status keeps the Spindle button and the position up to date
+        self._status_poll_timer = QtCore.QTimer(self)
+        self._status_poll_timer.setInterval(1000)
+        self._status_poll_timer.timeout.connect(self._poll_idle_status)
+        self._status_poll_timer.start()
 
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='', **kwargs)
@@ -420,11 +480,15 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if not getattr(self, '_al_core_signals_connected', False):
             self._al_core_signals_connected = True
             self.grbl_port_closed_sig.connect(self._on_grbl_port_closed)
+            self.ecut_tool_change_sig.connect(self._on_ecut_tool_change)
+            self.ecut_motion_result_sig.connect(self._on_ecut_motion_result)
+            self.ecut_connect_result_sig.connect(self._on_ecut_connect_result)
             self.al_result_ready_sig.connect(self._on_al_result_ready)
             self.build_al_table_sig.connect(self.build_al_table)
             self.show_probing_geo_sig.connect(self._on_show_probing_geo_sig)
             self.stream_progress_sig.connect(self._on_stream_progress)
             self.status_report_sig.connect(self._on_status_report)
+            self.spindle_state_sig.connect(self._on_spindle_state)
             self.stream_ended_sig.connect(self._on_stream_ended)
             self.frame_ready_sig.connect(self._on_frame_ready)
             self.console_line_sig.connect(lambda line: self._console().append(line))
@@ -438,10 +502,16 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             # Cleanup on Graceful exit (CTRL+ALT+X combo key)
             self.app.cleanup.connect(self.on_reset_tool)
             self.app.cleanup.connect(self._grbl_disconnect)
-            # close the serial port when the application ends
+            # the application closes or crashes: stop the motion, the spindle and the outputs, then close the port
+            MachineSafety.register(self._grbl_shutdown)
+            # a new project deletes the plugins: the deleted plugin stops its controller and leaves the registry
+            try:
+                self.destroyed.connect(lambda *_args, stop=self._grbl_shutdown: self._on_plugin_destroyed(stop))
+            except RuntimeError:
+                pass  # the Qt part is not initialized (a test double)
             qt_app = QtWidgets.QApplication.instance()
             if qt_app is not None:
-                qt_app.aboutToQuit.connect(self._grbl_force_close)
+                MachineSafety.connect_quit(qt_app)
                 qt_app.aboutToQuit.connect(lambda: self._simulation.close() if self._simulation else None)
         self.ui.level.toggled.connect(self.on_level_changed)
         self._select_available_excellon()
@@ -461,18 +531,26 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.add_bd_button.clicked.connect(self.on_grbl_add_baudrate)
         self.ui.del_bd_button.clicked.connect(self.on_grbl_delete_baudrate_grbl)
         self.ui.baudrates_list_combo.currentTextChanged.connect(self.on_baudrate_changed)
-        self.ui.controller_reset_button.clicked.connect(self.on_grbl_reset)
+        self.ui.controller_reset_button.clicked.connect(lambda: self.on_grbl_reset())
         self.ui.com_connect_button.clicked.connect(self.on_grbl_connect)
         self.ui.grbl_send_button.clicked.connect(self.on_grbl_send_command)
         self.ui.grbl_command_entry.returnPressed.connect(self.on_grbl_send_command)
+        self.ui.ecut_motion_button.clicked.connect(self.on_ecut_motion_settings)
 
         # Jog
-        self.ui.jog_wdg.jog_up_button.clicked.connect(lambda: self.on_grbl_jog(direction='yplus'))
-        self.ui.jog_wdg.jog_down_button.clicked.connect(lambda: self.on_grbl_jog(direction='yminus'))
-        self.ui.jog_wdg.jog_right_button.clicked.connect(lambda: self.on_grbl_jog(direction='xplus'))
-        self.ui.jog_wdg.jog_left_button.clicked.connect(lambda: self.on_grbl_jog(direction='xminus'))
-        self.ui.jog_wdg.jog_z_up_button.clicked.connect(lambda: self.on_grbl_jog(direction='zplus'))
-        self.ui.jog_wdg.jog_z_down_button.clicked.connect(lambda: self.on_grbl_jog(direction='zminus'))
+        for button, direction in ((self.ui.jog_wdg.jog_up_button, 'yplus'),
+                                  (self.ui.jog_wdg.jog_down_button, 'yminus'),
+                                  (self.ui.jog_wdg.jog_right_button, 'xplus'),
+                                  (self.ui.jog_wdg.jog_left_button, 'xminus'),
+                                  (self.ui.jog_wdg.jog_z_up_button, 'zplus'),
+                                  (self.ui.jog_wdg.jog_z_down_button, 'zminus')):
+            button.pressed.connect(lambda button=button, direction=direction:
+                                   self._on_jog_pressed(button, direction))
+            button.released.connect(self._stop_continuous_jog)
+            button.clicked.connect(lambda checked=False, button=button, direction=direction:
+                                   self._on_jog_clicked(button, direction))
+        self.ui.continuous_jog_cb.toggled.connect(
+            lambda checked: None if checked else self._stop_continuous_jog())
         self.ui.jog_wdg.jog_origin_button.clicked.connect(lambda: self.on_grbl_jog(direction='origin'))
 
         # Zero
@@ -501,6 +579,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.hold_button.clicked.connect(lambda: self._grbl_realtime(b'!'))
         self.ui.resume_button.clicked.connect(self._on_resume_button)
         self.ui.stop_button.clicked.connect(self.on_stream_stop)
+        self.ui.spindle_button.clicked.connect(self.on_spindle_button)
         self.ui.unlock_button.clicked.connect(self.on_unlock)
         self.ui.sim_button.clicked.connect(self.on_simulation)
         self.ui.save_levelled_button.clicked.connect(self.on_save_levelled_gcode)
@@ -514,6 +593,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.set_tool_ui()
 
     def set_tool_ui(self):
+        self._stop_continuous_jog()
         # closing or resetting the tool while adding manual points must give
         # the canvas events back to the app
         if self.__dict__.get('_simulation') is not None:
@@ -526,6 +606,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self._height_map_is_complete()
         self.clear_ui(self.layout)
         self.ui = GrblSenderUI(layout=self.layout, app=self.app)
+        self.ui.spindle_button.setChecked(self.__dict__.get('_spindle_on', False))
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
@@ -740,6 +821,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def on_grbl_search_ports(self, muted=None):
         port_list = self.on_grbl_list_serial_ports()
+        port_list.append('SH-9001 E-Cut USB')
         self.ui.com_list_combo.clear()
         self.ui.com_list_combo.addItems(port_list)
         if muted is not True:
@@ -761,11 +843,28 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         if " (" in port_name:
             port_name = port_name.rpartition(" (")[0]
 
+        ecut = port_name == 'SH-9001 E-Cut USB'
         try:
-            baudrate = int(self.ui.baudrates_list_combo.currentText())
+            baudrate = 0 if ecut else int(self.ui.baudrates_list_combo.currentText())
         except ValueError:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Select a valid baudrate."))
             return
+
+        if ecut:
+            # check the board before any connection state changes
+            from appPlugins.Common.ecut.ecut_config import EcutBoardConfig
+            from appPlugins.Common.ecut.ecut_protocol import find_boards, EcutUsbError
+            board = EcutBoardConfig()
+            try:
+                found = find_boards(board.vid, board.pid)
+            except EcutUsbError as err:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                return
+            if not found:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % (
+                    _("E-Cut board not found (USB VID %04X, PID %04X). Connect the board and try again.")
+                    % (board.vid, board.pid)))
+                return
 
         attempt = object()
         with self._grbl_op_lock:
@@ -776,15 +875,19 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self._last_wco = None
         self._grbl_report_inches = None
         self._grbl_set_ui_connected(False)
+        if ecut:
+            self._ecut_connect_start(port_name, attempt)
+            return
+
         try:
             port = serial.serial_for_url(port_name, baudrate,
-                                                       bytesize=serial.EIGHTBITS,
-                                                       parity=serial.PARITY_NONE,
-                                                       stopbits=serial.STOPBITS_ONE,
-                                                       timeout=0.1,
-                                                       write_timeout=1.0,
-                                                       xonxoff=False,
-                                                       rtscts=False)
+                                        bytesize=serial.EIGHTBITS,
+                                        parity=serial.PARITY_NONE,
+                                        stopbits=serial.STOPBITS_ONE,
+                                        timeout=0.1,
+                                        write_timeout=1.0,
+                                        xonxoff=False,
+                                        rtscts=False)
             with self._grbl_op_lock:
                 if self._grbl_connect_attempt is not attempt:
                     port.close()
@@ -794,7 +897,6 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 self._grbl_rx_buffer = b''
                 self._grbl_reply_pending = False
 
-            # Toggle DTR to reset the controller loaded with GRBL (Arduino, ESP32, etc.)
             try:
                 port.dtr = False
             except IOError:
@@ -811,6 +913,71 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             port.write("\r\n\r\n".encode('utf-8'))
         except (serial.SerialException, OSError, ValueError) as err:
             self.app.log.error("ToolLevelling.on_grbl_connect() -> %s" % str(err))
+            self._grbl_close_port(attempt=attempt)
+            self.app.inform.emit("[ERROR_NOTCL] %s: %s" % (_("Could not connect to port"), port_name))
+            return
+
+        QtCore.QTimer.singleShot(1000, lambda: self._grbl_connect_finish(port_name, port, attempt))
+
+    def _ecut_connect_start(self, port_name, attempt):
+        """
+        Create the E-Cut port in a worker: its start waits for the HID worker and would stop the GUI.
+        The result comes back on the GUI thread through ecut_connect_result_sig.
+        """
+        settings = Path(QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.StandardLocation.AppDataLocation)) / 'ecut' / 'grbl_settings.json'
+
+        def create_port():
+            port = error = None
+            try:
+                from appPlugins.Common.ecut.ecut_sender_port import EcutSenderPort
+                port = EcutSenderPort(settings_path=settings, timeout=0.1, write_timeout=1.0)
+            except Exception as failure:
+                error = failure
+            finally:
+                self.ecut_connect_result_sig.emit((port_name, attempt, port, error))
+
+        self.app.worker_task.emit({'fcn': create_port, 'params': []})
+
+    def _close_ecut_port_async(self, port):
+        """Close an E-Cut port that is not used (close() joins the worker and can block)."""
+        def close_port():
+            try:
+                port.close()
+            except Exception as err:
+                self.app.log.debug("ToolGrblSender._close_ecut_port_async() -> %s" % str(err))
+
+        self.app.worker_task.emit({'fcn': close_port, 'params': []})
+
+    def _on_ecut_connect_result(self, response):
+        """GUI thread: finish the E-Cut connection that a worker started."""
+        port_name, attempt, port, error = response
+        if error is not None:
+            if self._grbl_connect_attempt is attempt:
+                self.app.log.error("ToolGrblSender._on_ecut_connect_result() -> %s" % str(error))
+                self._grbl_close_port(attempt=attempt)
+                self.app.inform.emit("[ERROR_NOTCL] %s: %s" % (_("Could not connect to port"), port_name))
+            return
+
+        try:
+            port.tool_change_callback = lambda tool, connection=port: self.ecut_tool_change_sig.emit(
+                connection, tool, connection.tool_change_token)
+            with self._grbl_op_lock:
+                stale = self._grbl_connect_attempt is not attempt
+                if not stale:
+                    self.grbl_ser_port = port
+                    self._grbl_rx_port = port
+                    self._grbl_rx_buffer = b''
+                    self._grbl_reply_pending = False
+            if stale:
+                # a new Connect or a Disconnect came first
+                self._close_ecut_port_async(port)
+                return
+
+            # The HID adapter has initialized RAM and queued its verified connection banner.
+            port.write("\r\n\r\n".encode('utf-8'))
+        except (serial.SerialException, OSError, ValueError) as err:
+            self.app.log.error("ToolGrblSender._on_ecut_connect_result() -> %s" % str(err))
             self._grbl_close_port(attempt=attempt)
             self.app.inform.emit("[ERROR_NOTCL] %s: %s" % (_("Could not connect to port"), port_name))
             return
@@ -849,7 +1016,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             lines = [text.strip() for text in complete.decode('utf-8', errors='replace').splitlines()]
             alarm = any(text.lower().startswith('alarm:') or parse_grbl_status_state(text) == 'Alarm'
                         for text in lines)
-            banner = any(text.lower().startswith('grbl ') for text in lines)
+            banner = any(is_controller_banner(text) for text in lines)
             self._grbl_failure_locked(None, 'handshake', '\n'.join(lines))
             # unclassified old records stay buffered, a classified alarm does not
             self._grbl_rx_buffer = (b'' if alarm else buffered[:buffered.rfind(b'\n') + 1]) + suffix
@@ -903,6 +1070,14 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
 
     def _grbl_set_ui_connected(self, connected):
         """Show the connection state on the Connect button and on the tabs."""
+        self.ui.ecut_motion_button.setVisible(connected and self._ecut_settings_capable(self.grbl_ser_port))
+        if not connected:
+            self._close_ecut_motion_settings()
+        continuous = connected and self._continuous_jog_capable(self.grbl_ser_port)
+        self.ui.continuous_jog_cb.setVisible(continuous)
+        if not continuous:
+            self.ui.continuous_jog_cb.setChecked(False)
+            self._stop_continuous_jog()
         color = 'seagreen' if connected else 'red'
         self.ui.com_connect_button.setStyleSheet("QPushButton {background-color: %s;}" % color)
         self.ui.com_connect_button.setText(_("Connected") if connected else _("Disconnected"))
@@ -918,11 +1093,199 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         """Slot of grbl_port_closed_sig (GUI thread)."""
         self._controller_state = 'Idle'
         self._program_paused = False
+        self._on_spindle_state(False)
         try:
             self._grbl_set_ui_connected(False)
         except (AttributeError, RuntimeError):
             # the UI can be already deleted when the application ends
             pass
+
+    @staticmethod
+    def _ecut_settings_capable(port):
+        return all(callable(getattr(port, name, None)) for name in (
+            'get_motion_settings', 'save_motion_settings', 'calibration_move',
+            'get_io_state', 'set_manual_output'))
+
+    def on_ecut_motion_settings(self):
+        port = self.grbl_ser_port
+        if not self._ecut_settings_capable(port):
+            return
+        dialog = self._ecut_motion_dialog
+        if dialog is not None and self._ecut_motion_port is port:
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        if self._ecut_motion_loading:
+            return
+        self._ecut_motion_loading = True
+
+        def read_settings():
+            result = error = None
+            try:
+                with self._grbl_op_lock:
+                    valid = (self.grbl_ser_port is port and self._grbl_connected
+                             and not self._grbl_close_pending)
+                if not valid:
+                    return
+                result = port.get_motion_settings()
+            except Exception as failure:
+                error = str(failure)
+            finally:
+                self.ecut_motion_result_sig.emit((port, None, 'load', result, error))
+
+        # This is an immutable worker-published snapshot, not a serial transaction.
+        self.app.worker_task.emit({'fcn': read_settings, 'params': []})
+
+    def _ecut_settings_task(self, op, dialog, action, args):
+        port = op.port
+        if dialog is not None:
+            dialog.set_busy(True)
+            dialog.set_calibration_running(action == 'calibrate')
+
+        def task():
+            result = error = None
+            try:
+                with self._grbl_op_lock:
+                    valid = (self._grbl_op is op and self.grbl_ser_port is port
+                             and not op.cancel.is_set() and not self._grbl_close_pending)
+                if not valid:
+                    raise ValueError(_("The controller operation was cancelled."))
+                method = getattr(port, {'load': 'get_motion_settings', 'save': 'save_motion_settings',
+                                        'calibrate': 'calibration_move', 'output': 'set_manual_output',
+                                        'reference': 'reference_axes'}[action])
+                result = method(*args)
+                if action == 'reference' and {0, 1, 2} <= set(args[0]):
+                    with self._grbl_op_lock:
+                        # without home switches, a manual machine home of X, Y and Z replaces Home
+                        if (self._grbl_recovery == 'needs_home' and not op.cancel.is_set()
+                                and op.safety_generation == self._grbl_safety_generation):
+                            self._grbl_recovery = None
+                if op.cancel.is_set():
+                    # the call returned: the board already took effect, so the result is reported
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                        "Stop came after the E-Cut settings were applied; the board has the new settings."))
+            except Exception as failure:
+                error = str(failure)
+            finally:
+                self._grbl_release(op)
+                self.ecut_motion_result_sig.emit((port, dialog, action, result, error))
+
+        self.app.worker_task.emit({'fcn': task, 'params': []})
+
+    def _ecut_motion_action(self, dialog, action, args):
+        if (dialog is not self._ecut_motion_dialog or self.grbl_ser_port is not self._ecut_motion_port
+                or not self._grbl_connected):
+            dialog.show_error(_("The controller connection changed. Reopen its settings."))
+            return
+        op = self._grbl_reserve('E-Cut calibration' if action == 'calibrate' else 'E-Cut settings',
+                                motion=action == 'calibrate')
+        if op is not None:
+            self._ecut_settings_task(op, dialog, action, args)
+        else:
+            dialog.show_error(_("The controller is busy. Wait until it is idle, then try again."))
+
+    def _on_ecut_motion_result(self, response):
+        port, dialog, action, result, error = response
+        if action == 'load' and self.grbl_ser_port is port:
+            self._ecut_motion_loading = False
+        if self.grbl_ser_port is not port or not self._grbl_connected or not port.is_open:
+            return
+        if dialog is not None and dialog is not self._ecut_motion_dialog:
+            return
+        if error is not None:
+            if dialog is not None:
+                dialog.set_busy(False)
+                dialog.show_error(error)
+            else:
+                self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (_("E-Cut settings"), error))
+            return
+        if action == 'load':
+            from appPlugins.ToolGrblSender.SenderMotion import EcutMotionDialog
+            try:
+                dialog = EcutMotionDialog(result, parent=self)
+            except (ValueError, TypeError, KeyError, OverflowError) as failure:
+                self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (_("Invalid E-Cut settings"), failure))
+                return
+            dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            self._ecut_motion_dialog, self._ecut_motion_port = dialog, port
+            self._ecut_motion_revision = result['revision']
+            dialog.apply_requested.connect(lambda values: self._ecut_motion_action(dialog, 'save', (values,)))
+            dialog.calibration_requested.connect(lambda axis, distance, feed, revision:
+                self._ecut_motion_action(dialog, 'calibrate', (axis, distance, feed, revision)))
+            dialog.output_requested.connect(lambda pin, active:
+                self._ecut_motion_action(dialog, 'output', (pin, active, self._ecut_motion_revision)))
+            dialog.stop_requested.connect(self._stop_ecut_calibration)
+            dialog.reference_requested.connect(lambda axes: self._ecut_motion_action(dialog, 'reference', (axes,)))
+            dialog.finished.connect(lambda _result: self._closed_ecut_motion_settings(dialog))
+            dialog.show()
+            self._ecut_motion_io_timer.start()
+        elif action == 'save':
+            try:
+                dialog.load_settings(result)
+                self._ecut_motion_revision = result['revision']
+            except (ValueError, TypeError, KeyError, OverflowError) as failure:
+                dialog.show_error(str(failure))
+            dialog.set_busy(False)
+        elif action == 'calibrate':
+            dialog.calibration_finished(result)
+        else:
+            dialog.set_busy(False)
+        self._refresh_ecut_motion_io()
+
+    def _stop_ecut_calibration(self):
+        with self._grbl_op_lock:
+            op = self._grbl_op
+            if op is None or op.name != 'E-Cut calibration':
+                return
+            op.cancel.set()
+        self._grbl_realtime(b'\x85')
+
+    def _refresh_ecut_motion_io(self):
+        dialog, port = self._ecut_motion_dialog, self._ecut_motion_port
+        if dialog is None:
+            self._ecut_motion_io_timer.stop()
+            return
+        if port is not self.grbl_ser_port or not self._grbl_connected:
+            self._close_ecut_motion_settings()
+            return
+        try:
+            state = port.get_io_state()
+        except (OSError, ValueError, RuntimeError):
+            state = {'connected': False, 'age_s': float('inf'), 'inputs': 0, 'outputs': 0, 'busy': True}
+        dialog.update_io(state)
+
+    def _closed_ecut_motion_settings(self, dialog):
+        if self._ecut_motion_dialog is dialog:
+            self._ecut_motion_io_timer.stop()
+            self._ecut_motion_dialog = self._ecut_motion_port = self._ecut_motion_revision = None
+
+    def _close_ecut_motion_settings(self):
+        self._ecut_motion_loading = False
+        dialog = self.__dict__.get('_ecut_motion_dialog')
+        if dialog is not None:
+            dialog.set_busy(False)
+            dialog.reject()
+            self._closed_ecut_motion_settings(dialog)
+
+    def _on_ecut_tool_change(self, port, tool, token):
+        def current():
+            return (self.grbl_ser_port is port and port.is_open
+                    and port.pending_tool_change == tool and port.tool_change_token is token)
+
+        if not current():
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self.app.ui, _("Manual tool change"),
+            _("Install tool %d, then confirm to continue. The spindle remains off until a spindle command.") % tool,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel)
+        if not current():
+            return
+        if answer == QtWidgets.QMessageBox.StandardButton.Yes:
+            port.confirm_tool_change(tool, token=token)
+        else:
+            self.on_grbl_reset()
 
     def on_grbl_add_baudrate(self):
         new_bd = str(self.ui.new_baudrate_entry.get_value())
@@ -962,6 +1325,51 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         # a typed command can move the machine, so it needs a machine that is not in recovery
         self._grbl_start_op('command', task, motion=True)
 
+    def on_spindle_button(self, checked):
+        """
+        The Spindle button: M3 S<RPM> or M5. The button shows the spindle state, so it changes only
+        when the controller accepts the command (spindle_state_sig).
+        """
+        self.ui.spindle_button.setChecked(self.__dict__.get('_spindle_on', False))
+        cmd = 'M3 S%d' % self.ui.spindle_rpm_entry.get_value() if checked else 'M5'
+
+        def task(op):
+            return self._grbl_transact(op, cmd, timeout=30.0)[1] == 'ok'
+
+        # a start needs a machine that is not in recovery; M5 is always allowed
+        self._grbl_start_op('spindle', task, motion=checked)
+
+    def _on_spindle_state(self, running):
+        """Slot of spindle_state_sig (GUI thread): the Spindle button follows the spindle."""
+        self._spindle_on = bool(running)
+        button = getattr(self.__dict__.get('ui'), 'spindle_button', None)
+        if button is not None:
+            try:
+                button.setChecked(self._spindle_on)
+            except RuntimeError:
+                pass  # the UI was deleted
+
+    def _poll_idle_status(self):
+        """
+        Timer slot (1 s): read the status of an idle controller, so the Spindle button and the
+        position follow changes that the sender did not send (alarm, E-stop, another program).
+        Not in recovery: after a reset with the homing lock, GRBL reports Alarm, and a status
+        query takes that as a new alarm.
+        """
+        if (not self.__dict__.get('_plugin_active') or self.__dict__.get('_simulation') is not None
+                or not self._grbl_port_ready() or self._grbl_close_pending or self._grbl_op is not None
+                or self._grbl_stream_dirty or self._grbl_reset_pending or self._grbl_recovery is not None):
+            return
+
+        def task(op):
+            line = self._grbl_query_status(op, timeout=0.5)
+            report = parse_grbl_status_report(line) if line else None
+            if report is not None:
+                self.status_report_sig.emit(report)
+
+        # its own thread: in the app worker pool it can wait behind a long job while it holds the port
+        self._grbl_start_op(STATUS_POLL, task, own_thread=True)
+
     def on_grbl_report(self):
         def task(op):
             line = self._grbl_query_status(op)
@@ -985,6 +1393,70 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self.console_line_sig.emit("GRBL Parameter: $%d = %s" % (number, str(value)))
 
         self._grbl_start_op('parameter', task)
+
+    @staticmethod
+    def _continuous_jog_capable(port):
+        return all(callable(getattr(port, name, None))
+                   for name in ('start_jog', 'refresh_jog', 'stop_jog'))
+
+    def _on_jog_clicked(self, button, direction):
+        if self._continuous_jog_click_button is button:
+            self._continuous_jog_click_button = None
+            return
+        self.on_grbl_jog(direction=direction)
+
+    def _on_jog_pressed(self, button, direction):
+        self._continuous_jog_click_button = None
+        port = self.grbl_ser_port
+        if not (self.ui.continuous_jog_cb.isChecked() and self._continuous_jog_capable(port)):
+            return
+        self._continuous_jog_click_button = button
+        if self.ui.check_mode_cb.isChecked():
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Turn off check mode before jogging."))
+            return
+        op = self._grbl_reserve('continuous jog', motion=True)
+        if op is None:
+            return
+        try:
+            feed = self.ui.jog_fr_entry.get_value() * (25.4 if self.units == 'IN' else 1.0)
+            port.start_jog('xyz'.index(direction[0]), int(direction.endswith('minus')), feed)
+        except (serial.SerialException, OSError, ValueError) as error:
+            self._grbl_release(op)
+            self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (_("Jog failed"), error))
+            return
+        self._continuous_jog = (port, button)
+        self._continuous_jog_timer.start()
+
+        def wait_for_stop():
+            try:
+                self._grbl_wait_idle(op)
+            except (serial.SerialException, OSError) as error:
+                with self._grbl_op_lock:
+                    self._grbl_failure_locked(op, 'port_error')
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Jog failed"), error))
+            finally:
+                self._grbl_release(op)
+
+        self.app.worker_task.emit({'fcn': wait_for_stop, 'params': []})
+
+    def _stop_continuous_jog(self):
+        active = self.__dict__.get('_continuous_jog')
+        if active is None:
+            return
+        self._continuous_jog = None
+        self._continuous_jog_timer.stop()
+        active[0].stop_jog()
+
+    def _refresh_continuous_jog(self):
+        active = self._continuous_jog
+        if active is None:
+            return
+        port, button = active
+        if (self.grbl_ser_port is not port or not self._grbl_connected or not button.isDown()
+                or QtWidgets.QApplication.applicationState() != QtCore.Qt.ApplicationState.ApplicationActive
+                or not button.window().isActiveWindow()
+                or not self.ui.continuous_jog_cb.isChecked() or not port.refresh_jog()):
+            self._stop_continuous_jog()
 
     def on_grbl_jog(self, direction=None):
         if direction is None:
@@ -1104,11 +1576,21 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.app.inform.emit('[WARNING_NOTCL] %s %s' % (
             _("Stopped. GRBL is in feed hold."), self._grbl_recovery_text()))
 
-    def on_grbl_reset(self):
+    def on_grbl_reset(self, keep_position=None):
+        """
+        Soft reset of the controller; a worker then waits for the startup banner.
+
+        :param keep_position: True if no motion ran, so the position is still valid and the
+            machine does not need Home. None (the Reset button): found from the current state.
+        """
         if self.__dict__.get('_simulation') is not None:
             return
         self._last_wco = None
         with self._grbl_op_lock:
+            if keep_position is None:
+                op = self._grbl_op
+                keep_position = ((op is None or not op.motion) and not self._grbl_stream_dirty
+                                 and self._grbl_recovery is None)
             self._start_seq += 1
             self._grbl_safety_generation += 1
             op = self._grbl_op
@@ -1141,8 +1623,40 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 "Could not clear the GRBL receive buffer. Reset was sent, but Home is blocked. Press Reset again."))
             return
         self.app.inform.emit("%s" % _("GRBL software reset was sent."))
-        if self._grbl_recovery is not None:
+        # a soft reset stops the spindle
+        self._on_spindle_state(False)
+        self._grbl_confirm_reset_later(self._grbl_safety_generation, keep_position)
+
+    def _grbl_confirm_reset_later(self, generation, keep_position, tries=40):
+        """
+        Read the startup banner of a reset when the cancelled operation has freed the port
+        (GUI thread; it tries again every 50 ms). Without a confirmation, Home still reads it.
+        """
+        if self._grbl_safety_generation != generation or not self._grbl_reset_pending:
+            return
+        if self._grbl_op is not None:
+            if tries > 0:
+                QtCore.QTimer.singleShot(50, lambda: self._grbl_confirm_reset_later(generation, keep_position, tries - 1))
+            else:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % self._grbl_recovery_text())
+            return
+
+        def task(op):
+            if not self._grbl_confirm_reset(op):
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("GRBL reset was not confirmed. Press Reset, then Home."))
+                return
+            state = self._grbl_post_reset_state(op) if keep_position else None
+            with self._grbl_op_lock:
+                if not self._grbl_active_locked(op) or op.safety_generation != self._grbl_safety_generation:
+                    return
+                if state == 'Idle':
+                    # no motion ran, and a reset in Idle keeps the position
+                    self._grbl_recovery = None
+                    self.app.inform.emit('[success] %s' % _("Controller reset. The spindle and the outputs are off."))
+                    return
             self.app.inform.emit('[WARNING_NOTCL] %s' % self._grbl_recovery_text())
+
+        self._grbl_start_op('reset', task, allow_in_recovery=True)
 
     def on_grbl_pause_resume(self, checked):
         if self._grbl_op is not None:
@@ -2022,8 +2536,21 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             # Preparation commands aren't lines of the displayed program.
             return start_index + done - prefix_count if done > prefix_count else 0
 
+        program = preamble + resumed
+        prepare_program = getattr(port, 'prepare_program', None)
+        if program and not check_mode and callable(prepare_program):
+            try:
+                prepare_program(program)
+            except (serial.SerialException, OSError, ValueError) as error:
+                self._stream_result = {'done': 0, 'last_text': str(error),
+                                       'line': numbers[start_index] if start_index < len(numbers) else 1,
+                                       'errors': [], 'error_indices': []}
+                with self._grbl_op_lock:
+                    self._grbl_abort_stream_locked(op, 'error', str(error))
+                return 'error'
+
         res = stream_lines(
-            preamble + resumed, write, readline, check_mode=check_mode,
+            program, write, readline, check_mode=check_mode,
             on_progress=lambda d, t: self.stream_progress_sig.emit(program_done(d), len(lines)),
             on_line=self.console_line_sig.emit,
             poll_status=True, poll_interval=poll_interval,
@@ -2184,8 +2711,28 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         return 'incomplete'
 
     def on_stream_stop(self):
-        """Stop: feed hold now; the stream worker stops writing. Then GRBL needs Reset and Home."""
+        """
+        Stop: feed hold now; the stream worker stops writing. Then a soft reset, which also stops
+        the spindle. If no motion ran, the position is kept and the machine does not need Home.
+        """
+        if self.__dict__.get('_simulation') is not None:
+            self.on_grbl_stop()
+            return
+        with self._grbl_op_lock:
+            op = self._grbl_op
+            idle = (op is None or not op.motion) and not self._grbl_stream_dirty and self._grbl_recovery is None
         self.on_grbl_stop()
+        if not self._grbl_port_ready():
+            return
+        generation = self._grbl_safety_generation
+        port = self.grbl_ser_port
+
+        def reset():
+            if self._grbl_safety_generation == generation and self.grbl_ser_port is port and self._grbl_port_ready():
+                self.on_grbl_reset(keep_position=idle)
+
+        # a moving machine gets time to brake in the feed hold before the reset
+        QtCore.QTimer.singleShot(0 if idle else 500, reset)
 
     def on_unlock(self):
         def task(op):
@@ -2527,6 +3074,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.status_label.setText(text)
         if 'ov' in report:
             self.ui.ov_values_label.setText('F: %d%%  R: %d%%  S: %d%%' % report['ov'])
+            # the accessory field comes with 'Ov'; without it, no accessory is on
+            accessory = report.get('accessory', '')
+            self._on_spindle_state('S' in accessory or 'C' in accessory)
         if self.view3d is not None and pos is not None:
             self.view3d.set_tool_position(pos)
 
@@ -2572,6 +3122,8 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             return
         if self.view3d is None or self.view3d.canvas is not canvas:
             self.view3d = SenderView3d(canvas)
+            # the sender view starts in the isometric view; later the camera stays as the user turns it
+            canvas.view.camera.set_view('iso')
         dialog = self.__dict__.get('_simulation')
         if dialog is not None and dialog.running:
             self.view3d.set_toolpath(*dialog.preview)
@@ -2815,9 +3367,10 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.on_grbl_send_command()
 
     def on_plugin_cleanup(self):
-        """Release the sender's Plot 3D tab and hide the console."""
+        """The plugin closes: stop and disconnect the controller, release the Plot 3D tab, hide the console."""
         if self.__dict__.get('_simulation') is not None:
             self._simulation.close()
+        self._grbl_shutdown()
         self._plugin_active = False
         self._preview_generation = getattr(self, '_preview_generation', 0) + 1
         self._probe_start_op = None
@@ -2839,6 +3392,9 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             self.on_plugin_cleanup()
 
     def event(self, event):
+        if event.type() in (QtCore.QEvent.Type.Hide, QtCore.QEvent.Type.Close,
+                            QtCore.QEvent.Type.ApplicationDeactivate, QtCore.QEvent.Type.WindowDeactivate):
+            self._stop_continuous_jog()
         result = super().event(event)
         if event.type() in (QtCore.QEvent.Type.Hide, QtCore.QEvent.Type.ParentChange) and \
                 getattr(self, '_plugin_active', False):

@@ -495,8 +495,12 @@ def reset_confirmation_tool(fake):
 
 
 def run_reset_home(tool):
-    tool.on_grbl_homing()
     ticks = iter(range(10000))
+    with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(ticks)), \
+            patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'):
+        if tool._grbl_op is not None and tool._grbl_op.name == 'reset':
+            run_worker(tool)  # the reset worker reads the banner before Home
+    tool.on_grbl_homing()
     with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(ticks)), \
             patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'):
         run_worker(tool)

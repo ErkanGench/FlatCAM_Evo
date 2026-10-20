@@ -123,7 +123,12 @@ if __name__ == '__main__':
     VisPyPatches.apply_patches()
 
     def excepthook(exc_type, exc_value, exc_tb):
+        # The machine stops only when the application ends: an error in a GUI slot does not stop a running job.
+        # The headless run ends here; the GUI ends with QApplication.quit(), and aboutToQuit runs MachineSafety.stop_all().
         if App.cmd_line_headless:
+            # first the machine: stop the motion, the spindle and the outputs of the connected controllers
+            from appCommon import MachineSafety
+            MachineSafety.stop_all()
             # no window for a message box: the traceback goes to stderr and the run ends with exit code 1
             sys.stderr.write("".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
             sys.stderr.flush()
@@ -164,9 +169,12 @@ if __name__ == '__main__':
                 # msgbox.setTextFormat(Qt.TextFormat.RichText)
                 msgbox.exec()
 
-                response = msgbox.clickedButton()
-                if response == bt_ret:
-                    pass
+                # Quit ends the application; Return lets it (and a running job) continue
+                if msgbox.clickedButton() == bt_yes:
+                    # stop the machine now: a window can refuse the close (an updater or a save is active)
+                    from appCommon import MachineSafety
+                    MachineSafety.stop_all()
+                    QtWidgets.QApplication.quit()
             except Exception:
                 QtWidgets.QApplication.quit()
         else:

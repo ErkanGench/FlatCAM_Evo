@@ -70,6 +70,7 @@ def make_tool(units='MM', storage=None, heights_valid=True, cls=None):
     tool._grbl_stream_dirty = False
     tool.stream_progress_sig = MagicMock()
     tool.status_report_sig = MagicMock()
+    tool.spindle_state_sig = MagicMock()
     tool.stream_ended_sig = MagicMock()
     return tool
 
@@ -648,7 +649,7 @@ class TestSendGrblCommand(unittest.TestCase):
         tool, port = self._tool()
         self._send(tool, 'G0 X1')
         self.assertEqual(tool.console_line_sig.emit.call_args_list,
-                         [call('G0 X1'), call('\t\t\t: OK')])
+                         [call('G0 X1'), call('Answer:             OK')])
 
     def test_echo_false_suppresses_command_and_reply(self):
         tool, port = self._tool()

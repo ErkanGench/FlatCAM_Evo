@@ -64,7 +64,8 @@ class SenderView3d:
     def set_prepared_toolpath(self, prepared):
         """Upload prepared buffers on the GUI thread."""
         self._segments, pos, colors = prepared
-        self.path.set_data(pos=pos, color=colors)
+        # VisPy cannot draw an empty color array: an empty path gets 1 color
+        self.path.set_data(pos=pos, color=colors if len(colors) else CUT_COLOR)
         self.accepted.set_data(pos=np.zeros((0, 3), dtype=np.float32))
         self.set_selected_line(None)
 

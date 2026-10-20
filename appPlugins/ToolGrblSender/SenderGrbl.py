@@ -49,8 +49,50 @@ GRBL_RX_BUFFER = 127
 # LINE_BUFFER_SIZE of GRBL 1.1: the longest line GRBL accepts, with the line end
 GRBL_MAX_LINE = 80
 
+# the startup banner of the E-Cut USB adapter (appPlugins/Common/ecut); it is not a GRBL banner
+ECUT_BANNER = "E-Cut host adapter 1.0 ['$' for help]"
+
+
+def is_controller_banner(line):
+    """True for a controller startup banner: a GRBL banner or the E-Cut adapter banner."""
+    text = (line or '').strip().lower()
+    return text.startswith('grbl ') or text.startswith('e-cut host adapter ')
+
+
 _GCODE_WORD_RE = re.compile(r'([A-Za-z])\s*([+-]?(?:\d+\.?\d*|\.\d+))')
 _GCODE_COMMENT_RE = re.compile(r'\([^)]*\)')
+
+
+# the console shows a controller reply on its own line: 'Answer:' tells it from the command
+CONSOLE_ANSWER = 'Answer:             '
+
+# the name of the idle status query operation (Sender._poll_idle_status); it is short, so a new
+# operation waits for its end instead of a "busy" message
+STATUS_POLL = 'status poll'
+
+
+def spindle_state_of_line(line):
+    """
+    :param line: 1 G-code line that the controller accepted.
+    :return: True if it starts the spindle (M3, M4), False if it stops it (M5, M2, M30),
+        None if it does not change the spindle.
+    """
+    text = _GCODE_COMMENT_RE.sub('', (line or '').split(';', 1)[0])
+    if text.lstrip().startswith('$'):
+        return None
+    state = None
+    for letter, value in _GCODE_WORD_RE.findall(text):
+        if letter.upper() != 'M':
+            continue
+        try:
+            code = float(value)
+        except ValueError:
+            continue
+        if code in (3, 4):
+            state = True
+        elif code in (5, 2, 30):
+            state = False
+    return state
 
 
 def validate_stream_lines(lines, rx_size=GRBL_RX_BUFFER):
@@ -354,7 +396,10 @@ class GrblClientMixin:
                 port.close()
             except (serial.SerialException, OSError) as err:
                 self.app.log.debug("ToolLevelling._grbl_close_port() -> %s" % str(err))
-        self.grbl_port_closed_sig.emit()
+        try:
+            self.grbl_port_closed_sig.emit()
+        except RuntimeError:
+            pass  # a new project deleted the plugin: the port is closed and no UI is left to update
         return True
 
     def _grbl_disconnect(self):
@@ -375,7 +420,8 @@ class GrblClientMixin:
                 self._grbl_close_pending = True
 
         if op is not None:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The port closes when the running operation stops."))
+            if op.name != STATUS_POLL:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("The port closes when the running operation stops."))
             return
 
         self._grbl_close_port()
@@ -395,6 +441,31 @@ class GrblClientMixin:
                     self._grbl_recovery = 'needs_reset'
         self._grbl_close_port()
 
+    def _grbl_shutdown(self):
+        """
+        The plugin closes: feed hold and soft reset (motion, spindle and outputs stop), then close the
+        port. The next session starts clean; only a motion that the reset cut leaves 'needs_home'.
+        """
+        dialog = self.__dict__.get('_ecut_motion_dialog')
+        if dialog is not None:
+            self._ecut_motion_dialog = None
+            try:
+                dialog.close()
+            except RuntimeError:
+                pass  # the dialog was already deleted
+        with self._grbl_op_lock:
+            op = self._grbl_op
+            moving = (op is not None and op.motion) or self._grbl_stream_dirty
+            if self._grbl_port_ready():
+                self._grbl_write_realtime_locked(b'!')
+                self._grbl_write_realtime_locked(b'\x18')
+        self._grbl_force_close()
+        with self._grbl_op_lock:
+            self._grbl_recovery = 'needs_home' if moving else None
+            self._grbl_stream_dirty = False
+            self._grbl_reset_pending = False
+            self._grbl_reply_pending = False
+
     def _grbl_port_ready(self):
         """:return: True only after an open port has completed the GRBL handshake."""
         port = getattr(self, 'grbl_ser_port', None)
@@ -403,6 +474,9 @@ class GrblClientMixin:
     def _grbl_recovery_text(self):
         if self._grbl_recovery == 'needs_reset':
             return _("GRBL needs recovery. Press Reset, then Home.")
+        if callable(getattr(getattr(self, 'grbl_ser_port', None), 'reference_axes', None)):
+            return _("The controller needs recovery. Press Home, or set the machine home of X, Y and Z "
+                     "in the E-Cut settings.")
         return _("GRBL needs recovery. Press Home.")
 
     def _grbl_reserve(self, name, motion=False, allow_in_recovery=False):
@@ -422,12 +496,20 @@ class GrblClientMixin:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Not connected to a GRBL controller."))
             return None
 
+        # the idle status query takes milliseconds (its answer time limit is 0.5 s)
+        with self._grbl_op_lock:
+            busy = self._grbl_op
+        if name != STATUS_POLL and busy is not None and busy.name == STATUS_POLL:
+            deadline = time.monotonic() + 0.7
+            while self._grbl_op is busy and time.monotonic() < deadline:
+                time.sleep(0.005)
+
         with self._grbl_op_lock:
             if self._grbl_op is not None:
                 self.app.inform.emit('[WARNING_NOTCL] %s: %s. %s' % (
                     _("GRBL is busy"), self._grbl_op.name, _("Wait, or press Stop.")))
                 return None
-            if self._grbl_stream_dirty and not (name == 'home' and allow_in_recovery):
+            if self._grbl_stream_dirty and not (name in ('home', 'reset') and allow_in_recovery):
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _(
                     "GRBL can still have lines of the stopped job. Press Reset, then Home."))
                 return None
@@ -452,11 +534,13 @@ class GrblClientMixin:
         if close_now:
             self._grbl_close_port()
 
-    def _grbl_start_op(self, name, fn, motion=False, allow_in_recovery=False):
+    def _grbl_start_op(self, name, fn, motion=False, allow_in_recovery=False, own_thread=False):
         """
         Reserve the port now (GUI thread) and run fn(op) in a worker thread.
         The port is released when fn ends, also after an exception.
 
+        :param own_thread: True: a new thread, not the app worker pool. A short operation then never
+            waits in the queue behind a long job while it holds the port.
         :return: True if the worker task was scheduled.
         """
         op = self._grbl_reserve(name, motion=motion, allow_in_recovery=allow_in_recovery)
@@ -476,7 +560,10 @@ class GrblClientMixin:
             finally:
                 self._grbl_release(op)
 
-        self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+        if own_thread:
+            threading.Thread(target=worker_task, name='GrblSender-' + name, daemon=True).start()
+        else:
+            self.app.worker_task.emit({'fcn': worker_task, 'params': []})
         return True
 
     def _grbl_active_locked(self, op, port=None):
@@ -492,7 +579,7 @@ class GrblClientMixin:
         alarm = any(line.lower().startswith('alarm:') or parse_grbl_status_state(line) == 'Alarm'
                     for line in (text or '').splitlines())
         unexpected_reset = status != 'handshake' and any(
-            line.lower().startswith('grbl ') for line in (text or '').splitlines())
+            is_controller_banner(line) for line in (text or '').splitlines())
         uncertain = status in ('timeout', 'port_error', 'probe_invalid')
         if op is not None and (self._grbl_op is not op or op.cancel.is_set() or op.failed):
             return
@@ -698,10 +785,13 @@ class GrblClientMixin:
                         continue
                     decoded_lines.append(decoded_line)
                     if echo:
-                        self.console_line_sig.emit('\t\t\t: ' + decoded_line.upper())
+                        self.console_line_sig.emit(CONSOLE_ANSWER + decoded_line.upper())
                     lowered = decoded_line.lower()
                     if lowered == 'ok':
                         self._grbl_reply_pending = False
+                        spindle = spindle_state_of_line(cmd)
+                        if spindle is not None:
+                            self.spindle_state_sig.emit(spindle)
                         text, status = self._grbl_prepare_locked(op, port)
                         if status is not None:
                             return '\n'.join(decoded_lines + [text]), status
@@ -800,7 +890,7 @@ class GrblClientMixin:
                 while b'\n' in self._grbl_rx_buffer:
                     raw_line, self._grbl_rx_buffer = self._grbl_rx_buffer.split(b'\n', 1)
                     line = raw_line.decode('utf-8', errors='replace').strip()
-                    if line.lower().startswith('grbl '):
+                    if is_controller_banner(line):
                         # Only the same uncancelled reset epoch can retire old reply evidence.
                         self._grbl_reply_pending = False
                         self._grbl_reset_pending = False

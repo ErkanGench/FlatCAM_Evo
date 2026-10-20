@@ -246,7 +246,9 @@ def parse_grbl_status_report(line):
         'wpos' (tuples of 3 floats), 'wco' (tuple of 3 floats), 'feed' and
         'spindle' (floats), 'ov' (tuple of 3 ints: feed, rapid, spindle),
         'buffer' (tuple of 2 ints: planner blocks, RX bytes available),
-        'line' (int); None if `line` is not a status report.
+        'line' (int), 'accessory' (str, for example 'SF': S = spindle CW, C = spindle CCW,
+        F = flood, M = mist; GRBL sends it with 'Ov', and only when an accessory is on);
+        None if `line` is not a status report.
     """
     text = (line or '').strip()
     if not (text.startswith('<') and text.endswith('>')):
@@ -284,6 +286,8 @@ def parse_grbl_status_report(line):
                 report['buffer'] = tuple(int(v) for v in floats(value, 2))
             elif key == 'Ln':
                 report['line'] = int(value)
+            elif key == 'A':
+                report['accessory'] = value
     except ValueError:
         return None
     return report
