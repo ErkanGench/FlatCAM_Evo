@@ -33,7 +33,7 @@ Translations:
 
 Machine Sender:
 
-- new: E-Cut USB motion controller support (appPlugins/Common/ecut): connect, jog (also continuous: hold the arrow), streaming, spindle, inputs and outputs, soft limits and the motion settings of the board
+- new (experimental, not ready for production; bench tests only): E-Cut USB motion controller support (appPlugins/Common/ecut): connect, jog (also continuous: hold the arrow), streaming, spindle, inputs and outputs, soft limits and the motion settings of the board
 - new: a manual tool change dialog; the spindle stays off until a spindle command
 - new: the connected controllers stop (motion, spindle, outputs) when the application closes or crashes (appCommon/MachineSafety)
 - fixed: GRBL reset waits for the controller banner in a worker; after a stop the controller asks for Home; the status report reads the accessory state (spindle, coolant)
