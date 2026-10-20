@@ -1604,12 +1604,9 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 else:
                     geo_final.multigeo = True
 
-                try:
-                    new_solid_geometry += deepcopy(geo_obj.solid_geometry.geoms)
-                except Exception as e:
-                    new_solid_geometry.append(geo_obj.solid_geometry)
-                    if log:
-                        log.error("GeometryObject.merge() --> %s" % str(e))
+                # the solid geometry can be a list (e.g. the isolation geometry), a multi-geometry or a single geometry
+                if geo_obj.solid_geometry is not None:
+                    new_solid_geometry += deepcopy(flatten_shapely_geometry(geo_obj.solid_geometry))
 
                 # find the tool_uid maximum value in the geo_final
                 try:
@@ -1662,7 +1659,8 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 new_solid_geo = []
                 last_tool = None
                 for old_tool in i_lst:
-                    new_solid_geo += new_tools[old_tool]['solid_geometry']
+                    # the tool geometry can be a list, a multi-geometry (e.g. the cutout) or a single geometry
+                    new_solid_geo += flatten_shapely_geometry(new_tools[old_tool]['solid_geometry'])
                     last_tool = old_tool
 
                 if new_solid_geo and last_tool:
