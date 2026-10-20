@@ -1866,7 +1866,13 @@ tests/test_responsive_batch_executor.py::TestResponsiveBatch::test_worker_comple
 tests/test_safe_eval.py::TestGerberMacro::test_aperture_macro_refuses_code
 tests/test_safe_eval.py::TestGerberMacro::test_code_in_a_macro_primitive_does_not_run
 tests/test_safe_eval.py::TestGerberMacro::test_code_in_a_macro_variable_does_not_run
+tests/test_safe_eval.py::TestGerberMacro::test_huge_integer_in_a_macro_fails_quickly
 tests/test_safe_eval.py::TestGerberMacro::test_macro_arithmetic_still_works
+tests/test_safe_eval.py::TestIntegerSize::test_exponent_limit_is_kept
+tests/test_safe_eval.py::TestIntegerSize::test_long_multiplication_is_refused
+tests/test_safe_eval.py::TestIntegerSize::test_ordinary_arithmetic_still_works
+tests/test_safe_eval.py::TestIntegerSize::test_power_of_a_power_is_refused
+tests/test_safe_eval.py::TestIntegerSize::test_zero_one_and_minus_one_stay_small
 tests/test_safe_eval.py::TestNoEval::test_application_code_has_no_eval_or_exec_call
 tests/test_safe_eval.py::TestUserText::test_entries_evaluate_arithmetic_and_refuse_code
 tests/test_safe_eval.py::TestUserText::test_jump_to_does_not_run_the_clipboard_or_the_typed_text
