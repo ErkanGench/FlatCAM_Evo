@@ -114,6 +114,7 @@ Translations:
 - check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings
 - stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt
 - new guide for the translators (docs/TRANSLATING.md)
+- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
 - fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
 - fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
 

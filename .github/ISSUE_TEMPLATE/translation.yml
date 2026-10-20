@@ -1,0 +1,52 @@
+name: Translation problem
+description: A wrong, unclear or missing translation, or a translation file to add
+title: "[Translation] "
+labels: ["translation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you! See docs/TRANSLATING.md for how translations work. You can write in English or in the language
+        of the translation.
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language
+      options:
+        - Deutsch (de)
+        - Español (es)
+        - Français (fr)
+        - Italiano (it)
+        - Português do Brasil (pt_BR)
+        - Română (ro)
+        - Русский (ru)
+        - Türkçe (tr)
+        - 简体中文 (zh)
+        - Another language (write it below)
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options:
+        - A text in the program is wrong or unclear
+        - A text is still in English
+        - I translated or corrected strings.po (file attached)
+        - I would like to add a new language
+    validations:
+      required: true
+  - type: textarea
+    id: text
+    attributes:
+      label: The text
+      description: The text as the program shows it, and where you saw it (menu, tool, message).
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What it should be
+  - type: textarea
+    id: files
+    attributes:
+      label: Screenshot or files
+      description: Drag a screenshot or the .po file here.

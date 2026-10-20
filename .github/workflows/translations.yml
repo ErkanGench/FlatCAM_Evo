@@ -1,0 +1,28 @@
+name: Translations
+
+# Checks the translation files of a pull request: a translation whose placeholders (%s, {name} ...) do not format
+# makes the program fail, so it fails the check; HTML tag, argument name and line break differences are printed as
+# warnings. Only the Python standard library is needed.
+on:
+  pull_request:
+    paths: ['locale/**', 'locale_template/**', 'scripts/i18n_tool.py']
+  push:
+    paths: ['locale/**', 'locale_template/**', 'scripts/i18n_tool.py']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Placeholder errors and warnings of every translation
+        run: python scripts/i18n_tool.py check
+      - name: Status of the languages
+        if: always()
+        run: python scripts/i18n_tool.py stats >> "$GITHUB_STEP_SUMMARY"
+      - name: Compiled .mo files up to date (maintainers recompile when merging)
+        if: always()
+        continue-on-error: true
+        run: python scripts/i18n_tool.py compile --check
