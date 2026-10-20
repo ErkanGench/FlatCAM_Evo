@@ -80,8 +80,12 @@ LEGACY_MILL_DATA_KEYS = {
 # The older value of these settings in the tool data can be the text of a combo box: the development builds of
 # 21-28.10.2020 (0b94eef84 to eb7de1173, before the FlatCAM 8.994 release) saved the polish method as 'Standard', 'Seed'
 # or 'Lines' (translated in another interface language); the 8.994 release and FlatCAM Evo save the index. The laser ON
-# code comes from the 8.994 spindle direction (its GRBL_laser and Z_laser sent M03 for CW, M04 for CCW); FlatCAM Evo
-# before 12.2023 always sent M3, so its 'tools_mill_spindledir' does not give it.
+# code comes from the 8.994 spindle direction: the 8.994 GRBL_laser and Z_laser sent M03 for CW, M04 for CCW (its
+# multi-geometry job took the direction from the tool, its single-geometry job from the application option). The
+# 'tools_mill_spindledir' of FlatCAM Evo before 12.2023 does not give it: the GRBL_laser and Z_laser (GRBL_laser_z) of
+# the Evo builds of 12.2020 to 01.2022 (3d83f93d5 to 13ec36e50) still sent M03 or M04 from the spindle direction, those
+# of 01.2022 to 12.2023 (13ec36e50 to 993a195bd) M3 for any direction, and their tool data cannot tell them apart. So
+# such a tool gets the application laser ON code, also a laser tool saved with CCW in 2021 (it made M04 then).
 # modern key -> the modern value of each older text
 LEGACY_MILL_DATA_TEXTS = {
     'tools_mill_polish_method': {'standard': 0, 'seed': 1, 'lines': 2},
