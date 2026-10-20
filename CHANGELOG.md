@@ -215,6 +215,17 @@ Translations:
 - a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form (merged PR #27 from ErkanGench)
 - fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated (merged PR #27 from ErkanGench)
 - fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped (merged PR #27 from ErkanGench)
+- new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language
+- check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings
+- stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt
+- new guide for the translators (docs/TRANSLATING.md)
+- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
+- fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
+- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
+Project file:
+
+- the project save makes the WKT of all the geometries with vectorized Shapely calls, in pieces of about 10000 coordinates, instead of 1 call for each geometry while the JSON is written; a large project saves about 5x faster (compressed) and the GUI thread is blocked for much shorter times during the save
+- the coordinates are saved with the shortest text that reads back to the same number instead of 16 fixed decimals, which lost the last bits of a coordinate below 1; the files are smaller and older versions open them
 
 Tests:
 
@@ -231,6 +242,11 @@ Tests:
 - new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py) (merged PR #27 from ErkanGench)
 - new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py) (merged PR #27 from ErkanGench)
 - new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py) (merged PR #27 from ErkanGench)
+- new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
+- new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py)
+- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
+- new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
+- new unit tests for the WKT of the project save (tests/test_project_save_wkt.py)
 
 18.10.2026
 

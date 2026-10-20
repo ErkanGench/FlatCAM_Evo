@@ -8910,6 +8910,75 @@ def to_dict(obj):
     return obj
 
 
+# the WKT of a project is made in pieces of about this many coordinates (see geometry_wkt_cache())
+WKT_PIECE_COORDS = 10000
+
+
+def geometry_wkt_cache(data):
+    """
+    Make the WKT of all the Shapely geometries in a project dictionary (in nested dicts, lists and tuples) with
+    vectorized shapely.to_wkt() calls, instead of 1 call per geometry while the JSON is written.
+    Use the result with project_json_default().
+
+    The numbers get the shortest text that reads back to the same float (up to 20 decimals, trimmed). The 16 fixed
+    decimals of shapely.wkt.dumps() are longer and can lose the last bit of a coordinate below 1.
+    The format is still WKT, so older versions of the app read it.
+
+    to_wkt() holds the GIL and the project is saved in a worker thread: the geometries are converted in pieces
+    of about WKT_PIECE_COORDS coordinates, so the GUI thread runs between the pieces.
+
+    The cache keeps a reference to each geometry: an id() is unique only among the objects that exist at the same
+    time, and the project can change while it is saved.
+
+    :param data:    the project dictionary
+    :return:        dict: id(geometry) -> (geometry, WKT text)
+    """
+    geoms = {}
+    stack = [data]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, BaseGeometry):
+            geoms[id(item)] = item
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+
+    if not geoms:
+        return {}
+
+    arr = np.empty(len(geoms), dtype=object)
+    arr[:] = list(geoms.values())
+    ends = np.cumsum(shapely.get_num_coordinates(arr))
+    cuts = np.unique(np.searchsorted(ends, np.arange(WKT_PIECE_COORDS, ends[-1], WKT_PIECE_COORDS), side='right'))
+    texts = []
+    for part in np.split(arr, cuts):
+        if len(part):
+            texts.extend(shapely.to_wkt(part, rounding_precision=20, trim=True))
+    return {key: (geom, text) for (key, geom), text in zip(geoms.items(), texts)}
+
+
+def project_json_default(wkt_cache):
+    """
+    The 'default' function of json.dump() for a project save: like to_dict(), but the WKT of a geometry comes
+    from a geometry_wkt_cache() of the same data.
+
+    :param wkt_cache:   the dict made by geometry_wkt_cache()
+    :return:            a function for the 'default' parameter of json.dump()
+    """
+    def default(obj):
+        if isinstance(obj, BaseGeometry):
+            entry = wkt_cache.get(id(obj))
+            # the cached text only for the same geometry: a geometry that replaced it can have the same id()
+            if entry is not None and entry[0] is obj:
+                return {
+                    "__class__": "Shply",
+                    "__inst__": entry[1]
+                }
+        return to_dict(obj)
+    return default
+
+
 def dict2obj(d):
     """
     Default deserializer.
