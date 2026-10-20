@@ -194,7 +194,8 @@ class AppTextEditor(QtWidgets.QWidget):
     def handlePrint(self):
         dialog = QtPrintSupport.QPrintDialog()
         if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
-            self.code_editor.document().print(dialog.printer())
+            # (the print() of the code editor highlights the lines never shown before it prints)
+            self.code_editor.print(dialog.printer())
 
     def handlePreview(self):
         dialog = QtPrintSupport.QPrintPreviewDialog()
