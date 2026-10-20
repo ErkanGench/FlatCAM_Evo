@@ -7,7 +7,7 @@ import unittest
 
 import serial
 
-from appPlugins.ToolGrblSender.SenderGrbl import (
+from appPlugins.Common.grbl.grbl_client import (
     stream_lines, validate_stream_lines, dwell_seconds, GRBL_RX_BUFFER, GRBL_MAX_LINE)
 
 

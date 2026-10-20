@@ -386,7 +386,7 @@ def test_rest_order_reaches_multigeometry_cnc_execution(explicit_reverse, from_t
         return job
     milling = SimpleNamespace(app=gen.app, units='MM', decimals=6,
                               target_obj=output, sel_tools=ordered, new_object=new_object)
-    for name in ('_capture_cnc_job_context', '_submit_cnc_job_creation',
+    for name in ('_complete_milling_tool_data', '_capture_cnc_job_context', '_submit_cnc_job_creation',
                  '_initialize_single_geometry_cnc_job', '_initialize_multi_geometry_cnc_job'):
         setattr(milling, name, getattr(ToolMilling, name).__get__(milling))
     result = ToolMilling.generate_cnc_job_handler(

@@ -72,7 +72,7 @@ class TestVirtualGrbl(unittest.TestCase):
         self.assertEqual(controller.readline(), b'error:20\n')
 
     def test_streamer_uses_virtual_replies(self):
-        from appPlugins.ToolGrblSender.SenderGrbl import stream_lines
+        from appPlugins.Common.grbl.grbl_client import stream_lines
         controller = VirtualGrbl()
         controller.set_speed(100)
         result = stream_lines(['G21 G90', 'G1 X0.01 F600', 'G4 P0.01'],

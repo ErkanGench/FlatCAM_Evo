@@ -315,7 +315,7 @@ def plugin(_headless_qt):  # noqa: F811
 
 
 def run_plugin(plugin, gerber, combine, passes=PASSES, e_passes=0, boundary=None, trace_boundary=False,
-               envelope=None):
+               envelope=None, **kwargs):
     """Calls isolate(); envelope: a stand-in for generate_envelope(), else the real one is used."""
     data = {k: deepcopy(v) for k, v in AppDefaults().defaults.items() if k.startswith('tools_')}
     data.update(tools_iso_isotype='full', tools_iso_passes=passes, tools_iso_overlap=OVERLAP,
@@ -333,11 +333,11 @@ def run_plugin(plugin, gerber, combine, passes=PASSES, e_passes=0, boundary=None
     spy = Mock(side_effect=envelope) if envelope else Mock(wraps=plugin.generate_envelope)
     plugin.generate_envelope = spy
     # geometry: the whole object (with None the separate passes need the fix of the 'All' selection)
-    plugin.isolate(gerber, [1], storage, geometry=gerber.solid_geometry, plot=False, combine=combine,
-                   iso_except=False, e_passes=e_passes,
-                   area_except=False, area_shape='square', rest=False, sel_type=0, tip_shape='C1',
-                   iso_simplification=False, simplification_tol=0.001, boundary=boundary,
-                   trace_boundary=trace_boundary)
+    options = dict(iso_except=False, e_passes=e_passes, area_except=False, area_shape='square', rest=False,
+                   sel_type=0, tip_shape='C1', iso_simplification=False, simplification_tol=0.001,
+                   boundary=boundary, trace_boundary=trace_boundary)
+    options.update(kwargs)
+    plugin.isolate(gerber, [1], storage, geometry=gerber.solid_geometry, plot=False, combine=combine, **options)
     return created, [c.kwargs['nr_passes'] for c in spy.call_args_list]
 
 
@@ -423,3 +423,92 @@ def test_plugin_boundary_from_the_ui(plugin):
     messages = [c.args[0] for c in plugin.app.inform.emit.call_args_list]
     assert messages == ['[ERROR_NOTCL] The boundary object has no outline that encloses an area: edge',
                         '[ERROR_NOTCL] No boundary object is selected.']
+
+
+@pytest.mark.parametrize('mode', ['combined', 'separate', 'rest'])
+@pytest.mark.parametrize('restriction', ['selection', 'exclusion'])
+def test_boundary_trace_respects_machining_scope(app, plugin, mode, restriction):
+    gerber = make_gerber(app, name='g')
+    gerber.solid_geometry = [Point(4, 5).buffer(0.5)]
+    board = box(0, 0, 10, 10)
+    allowed = box(0, 0, 5, 10)
+    options = dict(limited_area=[allowed])
+    if restriction == 'exclusion':
+        excluded = box(5, -1, 11, 11)
+        plugin.app.collection.get_by_name = Mock(return_value=SimpleNamespace(solid_geometry=[excluded]))
+        plugin.ui.except_cb.set_value(True)
+        options = dict(iso_except=True)
+    if mode == 'rest':
+        plugin.ui.tools_table = SimpleNamespace(
+            selectedItems=lambda: [SimpleNamespace(row=lambda: 0)],
+            item=lambda row, col: SimpleNamespace(text=lambda: str(DIA)))
+    created, __ = run_plugin(plugin, gerber, combine=mode != 'separate', passes=3,
+                             boundary=board, trace_boundary=True, rest=mode == 'rest', **options)
+    assert created
+    for obj in created.values():
+        assert length_outside(obj.solid_geometry, allowed) == pytest.approx(0.0)
+        for tool in obj.tools.values():
+            assert length_outside(tool['solid_geometry'], allowed) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize('mode', ['combined', 'separate', 'rest'])
+def test_simplified_boundary_paths_stay_inside_the_boundary(app, plugin, mode):
+    gerber = make_gerber(app, name='g')
+    gerber.solid_geometry = [Point(4, 5).buffer(0.5)]
+    board = Polygon([(0, 0), (10, 0), (10, 10), (5.1, 10), (5, 9.95), (4.9, 10), (0, 10)])
+    if mode == 'rest':
+        plugin.ui.tools_table = SimpleNamespace(
+            selectedItems=lambda: [SimpleNamespace(row=lambda: 0)],
+            item=lambda row, col: SimpleNamespace(text=lambda: str(DIA)))
+    created, __ = run_plugin(plugin, gerber, combine=mode != 'separate', passes=3,
+                             boundary=board, trace_boundary=True, rest=mode == 'rest',
+                             iso_simplification=True, simplification_tol=0.1)
+    assert created
+    for obj in created.values():
+        assert length_outside(obj.solid_geometry, board) == pytest.approx(0.0)
+        for tool in obj.tools.values():
+            assert length_outside(tool['solid_geometry'], board) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize('combine', [True, False], ids=['combined', 'separate'])
+@pytest.mark.parametrize('use_plugin', [True, False], ids=['plugin', 'object'])
+def test_empty_pass_does_not_skip_a_disconnected_boundary(app, plugin, combine, use_plugin):
+    gerber = make_gerber(app, name='g')
+    gerber.solid_geometry = [Point(0, 0).buffer(0.5)]
+    second = box(5, -1, 7, 1)
+    board = shapely.MultiPolygon([box(-1, -1, 1, 1), second])
+    if use_plugin:
+        created, __ = run_plugin(plugin, gerber, combine=combine, passes=20, boundary=board)
+    else:
+        created, __ = run_isolate(app, gerber, combine=combine, passes=20, boundary=board)
+    paths = [g for obj in created.values() for g in obj.solid_geometry]
+    assert unary_union(paths).intersection(second).length > 0
+
+
+@pytest.mark.parametrize('combine', [True, False], ids=['combined', 'separate'])
+@pytest.mark.parametrize('use_plugin', [True, False], ids=['plugin', 'object'])
+def test_disconnected_boundary_reports_the_last_pass_with_paths(app, plugin, combine, use_plugin):
+    # path radii 0.75, 1.25, ...: the passes 10 to 13 (radius 5.25 to 6.75) reach the second box; the pass 14
+    # (radius 7.25) encloses the whole boundary, so the passes stop there
+    gerber = make_gerber(app, name='g')
+    gerber.solid_geometry = [Point(0, 0).buffer(0.5)]
+    board = shapely.MultiPolygon([box(-1, -1, 1, 1), box(5, -1, 7, 1)])
+    if use_plugin:
+        plugin.app.inform.emit.reset_mock()
+        __, computed = run_plugin(plugin, gerber, combine=combine, passes=20, boundary=board)
+        messages = [c.args[0] for c in plugin.app.inform.emit.call_args_list if 'passes' in str(c.args[0])]
+    else:
+        app.inform.emit.reset_mock()
+        __, computed = run_isolate(app, gerber, combine=combine, passes=20, boundary=board, outname='iso')
+        messages = reports(app)
+    assert messages == ['[success] %s: 13 of 20 passes, the area inside the boundary is cleared.' %
+                        messages[0].split(': ')[0].split('] ')[1]]
+    assert len(computed) == 14
+
+
+@pytest.mark.parametrize('combine', [True, False], ids=['combined', 'separate'])
+def test_unreached_disconnected_boundary_makes_no_trace_only_object(app, plugin, combine):
+    gerber = make_gerber(app, name='g')
+    board = shapely.MultiPolygon([far_box_of(gerber), box(200, 200, 210, 210)])
+    created, __ = run_plugin(plugin, gerber, combine=combine, passes=3, boundary=board, trace_boundary=True)
+    assert not created

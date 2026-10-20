@@ -5238,11 +5238,13 @@ class FCTextAreaLineNumber(QtWidgets.QFrame):
 
             self.highlighting_shown = True
             try:
-                block = self.document().findBlockByNumber(first)
-                while block.isValid() and block.blockNumber() <= last:
-                    if block.userState() == -1:
-                        self.highlighter.rehighlightBlock(block)
-                    block = block.next()
+                # Formatting emits textChanged too; scrolling must not mark the text as edited.
+                with QtCore.QSignalBlocker(self):
+                    block = self.document().findBlockByNumber(first)
+                    while block.isValid() and block.blockNumber() <= last:
+                        if block.userState() == -1:
+                            self.highlighter.rehighlightBlock(block)
+                        block = block.next()
             finally:
                 self.highlighting_shown = False
 
@@ -5266,7 +5268,8 @@ class FCTextAreaLineNumber(QtWidgets.QFrame):
                 # each block highlighted emits updateRequest: highlight_shown_blocks() must not run for each of them
                 self.highlighting_shown = True
                 try:
-                    self.highlighter.rehighlight()
+                    with QtCore.QSignalBlocker(self):
+                        self.highlighter.rehighlight()
                 finally:
                     self.highlighter.editor = self
                     self.highlighting_shown = False

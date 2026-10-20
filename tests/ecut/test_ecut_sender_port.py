@@ -507,8 +507,8 @@ def test_stored_startup_runs_on_worker_after_banner(tmp_path):
 @pytest.mark.parametrize('tool_change', [False, True])
 def test_sender_stream_lines_conforms_to_real_ecut_connection(tool_change):
     from appPlugins.Common.ecut.ecut_sender_port import EcutSenderPort
-    from appPlugins.Common.grbl_protocol import parse_grbl_status_report
-    from appPlugins.ToolGrblSender.SenderGrbl import stream_lines
+    from appPlugins.Common.grbl.grbl_protocol import parse_grbl_status_report
+    from appPlugins.Common.grbl.grbl_client import stream_lines
 
     api = make_board_api()
     before = list(api._usb.positions)
@@ -663,7 +663,7 @@ def test_reset_resolves_a_blocked_program_preparation(connection):
 
 def test_prepared_sender_batches_real_engine_linear_motion():
     from appPlugins.Common.ecut.ecut_sender_port import EcutSenderPort
-    from appPlugins.ToolGrblSender.SenderGrbl import stream_lines
+    from appPlugins.Common.grbl.grbl_client import stream_lines
     api = make_board_api()
     calls = []
     run_gcode = api.run_gcode
@@ -697,7 +697,7 @@ def test_prepared_sender_batches_real_engine_linear_motion():
 
 def test_prepared_real_job_preserves_m6_confirmation_and_reset():
     from appPlugins.Common.ecut.ecut_sender_port import EcutSenderPort
-    from appPlugins.ToolGrblSender.SenderGrbl import stream_lines
+    from appPlugins.Common.grbl.grbl_client import stream_lines
     api = make_board_api()
     port = EcutSenderPort(api=api, timeout=0.03)
     lines = ['G91', 'G1X0.01F60', 'T7M6', 'G4P5', 'G1X10']

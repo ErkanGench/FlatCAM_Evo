@@ -25,7 +25,7 @@ import gettext
 import appTranslation as fcTranslate
 import builtins
 
-from appPlugins.Common.grbl_protocol import (
+from appPlugins.Common.grbl.grbl_protocol import (
     parse_grbl_probe_output,
     parse_grbl_active_wcs,
     parse_grbl_work_offset,

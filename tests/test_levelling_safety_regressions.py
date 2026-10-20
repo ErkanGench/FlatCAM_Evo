@@ -111,7 +111,7 @@ def test_motion_failure_blocks_next_motion(entry, failure):
         tool.on_grbl_homing()
     # Advance real transaction deadlines without waiting 10/30/120 seconds.
     clock = iter(range(0, 10000, 200))
-    with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(clock)):
+    with patch('appPlugins.Common.grbl.grbl_client.time.monotonic', side_effect=lambda: next(clock)):
         run_worker(tool)
     assert tool._grbl_recovery == 'needs_reset'
     assert tool._grbl_reserve('next motion', motion=True) is None
@@ -288,7 +288,7 @@ def test_motion_waits_through_run_until_idle(entry):
         tool.on_grbl_send_command()
     else:
         tool.on_grbl_jog('xplus')
-    with patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'):
+    with patch('appPlugins.Common.grbl.grbl_client.time.sleep'):
         run_worker(tool)
     assert len(states) == 3
     assert states[-1].startswith(b'<Idle')
@@ -496,13 +496,13 @@ def reset_confirmation_tool(fake):
 
 def run_reset_home(tool):
     ticks = iter(range(10000))
-    with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(ticks)), \
-            patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'):
+    with patch('appPlugins.Common.grbl.grbl_client.time.monotonic', side_effect=lambda: next(ticks)), \
+            patch('appPlugins.Common.grbl.grbl_client.time.sleep'):
         if tool._grbl_op is not None and tool._grbl_op.name == 'reset':
             run_worker(tool)  # the reset worker reads the banner before Home
     tool.on_grbl_homing()
-    with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(ticks)), \
-            patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'):
+    with patch('appPlugins.Common.grbl.grbl_client.time.monotonic', side_effect=lambda: next(ticks)), \
+            patch('appPlugins.Common.grbl.grbl_client.time.sleep'):
         run_worker(tool)
 
 
@@ -766,8 +766,8 @@ def test_partial_line_that_never_completes_fails_home():
 def fake_time(step=1.0):
     """Patches for a clock that advances `step` seconds per monotonic() call and a sleep that waits not."""
     ticks = iter(i * step for i in range(100000))
-    return (patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(ticks)),
-            patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'))
+    return (patch('appPlugins.Common.grbl.grbl_client.time.monotonic', side_effect=lambda: next(ticks)),
+            patch('appPlugins.Common.grbl.grbl_client.time.sleep'))
 
 
 def stale_reply_tool(fake):

@@ -86,6 +86,25 @@ class TestLazyHighlight(EditorCase):
         # the lines highlighted before stay highlighted
         self.assertTrue(self.formatted(5))
 
+    def test_highlighting_does_not_report_text_changes(self):
+        changes = []
+        self.edit.textChanged.connect(lambda: changes.append(1))
+        self.edit.document().setModified(False)
+        text = self.edit.toPlainText()
+
+        self.scroll_to(4000)
+        self.frame.resize(600, 1000)
+        pump()
+        self.assertTrue(self.formatted(4001))
+        self.assertEqual(self.edit.toPlainText(), text)
+        self.assertFalse(self.edit.document().isModified())
+        self.assertEqual(changes, [])
+
+        # Real edits must still notify the editor and enable saving.
+        self.replace_line(4001, 'G1 X1.0000 Y2.0000 F800.00')
+        self.assertTrue(changes)
+        self.assertTrue(self.edit.document().isModified())
+
     def test_lines_shown_by_a_taller_editor_are_highlighted(self):
         # a resize of the height only (the Tcl Shell dock closed, the window made taller) emits no updateRequest
         self.frame.resize(600, 1000)
@@ -134,8 +153,11 @@ class TestPrint(EditorCase):
 
     def test_printed_document_is_highlighted_on_every_line(self):
         self.assertFalse(self.formatted(350))
+        changes = []
+        self.edit.textChanged.connect(lambda: changes.append(1))
         with tempfile.TemporaryDirectory() as folder:
             self.edit.print(QtGui.QPdfWriter(os.path.join(folder, 'print.pdf')))
+        self.assertEqual(changes, [])
         for number in (5, 350, self.LINES + 2):
             self.assertTrue(self.formatted(number), number)
         # the highlighting of the lines shown goes on

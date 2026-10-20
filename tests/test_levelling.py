@@ -21,7 +21,7 @@ from appPlugins.Common.levelling_interp import (
     new_levelling_state,
     level_gcode_line,
 )
-from appPlugins.Common.grbl_protocol import (
+from appPlugins.Common.grbl.grbl_protocol import (
     parse_grbl_probe_output,
     parse_grbl_active_wcs,
     parse_grbl_work_offset,

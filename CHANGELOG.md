@@ -42,6 +42,7 @@ Machine Sender:
 - fixed: GRBL reset waits for the controller banner in a worker; after a stop the controller asks for Home; the status report reads the accessory state (spindle, coolant)
 - fixed: the 3D view of the sender with an empty path raised an error in VisPy
 - hardware tests run only with FLATCAM_TEST_HARDWARE=1; the other tests cannot open a real HID device or serial port
+- the GRBL modules are in the appPlugins/Common/grbl package: grbl_protocol (the parsers of the GRBL replies) and grbl_client (the serial client of the GRBL Sender, before ToolGrblSender/SenderGrbl.py)
 
 Isolation Plugin:
 
@@ -52,6 +53,15 @@ Isolation Plugin:
 - rest machining adapts to the density of the layout: for each pass a sample of up to 16 polygons selects bulk STRtree queries in limited batches (65536 possible pairs at most for 1 query) for a sparse layout, or a stop at the first collision for a dense layout; on a dense layout the PR #31 queries collected every pair
 - measured with tests/benchmark_isolation_rest.py (synthetic square pads, median of 3 rounds, Python 3.14.3, Shapely 2.2.0, GEOS 3.14.1): sparse layouts (1000 pads, 3 mm pitch, 0.2 mm tool, 1 and 3 passes) keep the time of PR #31, about 5 times faster than before PR #31; dense layouts (3000 pads, 0.3 mm pitch, 1, 3 and 10 mm tool with 1 pass, 1 mm tool with 3 passes) are 1.9 to 48 times faster than PR #31 and faster than the code before PR #31 in every case; in the dense 10 mm case the largest query result is 397 KiB instead of 73 MiB
 - the paths, their order and the polygons left for the next tool are the same in the 3 versions (compared by WKB, also on 96 random layouts); new tests check that a dense layout does not collect every pair
+- faster isolation with many passes: the passes are buffered ahead in parallel threads, 1 pass per thread and 1 vectorized buffer for each pass (camlib.PassBuffers); Tcl isolate and the combined and separate passes of the Isolation Plugin use it, rest machining does not; the activity text shows the pass number; a board with 182 copper polygons, 0.1 mm tool, 12 threads: Tcl isolate 30 passes 26.5 s to 7.7 s, 100 passes 55.0 s to 13.4 s, the Isolation Plugin 30 combined passes 33.9 s to 5.8 s; the geometry and the G-code are the same (merged PR #34 from ErkanGench)
+- the Passes of the Isolation Plugin, of the isolation preferences and of the Tools Database accept up to 9999 passes (999 before); the Tcl isolate command has no limit (merged PR #34 from ErkanGench)
+- new: Boundary limits the isolation to the area enclosed by the outline of a Gerber or Geometry object, e.g. the Edge Cuts Gerber (Isolation Plugin, Tcl isolate -boundary and -trace_boundary); each pass is clipped to the area and the passes stop at the first pass that is completely outside it; the status bar reports the number of passes made, or warns that the area may not be cleared yet; if no pass reaches into the area no object is made and Tcl isolate fails; Trace boundary adds 1 path along the outline; on a 190 x 106 mm board 1000 requested passes stop after 126, with no toolpath outside the board (merged PR #35 from ErkanGench)
+- new: Clear leftovers (off by default, tools_iso_clear_leftovers) adds 1 path along each strip of copper left between the passes where the passes around 2 features meet, for the full isolation with combined passes (Isolation Plugin, Preferences -> Isolation, Tcl isolate -clear_leftovers); on a board with 2432 copper areas and 6 passes the copper left goes from 109.2 mm2 to 1.99 mm2 (merged PR #36 from ErkanGench)
+- fixed: Tcl isolate milled in the reverse direction: the climb milling type gave conventional milling and the conventional type gave climb milling; with a spindle that turns clockwise (M3), climb milling goes clockwise around the copper features, in the Isolation Plugin and in Tcl isolate
+- fixed: conventional milling reversed only the outlines; the paths along the holes of the copper stayed climb milling (Isolation Plugin, rest machining and Tcl isolate)
+- fixed: the paths that clear the leftovers between the passes follow the milling type
+- fixed: with a boundary of more than 1 area, the first pass outside the boundary stopped the passes before they reached the other areas; the passes stop now when a pass encloses the whole boundary, and the report counts the passes up to the last one with paths inside the boundary
+- fixed: with a boundary, the simplified paths stay inside the boundary, and the traced boundary respects the area selection and the area exclusion
 
 NCC and Paint:
 
@@ -97,9 +107,11 @@ Tcl and command line:
 - fixed: join_geometry makes the same object as Edit -> Join: MultiGeo objects stay MultiGeo and the tools with the same diameter and type are fused (preference geometry_merge_fuse_tools); a mix of MultiGeo and SingleGeo objects is refused; before, the joined isolation of a real board gave 3 times the G-code (124214 G1 moves instead of 40732) (merged PR #29 from ErkanGench)
 - fixed: Edit -> Join failed with "'Polygon' object is not iterable" or "'MultiLineString' object is not iterable" when a tool geometry was not a list (bbox, cutout) (merged PR #29 from ErkanGench)
 - Join fuses only the tools whose machining parameters (tools_*) are equal; a SingleGeo tool with an empty geometry of its own is kept
+
 Milling Tool:
 
-- fixed: the CNC job of a Geometry from an older project failed with a KeyError ('tools_mill_laser_on' for a FlatCAM Evo project saved before 12.2023, 'tools_mill_tooldia', 'tools_mill_offset_type' or 'tools_mill_job_type' for a FlatCAM 8.994 project); the Milling tool and the Tcl cncjob command give a tools_mill_* option that is missing from the tool data the value the tool keeps under its older name (FlatCAM 8.994: cutz, travelz, feedrate, spindlespeed (also the laser power), spindledir (also the laser ON code: CW is M03, CCW is M04), ppname_g ... and the tool's tooldia, offset, offset_value, type, tool_type; FlatCAM Evo before 12.2023: tools_mill_z_pdepth), and the application value only when the tool has neither; a saved 8.994 preprocessor that was renamed (grbl_11, line_xyz, Z_laser) gets its current name, and a saved preprocessor that the application does not have counts as absent (a job that uses the preprocessor of the tool gets the application one, with a warning; a multi-geometry job of the Milling tool uses the one of its form, as before); the options already in the tool data and the source object are not changed
+- fixed: the CNC job of a Geometry from an older project failed with a KeyError ('tools_mill_laser_on' for a FlatCAM Evo project saved before 12.2023, 'tools_mill_tooldia', 'tools_mill_offset_type' or 'tools_mill_job_type' for a FlatCAM 8.994 project); the Milling tool and the Tcl cncjob command give a tools_mill_* option that is missing from the tool data the value the tool keeps under its older name (FlatCAM 8.994: cutz, travelz, feedrate, spindlespeed (also the laser power), spindledir (also the laser ON code: CW is M03, CCW is M04), ppname_g ... and the tool's tooldia, offset, offset_value, type, tool_type; FlatCAM Evo before 12.2023: tools_mill_z_pdepth), and the application value only when the tool has neither; a saved 8.994 preprocessor that was renamed (grbl_11, line_xyz, Z_laser) gets its current name, and a saved preprocessor that the application does not have counts as absent (a job that uses the preprocessor of the tool gets the application one, with a warning; a multi-geometry job of the Milling tool uses the one of its form, as before); the options already in the tool data and the source object are not changed (merged PR #18 from ErkanGench)
+- fixed: the form of the Milling tool shows the values that a Geometry from an older project keeps under older names (the values that its CNC job uses); opening the tool does not change the tool data of the object
 
 19.10.2026
 
@@ -218,30 +230,25 @@ Translations:
 - a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form (merged PR #27 from ErkanGench)
 - fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated (merged PR #27 from ErkanGench)
 - fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped (merged PR #27 from ErkanGench)
-- new scripts/i18n_tool.py (Python standard library only): extract writes locale_template/strings.pot from the code and lists the _() calls that can not be translated; merge updates the .po of a language (the translations are kept with their previous English text (#|), the new strings are added, the removed strings stay as obsolete entries); compile writes the .mo files; init starts a new language
-- check reports the untranslated and fuzzy entries; a translation that does not format with the values of the English text (a real % formatting test) or whose {name} placeholders differ is an error and makes check exit with 1; placeholders written differently, a "%" that should be "%%", HTML tags, <argument> names and first and last line breaks that differ from the English text are printed as warnings
-- stats prints the status table of the languages (translated, untranslated, fuzzy, placeholder errors, warnings, .mo up to date); glossary shows how each language translates the key terms of locale_template/glossary_terms.txt
-- new guide for the translators (docs/TRANSLATING.md)
-- a GitHub workflow runs check, stats and compile --check when a push or a pull request changes the translations (.github/workflows/translations.yml); new Translation problem issue form
-- fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
-- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
 
 Project file:
 
-- the project save makes the WKT of all the geometries with vectorized Shapely calls, in pieces of about 10000 coordinates, instead of 1 call for each geometry while the JSON is written; a large project saves about 5x faster (compressed) and the GUI thread is blocked for much shorter times during the save
-- the coordinates are saved with the shortest text that reads back to the same number instead of 16 fixed decimals, which lost the last bits of a coordinate below 1; the files are smaller and older versions open them
-- a compressed project is written as compact JSON (no indentation, no sorted keys), which is faster for a project with many small items (a CNC job); a plain project keeps the indented JSON
-- fixed: closing the app while the project is saved did nothing (only a message); now the app closes when the save ends, the normal way (the settings are saved, a change made during the save is asked about); after a failed save the app stays open
+- the project save makes the WKT of all the geometries with vectorized Shapely calls, in pieces of about 10000 coordinates, instead of 1 call for each geometry while the JSON is written; a large project saves about 5x faster (compressed) and the GUI thread is blocked for much shorter times during the save (merged PR #32 from ErkanGench)
+- the coordinates are saved with the shortest text that reads back to the same number instead of 16 fixed decimals, which lost the last bits of a coordinate below 1; the files are smaller and older versions open them (merged PR #32 from ErkanGench)
+- a compressed project is written as compact JSON (no indentation, no sorted keys), which is faster for a project with many small items (a CNC job); a plain project keeps the indented JSON (merged PR #32 from ErkanGench)
+- fixed: closing the app while the project is saved did nothing (only a message); now the app closes when the save ends, the normal way (the settings are saved, a change made during the save is asked about); after a failed save the app stays open (merged PR #32 from ErkanGench)
+- fixed: a close during the save did not close the app when the check of the file size ended the save before the GUI received the save result
 
 Code Editor:
 
-- the code editor (Source Editor, G-code Editor, Script Editor) highlights only the lines that are shown, the other lines when they are scrolled into view; Qt highlighted every line when the text was set: the View Source of a G-code of 94000 lines took 11 s, now 0.9 s; Print and Print Preview highlight every line first
+- the code editor (Source Editor, G-code Editor, Script Editor) highlights only the lines that are shown, the other lines when they are scrolled into view; Qt highlighted every line when the text was set: the View Source of a G-code of 94000 lines took 11 s, now 0.9 s; Print and Print Preview highlight every line first (merged PR #33 from ErkanGench)
+- fixed: highlighting during scrolling, resizing and printing no longer reports unchanged text as edited; the GRBL Sender keeps its program, progress and error selections
 
 Project Tab:
 
-- fixed: View Source opened an empty Source Editor and left the app busy for an object without a source, e.g. a Geometry made by a tool; it shows a warning now
-- the context menu shows only the entries that apply to the selected objects: View Source for 1 object with a source, Edit and Save for 1 object (Batch Save for several CNCJob objects), Set Color for Gerber and Excellon objects, Enable Plot or Disable Plot by the plot state
-- fixed: the context menu entries hidden for a Script or a Document object stayed hidden for the next objects
+- fixed: View Source opened an empty Source Editor and left the app busy for an object without a source, e.g. a Geometry made by a tool; it shows a warning now (merged PR #33 from ErkanGench)
+- the context menu shows only the entries that apply to the selected objects: View Source for 1 object with a source, Edit and Save for 1 object (Batch Save for several CNCJob objects), Set Color for Gerber and Excellon objects, Enable Plot or Disable Plot by the plot state (merged PR #33 from ErkanGench)
+- fixed: the context menu entries hidden for a Script or a Document object stayed hidden for the next objects (merged PR #33 from ErkanGench)
 
 Tests:
 
@@ -258,14 +265,17 @@ Tests:
 - new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py) (merged PR #27 from ErkanGench)
 - new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py) (merged PR #27 from ErkanGench)
 - new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py) (merged PR #27 from ErkanGench)
-- new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
-- new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py)
-- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
-- new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
-- new unit tests for the WKT of the project save (tests/test_project_save_wkt.py)
-- new unit tests for a close of the app during a project save (tests/test_shutdown_routing.py)
-- new unit tests for the highlighting of the code editor (tests/test_lazy_highlight.py)
-- new unit tests for the Project tab context menu and View Source (tests/test_project_context_menu.py)
+- new unit tests for the WKT of the project save (tests/test_project_save_wkt.py) (merged PR #32 from ErkanGench)
+- new unit tests for a close of the app during a project save (tests/test_shutdown_routing.py) (merged PR #32 from ErkanGench)
+- new unit tests for the highlighting of the code editor (tests/test_lazy_highlight.py) (merged PR #33 from ErkanGench)
+- new unit tests for the Project tab context menu and View Source (tests/test_project_context_menu.py) (merged PR #33 from ErkanGench)
+- new unit tests for the parallel isolation passes (tests/test_isolation_parallel_passes.py) (merged PR #34 from ErkanGench)
+- new unit tests for the isolation boundary (tests/test_isolation_boundary.py) (merged PR #35 from ErkanGench)
+- new unit tests for Clear leftovers (tests/test_isolation_leftovers.py) (merged PR #36 from ErkanGench)
+- new unit tests for the CNC jobs of the tool data of older projects (tests/test_milling_old_tool_data.py) (merged PR #18 from ErkanGench)
+- new unit tests for the milling direction of the isolation paths and for a boundary of more than 1 area (tests/test_isolation_leftovers.py, tests/test_isolation_boundary.py)
+- new unit tests for the form of the Milling tool with the tool data of an older project (tests/test_milling_old_tool_data.py)
+- the tests hide the DeprecationWarnings of the SWIG wrappers of OR-Tools ("builtin type SwigPyPacked has no __module__ attribute")
 
 18.10.2026
 

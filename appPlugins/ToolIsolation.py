@@ -30,7 +30,7 @@ import builtins
 
 from appDatabase import load_tools_database
 from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs, outline_area, clip_paths_to_area, \
-    area_outline_paths, boundary_passes_message, isolation_leftover_paths
+    area_outline_paths, boundary_passes_message, isolation_leftover_paths, milling_orient, pass_covers_area
 from appCommon.SafeEval import safe_eval
 
 fcTranslate.apply_language('strings')
@@ -1923,6 +1923,8 @@ class ToolIsolation(Geometry, AppTool):
                     iso_offsets = [-iso_offset for iso_offset in iso_offsets]
                 # the passes are buffered ahead, in parallel threads
                 buffers = isolated_obj.isolation_buffers(iso_offsets, geometry=work_geo)
+                # the number of passes up to the last one with paths inside the boundary
+                passes_made = 0
                 for i in range(passes):
                     iso_offset = iso_offsets[i]
 
@@ -1941,7 +1943,7 @@ class ToolIsolation(Geometry, AppTool):
                         elif iso_t == 1:
                             iso_name = outname + "_int_iso"
 
-                    # if milling type is climb then the move is counter-clockwise around features
+                    # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
                     mill_dir = 0 if milling_type == 'cl' else 1
 
                     iso_geo = self.generate_envelope(isolated_obj, iso_offset, mill_dir, geometry=work_geo,
@@ -1956,15 +1958,12 @@ class ToolIsolation(Geometry, AppTool):
                     if boundary is not None:
                         iso_geo = clip_paths_to_area(iso_geo, boundary)
                         if not iso_geo:
+                            # a later pass can still reach an area of the boundary that is not connected to this one
+                            if isinstance(boundary, MultiPolygon) and not (
+                                    iso_offset > 0 and pass_covers_area(envelope_geo, boundary)):
+                                continue
                             # this pass is completely outside the boundary, and so are the next ones
-                            report = boundary_passes_message(outname, i, passes)
-                            self.app.log.info("Isolation boundary: " + report)
-                            self.app.inform.emit(report)
                             break
-                        if i == passes - 1:
-                            report = boundary_passes_message(outname, passes, passes)
-                            self.app.log.info("Isolation boundary: " + report)
-                            self.app.inform.emit(report)
 
                     # Extra Pads isolations
                     pad_geo = []
@@ -2000,6 +1999,16 @@ class ToolIsolation(Geometry, AppTool):
                         total_geo.append(p)
                     iso_geo = total_geo
 
+                    if boundary is not None:
+                        iso_geo = clip_paths_to_area(iso_geo, boundary)
+                        # the boundary is traced once, with the first pass that has paths inside it
+                        if trace_boundary and passes_made == 0:
+                            iso_geo += area_outline_paths(boundary)
+                        if use_simplification:
+                            iso_geo = [g.simplify(tolerance=simplification_tol) for g in iso_geo if not g.is_empty]
+                            iso_geo = clip_paths_to_area(iso_geo, boundary)
+                        passes_made = i + 1
+
                     # ############################################################
                     # ########## AREA SUBTRACTION ################################
                     # ############################################################
@@ -2011,15 +2020,9 @@ class ToolIsolation(Geometry, AppTool):
                         self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
                         iso_geo = self.area_intersection(iso_geo, intersection_geo=limited_area)
 
-                    if boundary is not None:
-                        # the extra pad passes
-                        iso_geo = clip_paths_to_area(iso_geo, boundary)
-                        if trace_boundary and i == 0:
-                            iso_geo += area_outline_paths(boundary)
-
                     # make sure that no empty geometry element is in the solid_geometry
                     new_solid_geo = flatten_shapely_geometry(iso_geo)
-                    if use_simplification:
+                    if use_simplification and boundary is None:
                         new_solid_geo = [
                             g.simplify(tolerance=simplification_tol) for g in new_solid_geo if not g.is_empty]
 
@@ -2071,6 +2074,11 @@ class ToolIsolation(Geometry, AppTool):
                     a_select = True if self.validation_status else False
                     self.new_object("geometry", iso_name, iso_init, source=isolated_obj,
                                     plot=plot, autoselected=a_select)
+
+                if boundary is not None:
+                    report = boundary_passes_message(outname, passes_made, passes)
+                    self.app.log.info("Isolation boundary: " + report)
+                    self.app.inform.emit(report)
 
             # clean the progressive plotted shapes if it was used
 
@@ -2167,7 +2175,7 @@ class ToolIsolation(Geometry, AppTool):
                     overlap /= 100.0
 
                     milling_type = tool_data['tools_iso_milling_type']
-                    # if milling type is climb then the move is counter-clockwise around features
+                    # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
                     mill_dir = False if milling_type == 'cl' else True
                     iso_t = {
                         'ext': 0,
@@ -2197,6 +2205,15 @@ class ToolIsolation(Geometry, AppTool):
                                                                       prog_plot_handler=self.plot_temp_shapes,
                                                                       plot=plot)
 
+                    if boundary is not None:
+                        solid_geo = clip_paths_to_area(solid_geo, boundary)
+                        # the boundary is traced once, with the first tool that has paths inside it
+                        if trace_boundary and solid_geo and not total_solid_geometry:
+                            solid_geo += area_outline_paths(boundary)
+                        if simp_en:
+                            solid_geo = [g.simplify(tolerance=simp_tol) for g in solid_geo if not g.is_empty]
+                            solid_geo = clip_paths_to_area(solid_geo, boundary)
+
                     # ############################################################
                     # ########## AREA SUBTRACTION ################################
                     # ############################################################
@@ -2207,12 +2224,6 @@ class ToolIsolation(Geometry, AppTool):
                     if lim_area:
                         self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
                         solid_geo = self.area_intersection(solid_geo, intersection_geo=lim_area)
-
-                    if boundary is not None:
-                        solid_geo = clip_paths_to_area(solid_geo, boundary)
-                        # the boundary is traced once, with the first tool that has paths inside it
-                        if trace_boundary and solid_geo and not total_solid_geometry:
-                            solid_geo += area_outline_paths(boundary)
 
                     # make sure that no empty geometry element is in the solid_geometry
                     new_solid_geo = flatten_shapely_geometry(solid_geo)
@@ -2231,7 +2242,7 @@ class ToolIsolation(Geometry, AppTool):
                     if not work_geo:
                         break
 
-        if simp_en:
+        if simp_en and boundary is None:
             total_solid_geometry = flatten_shapely_geometry(total_solid_geometry, simplify_tolerance=simp_tol)
         else:
             total_solid_geometry = flatten_shapely_geometry(total_solid_geometry)
@@ -2276,7 +2287,7 @@ class ToolIsolation(Geometry, AppTool):
                 geo_obj.solid_geometry = [geo_obj.solid_geometry]
 
             # simplify geometry if enabled
-            if simp_en:
+            if simp_en and boundary is None:
                 for t in geo_obj.tools:
                     geo_obj.tools[t]['solid_geometry'] = [
                         g.simplify(tolerance=simp_tol) for g in geo_obj.tools[t]['solid_geometry']]
@@ -2409,11 +2420,12 @@ class ToolIsolation(Geometry, AppTool):
             buffers = iso_obj.isolation_buffers(iso_offsets, geometry=work_geo)
             # with a boundary solid_geo holds the clipped paths; the envelopes are kept here for the pad passes
             envelopes = []
-            passes_made = passes
+            # the number of passes up to the last one with paths inside the boundary
+            passes_made = 0 if boundary is not None else passes
             for nr_pass in range(passes):
                 iso_offset = iso_offsets[nr_pass]
 
-                # if milling type is climb then the move is counter-clockwise around features
+                # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
                 mill_dir = 0 if milling_type == 'cl' else 1
 
                 iso_geo = self.generate_envelope(iso_obj, iso_offset, mill_dir, geometry=work_geo, env_iso_type=iso_t,
@@ -2425,15 +2437,19 @@ class ToolIsolation(Geometry, AppTool):
                 if use_leftovers:
                     if prev_geo is not None:
                         leftover_geo += isolation_leftover_paths(prev_geo, iso_geo, tool_dia / 2.0,
-                                                                 int(iso_obj.geo_steps_per_circle))
+                                                                 int(iso_obj.geo_steps_per_circle), invert=mill_dir)
                     prev_geo = iso_geo
 
                 if boundary is not None:
                     clipped = clip_paths_to_area(iso_geo, boundary)
                     if not clipped:
+                        # a later pass can still reach an area of the boundary that is not connected to this one
+                        if isinstance(boundary, MultiPolygon) and not (
+                                iso_offset > 0 and pass_covers_area(iso_geo, boundary)):
+                            continue
                         # this pass is completely outside the boundary, and so are the next ones
-                        passes_made = nr_pass
                         break
+                    passes_made = nr_pass + 1
                     envelopes.extend(flatten_shapely_geometry(iso_geo))
                     solid_geo.extend(clipped)
                     continue
@@ -2481,6 +2497,14 @@ class ToolIsolation(Geometry, AppTool):
             solid_geo += pad_geo
             solid_geo += leftover_geo
 
+            if boundary is not None:
+                solid_geo = clip_paths_to_area(solid_geo, boundary)
+                if trace_boundary and not total_solid_geometry:
+                    solid_geo += area_outline_paths(boundary)
+                if simp_en:
+                    solid_geo = [g.simplify(tolerance=simp_tol) for g in solid_geo if not g.is_empty]
+                    solid_geo = clip_paths_to_area(solid_geo, boundary)
+
             # ############################################################
             # ########## AREA SUBTRACTION ################################
             # ############################################################
@@ -2491,12 +2515,6 @@ class ToolIsolation(Geometry, AppTool):
             if lim_area:
                 self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
                 solid_geo = self.area_intersection(solid_geo, intersection_geo=lim_area)
-
-            if boundary is not None:
-                # the extra pad passes
-                solid_geo = clip_paths_to_area(solid_geo, boundary)
-                if trace_boundary and not total_solid_geometry:
-                    solid_geo += area_outline_paths(boundary)
 
             # make sure that no empty geometry element is in the solid_geometry
             new_solid_geo = flatten_shapely_geometry(solid_geo)
@@ -2528,7 +2546,7 @@ class ToolIsolation(Geometry, AppTool):
                 tools_storage.pop(tool, None)
 
         total_solid_geometry = flatten_shapely_geometry(total_solid_geometry)
-        if simp_en:
+        if simp_en and boundary is None:
             total_solid_geometry = [
                 g.simplify(tolerance=simp_tol) for g in total_solid_geometry if not g.is_empty]
 
@@ -2559,7 +2577,7 @@ class ToolIsolation(Geometry, AppTool):
                 geo_obj.solid_geometry = [geo_obj.solid_geometry]
 
             # simplify geometry if enabled
-            if simp_en:
+            if simp_en and boundary is None:
                 for t in geo_obj.tools:
                     geo_obj.tools[t]['solid_geometry'] = [
                         g.simplify(tolerance=simp_tol) for g in geo_obj.tools[t]['solid_geometry']]
@@ -3205,12 +3223,9 @@ class ToolIsolation(Geometry, AppTool):
     def generate_envelope(self, iso_obj, offset, invert, geometry=None, env_iso_type=2, nr_passes=0,
                           prog_plot=False, buffers=None):
         """
-        Isolation_geometry produces an envelope that is going on the left of the geometry
-        (the copper features). To leave the least amount of burrs on the features
-        the tool needs to travel on the right side of the features (this is called conventional milling)
-        the first pass is the one cutting all of the features, so it needs to be reversed
-        the other passes overlap preceding ones and cut the left over copper. It is better for them
-        to cut on the right side of the left over copper i.e on the left side of the features.
+        isolation_geometry() gives the polygons with the exteriors clockwise and the holes counter-clockwise: the
+        copper features are on the right of the tool, which is climb milling with a spindle that turns clockwise (M3).
+        invert reverses all the rings, for conventional milling.
 
         :param iso_obj:         The Gerber object to be isolated
         :param offset:          Offset distance to be passed to the obj.isolation_geometry() method
@@ -3249,13 +3264,13 @@ class ToolIsolation(Geometry, AppTool):
                 for p in geom:
                     if p is not None:
                         if isinstance(p, Polygon):
-                            pl.append(Polygon(p.exterior.coords[::-1], p.interiors))
+                            pl.append(milling_orient(p, conventional=True))
                         elif isinstance(p, LinearRing):
                             pl.append(Polygon(p.coords[::-1]))
                 geom = MultiPolygon(pl)
             except TypeError:
                 if isinstance(geom, Polygon) and geom is not None:
-                    geom = Polygon(geom.exterior.coords[::-1], geom.interiors)
+                    geom = milling_orient(geom, conventional=True)
                 elif isinstance(geom, LinearRing) and geom is not None:
                     geom = Polygon(geom.coords[::-1])
                 else:
@@ -3422,7 +3437,7 @@ class ToolIsolation(Geometry, AppTool):
                 pl = []
                 for p in work_geo_shp:
                     if isinstance(p, Polygon):
-                        pl.append(Polygon(p.exterior.coords[::-1], p.interiors))
+                        pl.append(milling_orient(p, conventional=True))
                     elif isinstance(p, LinearRing):
                         pl.append(Polygon(p.coords[::-1]))
                 work_geo_shp = MultiPolygon(pl)

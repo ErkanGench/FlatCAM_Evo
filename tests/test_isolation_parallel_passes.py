@@ -126,7 +126,8 @@ def test_isolate_makes_the_same_paths_as_one_pass_at_a_time(app, three_threads, 
     expected = []
     for nr in range(passes):
         offset = DIA * ((2 * nr + 1) / 2.0) - nr * (OVERLAP / 100.0) * DIA
-        expected += wkb_list(gerber.generate_envelope(offset, 1, geometry=gerber.solid_geometry, nr_passes=nr))
+        # milling_type='cl' (climb): the envelope is not inverted
+        expected += wkb_list(gerber.generate_envelope(offset, 0, geometry=gerber.solid_geometry, nr_passes=nr))
     assert three_threads.call_count == 0
 
     created = run_isolate(app, gerber, passes=passes, combine=combine)
@@ -211,7 +212,7 @@ def test_plugin_separate_passes_are_the_same_as_one_pass_at_a_time(app, three_th
     ToolIsolation.isolate(tool, gerber, [1], tools_storage(passes, 'cv'), geometry=gerber.solid_geometry,
                           plot=False, combine=False, iso_except=False, e_passes=0, area_except=False,
                           area_shape='square', rest=False, sel_type=0, tip_shape='C1',
-                          iso_simplification=False, simplification_tol=0.001)
+                          iso_simplification=False, simplification_tol=0.001, boundary=None)
 
     assert three_threads.call_count == passes
     assert len(created) == passes

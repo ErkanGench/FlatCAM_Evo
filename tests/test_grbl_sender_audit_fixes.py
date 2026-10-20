@@ -16,7 +16,7 @@ from tests.grbl_stream_helpers import (
 )
 from tests.test_grbl_sender_construct import make_app
 from appPlugins.ToolGrblSender.Sender import ToolGrblSender
-from appPlugins.ToolGrblSender.SenderGrbl import stream_lines
+from appPlugins.Common.grbl.grbl_client import stream_lines
 from tests.gates.run_gate import check_junit, run_pytest
 
 
@@ -306,7 +306,7 @@ class TestSpindleButton(unittest.TestCase):
         self.assertEqual(entry.get_value(), 15000)
 
     def test_spindle_state_of_line(self):
-        from appPlugins.ToolGrblSender.SenderGrbl import spindle_state_of_line
+        from appPlugins.Common.grbl.grbl_client import spindle_state_of_line
         for line, expected in (('M3 S1000', True), ('m4s200', True), ('G1 X1 M5', False), ('M30', False),
                                ('M2', False), ('G0 X3', None), ('(M3) G0 X1', None), ('G0 ; M3', None),
                                ('M03 S10', True), ('M13', None), ('$H', None)):
@@ -314,7 +314,7 @@ class TestSpindleButton(unittest.TestCase):
                 self.assertIs(spindle_state_of_line(line), expected)
 
     def test_status_accessory_field(self):
-        from appPlugins.Common.grbl_protocol import parse_grbl_status_report
+        from appPlugins.Common.grbl.grbl_protocol import parse_grbl_status_report
         report = parse_grbl_status_report('<Idle|MPos:0.000,0.000,0.000|FS:0,1000|Ov:100,100,100|A:SF>')
         self.assertEqual(report['accessory'], 'SF')
 
@@ -380,7 +380,7 @@ class TestSpindleButton(unittest.TestCase):
             self.assertEqual(tool.grbl_ser_port.written, [])
 
     def test_a_click_waits_for_the_poll_instead_of_busy(self):
-        from appPlugins.ToolGrblSender.SenderGrbl import STATUS_POLL
+        from appPlugins.Common.grbl.grbl_client import STATUS_POLL
         tool = self.poll_tool()
         poll = tool._grbl_reserve(STATUS_POLL)
         threading.Timer(0.05, tool._grbl_release, args=(poll,)).start()

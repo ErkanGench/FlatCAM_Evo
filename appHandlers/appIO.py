@@ -1478,6 +1478,10 @@ class appIO(QtCore.QObject):
         self.app.ui.set_ui_title(name=self.app.project_filename)
         # do not clear should_we_save here: it was cleared when the save was queued, and if it is set now, the
         # project changed while the save ran and that change is not in the file
+        if not self.app.save_in_progress and getattr(self.app, 'close_after_save', False):
+            # the worker timer can finish before the GUI receives the save result
+            self.app.close_after_save = False
+            QtCore.QMetaObject.invokeMethod(self.app.ui, 'close', QtCore.Qt.ConnectionType.QueuedConnection)
 
     def on_file_save_project_as(self, make_copy=False, use_thread=True, quit_action=False):
         """

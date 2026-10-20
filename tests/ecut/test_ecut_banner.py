@@ -1,5 +1,5 @@
 """The Sender detects the E-Cut adapter by its own banner; no board is needed."""
-from appPlugins.ToolGrblSender.SenderGrbl import ECUT_BANNER, is_controller_banner
+from appPlugins.Common.grbl.grbl_client import ECUT_BANNER, is_controller_banner
 
 
 def test_both_controller_banners_are_detected():

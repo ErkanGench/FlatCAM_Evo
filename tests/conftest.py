@@ -7,6 +7,12 @@ it). Import appMain 1 time here with a clean sys.argv; the later imports get the
 
 import os
 import sys
+import warnings
+
+# The SWIG wrappers of ortools (pywrapcp) give 3 DeprecationWarnings at import on Python 3.12+:
+# "builtin type SwigPyPacked has no __module__ attribute". The text is not from FlatCAM, so do not show it.
+_SWIG_WARNING = r'builtin type (SwigPyPacked|SwigPyObject|swigvarlink) has no __module__ attribute'
+warnings.filterwarnings('ignore', message=_SWIG_WARNING, category=DeprecationWarning)
 
 # Select native OpenGL support before collection can default Qt to offscreen.
 if sys.platform == 'win32':
@@ -74,6 +80,8 @@ _HARDWARE_BLOCKED = 'real hardware access is blocked in tests; mark the test har
 
 def pytest_configure(config):
     config.addinivalue_line('markers', 'hardware: needs a connected E-Cut or GRBL board (FLATCAM_TEST_HARDWARE=1)')
+    # pytest resets the warning filters for each test; this line keeps the SWIG filter in the tests
+    config.addinivalue_line('filterwarnings', f'ignore:{_SWIG_WARNING}:DeprecationWarning')
 
 
 def pytest_collection_modifyitems(config, items):

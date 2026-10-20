@@ -243,7 +243,9 @@ def run_plugin(tool, app, gerber, **kwargs):
         return 'ok'
 
     tool.app.app_obj.new_object = Mock(side_effect=new_object)
-    tool.isolate(isolated_obj=gerber, sel_tools=[1], tools_storage=tools_storage(4), plot=False,
+    storage = tools_storage(4)
+    storage[1]['data']['tools_iso_milling_type'] = kwargs.pop('milling_type', 'cl')
+    tool.isolate(isolated_obj=gerber, sel_tools=[1], tools_storage=storage, plot=False,
                  combine=True, iso_except=False, e_passes=0, area_except=False, area_shape='square', rest=False,
                  sel_type=0, tip_shape='C1', iso_simplification=False, simplification_tol=0.001, **kwargs)
     (obj,) = created.values()
@@ -268,3 +270,55 @@ def test_plugin_combined_passes_clear_the_leftovers(tool, app):
     window = box(0, 1, 0.42, 9)
     assert unburned(copper, rings(off.solid_geometry), window).area == pytest.approx(0.04 * 8, rel=0.05)
     assert unburned(copper, rings(on.solid_geometry), window).area < 1e-4
+
+
+@pytest.mark.parametrize('entry_point', ['gerber', 'plugin'])
+@pytest.mark.parametrize('copper', [two_strips(0.42), island_in_a_ring(0.39)], ids=['strips', 'annulus'])
+def test_leftover_paths_follow_the_milling_direction(tool, app, entry_point, copper):
+    gerber = make_strips_gerber(app)
+    gerber.solid_geometry = MultiPolygon(copper)
+    paths = {}
+    for milling_type in ('cl', 'cv'):
+        if entry_point == 'gerber':
+            obj = run_isolate(app, gerber, combine=True, iso_type=2, clear_leftovers=True,
+                              milling_type=milling_type)['iso']
+        else:
+            obj = run_plugin(tool, app, gerber, clear_leftovers=True, milling_type=milling_type)
+        paths[milling_type] = [g for g in obj.solid_geometry if isinstance(g, LinearRing)]
+
+    assert paths['cl'] and len(paths['cl']) == len(paths['cv'])
+    for climb, conventional in zip(paths['cl'], paths['cv']):
+        assert climb.hausdorff_distance(conventional) < 1e-9
+        assert climb.is_ccw != conventional.is_ccw
+
+
+@pytest.mark.parametrize('entry_point', ['gerber', 'gerber_separate', 'plugin'])
+@pytest.mark.parametrize('milling_type', ['cl', 'cv'])
+def test_climb_milling_keeps_the_copper_on_the_right_of_the_tool(tool, app, entry_point, milling_type):
+    # a spindle that turns clockwise (M3) climb mills when the material is on the right of the tool: clockwise around
+    # an outline, counter-clockwise along a hole. Conventional milling is the reverse.
+    gerber = make_strips_gerber(app)
+    gerber.solid_geometry = MultiPolygon(island_in_a_ring(0.39))
+    if entry_point == 'plugin':
+        objects = [run_plugin(tool, app, gerber, clear_leftovers=True, milling_type=milling_type)]
+    else:
+        objects = list(run_isolate(app, gerber, combine=entry_point == 'gerber', iso_type=2, clear_leftovers=True,
+                                   milling_type=milling_type).values())
+    climb = milling_type == 'cl'
+    polygons = [g for obj in objects for g in obj.solid_geometry if g.geom_type == 'Polygon']
+    assert polygons
+    # the separate passes share the name 'iso': only the last pass, the outer one with no hole, is kept here
+    assert entry_point == 'gerber_separate' or any(p.interiors for p in polygons)
+    for p in polygons:
+        assert p.exterior.is_ccw is not climb
+        assert all(ring.is_ccw is climb for ring in p.interiors)
+
+    # the leftover annulus: its outline and its hole, the copper to clear between them
+    leftovers = sorted((g for obj in objects for g in obj.solid_geometry if isinstance(g, LinearRing)),
+                       key=lambda ring: ring.length)
+    if entry_point == 'gerber_separate':
+        assert not leftovers
+    else:
+        hole, outline = leftovers
+        assert outline.is_ccw is not climb
+        assert hole.is_ccw is climb

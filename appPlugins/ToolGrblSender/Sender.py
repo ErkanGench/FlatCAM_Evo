@@ -24,13 +24,13 @@ from appGUI.GUIElements import (
 from camlib import CNCjob, flatten_shapely_geometry
 
 from appPlugins.Common.levelling_core import LevellingCoreMixin
-from appPlugins.Common.grbl_protocol import (
+from appPlugins.Common.grbl.grbl_protocol import (
     parse_grbl_status_state, parse_grbl_setting, parse_grbl_active_wcs, grbl_reply_error, probe_timeout_s,
     parse_grbl_status_report, work_position, grbl_report_scale)
 from appPlugins.Common.gcode_segment import split_long_moves, parse_toolpath, _words, _g_key
 from appPlugins.Common.levelling_interp import build_bilinear_grid
 from appPlugins.ToolGrblSender import SenderGen
-from appPlugins.ToolGrblSender.SenderGrbl import (
+from appPlugins.Common.grbl.grbl_client import (
     GrblClientMixin, STATUS_POLL, is_controller_banner, stream_lines, validate_stream_lines)
 from appPlugins.ToolGrblSender.SenderUI import GrblSenderUI
 from appPlugins.ToolGrblSender.SenderSimulation import SimulationDialog, VirtualGrbl

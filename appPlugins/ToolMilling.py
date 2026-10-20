@@ -1505,7 +1505,7 @@ class ToolMilling(Geometry, AppTool):
         obj = self.app.collection.get_by_name(self.obj_name)
         if obj is not None and obj.tools:
             last_key = list(obj.tools.keys())[-1]
-            self.to_form(storage=obj.tools[last_key]['data'])
+            self.to_form(storage=self._form_tool_data(obj, last_key))
 
         self.on_level_changed(self.ui.level.isChecked())
 
@@ -1544,7 +1544,7 @@ class ToolMilling(Geometry, AppTool):
                 self.ui.param_frame.setDisabled(False)
                 self.ui.generate_cnc_button.setDisabled(False)
                 last_key = list(self.target_obj.tools.keys())[-1]
-                self.to_form(storage=self.target_obj.tools[last_key]['data'])
+                self.to_form(storage=self._form_tool_data(self.target_obj, last_key))
             else:
                 self.ui.param_frame.setDisabled(True)
                 self.ui.generate_cnc_button.setDisabled(True)
@@ -1940,7 +1940,7 @@ class ToolMilling(Geometry, AppTool):
                     # if self.ui.target_radio.get_value() == 'geo':
                     #     tooluid = int(tooluid)
                     tooluid = int(tooluid)
-                    self.storage_to_form(self.target_obj.tools[tooluid]['data'])
+                    self.storage_to_form(self._form_tool_data(self.target_obj, tooluid))
                 else:
                     self.ui_connect()
                     return
@@ -3172,6 +3172,42 @@ class ToolMilling(Geometry, AppTool):
             return
         return self._submit_cnc_job_creation(context, plot, use_thread)
 
+    def _form_tool_data(self, obj, tooluid):
+        """
+        The tool data that the form shows. For a Geometry made by an older app version it is a copy with the missing
+        options resolved as the CNC job resolves them; the tool data of the object is not changed.
+        """
+        tool = obj.tools[tooluid]
+        if getattr(obj, 'kind', None) != 'geometry':
+            return tool['data']
+        tool = dict(tool, data=dict(tool['data']))
+        # the CNC job gives the warning for a saved preprocessor that is not available
+        self._complete_milling_tool_data({tooluid: tool}, tool_pp_used=False, warn=False)
+        return tool['data']
+
+    def _complete_milling_tool_data(self, tools_dict, tool_pp_used, warn=True):
+        """Resolve missing legacy settings before the CNC job reads the tool data."""
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        missing_pp = set()
+        for tool in tools_dict.values():
+            data = tool['data']
+            for key in AppDefaults.factory_defaults:
+                if not key.startswith('tools_mill_') or key in data:
+                    continue
+                found, value = legacy_mill_value(tool, key)
+                if found and key == 'tools_mill_ppname_g' and value not in self.app.preprocessors:
+                    # a saved preprocessor that this app does not have (deleted, or a user preprocessor that is not
+                    # installed) counts as absent
+                    found = False
+                    if warn and value not in missing_pp:
+                        missing_pp.add(value)
+                        self.app.log.warning("ToolMilling: the saved preprocessor %s is not available" % str(value))
+                        if tool_pp_used:
+                            self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (
+                                _("The saved preprocessor is not available, the one from Preferences is used"), value))
+                data[key] = value if found else deepcopy(self.app.options.get(
+                    key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
+
     def _capture_cnc_job_context(self, geo_obj, outname, tools_dict, seg_x, seg_y,
                                  toolchange, disable_offset, from_tcl):
         """Resolve GUI inputs on the submitting thread; keep the caller's tool storage shared."""
@@ -3184,32 +3220,9 @@ class ToolMilling(Geometry, AppTool):
         outname = "%s_%s" % (geo_obj.obj_options["name"], 'cnc') if outname is None else outname
 
         tools_dict = self.sel_tools if tools_dict is None else tools_dict
-
-        # the tool data of objects made by older app versions (e.g. a Geometry in an older project) lacks the
-        # options added later or keeps them under an older name; the CNC job reads them. A missing option gets the
-        # value of its older name in the tool, and the application value only when the tool has neither.
-        missing_pp = set()
-        # the job uses the preprocessor of the tool data, except a multi-geometry job of the plugin: it takes the one
-        # of the form (the overrides below), so there the replaced saved preprocessor is only logged
-        tool_pp_used = from_tcl or not geo_obj.multigeo
-        for tool in tools_dict.values():
-            data = tool['data']
-            for key in AppDefaults.factory_defaults:
-                if not key.startswith('tools_mill_') or key in data:
-                    continue
-                found, value = legacy_mill_value(tool, key)
-                if found and key == 'tools_mill_ppname_g' and value not in self.app.preprocessors:
-                    # a saved preprocessor that this app does not have (deleted, or a user preprocessor that is not
-                    # installed) counts as absent
-                    found = False
-                    if value not in missing_pp:
-                        missing_pp.add(value)
-                        self.app.log.warning("ToolMilling: the saved preprocessor %s is not available" % str(value))
-                        if tool_pp_used:
-                            self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (
-                                _("The saved preprocessor is not available, the one from Preferences is used"), value))
-                data[key] = value if found else deepcopy(self.app.options.get(
-                    key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
+        # Tcl jobs can reach this entry without opening the plugin. Multi-geometry plugin jobs use the form's
+        # preprocessor, so only warn here when the resolved tool preprocessor will be used.
+        self._complete_milling_tool_data(tools_dict, tool_pp_used=from_tcl or not geo_obj.multigeo)
 
         if not geo_obj.tools:
             seg_x = seg_x if seg_x is not None else float(geo_obj.obj_options['seg_x'])

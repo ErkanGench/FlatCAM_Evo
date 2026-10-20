@@ -25,7 +25,7 @@ from shapely.ops import unary_union
 
 from appPlugins.ToolLevelling import ToolLevelling
 from appPlugins.ToolGrblSender.Sender import ToolGrblSender
-from appPlugins.Common.grbl_protocol import parse_grbl_probe_output
+from appPlugins.Common.grbl.grbl_protocol import parse_grbl_probe_output
 from appPlugins.Common.levelling_interp import parse_height_map_line
 
 
@@ -637,7 +637,7 @@ class TestSendGrblCommand(unittest.TestCase):
 
     def test_no_answer_requires_recovery(self):
         tool, port = self._tool([])
-        with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=[0.0, 0.01, 31.0]):
+        with patch('appPlugins.Common.grbl.grbl_client.time.monotonic', side_effect=[0.0, 0.01, 31.0]):
             result = self._send(tool, 'G0 X1')
         self.assertEqual(result, '')
         port.readline.assert_called_once()

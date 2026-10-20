@@ -239,8 +239,8 @@ class TestConnectionRed:
 def run_home(tool):
     tool.on_grbl_homing()
     ticks = iter(range(10000))
-    with patch('appPlugins.ToolGrblSender.SenderGrbl.time.monotonic', side_effect=lambda: next(ticks)), \
-            patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep'):
+    with patch('appPlugins.Common.grbl.grbl_client.time.monotonic', side_effect=lambda: next(ticks)), \
+            patch('appPlugins.Common.grbl.grbl_client.time.sleep'):
         run_worker(tool)
 
 

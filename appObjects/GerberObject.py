@@ -17,7 +17,7 @@ from appParsers.ParseGerber import Gerber, drop_placeholder_record_keys
 from appObjects.AppObjectTemplate import FlatCAMObj, OffsetUiMixin, PropertiesPanelMixin, ObjectDeleted, ValidationError
 
 from camlib import flatten_shapely_geometry, isolation_leftover_paths, clip_paths_to_area, area_outline_paths, \
-    boundary_passes_message
+    boundary_passes_message, milling_orient, pass_covers_area
 from appCommon.SafeEval import safe_eval
 
 from shapely import MultiLineString, LinearRing, MultiPolygon, Polygon, LineString, Point
@@ -641,12 +641,13 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 iso_offsets = [dia * ((2 * nr + 1) / 2.0) - (nr * overlap * dia) for nr in range(passes)]
                 # the passes are buffered ahead, in parallel threads
                 buffers = self.isolation_buffers(iso_offsets, geometry=work_geo)
-                passes_made = passes
+                # the number of passes up to the last one with paths inside the boundary
+                passes_made = 0 if boundary is not None else passes
                 for nr_pass in range(passes):
                     iso_offset = iso_offsets[nr_pass]
 
-                    # if milling type is climb then the move is counter-clockwise around features
-                    mill_dir = 1 if milling_type == 'cl' else 0
+                    # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
+                    mill_dir = 0 if milling_type == 'cl' else 1
                     geom = self.generate_envelope(iso_offset, mill_dir, geometry=work_geo, env_iso_type=iso_t,
                                                   nr_passes=nr_pass, buffers=buffers)
 
@@ -659,15 +660,20 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     if boundary is not None:
                         geom = clip_paths_to_area(geom, boundary)
                         if not geom:
+                            # a later pass can still reach an area of the boundary that is not connected to this one
+                            if isinstance(boundary, MultiPolygon) and not (
+                                    iso_offset > 0 and pass_covers_area(envelope, boundary)):
+                                prev_geom = None
+                                continue
                             # this pass is completely outside the boundary, and so are the next ones
-                            passes_made = nr_pass
                             break
+                        passes_made = nr_pass + 1
                     all_passes_geo += flatten_shapely_geometry(geom)
 
                     if use_leftovers:
                         if prev_geom is not None:
                             leftover_geo += isolation_leftover_paths(prev_geom, envelope, dia / 2.0,
-                                                                     int(self.geo_steps_per_circle))
+                                                                     int(self.geo_steps_per_circle), invert=mill_dir)
                         prev_geom = envelope
 
                 if use_leftovers:
@@ -715,6 +721,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
             iso_offsets = [dia * ((2 * nr + 1) / 2.0) - (nr * overlap * dia) for nr in range(passes)]
             # the passes are buffered ahead, in parallel threads
             buffers = self.isolation_buffers(iso_offsets, geometry=work_geo)
+            # the number of passes up to the last one with paths inside the boundary
+            passes_made = 0
             for i in range(passes):
 
                 offset = iso_offsets[i]
@@ -739,27 +747,25 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     else:
                         iso_name = outname
 
-                # if milling type is climb then the move is counter-clockwise around features
-                mill_dir = 1 if milling_type == 'cl' else 0
+                # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
+                mill_dir = 0 if milling_type == 'cl' else 1
                 geom = self.generate_envelope(offset, mill_dir, geometry=work_geo, env_iso_type=iso_t, nr_passes=i,
                                               buffers=buffers)
 
                 if boundary is not None and geom != 'fail':
+                    envelope = geom
                     geom = clip_paths_to_area(geom, boundary)
                     if not geom:
+                        # a later pass can still reach an area of the boundary that is not connected to this one
+                        if isinstance(boundary, MultiPolygon) and not (
+                                offset > 0 and pass_covers_area(envelope, boundary)):
+                            continue
                         # this pass is completely outside the boundary, and so are the next ones
-                        report = boundary_passes_message(base_name, i, passes)
-                        self.app.log.info("Isolation boundary: " + report)
-                        self.app.inform.emit(report)
-                        if i == 0:
-                            return 'fail'
                         break
-                    if i == passes - 1:
-                        report = boundary_passes_message(base_name, passes, passes)
-                        self.app.log.info("Isolation boundary: " + report)
-                        self.app.inform.emit(report)
-                    if trace_boundary and i == 0:
+                    # the boundary is traced once, with the first pass that has paths inside it
+                    if trace_boundary and passes_made == 0:
                         geom += area_outline_paths(boundary)
+                    passes_made = i + 1
 
                 def iso_init(geo_obj, app_obj):
                     # Propagate options
@@ -816,13 +822,17 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 if self.app.app_obj.new_object("geometry", iso_name, iso_init, plot=plot) == 'fail':
                     return 'fail'
 
+            if boundary is not None:
+                report = boundary_passes_message(base_name, passes_made, passes)
+                self.app.log.info("Isolation boundary: " + report)
+                self.app.inform.emit(report)
+                if passes_made == 0:
+                    return 'fail'
+
     def generate_envelope(self, offset, invert, geometry=None, env_iso_type=2, nr_passes=0, buffers=None):
-        # isolation_geometry produces an envelope that is going on the left of the geometry
-        # (the copper features). To leave the least amount of burrs on the features
-        # the tool needs to travel on the right side of the features (this is called conventional milling)
-        # the first pass is the one cutting all the features, so it needs to be reversed
-        # the other passes overlap preceding ones and cut the leftover copper. It is better for them
-        # to cut on the right side of the leftover copper i.e. on the left side of the features.
+        # isolation_geometry() gives the polygons with the exteriors clockwise and the holes counter-clockwise: the
+        # copper features are on the right of the tool, which is climb milling with a spindle that turns clockwise (M3).
+        # invert reverses all the rings, for conventional milling.
 
         try:
             geom = self.isolation_geometry(offset, geometry=geometry, iso_type=env_iso_type, passes=nr_passes,
@@ -838,13 +848,13 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 for p in w_geo:
                     if p is not None:
                         if isinstance(p, Polygon):
-                            pl.append(Polygon(p.exterior.coords[::-1], p.interiors))
+                            pl.append(milling_orient(p, conventional=True))
                         elif isinstance(p, LinearRing):
                             pl.append(Polygon(p.coords[::-1]))
                 geom = MultiPolygon(pl)
             except TypeError:
                 if isinstance(geom, Polygon) and geom is not None:
-                    geom = Polygon(geom.exterior.coords[::-1], geom.interiors)
+                    geom = milling_orient(geom, conventional=True)
                 elif isinstance(geom, LinearRing) and geom is not None:
                     geom = Polygon(geom.coords[::-1])
                 else:

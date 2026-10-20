@@ -15,6 +15,7 @@ makes it like the Milling plugin, with its form.
 import os
 from copy import deepcopy
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -101,7 +102,8 @@ def milling_harness(tool, multigeo, **options):
     geometry = [LineString([(0, 0), (10, 0)]), LineString([(0, 5), (10, 5)])]
     tools = {1: dict(tool, solid_geometry=geometry)}
     obj_options = dict(MILL_OPTIONS, name='old_geo', xmin=0, ymin=0, xmax=10, ymax=5)
-    source = SimpleNamespace(multigeo=multigeo, tools=tools, solid_geometry=geometry, obj_options=obj_options)
+    source = SimpleNamespace(kind='geometry', multigeo=multigeo, tools=tools, solid_geometry=geometry,
+                             obj_options=obj_options)
     jobs = []
 
     def new_object(kind, name, initializer, **kwargs):
@@ -138,6 +140,9 @@ class FormField:
     def get_value(self):
         return deepcopy(self.value)
 
+    def set_value(self, value):
+        self.value = deepcopy(value)
+
 
 # the general fields of the Milling plugin form that its CNC job reads: widget -> the option it shows
 PLUGIN_FORM = {'offset_entry': 'tools_mill_offset_value', 'toolchange_cb': 'tools_mill_toolchange',
@@ -160,6 +165,106 @@ def make_plugin_cnc_job(tool, multigeo, form=None, **options):
     result = milling.generate_cnc_job_handler(toolchange=False, plot=False, use_thread=False)
     assert result is None and len(jobs) == 1
     return jobs[0], milling
+
+
+def load_plugin_target(milling):
+    """Load the target through the controller and its real Geometry tools table."""
+    from appGUI.GUIElements import FCTable
+
+    milling.app.app_units = 'MM'
+    milling.app.ui = SimpleNamespace(notebook=SimpleNamespace(tabText=lambda _index: 'Milling'))
+    milling.app.collection = SimpleNamespace(get_by_name=lambda _name: milling.target_obj,
+                                             set_all_inactive=lambda: None, set_active=lambda _name: None)
+    milling.ui = SimpleNamespace(**{widget: FormField(milling.app.options[key])
+                                   for widget, key in PLUGIN_FORM.items()})
+    milling.ui.object_combo = QtWidgets.QComboBox()
+    milling.ui.object_combo.addItem('old_geo')
+    milling.ui.target_radio = FormField('geo')
+    milling.ui.tools_table_mill_geo = FCTable()
+    milling.ui.tools_table_mill_geo.setColumnCount(5)
+    milling.ui.param_frame = QtWidgets.QFrame()
+    milling.ui.plot_cb = QtWidgets.QCheckBox()
+    milling.ui.generate_cnc_button = QtWidgets.QPushButton()
+    milling.ui.tool_data_label = QtWidgets.QLabel()
+    milling.form_fields = {key: FormField(milling.app.options[key]) for key in (
+        'tools_mill_cutz', 'tools_mill_multidepth', 'tools_mill_depthperpass',
+        'tools_mill_travelz', 'tools_mill_feedrate', 'tools_mill_feedrate_z', 'tools_mill_spindlespeed')}
+    milling.general_form_fields = {key: getattr(milling.ui, widget) for widget, key in PLUGIN_FORM.items()}
+    milling.ui_disconnect = milling.ui_connect = milling.plot_cb_handler = lambda: None
+    milling.build_ui = milling.build_ui_mill
+    milling.on_object_changed()
+
+
+@pytest.mark.parametrize('multigeo', [False, True])
+@pytest.mark.parametrize('edit_depth', [False, True])
+def test_legacy_form_displays_the_generated_parameters(multigeo, edit_depth):
+    tool = flatcam_8_994_cutout_tool()
+    milling, jobs = milling_harness(tool, multigeo, **OTHER_OPTIONS)
+
+    load_plugin_target(milling)
+
+    expected = {'tools_mill_cutz': -2.4, 'tools_mill_multidepth': True, 'tools_mill_depthperpass': 1.2,
+                'tools_mill_travelz': 2.0, 'tools_mill_feedrate': 120.0, 'tools_mill_feedrate_z': 60.0}
+    assert {key: milling.form_fields[key].get_value() for key in expected} == expected
+    assert milling.ui.pp_geo_name_cb.get_value() == 'default'
+    assert milling.ui.endz_entry.get_value() == 15.0
+
+    if edit_depth:
+        field = milling.form_fields['tools_mill_cutz']
+        field.set_value(-0.8)
+        field.objectName = lambda: 'cutz'
+        milling.sender = lambda: field
+        milling.name2option = {'cutz': 'tools_mill_cutz'}
+        milling.form_to_storage()
+
+    milling.generate_cnc_job_handler(tools_dict=deepcopy(milling.target_obj.tools),
+                                     toolchange=False, plot=False, use_thread=False)
+
+    gcode = jobs[0].source_file
+    assert ('G01 Z-0.8000' if edit_depth else 'G01 Z-2.4000') in gcode
+    assert 'G01 F120.00' in gcode and 'G01 F60.00' in gcode
+    assert 'G00 Z2.0000' in gcode and 'G00 Z15.00' in gcode
+    assert jobs[0].pp_geometry_name == milling.ui.pp_geo_name_cb.get_value()
+    assert 'Z-0.5000' not in gcode
+
+
+@pytest.mark.parametrize('multigeo', [False, True])
+def test_opening_the_plugin_does_not_change_the_legacy_tool_data(multigeo):
+    tool = flatcam_8_994_cutout_tool()
+    tool['data']['ppname_g'] = 'not_installed'
+    milling, jobs = milling_harness(tool, multigeo, **OTHER_OPTIONS)
+    saved = deepcopy(milling.target_obj.tools[1]['data'])
+    milling.app.inform.emit = Mock()
+
+    load_plugin_target(milling)
+
+    assert milling.target_obj.tools[1]['data'] == saved
+    assert milling.form_fields['tools_mill_cutz'].get_value() == -2.4
+    # the CNC job warns about the preprocessor, the form does not
+    milling.app.inform.emit.assert_not_called()
+
+
+def test_switching_legacy_targets_reloads_the_saved_preprocessor():
+    milling, jobs = milling_harness(flatcam_8_994_cutout_tool(), True, **OTHER_OPTIONS)
+    load_plugin_target(milling)
+    cutout = milling.target_obj
+    laser = deepcopy(cutout)
+    laser.tools[1].update(flatcam_8_994_laser_tool())
+    milling.target_obj = laser
+
+    milling.on_object_changed()
+
+    assert milling.ui.pp_geo_name_cb.get_value() == 'GRBL_laser'
+    assert milling.form_fields['tools_mill_cutz'].get_value() == 0.0
+    assert milling.form_fields['tools_mill_spindlespeed'].get_value() == 1000
+    milling.generate_cnc_job_handler(tools_dict=deepcopy(laser.tools),
+                                     toolchange=False, plot=False, use_thread=False)
+    assert 'M03 S1000' in jobs[0].source_file
+
+    milling.target_obj = cutout
+    milling.on_object_changed()
+    assert milling.ui.pp_geo_name_cb.get_value() == 'default'
+    assert milling.form_fields['tools_mill_cutz'].get_value() == -2.4
 
 
 @pytest.mark.parametrize('multigeo', [False, True])

@@ -147,6 +147,38 @@ def test_close_during_a_save_closes_the_app_when_the_save_ends(shutdown, tmp_pat
     s.lifecycle.quit_application.assert_called_once_with()
 
 
+@pytest.mark.parametrize('completion_order', ['timer-before-exit', 'timer-before-result', 'result-before-timer'])
+def test_close_waits_for_the_timer_and_gui_save_completion(shutdown, tmp_path, completion_order):
+    from appHandlers.appIO import appIO
+    s = shutdown
+    s.app.should_we_save = False
+    s.app.save_in_progress = True
+    s.app.project_save_pending = True
+    s.app.options = {}
+    s.app.defaults = {}
+    s.window.set_ui_title = Mock()
+
+    if completion_order == 'timer-before-exit':
+        end_save(s, tmp_path)
+    s.action.trigger()
+    if completion_order == 'timer-before-result':
+        end_save(s, tmp_path)
+    s.lifecycle.quit_application.assert_not_called()
+
+    appIO(s.app)._on_project_save_done(str(tmp_path / 'Board.FlatPrj'), True, False, True)
+    QtWidgets.QApplication.processEvents()
+    if completion_order == 'result-before-timer':
+        s.lifecycle.quit_application.assert_not_called()
+        end_save(s, tmp_path)
+
+    assert s.app.close_after_save is False
+    s.lifecycle.quit_application.assert_called_once_with()
+    # A refused quit must not leave an exit request for a later save.
+    s.app.save_in_progress = True
+    end_save(s, tmp_path)
+    s.lifecycle.quit_application.assert_called_once_with()
+
+
 def test_close_during_a_failed_save_keeps_the_app_open(shutdown, tmp_path):
     from appHandlers.appIO import appIO
     s = shutdown

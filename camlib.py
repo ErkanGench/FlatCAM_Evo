@@ -8740,7 +8740,7 @@ def polygon_gap_pairs(polygons, decimals, neighbors=False):
     return pairs
 
 
-def isolation_leftover_paths(inner_pass, outer_pass, burn_radius, quad_segs=16):
+def isolation_leftover_paths(inner_pass, outer_pass, burn_radius, quad_segs=16, invert=False):
     """
     Paths that clear the copper left between 2 consecutive isolation passes.
 
@@ -8758,6 +8758,7 @@ def isolation_leftover_paths(inner_pass, outer_pass, burn_radius, quad_segs=16):
     :param outer_pass:  the isolation geometry (polygons) of the next pass
     :param burn_radius: half of the tool width: what a path cuts on each side; no paths when it is not positive
     :param quad_segs:   the segments of a quarter circle of the buffers
+    :param invert:      False for climb milling, True for conventional milling (see milling_orient())
     :return:            list of LinearRing
     """
     if burn_radius <= 0:
@@ -8774,9 +8775,38 @@ def isolation_leftover_paths(inner_pass, outer_pass, burn_radius, quad_segs=16):
     for poly in flatten_shapely_geometry(shapely.difference(shrunk, grown)):
         if not isinstance(poly, Polygon) or shapely.buffer(poly, -burn_radius / 20.0).is_empty:
             continue
+        # the copper to clear is inside the leftover polygon
+        poly = milling_orient(poly, conventional=invert)
         paths.append(LinearRing(poly.exterior.coords))
         paths += [LinearRing(ring.coords) for ring in poly.interiors]
     return paths
+
+
+def milling_orient(polygon, conventional=False):
+    """
+    Orient the rings of a polygon whose outline is milled, for a spindle that turns clockwise (M3).
+
+    Climb milling keeps the material on the right of the tool: the exterior goes clockwise and the holes go
+    counter-clockwise. Conventional milling reverses both.
+
+    :param polygon:         a Polygon; the material that the cut leaves is on its inside
+    :param conventional:    True for conventional milling, False for climb milling
+    :return:                the oriented Polygon
+    """
+    return shapely.geometry.polygon.orient(polygon, sign=1.0 if conventional else -1.0)
+
+
+def pass_covers_area(envelope, area):
+    """
+    True when an isolation pass that goes outwards from the copper encloses the whole area. The next passes are
+    farther from the copper, so none of them is inside the area.
+
+    :param envelope:    the isolation geometry of the pass (polygons)
+    :param area:        the boundary area
+    :return:            bool
+    """
+    polygons = [p for p in flatten_shapely_geometry(envelope) if isinstance(p, Polygon)]
+    return bool(polygons) and shapely.covers(unary_union(polygons), area)
 
 
 def app_option(app, key, fallback=None):

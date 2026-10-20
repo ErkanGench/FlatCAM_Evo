@@ -29,11 +29,11 @@ import appPlugins.ToolLevelling  # noqa: F401
 tl_module = sys.modules['appPlugins.ToolLevelling']
 from appPlugins.ToolLevelling import ToolLevelling
 from appPlugins.ToolGrblSender.Sender import ToolGrblSender
-import appPlugins.ToolGrblSender.SenderGrbl  # noqa: F401
+import appPlugins.Common.grbl.grbl_client  # noqa: F401
 # appPlugins/__init__.py also shadows the package name with the class ToolGrblSender
-sg_module = sys.modules['appPlugins.ToolGrblSender.SenderGrbl']
+sg_module = sys.modules['appPlugins.Common.grbl.grbl_client']
 from appPlugins.Common import levelling_interp as li
-from appPlugins.Common import grbl_protocol as gp
+from appPlugins.Common.grbl import grbl_protocol as gp
 
 
 def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
@@ -769,23 +769,24 @@ class TestGrblConnect(unittest.TestCase):
     def test_bad_baudrate_opens_nothing(self):
         tool = self._tool()
         tool.ui.baudrates_list_combo.currentText.return_value = ''
-        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url') as opener:
+        with patch('appPlugins.Common.grbl.grbl_client.serial.serial_for_url') as opener:
             tool.on_grbl_connect()
         opener.assert_not_called()
         self.assertTrue(any('[ERROR_NOTCL]' in t for t in emitted(tool)))
 
     def test_connect_schedules_finish_without_sleep(self):
         tool = self._tool()
-        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url', return_value=make_port()), \
+        with patch('appPlugins.Common.grbl.grbl_client.serial.serial_for_url', return_value=make_port()), \
                 patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot') as single_shot, \
-                patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep') as sleeper:
+                patch('appPlugins.Common.grbl.grbl_client.time.sleep') as sleeper:
             tool.on_grbl_connect()
         sleeper.assert_not_called()
         self.assertEqual(single_shot.call_args.args[0], 1000)
 
     def test_open_failure_leaves_no_port(self):
         tool = self._tool()
-        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url', side_effect=serial.SerialException('busy')):
+        with patch('appPlugins.Common.grbl.grbl_client.serial.serial_for_url',
+                   side_effect=serial.SerialException('busy')):
             tool.on_grbl_connect()
         self.assertIsNone(tool.grbl_ser_port)
         self.assertTrue(any('[ERROR_NOTCL]' in t for t in emitted(tool)))
@@ -855,7 +856,7 @@ class TestGrblConnect(unittest.TestCase):
         tool._grbl_connected = True
         tool._grbl_reserve('probe', motion=True)
         tool._grbl_disconnect()
-        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.serial_for_url') as opener:
+        with patch('appPlugins.Common.grbl.grbl_client.serial.serial_for_url') as opener:
             tool.on_grbl_connect()
         opener.assert_not_called()
 
@@ -1107,7 +1108,7 @@ class TestGrblHoming(unittest.TestCase):
         tool.grbl_ser_port = FakeGrbl()
         tool._grbl_connected = True
         tool._grbl_transact = MagicMock(return_value=('ok', 'ok'))
-        with patch('appPlugins.ToolGrblSender.SenderGrbl.time.sleep') as sleeper:
+        with patch('appPlugins.Common.grbl.grbl_client.time.sleep') as sleeper:
             tool.on_grbl_homing()
             run_worker(tool)
         sleeper.assert_not_called()
@@ -1124,8 +1125,8 @@ class TestGrblHoming(unittest.TestCase):
 
     def test_port_list_does_not_open_ports(self):
         infos = [SimpleNamespace(device='COM3'), SimpleNamespace(device='COM7')]
-        with patch('appPlugins.ToolGrblSender.SenderGrbl.serial.tools.list_ports.comports', return_value=infos), \
-                patch('appPlugins.ToolGrblSender.SenderGrbl.serial.Serial') as serial_cls:
+        with patch('appPlugins.Common.grbl.grbl_client.serial.tools.list_ports.comports', return_value=infos), \
+                patch('appPlugins.Common.grbl.grbl_client.serial.Serial') as serial_cls:
             self.assertEqual(ToolGrblSender.on_grbl_list_serial_ports(), ['COM3', 'COM7'])
         serial_cls.assert_not_called()
 

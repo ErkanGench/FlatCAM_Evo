@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
 
-from appPlugins.Common.grbl_protocol import parse_grbl_status_report, work_position
+from appPlugins.Common.grbl.grbl_protocol import parse_grbl_status_report, work_position
 
 
 class TestStatusReport(unittest.TestCase):
