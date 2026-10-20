@@ -111,6 +111,7 @@ Preprocessors:
 Translations:
 
 - fixed: the "Undefined aperture at line" message of the Gerber parser was formatted with % inside _(), so it was never translated
+- fixed: the Tcl help hint read "Type help  for usage.": the shell shows it as HTML and took <command_name> for a tag; the hint texts are escaped
 
 Tests:
 
@@ -125,6 +126,7 @@ Tests:
 - new unit tests for the CNC job plot filter and the visibility toggle
 - new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
 - new unit test for the translation of the Gerber parser messages (tests/test_gerber_translated_messages.py)
+- new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
 
 18.10.2026
 
