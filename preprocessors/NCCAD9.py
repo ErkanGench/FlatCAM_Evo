@@ -238,9 +238,8 @@ G76 ; Move to reference point to ensure correct coordinates after tool change
         coords_xy = p['xy_end']
 
         if coords_xy and coords_xy != '':
-            gcode = ('G00 Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + " " + self.feedrate_rapid_code(
-                p) + "\n")
-            gcode += 'G0 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1]) + " " + self.feedrate_rapid_code(p) + "\n"
+            # End Z and the end position; the X-Y move is not made below the Travel Z
+            gcode = self.end_moves_code(p, rapid='G0', z_rapid='G00', suffix=" " + self.feedrate_rapid_code(p))
 
         gcode += '''
 G77 ; Move to release position

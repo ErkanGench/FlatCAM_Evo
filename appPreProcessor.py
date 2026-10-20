@@ -74,6 +74,44 @@ class PreProc(object, metaclass=ABCPreProcRegister):
     def spindle_stop_code(self, p):
         pass
 
+    @staticmethod
+    def end_xy_move_z(p):
+        """
+        The height of the final X-Y move to the end position: End Z, or the Travel Z when End Z is lower, so the
+        tool does not travel over the workpiece and the clamps below the Travel Z.
+
+        :param p:   preprocessor parameters
+        :return:    the Z of the final X-Y move
+        """
+        try:
+            return max(float(p['z_end']), float(p['z_move']))
+        except (KeyError, TypeError, ValueError):
+            return p['z_end']
+
+    def end_moves_code(self, p, rapid='G00', z_rapid=None, suffix=''):
+        """
+        The moves at the end of the job: to End Z, then the X-Y move to the end position (if one is set).
+        When End Z is below the Travel Z, the X-Y move is made at the Travel Z and the tool goes down to End Z after it.
+
+        :param p:           preprocessor parameters
+        :param rapid:       the rapid move command of the X-Y move ('G00' or 'G0')
+        :param z_rapid:     the rapid move command of the Z moves; by default the same as rapid
+        :param suffix:      text added at the end of each move (e.g. the rapid feedrate)
+        :return:            G-code
+        """
+        z_rapid = rapid if z_rapid is None else z_rapid
+        coords_xy = p['xy_end']
+
+        if not coords_xy:
+            return z_rapid + ' Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + suffix + "\n"
+
+        z_xy = self.end_xy_move_z(p)
+        gcode = z_rapid + ' Z' + self.feedrate_format % (p.fr_decimals, z_xy) + suffix + "\n"
+        gcode += '{g} X{x} Y{y}'.format(g=rapid, x=coords_xy[0], y=coords_xy[1]) + suffix + "\n"
+        if z_xy != p.z_end:
+            gcode += z_rapid + ' Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + suffix + "\n"
+        return gcode
+
 
 class AppPreProcTools(object, metaclass=ABCPreProcRegister):
     @abstractmethod
