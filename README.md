@@ -278,6 +278,10 @@ log file (`log.txt`) and your own preprocessors (`preprocessors/` folder) in a d
 **Portable mode (Windows)**: set `portable=True` in `config/configuration.txt`. The program then keeps its data in a
 `config` folder next to the program folder, for example on a USB drive.
 
+**Own data folder**: set the `FLATCAM_DATA_PATH` environment variable to a folder and the program keeps its data there,
+in place of the folders above and of portable mode. For example, a second installation keeps its own settings, or a
+test starts with fresh settings.
+
 The window layout and the style are kept in the Qt settings (`Open Source / FlatCAM_EVO`).
 
 ---
