@@ -264,6 +264,8 @@ class App(QtCore.QObject):
 
     # flag is True if saving action has been triggered
     save_in_progress = False
+    # flag is True if the app was closed while the project was saved; it closes when the save ends
+    close_after_save = False
     _release_preparation_in_progress = False
 
     # #######################################    APP Signals   ######################################################

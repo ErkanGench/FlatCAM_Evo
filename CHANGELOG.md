@@ -227,6 +227,7 @@ Project file:
 - the project save makes the WKT of all the geometries with vectorized Shapely calls, in pieces of about 10000 coordinates, instead of 1 call for each geometry while the JSON is written; a large project saves about 5x faster (compressed) and the GUI thread is blocked for much shorter times during the save
 - the coordinates are saved with the shortest text that reads back to the same number instead of 16 fixed decimals, which lost the last bits of a coordinate below 1; the files are smaller and older versions open them
 - a compressed project is written as compact JSON (no indentation, no sorted keys), which is faster for a project with many small items (a CNC job); a plain project keeps the indented JSON
+- fixed: closing the app while the project is saved did nothing (only a message); now the app closes when the save ends, the normal way (the settings are saved, a change made during the save is asked about); after a failed save the app stays open
 
 Tests:
 
@@ -248,6 +249,7 @@ Tests:
 - new unit test for the usage hint of the Tcl help (tests/test_tcl_help.py)
 - new unit tests for scripts/i18n_tool.py (tests/test_i18n_tool.py)
 - new unit tests for the WKT of the project save (tests/test_project_save_wkt.py)
+- new unit tests for a close of the app during a project save (tests/test_shutdown_routing.py)
 
 18.10.2026
 

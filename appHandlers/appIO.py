@@ -1460,6 +1460,8 @@ class appIO(QtCore.QObject):
             self.app.save_in_progress = False
             if was_dirty:
                 self.app.should_we_save = True
+            # a close during the save does not close the app: the project was not saved
+            self.app.close_after_save = False
             self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The project was not saved"), filename))
             return
 
