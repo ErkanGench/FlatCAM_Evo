@@ -3189,6 +3189,9 @@ class ToolMilling(Geometry, AppTool):
         # options added later or keeps them under an older name; the CNC job reads them. A missing option gets the
         # value of its older name in the tool, and the application value only when the tool has neither.
         missing_pp = set()
+        # the job uses the preprocessor of the tool data, except a multi-geometry job of the plugin: it takes the one
+        # of the form (the overrides below), so there the replaced saved preprocessor is only logged
+        tool_pp_used = from_tcl or not geo_obj.multigeo
         for tool in tools_dict.values():
             data = tool['data']
             for key in AppDefaults.factory_defaults:
@@ -3202,8 +3205,9 @@ class ToolMilling(Geometry, AppTool):
                     if value not in missing_pp:
                         missing_pp.add(value)
                         self.app.log.warning("ToolMilling: the saved preprocessor %s is not available" % str(value))
-                        self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (
-                            _("The saved preprocessor is not available, the one from Preferences is used"), value))
+                        if tool_pp_used:
+                            self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (
+                                _("The saved preprocessor is not available, the one from Preferences is used"), value))
                 data[key] = value if found else deepcopy(self.app.options.get(
                     key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
 

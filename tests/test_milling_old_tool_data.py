@@ -336,6 +336,27 @@ def test_unavailable_saved_preprocessor_gets_the_application_one(multigeo):
     assert len(warnings) == 1 and warnings[0].startswith('[WARNING_NOTCL]')
 
 
+@pytest.mark.parametrize('multigeo', [False, True])
+def test_milling_plugin_warns_only_when_the_preferences_preprocessor_replaces_the_saved_one(multigeo):
+    # Generate CNCJob for a tool saved with Toolchange_Custom; the application options have GRBL_11, the form 'default'
+    tool = flatcam_8_994_cutout_tool(ppname_g='Toolchange_Custom')
+
+    job, milling = make_plugin_cnc_job(tool, multigeo, form={'tools_mill_ppname_g': 'default'},
+                                       **dict(OTHER_OPTIONS, tools_mill_ppname_g='GRBL_11'))
+
+    warnings = [c.args[0] for c in milling.app.inform.emit.call_args_list if 'Toolchange_Custom' in str(c.args[0])]
+    if multigeo:
+        # the preprocessor of the form replaces the one of the tool, as for every project: no warning
+        assert job.pp_geometry_name == 'default' and not warnings
+    else:
+        # a single-geometry job uses the one of the tool data: the application one, with the warning
+        assert job.pp_geometry_name == 'GRBL_11'
+        assert len(warnings) == 1 and warnings[0].startswith('[WARNING_NOTCL]')
+    # the saved depths and feed rate are kept
+    gcode = job.source_file
+    assert 'G01 Z-1.2000' in gcode and 'G01 Z-2.4000' in gcode and 'F120.00' in gcode
+
+
 def test_older_tool_values_are_converted():
     tool = {'offset': 'Out', 'type': '           Iso', 'tool_type': 'V', 'data': {}}
     assert legacy_mill_value(tool, 'tools_mill_offset_type') == (True, 2)
