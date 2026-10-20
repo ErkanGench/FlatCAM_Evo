@@ -8,6 +8,14 @@ tests/test_clearing_paths.py::TestNarrowChannel::test_seed
 tests/test_clearing_paths.py::TestNarrowChannel::test_shrink
 tests/test_clearing_paths.py::TestScanLinesCoverTheEdgeStrip::test_horizontal_lines
 tests/test_clearing_paths.py::TestScanLinesCoverTheEdgeStrip::test_vertical_lines
+tests/test_clearing_speed.py::TestConnectArrays::test_closed_rings_are_joined_as_paths
+tests/test_clearing_speed.py::TestConnectArrays::test_joined_paths_are_made_from_coordinate_arrays
+tests/test_clearing_speed.py::TestConnectArrays::test_joins_the_paths_of_the_coordinate_tuples
+tests/test_clearing_speed.py::TestSeedBands::test_a_large_margin_is_cut_without_the_holes_out_of_the_band
+tests/test_clearing_speed.py::TestSeedBands::test_a_small_area_gets_its_rings_in_1_call
+tests/test_clearing_speed.py::TestSeedBands::test_band_margin_keeps_the_parts_in_the_band
+tests/test_clearing_speed.py::TestSeedBands::test_banded_rings_are_the_rings_cut_one_by_one
+tests/test_clearing_speed.py::TestSeedBands::test_rings_stop_at_the_first_ring_that_misses_the_margin
 tests/test_clipper_fuse.py::TestEagle::test_bottom_layer
 tests/test_clipper_fuse.py::TestEagle::test_top_layer
 tests/test_clipper_fuse.py::TestFallbackWithClipper::test_baseline_works

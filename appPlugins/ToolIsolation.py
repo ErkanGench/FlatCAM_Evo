@@ -20,6 +20,7 @@ import numpy as np
 import sys
 import math
 
+import shapely
 from shapely import LineString, MultiLineString, Polygon, MultiPolygon, Point, LinearRing
 from shapely.ops import unary_union
 
@@ -3162,64 +3163,86 @@ class ToolIsolation(Geometry, AppTool):
         work_geo = []
 
         geo_len = len(geometry)
+        geo_array = np.empty(geo_len, dtype=object)
+        geo_array[:] = list(geometry)
+        # find if each pass of each geo is valid (no intersection with other geos): 1 spatial index query for all
+        # the geos in each pass; testing every other geo for each geo grew with the square of the number of geos
+        geo_indexes = np.arange(geo_len)
+        pass_offsets = []
+        pass_intersects = []
+        first_pass_iso = [None] * geo_len
+        abandoned = np.zeros(geo_len, dtype=bool)
+        for nr_pass in range(passes):
+            iso_offset = tooldia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * tooldia)
+            if negative_dia:
+                iso_offset = -iso_offset
+
+            buf_chek = iso_offset * 1.99999
+            # (quad_segs=16: as geo.buffer())
+            check_geo = shapely.buffer(geo_array[geo_indexes], buf_chek, quad_segs=16)
+            # the index holds the check geos and the geos are the (prepared) query: a large geo (a ground pour) is
+            # then prepared once instead of being walked for each small check geo near it
+            other_idx, check_idx = shapely.STRtree(check_geo).query(geo_array, predicate='intersects')
+            check_idx = geo_indexes[check_idx]
+            intersect_flags = np.zeros(geo_len, dtype=bool)
+            # we don't want to test intersection with itself
+            intersect_flags[check_idx[check_idx != other_idx]] = True
+            pass_offsets.append(iso_offset)
+            pass_intersects.append(intersect_flags)
+
+            if nr_pass != 0:
+                continue
+
+            for idx, geo in enumerate(geometry):
+                # if we had an intersection do nothing, else the geo is isolated in the first pass
+                if intersect_flags[idx]:
+                    continue
+
+                temp_geo = geo.buffer(iso_offset)
+                first_pass_iso[idx] = temp_geo
+                # this test is done only for the first pass because this is where is relevant
+                # test if in the first pass, the geo that is isolated has interiors and if it has then test if the
+                # resulting isolated geometry (buffered) number of subgeo is the same as the exterior + interiors
+                # if not it means that the geo interiors most likely could not be isolated with this tool so we
+                # abandon the whole isolation for this geo and add this geo to the not_isolated_geo
+                if forced_rest is False:
+                    if geo.interiors:
+                        len_interiors = len(geo.interiors)
+                        if len_interiors > 1:
+                            total_poly_len = 1 + len_interiors  # one exterior + len_interiors of interiors
+
+                            if isinstance(temp_geo, Polygon):
+                                # calculate the number of subgeos in the buffered geo
+                                temp_geo_len = len([1] + list(temp_geo.interiors))  # one exterior + interiors
+                                if total_poly_len != temp_geo_len:
+                                    # some interiors could not be isolated
+                                    abandoned[idx] = True
+                            else:
+                                try:
+                                    temp_geo_len = len(temp_geo)
+                                    if total_poly_len != temp_geo_len:
+                                        # some interiors could not be isolated
+                                        abandoned[idx] = True
+                                except TypeError:
+                                    # this means that the buffered geo (temp_geo) is not iterable
+                                    # (one geo element only) therefore failure:
+                                    # we have more interiors but the resulting geo is only one
+                                    abandoned[idx] = True
+
+            # the next passes are tested only for the geos that are not abandoned
+            geo_indexes = np.flatnonzero(~abandoned)
+
         for idx, geo in enumerate(geometry):
             good_pass_iso = []
 
-            geo_idx_list = list(range(geo_len))
-            # we don't want to test intersection with itself
-            del geo_idx_list[idx]
-
-            for nr_pass in range(passes):
-
-                iso_offset = tooldia * ((2 * nr_pass + 1) / 2.0) - (nr_pass * overlap * tooldia)
-                if negative_dia:
-                    iso_offset = -iso_offset
-
-                buf_chek = iso_offset * 1.99999
-                check_geo = geo.buffer(buf_chek)
-
-                intersect_flag = False
-                # find if current pass for current geo is valid (no intersection with other geos)
-                for geo_search_idx in geo_idx_list:
-                    if check_geo.intersects(geometry[geo_search_idx]):
-                        intersect_flag = True
-                        break
-
-                # if we had an intersection do nothing, else add the geo to the good pass isolation's
-                if intersect_flag is False:
-                    temp_geo = geo.buffer(iso_offset)
-                    # this test is done only for the first pass because this is where is relevant
-                    # test if in the first pass, the geo that is isolated has interiors and if it has then test if the
-                    # resulting isolated geometry (buffered) number of subgeo is the same as the exterior + interiors
-                    # if not it means that the geo interiors most likely could not be isolated with this tool so we
-                    # abandon the whole isolation for this geo and add this geo to the not_isolated_geo
-                    if nr_pass == 0 and forced_rest is False:
-                        if geo.interiors:
-                            len_interiors = len(geo.interiors)
-                            if len_interiors > 1:
-                                total_poly_len = 1 + len_interiors  # one exterior + len_interiors of interiors
-
-                                if isinstance(temp_geo, Polygon):
-                                    # calculate the number of subgeos in the buffered geo
-                                    temp_geo_len = len([1] + list(temp_geo.interiors))  # one exterior + interiors
-                                    if total_poly_len != temp_geo_len:
-                                        # some interiors could not be isolated
-                                        break
-                                else:
-                                    try:
-                                        temp_geo_len = len(temp_geo)
-                                        if total_poly_len != temp_geo_len:
-                                            # some interiors could not be isolated
-                                            break
-                                    except TypeError:
-                                        # this means that the buffered geo (temp_geo) is not iterable
-                                        # (one geo element only) therefore failure:
-                                        # we have more interiors but the resulting geo is only one
-                                        break
-
-                    good_pass_iso.append(temp_geo)
-                    if plot and prog_plot == 'progressive':
-                        prog_plot_handler(temp_geo)
+            if not abandoned[idx]:
+                for nr_pass in range(passes):
+                    # if we had an intersection do nothing, else add the geo to the good pass isolation's
+                    if not pass_intersects[nr_pass][idx]:
+                        temp_geo = first_pass_iso[idx] if nr_pass == 0 else geo.buffer(pass_offsets[nr_pass])
+                        good_pass_iso.append(temp_geo)
+                        if plot and prog_plot == 'progressive':
+                            prog_plot_handler(temp_geo)
 
             if good_pass_iso:
                 work_geo += good_pass_iso
