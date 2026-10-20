@@ -276,6 +276,26 @@ class EditorChecks(DatabaseCase):
         ui.on_rest_machining_check(True)
         self.assertFalse(ui.final_cleanup_cb.isHidden())
 
+    def test_isolation_passes_accept_up_to_9999(self):
+        # a laser isolation can need more than 999 passes; a stored 1000 was clamped to 999
+        from PyQt6 import QtGui
+        from appPlugins.ToolIsolation import IsoUI
+        from appGUI.preferences.tools.ToolsISOPrefGroupUI import ToolsISOPrefGroupUI
+        self.app.collection = QtGui.QStandardItemModel()
+        parent = QtWidgets.QWidget()
+        self.addCleanup(parent.deleteLater)
+        ui = IsoUI(QtWidgets.QVBoxLayout(parent), self.app)
+        pref = ToolsISOPrefGroupUI(self.app)
+        self.addCleanup(pref.deleteLater)
+        db = self.database()
+        for name, entry in (('plugin', ui.passes_entry), ('preferences', pref.passes_entry),
+                            ('database', db.ui.iso_passes_entry)):
+            with self.subTest(entry=name):
+                entry.set_value(9999)
+                self.assertEqual(9999, entry.get_value())
+                entry.set_value(10000)
+                self.assertEqual(9999, entry.get_value())
+
     def test_normalization_preserves_input_and_repairs_aliases(self):
         import appDatabase
         normalize = getattr(appDatabase, 'normalize_tools_database', None)

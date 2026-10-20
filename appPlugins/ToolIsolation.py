@@ -3699,7 +3699,7 @@ class IsoUI:
               "number (integer) of tool widths.")
         )
         self.passes_entry = FCSpinner(callback=self.confirmation_message_int)
-        self.passes_entry.set_range(1, 999)
+        self.passes_entry.set_range(1, 9999)
         self.passes_entry.setObjectName("i_passes")
 
         tool_param_grid.addWidget(passlabel, 6, 0)
