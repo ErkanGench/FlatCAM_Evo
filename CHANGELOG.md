@@ -97,6 +97,9 @@ Tcl and command line:
 - fixed: join_geometry makes the same object as Edit -> Join: MultiGeo objects stay MultiGeo and the tools with the same diameter and type are fused (preference geometry_merge_fuse_tools); a mix of MultiGeo and SingleGeo objects is refused; before, the joined isolation of a real board gave 3 times the G-code (124214 G1 moves instead of 40732) (merged PR #29 from ErkanGench)
 - fixed: Edit -> Join failed with "'Polygon' object is not iterable" or "'MultiLineString' object is not iterable" when a tool geometry was not a list (bbox, cutout) (merged PR #29 from ErkanGench)
 - Join fuses only the tools whose machining parameters (tools_*) are equal; a SingleGeo tool with an empty geometry of its own is kept
+Milling Tool:
+
+- fixed: the CNC job of a Geometry from an older project failed with a KeyError ('tools_mill_laser_on' for a FlatCAM Evo project saved before 12.2023, 'tools_mill_tooldia', 'tools_mill_offset_type' or 'tools_mill_job_type' for a FlatCAM 8.994 project); the Milling tool and the Tcl cncjob command give a tools_mill_* option that is missing from the tool data the value the tool keeps under its older name (FlatCAM 8.994: cutz, travelz, feedrate, spindlespeed (also the laser power), spindledir (also the laser ON code: CW is M03, CCW is M04), ppname_g ... and the tool's tooldia, offset, offset_value, type, tool_type; FlatCAM Evo before 12.2023: tools_mill_z_pdepth), and the application value only when the tool has neither; a saved 8.994 preprocessor that was renamed (grbl_11, line_xyz, Z_laser) gets its current name, and a saved preprocessor that the application does not have counts as absent (a job that uses the preprocessor of the tool gets the application one, with a warning; a multi-geometry job of the Milling tool uses the one of its form, as before); the options already in the tool data and the source object are not changed
 
 19.10.2026
 

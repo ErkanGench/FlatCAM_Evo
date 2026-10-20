@@ -34,6 +34,121 @@ if '_' not in builtins.__dict__:
 
 log = logging.getLogger('base')
 
+# The tool data of a Geometry saved by an older app version keeps its milling settings under older names. FlatCAM 8.994
+# uses the name without the 'tools_mill_' prefix (the tool data of real 8.994 projects; FlatCAMGeometry.py of that
+# version). FlatCAM Evo before 12.2023 names the probe depth 'tools_mill_z_pdepth' (renamed in 993a195bd).
+# modern key -> its older names in the tool data
+LEGACY_MILL_DATA_KEYS = {
+    'tools_mill_cutz': ('cutz',),
+    'tools_mill_vtipdia': ('vtipdia',),
+    'tools_mill_vtipangle': ('vtipangle',),
+    'tools_mill_multidepth': ('multidepth',),
+    'tools_mill_depthperpass': ('depthperpass',),
+    'tools_mill_travelz': ('travelz',),
+    'tools_mill_toolchange': ('toolchange',),
+    'tools_mill_toolchangez': ('toolchangez',),
+    'tools_mill_toolchangexy': ('toolchangexy',),
+    'tools_mill_startz': ('startz',),
+    'tools_mill_endz': ('endz',),
+    'tools_mill_endxy': ('endxy',),
+    'tools_mill_feedrate': ('feedrate',),
+    'tools_mill_feedrate_z': ('feedrate_z',),
+    'tools_mill_feedrate_rapid': ('feedrate_rapid',),
+    'tools_mill_spindlespeed': ('spindlespeed',),    # a laser preprocessor: the laser power, as now
+    'tools_mill_spindledir': ('spindledir',),
+    'tools_mill_laser_on': ('spindledir',),     # the laser preprocessors of 8.994 used it: M03 for CW, M04 for CCW
+    'tools_mill_dwell': ('dwell',),
+    'tools_mill_dwelltime': ('dwelltime',),
+    'tools_mill_ppname_g': ('ppname_g',),
+    'tools_mill_extracut': ('extracut',),
+    'tools_mill_extracut_length': ('extracut_length',),
+    'tools_mill_f_plunge': ('f_plunge',),
+    'tools_mill_z_p_depth': ('tools_mill_z_pdepth', 'z_pdepth'),
+    'tools_mill_feedrate_probe': ('feedrate_probe',),
+    'tools_mill_area_exclusion': ('area_exclusion',),
+    'tools_mill_area_shape': ('area_shape',),
+    'tools_mill_area_strategy': ('area_strategy',),
+    'tools_mill_area_overz': ('area_overz',),
+    'tools_mill_polish': ('polish',),
+    'tools_mill_polish_margin': ('polish_margin',),
+    'tools_mill_polish_overlap': ('polish_overlap',),
+    'tools_mill_polish_method': ('polish_method',),
+    'tools_mill_optimization_type': ('optimization_type',),
+    'tools_mill_search_time': ('search_time',),
+}
+
+# The older value of these settings in the tool data can be the text of a combo box: the development builds of
+# 21-28.10.2020 (0b94eef84 to eb7de1173, before the FlatCAM 8.994 release) saved the polish method as 'Standard', 'Seed'
+# or 'Lines' (translated in another interface language); the 8.994 release and FlatCAM Evo save the index. The laser ON
+# code comes from the 8.994 spindle direction: the 8.994 GRBL_laser and Z_laser sent M03 for CW, M04 for CCW (its
+# multi-geometry job took the direction from the tool, its single-geometry job from the application option). The
+# 'tools_mill_spindledir' of FlatCAM Evo before 12.2023 does not give it: the GRBL_laser and Z_laser (GRBL_laser_z) of
+# the Evo builds of 12.2020 to 01.2022 (3d83f93d5 to 13ec36e50) still sent M03 or M04 from the spindle direction, those
+# of 01.2022 to 12.2023 (13ec36e50 to 993a195bd) M3 for any direction, and their tool data cannot tell them apart. So
+# such a tool gets the application laser ON code, also a laser tool saved with CCW in 2021 (it made M04 then).
+# modern key -> the modern value of each older text
+LEGACY_MILL_DATA_TEXTS = {
+    'tools_mill_polish_method': {'standard': 0, 'seed': 1, 'lines': 2},
+    'tools_mill_laser_on': {'cw': 'M03', 'ccw': 'M04'},
+}
+
+# FlatCAM 8.994 keeps these settings in the tool itself, next to its data. The offset, type and tool_type are combo box
+# texts. The 8.994 release saves the type in English; a translated type comes from older versions (before bb2bb7fc2,
+# 2020-11-03: 8.993 and older), from a Tools Database entry saved by them, or from the 8.994 polishing (_('Polish')).
+# modern key -> (older key, the modern value of each older value; None when the value is the same)
+LEGACY_MILL_TOOL_KEYS = {
+    'tools_mill_tooldia': ('tooldia', None),
+    'tools_mill_offset_value': ('offset_value', None),
+    'tools_mill_offset_type': ('offset', {'path': 0, 'in': 1, 'out': 2, 'custom': 3}),
+    'tools_mill_job_type': ('type', {'rough': 0, 'finish': 1, 'iso': 2}),
+    'tools_mill_tool_shape': ('tool_type', {'c1': 0, 'c2': 1, 'c3': 2, 'c4': 3, 'b': 4, 'v': 5}),
+}
+
+# FlatCAM 8.994 preprocessors that have another name now (renamed in baeb4b87e, 13ec36e50 and eb9e7b420)
+LEGACY_PREPROCESSOR_NAMES = {'grbl_11': 'GRBL_11', 'line_xyz': 'Line_xyz', 'Z_laser': 'GRBL_laser_z'}
+
+
+def legacy_choice(value, choices):
+    """
+    The modern value of an older combo box choice: its English text ('Path', 'Iso', 'C1', 'Standard', 'CW'...; spaces
+    and case are ignored, 8.994 sometimes saved them with spaces) or an int that is already a modern index. None when it
+    is not recognized (e.g. a translated text).
+    """
+    if type(value) is int:
+        return value if value in choices.values() else None
+    return choices.get(str(value).strip().lower())
+
+
+def legacy_mill_value(tool, key):
+    """
+    Find the milling setting 'key' that a tool made by an older app version keeps under an older name.
+
+    :param tool:    a tool of a Geometry: {'tooldia': ..., 'data': {...}, ...}
+    :param key:     a modern 'tools_mill_*' key
+    :return:        (True, a copy of the value; a renamed preprocessor gets its current name, a combo box text its
+                    modern value) or (False, None) when the tool has no recognized older setting
+    """
+    data = tool['data']
+    for old_key in LEGACY_MILL_DATA_KEYS.get(key, ()):
+        if old_key in data:
+            value = deepcopy(data[old_key])
+            if key == 'tools_mill_ppname_g' and isinstance(value, str):
+                value = LEGACY_PREPROCESSOR_NAMES.get(value, value)
+            elif key in LEGACY_MILL_DATA_TEXTS:
+                value = legacy_choice(value, LEGACY_MILL_DATA_TEXTS[key])
+                if value is None:
+                    return False, None
+            return True, value
+    if key in LEGACY_MILL_TOOL_KEYS:
+        old_key, values = LEGACY_MILL_TOOL_KEYS[key]
+        if old_key in tool:
+            if values is None:
+                return True, deepcopy(tool[old_key])
+            value = legacy_choice(tool[old_key], values)
+            if value is not None:
+                return True, value
+    return False, None
+
 
 class HybridGeoExc:
     def __init__(self, app):
@@ -3069,6 +3184,32 @@ class ToolMilling(Geometry, AppTool):
         outname = "%s_%s" % (geo_obj.obj_options["name"], 'cnc') if outname is None else outname
 
         tools_dict = self.sel_tools if tools_dict is None else tools_dict
+
+        # the tool data of objects made by older app versions (e.g. a Geometry in an older project) lacks the
+        # options added later or keeps them under an older name; the CNC job reads them. A missing option gets the
+        # value of its older name in the tool, and the application value only when the tool has neither.
+        missing_pp = set()
+        # the job uses the preprocessor of the tool data, except a multi-geometry job of the plugin: it takes the one
+        # of the form (the overrides below), so there the replaced saved preprocessor is only logged
+        tool_pp_used = from_tcl or not geo_obj.multigeo
+        for tool in tools_dict.values():
+            data = tool['data']
+            for key in AppDefaults.factory_defaults:
+                if not key.startswith('tools_mill_') or key in data:
+                    continue
+                found, value = legacy_mill_value(tool, key)
+                if found and key == 'tools_mill_ppname_g' and value not in self.app.preprocessors:
+                    # a saved preprocessor that this app does not have (deleted, or a user preprocessor that is not
+                    # installed) counts as absent
+                    found = False
+                    if value not in missing_pp:
+                        missing_pp.add(value)
+                        self.app.log.warning("ToolMilling: the saved preprocessor %s is not available" % str(value))
+                        if tool_pp_used:
+                            self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (
+                                _("The saved preprocessor is not available, the one from Preferences is used"), value))
+                data[key] = value if found else deepcopy(self.app.options.get(
+                    key, app_defaults.get(key, AppDefaults.factory_defaults.get(key))))
 
         if not geo_obj.tools:
             seg_x = seg_x if seg_x is not None else float(geo_obj.obj_options['seg_x'])
