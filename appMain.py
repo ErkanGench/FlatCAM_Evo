@@ -3393,6 +3393,9 @@ class App(QtCore.QObject):
     def draw_moving_selection_shape(self, old_coords, coords, **kwargs):
         self.canvas_events.draw_moving_selection_shape(old_coords, coords, **kwargs)
 
+    def cancel_drag_move(self):
+        self.canvas_events.cancel_drag_move()
+
     def obj_properties(self):
         """
         Will launch the object Properties Tool

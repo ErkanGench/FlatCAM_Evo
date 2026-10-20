@@ -114,6 +114,7 @@ FACADE_MANIFEST = {
         'delete_selection_shape': invocation(),
         'draw_selection_shape': invocation(ARG, SECOND_ARG),
         'draw_moving_selection_shape': invocation(ARG, SECOND_ARG, offset=(1, 2)),
+        'cancel_drag_move': invocation(),
     },
     'signal_connector': {
         'connect_filemenu_signals': invocation(),

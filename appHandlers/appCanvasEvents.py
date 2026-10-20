@@ -13,7 +13,8 @@ from PyQt6.QtCore import Qt
 from copy import copy
 import numpy as np
 
-from shapely import Point, Polygon
+from shapely import Point, Polygon, dwithin
+from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 import builtins
@@ -34,6 +35,154 @@ class AppCanvasEvents(QtCore.QObject):
         self.options = app.options
         self.defaults = getattr(app, 'defaults', {})
         self.ui = app.ui
+
+        # moving the selected objects by dragging them with the mouse: None, DRAG_CANCELLED or
+        # {'press': (x, y), 'start': (x, y), 'pixel': float, 'objects': [...], 'active': bool}, see _start_drag_move()
+        self._drag_move = None
+
+    # a left press on a selected object becomes a move after the mouse went this far (screen pixels)
+    DRAG_MOVE_PIXELS = 6
+    # the press must be this close (screen pixels) to the geometry of a selected object
+    DRAG_HIT_PIXELS = 5
+    DRAG_CANCELLED = 'cancelled'
+
+    @staticmethod
+    def _object_hit(obj, point, tolerance):
+        """
+        :return:    True if the point is within tolerance of the drawn geometry of the object (copper, lines, holes)
+        """
+        try:
+            opts = obj.obj_options
+            if not (opts['xmin'] - tolerance <= point.x <= opts['xmax'] + tolerance and
+                    opts['ymin'] - tolerance <= point.y <= opts['ymax'] + tolerance):
+                return False
+        except (KeyError, TypeError):
+            return False
+
+        def shapes(geometry):
+            # a shape or (nested) lists of shapes; a multipart shape stays 1 shape for dwithin()
+            # (flatten_shapely_geometry() takes about 100 ms for 7000 polygons, too slow for a mouse press)
+            found = []
+            stack = [geometry]
+            while stack:
+                geo = stack.pop()
+                if isinstance(geo, BaseGeometry):
+                    found.append(geo)
+                elif isinstance(geo, (list, tuple, np.ndarray)):
+                    stack.extend(geo)
+            return found
+
+        parts = shapes(getattr(obj, 'solid_geometry', None))
+        if not parts and getattr(obj, 'tools', None):
+            # the multi-geometry objects keep the geometry in the tools
+            parts = shapes([t.get('solid_geometry') for t in obj.tools.values() if isinstance(t, dict)])
+        if not parts:
+            return False
+        geoms = np.empty(len(parts), dtype=object)
+        geoms[:] = parts
+        return bool(np.any(dwithin(geoms, point, tolerance)))
+
+    def _start_drag_move(self, pos_canvas, pos):
+        """
+        Called on a left press. A press on the drawing of a selected object (no key modifier, no command, Plugin or
+        Editor active) may become a move of all the selected objects when the mouse is dragged.
+
+        :param pos_canvas:  the pressed position
+        :param pos:         the pressed position, snapped to the grid when the grid snap is on
+        :return:            None
+        """
+        self._drag_move = None
+        if self.app.call_source != 'app' or self.app.command_active is not None:
+            return
+        if QtWidgets.QApplication.keyboardModifiers() != Qt.KeyboardModifier.NoModifier:
+            return
+        # a Plugin in the Plugin tab may take the canvas clicks (e.g. the Polygon Selection of the Isolation Plugin
+        # gets the release and uses the selection box)
+        if self.ui.notebook.currentWidget().objectName() == "plugin_tab":
+            return
+
+        # the same objects as the Move Tool: selected, plotted and visible
+        objects = [obj for obj in self.app.collection.get_selected()
+                   if obj.obj_options.get('plot') and obj.visible is True]
+        if not objects:
+            return
+
+        try:
+            pixel = self.app.plotcanvas.pixel_size()
+            point = Point(pos_canvas[0], pos_canvas[1])
+            hit = any(self._object_hit(obj, point, self.DRAG_HIT_PIXELS * pixel) for obj in objects)
+        except Exception as e:
+            self.log.error("App.on_mouse_click_over_plot() drag move --> %s" % str(e))
+            return
+
+        if hit:
+            self._drag_move = {'press': (pos_canvas[0], pos_canvas[1]), 'start': (pos[0], pos[1]), 'pixel': pixel,
+                               'objects': objects, 'active': False}
+
+    def _update_drag_move(self, pos_canvas, pos):
+        """
+        Called on a mouse move with the left button pressed.
+
+        :param pos_canvas:  the mouse position
+        :param pos:         the mouse position, snapped to the grid when the grid snap is on
+        :return:            True if the press is a move (or may become one): no selection box is drawn
+        """
+        drag = self._drag_move
+        if drag is None:
+            return False
+        if drag == self.DRAG_CANCELLED:
+            return True
+
+        dx = pos[0] - drag['start'][0]
+        dy = pos[1] - drag['start'][1]
+        if not drag['active']:
+            # the distance the mouse went, not snapped: a click that moves 1 pixel over a grid line is not a move
+            moved = max(abs(pos_canvas[0] - drag['press'][0]), abs(pos_canvas[1] - drag['press'][1]))
+            if moved < self.DRAG_MOVE_PIXELS * drag['pixel']:
+                return True
+            drag['active'] = True
+            self.delete_selection_shape()
+            self.app.move_tool.draw_sel_bbox()
+            self.inform.emit(_("Release to place the objects. ESC cancels."))
+        self.app.move_tool.update_sel_bbox((dx, dy))
+        return True
+
+    def _finish_drag_move(self, pos):
+        """
+        Called on the release of the left button.
+
+        :param pos: the mouse position, snapped to the grid when the grid snap is on
+        :return:    True if the press was a move (done here) or a cancelled move: no selection by click
+        """
+        drag = self._drag_move
+        self._drag_move = None
+        if drag is None:
+            return False
+        if drag == self.DRAG_CANCELLED:
+            return True
+        if not drag['active']:
+            # it was a click on a selected object
+            return False
+
+        self.app.move_tool.delete_shape()
+        self.app.move_tool.move_handler(offset=(pos[0] - drag['start'][0], pos[1] - drag['start'][1]),
+                                        objects=drag['objects'])
+        return True
+
+    def cancel_drag_move(self):
+        """
+        ESC while the selected objects are dragged with the mouse: they stay where they were.
+
+        :return:    None
+        """
+        drag = self._drag_move
+        if drag is None or drag == self.DRAG_CANCELLED:
+            return
+        if drag['active']:
+            self.app.move_tool.delete_shape()
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+        # the release that follows does nothing
+        self._drag_move = self.DRAG_CANCELLED
 
     def on_mouse_click_over_plot(self, event):
         """
@@ -64,6 +213,9 @@ class AppCanvasEvents(QtCore.QObject):
                 else:
                     self.app.rel_point2 = copy(self.app.rel_point1)
                     self.app.rel_point1 = self.app.mouse_click_pos
+
+                # a press on a selected object may start a move of the selected objects
+                self._start_drag_move(pos_canvas, pos)
 
             self.on_mouse_move_over_plot(event, origin_click=True)
         except Exception as e:
@@ -135,6 +287,11 @@ class AppCanvasEvents(QtCore.QObject):
             self.app.plotcanvas.on_update_text_hud(self.app.dx, self.app.dy, pos[0], pos[1])
 
             self.app.mouse_pos = [pos[0], pos[1]]
+
+            # the selected objects are dragged with the mouse (see _start_drag_move()): no selection box
+            if self.app.event_is_dragging and event.button == 1 and self._update_drag_move(pos_canvas, pos):
+                self.app.selection_type = None
+                return
 
             if self.options.get('global_selection_shape', self.defaults.get('global_selection_shape', True)) is False:
                 self.app.selection_type = None
@@ -249,6 +406,12 @@ class AppCanvasEvents(QtCore.QObject):
         # selection and then select a type of selection ("enclosing" or "touching")
 
         if event.button == 1:  # left click
+            # the end of a move of the selected objects with the mouse (or of a cancelled move)
+            if self._finish_drag_move(pos):
+                self.app.selection_type = None
+                self.app.mouse_click_pos = [pos[0], pos[1]]
+                return
+
             key_modifier = QtWidgets.QApplication.keyboardModifiers()
             shift_modifier_key = Qt.KeyboardModifier.ShiftModifier
             ctrl_modifier_key = Qt.KeyboardModifier.ControlModifier

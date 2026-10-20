@@ -64,7 +64,7 @@ METHOD_MANIFEST = {
         "on_mouse_click_release_over_plot", "on_mouse_and_key_modifiers", "on_mouse_context_menu",
         "selection_area_handler", "select_objects", "selected_message", "on_plugin_mouse_click_release",
         "on_plugin_mouse_move", "delete_hover_shape", "draw_hover_shape", "delete_selection_shape",
-        "draw_selection_shape", "draw_moving_selection_shape",
+        "draw_selection_shape", "draw_moving_selection_shape", "cancel_drag_move",
     ),
     "signal_connector": (
         "connect_filemenu_signals", "connect_editmenu_signals", "connect_optionsmenu_signals",
@@ -1218,6 +1218,7 @@ class TestCanvasEvents(AppTestCase):
     @covers(
         "canvas_events", "selection_area_handler", "select_objects", "selected_message", "delete_hover_shape",
         "draw_hover_shape", "delete_selection_shape", "draw_selection_shape", "draw_moving_selection_shape",
+        "cancel_drag_move",
     )
     def test_area_overlap_messages_and_shapes(self):
         inside = ObjectStub("inside", bounds=(1, 1, 2, 2))
@@ -1262,6 +1263,10 @@ class TestCanvasEvents(AppTestCase):
         invoke("canvas_events", handler, "draw_moving_selection_shape", (0, 0), (2, 3), face_alpha=0.5)
         self.assertGreaterEqual(len([call for call in app.sel_shapes.calls if call[0] == "add"]), 2)
         self.assertTrue(app.sel_objects_list)
+
+        # no move of the selected objects with the mouse: nothing to cancel
+        invoke("canvas_events", handler, "cancel_drag_move")
+        self.assertIsNone(handler._drag_move)
 
 
 SIGNAL_ACTIONS = {

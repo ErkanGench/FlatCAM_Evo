@@ -108,6 +108,9 @@ Preprocessors:
 - fixed: the preprocessors that come with the application were searched in 'preprocessors' relative to the current working directory, so none was loaded from another folder (a frozen build changes to lib/, a script or a test that does not change folder); they are searched next to appPreProcessor.py now, next to the executable in a frozen build; the folder names are escaped for glob ('[' or ']' in a path)
 - the preprocessor files are loaded with importlib.util.spec_from_file_location() and exec_module() instead of the deprecated SourceFileLoader.load_module() (1 DeprecationWarning for each file on Python 3.12, hidden by the default warning filters)
 - fixed: all the preprocessor files were executed in the same module, so a module level name (a helper function, a constant) of a user preprocessor was replaced by the same name of the next file; every file is a module of its own now and appPreProcessor imports math again, for the older preprocessors that get it with 'from appPreProcessor import *'
+Canvas:
+
+- new: the selected objects can be moved by dragging them with the left mouse button: a press on the drawing of a selected object (within 5 pixels of its copper, lines or holes) and a drag of more than 6 pixels move all the selected and plotted objects together with the Move Tool, so they keep their positions to each other; the move snaps to the grid when the grid snap is on and ESC cancels it; a press on an empty place still draws the selection box and a click still selects; there is no drag with Ctrl or Shift held, while a command is active, in an Editor or while a Plugin is open
 
 Tests:
 
@@ -121,6 +124,7 @@ Tests:
 - new unit tests for the calibrated solder paste (tests/test_solderpaste_calibrated.py)
 - new unit tests for the CNC job plot filter and the visibility toggle
 - new unit tests for the preprocessor loading (tests/test_preprocessor_loading.py)
+- new unit tests for moving the selected objects with the mouse (tests/test_drag_move.py)
 
 18.10.2026
 

@@ -3394,6 +3394,9 @@ class MainGUI(QtWidgets.QMainWindow):
                         pass
                     self.app.inform.emit("")
 
+                    # cancel a move of the selected objects with the mouse
+                    self.app.cancel_drag_move()
+
                 # Space = Toggle Active/Inactive
                 if key == QtCore.Qt.Key.Key_Space:
                     for select in selected:
