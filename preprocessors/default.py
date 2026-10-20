@@ -253,11 +253,8 @@ G00 Z{z_toolchange}
     def end_code(self, p):
         # a final move at the end of the CNC job. First it moves to a safe parking Z height followed by an X-Y move
         # to the parking location.
-        end_coords_xy = p['xy_end']
-        gcode = ('G00 Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + "\n")
-
-        if end_coords_xy and end_coords_xy != '':
-            gcode += 'G00 X{x} Y{y}'.format(x=end_coords_xy[0], y=end_coords_xy[1]) + "\n"
+        # The X-Y move is not made below the Travel Z: with a lower End Z the tool goes down to End Z after it.
+        gcode = self.end_moves_code(p, rapid='G00')
         return gcode
 
     def feedrate_code(self, p):

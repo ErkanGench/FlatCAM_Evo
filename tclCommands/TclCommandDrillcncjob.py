@@ -71,7 +71,8 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             ('travelz', 'Travel distance above material (example: 2.0).'),
             ('feedrate_z', 'Drilling feed rate. It is the speed on the Z axis.'),
             ('feedrate_rapid', 'Rapid drilling feed rate.'),
-            ('spindlespeed', 'Speed of the spindle in rpm (example: 4000).'),
+            ('spindlespeed', 'Speed of the spindle in rpm (example: 4000). Laser preprocessors use -las_power; '
+                             'without -las_power, -spindlespeed is the laser power, default 0.0.'),
             ('toolchangez', 'Z distance for toolchange (example: 30.0). Enables toolchange; '
                             'bare -toolchangez uses object tools_drill_toolchangez.'),
             ('toolchangexy', 'The X,Y coordinates at Toolchange event in format (x, y) (example: (30.0, 15.2) or '
@@ -319,7 +320,9 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             if 'laser' not in pp_excellon_name:
                 cnc_job_obj.spindlespeed = float(args["spindlespeed"]) if "spindlespeed" in args else None
             else:
-                cnc_job_obj.spindlespeed = float(args["las_power"]) if "las_power" in args else 0.0
+                # the laser power; without -las_power use -spindlespeed, as the scripts of older versions do
+                cnc_job_obj.spindlespeed = float(args["las_power"]) if "las_power" in args else \
+                    float(args.get("spindlespeed", 0.0))
 
             # laser minimum power
             cnc_job_obj.laser_min_power = float(args["las_min_pwr"]) if "las_min_pwr" in args else 0.0

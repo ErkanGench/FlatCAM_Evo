@@ -247,11 +247,8 @@ M0""".format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolcha
         return ('G01 ' + self.position_code(p)).format(**p)
 
     def end_code(self, p):
-        coords_xy = p['xy_end']
-        gcode = ('G00 Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + "\n")
-
-        if coords_xy and coords_xy != '':
-            gcode += 'G00 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1]) + "\n"
+        # End Z and the end position; the X-Y move is not made below the Travel Z
+        gcode = self.end_moves_code(p, rapid='G00')
 
         gcode += '(Berta)\n'
         gcode += 'M111\n'

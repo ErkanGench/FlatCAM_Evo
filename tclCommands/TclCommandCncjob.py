@@ -81,7 +81,8 @@ class TclCommandCncjob(TclCommandSignaled):
             ('endxy', 'The X,Y coordinates at job end in format (x, y) (example: (2.0, 1.2) or without parenthesis'
                       'like: 0.3,1.0). WARNING: no spaces allowed in the value.'),
             ('spindlespeed', 'Spindle speed in rpm (example: 4000). Bare or omitted -spindlespeed uses None '
-                            'for nonlaser preprocessors. Laser preprocessors use -las_power, default 0.0, instead.'),
+                            'for nonlaser preprocessors. Laser preprocessors use -las_power; without -las_power, '
+                            '-spindlespeed is the laser power, default 0.0.'),
             ('dwelltime', 'Spindle startup pause time. Enables dwell; bare -dwelltime uses object '
                           'tools_mill_dwelltime with application fallback. If the option is omitted, '
                           'application tools_mill_dwell and tools_mill_dwelltime are used.'),
@@ -203,7 +204,8 @@ class TclCommandCncjob(TclCommandSignaled):
         if 'laser' not in args["pp"]:
             args["spindlespeed"] = args.get('spindlespeed')
         else:
-            args["spindlespeed"] = args["las_power"] if "las_power" in args else 0.0
+            # the laser power; without -las_power use -spindlespeed, as the scripts of older versions do
+            args["spindlespeed"] = args["las_power"] if "las_power" in args else (args.get('spindlespeed') or 0.0)
 
         # Laser minimum power
         args["las_min_pwr"] = args["las_min_pwr"] if "las_min_pwr" in args else 0.0

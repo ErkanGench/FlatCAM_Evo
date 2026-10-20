@@ -232,6 +232,11 @@ M0""".format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolcha
             g = 'G00 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1])
         else:
             g = ('G00 ' + self.position_code(p)).format(**p)
+
+        # with an End Z lower than the Travel Z, the X-Y move is made at the Travel Z and the tool goes down after it
+        z_xy = self.end_xy_move_z(p)
+        if z_xy != p.z_end:
+            g = g + ' Z' + self.coordinate_format % (p.coords_decimals, z_xy) + '\n' + g
         g += ' Z' + self.coordinate_format % (p.coords_decimals, p.z_end)
         return g
 
