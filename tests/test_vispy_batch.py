@@ -450,5 +450,44 @@ class TestDefaultsConfiguration(unittest.TestCase):
         self.assertTrue(defaults.defaults["global_backface_culling"])
 
 
+class TestAddCopy(unittest.TestCase):
+    """add_copy() reuses the position buffers of a shape and makes new color buffers."""
+
+    def setUp(self):
+        from appGUI.VisPyVisuals import ShapeCollectionVisual
+        options = {"global_graphic_engine_3d_no_mp": True, "global_backface_culling": True}
+        self.source = ShapeCollectionVisual(linewidth=1, layers=1, pool=None, fcoptions=options)
+        self.target = ShapeCollectionVisual(linewidth=1, layers=1, pool=None, fcoptions=options)
+
+    def test_polygon_copy_shares_positions_and_has_new_colors(self):
+        poly = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)], [[(0.5, 0.5), (1.5, 0.5), (1.5, 1.5), (0.5, 1.5)]])
+        key = self.source.add(shape=poly, color='#112233FF', face_color='#11223350', layer=0)
+        copy_key = self.target.add_copy(self.source, key, color='#FF0000FF', face_color='#00FF0050', linewidth=3)
+
+        src, dst = self.source.data[key], self.target.data[copy_key]
+        for name in ('line_pts', 'mesh_vertices', 'mesh_tris'):
+            self.assertIs(dst[name], src[name])
+        self.assertGreater(len(dst['mesh_tris']), 0)
+        self.assertEqual(dst['line_colors'].shape, src['line_colors'].shape)
+        self.assertEqual(dst['mesh_colors'].shape, src['mesh_colors'].shape)
+        self.assertEqual(dst['line_colors'].dtype.name, 'float32')
+        self.assertEqual(tuple(dst['line_colors'][0]), (1.0, 0.0, 0.0, 1.0))
+        self.assertEqual(tuple(dst['mesh_colors'][0][:3]), (0.0, 1.0, 0.0))
+        self.assertTrue(dst['visible'])
+        self.assertEqual(self.target._line_width, 3)
+        self.assertTrue(self.target._dirty)
+
+    def test_line_copy_has_no_mesh(self):
+        key = self.source.add(shape=LineString([(0, 0), (1, 1), (2, 0)]), color='#112233FF', layer=0)
+        copy_key = self.target.add_copy(self.source, key, color='#FF0000FF', face_color='#FF000050')
+        dst = self.target.data[copy_key]
+        self.assertEqual(len(dst['mesh_colors']), 0)
+        self.assertEqual(len(dst['line_colors']), len(dst['line_pts']))
+
+    def test_missing_key_gives_none(self):
+        self.assertIsNone(self.target.add_copy(self.source, 99, color='#FF0000FF'))
+        self.assertEqual(self.target.data, {})
+
+
 if __name__ == '__main__':
     unittest.main()

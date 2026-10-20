@@ -34,8 +34,9 @@ from appEditors.geo_plugins.GeoCopyPlugin import CopyEditorTool
 
 from vispy.geometry import Rect
 
-from shapely import LineString, LinearRing, MultiLineString, Polygon, MultiPolygon, Point, box
+from shapely import LineString, LinearRing, MultiLineString, Polygon, MultiPolygon, Point, box, STRtree
 from shapely.geometry import base
+import shapely
 from shapely.ops import unary_union, linemerge
 from shapely.affinity import translate, scale, skew, rotate
 from shapely.geometry.polygon import orient
@@ -45,7 +46,6 @@ import numpy as np
 from numpy.linalg import norm as numpy_norm
 import logging
 
-from rtree import index as rtindex
 
 from copy import deepcopy
 # from vispy.io import read_png
@@ -61,6 +61,9 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 log = logging.getLogger('base')
+
+# a click picks the shapes nearer than this number of screen pixels (the same value as in the Gerber editor)
+PICK_TOLERANCE_PX = 5
 
 
 class AppGeoEditor(QtCore.QObject):
@@ -119,6 +122,12 @@ class AppGeoEditor(QtCore.QObject):
         # List of selected shapes.
         self.selected = []
 
+        # what plot_all() drew: id(shape) -> [shape, geo, drawable, keys in 'shapes', keys in 'sel_shapes', selected];
+        # plot_changes() uses it to plot only the shapes that changed. _render_state is None when the cache is not
+        # usable.
+        self._rendered = {}
+        self._render_state = None
+
         self.flat_geo = []
 
         self.move_timer = QtCore.QTimer()
@@ -169,8 +178,6 @@ class AppGeoEditor(QtCore.QObject):
         self.app.ui.grid_gap_y_entry.setText(str(self.editor_options["global_gridy"]))
         self.app.ui.snap_max_dist_entry.setText(str(self.editor_options["global_snap_max"]))
         self.app.ui.grid_gap_link_cb.setChecked(True)
-
-        self.rtree_index = rtindex.Index()
 
         self.app.ui.grid_gap_x_entry.setValidator(QtGui.QDoubleValidator())
         self.app.ui.grid_gap_y_entry.setValidator(QtGui.QDoubleValidator())
@@ -380,69 +387,156 @@ class AppGeoEditor(QtCore.QObject):
         :return:
         """
 
-        iterator = QtWidgets.QTreeWidgetItemIterator(self.ui.geo_parent)
-        to_delete = []
-        while iterator.value():
-            item = iterator.value()
-            to_delete.append(item)
-            iterator += 1
-        for it in to_delete:
-            self.ui.geo_parent.removeChild(it)
-        # self.ui.tw.selectionModel().clearSelection()
+        # the rows are removed and added in 1 batch each, with the tree signals blocked: a removed selected row does
+        # not run the tree handlers (and their plots) for each row
+        tw = self.ui.tw
+        tw.blockSignals(True)
+        tw.setUpdatesEnabled(False)
+        try:
+            self.ui.geo_parent.takeChildren()
 
-        for elem in self.storage.get_objects():
-            geo_type = type(elem.geo)
+            items = []
+            for elem in self.storage.get_objects():
+                geo_type = type(elem.geo)
 
-            if geo_type is MultiLineString:
-                el_type = _('Multi-Line')
-            elif geo_type is MultiPolygon:
-                el_type = _('Multi-Polygon')
-            else:
-                el_type = elem.data['type']
+                if geo_type is MultiLineString:
+                    el_type = _('Multi-Line')
+                elif geo_type is MultiPolygon:
+                    el_type = _('Multi-Polygon')
+                else:
+                    el_type = elem.data['type']
 
-            self.ui.tw.addParentEditable(
-                self.ui.geo_parent,
-                [
-                    str(id(elem)),
-                    '%s' % el_type,
-                    _("Geo Elem")
-                ],
-                font=self.ui.geo_font,
-                font_items=2,
-                # color=QtGui.QColor("#FF0000"),
-                editable=True
-            )
+                items.append(tw.addParentEditable(
+                    None,
+                    [
+                        str(id(elem)),
+                        '%s' % el_type,
+                        _("Geo Elem")
+                    ],
+                    font=self.ui.geo_font,
+                    font_items=2,
+                    # color=QtGui.QColor("#FF0000"),
+                    editable=True
+                ))
+            self.ui.geo_parent.addChildren(items)
+        finally:
+            tw.setUpdatesEnabled(True)
+            tw.blockSignals(False)
+
+        # the new rows show the current selection
+        self.sync_tree_selection()
 
         self.ui.tw.resize_sig.emit()
 
     def on_geo_elem_selected(self):
         pass
 
+    def get_pick_index(self):
+        """
+        :return: (tree, refs): tree is a STRtree on the geometries of the storage (None if there is none), refs is the
+                 list of the shapes in the same order. The index is made again only when the storage changed.
+        """
+        refs = [shape for shape in self.storage.get_objects() if isinstance(shape.geo, BaseGeometry)]
+        state = [(id(shape), id(shape.geo)) for shape in refs]
+        cache = getattr(self, '_pick_cache', None)
+        if cache is not None and cache[0] == state:
+            return cache[1], cache[2]
+
+        tree = STRtree([shape.geo for shape in refs]) if refs else None
+        self._pick_cache = (state, tree, refs)
+        return tree, refs
+
+    def pick_at(self, point):
+        """
+        The shape under (or near) a click: the nearest shape in PICK_TOLERANCE_PX screen pixels. When more shapes
+        are at the same distance (a click inside of more polygons), the one with the smaller area is picked.
+
+        :param point:   (x, y) in plot units
+        :return:        DrawToolShape or None
+        """
+        tree, refs = self.get_pick_index()
+        if tree is None:
+            return None
+
+        try:
+            tol = PICK_TOLERANCE_PX * self.canvas.pixel_size()
+        except Exception:
+            tol = None
+
+        if tol:
+            found, dists = tree.query_nearest(Point(point[0], point[1]), max_distance=tol, return_distance=True,
+                                              all_matches=True)
+        else:
+            found, dists = tree.query_nearest(Point(point[0], point[1]), return_distance=True, all_matches=True)
+        if len(found) == 0:
+            return None
+
+        best_pos, __ = min(zip(found, dists), key=lambda item: (round(float(item[1]), 9), refs[int(item[0])].geo.area))
+        return refs[int(best_pos)]
+
+    def click_select(self, point):
+        """
+        Selects the shape under a click. With the multiple selection key, the click adds the shape to the
+        selection or removes it from the selection; without the key, the shape is the new selection. A click where
+        there is no shape clears the selection. The tree rows and the info fields follow the selection.
+
+        :param point:   (x, y) in plot units
+        :return:        False if a selection is not allowed now, else True
+        """
+        if self.interdict_selection is True:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Selection not allowed. Wait ..."))
+            return False
+
+        obj_to_add = self.pick_at(point)
+        if obj_to_add is None:
+            self.selected = []
+        else:
+            key_modifier = QtWidgets.QApplication.keyboardModifiers()
+            if key_modifier == QtCore.Qt.KeyboardModifier.ShiftModifier:
+                mod_key = 'Shift'
+            elif key_modifier == QtCore.Qt.KeyboardModifier.ControlModifier:
+                mod_key = 'Control'
+            else:
+                mod_key = None
+
+            if mod_key == self.app.options.get(
+                    "global_mselect_key",
+                    self.app.defaults.get(
+                        "global_mselect_key",
+                        self.app.defaults.factory_defaults.get("global_mselect_key")
+                    )):
+                # first click selects, second deselects
+                if any(shape is obj_to_add for shape in self.selected):
+                    self.selected = [shape for shape in self.selected if shape is not obj_to_add]
+                else:
+                    self.selected.append(obj_to_add)
+            else:
+                self.selected = [obj_to_add]
+
+        self.sync_tree_selection()
+        self.update_ui()
+        return True
+
+    def shapes_by_tree_id(self):
+        """
+        :return: dict of the tree row ID (the str of id(shape)) to the shape, for all the shapes of the storage
+        """
+        return {str(id(obj_shape)): obj_shape for obj_shape in self.storage.get_objects()}
+
     def update_ui(self, current_item: QtWidgets.QTreeWidgetItem = None):
-        self.selected = []
+        # this only fills the info fields; it does not change the selection
         last_obj_shape = None
         last_id = None
 
+        shapes_by_id = self.shapes_by_tree_id()
         if current_item:
             last_id = current_item.text(0)
-            for obj_shape in self.storage.get_objects():
-                try:
-                    if id(obj_shape) == int(last_id):
-                        # self.selected.append(obj_shape)
-                        last_obj_shape = obj_shape
-                except ValueError:
-                    pass
+            last_obj_shape = shapes_by_id.get(last_id)
         else:
-            selected_tree_items = self.ui.tw.selectedItems()
-            for sel in selected_tree_items:
-                for obj_shape in self.storage.get_objects():
-                    try:
-                        if id(obj_shape) == int(sel.text(0)):
-                            # self.selected.append(obj_shape)
-                            last_obj_shape = obj_shape
-                            last_id = sel.text(0)
-                    except ValueError:
-                        pass
+            for sel in self.ui.tw.selectedItems():
+                if sel.text(0) in shapes_by_id:
+                    last_id = sel.text(0)
+                    last_obj_shape = shapes_by_id[last_id]
 
         if last_obj_shape:
             last_sel_geo = last_obj_shape.geo
@@ -561,27 +655,39 @@ class AppGeoEditor(QtCore.QObject):
             self.ui.geo_vertex_entry.set_value("")
 
         if len(selected_items) >= 1:
-            total_selected_shapes = []
+            shapes_by_id = self.shapes_by_tree_id()
+            self.selected = [shapes_by_id[sel.text(0)] for sel in selected_items if sel.text(0) in shapes_by_id]
+            self.plot_changes()
+            self.update_all_vertex_count()
 
-            for sel in selected_items:
-                for obj_shape in self.storage.get_objects():
-                    try:
-                        if id(obj_shape) == int(sel.text(0)):
-                            total_selected_shapes.append(obj_shape)
-                    except ValueError:
-                        pass
+    def update_all_vertex_count(self):
+        """
+        Shows the number of vertices of all the selected shapes. The polygons count the vertices of all their rings.
+        """
+        total_geos = flatten_shapely_geometry([s.geo for s in self.selected])
+        total_vtx = int(shapely.get_num_coordinates(total_geos).sum()) if total_geos else 0
+        self.ui.geo_all_vertex_entry.set_value(str(total_vtx))
 
-            self.selected = total_selected_shapes
-            self.plot_all()
+    def sync_tree_selection(self):
+        """
+        Selects in the tree the rows of the selected shapes, in 1 pass over the rows. The tree signals are blocked,
+        so the tree handlers (and their replots) do not run for each row.
+        """
+        tw = self.ui.tw
+        sel_ids = {str(id(sel_shape)) for sel_shape in self.selected}
 
-            total_geos = flatten_shapely_geometry([s.geo for s in total_selected_shapes])
-            total_vtx = 0
-            for geo in total_geos:
-                try:
-                    total_vtx += len(geo.coords)
-                except AttributeError:
-                    pass
-            self.ui.geo_all_vertex_entry.set_value(str(total_vtx))
+        tw.blockSignals(True)
+        try:
+            tw.selectionModel().clearSelection()
+            if sel_ids:
+                iterator = QtWidgets.QTreeWidgetItemIterator(tw)
+                while iterator.value():
+                    item = iterator.value()
+                    if item.text(0) in sel_ids:
+                        item.setSelected(True)
+                    iterator += 1
+        finally:
+            tw.blockSignals(False)
 
     def on_change_orientation(self):
         self.app.log.debug("AppGeoEditor.on_change_orientation()")
@@ -1213,7 +1319,7 @@ class AppGeoEditor(QtCore.QObject):
                     # Dispatch event to active_tool
                     self.active_tool.click_release((self.pos[0], self.pos[1]))
                     # self.app.inform.emit(msg)
-                    self.plot_all()
+                    self.plot_changes()
             elif event.button == right_button:  # right click
                 if self.app.ui.popMenu.mouse_is_panning is False:
                     if self.in_action is False:
@@ -1406,11 +1512,12 @@ class AppGeoEditor(QtCore.QObject):
 
         self.app.delete_selection_shape()
 
-        sel_objects_list = []
-        for obj in self.storage.get_objects():
-            if (sel_type is True and poly_selection.contains(obj.geo)) or (sel_type is False and
-                                                                           poly_selection.intersects(obj.geo)):
-                sel_objects_list.append(obj)
+        # 1 vectorized test of all the shapes against the prepared selection polygon
+        objects = list(self.storage.get_objects())
+        shapely.prepare(poly_selection)
+        test = shapely.contains if sel_type is True else shapely.intersects
+        hits = test(poly_selection, [obj.geo for obj in objects]) if objects else []
+        sel_objects_list = [obj for obj, hit in zip(objects, hits) if hit]
 
         if mod_key == self.app.options.get(
                 "global_mselect_key",
@@ -1418,36 +1525,22 @@ class AppGeoEditor(QtCore.QObject):
                     "global_mselect_key",
                     self.app.defaults.factory_defaults.get("global_mselect_key")
                 )):
-            for obj in sel_objects_list:
-                if obj in self.selected:
-                    self.selected.remove(obj)
-                else:
-                    # add the object to the selected shapes
-                    self.selected.append(obj)
+            # a shape in the area is deselected if it was selected, else it is added to the selected shapes
+            old_ids = {id(obj) for obj in self.selected}
+            hit_ids = {id(obj) for obj in sel_objects_list}
+            self.selected[:] = [obj for obj in self.selected if id(obj) not in hit_ids] + \
+                               [obj for obj in sel_objects_list if id(obj) not in old_ids]
         else:
-            self.selected = []
             self.selected = sel_objects_list
 
         # #############################################################################################################
         # #########  if selection is done on canvas update the Tree in Selected Tab with the selection  ###############
         # #############################################################################################################
-        try:
-            self.ui.tw.currentItemChanged.disconnect(self.on_tree_geo_click)
-        except (AttributeError, TypeError):
-            pass
-
-        self.ui.tw.selectionModel().clearSelection()
-        for sel_shape in self.selected:
-            iterator = QtWidgets.QTreeWidgetItemIterator(self.ui.tw)
-            while iterator.value():
-                item = iterator.value()
-                try:
-                    if int(item.text(0)) == id(sel_shape):
-                        item.setSelected(True)
-                except ValueError:
-                    pass
-
-                iterator += 1
+        self.sync_tree_selection()
+        if self.selected:
+            self.update_all_vertex_count()
+        else:
+            self.on_tree_selection()
 
         # #############################################################################################################
         # ###################  calculate vertex numbers for all selected shapes  ######################################
@@ -1466,9 +1559,12 @@ class AppGeoEditor(QtCore.QObject):
 
         self.ui.geo_vertex_entry.set_value(vertex_nr)
 
-        self.ui.tw.currentItemChanged.connect(self.on_tree_geo_click)
+        self.plot_changes()
 
-        self.plot_all()
+        # a tool that shows data of the selection (like Simplify) updates it
+        selection_changed = getattr(self.active_tool, 'selection_changed', None)
+        if selection_changed is not None:
+            selection_changed()
 
     def draw_utility_geometry(self, geo):
         # Add the new utility shape
@@ -1552,17 +1648,18 @@ class AppGeoEditor(QtCore.QObject):
 
     def delete_selected(self):
         self.delete_shape(self.selected)
+        self.selected.clear()
 
         self.build_ui()
-        self.plot_all()
+        # only the deleted shapes are removed from the canvas
+        self.plot_changes()
 
-        self.selected.clear()
-        self.sel_shapes.clear(update=True)
-        self.sel_shapes.redraw()
-
-    def delete_shape(self, shapes):
+    def delete_shape(self, shapes, inserted=()):
         """
         Deletes shape(shapes) from the storage, selection and utility
+
+        :param shapes:      DrawToolShape or list of them
+        :param inserted:    DrawToolShape objects to insert in the storage in the same index update
         """
         # copy a list: 'selected' is passed in and shrinks while shapes are removed from it
         w_shapes = list(shapes) if isinstance(shapes, list) else [shapes]
@@ -1573,8 +1670,8 @@ class AppGeoEditor(QtCore.QObject):
         self.utility[:] = [shape for shape in self.utility if id(shape) not in shape_ids]
         self.selected[:] = [shape for shape in self.selected if id(shape) not in shape_ids]
 
-        # remove from Storage, in 1 batch
-        self.storage.replace(removed=w_shapes)
+        # remove from Storage (and insert), in 1 batch
+        self.storage.replace(removed=w_shapes, inserted=inserted)
 
     def on_move(self):
         # if not self.selected:
@@ -1668,32 +1765,160 @@ class AppGeoEditor(QtCore.QObject):
         draw_color = self.color_with_alpha(self.get_draw_color(), 'FF')
         sel_color = self.color_with_alpha(self.get_sel_color(), 'FF')
 
-        geo_drawn = []
-        geos_selected = []
+        drawn = []
 
-        selected = self.get_selected()
+        sel_ids = {id(shape) for shape in self.get_selected()}
+        rendered = {}
         for shape in self.storage.get_objects():
-            if shape.geo and not shape.geo.is_empty and shape.geo.is_valid:
-                if shape in selected:
-                    geos_selected.append(shape.geo)
-                else:
-                    geo_drawn.append(shape.geo)
+            geo = shape.geo
+            drawable = bool(geo and not geo.is_empty and geo.is_valid)
+            rendered[id(shape)] = entry = [shape, geo, drawable, [], [], id(shape) in sel_ids]
+            if drawable:
+                drawn.append(entry)
 
         # always clear, otherwise the last shape deleted or deselected stays on the canvas
         self.shapes.clear(update=False)
         self.sel_shapes.clear(update=False)
 
-        for geo in geo_drawn:
-            self.plot_shape(storage=self.shapes, geometry=geo, color=draw_color, linewidth=1)
+        # every shape is drawn in 'shapes'. A selected shape is hidden there and 'sel_shapes' gets a copy of its
+        # buffers with the selection colors, so a change of the selection does not triangulate the shapes again.
+        for entry in drawn:
+            entry[3] = self.plot_shape(storage=self.shapes, geometry=entry[1], color=draw_color, linewidth=1)
 
         for shape in self.utility:
             self.plot_shape(storage=self.shapes, geometry=shape.geo, linewidth=1)
 
-        for geo in geos_selected:
-            self.plot_shape(storage=self.sel_shapes, geometry=geo, color=sel_color, linewidth=3)
+        hidden = set()
+        for entry in drawn:
+            if entry[5]:
+                hidden.update(entry[3])
+                entry[4] = self.copy_to_selection(entry, sel_color)
+        if hidden:
+            self.shapes.update_visibility(False, hidden)
 
         self.shapes.redraw()
         self.sel_shapes.redraw()
+
+        self._rendered = rendered
+        self._render_state = self.get_render_state()
+
+    def get_render_state(self):
+        """
+        :return: what must stay the same for the cache of plot_all() to match the canvas: the utility shapes and the
+                 keys and sizes of the 2 shape collections (a clear() made elsewhere changes them)
+        """
+        return (tuple(id(shape) for shape in self.utility),
+                getattr(self.shapes, 'last_key', None), len(getattr(self.shapes, 'data', ())),
+                getattr(self.sel_shapes, 'last_key', None), len(getattr(self.sel_shapes, 'data', ())))
+
+    def copy_to_selection(self, entry, sel_color):
+        """
+        Draws a shape of the 'shapes' collection in the 'sel_shapes' collection with the selection colors. It copies
+        the buffers of the shape; it triangulates the shape again only if a buffer is not ready.
+
+        :param entry:       the plot_all() cache entry of the shape
+        :param sel_color:   selection color, '#RRGGBBAA'
+        :return:            the keys of the shape in 'sel_shapes'
+        """
+        sel_keys = []
+        for key in entry[3]:
+            sel_key = self.sel_shapes.add_copy(self.shapes, key, color=sel_color, face_color=sel_color[:-2] + '50',
+                                               linewidth=3)
+            if sel_key is None:
+                for done_key in sel_keys:
+                    self.sel_shapes.remove(done_key)
+                return self.plot_shape(storage=self.sel_shapes, geometry=entry[1], color=sel_color, linewidth=3)
+            sel_keys.append(sel_key)
+        return sel_keys
+
+    def plot_changes(self):
+        """
+        Plots the changes since the last plot: new, changed and removed shapes, and the shapes whose selection
+        changed. Only a new shape (or a shape with a new geometry) is triangulated; a change of the selection hides or
+        shows a shape in the 'shapes' collection and adds or removes its copy in the 'sel_shapes' collection. If the
+        utility shapes or the collections changed outside of the plot functions, it does a plot_all().
+
+        :return: None
+        """
+        rendered = getattr(self, '_rendered', None)
+        if not rendered or getattr(self, '_render_state', None) != self.get_render_state():
+            self.plot_all()
+            return
+
+        draw_color = self.color_with_alpha(self.get_draw_color(), 'FF')
+        sel_color = self.color_with_alpha(self.get_sel_color(), 'FF')
+        sel_ids = {id(shape) for shape in self.get_selected()}
+
+        to_hide = set()
+        to_show = set()
+        changed = False
+        seen = set()
+        for shape in self.storage.get_objects():
+            shape_id = id(shape)
+            seen.add(shape_id)
+            is_sel = shape_id in sel_ids
+            entry = rendered.get(shape_id)
+
+            if entry is None or entry[0] is not shape or entry[1] is not shape.geo:
+                # a new shape, or a shape with a new geometry
+                if entry is not None:
+                    self.unplot_entry(entry)
+                geo = shape.geo
+                drawable = bool(geo and not geo.is_empty and geo.is_valid)
+                rendered[shape_id] = entry = [shape, geo, drawable, [], [], is_sel]
+                if drawable:
+                    changed = True
+                    entry[3] = self.plot_shape(storage=self.shapes, geometry=geo, color=draw_color, linewidth=1)
+                    if is_sel:
+                        to_hide.update(entry[3])
+                        entry[4] = self.copy_to_selection(entry, sel_color)
+                continue
+
+            if is_sel == entry[5]:
+                continue
+            entry[5] = is_sel
+            if not entry[2]:
+                continue
+
+            changed = True
+            if is_sel:
+                to_hide.update(entry[3])
+                entry[4] = self.copy_to_selection(entry, sel_color)
+            else:
+                for key in entry[4]:
+                    self.sel_shapes.remove(key)
+                entry[4] = []
+                to_show.update(entry[3])
+
+        # the removed shapes
+        for shape_id in [shape_id for shape_id in rendered if shape_id not in seen]:
+            changed = self.unplot_entry(rendered.pop(shape_id)) or changed
+
+        # 1 pass over the collection for each change of visibility
+        if to_hide:
+            self.shapes.update_visibility(False, to_hide)
+        if to_show:
+            self.shapes.update_visibility(True, to_show)
+
+        if changed:
+            self.shapes.redraw()
+            self.sel_shapes.redraw()
+        self._render_state = self.get_render_state()
+
+    def unplot_entry(self, entry):
+        """
+        Removes from the 2 collections the canvas shapes of a plot_all() cache entry.
+
+        :return: True if a canvas shape was removed
+        """
+        for key in entry[3]:
+            self.shapes.remove(key)
+        for key in entry[4]:
+            self.sel_shapes.remove(key)
+        removed = bool(entry[3] or entry[4])
+        entry[3] = []
+        entry[4] = []
+        return removed
 
     @staticmethod
     def color_with_alpha(color, alpha):
@@ -1925,13 +2150,16 @@ class AppGeoEditor(QtCore.QObject):
                 geo_to_edit = flatten_shapely_geometry(geo_to_edit)
                 cleaned_geo = [g for g in geo_to_edit if g and not g.is_empty and g.is_valid and g.geom_type != 'Point']
 
+                # all the shapes go in the storage in 1 batch (1 index load instead of 1 index update for each shape)
+                new_shapes = []
                 for shape in cleaned_geo:
                     if shape.geom_type == 'Polygon':
-                        editor_obj.add_shape(DrawToolShape(shape.exterior), build_ui=False)
+                        new_shapes.append(DrawToolShape(shape.exterior))
                         for inter in shape.interiors:
-                            editor_obj.add_shape(DrawToolShape(inter), build_ui=False)
+                            new_shapes.append(DrawToolShape(inter))
                     else:
-                        editor_obj.add_shape(DrawToolShape(shape), build_ui=False)
+                        new_shapes.append(DrawToolShape(shape))
+                editor_obj.add_shape(new_shapes, build_ui=False)
 
                 editor_obj.plot_all()
 
@@ -1967,69 +2195,48 @@ class AppGeoEditor(QtCore.QObject):
         Transfers the geometry tool shape buffer to the selected geometry
         object. The geometry already in the object are removed.
 
+        It runs in the caller thread and ends with the editor deactivated: the caller (App.on_editing_finished())
+        reads the bounds and plots the object right after this call, so the object has the new geometry first.
+        The copy is fast (about 45 ms for 5000 shapes); a worker thread here let the caller read the old geometry.
+
         :param fcgeometry:  GeometryObject
         :return:            None
         """
+        with self.app.proc_container.new(_("Working...")):
+            new_dia = self.ui.tooldia_entry.get_value()
 
-        def deactivate_signal_handler():
-            self.deactivate()
+            # the shapes of the editor, with the MultiLineString shapes merged
+            new_geometry = []
+            for shape in self.storage.get_objects():
+                new_geo = shape.geo
+                if isinstance(new_geo, MultiLineString):
+                    new_geo = linemerge(new_geo)
+                new_geometry.append(new_geo)
+            new_geometry = flatten_shapely_geometry(new_geometry)
 
-        self.app.connect_custom_signal(deactivate_signal_handler, object)
+            if self.multigeo_tool:
+                tool = fcgeometry.tools[self.multigeo_tool]
+                if new_dia != float(tool['tooldia']):
+                    tool['tooldia'] = new_dia
+                    tool['data']['tools_mill_tooldia'] = new_dia
+                tool['solid_geometry'] = list(new_geometry)
+                self.multigeo_tool = None
+            elif new_dia != float(fcgeometry.obj_options['tools_mill_tooldia']):
+                fcgeometry.obj_options['tools_mill_tooldia'] = new_dia
 
-        def worker_job(editor_obj):
-            # Link shapes into editor.
-            with editor_obj.app.proc_container.new(_("Working...")):
-                if editor_obj.multigeo_tool:
-                    edited_dia = float(fcgeometry.tools[self.multigeo_tool]['tooldia'])
-                    new_dia = self.ui.tooldia_entry.get_value()
+            fcgeometry.solid_geometry = new_geometry
 
-                    if new_dia != edited_dia:
-                        fcgeometry.tools[self.multigeo_tool]['tooldia'] = new_dia
-                        fcgeometry.tools[self.multigeo_tool]['data']['tools_mill_tooldia'] = new_dia
+            try:
+                bounds = fcgeometry.bounds()
+                fcgeometry.obj_options['xmin'] = bounds[0]
+                fcgeometry.obj_options['ymin'] = bounds[1]
+                fcgeometry.obj_options['xmax'] = bounds[2]
+                fcgeometry.obj_options['ymax'] = bounds[3]
+            except Exception:
+                pass
 
-                    tool_geo = []
-                    # for shape in self.shape_buffer:
-                    for shape in editor_obj.storage.get_objects():
-                        new_geo = shape.geo
-
-                        # simplify the MultiLineString
-                        if isinstance(new_geo, MultiLineString):
-                            new_geo = linemerge(new_geo)
-
-                        tool_geo.append(new_geo)
-                    fcgeometry.tools[self.multigeo_tool]['solid_geometry'] = flatten_shapely_geometry(tool_geo)
-                    editor_obj.multigeo_tool = None
-                else:
-                    edited_dia = float(fcgeometry.obj_options['tools_mill_tooldia'])
-                    new_dia = self.ui.tooldia_entry.get_value()
-
-                    if new_dia != edited_dia:
-                        fcgeometry.obj_options['tools_mill_tooldia'] = new_dia
-
-                new_solid_geometry = []
-                # for shape in self.shape_buffer:
-                for shape in editor_obj.storage.get_objects():
-                    new_geo = shape.geo
-
-                    # simplify the MultiLineString
-                    if isinstance(new_geo, MultiLineString):
-                        new_geo = linemerge(new_geo)
-                    new_solid_geometry.append(new_geo)
-                fcgeometry.solid_geometry = flatten_shapely_geometry(new_solid_geometry)
-
-                try:
-                    bounds = fcgeometry.bounds()
-                    fcgeometry.obj_options['xmin'] = bounds[0]
-                    fcgeometry.obj_options['ymin'] = bounds[1]
-                    fcgeometry.obj_options['xmax'] = bounds[2]
-                    fcgeometry.obj_options['ymax'] = bounds[3]
-                except Exception:
-                    pass
-
-                self.app.custom_signal.emit(None)
-                editor_obj.app.inform.emit(_("Editor Exit. Geometry object was updated ..."))
-
-        self.app.worker_task.emit({'fcn': worker_job, 'params': [self]})
+        self.deactivate()
+        self.app.inform.emit(_("Editor Exit. Geometry object was updated ..."))
 
     def update_options(self, obj):
         if self.paint_tooldia:
@@ -4408,97 +4615,12 @@ class FCSelect(DrawTool):
 
     def click_release(self, point):
         """
+        Selects the shape under the click; see AppGeoEditor.click_select().
 
-        :param point:   The point for which to find the nearest shape
+        :param point:   (x, y) of the click
         :return:
         """
-
-        # list where we store the overlapped shapes under our mouse left click position
-        over_shape_list = []
-
-        if self.draw_app.interdict_selection is True:
-            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' % _("Selection not allowed. Wait ..."))
-            return
-
-        # pos[0] and pos[1] are the mouse click coordinates (x, y)
-        for ____ in self.storage.get_objects():
-            # first method of click selection -> inconvenient
-            # minx, miny, maxx, maxy = obj_shape.geo.bounds
-            # if (minx <= pos[0] <= maxx) and (miny <= pos[1] <= maxy):
-            #     over_shape_list.append(obj_shape)
-
-            # second method of click selection -> slow
-            # outside = obj_shape.geo.buffer(0.1)
-            # inside = obj_shape.geo.buffer(-0.1)
-            # shape_band = outside.difference(inside)
-            # if Point(pos).within(shape_band):
-            #     over_shape_list.append(obj_shape)
-
-            # 3rd method of click selection -> inconvenient
-            try:
-                __, closest_shape = self.storage.nearest(point)
-            except StopIteration:
-                return ""
-
-            over_shape_list.append(closest_shape)
-
-        try:
-            # if there is no shape under our click then deselect all shapes
-            # it will not work for 3rd method of click selection
-            if not over_shape_list:
-                self.draw_app.selected = []
-                AppGeoEditor.draw_shape_idx = -1
-            else:
-                # if there are shapes under our click then advance through the list of them, one at the time in a
-                # circular way
-                AppGeoEditor.draw_shape_idx = (AppGeoEditor.draw_shape_idx + 1) % len(over_shape_list)
-                obj_to_add = over_shape_list[int(AppGeoEditor.draw_shape_idx)]
-
-                key_modifier = QtWidgets.QApplication.keyboardModifiers()
-
-                if key_modifier == QtCore.Qt.KeyboardModifier.ShiftModifier:
-                    mod_key = 'Shift'
-                elif key_modifier == QtCore.Qt.KeyboardModifier.ControlModifier:
-                    mod_key = 'Control'
-                else:
-                    mod_key = None
-
-                if mod_key == self.draw_app.app.options.get(
-                        "global_mselect_key",
-                        self.draw_app.app.defaults.get(
-                            "global_mselect_key",
-                            self.draw_app.app.defaults.factory_defaults.get("global_mselect_key")
-                        )):
-                    # if modifier key is pressed then we add to the selected list the current shape but if it's already
-                    # in the selected list, we removed it. Therefore, first click selects, second deselects.
-                    if obj_to_add in self.draw_app.selected:
-                        self.draw_app.selected.remove(obj_to_add)
-                    else:
-                        self.draw_app.selected.append(obj_to_add)
-                else:
-                    self.draw_app.selected = [obj_to_add]
-        except Exception as e:
-            log.error("[ERROR] AppGeoEditor.FCSelect.click_release() -> Something went bad. %s" % str(e))
-
-        self.draw_app.ui.tw.blockSignals(True)
-
-        self.draw_app.ui.tw.selectionModel().clearSelection()
-        for sel_shape in self.draw_app.get_selected():
-            iterator = QtWidgets.QTreeWidgetItemIterator(self.draw_app.ui.tw)
-            while iterator.value():
-                item = iterator.value()
-                try:
-                    if int(item.text(0)) == id(sel_shape):
-                        item.setSelected(True)
-                except ValueError:
-                    pass
-                iterator += 1
-
-        self.draw_app.ui.tw.blockSignals(False)
-
-        # self.draw_app.ui.tw.itemClicked.emit(self.draw_app.ui.tw.currentItem(), 0)
-        self.draw_app.update_ui()
-
+        self.draw_app.click_select(point)
         return ""
 
     def clean_up(self):
@@ -5701,20 +5823,18 @@ class FCSimplification(FCShapeTool):
             self.draw_app.app.ui.splitter.setSizes([1, 1])
 
     def click(self, point):
-        for ____ in self.storage.get_objects():
-            try:
-                __, closest_shape = self.storage.nearest(point)
-                self.draw_app.selected.append(closest_shape)
-            except StopIteration:
-                return ""
-        self.draw_app.plot_all()
+        # the same selection as the Select tool: a click selects, deselects (with the key) or clears the selection
+        if self.draw_app.click_select(point):
+            self.draw_app.plot_changes()
+            self.selection_changed()
 
-        last_sel_geo = self.draw_app.selected[-1].geo
-        self.simp_tool.calculate_coordinates_vertex(last_sel_geo)
+    def selection_changed(self):
+        self.simp_tool.calculate_coordinates_vertex([shape.geo for shape in self.draw_app.selected])
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.sync_tree_selection()
+        self.draw_app.plot_changes()
 
 
 class FCEraser(FCShapeTool):

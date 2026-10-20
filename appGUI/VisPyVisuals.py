@@ -472,6 +472,54 @@ class ShapeCollectionVisual(CompoundVisual):
         self._dirty = True
         return keys
 
+    def add_copy(self, source, source_key, color=None, face_color=None, linewidth=None):
+        """
+        Adds a shape that is already in a collection (this one or another one) with new colors, without a new
+        simplification and triangulation. The position buffers are shared: no code changes them after
+        _update_shape_buffers(). Only the color buffers are new.
+
+        :param source:      ShapeCollectionVisual that holds the shape
+        :param source_key:  key of the shape in the source
+        :param color:       line color of the copy
+        :param face_color:  face color of the copy
+        :param linewidth:   width of the lines of this collection
+        :return:            key of the copy, or None if the source has no buffers for this key (yet)
+        """
+        src = source.data.get(source_key)
+        if src is None or 'line_pts' not in src or source_key in source.results:
+            return None
+
+        if linewidth:
+            self._line_width = linewidth
+
+        def rgba_rows(col, rows):
+            if not rows:
+                return np.empty((0, 4), dtype=np.float32)
+            rgba = _cached_color_rgba(col) if isinstance(col, str) else Color(col).rgba
+            return np.tile(np.asarray(rgba, dtype=np.float32), (rows, 1))
+
+        self.key_lock.acquire(True)
+        self.last_key += 1
+        key = self.last_key
+        self.key_lock.release()
+
+        self.data[key] = {
+            'color': color,
+            'alpha': src.get('alpha'),
+            'face_color': face_color,
+            'visible': True,
+            'layer': src['layer'],
+            'tolerance': src.get('tolerance'),
+            'mesh_vertices': src['mesh_vertices'],
+            'mesh_tris': src['mesh_tris'],
+            'mesh_colors': rgba_rows(face_color, len(src['mesh_colors'])),
+            'line_pts': src['line_pts'],
+            'line_colors': rgba_rows(color, len(src['line_colors']))
+        }
+
+        self._dirty = True
+        return key
+
     def remove(self, key, update=False):
         """
         Removes shape from collection

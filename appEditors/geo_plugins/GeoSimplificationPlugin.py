@@ -5,7 +5,7 @@ from appGUI.GUIElements import VerticalScrollArea, GLay, FCLabel, FCButton, FCFr
     FCDoubleSpinner
 
 # from camlib import  flatten_shapely_geometry
-from copy import deepcopy
+import shapely
 
 import gettext
 import appTranslation as fcTranslate
@@ -80,15 +80,8 @@ class SimplificationTool(AppToolEditor):
         # Init appGUI
         self.ui.geo_tol_entry.set_value(0.01 if self.geo_editor.units == 'MM' else 0.0004)
 
-        selected_shapes_geos = []
-        selected_tree_items = self.geo_editor.ui.tw.selectedItems()
-        for sel in selected_tree_items:
-            for obj_shape in self.geo_editor.storage.get_objects():
-                try:
-                    if id(obj_shape) == int(sel.text(0)):
-                        selected_shapes_geos.append(obj_shape.geo)
-                except (ValueError, AttributeError):
-                    pass
+        # the editor selection is the same as the selected rows of the tree
+        selected_shapes_geos = [obj_shape.geo for obj_shape in self.geo_editor.selected]
         if selected_shapes_geos:
             # those are displayed by triggering the signal self.update_ui
             self.calculate_coordinates_vertex(selected_shapes_geos)
@@ -107,40 +100,27 @@ class SimplificationTool(AppToolEditor):
                 geo_editor.interdict_selection = True
 
                 # Simplification
-                selected_shapes = geo_editor.selected
-                selected_shapes_geos = [
-                    deepcopy(obj_shape.geo.simplify(tolerance=tol)) for obj_shape in selected_shapes
-                ]
-
-                not_selected_geos = [
-                    obj_shape for obj_shape in geo_editor.storage.get_objects() if obj_shape not in selected_shapes
-                ]
-
-                if not selected_shapes or not selected_shapes_geos:
+                selected_shapes = list(geo_editor.selected)
+                if not selected_shapes:
+                    geo_editor.interdict_selection = False
                     self.app.inform.emit('%s' % _("Failed."))
                     return
 
-                # reset the old storage
-                geo_editor.storage = geo_editor.make_storage()
-                geo_editor.ui.tw.blockSignals(True)
-                # add again the shapes (modified and non-modified
-                for geo in not_selected_geos + selected_shapes_geos:
-                    geo_editor.add_shape(geo, build_ui=False)
-                geo_editor.ui.tw.blockSignals(False)
+                # 1 vectorized call: GEOS does the work without the Python GIL, so the UI thread can run
+                selected_shapes_geos = list(shapely.simplify([obj_shape.geo for obj_shape in selected_shapes],
+                                                             tolerance=tol))
 
-                # # -----------------------------------------------------
-                # # Shape Deletion -> Shape Adding
-                # # geo_editor.ui.tw.blockSignals(True)
-                # geo_editor.delete_shape(selected_shapes)
-                #
-                # # while adding the shape also add it to selected
-                # for geo in selected_shapes_geos:
-                #     geo_editor.add_shape(geo, build_ui=False)
-                # # geo_editor.ui.tw.blockSignals(False)
-                # # -----------------------------------------------------
+                # the simplified shapes replace the selected shapes in 1 update of the storage index, and they are
+                # the new selection
+                new_shapes = []
+                for geo in selected_shapes_geos:
+                    geo_editor._collect_shape(geo, new_shapes)
+                geo_editor.delete_shape(selected_shapes, inserted=new_shapes)
+                geo_editor.selected = list(new_shapes)
 
                 self.calculate_coordinates_vertex(selected_shapes_geos)
-                geo_editor.plot_all()
+                # only the replaced shapes are plotted again
+                geo_editor.plot_changes()
 
                 geo_editor.interdict_selection = False
                 geo_editor.build_ui_sig.emit()
@@ -211,7 +191,7 @@ class SimplificationTool(AppToolEditor):
         #         coordinates = 'None'
         #         vertex_nr = 0
 
-            self.update_ui.emit(coordinates, vertex_nr)
+        self.update_ui.emit(coordinates, vertex_nr)
 
     def on_update_ui(self, coords, vertex_nr):
         self.ui.geo_coords_entry.set_value(str(coords))
