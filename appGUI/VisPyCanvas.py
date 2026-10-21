@@ -6,7 +6,7 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from PyQt6.QtGui import QPalette
+from PyQt6.QtGui import QFont, QFontMetricsF, QPalette
 from PyQt6.QtCore import QSettings
 
 import numpy as np
@@ -72,7 +72,7 @@ class VisPyCanvas(scene.SceneCanvas):
         self.central_widget.bgcolor = back_color
         self.central_widget.border_color = back_color
 
-        self.grid_widget = self.central_widget.add_grid(margin=10)
+        self.grid_widget = self.central_widget.add_grid(margin=0)
         self.grid_widget.spacing = 0
 
         top_padding = self.grid_widget.add_widget(row=0, col=0, col_span=2)
@@ -89,13 +89,19 @@ class VisPyCanvas(scene.SceneCanvas):
             orientation='bottom', axis_color=tick_color, text_color=tick_color, font_size=a_fsize, axis_width=1,
             anchors=['center', 'bottom']
         )
-        self.xaxis.height_min = 5
-        self.xaxis.height_max = 35
+        # Reserve only the ticks, horizontal labels and a small bottom gap.
+        font = QFont(self.xaxis.axis._text.face)
+        font.setPointSizeF(self.xaxis.axis.tick_font_size)
+        label_height = QFontMetricsF(font, self.native).ascent()
+        axis_height = np.ceil(self.xaxis.axis.major_tick_length +
+                              self.xaxis.axis.tick_label_margin + label_height + 4)
+        self.xaxis.height_min = axis_height
+        self.xaxis.height_max = axis_height
         self.grid_widget.add_widget(self.xaxis, row=2, col=1)
 
         right_padding = self.grid_widget.add_widget(row=0, col=2, row_span=2)
-        # right_padding.width_max = 24
-        right_padding.width_max = 0
+        right_padding.width_min = 8
+        right_padding.width_max = 8
 
         view = self.grid_widget.add_view(row=1, col=1, border_color=tick_color, bgcolor=theme_color)
         view.camera = Camera(aspect=1, rect=(-25, -25, 150, 150))
