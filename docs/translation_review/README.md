@@ -37,6 +37,16 @@ is; nothing that failed the check was applied.
 
 The texts added to the program after September are not translated here; they show in English until they are.
 
+## The texts added after September (2026-10-21)
+
+The 635 texts that were still untranslated in each language (and the fuzzy "Calibration" entry of de, fr, pt_BR and
+ru) were translated on 2026-10-21 in the same way: a translator model with the glossary and the existing translations
+of the same words, an independent reviewer model that corrected the draft, and the `scripts/i18n_tool.py` checks
+(placeholders, `%%`, HTML tags, `<argument>` names, line breaks, a real `%` formatting test). These entries are not in
+the `<lang>.md` / `<lang>.csv` lists; in the `.po` file each one carries the comment
+`# auto-review 2026-10-21: new` (or `fuzzy corrected` / `fuzzy confirmed`). They also need a native translator's
+approval.
+
 ## How to approve
 
 - `<lang>.md`: readable table (type, English, old translation, new translation, reason).
