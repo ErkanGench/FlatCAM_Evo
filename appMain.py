@@ -27,6 +27,7 @@ import shutil
 import traceback
 import time
 import re
+import html
 
 from io import StringIO
 
@@ -1694,7 +1695,11 @@ class App(QtCore.QObject):
 
         self.log.debug("Application was started with arguments: %s. Processing ..." % str(args_to_process))
         for argument in args_to_process:
-            if '.FlatPrj'.lower() in argument.lower():
+            # the file type comes from the last extension and a command word from the whole argument. Searched anywhere
+            # in the path, 'top.tcl.gtl' (a Gerber for Windows) or a file in a folder 'board.tcl' was run as a Tcl script
+            arg_ext = os.path.splitext(argument)[1].lower()
+            arg_word = argument.strip().lower()
+            if arg_ext == '.flatprj':
                 try:
                     project_name = str(argument)
 
@@ -1710,7 +1715,7 @@ class App(QtCore.QObject):
                 except Exception as e:
                     self.log.error("Could not open FlatCAM project file as App parameter due: %s" % str(e))
 
-            elif '.FlatConfig'.lower() in argument.lower():
+            elif arg_ext == '.flatconfig':
                 try:
                     file_name = str(argument)
 
@@ -1725,7 +1730,7 @@ class App(QtCore.QObject):
                 except Exception as e:
                     self.log.error("Could not open FlatCAM Config file as App parameter due: %s" % str(e))
 
-            elif '.FlatScript'.lower() in argument.lower() or '.TCL'.lower() in argument.lower():
+            elif arg_ext in ('.flatscript', '.tcl'):
                 try:
                     file_name = str(argument)
 
@@ -1736,25 +1741,31 @@ class App(QtCore.QObject):
                         if silent is False:
                             self.f_handlers.on_file_open_script(name=file_name)
                             self.ui.plot_tab_area.setCurrentWidget(self.ui.plot_tab)
-                        self.f_handlers.on_file_run_script(name=file_name)
+                        # a Tcl script can start programs and delete files: a script given as a file to open (a
+                        # double-click, a file sent by a second launch) runs only after a Yes. The --shellfile option
+                        # and the headless runs (HeadlessRunner) do not come here; they still run unattended.
+                        if self.ask_run_script_arg(file_name):
+                            self.f_handlers.on_file_run_script(name=file_name)
+                        elif silent is False:
+                            self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
                 except Exception as e:
                     self.log.error("Could not open FlatCAM Script file as App parameter due: %s" % str(e))
 
-            elif 'quit'.lower() in argument.lower() or 'exit'.lower() in argument.lower():
+            elif arg_word in ('quit', 'exit'):
                 self.log.debug("App.on_startup_args() --> Quit event.")
                 self.app_quit.emit()
 
-            elif 'save'.lower() in argument.lower():
+            elif arg_word == 'save':
                 self.log.debug("App.on_startup_args() --> Save event. App Defaults saved.")
                 self.defaults.update(self.options)
                 self.preferencesUiManager.save_defaults()
             else:
                 exc_list = self.ui.util_pref_form.fa_excellon_group.exc_list_text.get_value().split(',')
-                proc_arg = argument.lower()
+                proc_arg = arg_ext
                 for ext in exc_list:
                     proc_ext = ext.replace(' ', '')
                     proc_ext = '.%s' % proc_ext
-                    if proc_ext.lower() in proc_arg and proc_ext != '.':
+                    if proc_ext.lower() == proc_arg and proc_ext != '.':
                         file_name = str(argument)
                         if file_name == "":
                             if silent is False:
@@ -1767,7 +1778,7 @@ class App(QtCore.QObject):
                 for ext in gco_list:
                     proc_ext = ext.replace(' ', '')
                     proc_ext = '.%s' % proc_ext
-                    if proc_ext.lower() in proc_arg and proc_ext != '.':
+                    if proc_ext.lower() == proc_arg and proc_ext != '.':
                         file_name = str(argument)
                         if file_name == "":
                             if silent is False:
@@ -1780,7 +1791,7 @@ class App(QtCore.QObject):
                 for ext in grb_list:
                     proc_ext = ext.replace(' ', '')
                     proc_ext = '.%s' % proc_ext
-                    if proc_ext.lower() in proc_arg and proc_ext != '.':
+                    if proc_ext.lower() == proc_arg and proc_ext != '.':
                         file_name = str(argument)
                         if file_name == "":
                             if silent is False:
@@ -1798,6 +1809,33 @@ class App(QtCore.QObject):
         #         continue
         #     else:
         #         sys.exit(2)
+
+    def ask_run_script_arg(self, file_name):
+        """
+        Ask the user if a Tcl script given as a file to open is run. The default answer is No.
+
+        :param file_name:   path of the script
+        :return:            True if the user answered Yes
+        """
+
+        msgbox = FCMessageBox(parent=self.ui)
+        title = _("Run TCL script")
+        msgbox.setWindowTitle(title)  # taskbar still shows it
+        msgbox.setWindowIcon(QtGui.QIcon(self.resource_location + '/app128.png'))
+        msgbox.setText('<b>%s</b>' % _("Run this script?"))
+        # rich text with the path escaped: a file name with < > & in it (possible on Linux) is shown as it is
+        msgbox.setInformativeText('<p>%s</p><p>%s</p>' % (
+            html.escape(file_name),
+            html.escape(_("A Tcl script can start programs and change or delete files. "
+                          "Run it only if you trust its source."))))
+        msgbox.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+
+        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+        bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
+
+        msgbox.setDefaultButton(bt_no)
+        msgbox.exec()
+        return msgbox.clickedButton() == bt_yes
 
     def tools_database_path(self):
         return os.path.join(self.data_path, 'tools_db_%s.FlatDB' % str(self.version))
