@@ -4387,8 +4387,9 @@ class AppExcEditor(QtCore.QObject):
             current_tool += 1
 
             # create the self.tools for the new Excellon object (the one with edited content)
+            # each tool has the 'drills' and the 'slots' keys, even empty, like a tool of a parsed Excellon file
             if current_tool not in self.new_tools:
-                self.new_tools[current_tool] = {}
+                self.new_tools[current_tool] = {'drills': [], 'slots': []}
             self.new_tools[current_tool]['tooldia'] = float(tool_dia[0])
 
             # add in self.tools the 'solid_geometry' key, the value (a list) is populated below
@@ -4416,11 +4417,13 @@ class AppExcEditor(QtCore.QObject):
                     break
 
             if tool_exist_flag is False:
-                current_tool += 1
+                # a new tool goes after the highest tool number; current_tool can be the number of an existing tool
+                # found above for a previous slot diameter and current_tool + 1 would then overwrite the next tool
+                current_tool = max(self.new_tools, default=0) + 1
 
                 # create the self.tools for the new Excellon object (the one with edited content)
                 if current_tool not in self.new_tools:
-                    self.new_tools[current_tool] = {}
+                    self.new_tools[current_tool] = {'drills': [], 'slots': []}
                 self.new_tools[current_tool]['tooldia'] = float(tool_dia[0])
 
                 # add in self.tools the 'solid_geometry' key, the value (a list) is populated below
