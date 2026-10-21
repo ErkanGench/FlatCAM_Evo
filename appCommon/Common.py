@@ -12,7 +12,7 @@
 # ##########################################################
 from PyQt6 import QtCore
 
-from shapely import Polygon, Point, LineString
+from shapely import Polygon, Point, LineString, get_coordinates
 from shapely.ops import unary_union
 from appGUI.VisPyVisuals import ShapeCollection
 
@@ -662,6 +662,22 @@ class ExclusionAreas(QtCore.QObject):
             # there are no more exclusion areas in the storage, all have been selected and deleted
             self.app.inform.emit('%s' % _("All exclusion zones deleted."))
 
+    def grown_shape(self, shape, tooldia):
+        """
+        An Exclusion area grown by the half of the tool diameter and a little more. The travel lines go over or around
+        the grown area and no drill point is accepted inside it.
+
+        :param shape:           the shape of an Exclusion area
+        :type shape:            Polygon
+        :param tooldia:         the tool diameter
+        :type tooldia:          float
+        :return:                the grown shape
+        :rtype:                 Polygon
+        """
+        # add a little something to the half diameter, to make sure that we really don't enter the exclusion zones
+        buffered_distance = (tooldia / 2.0) + (0.1 if self.app.app_units == 'MM' else 0.00393701)
+        return shape.buffer(buffered_distance, join_style="mitre")
+
     def travel_coordinates(self, start_point, end_point, tooldia):
         """
         WIll create a path the go around the exclusion areas on the shortest path when travelling (at a Z above the
@@ -675,27 +691,30 @@ class ExclusionAreas(QtCore.QObject):
         :type tooldia           float
         :return:                A list of x,y tuples that describe the avoiding path
         :rtype:                 list
+        :raises ValueError:     when the travel starts or ends inside an 'around' area grown by the tool radius
         """
 
         ret_list = []
 
         # Travel lines: rapids. Should not pass through Exclusion areas
         travel_line = LineString([start_point, end_point])
-        origin_point = Point(start_point)
 
         buffered_storage = []
-        # add a little something to the half diameter, to make sure that we really don't enter the exclusion zones
-        buffered_distance = (tooldia / 2.0) + (0.1 if self.app.app_units == 'MM' else 0.00393701)
-
         for area in self.exclusion_areas_storage:
             new_area = deepcopy(area)
-            new_area['shape'] = area['shape'].buffer(buffered_distance, join_style="mitre")
+            new_area['shape'] = self.grown_shape(area['shape'], tooldia)
             buffered_storage.append(new_area)
 
-        # sort the Exclusion areas from the closest to the start_point to the farthest
+        # sort the Exclusion areas in the order in which the travel line enters them (the area closest to the
+        # start_point is not always the first one entered); the areas that the travel line does not enter come last,
+        # from the closest to the start_point to the farthest, because a path around an area can still enter them
         tmp = []
         for area in buffered_storage:
-            dist = Point(start_point).distance(area['shape'])
+            crossing = line_crossing(travel_line, area['shape'])
+            if crossing is not None:
+                dist = (0, crossing[0])
+            else:
+                dist = (1, Point(start_point).distance(area['shape']))
             tmp.append((dist, area))
         tmp.sort(key=lambda k: k[0])
 
@@ -704,17 +723,23 @@ class ExclusionAreas(QtCore.QObject):
         # process the ordered exclusion areas list
         for area in sorted_area_storage:
             outline = area['shape'].exterior
-            if travel_line.intersects(outline):
-                intersection_pts = travel_line.intersection(outline)
-
-                if isinstance(intersection_pts, Point):
-                    # it's just a touch, continue
-                    continue
-
-                entry_pt = nearest_point(origin_point, intersection_pts)
-                exit_pt = farthest_point(origin_point, intersection_pts)
+            # the travel line is tested against the whole area, not only against its outline: when the start or the
+            # end point is inside the area the line meets the outline once or not at all, but it still goes through it
+            crossing = line_crossing(travel_line, area['shape'])
+            if crossing is not None:
+                __, entry_pt, exit_pt = crossing
 
                 if area['strategy'] == 'around':
+                    # after a detour the travel line starts where the detour ended
+                    line_start = travel_line.coords[0]
+
+                    # a path on the outline can only join two points outside the area; going over the area instead is
+                    # not safe: the Over Z of an 'around' area is not set by the user
+                    if area['shape'].contains(Point(line_start)) or area['shape'].contains(Point(end_point)):
+                        raise ValueError(_("Failed. The tool cannot go around an exclusion area: "
+                                           "a travel starts or ends too close to the area. "
+                                           "Use the 'Over' strategy or change the area."))
+
                     full_vertex_points = [Point(x) for x in list(outline.coords)]
 
                     # the last coordinate in outline, a LinearRing, is the closing one
@@ -766,7 +791,7 @@ class ExclusionAreas(QtCore.QObject):
                         try:
                             start_line = LineString(
                                 [
-                                    start_point,
+                                    line_start,
                                     (vertex_points[i].x, vertex_points[i].y)
                                 ]
                             )
@@ -779,9 +804,10 @@ class ExclusionAreas(QtCore.QObject):
                         except IndexError:
                             continue
 
-                        if not start_line.crosses(area['shape']):
+                        # not crosses(): a line from a point on the outline through the area does not 'cross' it
+                        if line_crossing(start_line, area['shape']) is None:
                             close_start_points.append(vertex_points[i])
-                        if not end_line.crosses(area['shape']):
+                        if line_crossing(end_line, area['shape']) is None:
                             close_end_points.append(vertex_points[i])
 
                     closest_point_entry = nearest_point(entry_pt, close_start_points)
@@ -1002,3 +1028,35 @@ def nearest_point(origin, points_list):
             old_dist = dist
 
     return nearest_pt
+
+
+def line_crossing(line, shape):
+    """
+    Find where a line (a travel line) goes through a polygon (a grown Exclusion area)
+
+    :param line:        the line
+    :type line:         LineString
+    :param shape:       the polygon
+    :type shape:        Polygon
+    :return:            None if the line does not go through the polygon (it misses it, only touches it or only runs
+                        along its outline), else a tuple (entry distance, entry Point, exit Point) with the first and
+                        the last point of the line inside the polygon; the entry distance is measured along the line
+    :rtype:             tuple
+    """
+    # the interior of the line meets the interior of the polygon; this is also True when the start or the end point
+    # (or both) is inside the polygon and the line meets the outline only once or not at all
+    if line.length == 0 or not line.relate_pattern(shape, 'T********'):
+        return None
+
+    inside = line.intersection(shape)
+    # a line that only touches a corner of the polygon can meet its interior by a rounding error
+    if inside.length < 1e-9:
+        return None
+
+    # the line can enter the polygon more than once; the result is then a MultiLineString or a GeometryCollection,
+    # which are not iterable in Shapely 2, therefore use the coordinates
+    inside_points = [Point(xy) for xy in get_coordinates(inside)]
+    distances = [line.project(pt) for pt in inside_points]
+    entry_idx = int(np.argmin(distances))
+    exit_idx = int(np.argmax(distances))
+    return distances[entry_idx], inside_points[entry_idx], inside_points[exit_idx]

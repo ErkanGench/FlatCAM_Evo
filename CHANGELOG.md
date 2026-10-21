@@ -40,6 +40,8 @@ CNCJob:
 - the nearest path on a tie is the first inserted one, so the G-code does not depend on how an index was built
 - the G-code of the paths, drills and points is collected in a list and joined 1 time; fixed: a job with 20000 polylines failed with MemoryError
 - the R-tree storages are bulk loaded from NumPy arrays (insert_many(), new_rtree_index(points=..., boxes=...)): clearing, paint, connect, cleanup order, solder paste, panelize and the Excellon editor; about 3 times faster than an insert for each object
+- fixed: exclusion areas: a travel move that started or ended inside an area grown by the tool radius and 0.1 mm went straight through the area at the travel Z, so the tool could hit the clamp the area was drawn for; a travel that crossed an area failed with an internal error ('MultiPoint' object is not iterable, Shapely 2); now the tool rises before the move ('Over') or goes around the area ('Around'; a travel that starts or ends inside an 'Around' area fails with a message); the areas are avoided in the order the travel enters them
+- fixed: the drill point checks of the Drilling tool and of the Tcl drillcncjob used only the tool radius; they use the same grown areas as the travel moves, so a drill in the 0.1 mm margin is refused and no travel starts or ends inside an area
 
 Preferences:
 
@@ -53,6 +55,7 @@ Excellon Editor:
 
 Tests:
 
+- new unit tests for the exclusion area travel moves and drill point checks (tests/test_exclusion_area_travel.py)
 - new unit tests for the project save before a restart (tests/test_restart_project_save.py)
 - new unit tests for the type of a file given on the command line and for the question before a script given this way runs (tests/test_startup_args.py)
 - new unit tests for the tool numbers and the tool keys of the Excellon Editor save, with the Excellon export and the drillcncjob of the saved object (tests/test_exc_editor_slot_tools.py)
