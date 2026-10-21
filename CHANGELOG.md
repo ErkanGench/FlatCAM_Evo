@@ -8,6 +8,11 @@ CHANGELOG for FlatCAM Evo
 
 21.10.2026
 
+Milling:
+
+- fixed: a tool with a Cut Z of 0 and a non-laser preprocessor showed the "Cut Z is zero" warning and then an internal error ('too many values to unpack'); the job now fails cleanly and no CNC job is made; same fix for the Geometry object CNC job (issue #40 reported by ErkanGench)
+- fixed: the selection of a Milling target loaded the form with the form signals connected, so the values of the last tool were written into all the other selected tools (offset type, tool shape, job type) and the preprocessor could be reset from the Preferences; with the issue #41 tests (reported by ErkanGench) the form and the job now always use the values saved with the selected object and its tools
+
 Geometry Editor:
 
 - faster selection: a selection change only hides or shows the changed shapes and copies their canvas buffers (no new triangulation); the tree rows are selected in 1 pass with the signals blocked; the area selection tests all the shapes in 1 vectorized call; area selection of 289 of 1000 shapes: 418 s to 0.02 s

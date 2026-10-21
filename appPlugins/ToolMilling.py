@@ -1970,6 +1970,24 @@ class ToolMilling(Geometry, AppTool):
             t_table = self.ui.tools_table_mill_exc
         self.current_row = t_table.currentRow()
 
+        # Showing values is not editing: with the signals connected each changed combo box or check box would run
+        # form_to_storage() and write the shown value into the tools of the target (of the previous target when the
+        # target is not set yet, as in on_target_changed()), changing the saved data of the tools.
+        self.ui_disconnect()
+        try:
+            self._set_form_fields(storage)
+            # what the changed combo boxes did through their signals: the fields that depend on the tool shape and on
+            # the preprocessor (Preferences are not applied: the form shows the saved values)
+            try:
+                if 'tools_mill_tool_shape' in storage and self.ui.target_radio.get_value() == 'geo':
+                    self._show_v_shape_fields(self.ui.tool_shape_combo.currentText())
+                self.on_pp_changed()
+            except Exception as err:
+                self.app.log.error("ToolMilling.to_form() updating the dependent fields --> %s" % str(err))
+        finally:
+            self.ui_connect()
+
+    def _set_form_fields(self, storage):
         for k in list(self.form_fields.keys()) + list(self.general_form_fields.keys()):
             for option in storage:
                 if option.startswith('tools_mill_'):
@@ -2113,6 +2131,15 @@ class ToolMilling(Geometry, AppTool):
         self.on_pp_changed()
 
     def ui_update_v_shape(self, tool_type_txt):
+        self._show_v_shape_fields(tool_type_txt)
+        if tool_type_txt == 'V':
+            self.ui.job_type_combo.set_value(2)   # 'Isolation'
+            self.on_update_cutz()
+        else:
+            self.ui.job_type_combo.set_value(0)   # 'Roughing'
+
+    def _show_v_shape_fields(self, tool_type_txt):
+        """Show the V-tip fields for a V-Shape tool and hide them for any other tool; the tool data is not changed."""
         if tool_type_txt == 'V':
             self.ui.tipdialabel.show()
             self.ui.tipdia_entry.show()
@@ -2126,8 +2153,6 @@ class ToolMilling(Geometry, AppTool):
                   "- Tool Dia -> 'Dia' column found in the Tool Table\n"
                   "NB: a value of zero means that Tool Dia = 'V-tip Dia'")
             )
-            self.ui.job_type_combo.set_value(2)   # 'Isolation'
-            self.on_update_cutz()
         else:
             self.ui.tipdialabel.hide()
             self.ui.tipdia_entry.hide()
@@ -2138,7 +2163,6 @@ class ToolMilling(Geometry, AppTool):
                   "below the copper surface.")
             )
             self.ui.cutz_entry.setToolTip('')
-            self.ui.job_type_combo.set_value(0)   # 'Roughing'
 
     def on_update_cutz(self):
         vdia = float(self.ui.tipdia_entry.get_value())
@@ -3375,7 +3399,8 @@ class ToolMilling(Geometry, AppTool):
             glob_tol = float(context['options']['global_tolerance'])
             tol = glob_tol / 20 if context['units'].lower() == 'in' else glob_tol
             # append=False: the returned G-code (and the parsed one below) holds only this tool
-            res, start_gcode = new_cncjob_obj.generate_from_geometry_2(
+            # on failure the result is the bare 'fail' string, not a (gcode, start_gcode) pair
+            gen = new_cncjob_obj.generate_from_geometry_2(
                 geo_obj, append=False, tooldia=tooldia_val, offset=tool_offset, tolerance=tol,
                 z_cut=data['tools_mill_cutz'], z_move=data['tools_mill_travelz'],
                 feedrate=data['tools_mill_feedrate'], feedrate_z=data['tools_mill_feedrate_z'],
@@ -3389,9 +3414,10 @@ class ToolMilling(Geometry, AppTool):
                 toolchange=data['tools_mill_toolchange'], toolchangez=data['tools_mill_toolchangez'],
                 toolchangexy=data['tools_mill_toolchangexy'], pp_geometry_name=data['tools_mill_ppname_g'],
                 tool_no=tool_cnt, is_first=tool_uid_key == used_tools[0])
-            if res == 'fail':
+            if gen == 'fail':
                 self.app.log.debug("GeometryObject.mtool_gen_cncjob() --> generate_from_geometry2() failed")
                 return 'fail'
+            res, start_gcode = gen
             dia_cnc_dict['gcode'] = res
             if start_gcode != '':
                 new_cncjob_obj.gc_start = start_gcode
@@ -3514,15 +3540,16 @@ class ToolMilling(Geometry, AppTool):
             new_cncjob_obj.obj_options['tool_dia'] = tooldia_val
             glob_tol = float(context['options']['global_tolerance'])
             tol = glob_tol / 20 if context['units'].lower() == 'in' else glob_tol
-            res, start_gcode = new_cncjob_obj.geometry_tool_gcode_gen(
+            gen = new_cncjob_obj.geometry_tool_gcode_gen(
                 tool_uid_key, tools_dict, first_pt=(0, 0), last_pt=data['tools_mill_endxy'],
                 tolerance=tol, is_first=tool_uid_key == used_tools[0],
                 is_last=tool_uid_key == used_tools[-1], toolchange=context['toolchange'],
                 use_ui=not context['from_tcl'])
-            if res == 'fail':
+            if gen == 'fail':
                 self.app.log.debug("ToolMilling.generate_cnc_job_handler() --> "
                                    "Failed to generate GCode for tool: %s" % tool_uid_key)
                 return 'fail'
+            res, start_gcode = gen
             dia_cnc_dict['gcode'] = res
             total_gcode += res
             if start_gcode != '':

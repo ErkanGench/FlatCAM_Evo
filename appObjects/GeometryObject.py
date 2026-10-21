@@ -785,7 +785,8 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
                 # to a value of 0.0005 which is 20 times less than 0.01
                 tol = float(self._app_option('global_tolerance')) / 20
-                res, start_gcode = job_obj.generate_from_geometry_2(
+                # on failure the result is the bare 'fail' string, not a (gcode, start_gcode) pair
+                gen = job_obj.generate_from_geometry_2(
                     self, tooldia=tooldia_val, offset=tool_offset, tolerance=tol,
                     z_cut=z_cut, z_move=z_move,
                     feedrate=feedrate, feedrate_z=feedrate_z, feedrate_rapid=feedrate_rapid,
@@ -796,9 +797,10 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                     pp_geometry_name=pp_geometry_name,
                     tool_no=tool_cnt, is_first=is_first)
 
-                if res == 'fail':
+                if gen == 'fail':
                     self.app.log.debug("GeometryObject.mtool_gen_cncjob() --> generate_from_geometry2() failed")
                     return 'fail'
+                res, start_gcode = gen
 
                 dia_cnc_dict['gcode'] = res
                 if start_gcode != '':
@@ -940,15 +942,15 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 tool_lst = list(tools_dict.keys())
                 is_first = True if tooluid_key == tool_lst[0] else False
                 is_last = True if tooluid_key == tool_lst[-1] else False
-                res, start_gcode = job_obj.geometry_tool_gcode_gen(tooluid_key, tools_dict, first_pt=(0, 0),
-                                                                   tolerance=tol,
-                                                                   is_first=is_first, is_last=is_last,
-                                                                   toolchange=True)
-                if res == 'fail':
+                gen = job_obj.geometry_tool_gcode_gen(tooluid_key, tools_dict, first_pt=(0, 0),
+                                                      tolerance=tol,
+                                                      is_first=is_first, is_last=is_last,
+                                                      toolchange=True)
+                if gen == 'fail':
                     self.app.log.debug("GeometryObject.mtool_gen_cncjob() --> generate_from_geometry2() failed")
                     return 'fail'
-                else:
-                    dia_cnc_dict['gcode'] = res
+                res, start_gcode = gen
+                dia_cnc_dict['gcode'] = res
                 total_gcode += res
 
                 if start_gcode != '':
@@ -1125,13 +1127,17 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             # it seems that the tolerance needs to be a lot lower value than 0.01, and it was hardcoded initially
             # to a value of 0.0005 which is 20 times less than 0.01
             tol = float(self._app_option('global_tolerance')) / 20
-            res, start_gcode = job_obj.generate_from_geometry_2(
+            gen = job_obj.generate_from_geometry_2(
                 self, tooldia=tooldia, offset=offset, tolerance=tol, z_cut=z_cut, z_move=z_move, feedrate=feedrate,
                 feedrate_z=feedrate_z, feedrate_rapid=feedrate_rapid, spindlespeed=spindlespeed, dwell=dwell,
                 dwelltime=dwelltime, laser_min_power=las_min_pwr, multidepth=multidepth, depthpercut=depthperpass,
                 toolchange=toolchange,
                 toolchangez=toolchangez, toolchangexy=toolchangexy, extracut=extracut, extracut_length=extracut_length,
                 startz=startz, endz=endz, endxy=endxy, pp_geometry_name=ppname_g, is_first=True)
+            if gen == 'fail':
+                self.app.log.debug("GeometryObject.generatecncjob() --> generate_from_geometry2() failed")
+                return 'fail'
+            res, start_gcode = gen
 
             if start_gcode != '':
                 job_obj.gc_start = start_gcode
