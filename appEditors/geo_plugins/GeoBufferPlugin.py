@@ -171,31 +171,35 @@ class BufferSelectionTool(AppToolEditor):
                             results.append(
                                 t.geo.exterior.buffer(
                                     buf_distance - 1e-10,
-                                    resolution=usable_resolution,
+                                    quad_segs=usable_resolution,
                                     join_style=join_style)
                             )
                         elif t.geo.geom_type == 'MultiLineString':
-                            for line in t.geo:
+                            for line in t.geo.geoms:
                                 if line.is_ring:
                                     b_geo = Polygon(line)
+                                else:
+                                    b_geo = line
                                 results.append(b_geo.buffer(
                                     buf_distance - 1e-10,
-                                    resolution=usable_resolution,
+                                    quad_segs=usable_resolution,
                                     join_style=join_style).exterior)
                                 results.append(b_geo.buffer(
                                     -buf_distance + 1e-10,
-                                    resolution=usable_resolution,
+                                    quad_segs=usable_resolution,
                                     join_style=join_style).exterior)
                         elif t.geo.geom_type in ['LineString', 'LinearRing']:
                             if t.geo.is_ring:
                                 b_geo = Polygon(t.geo)
+                            else:
+                                b_geo = t.geo
                             results.append(b_geo.buffer(
                                 buf_distance - 1e-10,
-                                resolution=usable_resolution,
+                                quad_segs=usable_resolution,
                                 join_style=join_style).exterior)
                             results.append(b_geo.buffer(
                                 -buf_distance + 1e-10,
-                                resolution=usable_resolution,
+                                quad_segs=usable_resolution,
                                 join_style=join_style).exterior
                                            )
 
@@ -206,11 +210,8 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.plot_all()
                     return 'fail'
 
-                for sha in results:
-                    geo_editor.add_shape(sha)
-
-                geo_editor.plot_all()
-                geo_editor.build_ui_sig.emit()
+                geo_editor.add_shape(results)
+                geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
         self.app.worker_task.emit({'fcn': work_task, 'params': [self.draw_app]})
@@ -244,7 +245,7 @@ class BufferSelectionTool(AppToolEditor):
                         if t.geo.geom_type == 'Polygon':
                             results.append(t.geo.exterior.buffer(
                                 -buf_distance + 1e-10,
-                                resolution=int(int(geo_editor.app.options.get(
+                                quad_segs=int(int(geo_editor.app.options.get(
                                     "geometry_circle_steps",
                                     geo_editor.app.defaults.get(
                                         "geometry_circle_steps",
@@ -254,14 +255,14 @@ class BufferSelectionTool(AppToolEditor):
                                 join_style=join_style).exterior
                                            )
                         elif t.geo.geom_type == 'MultiLineString':
-                            for line in t.geo:
+                            for line in t.geo.geoms:
                                 if line.is_ring:
                                     b_geo = Polygon(line)
                                 else:
                                     b_geo = line
                                 results.append(b_geo.buffer(
                                     -buf_distance + 1e-10,
-                                    resolution=int(int(geo_editor.app.options.get(
+                                    quad_segs=int(int(geo_editor.app.options.get(
                                         "geometry_circle_steps",
                                         geo_editor.app.defaults.get(
                                             "geometry_circle_steps",
@@ -277,7 +278,7 @@ class BufferSelectionTool(AppToolEditor):
                                 b_geo = t.geo
                             results.append(b_geo.buffer(
                                 -buf_distance + 1e-10,
-                                resolution=int(int(geo_editor.app.options.get(
+                                quad_segs=int(int(geo_editor.app.options.get(
                                     "geometry_circle_steps",
                                     geo_editor.app.defaults.get(
                                         "geometry_circle_steps",
@@ -294,11 +295,8 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.plot_all()
                     return 'fail'
 
-                for sha in results:
-                    geo_editor.add_shape(sha)
-
-                geo_editor.plot_all()
-                geo_editor.build_ui_sig.emit()
+                geo_editor.add_shape(results)
+                geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
         self.app.worker_task.emit({'fcn': work_task, 'params': [self.draw_app]})
@@ -334,7 +332,7 @@ class BufferSelectionTool(AppToolEditor):
                         if t.geo.geom_type == 'Polygon':
                             results.append(t.geo.exterior.buffer(
                                 buf_distance - 1e-10,
-                                resolution=int(int(geo_editor.app.options.get(
+                                quad_segs=int(int(geo_editor.app.options.get(
                                     "geometry_circle_steps",
                                     geo_editor.app.defaults.get(
                                         "geometry_circle_steps",
@@ -344,14 +342,14 @@ class BufferSelectionTool(AppToolEditor):
                                 join_style=join_style).exterior
                                            )
                         elif t.geo.geom_type == 'MultiLineString':
-                            for line in t.geo:
+                            for line in t.geo.geoms:
                                 if line.is_ring:
                                     b_geo = Polygon(line)
                                 else:
                                     b_geo = line
                                 results.append(b_geo.buffer(
                                     buf_distance - 1e-10,
-                                    resolution=int(int(geo_editor.app.options.get(
+                                    quad_segs=int(int(geo_editor.app.options.get(
                                         "geometry_circle_steps",
                                         geo_editor.app.defaults.get(
                                             "geometry_circle_steps",
@@ -367,7 +365,7 @@ class BufferSelectionTool(AppToolEditor):
                                 b_geo = t.geo
                             results.append(b_geo.buffer(
                                 buf_distance - 1e-10,
-                                resolution=int(int(geo_editor.app.options.get(
+                                quad_segs=int(int(geo_editor.app.options.get(
                                     "geometry_circle_steps",
                                     geo_editor.app.defaults.get(
                                         "geometry_circle_steps",
@@ -384,11 +382,8 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.plot_all()
                     return 'fail'
 
-                for sha in results:
-                    geo_editor.add_shape(sha)
-
-                geo_editor.plot_all()
-                geo_editor.build_ui_sig.emit()
+                geo_editor.add_shape(results)
+                geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
         self.app.worker_task.emit({'fcn': work_task, 'params': [self.draw_app]})

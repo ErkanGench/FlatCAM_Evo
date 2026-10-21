@@ -692,38 +692,31 @@ class AppGeoEditor(QtCore.QObject):
     def on_change_orientation(self):
         self.app.log.debug("AppGeoEditor.on_change_orientation()")
 
-        selected_tree_items = self.ui.tw.selectedItems()
-        processed_shapes = []
-        new_shapes = []
+        shapes_by_id = self.shapes_by_tree_id()
+        selected_shapes = [shapes_by_id.get(item.text(0)) for item in self.ui.tw.selectedItems()]
 
         def task_job():
             with self.app.proc_container.new('%s...' % _("Working")):
-                for sel in selected_tree_items:
-                    for obj_shape in self.storage.get_objects():
-                        try:
-                            if id(obj_shape) == int(sel.text(0)):
-                                old_geo = obj_shape.geo
-                                if old_geo.geom_type == 'LineaRing':
-                                    processed_shapes.append(obj_shape)
-                                    new_shapes.append(LinearRing(list(old_geo.coords)[::-1]))
-                                elif old_geo.geom_type == 'LineString':
-                                    processed_shapes.append(obj_shape)
-                                    new_shapes.append(LineString(list(old_geo.coords)[::-1]))
-                                elif old_geo.geom_type == 'Polygon':
-                                    processed_shapes.append(obj_shape)
-                                    if old_geo.exterior.is_ccw is True:
-                                        new_shapes.append(deepcopy(orient(old_geo, -1)))
-                                    else:
-                                        new_shapes.append(deepcopy(orient(old_geo, 1)))
-                        except ValueError:
-                            pass
+                processed_shapes = []
+                new_shapes = []
+                for obj_shape in selected_shapes:
+                    if obj_shape is None:
+                        continue
+                    old_geo = obj_shape.geo
+                    if isinstance(old_geo, (LinearRing, LineString)):
+                        geometry = type(old_geo)(old_geo.coords[::-1])
+                    elif isinstance(old_geo, Polygon):
+                        geometry = orient(old_geo, -1 if old_geo.exterior.is_ccw else 1)
+                    else:
+                        continue
+                    result = DrawToolShape(geometry)
+                    result.data = obj_shape.data.copy()
+                    processed_shapes.append(obj_shape)
+                    new_shapes.append(result)
 
-                self.delete_shape(processed_shapes)
-
-                for geo in new_shapes:
-                    self.add_shape(DrawToolShape(geo), build_ui=False)
-
+                self.delete_shape(processed_shapes, inserted=new_shapes)
                 self.build_ui_sig.emit()
+                self.plot_changes()
 
         self.app.worker_task.emit({'fcn': task_job, 'params': []})
 
@@ -1120,7 +1113,7 @@ class AppGeoEditor(QtCore.QObject):
             return
 
         try:
-            w_geo = shape.geoms if isinstance(shape, (MultiPolygon, MultiLineString)) else shape
+            w_geo = shape.geoms if isinstance(shape, base.BaseMultipartGeometry) else shape
             for subshape in w_geo:
                 self._collect_shape(subshape, to_insert)
             return
@@ -1711,6 +1704,23 @@ class AppGeoEditor(QtCore.QObject):
         # return [shape for shape in self.shape_buffer if shape["selected"]]
         return self.selected
 
+    def transform_shapes(self, transform, *args, **kwargs):
+        """Transform the selection, then update storage, tree and canvas once."""
+        selected = list(self.get_selected())
+        transformed = []
+        for shape in selected:
+            # Keep the indexed geometry unchanged until replace() removes its old points.
+            result = DrawToolShape(shape.geo)
+            result.data = shape.data.copy()
+            getattr(result, transform)(*args, **kwargs)
+            result.data['bounds'] = result.bounds()
+            self._collect_shape(result, transformed)
+
+        self.delete_shape(selected, inserted=transformed)
+        self.selected.extend(transformed)
+        self.build_ui_sig.emit()
+        self.plot_changes()
+
     def plot_shape(self, storage, geometry=None, color='#000000FF', linewidth=1, layer=0):
         """
         Plots a geometric object or list of objects without rendering. Plotted objects
@@ -1726,15 +1736,17 @@ class AppGeoEditor(QtCore.QObject):
             geometry = self.active_tool.geometry
 
         try:
-            w_geo = geometry.geoms if isinstance(geometry, (MultiPolygon, MultiLineString)) else geometry
+            w_geo = geometry.geoms if isinstance(geometry, base.BaseMultipartGeometry) else geometry
             for geo in w_geo:
-                plot_elements += self.plot_shape(geometry=geo, color=color, linewidth=linewidth)
+                plot_elements += self.plot_shape(storage=storage, geometry=geo, color=color, linewidth=linewidth,
+                                                 layer=layer)
         # Non-iterable
         except TypeError:
 
             # DrawToolShape
             if isinstance(geometry, DrawToolShape):
-                plot_elements += self.plot_shape(geometry=geometry.geo, color=color, linewidth=linewidth)
+                plot_elements += self.plot_shape(storage=storage, geometry=geometry.geo, color=color,
+                                                 linewidth=linewidth, layer=layer)
 
             # Polygon: Descend into exterior and each interior.
             # if isinstance(geometry, Polygon):
@@ -1980,7 +1992,7 @@ class AppGeoEditor(QtCore.QObject):
         self.tool_shape.clear(update=True)
 
         # Re-plot and reset tool.
-        self.plot_all()
+        self.plot_changes()
         # self.active_tool = type(self.active_tool)(self)
 
     @staticmethod
@@ -2268,16 +2280,10 @@ class AppGeoEditor(QtCore.QObject):
                 if results.geom_type == 'MultiLineString':
                     results = linemerge(results)
 
-                # Delete originals.
-                for_deletion = [s for s in selected]
-                for shape in for_deletion:
-                    editor_self.delete_shape(shape)
-
-                # Selected geometry is now gone!
-                editor_self.selected = []
-
-                editor_self.add_shape(DrawToolShape(results))
-                editor_self.plot_all()
+                inserted = []
+                editor_self._collect_shape(DrawToolShape(results), inserted)
+                editor_self.delete_shape(selected, inserted=inserted)
+                editor_self.plot_changes()
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
@@ -2302,35 +2308,25 @@ class AppGeoEditor(QtCore.QObject):
                     editor_self.select_tool('select')
                     return
 
-                target = deepcopy(selected[0].geo)
+                target = selected[0].geo
                 if target.is_ring:
                     target = Polygon(target)
                 tools = selected[1:]
                 # toolgeo = unary_union([deepcopy(shp.geo) for shp in tools]).buffer(0.0000001)
                 # result = DrawToolShape(target.difference(toolgeo))
-                for tool in tools:
-                    if tool.geo.is_ring:
-                        intersector_geo = Polygon(tool.geo)
-                    target = target.difference(intersector_geo)
+                toolgeo = unary_union([Polygon(tool.geo) if tool.geo.is_ring else tool.geo for tool in tools])
+                target = target.difference(toolgeo)
 
-                if target.geom_type in ['LineString', 'MultiLineString']:
+                if target.geom_type == 'MultiLineString':
                     target = linemerge(target)
 
                 if target.geom_type == 'Polygon':
                     target = target.exterior
 
-                result = DrawToolShape(target)
-                editor_self.add_shape(deepcopy(result))
-
-                # Delete originals.
-                for_deletion = [s for s in editor_self.get_selected()]
-                for shape_el in for_deletion:
-                    editor_self.delete_shape(shape_el)
-
-                # Selected geometry is now gone!
-                editor_self.selected = []
-
-                editor_self.plot_all()
+                inserted = []
+                editor_self._collect_shape(DrawToolShape(target), inserted)
+                editor_self.delete_shape(selected, inserted=inserted)
+                editor_self.plot_changes()
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
@@ -2372,28 +2368,26 @@ class AppGeoEditor(QtCore.QObject):
                         intact.append(tool)
 
                 if results:
-                    # Delete originals.
-                    for_deletion = [s for s in editor_self.get_selected()]
-                    for shape_el in for_deletion:
-                        if shape_el not in intact:
-                            editor_self.delete_shape(shape_el)
-
+                    intact_ids = {id(shape) for shape in intact}
+                    removed = [shape for shape in selected if id(shape) not in intact_ids]
+                    inserted = []
                     for geo in results:
                         if geo.geom_type == 'MultiPolygon':
                             for poly in geo.geoms:
                                 p_geo = [poly.exterior] + [ints for ints in poly.interiors]
                                 for g in p_geo:
-                                    editor_self.add_shape(DrawToolShape(g))
+                                    editor_self._collect_shape(DrawToolShape(g), inserted)
                         elif geo.geom_type == 'Polygon':
                             p_geo = [geo.exterior] + [ints for ints in geo.interiors]
                             for g in p_geo:
-                                editor_self.add_shape(DrawToolShape(g))
+                                editor_self._collect_shape(DrawToolShape(g), inserted)
                         else:
-                            editor_self.add_shape(DrawToolShape(geo))
+                            editor_self._collect_shape(geo, inserted)
+                    editor_self.delete_shape(removed, inserted=inserted)
 
                 # Selected geometry is now gone!
                 editor_self.selected = []
-                editor_self.plot_all()
+                editor_self.plot_changes()
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
@@ -2410,22 +2404,16 @@ class AppGeoEditor(QtCore.QObject):
                     return
 
                 try:
-                    target = deepcopy(selected[0].geo)
+                    target = selected[0].geo
                     tools = selected[1:]
                     # toolgeo = unary_union([deepcopy(shp.geo) for shp in tools]).buffer(0.0000001)
                     # result = DrawToolShape(target.difference(toolgeo))
-                    for tool in tools:
-                        if tool.geo.is_ring:
-                            sub_geo = Polygon(tool.geo)
-                        target = target.difference(sub_geo)
-                    result = DrawToolShape(target)
-                    editor_self.add_shape(deepcopy(result))
-
-                    for_deletion = [s for s in editor_self.get_selected()]
-                    for shape in for_deletion:
-                        self.delete_shape(shape)
-
-                    editor_self.plot_all()
+                    toolgeo = unary_union([Polygon(tool.geo) if tool.geo.is_ring else tool.geo for tool in tools])
+                    target = target.difference(toolgeo)
+                    inserted = []
+                    editor_self._collect_shape(DrawToolShape(target), inserted)
+                    editor_self.delete_shape(selected, inserted=inserted)
+                    editor_self.plot_changes()
                     editor_self.build_ui_sig.emit()
                     editor_self.app.inform.emit('[success] %s' % _("Done."))
                 except Exception as e:
@@ -2444,19 +2432,15 @@ class AppGeoEditor(QtCore.QObject):
                     return
 
                 try:
-                    target = deepcopy(selected[0].geo)
+                    target = selected[0].geo
                     tools = selected[1:]
                     # toolgeo = unary_union([shp.geo for shp in tools]).buffer(0.0000001)
-                    for tool in tools:
-                        if tool.geo.is_ring:
-                            sub_geo = Polygon(tool.geo)
-                        target = target.difference(sub_geo)
-                    result = DrawToolShape(target)
-                    editor_self.add_shape(deepcopy(result))
-
-                    editor_self.delete_shape(selected[0])
-
-                    editor_self.plot_all()
+                    toolgeo = unary_union([Polygon(tool.geo) if tool.geo.is_ring else tool.geo for tool in tools])
+                    target = target.difference(toolgeo)
+                    inserted = []
+                    editor_self._collect_shape(DrawToolShape(target), inserted)
+                    editor_self.delete_shape(selected[0], inserted=inserted)
+                    editor_self.plot_changes()
                     editor_self.build_ui_sig.emit()
                     editor_self.app.inform.emit('[success] %s' % _("Done."))
                 except Exception as e:
@@ -2491,13 +2475,14 @@ class AppGeoEditor(QtCore.QObject):
                     editor_self.app.log.warning("Not implemented. Object type: %s" % str(type(target.geo)))
                     return
 
+                inserted = []
                 for path in paths:
                     for result in editor_self.flatten(path.difference(toolgeo)):
                         if not result.is_empty:
-                            editor_self.add_shape(DrawToolShape(result))
+                            editor_self._collect_shape(result, inserted)
 
-                editor_self.delete_shape(target)
-                editor_self.plot_all()
+                editor_self.delete_shape(target, inserted=inserted)
+                editor_self.plot_changes()
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
@@ -2864,7 +2849,7 @@ class DrawToolShape(object):
 
         # Iterable: descend into each item.
         try:
-            if isinstance(o, (MultiPolygon, MultiLineString)):
+            if isinstance(o, base.BaseMultipartGeometry):
                 for subo in o.geoms:
                     pts += DrawToolShape.get_pts(subo)
             else:
@@ -3136,7 +3121,7 @@ class DrawToolShape(object):
                 if factor:
                     return scale(geom, xfact=value, yfact=value, origin='center')
                 else:
-                    return geom.buffer(value, resolution=32, join_style=join)
+                    return geom.buffer(value, quad_segs=32, join_style=join)
 
         try:
             self.geo = buffer_recursion(self.geo)
@@ -3293,16 +3278,14 @@ class FCCircle(FCShapeTool):
         if modifiers == QtCore.Qt.KeyboardModifier.ShiftModifier:
             # deselect all shapes
             self.draw_app.selected = []
-            for ____ in self.storage.get_objects():
-                try:
-                    __, closest_shape = self.storage.nearest(point)
-                    # select closes shape
-                    self.draw_app.selected.append(closest_shape)
-                except StopIteration:
-                    return ""
+            try:
+                __, closest_shape = self.storage.nearest(point)
+                self.draw_app.selected.append(closest_shape)
+            except StopIteration:
+                return ""
 
             if self.draw_app.selected:
-                self.draw_app.plot_all()
+                self.draw_app.plot_changes()
                 self.circle_tool.mode = 'change'
                 sel_shape_geo = self.draw_app.selected[-1].geo
                 geo_bounds = sel_shape_geo.bounds
@@ -3529,7 +3512,7 @@ class FCCircle(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
@@ -3779,7 +3762,7 @@ class FCArc(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -3832,16 +3815,14 @@ class FCRectangle(FCShapeTool):
         if modifiers == QtCore.Qt.KeyboardModifier.ShiftModifier:
             # deselect all shapes
             self.draw_app.selected = []
-            for ____ in self.storage.get_objects():
-                try:
-                    __, closest_shape = self.storage.nearest(point)
-                    # select closes shape
-                    self.draw_app.selected.append(closest_shape)
-                except StopIteration:
-                    return ""
+            try:
+                __, closest_shape = self.storage.nearest(point)
+                self.draw_app.selected.append(closest_shape)
+            except StopIteration:
+                return ""
 
             if self.draw_app.selected:
-                self.draw_app.plot_all()
+                self.draw_app.plot_changes()
                 self.rect_tool.mode = 'change'
                 sel_shape_geo = self.draw_app.selected[-1].geo
                 geo_bounds = sel_shape_geo.bounds
@@ -4065,7 +4046,7 @@ class FCRectangle(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
@@ -4281,7 +4262,7 @@ class FCPolygon(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
@@ -4575,7 +4556,7 @@ class FCPath(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
@@ -4696,7 +4677,7 @@ class FCExplode(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -4750,8 +4731,6 @@ class FCMove(FCShapeTool):
         if self.draw_app.app.ui.splitter.sizes()[0] == 0:
             self.draw_app.app.ui.splitter.setSizes([1, 1])
 
-        self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
-
     def set_origin(self, origin):
         self.draw_app.app.inform.emit(_("Click on destination point ..."))
         self.origin = origin
@@ -4764,18 +4743,12 @@ class FCMove(FCShapeTool):
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         if self.has_selection is False:
-            # self.complete = True
-            # self.draw_app.app.inform.emit(_("[WARNING_NOTCL] Move cancelled. No shape selected."))
-            # self.select_shapes(point)
-            # deselect all shapes
             self.draw_app.selected = []
-            for ____ in self.storage.get_objects():
-                try:
-                    __, closest_shape = self.storage.nearest(point)
-                    # select closes shape
-                    self.draw_app.selected.append(closest_shape)
-                except StopIteration:
-                    return ""
+            try:
+                __, closest_shape = self.storage.nearest(point)
+                self.draw_app.selected.append(closest_shape)
+            except StopIteration:
+                return ""
 
             if not self.draw_app.selected:
                 self.draw_app.app.inform.emit('[WARNING_NOTCL] %s %s' %
@@ -4783,7 +4756,7 @@ class FCMove(FCShapeTool):
                 return
 
             self.has_selection = True
-            self.draw_app.plot_all()
+            self.draw_app.plot_changes()
             self.selection_shape = self.selection_bbox()
             # self.draw_app.plot_all()
             self.draw_app.app.inform.emit(_("Click on reference location ..."))
@@ -4813,10 +4786,7 @@ class FCMove(FCShapeTool):
 
             # Delete old. No plot here: on_shape_complete() plots after the new shapes are added.
             self.draw_app.delete_shape(selected)
-            self.draw_app.build_ui()
             self.draw_app.selected.clear()
-            self.draw_app.sel_shapes.clear(update=True)
-            self.draw_app.sel_shapes.redraw()
             self.complete = True
             self.origin = None
             self.draw_cursor_data(delete=True)
@@ -5047,7 +5017,7 @@ class FCMove(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
@@ -5110,8 +5080,6 @@ class FCCopy(FCShapeTool):
         if self.draw_app.app.ui.splitter.sizes()[0] == 0:
             self.draw_app.app.ui.splitter.setSizes([1, 1])
 
-        self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
-
     def set_origin(self, origin):
         self.draw_app.app.inform.emit(_("Click on destination point ..."))
         self.origin = origin
@@ -5126,18 +5094,12 @@ class FCCopy(FCShapeTool):
         self.clicked_postion = point
 
         if self.has_selection is False:
-            # self.complete = True
-            # self.draw_app.app.inform.emit(_("[WARNING_NOTCL] Move cancelled. No shape selected."))
-            # self.select_shapes(point)
-            # deselect all shapes
             self.draw_app.selected = []
-            for ____ in self.storage.get_objects():
-                try:
-                    __, closest_shape = self.storage.nearest(point)
-                    # select closes shape
-                    self.draw_app.selected.append(closest_shape)
-                except StopIteration:
-                    return ""
+            try:
+                __, closest_shape = self.storage.nearest(point)
+                self.draw_app.selected.append(closest_shape)
+            except StopIteration:
+                return ""
 
             if not self.draw_app.selected:
                 self.draw_app.app.inform.emit('[WARNING_NOTCL] %s %s' %
@@ -5145,7 +5107,7 @@ class FCCopy(FCShapeTool):
                 return
 
             self.has_selection = True
-            self.draw_app.plot_all()
+            self.draw_app.plot_changes()
             self.selection_shape = self.selection_bbox()
             # self.draw_app.plot_all()
             self.draw_app.app.inform.emit(_("Click on reference location ..."))
@@ -5164,19 +5126,20 @@ class FCCopy(FCShapeTool):
             return "Done."
 
     def make(self):
-        # Create new geometry
-        if len(self.draw_app.get_selected()) > self.sel_limit:
-            self.util_geo = self.array_util_geometry((self.clicked_postion[0], self.clicked_postion[1]))
-        elif self.util_geo is None:
-            # the copies are made on the mouse move after the reference click; with no move (a second click on the
-            # reference point, to copy in place) make them here, for the destination
-            self.utility_geometry(data=self.destination)
-
-        # when doing circular array we remove the last geometry item in the list because it is the temp_line
-        if self.copy_tool.ui.mode_radio.get_value() == 'a' and \
-                self.copy_tool.ui.array_type_radio.get_value() == 'circular':
-            del self.util_geo.geo[-1]
-        self.geometry = [DrawToolShape(deepcopy(shp)) for shp in self.util_geo.geo]
+        # Always generate at the destination; the last preview may be stale or only a bounding box.
+        dx = self.destination[0] - self.origin[0]
+        dy = self.destination[1] - self.origin[1]
+        if self.copy_tool.ui.mode_radio.get_value() == 'n':
+            geometry = translate_geometry([shape.geo for shape in self.draw_app.get_selected()], dx, dy)
+        else:
+            self.util_geo = self.array_util_geometry((dx, dy))
+            if self.util_geo is None:
+                return
+            geometry = self.util_geo.geo
+            # The last circular preview shape is the radius guide, not a copy.
+            if self.copy_tool.ui.array_type_radio.get_value() == 'circular':
+                geometry = geometry[:-1]
+        self.geometry = [DrawToolShape(shp) for shp in geometry]
 
         self.complete = True
         self.origin = None
@@ -5223,11 +5186,19 @@ class FCCopy(FCShapeTool):
         dx = data[0] - self.origin[0]
         dy = data[1] - self.origin[1]
 
-        if len(self.draw_app.get_selected()) <= self.sel_limit:
-            copy_mode = self.copy_tool.ui.mode_radio.get_value()
+        selected = self.draw_app.get_selected()
+        copy_mode = self.copy_tool.ui.mode_radio.get_value()
+        copy_count = 1
+        if copy_mode == 'a':
+            if self.copy_tool.ui.array_type_radio.get_value() == '2D':
+                copy_count = self.copy_tool.ui.rows.get_value() * self.copy_tool.ui.columns.get_value()
+            else:
+                copy_count = self.copy_tool.ui.array_size_entry.get_value()
+
+        if len(selected) * copy_count <= self.sel_limit:
             if copy_mode == 'n':
                 try:
-                    geo_list = [translate(geom.geo, xoff=dx, yoff=dy) for geom in self.draw_app.get_selected()]
+                    geo_list = translate_geometry([geom.geo for geom in selected], dx, dy)
                 except AttributeError:
                     self.draw_app.select_tool('select')
                     self.draw_app.selected = []
@@ -5269,6 +5240,9 @@ class FCCopy(FCShapeTool):
 
         geo_list = []
         self.points = [(dx, dy)]
+        geo_source = [shape.geo for shape in self.draw_app.get_selected()]
+        x_adj = pitch * math.cos(math.radians(linear_angle))
+        y_adj = pitch * math.sin(math.radians(linear_angle))
 
         for item in range(array_size):
             if axis == 'X':
@@ -5276,15 +5250,12 @@ class FCCopy(FCShapeTool):
             elif axis == 'Y':
                 new_pos = (dx, (dy + (pitch * item)))
             else:  # 'A'
-                x_adj = pitch * math.cos(math.radians(linear_angle))
-                y_adj = pitch * math.sin(math.radians(linear_angle))
                 new_pos = ((dx + (x_adj * item)), (dy + (y_adj * item)))
 
-            for g in self.draw_app.get_selected():
-                if static is None or static is False:
-                    geo_list.append(translate(g.geo, xoff=new_pos[0], yoff=new_pos[1]))
-                else:
-                    geo_list.append(g.geo)
+            if static is None or static is False:
+                geo_list.extend(translate_geometry(geo_source, new_pos[0], new_pos[1]))
+            else:
+                geo_list.extend(geo_source)
 
         return DrawToolUtilityShape(geo_list)
 
@@ -5303,47 +5274,16 @@ class FCCopy(FCShapeTool):
 
         geo_source = [s.geo for s in self.draw_app.get_selected()]
 
-        def geo_bounds(geo: (BaseGeometry, list)):
-            minx = np.inf
-            miny = np.inf
-            maxx = -np.inf
-            maxy = -np.inf
-
-            if type(geo) == list:
-                for shp in geo:
-                    minx_, miny_, maxx_, maxy_ = geo_bounds(shp)
-                    minx = min(minx, minx_)
-                    miny = min(miny, miny_)
-                    maxx = max(maxx, maxx_)
-                    maxy = max(maxy, maxy_)
-                return minx, miny, maxx, maxy
-            else:
-                # it's an object, return its bounds
-                return geo.bounds
-
-        xmin, ymin, xmax, ymax = geo_bounds(geo_source)
+        xmin, ymin, xmax, ymax = get_shapely_list_bounds(geo_source)
 
         currentx = pos[0]
         currenty = pos[1]
-
-        def translate_recursion(geom):
-            if type(geom) == list:
-                geoms = []
-                for local_geom in geom:
-                    res_geo = translate_recursion(local_geom)
-                    try:
-                        geoms += res_geo
-                    except TypeError:
-                        geoms.append(res_geo)
-                return geoms
-            else:
-                return translate(geom, xoff=currentx, yoff=currenty)
 
         for row in range(rows):
             currentx = pos[0]
 
             for col in range(columns):
-                trans_geo += translate_recursion(geo_source)
+                trans_geo.extend(translate_geometry(geo_source, currentx, currenty))
                 if array_2d_type == 's':  # 'spacing'
                     currentx += (xmax - xmin + spacing_columns)
                 else:   # 'offset'
@@ -5403,6 +5343,7 @@ class FCCopy(FCShapeTool):
         array_size = int(self.copy_tool.ui.array_size_entry.get_value())
 
         circular_geo = []
+        geo_source = [shape.geo for shape in self.draw_app.get_selected()]
         for i in range(array_size):
             angle_radians = math.radians(angle * i)
             if direction == 'CW':
@@ -5412,10 +5353,7 @@ class FCCopy(FCShapeTool):
                 x = radius * math.cos(angle_radians + ini_angle)
                 y = radius * math.sin(angle_radians + ini_angle)
 
-            for shape in self.draw_app.get_selected():
-                geo_sol = translate(shape.geo, x, y)
-                # geo_sol = affinity.rotate(geo_sol, angle=(math.pi - angle_radians), use_radians=True)
-
+            for geo_sol in translate_geometry(geo_source, x, y):
                 circular_geo.append(DrawToolShape(geo_sol))
 
         return circular_geo
@@ -5585,7 +5523,7 @@ class FCCopy(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
@@ -5674,7 +5612,7 @@ class FCText(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -5802,7 +5740,7 @@ class FCBuffer(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
 
 class FCSimplification(FCShapeTool):
@@ -5901,21 +5839,31 @@ class FCEraser(FCShapeTool):
 
         # create the eraser shape from selection
         for eraser_shape in self.utility_geometry(data=self.destination).geo:
-            temp_shape = eraser_shape.buffer(0.0000001)
-            temp_shape = Polygon(temp_shape.exterior)
-            eraser_sel_shapes.append(temp_shape)
+            for temp_shape in flatten_shapely_geometry(eraser_shape.buffer(0.0000001)):
+                eraser_sel_shapes.append(Polygon(temp_shape.exterior))
         eraser_sel_shapes = unary_union(eraser_sel_shapes)
 
-        for obj_shape in self.storage.get_objects():
-            try:
-                geometric_data = obj_shape.geo
-                if eraser_sel_shapes.intersects(geometric_data):
-                    obj_shape.geo = geometric_data.difference(eraser_sel_shapes)
-            except KeyError:
-                pass
+        tree, refs = self.draw_app.get_pick_index()
+        removed = [refs[idx] for idx in sorted(tree.query(eraser_sel_shapes, predicate='intersects'))] \
+            if tree is not None else []
+        if removed:
+            selected_ids = {id(shape) for shape in self.draw_app.get_selected()}
+            inserted = []
+            selected = []
+            geometries = shapely.difference([shape.geo for shape in removed], eraser_sel_shapes)
+            for shape, geometry in zip(removed, geometries):
+                result = DrawToolShape(geometry)
+                result.data = shape.data.copy()
+                result.data['bounds'] = result.bounds()
+                self.draw_app._collect_shape(result, inserted)
+                if id(shape) in selected_ids and inserted and inserted[-1] is result:
+                    selected.append(result)
+            self.draw_app.delete_shape(removed, inserted=inserted)
+            self.draw_app.selected.extend(selected)
+            self.draw_app.build_ui_sig.emit()
 
         self.draw_app.delete_utility_geometry()
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
         self.draw_app.app.inform.emit('[success] %s' % _("Done."))
         try:
             self.draw_app.app.jump_signal.disconnect()
@@ -5951,7 +5899,7 @@ class FCEraser(FCShapeTool):
 
     def clean_up(self):
         self.draw_app.selected = []
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
         try:
             self.draw_app.app.jump_signal.disconnect()

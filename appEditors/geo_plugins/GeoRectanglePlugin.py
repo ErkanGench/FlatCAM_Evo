@@ -165,7 +165,7 @@ class RectangleEditorTool(AppToolEditor):
         added_shapes = self.draw_app.add_shape(geo)
         for added_shape in added_shapes:
             added_shape.data['type'] = _("Rectangle")
-        self.draw_app.plot_all()
+        self.draw_app.plot_changes()
 
     def on_clear(self):
         self.set_tool_ui()

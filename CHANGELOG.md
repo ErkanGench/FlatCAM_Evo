@@ -17,6 +17,12 @@ Geometry Editor:
 - the editor loads the shapes in 1 batch: 5000 shapes 4.0 s to 0.4 s
 - fixed: the save of the edits ran in a thread while the caller already read the bounds and plotted the object, so the plot could show the old geometry; the save now ends before the caller goes on
 - fixed: a click selection was cleared at once by the info update; the vertex count of the selection failed on polygons
+- the Transform tool (rotate, flip, skew, scale, offset, buffer), Union, Intersection, Subtract, Cut Path, Change Orientation, the Buffer and Paint sub tools and the Eraser change the selected shapes in 1 storage update, 1 tree build and 1 plot of the changed shapes (they plotted everything again after each shape)
+- the Eraser finds the touched shapes with the pick index instead of a test of each shape; an eraser path that makes more than 1 polygon erases with all of them
+- Copy makes the copies at the destination with 1 translation of all the selected shapes (the last preview could be stale or only a bounding box); the preview of an array shows only the bounding box when the number of copies is large, not only when the number of shapes is large
+- fixed: Subtract with an open path as a tool used the previous tool geometry; the Buffer sub tool failed on a MultiLineString and used the old Shapely 'resolution' argument; Change Orientation skipped the LinearRing shapes and lost the shape data
+- fixed: Move and Copy dropped the z coordinate of 3D shapes (translate_geometry)
+- the Circle, Rectangle and Move tools select the shape under the click with 1 index query (they made 1 query for each shape)
 
 CNCJob:
 

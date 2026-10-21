@@ -167,13 +167,15 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
         app = make_app()
         app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
         editor = SimpleNamespace(app=app, get_selected=lambda: shapes,
-                                 add_shape=Mock(), delete_shape=Mock(), plot_all=Mock(),
+                                 delete_shape=Mock(), plot_changes=Mock(),
                                  build_ui_sig=Mock(), flat_geo=[])
         editor.flatten = lambda *a, **k: AppGeoEditor.flatten(editor, *a, **k)
+        editor._collect_shape = lambda shape, dest: AppGeoEditor._collect_shape(editor, shape, dest)
         AppGeoEditor.cutpath(editor)
-        editor.delete_shape.assert_called_once_with(shapes[0])
+        editor.delete_shape.assert_called_once()
+        self.assertIs(editor.delete_shape.call_args.args[0], shapes[0])
         self.assertEqual(shapes[1].geo, cutter)
-        return [call.args[0].geo for call in editor.add_shape.call_args_list]
+        return [shape.geo for shape in editor.delete_shape.call_args.kwargs['inserted']]
 
     def test_cut_closed_masks_and_multipart_results(self):
         target = LineString([(-2, 0), (2, 0)])

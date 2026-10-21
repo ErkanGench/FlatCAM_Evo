@@ -153,7 +153,7 @@ class TestClimbMillingDirection(unittest.TestCase):
         app = SimpleNamespace(options={'geometry_editor_milling_type': 'cl'}, log=Mock(),
                               defaults=SimpleNamespace(get=lambda k, d=None: d, factory_defaults={}))
         editor = SimpleNamespace(app=app, active_tool=tool, add_shape=Mock(), delete_utility_geometry=Mock(),
-                                 tool_shape=Mock(), plot_all=Mock())
+                                 tool_shape=Mock(), plot_changes=Mock())
         AppGeoEditor.on_shape_complete(editor)
         return list(editor.add_shape.call_args[0][0][0].geo.coords)
 

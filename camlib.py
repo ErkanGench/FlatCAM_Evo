@@ -8228,7 +8228,7 @@ def translate_geometry(obj, dx, dy):
         
         try:
             arr = np.array(valid_geoms, dtype=object)
-            coords = shapely.get_coordinates(arr)
+            coords = shapely.get_coordinates(arr, include_z=bool(shapely.has_z(arr).any()))
             if coords.size == 0:
                 return obj
             coords[:, 0] += dx
@@ -8258,7 +8258,7 @@ def translate_geometry(obj, dx, dy):
             return result
     elif isinstance(obj, BaseGeometry):
         try:
-            coords = shapely.get_coordinates(obj)
+            coords = shapely.get_coordinates(obj, include_z=obj.has_z)
             if coords.size == 0:
                 return obj
             coords[:, 0] += dx

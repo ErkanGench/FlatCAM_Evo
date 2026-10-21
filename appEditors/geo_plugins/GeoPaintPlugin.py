@@ -3,7 +3,7 @@ from PyQt6 import QtWidgets
 from appTool import AppToolEditor
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCFrame, FCButton, GLay, FCDoubleSpinner, FCComboBox, \
     FCCheckBox
-from camlib import Geometry
+from camlib import Geometry, flatten_shapely_geometry
 
 from shapely import Polygon
 from shapely.ops import unary_union
@@ -210,37 +210,10 @@ class PaintOptionsTool(AppToolEditor):
 
                 results = []
 
-                def recurse(geometry, reset=True):
-                    """
-                    Creates a list of non-iterable linear geometry objects.
-                    Results are placed in self.flat_geometry
-
-                    :param geometry: Shapely type, list or list of lists of such.
-                    :param reset: Clears the contents of self.flat_geometry.
-                    """
-
-                    if geometry is None:
-                        return
-
-                    if reset:
-                        self.flat_geo = []
-
-                    # If iterable, expand recursively.
-                    try:
-                        for geo_el in geometry:
-                            if geo_el is not None and not geo_el.is_emoty:
-                                recurse(geometry=geo_el, reset=False)
-
-                    # Not iterable, do the actual indexing and add.
-                    except TypeError:
-                        self.flat_geo.append(geometry)
-
-                    return self.flat_geo
-
                 for geo in selected:
 
                     local_results = []
-                    for geo_obj in recurse(geo.geo):
+                    for geo_obj in flatten_shapely_geometry(geo.geo):
                         try:
                             if type(geo_obj) == Polygon:
                                 poly_buf = geo_obj.buffer(-margin)
@@ -291,14 +264,11 @@ class PaintOptionsTool(AppToolEditor):
                             )
                             return
 
-                        # add the result to the results list
+                    if local_results:
                         results.append(unary_union(local_results))
 
-                # This is a dirty patch:
-                for r in results:
-                    geo_editor.add_shape(r)
-                geo_editor.plot_all()
-                geo_editor.build_ui_sig.emit()
+                geo_editor.add_shape(results)
+                geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
         self.app.worker_task.emit({'fcn': work_task, 'params': [self.fcdraw]})

@@ -413,9 +413,7 @@ class TransformEditorTool(AppToolEditor):
                 return
 
             try:
-                for sel_sha in shape_list:
-                    sel_sha.rotate(-val, point=(px, py))
-                    self.draw_app.plot_all()
+                self.draw_app.transform_shapes('rotate', -val, point=(px, py))
 
                 self.app.inform.emit('[success] %s' % _("Done."))
             except Exception as e:
@@ -441,15 +439,11 @@ class TransformEditorTool(AppToolEditor):
             try:
                 px, py = point
 
-                # execute mirroring
-                for sha in shape_list:
-                    if axis == 'X':
-                        sha.mirror('X', (px, py))
-                        self.app.inform.emit('[success] %s...' % _('Flip on Y axis done'))
-                    elif axis == 'Y':
-                        sha.mirror('Y', (px, py))
-                        self.app.inform.emit('[success] %s' % _('Flip on X axis done'))
-                    self.draw_app.plot_all()
+                self.draw_app.transform_shapes('mirror', axis, (px, py))
+                if axis == 'X':
+                    self.app.inform.emit('[success] %s...' % _('Flip on Y axis done'))
+                elif axis == 'Y':
+                    self.app.inform.emit('[success] %s' % _('Flip on X axis done'))
 
             except Exception as e:
                 self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
@@ -475,10 +469,7 @@ class TransformEditorTool(AppToolEditor):
         with self.app.proc_container.new('%s...' % _("Skewing")):
             try:
                 px, py = point
-                for sha in shape_list:
-                    sha.skew(xval, yval, point=(px, py))
-
-                    self.draw_app.plot_all()
+                self.draw_app.transform_shapes('skew', xval, yval, point=(px, py))
 
                 if axis == 'X':
                     self.app.inform.emit('[success] %s...' % _('Skew on the X axis done'))
@@ -511,9 +502,7 @@ class TransformEditorTool(AppToolEditor):
             try:
                 px, py = point
 
-                for sha in shape_list:
-                    sha.scale(xfactor, yfactor, point=(px, py))
-                    self.draw_app.plot_all()
+                self.draw_app.transform_shapes('scale', xfactor, yfactor, point=(px, py))
 
                 if str(axis) == 'X':
                     self.app.inform.emit('[success] %s...' % _('Scale on the X axis done'))
@@ -540,12 +529,7 @@ class TransformEditorTool(AppToolEditor):
 
         with self.app.proc_container.new('%s...' % _("Offsetting")):
             try:
-                for sha in shape_list:
-                    if axis == 'X':
-                        sha.offset((num, 0))
-                    elif axis == 'Y':
-                        sha.offset((0, num))
-                    self.draw_app.plot_all()
+                self.draw_app.transform_shapes('offset', (num, 0) if axis == 'X' else (0, num))
 
                 if axis == 'X':
                     self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
@@ -565,10 +549,7 @@ class TransformEditorTool(AppToolEditor):
         else:
             with self.app.proc_container.new('%s...' % _("Buffering")):
                 try:
-                    for sel_obj in shape_list:
-                        sel_obj.buffer(value, join, factor)
-
-                        self.draw_app.plot_all()
+                    self.draw_app.transform_shapes('buffer', value, join, factor)
 
                     self.app.inform.emit('[success] %s...' % _('Buffer done'))
 
