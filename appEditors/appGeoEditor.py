@@ -11,13 +11,19 @@
 # Date: 3/10/2019                                          #
 # ##########################################################
 
+from appHandlers.appHistory import history_of, HistoryManager, state_size, invert_matrix
 from PyQt6 import QtGui, QtCore, QtWidgets
 from PyQt6.QtCore import Qt
 # import inspect
 import math
+from contextlib import contextmanager
+from functools import wraps
+from threading import RLock, get_ident
+from weakref import WeakKeyDictionary, WeakSet, ref
 
 from camlib import distance, arc, three_point_circle, Geometry, AppRTreeStorage, flatten_shapely_geometry, \
-    translate_geometry
+    translate_geometry, affine_translate_matrix, affine_rotate_matrix, affine_scale_matrix, affine_skew_matrix, \
+    affine_mirror_matrix
 from appGUI.GUIElements import FCLabel, GLay, FCDoubleSpinner, FCTree, FCButton, FCFrame, FCCheckBox, FCEntry, \
     FCTextEdit
 from appGUI.VisPyVisuals import ShapeCollection
@@ -31,13 +37,17 @@ from appEditors.geo_plugins.GeoSimplificationPlugin import SimplificationTool
 from appEditors.geo_plugins.GeoRectanglePlugin import RectangleEditorTool
 from appEditors.geo_plugins.GeoCirclePlugin import CircleEditorTool
 from appEditors.geo_plugins.GeoCopyPlugin import CopyEditorTool
+from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message, BEND_MODE_FREE
+from appEditors.vertex_ops import (vertex_address, edit_vertex, check_vertex_result, parts_of, rings_of,
+                                   SUPPORTED_TYPES, DEFAULT_CIRCLE_STEPS)
+from appEditors.vertex_grips import VertexGrips
 
 from vispy.geometry import Rect
 
 from shapely import LineString, LinearRing, MultiLineString, Polygon, MultiPolygon, Point, box, STRtree
 from shapely.geometry import base
 import shapely
-from shapely.ops import unary_union, linemerge
+from shapely.ops import unary_union, linemerge, substring
 from shapely.affinity import translate, scale, skew, rotate
 from shapely.geometry.polygon import orient
 from shapely.geometry.base import BaseGeometry
@@ -64,6 +74,205 @@ log = logging.getLogger('base')
 
 # a click picks the shapes nearer than this number of screen pixels (the same value as in the Gerber editor)
 PICK_TOLERANCE_PX = 5
+CLICK_DRAG_THRESHOLD_PX = 5
+
+
+class GeometryEditorStorage(AppRTreeStorage):
+    """Track mutations at the storage boundary, including direct edits of stored wrappers."""
+
+    def __init__(self):
+        super().__init__()
+        self.revision = 0
+
+    def insert(self, obj):
+        self.revision += 1
+        super().insert(obj)
+        DrawToolShape._storages.setdefault(obj, WeakSet()).add(self)
+
+    def remove(self, obj):
+        self.revision += 1
+        super().remove(obj)
+        DrawToolShape._storages.get(obj, set()).discard(self)
+
+    def replace(self, removed=(), inserted=(), skip_errors=False):
+        removed, inserted = list(removed), list(inserted)
+        if not removed and not inserted:
+            return
+        self.revision += 1
+        try:
+            super().replace(removed, inserted, skip_errors=skip_errors)
+        finally:
+            # replace() can either bulk rebuild or call insert/remove. Track both paths, even on failure.
+            for shape in removed + inserted:
+                index = self.indexes.get(id(shape))
+                if index is not None and self.objects[index] is shape:
+                    DrawToolShape._storages.setdefault(shape, WeakSet()).add(self)
+                else:
+                    DrawToolShape._storages.get(shape, set()).discard(self)
+
+
+def geometry_operation(method):
+    @wraps(method)
+    def operation(self, *args, **kwargs):
+        tool_name = getattr(getattr(self, 'active_tool', None), 'name', '')
+        label = tool_name if tool_name and tool_name != 'select' else method.__name__.replace('_', ' ')
+        with AppGeoEditor.history_operation(self, label=_(label.capitalize())) as accepted:
+            if not accepted:
+                return 'fail'
+            return method(self, *args, **kwargs)
+    return operation
+
+
+def shape_size(geometry):
+    """
+    Size of a shape geometry for Select by Size.
+
+    :return: ('area', value) for Polygon/MultiPolygon, ('length', value) for LineString/LinearRing/MultiLineString,
+             None for points, empty geometry and mixed collections. A list/tuple of parts (text) counts as the
+             sum of its parts when they are all of one kind.
+    """
+    if isinstance(geometry, (list, tuple)):
+        sizes = [shape_size(part) for part in geometry]
+        kinds = {size[0] for size in sizes if size}
+        if not sizes or None in sizes or len(kinds) != 1:
+            return None
+        return kinds.pop(), sum(size[1] for size in sizes)
+    if geometry is None or geometry.is_empty:
+        return None
+    if isinstance(geometry, (Polygon, MultiPolygon)):
+        return 'area', geometry.area
+    if isinstance(geometry, (LineString, LinearRing, MultiLineString)):
+        return 'length', geometry.length
+    return None
+
+
+def shapes_in_size_range(shapes, area_range=None, length_range=None):
+    """
+    The shapes whose area (polygons) or length (paths) is inside the given inclusive (min, max) range.
+    A range of None disables that filter; shapes of the other kind never match. Needs no GUI.
+    """
+    ranges = {'area': area_range, 'length': length_range}
+    matches = []
+    for shape in shapes:
+        size = shape_size(shape.geo)
+        limits = ranges[size[0]] if size else None
+        if limits is not None and limits[0] <= size[1] <= limits[1]:
+            matches.append(shape)
+    return matches
+
+
+CIRCLE_MIN_VERTICES = 8
+CIRCLE_RADIUS_TOLERANCE = 1e-3
+
+
+def circle_of(geometry, tolerance=CIRCLE_RADIUS_TOLERANCE):
+    """
+    Detect a circle drawn as a polygon (Polygon without holes) or as an outline (LinearRing / closed LineString).
+    Shapes keep no circle metadata, so it is geometric: at least CIRCLE_MIN_VERTICES vertices, all at the same
+    distance from the center within `tolerance` * radius. Squares (too few vertices) and ellipses fail.
+
+    :return: ((x, y), radius), or None if the geometry is not a circle. Needs no GUI.
+    """
+    if isinstance(geometry, Polygon):
+        if geometry.is_empty or len(geometry.interiors):
+            return None
+        ring = geometry.exterior
+    elif isinstance(geometry, LinearRing) or (isinstance(geometry, LineString) and geometry.is_closed):
+        ring = geometry
+    else:
+        return None
+    if ring.is_empty or ring.has_z:
+        return None
+    vertices = np.asarray(ring.coords)[:-1]
+    if len(vertices) < CIRCLE_MIN_VERTICES or not np.all(np.isfinite(vertices)):
+        return None
+    center = Polygon(ring).centroid
+    if center.is_empty:
+        return None
+    center = (center.x, center.y)
+    distances = np.hypot(vertices[:, 0] - center[0], vertices[:, 1] - center[1])
+    radius = float(distances.mean())
+    if radius <= 0 or float(distances.max() - distances.min()) > tolerance * radius:
+        return None
+    return center, radius
+
+
+def resized_circle(geometry, new_diameter):
+    """
+    The circle scaled about its own center to the new diameter. Scaling (not a rebuild) keeps the geometry type,
+    the vertex count and the vertex phase exactly. None if the geometry is not a circle. Needs no GUI.
+    """
+    found = circle_of(geometry)
+    if found is None:
+        return None
+    center, radius = found
+    factor = (new_diameter / 2.0) / radius
+    return scale(geometry, xfact=factor, yfact=factor, origin=center)
+
+
+# the kinds of project objects whose shapes the Import tool can copy into the edited Geometry
+IMPORT_SOURCE_KINDS = ('geometry', 'gerber', 'excellon')
+
+
+def import_source_objects(objects, edited_obj):
+    """
+    The project objects the Import tool takes shapes from: visible Geometry, Gerber and Excellon objects; never the
+    edited object itself and never a CNCJob. Needs no GUI.
+    """
+    sources = []
+    for obj in objects:
+        if obj is edited_obj or getattr(obj, 'kind', None) not in IMPORT_SOURCE_KINDS:
+            continue
+        if obj.obj_options.get('plot') is not True:
+            continue
+        sources.append(obj)
+    return sources
+
+
+def import_source_geometries(obj, app_units=None):
+    """
+    The shapes of a project object, flat: Shapely polygons and paths. A multi-geo Geometry gives the shapes of all
+    its tools. If the object has other units than app_units, the shapes are scaled to app_units. Needs no GUI.
+
+    :param obj:         Geometry, Gerber or Excellon object
+    :param app_units:   'MM' or 'IN'; None for no unit check
+    :return:            list of Shapely geometries (copies are made on commit)
+    """
+    if obj.kind == 'geometry' and getattr(obj, 'multigeo', False):
+        sources = [tool.get('solid_geometry') for tool in obj.tools.values()]
+    else:
+        sources = [obj.solid_geometry]
+        if obj.kind == 'excellon' and not obj.solid_geometry:
+            sources = [tool.get('solid_geometry') for tool in obj.tools.values()]
+
+    geos = [geo for geo in flatten_shapely_geometry([src for src in sources if src is not None])
+            if geo.geom_type != 'Point']
+
+    obj_units = str(getattr(obj, 'units', '') or '').upper()
+    if app_units and obj_units in ('MM', 'IN') and obj_units != str(app_units).upper():
+        factor = 25.4 if obj_units == 'IN' else 1 / 25.4
+        geos = [scale(geo, factor, factor, origin=(0, 0)) for geo in geos]
+    return geos
+
+
+def geometries_at_point(geometries, point, tolerance=0.0):
+    """
+    The geometries under a point: a polygon that contains it, a path or a polygon outline within the tolerance.
+    Needs no GUI.
+    """
+    pt = Point(point[0], point[1])
+    return [geo for geo in geometries if geo.distance(pt) <= tolerance]
+
+
+def geometries_in_area(geometries, start, end, enclosing=True):
+    """
+    The geometries inside (enclosing=True) or touching (enclosing=False) the rectangle with the corners start and
+    end. Needs no GUI.
+    """
+    area = box(min(start[0], end[0]), min(start[1], end[1]), max(start[0], end[0]), max(start[1], end[1]))
+    if enclosing:
+        return [geo for geo in geometries if geo.within(area)]
+    return [geo for geo in geometries if geo.intersects(area)]
 
 
 class AppGeoEditor(QtCore.QObject):
@@ -75,6 +284,8 @@ class AppGeoEditor(QtCore.QObject):
 
     build_ui_sig = QtCore.pyqtSignal()
     clear_tree_sig = QtCore.pyqtSignal()
+    source_save_done = QtCore.pyqtSignal(object)
+    history_changed = QtCore.pyqtSignal()
 
     draw_shape_idx = -1
 
@@ -85,6 +296,9 @@ class AppGeoEditor(QtCore.QObject):
         super(AppGeoEditor, self).__init__()
 
         self.app = app
+        self.source_save_done.connect(self.on_source_save_done, Qt.ConnectionType.QueuedConnection)
+        self._history_lock = RLock()
+        self.reset_history()
         self.canvas = app.plotcanvas
         self.decimals = app.decimals
         self.units = self.app.app_units
@@ -93,6 +307,11 @@ class AppGeoEditor(QtCore.QObject):
         # Geometry Editor UI
         # #############################################################################################################
         self.ui = AppGeoEditorUI(app=self.app)
+        self.history_changed.connect(self.refresh_history, Qt.ConnectionType.QueuedConnection)
+        self.ui.history_undo.clicked.connect(self.undo)
+        self.ui.history_redo.clicked.connect(self.redo)
+        self.ui.history_positions.activated.connect(self.history_go_to)
+        self.refresh_history()
         if disabled:
             self.ui.geo_frame.setDisabled(True)
 
@@ -113,6 +332,8 @@ class AppGeoEditor(QtCore.QObject):
         self.shapes = self.app.plotcanvas.new_shape_collection(layers=1)
         self.sel_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
         self.tool_shape = self.app.plotcanvas.new_shape_collection(layers=1)
+        # grips to drag the vertices of 1 selected shape in the Select tool
+        self.vertex_grips = VertexGrips(self)
 
         # Remove from scene
         self.shapes.enabled = False
@@ -163,6 +384,9 @@ class AppGeoEditor(QtCore.QObject):
             "global_snap_max": 0.05,
             "grid_snap": True,
             "corner_snap": False,
+            "midpoint_snap": False,
+            "segment_snap": False,
+            "snap_radius_px": 8.0,
             "grid_gap_link": True
         }
         self.editor_options.update(self.app.options)
@@ -183,6 +407,10 @@ class AppGeoEditor(QtCore.QObject):
         self.app.ui.grid_gap_y_entry.setValidator(QtGui.QDoubleValidator())
         self.app.ui.snap_max_dist_entry.setValidator(QtGui.QDoubleValidator())
 
+        # corner mode of the Path and Polygon tools: 1 = 45 deg, 2 = reverse 45 deg, 3 = 90 deg, 4 = reverse 90 deg,
+        # 5 = free angle. It is kept for the whole editor session; 5 keeps the legacy behavior.
+        self.bend_mode = BEND_MODE_FREE
+
         # if using Paint store here the tool diameter used
         self.paint_tooldia = None
 
@@ -202,6 +430,13 @@ class AppGeoEditor(QtCore.QObject):
         self.app.ui.grid_snap_btn.triggered.connect(lambda: self.on_grid_toggled())
         self.app.ui.corner_snap_btn.setCheckable(True)
         self.app.ui.corner_snap_btn.triggered.connect(lambda: self.toolbar_tool_toggle("corner_snap"))
+
+        self.ui.midpoint_snap_cb.toggled.connect(
+            lambda checked: self.editor_options.update(midpoint_snap=checked))
+        self.ui.segment_snap_cb.toggled.connect(
+            lambda checked: self.editor_options.update(segment_snap=checked))
+        self.ui.snap_radius_entry.valueChanged.connect(
+            lambda value: self.editor_options.update(snap_radius_px=value))
 
         self.app.pool_recreated.connect(self.pool_recreated)
 
@@ -228,6 +463,7 @@ class AppGeoEditor(QtCore.QObject):
 
         self.app.ui.geo_cutpath_menuitem.triggered.connect(self.cutpath)
         self.app.ui.geo_copy_menuitem.triggered.connect(lambda: self.select_tool('copy'))
+        self.app.ui.geo_import_menuitem.triggered.connect(lambda: self.select_tool('import'))
 
         self.app.ui.geo_union_btn.triggered.connect(self.union)
         self.app.ui.geo_intersection_btn.triggered.connect(self.intersection)
@@ -243,6 +479,12 @@ class AppGeoEditor(QtCore.QObject):
         self.transform_complete.connect(self.on_transform_complete)
 
         self.ui.change_orientation_btn.clicked.connect(self.on_change_orientation)
+        self.ui.vertex_edit_btn.clicked.connect(self.on_edit_vertices)
+        self.ui.join_btn.clicked.connect(self.on_join_paths)
+        self.ui.diagnostics_btn.clicked.connect(self.on_diagnostics)
+        self.ui.size_select_btn.clicked.connect(self.on_select_by_size)
+        self.ui.size_delete_btn.clicked.connect(self.on_delete_by_size)
+        self.ui.resize_circles_btn.clicked.connect(self.on_resize_circles)
 
         self.ui.tw.customContextMenuRequested.connect(self.on_menu_request)
 
@@ -272,7 +514,9 @@ class AppGeoEditor(QtCore.QObject):
             "move": {"button": self.app.ui.geo_move_btn, "constructor": FCMove},
             "transform": {"button": self.app.ui.geo_transform_btn, "constructor": FCTransform},
             "copy": {"button": self.app.ui.geo_copy_btn, "constructor": FCCopy},
-            "explode": {"button": self.app.ui.geo_explode_btn, "constructor": FCExplode}
+            "import": {"button": self.app.ui.geo_import_btn, "constructor": FCImport},
+            "explode": {"button": self.app.ui.geo_explode_btn, "constructor": FCExplode},
+            "split": {"button": self.ui.split_action, "constructor": FCSplit}
         })
 
         for tool in self.tools:
@@ -436,14 +680,15 @@ class AppGeoEditor(QtCore.QObject):
         :return: (tree, refs): tree is a STRtree on the geometries of the storage (None if there is none), refs is the
                  list of the shapes in the same order. The index is made again only when the storage changed.
         """
-        refs = [shape for shape in self.storage.get_objects() if isinstance(shape.geo, BaseGeometry)]
-        state = [(id(shape), id(shape.geo)) for shape in refs]
+        state = (self.storage, self.storage.revision)
         cache = getattr(self, '_pick_cache', None)
         if cache is not None and cache[0] == state:
             return cache[1], cache[2]
 
+        refs = [shape for shape in self.storage.get_objects() if isinstance(shape.geo, BaseGeometry)]
         tree = STRtree([shape.geo for shape in refs]) if refs else None
         self._pick_cache = (state, tree, refs)
+        self._pick_cycle = None
         return tree, refs
 
     def pick_at(self, point):
@@ -454,9 +699,14 @@ class AppGeoEditor(QtCore.QObject):
         :param point:   (x, y) in plot units
         :return:        DrawToolShape or None
         """
+        candidates = AppGeoEditor.pick_candidates(self, point)
+        return candidates[0] if candidates else None
+
+    def pick_candidates(self, point):
+        """Nearest contour ties, ordered by distance, area, then stable storage order."""
         tree, refs = self.get_pick_index()
         if tree is None:
-            return None
+            return []
 
         try:
             tol = PICK_TOLERANCE_PX * self.canvas.pixel_size()
@@ -468,11 +718,31 @@ class AppGeoEditor(QtCore.QObject):
                                               all_matches=True)
         else:
             found, dists = tree.query_nearest(Point(point[0], point[1]), return_distance=True, all_matches=True)
-        if len(found) == 0:
-            return None
+        ordered = sorted(zip(found, dists),
+                         key=lambda item: (round(float(item[1]), 9), refs[int(item[0])].geo.area, int(item[0])))
+        return [refs[int(index)] for index, _distance in ordered]
 
-        best_pos, __ = min(zip(found, dists), key=lambda item: (round(float(item[1]), 9), refs[int(item[0])].geo.area))
-        return refs[int(best_pos)]
+    def pick_cycle_at(self, point):
+        candidates = AppGeoEditor.pick_candidates(self, point)
+        if not candidates:
+            self._pick_cycle = None
+            return None, None, 0, 0
+        ids = tuple(id(shape) for shape in candidates)
+        state = (self.storage, self.storage.revision)
+        last = getattr(self, '_pick_cycle', None)
+        position, previous = 0, None
+        if last is not None and len(candidates) > 1 and last['ids'] == ids and last['state'] == state:
+            pixel_size = 0
+            try:
+                pixel_size = self.canvas.pixel_size()
+                moved = math.hypot(point[0] - last['point'][0], point[1] - last['point'][1]) / pixel_size
+            except (AttributeError, TypeError, ZeroDivisionError):
+                moved = float('inf')
+            if pixel_size and pixel_size > 0 and moved < CLICK_DRAG_THRESHOLD_PX:
+                position = (last['position'] + 1) % len(candidates)
+                previous = candidates[last['position']]
+        self._pick_cycle = {'point': tuple(point), 'ids': ids, 'state': state, 'position': position}
+        return candidates[position], previous, position, len(candidates)
 
     def click_select(self, point):
         """
@@ -487,7 +757,7 @@ class AppGeoEditor(QtCore.QObject):
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Selection not allowed. Wait ..."))
             return False
 
-        obj_to_add = self.pick_at(point)
+        obj_to_add, previous, position, count = AppGeoEditor.pick_cycle_at(self, point)
         if obj_to_add is None:
             self.selected = []
         else:
@@ -505,13 +775,20 @@ class AppGeoEditor(QtCore.QObject):
                         "global_mselect_key",
                         self.app.defaults.factory_defaults.get("global_mselect_key")
                     )):
-                # first click selects, second deselects
-                if any(shape is obj_to_add for shape in self.selected):
+                if previous is not None:
+                    self.selected = [shape for shape in self.selected if shape is not previous]
+                    if not any(shape is obj_to_add for shape in self.selected):
+                        self.selected.append(obj_to_add)
+                # A single candidate still toggles with the multiple-selection key.
+                elif any(shape is obj_to_add for shape in self.selected):
                     self.selected = [shape for shape in self.selected if shape is not obj_to_add]
                 else:
                     self.selected.append(obj_to_add)
             else:
                 self.selected = [obj_to_add]
+            if count > 1:
+                self.app.inform.emit('%s %d / %d. %s' % (
+                    _("Shape"), position + 1, count, _("Click again at the same place to select the next one.")))
 
         self.sync_tree_selection()
         self.update_ui()
@@ -642,6 +919,8 @@ class AppGeoEditor(QtCore.QObject):
             self.app.log.error("APpGeoEditor.on_tree_selection_change() -> %s" % str(e))
 
     def on_tree_selection(self):
+        if getattr(self, 'interdict_selection', False):
+            return
         selected_items = self.ui.tw.selectedItems()
 
         if len(selected_items) == 0:
@@ -689,6 +968,477 @@ class AppGeoEditor(QtCore.QObject):
         finally:
             tw.blockSignals(False)
 
+    def vertex_edit_target(self, target=None):
+        """Vertex editing never guesses a selected contour: exactly 1 selected shape."""
+        if len(self.selected) != 1:
+            raise ValueError(_("Select exactly one shape to edit vertices."))
+        shape = self.selected[0]
+        if (target is not None and shape is not target) or id(shape) not in self.storage.indexes:
+            raise ValueError(_("The selected shape changed. Reopen the vertex editor."))
+        if not isinstance(shape.geo, SUPPORTED_TYPES) or shape.geo.is_empty:
+            raise ValueError(_("Vertex editing supports LineString, LinearRing, Polygon and their multipart shapes.\n"
+                               "Collections are not supported."))
+        if shape.geo.has_z:
+            raise ValueError(_("Vertex editing supports two-dimensional coordinates only."))
+        return shape
+
+    @geometry_operation
+    def apply_vertex_edit(self, action, index, point=None, target=None, on_segment=True):
+        """
+        Validate a complete replacement before touching storage or recording history.
+
+        :param action:      'move', 'insert', 'remove' or an arc action of vertex_ops.ARC_ACTIONS
+        :param index:       a vertex index of a single contour, or a (part, ring, index) / (part, ring, start, end)
+                            address
+        :param on_segment:  True (the dialog): an inserted vertex must lie inside the chosen segment
+        """
+        try:
+            shape = AppGeoEditor.vertex_edit_target(self, target)
+            geometry = shape.geo
+            address = vertex_address(geometry, index)
+            steps = self.app.options.get('geometry_circle_steps', DEFAULT_CIRCLE_STEPS)
+            result_geo = edit_vertex(geometry, action, address, point, on_segment=on_segment, steps=steps)
+            check_vertex_result(result_geo, address)
+        except (ValueError, TypeError, OverflowError, shapely.errors.GEOSException) as err:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
+            return 'fail'
+
+        if result_geo.equals_exact(geometry, 0.0):
+            return
+        result = DrawToolShape(result_geo)
+        result.data = shape.data.copy()
+        result.data['bounds'] = result.bounds()
+        if self.replace_shapes(removed=[shape], inserted=[result], selected=[result]) == 'fail':
+            return 'fail'
+        self.build_ui_sig.emit()
+        self.plot_changes()
+
+    def on_edit_vertices(self):
+        if AppGeoEditor.reject_busy(self):
+            return 'fail'
+        try:
+            target = AppGeoEditor.vertex_edit_target(self)
+        except ValueError as err:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
+            return 'fail'
+
+        dialog = QtWidgets.QDialog(self.ui.geo_edit_widget)
+        dialog.setWindowTitle(_("Edit vertices"))
+        grid = GLay(v_spacing=5, h_spacing=3)
+        dialog.setLayout(grid)
+        hint = FCLabel(_("Indexes start at 0. Ring 0 is the line or the polygon exterior; rings 1+ are the holes.\n"
+                         "Insert uses the segment from index to index + 1.\n"
+                         "The closing coordinate is an alias of vertex 0."))
+        grid.addWidget(hint, 0, 0, 1, 2)
+        part_entry, ring_entry, index_entry = QtWidgets.QSpinBox(), QtWidgets.QSpinBox(), QtWidgets.QSpinBox()
+        part_entry.setObjectName('vertex_part')
+        ring_entry.setObjectName('vertex_ring')
+        index_entry.setObjectName('vertex_index')
+        x_entry, y_entry = FCEntry(), FCEntry()
+        x_entry.setObjectName('vertex_x')
+        y_entry.setObjectName('vertex_y')
+        action_entry = QtWidgets.QComboBox()
+        for label, action in [(_("Move"), 'move'), (_("Insert"), 'insert'), (_("Remove"), 'remove')]:
+            action_entry.addItem(label, action)
+        for row, (label, widget) in enumerate([(_("Part"), part_entry), (_("Ring"), ring_entry),
+                                                (_("Vertex / segment index"), index_entry),
+                                                ('X', x_entry), ('Y', y_entry),
+                                                (_("Operation"), action_entry)], 1):
+            grid.addWidget(FCLabel(label), row, 0)
+            grid.addWidget(widget, row, 1)
+        apply_btn, close_btn = FCButton(_("Apply")), FCButton(_("Close"))
+        apply_btn.setObjectName('vertex_apply')
+        grid.addWidget(apply_btn, 7, 0)
+        grid.addWidget(close_btn, 7, 1)
+
+        def load_vertex():
+            parts = parts_of(target.geo)
+            part_entry.setMaximum(len(parts) - 1)
+            rings = rings_of(parts[part_entry.value()])
+            ring_entry.setMaximum(len(rings) - 1)
+            coords = list(rings[ring_entry.value()].coords)
+            index_entry.setMaximum(len(coords) - 1)
+            x_entry.setText(str(coords[index_entry.value()][0]))
+            y_entry.setText(str(coords[index_entry.value()][1]))
+
+        def apply():
+            nonlocal target
+            address = (part_entry.value(), ring_entry.value(), index_entry.value())
+            if self.apply_vertex_edit(action_entry.currentData(), address,
+                                      (x_entry.text(), y_entry.text()), target=target) == 'fail':
+                return
+            target = self.selected[0]
+            load_vertex()
+
+        def change_action():
+            for entry in (x_entry, y_entry):
+                entry.setEnabled(action_entry.currentData() != 'remove')
+
+        index_entry.valueChanged.connect(load_vertex)
+        part_entry.valueChanged.connect(load_vertex)
+        ring_entry.valueChanged.connect(load_vertex)
+        action_entry.currentIndexChanged.connect(change_action)
+        apply_btn.clicked.connect(apply)
+        close_btn.clicked.connect(dialog.reject)
+        load_vertex()
+        dialog.exec()
+        dialog.deleteLater()
+
+    @geometry_operation
+    def apply_path_split(self, point, tolerance, target=None, session=None):
+        """Project a click and replace one open path with two directed substrings."""
+        try:
+            if len(self.selected) != 1:
+                raise ValueError(_("Select exactly one open LineString to split."))
+            shape = self.selected[0]
+            stored_index = self.storage.indexes.get(id(shape))
+            if ((target is not None and shape is not target) or stored_index is None or
+                    self.storage.objects[stored_index] is not shape or
+                    (session is not None and session != self._history_session)):
+                raise ValueError(_("The selected path or editing session changed. Reopen Split path."))
+            geometry = shape.geo
+            if (type(geometry) is not LineString or geometry.is_empty or geometry.is_closed or
+                    geometry.has_z or not geometry.is_valid or not math.isfinite(geometry.length)):
+                raise ValueError(_("Split supports one two-dimensional open LineString only.\n"
+                                   "Rings, polygons and multipart shapes are not supported."))
+            tolerance = float(tolerance)
+            if not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError(_("Split tolerance must be a finite, nonnegative distance in current units."))
+            if point is None or len(point) != 2:
+                raise ValueError(_("Choose a finite X and Y split point."))
+            point = tuple(float(value) for value in point)
+            if not all(math.isfinite(value) for value in point):
+                raise ValueError(_("Choose a finite X and Y split point."))
+            candidate = Point(point)
+            if geometry.distance(candidate) > tolerance:
+                raise ValueError(_("The split point is outside the path tolerance."))
+            position = geometry.project(candidate)
+            if position <= tolerance or geometry.length - position <= tolerance:
+                raise ValueError(_("Choose a split point farther than the tolerance from both path endpoints."))
+            pieces = [substring(geometry, 0, position), substring(geometry, position, geometry.length)]
+            if any(type(piece) is not LineString or piece.length <= 0 or not piece.is_valid for piece in pieces):
+                raise ValueError(_("The split must produce two nonzero-length paths."))
+        except (ValueError, TypeError, OverflowError, shapely.errors.GEOSException) as err:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
+            return 'fail'
+
+        results = []
+        for piece in pieces:
+            result = DrawToolShape(piece)
+            result.data = shape.data.copy()
+            result.data['bounds'] = result.bounds()
+            results.append(result)
+        if self.replace_shapes(removed=[shape], inserted=results, selected=results) == 'fail':
+            return 'fail'
+        self.build_ui_sig.emit()
+        self.plot_changes()
+
+    def on_join_paths(self):
+        return self.apply_path_join(self.ui.join_tolerance_entry.text())
+
+    @geometry_operation
+    def apply_path_join(self, tolerance):
+        """Merge unique endpoint pairs; near pairs gain a bridge, not moved vertices."""
+        try:
+            tolerance = float(tolerance)
+            if not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError(_("Join tolerance must be a finite, nonnegative distance in current units."))
+            shapes = list(self.selected)
+            if len(shapes) < 2 or len({id(shape) for shape in shapes}) != len(shapes):
+                raise ValueError(_("Select at least two distinct open LineStrings to join."))
+            endpoints = []
+            for shape in shapes:
+                stored_index = self.storage.indexes.get(id(shape))
+                if stored_index is None or self.storage.objects[stored_index] is not shape:
+                    raise ValueError(_("The selected paths changed. Select stored paths again."))
+                geometry = shape.geo
+                if (type(geometry) is not LineString or geometry.is_empty or geometry.is_closed or
+                        geometry.has_z or not geometry.is_valid or not geometry.is_simple or
+                        not math.isfinite(geometry.length) or geometry.length <= 0 or
+                        not all(math.isfinite(v) for coord in geometry.coords for v in coord)):
+                    raise ValueError(_("Join supports two-dimensional, simple open LineStrings only."))
+                endpoints.extend([geometry.coords[0], geometry.coords[-1]])
+
+            # Only selected endpoints participate. No transitive welding or nearest-choice guessing.
+            points = [Point(coord) for coord in endpoints]
+            tree = STRtree(points)
+            pairs = []
+            adjacency = [set() for shape in shapes]
+            for i, point in enumerate(points):
+                candidates = [int(j) for j in tree.query(point, predicate='dwithin', distance=tolerance)
+                              if int(j) // 2 != i // 2]
+                if len(candidates) > 1:
+                    raise ValueError(_("Ambiguous or branching endpoints. Reduce tolerance or selection."))
+                if candidates and i < candidates[0]:
+                    j = candidates[0]
+                    pairs.append((i, j))
+                    adjacency[i // 2].add(j // 2)
+                    adjacency[j // 2].add(i // 2)
+            if not pairs:
+                raise ValueError(_("No selected endpoints are within the join tolerance."))
+
+            removed, inserted, selected = [], [], []
+            visited = set()
+            bridge_length = 0.0
+            for start in range(len(shapes)):
+                if start in visited:
+                    continue
+                component, pending = set(), [start]
+                while pending:
+                    index = pending.pop()
+                    if index in component:
+                        continue
+                    component.add(index)
+                    pending.extend(adjacency[index] - component)
+                visited.update(component)
+                members = [shapes[index] for index in sorted(component)]
+                if len(members) == 1:
+                    selected.extend(members)
+                    continue
+                metadata = {key: value for key, value in members[0].data.items() if key != 'bounds'}
+                if any({key: value for key, value in member.data.items() if key != 'bounds'} != metadata
+                       for member in members[1:]):
+                    raise ValueError(_("Joined paths must have compatible metadata and tool ownership."))
+                lines = [member.geo for member in members]
+                added_length = 0.0
+                for i, j in pairs:
+                    if i // 2 in component and endpoints[i] != endpoints[j]:
+                        bridge = LineString([endpoints[i], endpoints[j]])
+                        lines.append(bridge)
+                        added_length += bridge.length
+                geometry = linemerge(lines)
+                expected_length = sum(member.geo.length for member in members) + added_length
+                if (type(geometry) is not LineString or geometry.is_empty or not geometry.is_valid or
+                        not geometry.is_simple or not math.isfinite(geometry.length) or
+                        not math.isclose(geometry.length, expected_length, rel_tol=1e-12, abs_tol=1e-12)):
+                    raise ValueError(_("Join would create branching, overlapping or invalid geometry."))
+                result = DrawToolShape(geometry)
+                result.data = members[0].data.copy()
+                result.data['bounds'] = result.bounds()
+                removed.extend(members)
+                inserted.append(result)
+                selected.append(result)
+                bridge_length += added_length
+            if not MultiLineString([shape.geo for shape in selected]).is_simple:
+                raise ValueError(_("Joined components would intersect or branch. Refine the selection."))
+        except (ValueError, TypeError, OverflowError, shapely.errors.GEOSException) as err:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
+            return 'fail'
+
+        if self.replace_shapes(removed=removed, inserted=inserted, selected=selected) == 'fail':
+            return 'fail'
+        self.build_ui_sig.emit()
+        self.plot_changes()
+        self.app.inform.emit(_("Join complete: %d separate components; straight bridges added %s %s of length.") %
+                             (len(selected), bridge_length, self.app.app_units))
+
+    def diagnose_selected(self, tolerance):
+        """Inspect selected contours only; never enter a geometry/history operation."""
+        with AppGeoEditor.history_access(self) as allowed:
+            if not allowed:
+                return 'fail'
+            try:
+                tolerance = float(tolerance)
+                if not math.isfinite(tolerance) or tolerance < 0:
+                    raise ValueError
+            except (ValueError, TypeError, OverflowError):
+                self.app.inform.emit(_('[WARNING_NOTCL] Endpoint tolerance must be finite and non-negative.'))
+                return 'fail'
+            if not self.selected:
+                self.app.inform.emit(_('[WARNING_NOTCL] Select geometry to inspect.'))
+                return 'fail'
+
+            report = {key: [] for key in ('empty', 'zero_length', 'duplicate', 'invalid',
+                                          'open', 'endpoints', 'near_endpoints')}
+            paths = {}
+
+            def mark(key, shape):
+                if shape not in report[key]:
+                    report[key].append(shape)
+
+            def inspect(geometry, shape):
+                if isinstance(geometry, (list, tuple)):
+                    if not geometry:
+                        mark('empty', shape)
+                    for part in geometry:
+                        inspect(part, shape)
+                    return
+                if geometry.is_empty:
+                    mark('empty', shape)
+                    return
+                if not geometry.is_valid or not geometry.is_simple:
+                    mark('invalid', shape)
+                if isinstance(geometry, Polygon):
+                    inspect(geometry.exterior, shape)
+                    for ring in geometry.interiors:
+                        inspect(ring, shape)
+                elif hasattr(geometry, 'geoms'):
+                    for part in geometry.geoms:
+                        inspect(part, shape)
+                elif isinstance(geometry, (LineString, LinearRing)):
+                    if geometry.length == 0:
+                        mark('zero_length', shape)
+                        return
+                    # Normalize direction without modifying the stored path.
+                    key = shapely.normalize(LineString(geometry.coords)).wkb
+                    if key in paths:
+                        mark('duplicate', paths[key])
+                        mark('duplicate', shape)
+                    else:
+                        paths[key] = shape
+                    if not geometry.is_closed:
+                        mark('open', shape)
+                        report['endpoints'].extend((shape, tuple(geometry.coords[index])) for index in (0, -1))
+
+            for shape in self.selected:
+                inspect(shape.geo, shape)
+            endpoints = report['endpoints']
+            # Selected-only explicit action, not a mouse-move scan. STRtree bounds endpoint comparisons.
+            if endpoints:
+                points = [Point(coords[:2]) for shape, coords in endpoints]
+                tree = STRtree(points)
+                for index, point in enumerate(points):
+                    for other in tree.query(point, predicate='dwithin', distance=tolerance):
+                        if other > index:
+                            report['near_endpoints'].append((endpoints[index], endpoints[other]))
+            return report
+
+    def on_diagnostics(self):
+        report = AppGeoEditor.diagnose_selected(self, self.ui.diagnostics_tolerance_entry.text())
+        if report == 'fail':
+            return 'fail'
+        labels = [('empty', _('Empty geometry')), ('zero_length', _('Zero-length paths')),
+                  ('duplicate', _('Duplicate paths')), ('invalid', _('Invalid / self-intersecting')),
+                  ('open', _('Open paths (information)'))]
+        lines = [_('Selected geometry snapshot; rerun after edits or selection changes.')]
+        by_shape = {}
+        for key, label in labels:
+            ids = ', '.join(str(id(shape)) for shape in report[key])
+            lines.append('%s: %d%s' % (label, len(report[key]), ' — ' + ids if ids else ''))
+            for shape in report[key]:
+                by_shape.setdefault(str(id(shape)), []).append(label)
+        lines.append(_('Open endpoints (information): %d') % len(report['endpoints']))
+        for shape, coords in report['endpoints']:
+            lines.append('%s: %s' % (id(shape), coords))
+        lines.append(_('Near endpoint pairs: %d') % len(report['near_endpoints']))
+        for (first, a), (second, b) in report['near_endpoints']:
+            lines.append('%s %s — %s %s' % (id(first), a, id(second), b))
+        self.ui.diagnostics_result.setText('\n'.join(lines))
+        iterator = QtWidgets.QTreeWidgetItemIterator(self.ui.tw)
+        while iterator.value():
+            item = iterator.value()
+            item.setToolTip(1, '\n'.join(by_shape.get(item.text(0), [])))
+            iterator += 1
+        self.app.inform.emit(_('[INFO_NOTCL] Selected geometry diagnostics updated (read-only).'))
+        return report
+
+    def size_filter_matches(self, whole_board=False):
+        """
+        Shapes matching the enabled Select by Size filters. Read-only: no selection or history change.
+        Select searches the whole board (whole_board=True), so repeating it never only narrows the selection.
+        Delete acts on the selected shapes if any, else on all the shapes of the edited object.
+
+        :return: list of DrawToolShape, or 'fail' (a warning was shown) for bad input
+        """
+        with AppGeoEditor.history_access(self) as allowed:
+            if not allowed:
+                return 'fail'
+            ranges = {}
+            for key, check, low_entry, high_entry, name in (
+                    ('area', self.ui.size_area_chk, self.ui.size_min_area_entry, self.ui.size_max_area_entry,
+                     _("area")),
+                    ('length', self.ui.size_length_chk, self.ui.size_min_length_entry,
+                     self.ui.size_max_length_entry, _("length"))):
+                if not check.isChecked():
+                    continue
+                try:
+                    low = float(low_entry.text().strip().replace(',', '.'))
+                    high = float(high_entry.text().strip().replace(',', '.'))
+                    if not (math.isfinite(low) and math.isfinite(high)) or low < 0 or high < 0:
+                        raise ValueError
+                except (ValueError, TypeError, OverflowError):
+                    self.app.inform.emit('[WARNING_NOTCL] %s %s' % (
+                        _("Invalid limits. Enter finite, non-negative numbers for the"), name))
+                    return 'fail'
+                if low > high:
+                    self.app.inform.emit('[WARNING_NOTCL] %s %s' % (
+                        _("The minimum is larger than the maximum for the"), name))
+                    return 'fail'
+                ranges[key] = (low, high)
+            if not ranges:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Enable the area or the length filter."))
+                return 'fail'
+            if self.selected and not whole_board:
+                scope = list(self.selected)
+            else:
+                scope = list(self.storage.get_objects())
+            return shapes_in_size_range(scope, ranges.get('area'), ranges.get('length'))
+
+    def on_select_by_size(self):
+        matches = AppGeoEditor.size_filter_matches(self, whole_board=True)
+        if matches == 'fail':
+            return 'fail'
+        self.selected = matches
+        AppGeoEditor.sync_tree_selection(self)
+        AppGeoEditor.update_all_vertex_count(self)
+        self.plot_changes()
+        self.app.inform.emit(_("{n} shapes match").format(n=len(matches)))
+        return matches
+
+    def on_delete_by_size(self):
+        matches = AppGeoEditor.size_filter_matches(self)
+        if matches == 'fail':
+            return 'fail'
+        if not matches:
+            self.app.inform.emit(_("{n} shapes match").format(n=0))
+            return matches
+        previous = self.selected
+        self.selected = list(matches)
+        # one history step: delete_selected is a single geometry operation
+        if AppGeoEditor.delete_selected(self) == 'fail':
+            self.selected = previous
+            return 'fail'
+        self.app.inform.emit(_("{n} shapes deleted").format(n=len(matches)))
+        return matches
+
+    def on_resize_circles(self):
+        return AppGeoEditor.apply_resize_circles(self, self.ui.resize_circles_entry.get_value())
+
+    @geometry_operation
+    def apply_resize_circles(self, diameter):
+        """Set the diameter of the selected circles, each about its own center, as one history step."""
+        try:
+            diameter = float(diameter)
+        except (ValueError, TypeError, OverflowError):
+            diameter = float('nan')
+        if not math.isfinite(diameter) or diameter <= 0:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The new diameter must be a positive number."))
+            return 'fail'
+        removed, inserted, replacement = [], [], {}
+        skipped = 0
+        for shape in self.selected:
+            geometry = resized_circle(shape.geo, diameter) if isinstance(shape.geo, BaseGeometry) else None
+            if geometry is None:
+                skipped += 1
+                continue
+            result = DrawToolShape(geometry)
+            result.data = shape.data.copy()
+            result.data['bounds'] = result.bounds()
+            removed.append(shape)
+            inserted.append(result)
+            replacement[id(shape)] = result
+        if not removed:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No circle selected."))
+            return 'fail'
+        selected = [replacement.get(id(shape), shape) for shape in self.selected]
+        if self.replace_shapes(removed=removed, inserted=inserted, selected=selected) == 'fail':
+            return 'fail'
+        AppGeoEditor.update_all_vertex_count(self)
+        self.build_ui_sig.emit()
+        self.plot_changes()
+        self.app.inform.emit(_("{n} circles resized, {m} shapes skipped").format(n=len(removed), m=skipped))
+        return inserted
+
     def on_change_orientation(self):
         self.app.log.debug("AppGeoEditor.on_change_orientation()")
 
@@ -718,7 +1468,7 @@ class AppGeoEditor(QtCore.QObject):
                 self.build_ui_sig.emit()
                 self.plot_changes()
 
-        self.app.worker_task.emit({'fcn': task_job, 'params': []})
+        AppGeoEditor.submit_worker(self, task_job, [])
 
     def on_menu_request(self, pos):
         menu = QtWidgets.QMenu()
@@ -739,9 +1489,12 @@ class AppGeoEditor(QtCore.QObject):
         menu.exec(self.ui.tw.viewport().mapToGlobal(pos))
 
     def activate(self):
+        if AppGeoEditor.reset_history(self) == 'fail':
+            return 'fail'
         # adjust the status of the menu entries related to the editor
         self.app.ui.menueditedit.setDisabled(True)
         self.app.ui.menueditok.setDisabled(False)
+        self.app.ui.on_history_changed('', '')
 
         # adjust the visibility of some of the canvas context menu
         self.app.ui.popmenu_edit.setVisible(False)
@@ -802,6 +1555,8 @@ class AppGeoEditor(QtCore.QObject):
         self.app.log.debug("Finished activating the Geometry Editor...")
 
     def deactivate(self):
+        if AppGeoEditor.reset_history(self) == 'fail':
+            return 'fail'
         try:
             QtGui.QGuiApplication.restoreOverrideCursor()
         except Exception:
@@ -810,6 +1565,7 @@ class AppGeoEditor(QtCore.QObject):
         # adjust the status of the menu entries related to the editor
         self.app.ui.menueditedit.setDisabled(False)
         self.app.ui.menueditok.setDisabled(True)
+        history_of(self.app).notify()
 
         # adjust the visibility of some of the canvas context menu
         self.app.ui.popmenu_edit.setVisible(True)
@@ -818,6 +1574,9 @@ class AppGeoEditor(QtCore.QObject):
         self.disconnect_canvas_event_handlers()
         self.storage = self.make_storage()
 
+        grips = getattr(self, 'vertex_grips', None)
+        if grips is not None:
+            grips.hide()
         self.clear()
         self.app.ui.geo_edit_toolbar.setDisabled(True)
 
@@ -1074,6 +1833,269 @@ class AppGeoEditor(QtCore.QObject):
         self.ui.tw.clear()
         self.ui.geo_parent = self.ui.tw.invisibleRootItem()
 
+    def reject_busy(self):
+        busy = getattr(self, '_source_save_pending', False) is True or (
+            getattr(self, '_history_worker_pending', False) is True and
+            getattr(self, '_history_worker_owner', None) != get_ident())
+        if busy:
+            AppGeoEditor.history_busy_message(self)
+        return busy
+
+    def history_busy_message(self):
+        self.app.inform.emit('[WARNING_NOTCL] %s' %
+                             _("Geometry operation in progress. Wait for it to finish, then retry."))
+
+    @contextmanager
+    def history_access(self, cancel_pending=False):
+        """Never wait for worker compute on the GUI thread. Only queued jobs can be invalidated."""
+        if getattr(self, '_source_save_pending', False) is True:
+            AppGeoEditor.history_busy_message(self)
+            yield False
+            return
+        if not hasattr(self, '_history_lock'):
+            self._history_lock = RLock()
+        pending = getattr(self, '_history_worker_pending', False) is True
+        owner = getattr(self, '_history_worker_owner', None)
+        if (pending and (owner != get_ident() or cancel_pending) and
+                not (cancel_pending and owner is None)) or not self._history_lock.acquire(blocking=False):
+            AppGeoEditor.history_busy_message(self)
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            self._history_lock.release()
+
+    @contextmanager
+    def history_operation(self, record=True, label=None):
+        """Group committed deltas, never copy the scene or record utility geometry."""
+        if not hasattr(self, '_history_undo'):
+            AppGeoEditor.reset_history(self)
+        with AppGeoEditor.history_access(self) as accepted:
+            if not accepted:
+                yield False
+                return
+            nested = self._history_pending is not None
+            if not nested:
+                self._history_pending = []
+                before = list(self.selected)
+                tool_name = getattr(getattr(self, 'active_tool', None), 'name', '')
+                label = label or tool_name or _("Geometry")
+            try:
+                yield True
+            except Exception:
+                if not nested:
+                    for removed, inserted in reversed(self._history_pending):
+                        self.storage.replace(removed=inserted, inserted=removed)
+                    self._snap_cache = None
+                    self.selected[:] = before
+                raise
+            else:
+                if not nested and self._history_pending:
+                    if record:
+                        self._history_undo.append((self._history_pending, before, list(self.selected), label))
+                        self._history_redo.clear()
+                        AppGeoEditor.enforce_history_limits(self)
+                    self._history_revision += 1
+            finally:
+                if not nested:
+                    self._history_pending = None
+                    AppGeoEditor.notify_history(self)
+
+    def history_limits(self):
+        # Only the limit values are shared; the editor owns its deltas and navigation state.
+        return HistoryManager(self.app, None).limits()
+
+    def enforce_history_limits(self):
+        max_steps, max_bytes = AppGeoEditor.history_limits(self)
+        if len(self._history_undo) > max_steps:
+            self._history_baseline_evicted = True
+        del self._history_undo[:-max_steps]
+
+        def retained_size():
+            shapes = {}
+            for deltas, before, after, label in self._history_undo + self._history_redo:
+                for shape in before + after:
+                    shapes[id(shape)] = shape
+                for removed, inserted in deltas:
+                    for shape in removed + inserted:
+                        shapes[id(shape)] = shape
+            return state_size({'geometry': [shape.geo for shape in shapes.values()]})
+
+        # The memory budget is soft for one adjacent operation, on either stack.
+        while self._history_redo and len(self._history_undo) + len(self._history_redo) > 1 and \
+                retained_size() > max_bytes:
+            del self._history_redo[0]
+        while len(self._history_undo) > 1 and retained_size() > max_bytes:
+            del self._history_undo[0]
+            self._history_baseline_evicted = True
+
+    def history_labels(self):
+        return [entry[3] for entry in self._history_undo + list(reversed(self._history_redo))]
+
+    def notify_history(self):
+        signal = getattr(self, 'history_changed', None)
+        if signal is not None:
+            signal.emit()
+
+    def refresh_history(self):
+        if not self._history_lock.acquire(blocking=False):
+            return
+        try:
+            AppGeoEditor.enforce_history_limits(self)
+            labels = AppGeoEditor.history_labels(self)
+            position = len(self._history_undo)
+            combo = self.ui.history_positions
+            combo.clear()
+            baseline = _('Oldest retained state') if self._history_baseline_evicted else _('Initial state')
+            combo.addItems([baseline] + labels)
+            combo.setCurrentIndex(position)
+            undo_label = self._history_undo[-1][3] if self._history_undo else ''
+            redo_label = self._history_redo[-1][3] if self._history_redo else ''
+            self.ui.history_undo.setText('%s %s' % (_('Undo'), undo_label))
+            self.ui.history_redo.setText('%s %s' % (_('Redo'), redo_label))
+            self.ui.history_undo.setEnabled(bool(undo_label))
+            self.ui.history_redo.setEnabled(bool(redo_label))
+            if self.app.call_source == 'geo_editor':
+                self.app.ui.on_history_changed(undo_label, redo_label)
+            elif self.app.call_source == 'app':
+                history_of(self.app).notify()
+        finally:
+            self._history_lock.release()
+
+    def history_go_to(self, position):
+        with AppGeoEditor.history_access(self) as accepted:
+            if not accepted:
+                AppGeoEditor.notify_history(self)
+                return False
+            # Positions refer to the retained timeline, just as in refresh_history().
+            AppGeoEditor.enforce_history_limits(self)
+            if not 0 <= position <= len(self._history_undo) + len(self._history_redo):
+                AppGeoEditor.notify_history(self)
+                return False
+            distance = position - len(self._history_undo)
+            for _step in range(abs(distance)):
+                if not AppGeoEditor._replay_history(self, distance > 0):
+                    return False
+            return True
+
+    def reset_history(self):
+        if not hasattr(self, '_history_lock'):
+            self._history_lock = RLock()
+        with AppGeoEditor.history_access(self, cancel_pending=True) as accepted:
+            if not accepted:
+                return 'fail'
+            self._history_session = getattr(self, '_history_session', 0) + 1
+            self._history_revision = 0
+            self._snap_cache = None
+            self._pick_cache = None
+            self._pick_cycle = None
+            self.press_pos_raw = None
+            self.press_pos_screen = None
+            self._history_undo = []
+            self._history_redo = []
+            self._history_baseline_evicted = False
+            self._history_pending = None
+            self._history_worker_pending = False
+            self._history_worker_owner = None
+            self._history_worker_token = None
+            AppGeoEditor.notify_history(self)
+
+    @geometry_operation
+    def replace_shapes(self, removed=(), inserted=(), selected=None):
+        """The committed storage boundary. Selection and wrappers belong to the same delta."""
+        removed = [shape for shape in removed if id(shape) in self.storage.indexes]
+        inserted = list(inserted)
+        if not removed and not inserted:
+            return
+        self.storage.replace(removed=removed, inserted=inserted)
+        self._snap_cache = None
+        self._history_pending.append((removed, inserted))
+        removed_ids = {id(shape) for shape in removed}
+        self.selected[:] = [shape for shape in self.selected if id(shape) not in removed_ids]
+        if selected is not None:
+            self.selected[:] = selected
+
+    def undo(self):
+        return AppGeoEditor._replay_history(self, False)
+
+    def redo(self):
+        return AppGeoEditor._replay_history(self, True)
+
+    def _replay_history(self, redo):
+        if not hasattr(self, '_history_lock'):
+            return False
+        with AppGeoEditor.history_access(self) as accepted:
+            if not accepted:
+                return False
+            AppGeoEditor.enforce_history_limits(self)
+            source = self._history_redo if redo else self._history_undo
+            destination = self._history_undo if redo else self._history_redo
+            if not source:
+                return False
+            deltas, before, after, label = source[-1]
+            for removed, inserted in deltas if redo else reversed(deltas):
+                self.storage.replace(removed=removed if redo else inserted,
+                                     inserted=inserted if redo else removed)
+            self.selected[:] = after if redo else before
+            destination.append(source.pop())
+            AppGeoEditor.enforce_history_limits(self)
+            self._history_revision += 1
+            self._snap_cache = None
+            self.build_ui_sig.emit()
+            self.plot_changes()
+            AppGeoEditor.notify_history(self)
+            return True
+
+    def submit_worker(self, fcn, params, record=True):
+        """Reserve one operation; GUI callers reject busy work instead of waiting for computation."""
+        if not hasattr(self, '_history_undo'):
+            AppGeoEditor.reset_history(self)
+        with AppGeoEditor.history_access(self) as accepted:
+            if not accepted:
+                return 'fail'
+            session, revision = self._history_session, self._history_revision
+            selection = tuple(self.selected)
+            token = object()
+            label = getattr(getattr(self, 'active_tool', None), 'name', '') or \
+                getattr(fcn, '__qualname__', _('Geometry')).split('.<locals>')[0].split('.')[-1].replace('_', ' ').capitalize()
+            self._history_worker_token = token
+            self._history_worker_pending = True
+
+        def work():
+            try:
+                # Only the worker may wait here. Every GUI entry uses nonblocking history_access().
+                with self._history_lock:
+                    if token is not self._history_worker_token or \
+                            (session, revision) != (self._history_session, self._history_revision) or \
+                            selection != tuple(self.selected):
+                        return
+                    self._history_worker_owner = get_ident()
+                    interdict_selection = getattr(self, 'interdict_selection', False)
+                    self.interdict_selection = True
+                    try:
+                        with AppGeoEditor.history_operation(self, record=record, label=label) as accepted:
+                            if accepted:
+                                return fcn(*params)
+                    finally:
+                        self.interdict_selection = interdict_selection
+            finally:
+                with self._history_lock:
+                    if token is self._history_worker_token:
+                        self._history_worker_token = None
+                        self._history_worker_owner = None
+                        self._history_worker_pending = False
+                        AppGeoEditor.notify_history(self)
+
+        try:
+            self.app.worker_task.emit({'fcn': work, 'params': []})
+        except Exception:
+            if token is self._history_worker_token:
+                self._history_worker_token = None
+                self._history_worker_pending = False
+            raise
+
+    @geometry_operation
     def add_shape(self, shape, build_ui=True):
         """
         Adds a shape to the shape storage.
@@ -1090,7 +2112,7 @@ class AppGeoEditor(QtCore.QObject):
 
         if to_insert:
             try:
-                self.storage.replace(inserted=to_insert)
+                AppGeoEditor.replace_shapes(self, inserted=to_insert)
             except Exception as err:
                 self.app.inform_shell.emit('%s\n%s' % (_("Error on inserting shapes into storage."), str(err)))
             if build_ui is True:
@@ -1173,6 +2195,8 @@ class AppGeoEditor(QtCore.QObject):
 
         :return:    None
         """
+        if AppGeoEditor.reset_history(self) == 'fail':
+            return 'fail'
         self.active_tool = None
         # self.shape_buffer = []
         self.selected = []
@@ -1190,9 +2214,18 @@ class AppGeoEditor(QtCore.QObject):
         :rtype : None
         """
         self.app.log.debug("on_tool_select('%s')" % tool)
+        grips = getattr(self, 'vertex_grips', None)
+        if grips is not None:
+            grips.cancel()
 
         # This is to make the group behave as radio group
         if tool in self.tools:
+            if isinstance(self.active_tool, (FCPath, FCCircle, FCRectangle, FCMove, FCCopy, FCImport)):
+                self.delete_utility_geometry()
+                self.active_tool.clean_up()
+                self.active_tool.points = []
+                self.in_action = False
+                QtGui.QGuiApplication.restoreOverrideCursor()
             if self.tools[tool]["button"].isChecked():
                 self.app.log.debug("%s is checked." % tool)
                 for t in self.tools:
@@ -1207,6 +2240,9 @@ class AppGeoEditor(QtCore.QObject):
 
                 self.select_tool('select')
                 self.active_tool = FCSelect(self)
+
+        if grips is not None:
+            grips.sync()
 
     def draw_tool_path(self):
         self.select_tool('path')
@@ -1229,6 +2265,24 @@ class AppGeoEditor(QtCore.QObject):
             self.app.inform[str, bool].emit(_("Grid Snap disabled."), False)
             self.app.app_cursor.enabled = False
 
+    def _tool_wants_raw_pick(self):
+        tool = self.active_tool
+        name = getattr(tool, 'name', None)
+        if name in ('select', 'simplification', 'import'):
+            return True
+        if name in ('move', 'copy'):
+            return getattr(tool, 'has_selection', True) is False
+        if name == 'eraser':
+            return not self.selected
+        return name in ('circle', 'rectangle') and \
+            QtWidgets.QApplication.keyboardModifiers() == QtCore.Qt.KeyboardModifier.ShiftModifier
+
+    def _is_click_not_drag(self, screen_pos):
+        press = getattr(self, 'press_pos_screen', None)
+        if press is None:
+            return None
+        return math.hypot(screen_pos[0] - press[0], screen_pos[1] - press[1]) < CLICK_DRAG_THRESHOLD_PX
+
     def on_canvas_click(self, event):
         """
         event.pos has canvas screen coordinates.
@@ -1239,8 +2293,17 @@ class AppGeoEditor(QtCore.QObject):
         event_pos = event.pos
 
         self.pos = self.canvas.translate_coords(event_pos)
+        raw_pick = AppGeoEditor._tool_wants_raw_pick(self)
+        grips = getattr(self, 'vertex_grips', None)
+        if event.button == 1:
+            self.press_pos_raw = (self.pos[0], self.pos[1])
+            self.press_pos_screen = (event_pos[0], event_pos[1])
+            if grips is not None and grips.press(event_pos, self.pos, QtWidgets.QApplication.keyboardModifiers()):
+                return
+        elif grips is not None:
+            grips.cancel()
 
-        if self.app.grid_status():
+        if not raw_pick and self.app.grid_status():
             self.pos = self.app.geo_editor.snap(self.pos[0], self.pos[1])
         else:
             self.pos = (self.pos[0], self.pos[1])
@@ -1258,6 +2321,7 @@ class AppGeoEditor(QtCore.QObject):
             if modifiers == QtCore.Qt.KeyboardModifier.ShiftModifier:
                 if self.active_tool is not None \
                         and self.active_tool.name != 'rectangle' \
+                        and self.active_tool.name != 'circle' \
                         and self.active_tool.name != 'path':
                     self.app.clipboard.setText(
                         self.app.options.get(
@@ -1275,11 +2339,16 @@ class AppGeoEditor(QtCore.QObject):
             if self.active_tool is not None:
 
                 # Dispatch event to active_tool
-                self.active_tool.click(self.snap(self.pos[0], self.pos[1]))
+                if AppGeoEditor.reject_busy(self):
+                    return 'fail'
+                point = self.pos if raw_pick else self.snap(self.pos[0], self.pos[1])
+                if self.active_tool.click(point) == 'fail':
+                    return 'fail'
 
                 # If it is a shape generating tool
                 if isinstance(self.active_tool, FCShapeTool) and self.active_tool.complete:
-                    self.on_shape_complete()
+                    if self.on_shape_complete() == 'fail':
+                        return 'fail'
 
                     if isinstance(self.active_tool, (FCText, FCMove)):
                         self.select_tool("select")
@@ -1289,15 +2358,22 @@ class AppGeoEditor(QtCore.QObject):
                 self.app.log.debug("No active tool to respond to click!")
 
     def on_canvas_click_release(self, event):
+        if AppGeoEditor.reject_busy(self):
+            return 'fail'
         event_pos = event.pos
         right_button = 2
 
         pos_canvas = self.canvas.translate_coords(event_pos)
 
-        if self.app.grid_status():
+        if not AppGeoEditor._tool_wants_raw_pick(self) and self.app.grid_status():
             pos = self.snap(pos_canvas[0], pos_canvas[1])
         else:
             pos = (pos_canvas[0], pos_canvas[1])
+
+        grips = getattr(self, 'vertex_grips', None)
+        if event.button == 1 and grips is not None and grips.release(event_pos, pos_canvas):
+            self.press_pos_raw = self.press_pos_screen = None
+            return
 
         # if the released mouse button was RMB then test if it was a panning motion or not, if not it was a context
         # canvas menu
@@ -1305,7 +2381,30 @@ class AppGeoEditor(QtCore.QObject):
             # if the released mouse button was LMB then test if we had a right-to-left selection or a left-to-right
             # selection and then select a type of selection ("enclosing" or "touching")
             if event.button == 1:  # left click
-                if self.app.selection_type is not None:
+                is_click = AppGeoEditor._is_click_not_drag(self, event_pos) if isinstance(self.active_tool, FCSelect) \
+                    else None
+                if isinstance(self.active_tool, FCImport):
+                    # a click picks (or unpicks) the shapes under it; a drag picks the shapes in the area
+                    start = getattr(self, 'press_pos_raw', None) or (self.pos[0], self.pos[1])
+                    self.app.delete_selection_shape()
+                    if AppGeoEditor._is_click_not_drag(self, event_pos) is False:
+                        self.active_tool.area_select(start, (pos_canvas[0], pos_canvas[1]), pos_canvas[0] >= start[0])
+                    else:
+                        self.active_tool.click_release(start)
+                    self.app.selection_type = None
+                    self.press_pos_raw = self.press_pos_screen = None
+                elif isinstance(self.active_tool, FCSelect) and is_click is not None:
+                    start = self.press_pos_raw
+                    self.app.delete_selection_shape()
+                    if is_click:
+                        self.active_tool.click_release(start)
+                        self.plot_changes()
+                    else:
+                        self._pick_cycle = None
+                        self.draw_selection_area_handler(start, (pos_canvas[0], pos_canvas[1]), pos_canvas[0] >= start[0])
+                    self.app.selection_type = None
+                    self.press_pos_raw = self.press_pos_screen = None
+                elif self.app.selection_type is not None:
                     self.draw_selection_area_handler(self.pos, pos, self.app.selection_type)
                     self.app.selection_type = None
                 elif isinstance(self.active_tool, FCSelect):
@@ -1325,6 +2424,9 @@ class AppGeoEditor(QtCore.QObject):
                             self.active_tool.complete = True
                             self.in_action = False
                             self.delete_utility_geometry()
+                            if isinstance(self.active_tool, FCImport) and self.active_tool.commit() == 'fail':
+                                self.active_tool.complete = False
+                                return 'fail'
                             self.active_tool.clean_up()
                             self.app.inform.emit('[success] %s' % _("Done."))
                             self.select_tool('select')
@@ -1336,10 +2438,13 @@ class AppGeoEditor(QtCore.QObject):
                         # if right click on canvas and the active tool need to be finished (like Path or Polygon)
                         # right mouse click will finish the action
                         if isinstance(self.active_tool, FCShapeTool):
-                            self.active_tool.click(self.snap(self.x, self.y))
-                            self.active_tool.make()
+                            if self.active_tool.click(self.snap(self.x, self.y)) == 'fail':
+                                return 'fail'
+                            if self.active_tool.make() == 'fail':
+                                return 'fail'
                             if self.active_tool.complete:
-                                self.on_shape_complete()
+                                if self.on_shape_complete() == 'fail':
+                                    return 'fail'
                                 self.app.inform.emit('[success] %s' % _("Done."))
                                 self.select_tool(self.active_tool.name)
         except Exception as e:
@@ -1404,6 +2509,8 @@ class AppGeoEditor(QtCore.QObject):
 
         self.snap_x = x
         self.snap_y = y
+        if not self.app.grid_status():
+            AppGeoEditor.snap_feedback(self, None)
         self.app.mouse_pos = [x, y]
 
         if self.pos is None:
@@ -1449,12 +2556,24 @@ class AppGeoEditor(QtCore.QObject):
                     # this can happen if the method is not implemented yet for the active_tool
                     pass
 
+        grips = getattr(self, 'vertex_grips', None)
+        if grips is not None and grips.move(event_pos, pos):
+            return
+
         # ### Selection area on canvas section ###
         dx = pos[0] - self.pos[0]
-        if event_is_dragging and event.button == 1:
+        selecting = isinstance(self.active_tool, FCSelect)
+        if selecting:
+            start = getattr(self, 'press_pos_raw', None) or (self.pos[0], self.pos[1])
+            dx = pos[0] - start[0]
+            selection_end = (pos[0], pos[1])
+        else:
+            start, selection_end = self.pos, (x, y)
+        if event_is_dragging and event.button == 1 and \
+                (not selecting or AppGeoEditor._is_click_not_drag(self, event_pos) is not True):
             self.app.delete_selection_shape()
             if dx < 0:
-                self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y),
+                self.app.draw_moving_selection_shape(tuple(start), selection_end,
                                                      color=self.app.options.get(
                                                          "global_alt_sel_line",
                                                          self.app.defaults.get(
@@ -1471,9 +2590,11 @@ class AppGeoEditor(QtCore.QObject):
                                                      ))
                 self.app.selection_type = False
             else:
-                self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y))
+                self.app.draw_moving_selection_shape(tuple(start), selection_end)
                 self.app.selection_type = True
         else:
+            if selecting:
+                self.app.delete_selection_shape()
             self.app.selection_type = None
 
     def update_utility_geometry(self, data):
@@ -1492,6 +2613,8 @@ class AppGeoEditor(QtCore.QObject):
         :param sel_type: if True it's a left to right selection (enclosure), if False it's a 'touch' selection
         :return:
         """
+        if getattr(self, 'interdict_selection', False):
+            return
         poly_selection = Polygon([start_pos, (end_pos[0], start_pos[1]), end_pos, (start_pos[0], end_pos[1])])
 
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
@@ -1639,6 +2762,7 @@ class AppGeoEditor(QtCore.QObject):
         self.delete_selected()
         # self.plot_all()
 
+    @geometry_operation
     def delete_selected(self):
         self.delete_shape(self.selected)
         self.selected.clear()
@@ -1647,6 +2771,7 @@ class AppGeoEditor(QtCore.QObject):
         # only the deleted shapes are removed from the canvas
         self.plot_changes()
 
+    @geometry_operation
     def delete_shape(self, shapes, inserted=()):
         """
         Deletes shape(shapes) from the storage, selection and utility
@@ -1661,10 +2786,9 @@ class AppGeoEditor(QtCore.QObject):
         # so the identity test is the same test as 'in'. The slice assignment keeps the list objects.
         shape_ids = {id(shape) for shape in w_shapes}
         self.utility[:] = [shape for shape in self.utility if id(shape) not in shape_ids]
-        self.selected[:] = [shape for shape in self.selected if id(shape) not in shape_ids]
 
         # remove from Storage (and insert), in 1 batch
-        self.storage.replace(removed=w_shapes, inserted=inserted)
+        AppGeoEditor.replace_shapes(self, removed=w_shapes, inserted=inserted)
 
     def on_move(self):
         # if not self.selected:
@@ -1704,10 +2828,12 @@ class AppGeoEditor(QtCore.QObject):
         # return [shape for shape in self.shape_buffer if shape["selected"]]
         return self.selected
 
+    @geometry_operation
     def transform_shapes(self, transform, *args, **kwargs):
         """Transform the selection, then update storage, tree and canvas once."""
         selected = list(self.get_selected())
         transformed = []
+        matrix = AppGeoEditor.transform_matrix(transform, *args, **kwargs)
         for shape in selected:
             # Keep the indexed geometry unchanged until replace() removes its old points.
             result = DrawToolShape(shape.geo)
@@ -1715,11 +2841,82 @@ class AppGeoEditor(QtCore.QObject):
             getattr(result, transform)(*args, **kwargs)
             result.data['bounds'] = result.bounds()
             self._collect_shape(result, transformed)
+            if matrix is not None:
+                DrawToolShape._affine_sources[result] = (ref(shape), shape.geo, result.geo, matrix)
 
         self.delete_shape(selected, inserted=transformed)
         self.selected.extend(transformed)
         self.build_ui_sig.emit()
         self.plot_changes()
+
+    @staticmethod
+    def transform_matrix(transform, *args, **kwargs):
+        """Use the same model-space matrices as the other editors; buffers are only a rendering optimization."""
+        factories = {
+            'offset': lambda vect: affine_translate_matrix(*vect),
+            'rotate': lambda angle, point: affine_rotate_matrix(angle, point),
+            'mirror': lambda axis, point: affine_mirror_matrix(axis, point),
+            'skew': lambda angle_x, angle_y, point: affine_skew_matrix(angle_x, angle_y, point),
+            'scale': lambda xfactor, yfactor=None, point=None: affine_scale_matrix(
+                float(xfactor), float(xfactor if yfactor is None else yfactor), (0, 0) if point is None else point)
+        }
+        factory = factories.get(transform)
+        return factory(*args, **kwargs) if factory is not None else None
+
+    def reuse_affine_entries(self, objects, rendered):
+        """Transfer proven replacement buffers, or discard a partial transfer and use the normal replot path."""
+        live_ids = {id(shape) for shape in objects}
+        reverse = {}
+        for entry in rendered.values():
+            provenance = DrawToolShape._affine_sources.get(entry[0])
+            if provenance is not None:
+                source = provenance[0]()
+                if source is not None:
+                    reverse[id(source)] = (entry[0], provenance)
+        changed = False
+        for shape in objects:
+            if id(shape) in rendered:
+                continue
+            provenance = DrawToolShape._affine_sources.get(shape)
+            if provenance is not None and provenance[0]() is not None and id(provenance[0]()) in rendered:
+                source = provenance[0]()
+                source_geo, target_geo, matrix = provenance[1:]
+            elif id(shape) in reverse:
+                source, provenance = reverse[id(shape)]
+                target_geo, source_geo, matrix = provenance[1:]
+                try:
+                    matrix = invert_matrix(matrix)
+                except Exception:
+                    continue
+            else:
+                continue
+            entry = rendered.get(id(source))
+            if (id(source) in live_ids or entry is None or entry[0] is not source or
+                    entry[1] is not source_geo or shape.geo is not target_geo or not entry[2]):
+                continue
+            a, b, d, e, _xoff, _yoff = matrix
+            if not all(math.isfinite(value) for value in matrix) or abs(a * e - b * d) <= 1e-12:
+                continue
+            collections = ((self.shapes, entry[3]), (self.sel_shapes, entry[4]))
+            if not entry[3] or any(not callable(getattr(collection, 'transform_keys', None)) or
+                                   any(key not in collection.data for key in keys)
+                                   for collection, keys in collections):
+                continue
+            try:
+                reused = all(not keys or collection.transform_keys(keys, matrix, update=False)
+                             for collection, keys in collections)
+            except Exception as err:
+                self.app.log.debug('AppGeoEditor.reuse_affine_entries() --> %s' % str(err))
+                reused = False
+            rendered.pop(id(source))
+            changed = True
+            if reused:
+                entry[0], entry[1] = shape, shape.geo
+                rendered[id(shape)] = entry
+            else:
+                # The base collection may have succeeded before the selection copy failed. Never reuse half a pair.
+                self.unplot_entry(entry)
+        return changed
 
     def plot_shape(self, storage, geometry=None, color='#000000FF', linewidth=1, layer=0):
         """
@@ -1813,6 +3010,9 @@ class AppGeoEditor(QtCore.QObject):
 
         self._rendered = rendered
         self._render_state = self.get_render_state()
+        grips = getattr(self, 'vertex_grips', None)
+        if grips is not None:
+            grips.sync()
 
     def get_render_state(self):
         """
@@ -1863,9 +3063,10 @@ class AppGeoEditor(QtCore.QObject):
 
         to_hide = set()
         to_show = set()
-        changed = False
+        objects = list(self.storage.get_objects())
+        changed = AppGeoEditor.reuse_affine_entries(self, objects, rendered)
         seen = set()
-        for shape in self.storage.get_objects():
+        for shape in objects:
             shape_id = id(shape)
             seen.add(shape_id)
             is_sel = shape_id in sel_ids
@@ -1916,6 +3117,9 @@ class AppGeoEditor(QtCore.QObject):
             self.shapes.redraw()
             self.sel_shapes.redraw()
         self._render_state = self.get_render_state()
+        grips = getattr(self, 'vertex_grips', None)
+        if grips is not None:
+            grips.sync()
 
     def unplot_entry(self, entry):
         """
@@ -1939,6 +3143,7 @@ class AppGeoEditor(QtCore.QObject):
         """
         return color[:7] + alpha
 
+    @geometry_operation
     def on_shape_complete(self):
         self.app.log.debug("on_shape_complete()")
 
@@ -1985,7 +3190,17 @@ class AppGeoEditor(QtCore.QObject):
 
         # Add shape
 
-        self.add_shape(geom_list)
+        removed = getattr(self.active_tool, 'removed_shapes', ())
+        if removed:
+            inserted = []
+            self._collect_shape(geom_list, inserted)
+            if AppGeoEditor.replace_shapes(self, removed=removed, inserted=inserted, selected=inserted) == 'fail':
+                return 'fail'
+            self.active_tool.removed_shapes = []
+            self.build_ui_sig.emit()
+        else:
+            if self.add_shape(geom_list) == 'fail':
+                return 'fail'
 
         # Remove any utility shapes
         self.delete_utility_geometry()
@@ -1993,13 +3208,22 @@ class AppGeoEditor(QtCore.QObject):
 
         # Re-plot and reset tool.
         self.plot_changes()
+        if removed and isinstance(self.active_tool, FCMove):
+            # Move preparation must remain retryable until its replacement has actually committed.
+            self.active_tool.origin = None
+            self.active_tool.draw_cursor_data(delete=True)
+            self.app.inform.emit('[success] %s' % _("Done."))
+            try:
+                self.app.jump_signal.disconnect()
+            except TypeError:
+                pass
         # self.active_tool = type(self.active_tool)(self)
 
     @staticmethod
     def make_storage():
 
         # Shape storage.
-        storage = AppRTreeStorage()
+        storage = GeometryEditorStorage()
         storage.get_points = DrawToolShape.get_pts
 
         return storage
@@ -2026,6 +3250,43 @@ class AppGeoEditor(QtCore.QObject):
         if shape in self.selected:
             self.selected.remove(shape)
 
+    def get_snap_index(self):
+        """Cache straight segments once per mutation, never scan the scene on each mouse move."""
+        if not self._history_lock.acquire(blocking=False):
+            return None, ()
+        try:
+            cache = getattr(self, '_snap_cache', None)
+            state = (self.storage, self.storage.revision)
+            if cache is not None and cache[0] == state:
+                return cache[1], cache[2]
+            segments = []
+            for shape in self.storage.get_objects():
+                geo = shape.geo
+                parts = geo.geoms if isinstance(geo, MultiLineString) else (geo,)
+                for part in parts:
+                    if not isinstance(part, (LineString, LinearRing)):
+                        continue
+                    coords = list(part.coords)
+                    segments.extend(LineString((a[:2], b[:2])) for a, b in zip(coords, coords[1:]) if a[:2] != b[:2])
+            tree = STRtree(segments) if segments else None
+            self._snap_cache = (state, tree, segments)
+            return tree, segments
+        finally:
+            self._history_lock.release()
+
+    def snap_feedback(self, kind):
+        self.active_snap_type = kind
+        ui = getattr(self, 'ui', None)
+        label = getattr(ui, 'snap_type_label', None)
+        if label is not None:
+            names = {'corner': _("Corner"), 'midpoint': _("Midpoint"), 'segment': _("Nearest segment"),
+                     'grid': _("Grid"), None: _("None")}
+            text = '%s: %s' % (_("Snap"), names[kind])
+            if getattr(self, 'snap_acquisition', None) == 'world':
+                text += ' — ' + _("Compatibility: model units (global_snap_max)")
+            if label.text() != text:
+                label.setText(text)
+
     def snap(self, x, y):
         """
         Adjusts coordinates to snap settings.
@@ -2034,9 +3295,14 @@ class AppGeoEditor(QtCore.QObject):
         :param y: Input coordinate Y
         :return: Snapped (x, y)
         """
+        if getattr(self.app, 'call_source', None) == 'grb_editor':
+            return self.app.grb_editor.snap(x, y)
+        if getattr(self.app, 'call_source', None) == 'exc_editor':
+            return self.app.exc_editor.snap(x, y)
 
         snap_x, snap_y = (x, y)
         snap_distance = np.inf
+        snap_kind = None
 
         # # ## Object (corner?) snap
         # # ## No need for the objects, just the coordinates
@@ -2049,8 +3315,54 @@ class AppGeoEditor(QtCore.QObject):
                 if nearest_pt_distance <= float(self.editor_options["global_snap_max"]):
                     snap_distance = nearest_pt_distance
                     snap_x, snap_y = nearest_pt
+                    snap_kind = 'corner'
             except (StopIteration, AssertionError):
                 pass
+
+        # New modes are editor-local. Global callers keep the legacy grid/corner contract.
+        self.snap_acquisition = None
+        if getattr(self.app, 'call_source', None) == 'geo_editor' and (
+                self.editor_options.get('midpoint_snap', False) or self.editor_options.get('segment_snap', False)) and \
+                self.app.grid_status():
+            radius = float(self.editor_options.get('snap_radius_px', 8.0))
+            try:
+                canvas = self.canvas
+                screen = np.asarray(canvas.translate_coords_2((x, y))[:2], dtype=float)
+                corners = [canvas.translate_coords((screen[0] + dx, screen[1] + dy))[:2]
+                           for dx, dy in ((-radius, -radius), (-radius, radius),
+                                          (radius, -radius), (radius, radius))]
+                bounds = np.asarray(corners, dtype=float)
+                if not np.isfinite(screen).all() or not np.isfinite(bounds).all():
+                    raise ValueError('Non-finite canvas conversion')
+                query = box(*bounds.min(axis=0), *bounds.max(axis=0))
+                self.snap_acquisition = 'pixels'
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                # Preserve the existing preference's units; never reinterpret it as a pixel count.
+                radius = float(self.editor_options['global_snap_max'])
+                query = box(x - radius, y - radius, x + radius, y + radius)
+                self.snap_acquisition = 'world'
+
+            tree, segments = AppGeoEditor.get_snap_index(self)
+            candidates = []
+            for idx in tree.query(query) if tree is not None else ():
+                segment = segments[int(idx)]
+                if self.editor_options.get('midpoint_snap', False):
+                    candidates.append((segment.interpolate(0.5, normalized=True), 1, 'midpoint'))
+                if self.editor_options.get('segment_snap', False):
+                    candidates.append((segment.interpolate(segment.project(Point(x, y))), 2, 'segment'))
+            ranked = []
+            for point, priority, kind in candidates:
+                pt = (point.x, point.y)
+                model_distance = distance((x, y), pt)
+                acquisition_distance = model_distance
+                if self.snap_acquisition == 'pixels':
+                    acquisition_distance = distance(screen, canvas.translate_coords_2(pt)[:2])
+                if acquisition_distance <= radius:
+                    ranked.append((model_distance, priority, pt, kind))
+            if ranked:
+                candidate_distance, __, pt, kind = min(ranked)
+                if candidate_distance < snap_distance:
+                    snap_distance, (snap_x, snap_y), snap_kind = candidate_distance, pt, kind
 
         # # ## Grid snap
         if self.editor_options["grid_snap"]:
@@ -2086,7 +3398,9 @@ class AppGeoEditor(QtCore.QObject):
             nearest_grid_distance = distance((x, y), (snap_x_, snap_y_))
             if nearest_grid_distance < snap_distance:
                 snap_x, snap_y = (snap_x_, snap_y_)
+                snap_kind = 'grid'
 
+        AppGeoEditor.snap_feedback(self, snap_kind)
         return snap_x, snap_y
 
     def edit_geometry(self, fcgeometry, multigeo_tool=None):
@@ -2100,8 +3414,10 @@ class AppGeoEditor(QtCore.QObject):
         """
         assert isinstance(fcgeometry, Geometry), "Expected a Geometry, got %s" % type(fcgeometry)
 
-        self.deactivate()
-        self.activate()
+        if self.deactivate() == 'fail':
+            return 'fail'
+        if self.activate() == 'fail':
+            return 'fail'
 
         self.set_editor_ui()
 
@@ -2200,55 +3516,131 @@ class AppGeoEditor(QtCore.QObject):
                 else:
                     self.ui.tooldia_entry.set_value(float(fcgeometry.obj_options['tools_mill_tooldia']))
 
-        self.app.worker_task.emit({'fcn': worker_job, 'params': [self]})
+        AppGeoEditor.submit_worker(self, worker_job, [self], record=False)
 
-    def update_editor_geometry(self, fcgeometry):
+    def update_editor_geometry(self, fcgeometry, on_complete=None):
         """
         Transfers the geometry tool shape buffer to the selected geometry
         object. The geometry already in the object are removed.
 
-        It runs in the caller thread and ends with the editor deactivated: the caller (App.on_editing_finished())
-        reads the bounds and plots the object right after this call, so the object has the new geometry first.
-        The copy is fast (about 45 ms for 5000 shapes); a worker thread here let the caller read the old geometry.
+        Geometry commits in the caller thread. The GUI caller supplies on_complete: DXF generation then runs
+        in the existing worker queue and queued GUI completion owns source assignment and editor teardown.
+        Direct non-GUI callers without a continuation retain synchronous completion.
 
         :param fcgeometry:  GeometryObject
-        :return:            None
+        :param on_complete: GUI continuation, called once after source generation and deactivation
+        :return:            'fail' if busy; 'pending' for deferred source generation; None on completion
         """
-        with self.app.proc_container.new(_("Working...")):
-            new_dia = self.ui.tooldia_entry.get_value()
+        # Reserve the idle editor BEFORE reading storage. A rejected save must not change the object.
+        with AppGeoEditor.history_access(self) as accepted:
+            if not accepted:
+                return 'fail'
+            if getattr(self.app, 'save_in_progress', False) is True or \
+                    getattr(self.app, 'project_save_pending', False) is True:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    "A save of the project is running. Wait until it ends."))
+                return 'fail'
+            with self.app.proc_container.new(_("Working...")):
+                new_dia = self.ui.tooldia_entry.get_value()
 
-            # the shapes of the editor, with the MultiLineString shapes merged
-            new_geometry = []
-            for shape in self.storage.get_objects():
-                new_geo = shape.geo
-                if isinstance(new_geo, MultiLineString):
-                    new_geo = linemerge(new_geo)
-                new_geometry.append(new_geo)
-            new_geometry = flatten_shapely_geometry(new_geometry)
+                # the shapes of the editor, with the MultiLineString shapes merged
+                new_geometry = []
+                for shape in self.storage.get_objects():
+                    new_geo = shape.geo
+                    if isinstance(new_geo, MultiLineString):
+                        new_geo = linemerge(new_geo)
+                    new_geometry.append(new_geo)
+                new_geometry = flatten_shapely_geometry(new_geometry)
 
-            if self.multigeo_tool:
-                tool = fcgeometry.tools[self.multigeo_tool]
-                if new_dia != float(tool['tooldia']):
-                    tool['tooldia'] = new_dia
-                    tool['data']['tools_mill_tooldia'] = new_dia
-                tool['solid_geometry'] = list(new_geometry)
-                self.multigeo_tool = None
-            elif new_dia != float(fcgeometry.obj_options['tools_mill_tooldia']):
-                fcgeometry.obj_options['tools_mill_tooldia'] = new_dia
+                if self.multigeo_tool:
+                    tool = fcgeometry.tools[self.multigeo_tool]
+                    if new_dia != float(tool['tooldia']):
+                        tool['tooldia'] = new_dia
+                        tool['data']['tools_mill_tooldia'] = new_dia
+                    tool['solid_geometry'] = list(new_geometry)
+                    self.multigeo_tool = None
+                elif new_dia != float(fcgeometry.obj_options['tools_mill_tooldia']):
+                    fcgeometry.obj_options['tools_mill_tooldia'] = new_dia
 
-            fcgeometry.solid_geometry = new_geometry
+                fcgeometry.solid_geometry = new_geometry
 
+                try:
+                    bounds = fcgeometry.bounds()
+                    fcgeometry.obj_options['xmin'] = bounds[0]
+                    fcgeometry.obj_options['ymin'] = bounds[1]
+                    fcgeometry.obj_options['xmax'] = bounds[2]
+                    fcgeometry.obj_options['ymax'] = bounds[3]
+                except Exception:
+                    pass
+
+                # Geometry is committed. A failed interchange snapshot must not turn Save into Discard.
+                if on_complete is not None:
+                    return AppGeoEditor.queue_source_save(self, fcgeometry, on_complete)
+                try:
+                    source_updated = fcgeometry.regenerate_source()
+                except Exception as e:
+                    self.app.log.error("AppGeoEditor.update_editor_geometry() --> %s" % str(e))
+                    source_updated = False
+                if not source_updated:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                        "Geometry saved, but the DXF source snapshot is stale. The previous source was kept."))
+
+            self.deactivate()
+            self.app.inform.emit(_("Editor Exit. Geometry object was updated ..."))
+
+    def queue_source_save(self, fcgeometry, on_complete):
+        token = object()
+        self._source_save = dict(token=token, obj=fcgeometry, complete=on_complete,
+                                 session=getattr(self, '_history_session', 0),
+                                 selection_blocked=getattr(self, 'interdict_selection', False),
+                                 proc=self.app.proc_container.new(_("Working...")))
+        self._source_save_pending = True
+        self.interdict_selection = True
+
+        def work():
+            state = getattr(self, '_source_save', None)
+            if state is None or state['token'] is not token:
+                return
+            text = False
             try:
-                bounds = fcgeometry.bounds()
-                fcgeometry.obj_options['xmin'] = bounds[0]
-                fcgeometry.obj_options['ymin'] = bounds[1]
-                fcgeometry.obj_options['xmax'] = bounds[2]
-                fcgeometry.obj_options['ymax'] = bounds[3]
-            except Exception:
-                pass
+                # No source or UI mutation here. The committed geometry is reserved until GUI completion.
+                text = fcgeometry.regenerate_source(store=False)
+            except Exception as err:
+                self.app.log.error("AppGeoEditor.queue_source_save() --> %s" % str(err))
+            finally:
+                self.source_save_done.emit((token, text))
 
-        self.deactivate()
-        self.app.inform.emit(_("Editor Exit. Geometry object was updated ..."))
+        try:
+            self.app.worker_task.emit({'fcn': work, 'params': []})
+        except Exception as err:
+            self.app.log.error("AppGeoEditor.queue_source_save() --> %s" % str(err))
+            AppGeoEditor.on_source_save_done(self, (token, False))
+            return
+        return 'pending'
+
+    @QtCore.pyqtSlot(object)
+    def on_source_save_done(self, result):
+        token, text = result
+        state = getattr(self, '_source_save', None)
+        if state is None or token is not state['token']:
+            return
+        self._source_save = None
+        self._source_save_pending = False
+        self.interdict_selection = state['selection_blocked']
+        try:
+            if self.app.geo_editor is not self or self.app.call_source != 'geo_editor' or \
+                    getattr(self, '_history_session', 0) != state['session']:
+                return
+            if isinstance(text, str) and text and text != 'fail':
+                state['obj'].source_file = text
+            else:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    "Geometry saved, but the DXF source snapshot is stale. The previous source was kept."))
+            self.deactivate()
+            self.app.inform.emit(_("Editor Exit. Geometry object was updated ..."))
+            state['complete']()
+        finally:
+            state['proc'].done()
 
     def update_options(self, obj):
         if self.paint_tooldia:
@@ -2287,7 +3679,7 @@ class AppGeoEditor(QtCore.QObject):
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self]})
+        AppGeoEditor.submit_worker(self, work_task, [self])
 
     def intersection_2(self):
         """
@@ -2330,7 +3722,7 @@ class AppGeoEditor(QtCore.QObject):
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self]})
+        AppGeoEditor.submit_worker(self, work_task, [self])
 
     def intersection(self):
         """
@@ -2391,7 +3783,7 @@ class AppGeoEditor(QtCore.QObject):
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self]})
+        AppGeoEditor.submit_worker(self, work_task, [self])
 
     def subtract(self):
         def work_task(editor_self):
@@ -2419,7 +3811,7 @@ class AppGeoEditor(QtCore.QObject):
                 except Exception as e:
                     editor_self.app.log.error(str(e))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self]})
+        AppGeoEditor.submit_worker(self, work_task, [self])
 
     def subtract_2(self):
         def work_task(editor_self):
@@ -2446,7 +3838,7 @@ class AppGeoEditor(QtCore.QObject):
                 except Exception as e:
                     editor_self.app.log.error(str(e))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self]})
+        AppGeoEditor.submit_worker(self, work_task, [self])
 
     def cutpath(self):
         def work_task(editor_self):
@@ -2486,7 +3878,7 @@ class AppGeoEditor(QtCore.QObject):
                 editor_self.build_ui_sig.emit()
                 editor_self.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self]})
+        AppGeoEditor.submit_worker(self, work_task, [self])
 
     def flatten(self, geometry, orient_val=1, reset=True, pathonly=False):
         """
@@ -2584,6 +3976,16 @@ class AppGeoEditorUI:
         self.level.setCheckable(True)
         self.title_box.addWidget(self.level)
 
+        history_box = QtWidgets.QHBoxLayout()
+        self.tools_box.addLayout(history_box)
+        self.history_undo = QtWidgets.QPushButton(_('Undo'))
+        self.history_redo = QtWidgets.QPushButton(_('Redo'))
+        history_box.addWidget(self.history_undo)
+        history_box.addWidget(self.history_redo)
+        self.history_positions = QtWidgets.QComboBox()
+        self.history_positions.setToolTip(_('History: select a state to undo or redo geometry operations.'))
+        self.tools_box.addWidget(self.history_positions)
+
         dia_grid = GLay(v_spacing=5, h_spacing=3)
         self.tools_box.addLayout(dia_grid)
 
@@ -2599,6 +4001,31 @@ class AppGeoEditorUI:
 
         dia_grid.addWidget(tooldia_lbl, 0, 0)
         dia_grid.addWidget(self.tooldia_entry, 0, 1)
+
+        snap_frame = FCFrame()
+        self.tools_box.addWidget(snap_frame)
+        snap_grid = GLay(v_spacing=5, h_spacing=3)
+        snap_frame.setLayout(snap_grid)
+        self.midpoint_snap_cb = FCCheckBox(_("Midpoint snap"))
+        self.segment_snap_cb = FCCheckBox(_("Nearest segment snap"))
+        self.midpoint_snap_cb.setToolTip(_("Snap to the midpoint of each straight line/polyline segment."))
+        self.segment_snap_cb.setToolTip(_("Snap to the closest point on a straight segment, not its extension.\n"
+                                          "Polygonized curves remain straight segments, not analytic circles or tangents."))
+        snap_grid.addWidget(self.midpoint_snap_cb, 0, 0, 1, 2)
+        snap_grid.addWidget(self.segment_snap_cb, 1, 0, 1, 2)
+        snap_grid.addWidget(FCLabel(_("Acquisition (px)")), 2, 0)
+        self.snap_radius_entry = FCDoubleSpinner()
+        self.snap_radius_entry.set_precision(1)
+        self.snap_radius_entry.set_range(0.0, 100.0)
+        self.snap_radius_entry.set_value(8.0)
+        self.snap_radius_entry.setToolTip(_("Pixel radius for midpoint/segment snapping. Requires grid snapping enabled.\n"
+                                           "Without a live canvas, uses global_snap_max in model units.\n"
+                                           "Corner snapping keeps its existing model-unit distance preference."))
+        snap_grid.addWidget(self.snap_radius_entry, 2, 1)
+        self.snap_type_label = FCLabel('%s: %s' % (_("Snap"), _("None")))
+        self.snap_type_label.setToolTip(_("Closest candidate wins. Equal distances: corner, midpoint, segment, grid.\n"
+                                         "Equal segment candidates use coordinate order."))
+        snap_grid.addWidget(self.snap_type_label, 3, 0, 1, 2)
 
         # #############################################################################################################
         # Tree Widget Frame
@@ -2737,6 +4164,110 @@ class AppGeoEditorUI:
         )
         coords_grid.addWidget(self.geo_coords_entry, 0, 0, 1, 2)
 
+        self.vertex_edit_btn = FCButton(_("Edit vertices"))
+        self.vertex_edit_btn.setToolTip(_("Numerically move, insert or remove a vertex of one selected contour."))
+        coords_grid.addWidget(self.vertex_edit_btn, 1, 0, 1, 2)
+
+        self.split_action = QtGui.QAction(_("Split path"), self.geo_edit_widget)
+        self.split_action.setToolTip(_("Select one open LineString, then click its interior to split it."))
+        self.split_btn = QtWidgets.QToolButton()
+        self.split_btn.setDefaultAction(self.split_action)
+        coords_grid.addWidget(self.split_btn, 2, 0, 1, 2)
+        self.split_tolerance_entry = FCEntry()
+        self.split_tolerance_entry.setText('0.01')
+        self.split_tolerance_entry.setToolTip(
+            _("Maximum click distance from the path, and excluded distance along the path from each endpoint.\n"
+              "In current units, independent of grid and pixel snap radius. Zero requires an exact interior click."))
+        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Split tolerance"), self.app.app_units)), 3, 0)
+        coords_grid.addWidget(self.split_tolerance_entry, 3, 1)
+
+        self.join_btn = FCButton(_("Join paths"))
+        self.join_btn.setToolTip(_("Join selected open LineStrings. Ambiguous branches are rejected."))
+        coords_grid.addWidget(self.join_btn, 4, 0, 1, 2)
+        self.join_tolerance_entry = FCEntry()
+        self.join_tolerance_entry.setText('0.01')
+        self.join_tolerance_entry.setToolTip(
+            _("Maximum endpoint gap in current units. Zero joins exact endpoints only.\n"
+              "Near endpoints get a straight bridge: no vertices move; length increases by the gap.\n"
+              "Each endpoint must have only one candidate. Disjoint components stay separate."))
+        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Join tolerance"), self.app.app_units)), 5, 0)
+        coords_grid.addWidget(self.join_tolerance_entry, 5, 1)
+
+        self.diagnostics_btn = FCButton(_("Inspect selected geometry"))
+        self.diagnostics_btn.setToolTip(_("Read-only snapshot. Open paths are informational; no repair is performed."))
+        coords_grid.addWidget(self.diagnostics_btn, 6, 0, 1, 2)
+        self.diagnostics_tolerance_entry = FCEntry()
+        self.diagnostics_tolerance_entry.setText('0.01')
+        self.diagnostics_tolerance_entry.setToolTip(
+            _("Near endpoint distance in current units, independent of grid and snapping.\n"
+              "Zero reports exactly coincident endpoints only. Paths remain open and unchanged."))
+        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Endpoint tolerance"), self.app.app_units)), 7, 0)
+        coords_grid.addWidget(self.diagnostics_tolerance_entry, 7, 1)
+        self.diagnostics_result = FCLabel('')
+        self.diagnostics_result.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.diagnostics_result.setWordWrap(True)
+        self.diagnostics_result.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        coords_grid.addWidget(self.diagnostics_result, 8, 0, 1, 2)
+
+        # Select by Size
+        coords_grid.addWidget(FCLabel('%s' % _("Select by Size"), bold=True), 9, 0, 1, 2)
+        units = self.app.app_units
+        self.size_area_chk = FCCheckBox(_("Filter polygons by area"))
+        self.size_area_chk.setToolTip(
+            _("Applies to Polygon and MultiPolygon shapes (text counts as polygons), area in current units squared.\n"
+              "Limits are inclusive. Points and mixed collections never match."))
+        self.size_min_area_entry = FCEntry()
+        self.size_min_area_entry.setText('0')
+        self.size_max_area_entry = FCEntry()
+        self.size_max_area_entry.setText('1')
+        coords_grid.addWidget(self.size_area_chk, 10, 0, 1, 2)
+        coords_grid.addWidget(FCLabel('%s (%s²)' % (_("Min area"), units)), 11, 0)
+        coords_grid.addWidget(self.size_min_area_entry, 11, 1)
+        coords_grid.addWidget(FCLabel('%s (%s²)' % (_("Max area"), units)), 12, 0)
+        coords_grid.addWidget(self.size_max_area_entry, 12, 1)
+
+        self.size_length_chk = FCCheckBox(_("Filter paths by length"))
+        self.size_length_chk.setToolTip(
+            _("Applies to LineString, LinearRing and MultiLineString shapes, length in current units.\n"
+              "Limits are inclusive. Points and mixed collections never match."))
+        self.size_min_length_entry = FCEntry()
+        self.size_min_length_entry.setText('0')
+        self.size_max_length_entry = FCEntry()
+        self.size_max_length_entry.setText('1')
+        coords_grid.addWidget(self.size_length_chk, 13, 0, 1, 2)
+        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Min length"), units)), 14, 0)
+        coords_grid.addWidget(self.size_min_length_entry, 14, 1)
+        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Max length"), units)), 15, 0)
+        coords_grid.addWidget(self.size_max_length_entry, 15, 1)
+
+        self.size_select_btn = FCButton(_("Select"))
+        self.size_select_btn.setToolTip(
+            _("Select the shapes matching the enabled filters. Searches the selected shapes if any,\n"
+              "else all the shapes. Replaces the current selection."))
+        self.size_delete_btn = FCButton(_("Delete"))
+        self.size_delete_btn.setToolTip(
+            _("Delete the shapes matching the enabled filters, as one Undo/Redo step.\n"
+              "Searches the selected shapes if any, else all the shapes."))
+        coords_grid.addWidget(self.size_select_btn, 16, 0)
+        coords_grid.addWidget(self.size_delete_btn, 16, 1)
+
+        # Resize Circles
+        coords_grid.addWidget(FCLabel('%s' % _("Resize Circles"), bold=True), 17, 0, 1, 2)
+        self.resize_circles_entry = FCDoubleSpinner(policy=False)
+        self.resize_circles_entry.set_precision(self.decimals)
+        self.resize_circles_entry.set_range(0.0000, 10000.0000)
+        self.resize_circles_entry.setSingleStep(10 ** -self.decimals)
+        self.resize_circles_entry.setToolTip(
+            _("Diameter to resize the selected circles to. Each circle keeps its own center.\n"
+              "Circles are recognized by their shape (polygon or outline with at least 8 vertices,\n"
+              "all at the same distance from the center). Other shapes are skipped."))
+        coords_grid.addWidget(FCLabel('%s (%s)' % (_("New Diameter"), units)), 18, 0)
+        coords_grid.addWidget(self.resize_circles_entry, 18, 1)
+        self.resize_circles_btn = FCButton(_("Resize"))
+        self.resize_circles_btn.setToolTip(
+            _("Resize the selected circles to the new diameter, as one Undo/Redo step."))
+        coords_grid.addWidget(self.resize_circles_btn, 19, 0, 1, 2)
+
         # Grid Layout
         v_grid = GLay(v_spacing=5, h_spacing=3)
         self.tools_box.addLayout(v_grid)
@@ -2831,6 +4362,20 @@ class DrawToolShape(object):
     """
     Encapsulates "shapes" under a common class.
     """
+
+    # External weak maps keep storage/render provenance out of deepcopy and worker serialization.
+    _storages = WeakKeyDictionary()
+    _affine_sources = WeakKeyDictionary()
+
+    @property
+    def geo(self):
+        return self._geo
+
+    @geo.setter
+    def geo(self, geometry):
+        self._geo = geometry
+        for storage in tuple(DrawToolShape._storages.get(self, ())):
+            storage.revision += 1
 
     tolerance = None
 
@@ -3143,6 +4688,59 @@ class DrawToolUtilityShape(DrawToolShape):
         self.utility = True
 
 
+def bend_corner_point(draw_app, old, new):
+    """
+    Corner point inserted between two consecutive points of a Path/Polygon, according to draw_app.bend_mode.
+
+    The corner math is the one shared with the Gerber Editor (corner_point()).
+
+    :param draw_app:    the Geometry Editor; its bend_mode attribute holds the corner mode (5 = free angle)
+    :param old:         (x, y) of the previous point
+    :param new:         (x, y) of the new point
+    :return:            (x, y) of the corner or None if no corner point is needed
+    """
+    mode = getattr(draw_app, 'bend_mode', BEND_MODE_FREE)
+    return corner_point(mode, (float(old[0]), float(old[1])), (float(new[0]), float(new[1])))
+
+
+def corner_points(draw_app, points, point):
+    """
+    Points to append to a Path/Polygon when the user clicks 'point': the corner (if any) and the point.
+    """
+    corner = bend_corner_point(draw_app, points[-1], point) if points else None
+    return [corner, point] if corner is not None else [point]
+
+
+def backtrack_points(tool):
+    """
+    Remove from tool.points the points added by the last click (the corner included).
+    The number of points added by each click is stored in tool.click_sizes.
+    """
+    sizes = getattr(tool, 'click_sizes', None)
+    count = sizes.pop() if sizes else 1
+    tool.points = tool.points[0:-count] if count else tool.points[:]
+
+
+def cycle_bend_mode(tool, forward):
+    """
+    Change the corner mode of the Geometry Editor (T = forward, R = backward) and refresh the utility shape.
+
+    :param tool:    the active Path or Polygon tool
+    :param forward: True to go to the next mode, False to go to the previous one
+    :return:        the status bar message
+    """
+    draw_app = tool.draw_app
+    draw_app.bend_mode = next_bend_mode(getattr(draw_app, 'bend_mode', BEND_MODE_FREE), forward)
+
+    if tool.points:
+        # Remove any previous utility shape
+        draw_app.tool_shape.clear(update=False)
+        geo = tool.utility_geometry(data=(draw_app.snap_x, draw_app.snap_y))
+        draw_app.draw_utility_geometry(geo=geo)
+
+    return bend_mode_message(draw_app.bend_mode)
+
+
 class DrawTool(object):
     """
     Abstract Class representing a tool in the drawing
@@ -3205,6 +4803,32 @@ class DrawTool(object):
 
         bounds_coords = bounds_rec(obj)
         return bounds_coords
+
+
+class FCSplit(DrawTool):
+    """One click commits the split directly; it isn't newly drawn geometry."""
+
+    def __init__(self, draw_app):
+        DrawTool.__init__(self, draw_app)
+        self.name = 'split'
+        self.target = draw_app.selected[0] if len(draw_app.selected) == 1 else None
+        self.session = draw_app._history_session
+        draw_app.in_action = False
+        draw_app.app.inform.emit(_("Select one open LineString before starting Split path. Click its interior; "
+                                   "the split tolerance is in current units."))
+
+    def click(self, point):
+        if self.target is None:
+            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
+                                          _("Select exactly one open LineString and reopen Split path."))
+            return 'fail'
+        if self.draw_app.apply_path_split(point, self.draw_app.ui.split_tolerance_entry.text(),
+                                          target=self.target, session=self.session) == 'fail':
+            return 'fail'
+        self.draw_app.select_tool('select')
+
+    def clean_up(self):
+        pass
 
 
 class FCShapeTool(DrawTool):
@@ -3298,10 +4922,16 @@ class FCCircle(FCShapeTool):
                     _("Click on Center point to add a new circle or Apply to change the selection."))
             return
 
+        if not all(math.isfinite(v) for v in point) or (self.points and point == self.points[0]):
+            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
+                                          _("Choose a finite perimeter point different from the center."))
+            return 'fail'
+        if self.points:
+            self.utility_geometry(data=point)
         self.circle_tool.mode = 'add'
         self.points.append(point)
-        self.circle_tool.ui.x_entry.set_value(point[0])
-        self.circle_tool.ui.y_entry.set_value(point[1])
+        self.circle_tool.ui.x_entry.set_value(self.points[0][0])
+        self.circle_tool.ui.y_entry.set_value(self.points[0][1])
 
         if len(self.points) == 1:
             if self.ui.radius_link_btn.isChecked():
@@ -3313,7 +4943,8 @@ class FCCircle(FCShapeTool):
 
         if len(self.points) == 2:
             if self.ui.radius_link_btn.isChecked():
-                self.make()
+                if self.make() == 'fail':
+                    return 'fail'
                 return "Done."
             else:
                 self.draw_app.app.inform.emit(_("Click on Perimeter point to set axis minor ..."))
@@ -3420,6 +5051,11 @@ class FCCircle(FCShapeTool):
             self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
+        if key in ('Enter', QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            if AppGeoEditor.reject_busy(self.draw_app):
+                return 'fail'
+            if not self.points:
+                return _("Click on the center point before entering a radius.")
         # Jump to coords
         if key == QtCore.Qt.Key.Key_J or key == 'J':
             self.draw_app.app.on_jump_to()
@@ -3431,6 +5067,8 @@ class FCCircle(FCShapeTool):
                         QtCore.Qt.Key.Key_Plus, QtCore.Qt.Key.Key_Comma, QtCore.Qt.Key.Key_Period,
                         QtCore.Qt.Key.Key_Slash, QtCore.Qt.Key.Key_Asterisk]:
 
+            if not self.points:
+                return _("Click on the center point before entering a radius.")
             if self.draw_app.app.mouse_pos[0] != self.points[-1][0] or (
                     self.draw_app.app.mouse_pos[1] != self.points[-1][1] and
                     self.circle_tool.ui.radius_link_btn.isChecked()):
@@ -3465,21 +5103,25 @@ class FCCircle(FCShapeTool):
 
         if key == 'Enter' or key == QtCore.Qt.Key.Key_Return or key == QtCore.Qt.Key.Key_Enter:
             new_radius_x, new_radius_y = self.circle_tool.radius_x, self.circle_tool.radius_y
-
-            if self.circle_tool.ui.radius_link_btn.isChecked():
-                if self.circle_tool.radius_x == 0:
-                    return _("Failed.")
-            else:
-                if self.circle_tool.radius_x == 0 or self.circle_tool.radius_y == 0:
-                    return _("Failed.")
-
-            new_pt = (
-                new_radius_x + self.circle_tool.ui.x_entry.get_value(),
-                self.circle_tool.ui.y_entry.get_value()
-            )
-            self.points.append(new_pt)
-            self.make()
-            self.draw_app.on_shape_complete()
+            linked = self.circle_tool.ui.radius_link_btn.isChecked()
+            if linked:
+                new_radius_y = new_radius_x
+            x = self.circle_tool.ui.x_entry.get_value()
+            y = self.circle_tool.ui.y_entry.get_value()
+            angle = self.circle_tool.ui.angle_entry.get_value()
+            try:
+                valid = all(math.isfinite(v) for v in (x, y, new_radius_x, new_radius_y, angle))
+                valid = valid and new_radius_x > 0 and new_radius_y > 0
+            except (TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                return _("Enter positive finite radii and finite center coordinates and angle.")
+            self.util_geo = Point((x, y)).buffer(new_radius_x, int(self.steps_per_circ)) if linked else \
+                rotate(scale(Point((x, y)).buffer(1), new_radius_x, new_radius_y), angle)
+            if self.make() == 'fail':
+                return 'fail'
+            if self.draw_app.on_shape_complete() == 'fail':
+                return 'fail'
             self.draw_app.select_tool("select")
             return "Done."
 
@@ -3497,6 +5139,11 @@ class FCCircle(FCShapeTool):
         # radius = distance(p1, p2)
         # circle_shape = Point(p1).buffer(radius, int(self.steps_per_circ / 4)).exterior
 
+        if self.util_geo is None or self.util_geo.is_empty or not self.util_geo.is_valid or \
+                not math.isfinite(self.util_geo.area) or self.util_geo.area == 0:
+            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
+                                          _("Choose a center and a positive finite radius before completing the circle."))
+            return 'fail'
         self.geometry = DrawToolShape(self.util_geo.exterior)
         self.geometry.data['type'] = _('Circle')
 
@@ -3511,9 +5158,6 @@ class FCCircle(FCShapeTool):
         self.draw_app.app.inform.emit('[success] %s' % _("Done."))
 
     def clean_up(self):
-        self.draw_app.selected = []
-        self.draw_app.plot_changes()
-
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
@@ -3521,6 +5165,11 @@ class FCCircle(FCShapeTool):
             self.draw_app.app.jump_signal.disconnect()
         except (TypeError, AttributeError):
             pass
+        try:
+            self.circle_tool.ui.add_button.clicked.disconnect()
+        except (TypeError, AttributeError):
+            pass
+        self.circle_tool.ui.circle_frame.hide()
 
 
 class FCArc(FCShapeTool):
@@ -3835,13 +5484,21 @@ class FCRectangle(FCShapeTool):
                     _("Click on 1st corner to add a new rectangle or Apply to change the selection."))
             return
 
+        if not all(math.isfinite(v) for v in point) or (self.points and
+                (point[0] == self.points[0][0] or point[1] == self.points[0][1])):
+            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
+                                          _("Choose a finite opposite corner with nonzero length and width."))
+            return 'fail'
+        if self.points:
+            self.utility_geometry(data=point)
         self.rect_tool.mode = 'add'
         self.points.append(point)
         if len(self.points) == 1:
             self.draw_app.app.inform.emit(_("Click on opposite corner to complete ..."))
             return "Click on opposite corner to complete ..."
         if len(self.points) == 2:
-            self.make()
+            if self.make() == 'fail':
+                return 'fail'
             return "Done."
 
         return ""
@@ -3877,7 +5534,7 @@ class FCRectangle(FCShapeTool):
             if corner_type == 'r':
                 util_geo = box(minx, miny, maxx, maxy).buffer(
                     corner_radius, join_style=base.JOIN_STYLE.round,
-                    resolution=self.draw_app.app.options.get(
+                    quad_segs=self.draw_app.app.options.get(
                         "geometry_circle_steps",
                         self.draw_app.app.defaults.get(
                             "geometry_circle_steps",
@@ -3887,7 +5544,7 @@ class FCRectangle(FCShapeTool):
             elif corner_type == 'b':
                 util_geo = box(minx, miny, maxx, maxy).buffer(
                     corner_radius, join_style=base.JOIN_STYLE.bevel,
-                    resolution=self.draw_app.app.options.get(
+                    quad_segs=self.draw_app.app.options.get(
                         "geometry_circle_steps",
                         self.draw_app.app.defaults.get(
                             "geometry_circle_steps",
@@ -3913,6 +5570,11 @@ class FCRectangle(FCShapeTool):
         # # self.geometry = LinearRing([p1, (p2[0], p1[1]), p2, (p1[0], p2[1])])
         # geo = LinearRing([p1, (p2[0], p1[1]), p2, (p1[0], p2[1])])
 
+        if self.util_geo is None or self.util_geo.is_empty or not self.util_geo.is_valid or \
+                not math.isfinite(Polygon(self.util_geo).area) or Polygon(self.util_geo).area == 0:
+            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
+                                          _("Choose two finite opposite corners with nonzero length and width."))
+            return 'fail'
         self.geometry = DrawToolShape(self.util_geo)
         self.geometry.data['type'] = _('Rectangle')
 
@@ -3975,6 +5637,11 @@ class FCRectangle(FCShapeTool):
             self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
     def on_key(self, key):
+        if key in ('Enter', QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
+            if AppGeoEditor.reject_busy(self.draw_app):
+                return 'fail'
+            if not self.points:
+                return _("Click on the first corner point before entering dimensions.")
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
             self.cursor_data_control = not self.cursor_data_control
 
@@ -3989,6 +5656,8 @@ class FCRectangle(FCShapeTool):
                         QtCore.Qt.Key.Key_Plus, QtCore.Qt.Key.Key_Comma, QtCore.Qt.Key.Key_Period,
                         QtCore.Qt.Key.Key_Slash, QtCore.Qt.Key.Key_Asterisk]:
 
+            if not self.points:
+                return _("Click on the first corner point before entering dimensions.")
             if self.draw_app.app.mouse_pos[0] != self.points[-1][0]:
                 try:
                     # VisPy keys
@@ -4018,22 +5687,18 @@ class FCRectangle(FCShapeTool):
 
         if key == 'Enter' or key == QtCore.Qt.Key.Key_Return or key == QtCore.Qt.Key.Key_Enter:
             new_x, new_y = self.points[-1][0], self.points[-1][1]
-
-            if self.rect_tool.length != 0:
-                target_length = self.rect_tool.length
-                if target_length is None:
-                    self.rect_tool.length = 0.0
-                    return _("Failed.")
-
-                new_x = self.points[-1][0] + target_length
-
-            if self.rect_tool.width != 0:
-                target_width = self.rect_tool.width
-                if target_width is None:
-                    self.rect_tool.width = 0.0
-                    return _("Failed.")
-
-                new_y = self.points[-1][1] + target_width
+            target_length, target_width = self.rect_tool.length, self.rect_tool.width
+            try:
+                valid = all(math.isfinite(v) for v in (new_x, new_y, target_length, target_width))
+                valid = valid and target_length != 0 and target_width != 0
+            except (TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                return _("Enter finite nonzero length and width values.")
+            new_x += target_length
+            new_y += target_width
+            if not all(math.isfinite(v) for v in (new_x, new_y)):
+                return _("Enter smaller dimensions so the projected coordinates remain finite.")
 
             if self.points[-1] != (new_x, new_y):
                 self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
@@ -4045,9 +5710,6 @@ class FCRectangle(FCShapeTool):
                 self.draw_app.app.inform.emit(msg)
 
     def clean_up(self):
-        self.draw_app.selected = []
-        self.draw_app.plot_changes()
-
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
@@ -4055,6 +5717,11 @@ class FCRectangle(FCShapeTool):
             self.draw_app.app.jump_signal.disconnect()
         except (TypeError, AttributeError):
             pass
+        try:
+            self.rect_tool.ui.add_button.clicked.disconnect()
+        except (TypeError, AttributeError):
+            pass
+        self.rect_tool.ui.rect_frame.hide()
 
 
 class FCPolygon(FCShapeTool):
@@ -4083,13 +5750,17 @@ class FCPolygon(FCShapeTool):
         self.polygon_tool.run()
         self.new_segment = True
 
+        # number of points added by each click (the corner point + the clicked point), used by Backspace
+        self.click_sizes = []
+
         self.cursor_data_control = True
 
         self.app.ui.notebook.setTabText(2, self.plugin_name)
         if self.draw_app.app.ui.splitter.sizes()[0] == 0:
             self.draw_app.app.ui.splitter.setSizes([1, 1])
 
-        self.draw_app.app.inform.emit(_("Click on 1st corner ..."))
+        self.draw_app.app.inform.emit("%s %s" % (_("Click on 1st corner ..."),
+                                                 bend_mode_message(self.draw_app.bend_mode)))
 
     def click(self, point):
         try:
@@ -4100,7 +5771,9 @@ class FCPolygon(FCShapeTool):
 
         self.draw_app.in_action = True
         if point != self.points[-1:]:
-            self.points.append(point)
+            added = corner_points(self.draw_app, self.points, point)
+            self.points.extend(added)
+            self.__dict__.setdefault('click_sizes', []).append(len(added))
 
         if len(self.points) > 0:
             self.draw_app.app.inform.emit(_("Click on next Point or click right mouse button to complete ..."))
@@ -4130,11 +5803,11 @@ class FCPolygon(FCShapeTool):
     def utility_geometry(self, data=None):
         if len(self.points) == 1:
             temp_points = [x for x in self.points]
-            temp_points.append(data)
+            temp_points.extend(corner_points(self.draw_app, temp_points, data))
             return DrawToolUtilityShape(LineString(temp_points))
         elif len(self.points) > 1:
             temp_points = [x for x in self.points]
-            temp_points.append(data)
+            temp_points.extend(corner_points(self.draw_app, temp_points, data))
             return DrawToolUtilityShape(LinearRing(temp_points))
         else:
             return None
@@ -4198,7 +5871,7 @@ class FCPolygon(FCShapeTool):
 
         if key == 'Backspace' or key == QtCore.Qt.Key.Key_Backspace:
             if len(self.points) > 0:
-                self.points = self.points[0:-1]
+                backtrack_points(self)
                 # Remove any previous utility shape
                 self.draw_app.tool_shape.clear(update=False)
                 geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
@@ -4207,6 +5880,13 @@ class FCPolygon(FCShapeTool):
                     return _("Backtracked one point ...")
                 else:
                     self.draw_app.app.inform.emit(_("Click on 1st corner ..."))
+
+        # Corner Mode: T = next mode, R = previous mode
+        if key == 'T' or key == QtCore.Qt.Key.Key_T:
+            return cycle_bend_mode(self, forward=True)
+
+        if key == 'R' or key == QtCore.Qt.Key.Key_R:
+            return cycle_bend_mode(self, forward=False)
 
         if key in [str(i) for i in range(10)] + ['.', ',', '+', '-', '/', '*'] or \
                 key in [QtCore.Qt.Key.Key_0, QtCore.Qt.Key.Key_0, QtCore.Qt.Key.Key_1, QtCore.Qt.Key.Key_2,
@@ -4252,6 +5932,7 @@ class FCPolygon(FCShapeTool):
 
                 if self.points[-1] != (new_x, new_y):
                     self.points.append((new_x, new_y))
+                    self.__dict__.setdefault('click_sizes', []).append(1)
                     self.new_segment = True
                     self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
                     if len(self.points) > 0:
@@ -4292,8 +5973,7 @@ class FCPath(FCShapeTool):
             QtGui.QGuiApplication.restoreOverrideCursor()
         except Exception:
             pass
-        self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path5.png'))
-        QtGui.QGuiApplication.setOverrideCursor(self.cursor)
+        self.set_bend_cursor(restore=False)
 
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
@@ -4305,11 +5985,33 @@ class FCPath(FCShapeTool):
         self.close_x = 0.0
         self.close_y = 0.0
 
+        # number of points added by each click (the corner point + the clicked point), used by Backspace
+        self.click_sizes = []
+
         self.app.ui.notebook.setTabText(2, _("Path"))
         if self.draw_app.app.ui.splitter.sizes()[0] == 0:
             self.draw_app.app.ui.splitter.setSizes([1, 1])
 
-        self.draw_app.app.inform.emit(_("Click on 1st point ..."))
+        self.draw_app.app.inform.emit("%s %s" % (_("Click on 1st point ..."),
+                                                 bend_mode_message(self.draw_app.bend_mode)))
+
+    def set_bend_cursor(self, restore=True):
+        """
+        Set the cursor icon that matches the current corner mode.
+
+        :param restore: True to first remove the cursor set previously by this tool
+        """
+        if restore:
+            try:
+                QtGui.QGuiApplication.restoreOverrideCursor()
+            except Exception:
+                pass
+        try:
+            self.cursor = QtGui.QCursor(QtGui.QPixmap(
+                self.draw_app.app.resource_location + '/aero_path%s.png' % self.draw_app.bend_mode))
+            QtGui.QGuiApplication.setOverrideCursor(self.cursor)
+        except Exception as e:
+            self.app.log.error("FCPath.set_bend_cursor() -> %s" % str(e))
 
     def click(self, point):
         try:
@@ -4324,9 +6026,12 @@ class FCPath(FCShapeTool):
             new_point = self.close_x, self.close_y
             if new_point != self.points[-1:]:
                 self.points.append(new_point)
+                self.__dict__.setdefault('click_sizes', []).append(1)
         else:
             if point != self.points[-1:]:
-                self.points.append(point)
+                added = corner_points(self.draw_app, self.points, point)
+                self.points.extend(added)
+                self.__dict__.setdefault('click_sizes', []).append(len(added))
 
         if len(self.points) > 0:
             self.draw_app.app.inform.emit(_("Click on next Point or click right mouse button to complete ..."))
@@ -4335,6 +6040,11 @@ class FCPath(FCShapeTool):
         return ""
 
     def make(self):
+        if len(self.points) < 2 or not all(math.isfinite(v) for p in self.points for v in p) or \
+                not any(p != self.points[0] for p in self.points[1:]):
+            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
+                                          _("Choose at least two distinct finite points to complete the path."))
+            return 'fail'
         self.geometry = DrawToolShape(LineString(self.points))
         self.name = 'path'
 
@@ -4385,7 +6095,7 @@ class FCPath(FCShapeTool):
                 temp_points.append([new_x, new_y])
             else:
                 temp_points = [x for x in self.points]
-                temp_points.append(data)
+                temp_points.extend(corner_points(self.draw_app, temp_points, data))
 
             return DrawToolUtilityShape(LineString(temp_points))
 
@@ -4482,7 +6192,9 @@ class FCPath(FCShapeTool):
 
         if key == 'Backspace' or key == QtCore.Qt.Key.Key_Backspace:
             if len(self.points) > 0:
-                self.points = self.points[0:-1]
+                backtrack_points(self)
+                self.draw_app.in_action = bool(self.points)
+                self.new_segment = True
                 # Remove any previous utility shape
                 self.draw_app.tool_shape.clear(update=False)
                 geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
@@ -4492,6 +6204,12 @@ class FCPath(FCShapeTool):
                 else:
                     return _("Click on 1st point ...")
 
+        # Corner Mode: T = next mode, R = previous mode
+        if key == 'T' or key == QtCore.Qt.Key.Key_T or key == 'R' or key == QtCore.Qt.Key.Key_R:
+            msg = cycle_bend_mode(self, forward=(key == 'T' or key == QtCore.Qt.Key.Key_T))
+            self.set_bend_cursor()
+            return msg
+
         if key in [str(i) for i in range(10)] + ['.', ',', '+', '-', '/', '*'] or \
                 key in [QtCore.Qt.Key.Key_0, QtCore.Qt.Key.Key_0, QtCore.Qt.Key.Key_1, QtCore.Qt.Key.Key_2,
                         QtCore.Qt.Key.Key_3, QtCore.Qt.Key.Key_4, QtCore.Qt.Key.Key_5, QtCore.Qt.Key.Key_6,
@@ -4500,20 +6218,31 @@ class FCPath(FCShapeTool):
                         QtCore.Qt.Key.Key_Slash, QtCore.Qt.Key.Key_Asterisk]:
             try:
                 # VisPy keys
-                if self.path_tool.length == 0 or self.new_segment is True:
+                if self.new_segment is True:
                     self.path_tool.length = str(key.name)
                     self.new_segment = False
                 else:
-                    self.path_tool.length = str(self.path_tool.length) + str(key.name)
+                    self.path_tool.length = self.path_tool.ui.project_line_entry.text() + str(key.name)
             except AttributeError:
                 # Qt keys
-                if self.path_tool.length == 0 or self.new_segment is True:
-                    self.path_tool.length = chr(key)
+                if self.new_segment is True:
+                    self.path_tool.length = key if isinstance(key, str) else chr(key)
                     self.new_segment = False
                 else:
-                    self.path_tool.length = str(self.path_tool.length) + chr(key)
+                    self.path_tool.length = self.path_tool.ui.project_line_entry.text() + \
+                        (key if isinstance(key, str) else chr(key))
 
         if key == 'Enter' or key == QtCore.Qt.Key.Key_Return or key == QtCore.Qt.Key.Key_Enter:
+            if AppGeoEditor.reject_busy(self.draw_app):
+                return 'fail'
+            if not self.points:
+                return _("Click on the first point before entering a length.")
+            try:
+                valid = math.isfinite(self.path_tool.length) and self.path_tool.length != 0
+            except (TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                return _("Enter a finite nonzero length.")
             if self.path_tool.length != 0:
                 # target_length = self.interpolate_length.replace(',', '.')
                 # try:
@@ -4531,9 +6260,9 @@ class FCPath(FCShapeTool):
                 first_pt = self.points[-1]
                 last_pt = self.draw_app.app.mouse_pos
 
-                seg_length = math.sqrt((last_pt[0] - first_pt[0])**2 + (last_pt[1] - first_pt[1])**2)
-                if seg_length == 0.0:
-                    return
+                seg_length = math.hypot(last_pt[0] - first_pt[0], last_pt[1] - first_pt[1])
+                if not math.isfinite(seg_length) or seg_length == 0.0:
+                    return _("Move the cursor away from the last point to set a finite direction.")
                 try:
                     new_x = first_pt[0] + (last_pt[0] - first_pt[0]) / seg_length * target_length
                     new_y = first_pt[1] + (last_pt[1] - first_pt[1]) / seg_length * target_length
@@ -4542,8 +6271,11 @@ class FCPath(FCShapeTool):
                     self.clean_up()
                     return '[ERROR_NOTCL] %s %s' % (_("Failed."), str(err).capitalize())
 
+                if not all(math.isfinite(v) for v in (new_x, new_y)):
+                    return _("Enter a smaller length so the projected coordinates remain finite.")
                 if self.points[-1] != (new_x, new_y):
                     self.points.append((new_x, new_y))
+                    self.__dict__.setdefault('click_sizes', []).append(1)
                     self.new_segment = True
                     self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
                     if len(self.points) > 0:
@@ -4555,9 +6287,6 @@ class FCPath(FCShapeTool):
                         # return "Click on next point or hit ENTER to complete ..."
 
     def clean_up(self):
-        self.draw_app.selected = []
-        self.draw_app.plot_changes()
-
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
@@ -4565,7 +6294,8 @@ class FCPath(FCShapeTool):
             self.draw_app.app.jump_signal.disconnect()
         except (TypeError, AttributeError):
             pass
-        self.path_tool.on_tab_close()
+        self.path_tool.disconnect_signals()
+        self.path_tool.ui.path_tool_frame.hide()
 
 
 class FCSelect(DrawTool):
@@ -4660,10 +6390,7 @@ class FCExplode(FCShapeTool):
                         if c < len(int_coords):
                             lines.append(LineString([int_coords[c], int_coords[c + 1]]))
 
-        for shape in to_be_deleted_list:
-            self.draw_app.storage.remove(shape)
-            if shape in self.draw_app.selected:
-                self.draw_app.selected.remove(shape)
+        self.removed_shapes = to_be_deleted_list
 
         geo_list = []
         for line in lines:
@@ -4726,6 +6453,7 @@ class FCMove(FCShapeTool):
 
         self.move_tool = PathEditorTool(self.app, self.draw_app, plugin_name=_("Move"))
         self.move_tool.run()
+        self.new_segment = True
 
         self.app.ui.notebook.setTabText(2, _("Move"))
         if self.draw_app.app.ui.splitter.sizes()[0] == 0:
@@ -4736,6 +6464,8 @@ class FCMove(FCShapeTool):
         self.origin = origin
 
     def click(self, point):
+        if AppGeoEditor.reject_busy(self.draw_app):
+            return 'fail'
         try:
             self.draw_app.app.jump_signal.disconnect()
         except (TypeError, AttributeError):
@@ -4760,7 +6490,9 @@ class FCMove(FCShapeTool):
             self.selection_shape = self.selection_bbox()
             # self.draw_app.plot_all()
             self.draw_app.app.inform.emit(_("Click on reference location ..."))
-            self.set_origin(point)
+            # This click picks with raw coordinates, but it also establishes the move reference.
+            origin = self.draw_app.snap(*point) if getattr(self.draw_app.app, 'grid_status', lambda: False)() else point
+            self.set_origin(origin)
             return
 
         if self.origin is None:
@@ -4770,12 +6502,15 @@ class FCMove(FCShapeTool):
             return "Click on final location."
         else:
             self.destination = point
-            self.make()
+            if self.make() == 'fail':
+                return 'fail'
             # self.draw_app.app.worker_task.emit(({'fcn': self.make,
             #                                      'params': []}))
             return "Done."
 
     def make(self):
+        if AppGeoEditor.reject_busy(self.draw_app):
+            return 'fail'
         with self.draw_app.app.proc_container.new('%s...' % _("Moving")):
             # Create new geometry
             dx = self.destination[0] - self.origin[0]
@@ -4783,18 +6518,15 @@ class FCMove(FCShapeTool):
             # 1 vectorized batch; Shapely geometry is immutable, so the source needs no deepcopy
             selected = self.draw_app.get_selected()
             self.geometry = [DrawToolShape(geo) for geo in translate_geometry([geom.geo for geom in selected], dx, dy)]
+            for source, result in zip(selected, self.geometry):
+                result.data = deepcopy(source.data)
+                result.data['bounds'] = result.bounds()
+                DrawToolShape._affine_sources[result] = (
+                    ref(source), source.geo, result.geo, affine_translate_matrix(dx, dy))
 
-            # Delete old. No plot here: on_shape_complete() plots after the new shapes are added.
-            self.draw_app.delete_shape(selected)
-            self.draw_app.selected.clear()
+            # Completion removes the originals and inserts the replacements in one committed operation.
+            self.removed_shapes = list(selected)
             self.complete = True
-            self.origin = None
-            self.draw_cursor_data(delete=True)
-            self.draw_app.app.inform.emit('[success] %s' % _("Done."))
-            try:
-                self.draw_app.app.jump_signal.disconnect()
-            except TypeError:
-                pass
 
     def selection_bbox(self):
         geo_list = []
@@ -4974,30 +6706,43 @@ class FCMove(FCShapeTool):
                         QtCore.Qt.Key.Key_Slash, QtCore.Qt.Key.Key_Asterisk]:
             try:
                 # VisPy keys
-                if self.move_tool.length == 0:
+                if self.new_segment is True:
                     self.move_tool.length = str(key.name)
+                    self.new_segment = False
                 else:
-                    self.move_tool.length = str(self.move_tool.length) + str(key.name)
+                    self.move_tool.length = self.move_tool.ui.project_line_entry.text() + str(key.name)
             except AttributeError:
                 # Qt keys
-                if self.move_tool.length == 0:
-                    self.move_tool.length = chr(key)
+                if self.new_segment is True:
+                    self.move_tool.length = key if isinstance(key, str) else chr(key)
+                    self.new_segment = False
                 else:
-                    self.move_tool.length = str(self.move_tool.length) + chr(key)
+                    self.move_tool.length = self.move_tool.ui.project_line_entry.text() + \
+                        (key if isinstance(key, str) else chr(key))
 
         if key == 'Enter' or key == QtCore.Qt.Key.Key_Return or key == QtCore.Qt.Key.Key_Enter:
+            if AppGeoEditor.reject_busy(self.draw_app):
+                return 'fail'
+            if self.origin is None:
+                return _("Click on a reference point before entering a length.")
+            try:
+                valid = math.isfinite(self.move_tool.length) and self.move_tool.length != 0
+            except (TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                return _("Enter a finite nonzero length.")
             if self.move_tool.length != 0:
                 target_length = self.move_tool.length
                 if target_length is None:
                     self.move_tool.length = 0.0
                     return _("Failed.")
 
-                first_pt = self.points[-1]
+                first_pt = self.origin
                 last_pt = self.draw_app.app.mouse_pos
 
-                seg_length = math.sqrt((last_pt[0] - first_pt[0])**2 + (last_pt[1] - first_pt[1])**2)
-                if seg_length == 0.0:
-                    return
+                seg_length = math.hypot(last_pt[0] - first_pt[0], last_pt[1] - first_pt[1])
+                if not math.isfinite(seg_length) or seg_length == 0.0:
+                    return _("Move the cursor away from the reference point to set a finite direction.")
                 try:
                     new_x = first_pt[0] + (last_pt[0] - first_pt[0]) / seg_length * target_length
                     new_y = first_pt[1] + (last_pt[1] - first_pt[1]) / seg_length * target_length
@@ -5006,19 +6751,20 @@ class FCMove(FCShapeTool):
                     self.clean_up()
                     return '[ERROR_NOTCL] %s %s' % (_("Failed."), str(err).capitalize())
 
-                if self.points[-1] != (new_x, new_y):
+                if not all(math.isfinite(v) for v in (new_x, new_y)):
+                    return _("Enter a smaller length so the projected coordinates remain finite.")
+                if first_pt != (new_x, new_y):
                     self.points.append((new_x, new_y))
                     self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
                     self.destination = (new_x, new_y)
-                    self.make()
-                    self.draw_app.on_shape_complete()
+                    if self.make() == 'fail':
+                        return 'fail'
+                    if self.draw_app.on_shape_complete() == 'fail':
+                        return 'fail'
                     self.draw_app.select_tool("select")
                     return "Done."
 
     def clean_up(self):
-        self.draw_app.selected = []
-        self.draw_app.plot_changes()
-
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
@@ -5026,7 +6772,8 @@ class FCMove(FCShapeTool):
             self.draw_app.app.jump_signal.disconnect()
         except (TypeError, AttributeError):
             pass
-        self.move_tool.on_tab_close()
+        self.move_tool.disconnect_signals()
+        self.move_tool.ui.path_tool_frame.hide()
 
 
 class FCCopy(FCShapeTool):
@@ -5075,6 +6822,7 @@ class FCCopy(FCShapeTool):
 
         self.copy_tool = CopyEditorTool(self.app, self.draw_app, plugin_name=_("Copy"))
         self.copy_tool.run()
+        self.new_segment = True
 
         self.app.ui.notebook.setTabText(2, _("Copy"))
         if self.draw_app.app.ui.splitter.sizes()[0] == 0:
@@ -5480,30 +7228,43 @@ class FCCopy(FCShapeTool):
                         QtCore.Qt.Key.Key_Slash, QtCore.Qt.Key.Key_Asterisk]:
             try:
                 # VisPy keys
-                if self.copy_tool.length == 0:
+                if self.new_segment is True:
                     self.copy_tool.length = str(key.name)
+                    self.new_segment = False
                 else:
-                    self.copy_tool.length = str(self.copy_tool.length) + str(key.name)
+                    self.copy_tool.length = self.copy_tool.ui.project_line_entry.text() + str(key.name)
             except AttributeError:
                 # Qt keys
-                if self.copy_tool.length == 0:
-                    self.copy_tool.length = chr(key)
+                if self.new_segment is True:
+                    self.copy_tool.length = key if isinstance(key, str) else chr(key)
+                    self.new_segment = False
                 else:
-                    self.copy_tool.length = str(self.copy_tool.length) + chr(key)
+                    self.copy_tool.length = self.copy_tool.ui.project_line_entry.text() + \
+                        (key if isinstance(key, str) else chr(key))
 
         if key == 'Enter' or key == QtCore.Qt.Key.Key_Return or key == QtCore.Qt.Key.Key_Enter:
+            if AppGeoEditor.reject_busy(self.draw_app):
+                return 'fail'
+            if self.origin is None:
+                return _("Click on a reference point before entering a length.")
+            try:
+                valid = math.isfinite(self.copy_tool.length) and self.copy_tool.length != 0
+            except (TypeError, ValueError, OverflowError):
+                valid = False
+            if not valid:
+                return _("Enter a finite nonzero length.")
             if self.copy_tool.length != 0:
                 target_length = self.copy_tool.length
                 if target_length is None:
                     self.copy_tool.length = 0.0
                     return _("Failed.")
 
-                first_pt = self.points[-1]
+                first_pt = self.origin
                 last_pt = self.draw_app.app.mouse_pos
 
-                seg_length = math.sqrt((last_pt[0] - first_pt[0])**2 + (last_pt[1] - first_pt[1])**2)
-                if seg_length == 0.0:
-                    return
+                seg_length = math.hypot(last_pt[0] - first_pt[0], last_pt[1] - first_pt[1])
+                if not math.isfinite(seg_length) or seg_length == 0.0:
+                    return _("Move the cursor away from the reference point to set a finite direction.")
                 try:
                     new_x = first_pt[0] + (last_pt[0] - first_pt[0]) / seg_length * target_length
                     new_y = first_pt[1] + (last_pt[1] - first_pt[1]) / seg_length * target_length
@@ -5512,19 +7273,20 @@ class FCCopy(FCShapeTool):
                     self.clean_up()
                     return '[ERROR_NOTCL] %s %s' % (_("Failed."), str(err).capitalize())
 
-                if self.points[-1] != (new_x, new_y):
+                if not all(math.isfinite(v) for v in (new_x, new_y)):
+                    return _("Enter a smaller length so the projected coordinates remain finite.")
+                if first_pt != (new_x, new_y):
                     self.points.append((new_x, new_y))
                     self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
                     self.destination = (new_x, new_y)
-                    self.make()
-                    self.draw_app.on_shape_complete()
+                    if self.make() == 'fail':
+                        return 'fail'
+                    if self.draw_app.on_shape_complete() == 'fail':
+                        return 'fail'
                     self.draw_app.select_tool("select")
                     return "Done."
 
     def clean_up(self):
-        self.draw_app.selected = []
-        self.draw_app.plot_changes()
-
         self.draw_app.app.plotcanvas.text_cursor.parent = None
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
 
@@ -5532,7 +7294,8 @@ class FCCopy(FCShapeTool):
             self.draw_app.app.jump_signal.disconnect()
         except (TypeError, AttributeError):
             pass
-        self.copy_tool.on_tab_close()
+        self.copy_tool.disconnect_signals()
+        self.copy_tool.ui.copy_frame.hide()
 
 
 class FCText(FCShapeTool):
@@ -5775,6 +7538,106 @@ class FCSimplification(FCShapeTool):
         self.draw_app.plot_changes()
 
 
+class FCImport(DrawTool):
+    """
+    Copies shapes of the other visible project objects (Geometry, Gerber, Excellon) into the edited Geometry.
+
+    A click picks or unpicks the shapes under it, a drag picks the shapes in the area (left to right: enclosed,
+    right to left: touched). The picked shapes are highlighted. Right click or Enter copies them into the editor
+    as one Undo step; Escape cancels.
+    """
+
+    def __init__(self, draw_app):
+        DrawTool.__init__(self, draw_app)
+        self.name = 'import'
+        self.draw_app = draw_app
+        self.app = draw_app.app
+
+        # the picked shapes: dicts with the source geometry ('geo'), its WKB ('wkb') and the highlight key
+        self.picked = []
+
+        try:
+            QtGui.QGuiApplication.restoreOverrideCursor()
+        except Exception:
+            pass
+
+        self.app.inform.emit(_("Select shapes to import them into the edited object."))
+
+    def source_geometries(self):
+        geos = []
+        for obj in import_source_objects(self.app.collection.get_list(), self.draw_app.fcgeometry):
+            geos += import_source_geometries(obj, self.app.app_units)
+        return geos
+
+    def pick_tolerance(self):
+        try:
+            return PICK_TOLERANCE_PX * self.draw_app.canvas.pixel_size()
+        except Exception:
+            return 0.0
+
+    def click_release(self, point):
+        """
+        Picks, or unpicks if already picked, the shapes under the click.
+
+        :param point:   (x, y) of the click
+        """
+        self.toggle(geometries_at_point(self.source_geometries(), point, self.pick_tolerance()))
+        return ""
+
+    def area_select(self, start, end, enclosing):
+        self.toggle(geometries_in_area(self.source_geometries(), start, end, enclosing))
+
+    def toggle(self, geometries):
+        if not geometries:
+            self.app.inform.emit(_("No shape in selection."))
+            return
+        for geo in geometries:
+            wkb = geo.wkb
+            existing = [item for item in self.picked if item['wkb'] == wkb]
+            if existing:
+                self.picked.remove(existing[0])
+            else:
+                self.picked.append({'geo': geo, 'wkb': wkb})
+        self.highlight()
+        self.app.inform.emit('%s: %d. %s' % (_("Picked shapes"), len(self.picked),
+                                             _("Click to pick more, right click or Enter to import.")))
+
+    def highlight(self):
+        color = self.draw_app.get_sel_color()[:7] + 'AF'
+        self.draw_app.tool_shape.clear(update=False)
+        for item in self.picked:
+            self.draw_app.tool_shape.add(shape=item['geo'], color=color, face_color=color, update=False, layer=0,
+                                         tolerance=None)
+        self.draw_app.tool_shape.redraw()
+
+    def commit(self):
+        """
+        Copies the picked shapes into the edited object: one Undo step.
+
+        :return:    'fail' if the editor is busy, else None
+        """
+        if not self.picked:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape picked."))
+            return
+        shapes = [DrawToolShape(deepcopy(item['geo'])) for item in self.picked]
+        if self.draw_app.add_shape(shapes) == 'fail':
+            return 'fail'
+        self.picked = []
+        self.draw_app.plot_changes()
+
+    def on_key(self, key):
+        if key in (QtCore.Qt.Key.Key_Enter, QtCore.Qt.Key.Key_Return, 'Enter', 'Return'):
+            if self.commit() != 'fail':
+                self.app.inform.emit('[success] %s' % _("Done."))
+                self.draw_app.select_tool('select')
+            return
+        return DrawTool.on_key(self, key)
+
+    def clean_up(self):
+        self.picked = []
+        self.draw_app.tool_shape.clear(update=True)
+
+
 class FCEraser(FCShapeTool):
     def __init__(self, draw_app):
         DrawTool.__init__(self, draw_app)
@@ -5824,7 +7687,8 @@ class FCEraser(FCShapeTool):
             self.draw_app.app.inform.emit(_("Click to pick-up the erase shape..."))
 
         if self.origin is None:
-            self.set_origin(point)
+            origin = self.draw_app.snap(*point) if getattr(self.draw_app.app, 'grid_status', lambda: False)() else point
+            self.set_origin(origin)
             self.draw_app.app.inform.emit(_("Click to erase ..."))
             return
         else:
@@ -5858,8 +7722,11 @@ class FCEraser(FCShapeTool):
                 self.draw_app._collect_shape(result, inserted)
                 if id(shape) in selected_ids and inserted and inserted[-1] is result:
                     selected.append(result)
-            self.draw_app.delete_shape(removed, inserted=inserted)
-            self.draw_app.selected.extend(selected)
+            with AppGeoEditor.history_operation(self.draw_app) as accepted:
+                if not accepted:
+                    return 'fail'
+                self.draw_app.delete_shape(removed, inserted=inserted)
+                self.draw_app.selected.extend(selected)
             self.draw_app.build_ui_sig.emit()
 
         self.draw_app.delete_utility_geometry()
@@ -5936,10 +7803,6 @@ class FCTransform(FCShapeTool):
 
     def clean_up(self):
         pass
-
-
-def distance(pt1, pt2):
-    return np.sqrt((pt1[0] - pt2[0]) ** 2 + (pt1[1] - pt2[1]) ** 2)
 
 
 def mag(vec):

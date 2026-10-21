@@ -126,7 +126,7 @@ class SimplificationTool(AppToolEditor):
                 geo_editor.build_ui_sig.emit()
                 self.app.inform.emit('%s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': task_job, 'params': [self.geo_editor]})
+        self.geo_editor.submit_worker(task_job, [self.geo_editor])
 
     def calculate_coordinates_vertex(self, selected_geos):
         vertex_nr = 0

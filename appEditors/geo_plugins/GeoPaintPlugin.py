@@ -181,7 +181,8 @@ class PaintOptionsTool(AppToolEditor):
         contour = self.ui.paintcontour_cb.get_value()
         connect = self.ui.pathconnect_cb.get_value()
 
-        self.paint(tooldia, overlap, margin, connect=connect, contour=contour, method=method)
+        if self.paint(tooldia, overlap, margin, connect=connect, contour=contour, method=method) == 'fail':
+            return 'fail'
         self.fcdraw.select_tool("select")
         # self.app.ui.notebook.setTabText(2, _("Tools"))
         # self.app.ui.notebook.setCurrentWidget(self.app.ui.project_tab)
@@ -271,7 +272,7 @@ class PaintOptionsTool(AppToolEditor):
                 geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self.fcdraw]})
+        return self.fcdraw.submit_worker(work_task, [self.fcdraw])
 
 
 class PaintEditorUI:

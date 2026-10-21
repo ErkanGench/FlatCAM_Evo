@@ -7,6 +7,7 @@ from shapely import Point
 from shapely.affinity import scale, rotate
 
 import gettext
+import math
 import appTranslation as fcTranslate
 import builtins
 
@@ -87,14 +88,16 @@ class CircleEditorTool(AppToolEditor):
         self.app.ui.notebook.callback_on_close = lambda: None
 
     def on_execute(self):
-        if self.mode == 'add':
-            self.app.log.info("CircleEditorTool.on_add() -> adding a Circle shape")
-            self.on_add()
-        else:
-            self.app.log.info("RectangleEditorTool.on_add() -> modifying a Circle shape")
-            self.draw_app.delete_selected()
-            self.on_add()
-            self.draw_app.app.inform.emit(_("Click on Center point ..."))
+        with self.draw_app.history_operation() as accepted:
+            if not accepted:
+                return 'fail'
+            if self.mode == 'add':
+                self.app.log.info("CircleEditorTool.on_add() -> adding a Circle shape")
+                self.on_add()
+            else:
+                self.app.log.info("RectangleEditorTool.on_add() -> modifying a Circle shape")
+                self.on_add()
+                self.draw_app.app.inform.emit(_("Click on Center point ..."))
 
     def on_add(self):
         origin_x = self.ui.x_entry.get_value()
@@ -104,8 +107,14 @@ class CircleEditorTool(AppToolEditor):
         angle = self.ui.angle_entry.get_value()
         is_circle = True if self.ui.radius_link_btn.isChecked() else False
 
-        if radius_x == 0.0 or radius_y == 0.0:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed."))
+        try:
+            valid = all(math.isfinite(v) for v in (origin_x, origin_y, radius_x, radius_y, angle))
+            valid = valid and radius_x > 0 and radius_y > 0
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            self.app.inform.emit('[WARNING_NOTCL] %s' %
+                                 _("Enter positive finite radii and finite center coordinates and angle."))
             return
 
         if is_circle:
@@ -116,9 +125,18 @@ class CircleEditorTool(AppToolEditor):
             if angle != 0:
                 geo = rotate(geo, -angle)
 
-        added_shapes = self.draw_app.add_shape(geo.exterior)
+        added_shapes = []
+        self.draw_app._collect_shape(geo.exterior, added_shapes)
+        if not added_shapes:
+            return
         for added_shape in added_shapes:
             added_shape.data['type'] = _("Circle")
+        if self.mode != 'add':
+            self.draw_app.replace_shapes(removed=list(self.draw_app.get_selected()),
+                                         inserted=added_shapes, selected=added_shapes)
+            self.draw_app.build_ui_sig.emit()
+        else:
+            self.draw_app.add_shape(added_shapes)
         self.draw_app.plot_changes()
 
     def on_clear(self):

@@ -135,6 +135,19 @@ class PathEditorUI:
         grid_path.addWidget(self.project_line_lbl, 0, 0)
         grid_path.addWidget(self.project_line_entry, 0, 1)
 
+        # Corner Mode
+        self.corner_mode_lbl = FCLabel('%s:' % _("Corner Mode"))
+        self.corner_mode_lbl.setToolTip(
+            _("How a new segment is joined to the previous one:\n"
+              "1 = 45 degrees, 2 = reverse 45 degrees, 3 = 90 degrees,\n"
+              "4 = reverse 90 degrees, 5 = free angle (default).\n"
+              "Key T: next mode. Key R: previous mode.")
+        )
+        self.corner_mode_keys_lbl = FCLabel(_("T / R"))
+        self.corner_mode_keys_lbl.setToolTip(self.corner_mode_lbl.toolTip())
+        grid_path.addWidget(self.corner_mode_lbl, 1, 0)
+        grid_path.addWidget(self.corner_mode_keys_lbl, 1, 1)
+
         # self.buffer_corner_lbl = FCLabel('%s:' % _("Buffer corner"))
         # self.buffer_corner_lbl.setToolTip(
         #     _("There are 3 types of corners:\n"

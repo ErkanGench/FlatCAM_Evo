@@ -21,7 +21,7 @@ def save_editor(geos, tooldia=0.5, multigeo_tool=None):
 
 def geometry_object(tooldia=0.5, tools=None):
     obj = SimpleNamespace(solid_geometry=[LineString([(9, 9), (10, 10)])], tools=tools or {},
-                          obj_options={'tools_mill_tooldia': tooldia})
+                          obj_options={'tools_mill_tooldia': tooldia}, regenerate_source=Mock(return_value=True))
     obj.bounds = lambda: (0.0, 0.0, 2.0, 1.0)
     return obj
 
@@ -40,6 +40,7 @@ class TestGeoEditorSave(unittest.TestCase):
         self.assertEqual(obj.solid_geometry, [a, b])
         self.assertEqual(seen, [[a, b]])
         self.assertEqual((obj.obj_options['xmin'], obj.obj_options['ymax']), (0.0, 1.0))
+        obj.regenerate_source.assert_called_once_with()
         editor.app.inform.emit.assert_called_once()
 
     def test_multilinestring_is_merged(self):

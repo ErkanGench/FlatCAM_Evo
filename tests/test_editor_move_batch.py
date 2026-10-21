@@ -119,7 +119,7 @@ class TestExcellonEditorMove(unittest.TestCase):
 
 class TestGeometryEditorMove(unittest.TestCase):
 
-    def test_move_deletes_without_plot_and_keeps_the_geometry(self):
+    def test_move_prepares_without_mutation_then_commits_once(self):
         a, b, c = GeoShape(box(0, 0, 1, 1)), GeoShape(LineString([(0, 0), (1, 1)])), GeoShape(box(5, 5, 6, 6))
         storage = AppGeoEditor.make_storage()
         for shp in (a, b, c):
@@ -136,11 +136,28 @@ class TestGeometryEditorMove(unittest.TestCase):
         tool.make()
 
         self.assertEqual([shp.geo.bounds for shp in tool.geometry], [(3.0, 0.0, 4.0, 1.0), (3.0, 0.0, 4.0, 1.0)])
-        self.assertEqual(list(storage.get_objects()), [c])
-        self.assertEqual(editor.selected, [])
-        self.assertEqual(editor.utility, [])
+        self.assertEqual(list(storage.get_objects()), [a, b, c])
+        self.assertEqual(editor.selected, [a, b])
+        self.assertEqual(editor.utility, [b])
         editor.plot_all.assert_not_called()      # on_shape_complete() plots after the new shapes are added
         self.assertTrue(tool.complete)
+        editor.active_tool = tool
+        editor.app.options = {'geometry_editor_milling_type': 'cv'}
+        editor.app.defaults = SimpleNamespace(get=lambda k, d=None: d, factory_defaults={})
+        editor.app.log = Mock()
+        editor.build_ui_sig = Mock()
+        editor.tool_shape = Mock()
+        editor.plot_changes = Mock()
+        editor._collect_shape = lambda shp, acc: AppGeoEditor._collect_shape(editor, shp, acc)
+        editor.delete_utility_geometry = lambda: AppGeoEditor.delete_utility_geometry(editor)
+        AppGeoEditor.on_shape_complete(editor)
+        self.assertEqual(set(storage.get_objects()), {c, *tool.geometry})
+        self.assertEqual(editor.selected, tool.geometry)
+        self.assertEqual(editor.utility, [])
+        editor.plot_changes.assert_called_once()
+        self.assertTrue(AppGeoEditor.undo(editor))
+        self.assertEqual(set(storage.get_objects()), {a, b, c})
+        self.assertEqual(editor.selected, [a, b])
 
 
 class TestClimbMillingDirection(unittest.TestCase):
@@ -153,7 +170,7 @@ class TestClimbMillingDirection(unittest.TestCase):
         app = SimpleNamespace(options={'geometry_editor_milling_type': 'cl'}, log=Mock(),
                               defaults=SimpleNamespace(get=lambda k, d=None: d, factory_defaults={}))
         editor = SimpleNamespace(app=app, active_tool=tool, add_shape=Mock(), delete_utility_geometry=Mock(),
-                                 tool_shape=Mock(), plot_changes=Mock())
+                                 tool_shape=Mock(), plot_changes=Mock(), selected=[])
         AppGeoEditor.on_shape_complete(editor)
         return list(editor.add_shape.call_args[0][0][0].geo.coords)
 
@@ -210,7 +227,7 @@ class TestStorageReplace(unittest.TestCase):
 
     def test_geo_add_shape_inserts_in_1_batch_and_builds_the_ui_once(self):
         storage = AppGeoEditor.make_storage()
-        editor = SimpleNamespace(storage=storage, utility=[], build_ui_sig=Mock(), app=counting_app())
+        editor = SimpleNamespace(storage=storage, utility=[], selected=[], build_ui_sig=Mock(), app=counting_app())
         editor._collect_shape = lambda shp, acc: AppGeoEditor._collect_shape(editor, shp, acc)
         shapes = [GeoShape(box(i, 0, i + 0.5, 0.5)) for i in range(10)] + [GeoShape(Point(0, 0))]
         AppGeoEditor.add_shape(editor, shapes)

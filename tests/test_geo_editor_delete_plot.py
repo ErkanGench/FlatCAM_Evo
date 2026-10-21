@@ -80,6 +80,7 @@ def make_editor(shapes, selected=(), utility=()):
     editor.get_render_state = lambda: AppGeoEditor.get_render_state(editor)
     editor.copy_to_selection = lambda entry, color: AppGeoEditor.copy_to_selection(editor, entry, color)
     editor.unplot_entry = lambda entry: AppGeoEditor.unplot_entry(editor, entry)
+    editor.submit_worker = lambda fcn, params: AppGeoEditor.submit_worker(editor, fcn, params)
     return editor
 
 

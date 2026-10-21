@@ -214,7 +214,7 @@ class BufferSelectionTool(AppToolEditor):
                 geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self.draw_app]})
+        self.draw_app.submit_worker(work_task, [self.draw_app])
 
     def buffer_int(self, buf_distance, join_style):
         def work_task(geo_editor):
@@ -299,7 +299,7 @@ class BufferSelectionTool(AppToolEditor):
                 geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self.draw_app]})
+        self.draw_app.submit_worker(work_task, [self.draw_app])
 
     def buffer_ext(self, buf_distance, join_style):
         def work_task(geo_editor):
@@ -386,7 +386,7 @@ class BufferSelectionTool(AppToolEditor):
                 geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.worker_task.emit({'fcn': work_task, 'params': [self.draw_app]})
+        self.draw_app.submit_worker(work_task, [self.draw_app])
 
     def hide_tool(self):
         self.ui.buffer_tool_frame.hide()

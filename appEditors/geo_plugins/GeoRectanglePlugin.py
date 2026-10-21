@@ -8,6 +8,7 @@ from shapely import box
 from shapely.geometry import base
 
 import gettext
+import math
 import appTranslation as fcTranslate
 import builtins
 
@@ -90,14 +91,16 @@ class RectangleEditorTool(AppToolEditor):
         self.app.ui.notebook.callback_on_close = lambda: None
 
     def on_execute(self):
-        if self.mode == 'add':
-            self.app.log.info("RectangleEditorTool.on_add() -> adding a Rectangle shape")
-            self.on_add()
-        else:
-            self.app.log.info("RectangleEditorTool.on_add() -> modifying a Rectangle shape")
-            self.draw_app.delete_selected()
-            self.on_add()
-            self.draw_app.app.inform.emit(_("Click on 1st corner ..."))
+        with self.draw_app.history_operation() as accepted:
+            if not accepted:
+                return 'fail'
+            if self.mode == 'add':
+                self.app.log.info("RectangleEditorTool.on_add() -> adding a Rectangle shape")
+                self.on_add()
+            else:
+                self.app.log.info("RectangleEditorTool.on_add() -> modifying a Rectangle shape")
+                self.on_add()
+                self.draw_app.app.inform.emit(_("Click on 1st corner ..."))
 
     def on_add(self):
         origin = self.ui.anchor_radio.get_value()
@@ -108,8 +111,14 @@ class RectangleEditorTool(AppToolEditor):
         length = self.ui.length_entry.get_value()
         width = self.ui.width_entry.get_value()
 
-        if length == 0.0 or width == 0.0:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed."))
+        try:
+            valid = all(math.isfinite(v) for v in (origin_x, origin_y, length, width, corner_radius))
+            valid = valid and length != 0 and width != 0 and corner_radius >= 0
+        except (TypeError, ValueError, OverflowError):
+            valid = False
+        if not valid:
+            self.app.inform.emit('[WARNING_NOTCL] %s' %
+                                 _("Enter finite coordinates, nonzero length and width, and a nonnegative corner radius."))
             return
 
         if origin == 'tl':
@@ -142,7 +151,7 @@ class RectangleEditorTool(AppToolEditor):
         if corner_type == 'r':
             geo = box(minx, miny, maxx, maxy).buffer(
                 corner_radius, join_style=base.JOIN_STYLE.round,
-                resolution=self.draw_app.app.options.get(
+                quad_segs=self.draw_app.app.options.get(
                     "geometry_circle_steps",
                     self.draw_app.app.defaults.get(
                         "geometry_circle_steps",
@@ -152,7 +161,7 @@ class RectangleEditorTool(AppToolEditor):
         elif corner_type == 'b':
             geo = box(minx, miny, maxx, maxy).buffer(
                 corner_radius, join_style=base.JOIN_STYLE.bevel,
-                resolution=self.draw_app.app.options.get(
+                quad_segs=self.draw_app.app.options.get(
                     "geometry_circle_steps",
                     self.draw_app.app.defaults.get(
                         "geometry_circle_steps",
@@ -162,9 +171,18 @@ class RectangleEditorTool(AppToolEditor):
         else:   # 's' - square
             geo = box(minx, miny, maxx, maxy).exterior
 
-        added_shapes = self.draw_app.add_shape(geo)
+        added_shapes = []
+        self.draw_app._collect_shape(geo, added_shapes)
+        if not added_shapes:
+            return
         for added_shape in added_shapes:
             added_shape.data['type'] = _("Rectangle")
+        if self.mode != 'add':
+            self.draw_app.replace_shapes(removed=list(self.draw_app.get_selected()),
+                                         inserted=added_shapes, selected=added_shapes)
+            self.draw_app.build_ui_sig.emit()
+        else:
+            self.draw_app.add_shape(added_shapes)
         self.draw_app.plot_changes()
 
     def on_clear(self):

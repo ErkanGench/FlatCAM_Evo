@@ -284,21 +284,21 @@ class TransformEditorTool(AppToolEditor):
         point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
         if point == 'fail':
             return
-        self.app.worker_task.emit({'fcn': self.on_rotate_action, 'params': [value, point]})
+        self.draw_app.submit_worker(self.on_rotate_action, [value, point])
 
     def on_flipx(self, ref=None):
         axis = 'Y'
         point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
         if point == 'fail':
             return
-        self.app.worker_task.emit({'fcn': self.on_flip, 'params': [axis, point]})
+        self.draw_app.submit_worker(self.on_flip, [axis, point])
 
     def on_flipy(self, ref=None):
         axis = 'X'
         point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
         if point == 'fail':
             return
-        self.app.worker_task.emit({'fcn': self.on_flip, 'params': [axis, point]})
+        self.draw_app.submit_worker(self.on_flip, [axis, point])
 
     def on_skewx(self, val=None, ref=None):
         xvalue = float(self.ui.skewx_entry.get_value()) if val is None else val
@@ -313,7 +313,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_skew, 'params': [axis, xvalue, yvalue, point]})
+        self.draw_app.submit_worker(self.on_skew, [axis, xvalue, yvalue, point])
 
     def on_skewy(self, val=None, ref=None):
         xvalue = 0
@@ -327,7 +327,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_skew, 'params': [axis, xvalue, yvalue, point]})
+        self.draw_app.submit_worker(self.on_skew, [axis, xvalue, yvalue, point])
 
     def on_scalex(self, val=None, ref=None):
         xvalue = float(self.ui.scalex_entry.get_value()) if val is None else val
@@ -344,7 +344,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_scale, 'params': [axis, xvalue, yvalue, point]})
+        self.draw_app.submit_worker(self.on_scale, [axis, xvalue, yvalue, point])
 
     def on_scaley(self, val=None, ref=None):
         xvalue = 1
@@ -360,7 +360,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_scale, 'params': [axis, xvalue, yvalue, point]})
+        self.draw_app.submit_worker(self.on_scale, [axis, xvalue, yvalue, point])
 
     def on_offx(self, val=None):
         value = float(self.ui.offx_entry.get_value()) if val is None else val
@@ -369,7 +369,7 @@ class TransformEditorTool(AppToolEditor):
             return
         axis = 'X'
 
-        self.app.worker_task.emit({'fcn': self.on_offset, 'params': [axis, value]})
+        self.draw_app.submit_worker(self.on_offset, [axis, value])
 
     def on_offy(self, val=None):
         value = float(self.ui.offy_entry.get_value()) if val is None else val
@@ -378,13 +378,13 @@ class TransformEditorTool(AppToolEditor):
             return
         axis = 'Y'
 
-        self.app.worker_task.emit({'fcn': self.on_offset, 'params': [axis, value]})
+        self.draw_app.submit_worker(self.on_offset, [axis, value])
 
     def on_buffer_by_distance(self):
         value = self.ui.buffer_entry.get_value()
         join = 1 if self.ui.buffer_rounded_cb.get_value() else 2
 
-        self.app.worker_task.emit({'fcn': self.on_buffer_action, 'params': [value, join]})
+        self.draw_app.submit_worker(self.on_buffer_action, [value, join])
 
     def on_buffer_by_factor(self):
         value = 1 + (self.ui.buffer_factor_entry.get_value() / 100.0)
@@ -393,7 +393,7 @@ class TransformEditorTool(AppToolEditor):
         # tell the buffer method to use the factor
         factor = True
 
-        self.app.worker_task.emit({'fcn': self.on_buffer_action, 'params': [value, join, factor]})
+        self.draw_app.submit_worker(self.on_buffer_action, [value, join, factor])
 
     def on_rotate_action(self, val, point):
         """
