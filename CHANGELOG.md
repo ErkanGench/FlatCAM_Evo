@@ -36,6 +36,15 @@ CNCJob:
 - the G-code of the paths, drills and points is collected in a list and joined 1 time; fixed: a job with 20000 polylines failed with MemoryError
 - the R-tree storages are bulk loaded from NumPy arrays (insert_many(), new_rtree_index(points=..., boxes=...)): clearing, paint, connect, cleanup order, solder paste, panelize and the Excellon editor; about 3 times faster than an insert for each object
 
+Preferences:
+
+- fixed: a restart (Apply Language, Apply font size, Preferences -> Save with a new appearance, style, dark canvas or title bar, the icon color) killed the project save that the user had just confirmed: the save ran in a worker thread and os.execl() replaced the process at once, so the project file was not written; the projects are now saved in the GUI thread before the restart, the same way as on exit (each project with changes is asked about: Yes / No / Cancel)
+- fixed: a cancelled Save As dialog, a failed save or a save that is still running (File -> Save, Save As) no longer restart the app; the setting is applied at the next start and the app goes on as it was
+
+Tests:
+
+- new unit tests for the project save before a restart (tests/test_restart_project_save.py)
+
 20.10.2026
 
 Security:
