@@ -8,6 +8,11 @@ CHANGELOG for FlatCAM Evo
 
 21.10.2026
 
+Security:
+
+- fixed: a file given to FlatCAM on the command line (a double-click on an associated file, or a file sent by a second launch) got its type from a text found anywhere in its path, so 'top_copper.tcl.gtl' (a Gerber for Windows) or a file in a folder named 'board.tcl' was run as a Tcl script without a question; the type now comes from the last extension only, and quit, exit and save are commands only as the whole argument (a path with 'exit' in it closed the application, one with 'save' in it saved the preferences and opened nothing)
+- a Tcl script (.tcl, .FlatScript) given as a file to open is opened in the Code Editor and runs only after a Yes to "Run this script?" (the default answer is No); --shellfile and the headless runs still run their script without a question
+
 Milling:
 
 - fixed: a tool with a Cut Z of 0 and a non-laser preprocessor showed the "Cut Z is zero" warning and then an internal error ('too many values to unpack'); the job now fails cleanly and no CNC job is made; same fix for the Geometry object CNC job (issue #40 reported by ErkanGench)
@@ -44,6 +49,7 @@ Preferences:
 Tests:
 
 - new unit tests for the project save before a restart (tests/test_restart_project_save.py)
+- new unit tests for the type of a file given on the command line and for the question before a script given this way runs (tests/test_startup_args.py)
 
 20.10.2026
 
