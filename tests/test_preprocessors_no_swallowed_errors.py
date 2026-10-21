@@ -28,13 +28,15 @@ from test_unify_regressions_0b import make_app
 for _module in pkgutil.iter_modules(preprocessors.__path__):
     importlib.import_module('preprocessors.' + _module.name)
 
+# the registry is module wide and other tests empty or reload it: keep the preprocessors of the collection time
+PREPROCESSORS = dict(appPreProcessor.preprocessors)
 # the solder paste preprocessors need the solder paste options of a solder paste job
-GENERAL = sorted(name for name in appPreProcessor.preprocessors if not name.startswith('Paste_'))
+GENERAL = sorted(name for name in PREPROCESSORS if not name.startswith('Paste_'))
 
 
 def _job(kind, pp_name, toolchange_xy='1.0,2.0', end_xy=None):
     app = make_app()
-    app.preprocessors = appPreProcessor.preprocessors
+    app.preprocessors = PREPROCESSORS
     app.log = Mock()
     job = CNCjob(app, units='MM', pp_geometry_name=pp_name, pp_excellon_name=pp_name)
     job.obj_options = {'name': 'job', 'type': kind, 'xmin': 0.0, 'ymin': 0.0, 'xmax': 10.0, 'ymax': 20.0,
@@ -60,7 +62,7 @@ def _exceptions(app):
 
 @pytest.mark.parametrize('pp_name', GENERAL)
 def test_no_preprocessor_swallows_an_exception(pp_name):
-    pp = appPreProcessor.preprocessors[pp_name]
+    pp = PREPROCESSORS[pp_name]
     swallowed = []
 
     for kind in ('Geometry', 'Excellon'):

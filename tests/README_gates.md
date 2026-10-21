@@ -59,11 +59,21 @@ Rules:
 
 ## 4. Gate run
 
-Run the full suite 1 time at the end of a stage (about 4 minutes):
+Install `pytest-xdist` (`.venv/Scripts/python.exe -m pip install pytest-xdist`). Then the full suite runs in 8
+processes in about 3 minutes (1 serial process: about 10 minutes):
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q -rA -p no:cacheprovider
+.venv/Scripts/python.exe tests/gates/run_gate.py                 # outcome gate, 8 workers
+.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider -n 8 --dist loadfile
 ```
+
+`--dist loadfile` gives each worker whole files, so the tests of 1 file keep their order and module state.
+`run_gate.py --workers 0` runs 1 serial process. Use it to find a test that changes a global state for the next
+files (a monkeypatch of a library class that is not undone, a timer, a singleton): such a failure shows only in a
+serial run.
+
+A test that measures time on the GUI thread fails on a busy machine. Wait for the state (a loop of `qWait(10)` with a
+limit), not for a fixed time, or mark the test `@pytest.mark.timing` (it runs only with `FLATCAM_TEST_TIMING=1`).
 
 For each commit, run the identity gate (section 3) and the area gate below. It holds the tests of the Gerber /
 Excellon parsers, objects, transforms, export and the Tcl transform commands (about 1.5 minutes; without the 5

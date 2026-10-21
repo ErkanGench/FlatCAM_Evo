@@ -32,7 +32,8 @@ class Signals(QtCore.QObject):
 def make_app():
     app = Signals()
     app.log = Mock()
-    app.options = {'global_background_timeout': 100, 'global_verbose_error_level': 0}
+    # a long default: a busy machine (parallel test workers) delays the queued work; the timeout tests pass -timeout
+    app.options = {'global_background_timeout': 5000, 'global_verbose_error_level': 0}
     shell = SimpleNamespace(app=app, tcl=tkinter.Tcl(), TclErrorException=FCShell.TclErrorException,
                             open_processing=Mock())
     shell.raise_tcl_error = lambda text: FCShell.raise_tcl_error(shell, text)

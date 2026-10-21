@@ -1,2 +1,9 @@
 # Format: <test id>  # <reason>   (one per line; blank and # lines are ignored)
 # Tests that may be skipped or xfailed although the baseline does not say so.
+tests/test_geo_editor_source.py::test_real_100000_path_save_keeps_qt_heartbeat_and_working_visible  # timing test: runs only with FLATCAM_TEST_TIMING=1
+tests/test_project_file.py::TestProjectFile::test_zstandard_package_backend_reads_and_writes_the_same_format  # needs both Zstandard backends installed
+tests/test_start_dir.py::TestPosixLaunchers::test_a_launcher_that_starts_in_the_home_folder_keeps_it  # POSIX paths only
+tests/test_start_dir.py::TestPosixLaunchers::test_a_launcher_that_starts_in_the_root_folder_gives_home  # POSIX paths only
+tests/test_start_dir.py::TestPosixLaunchers::test_an_appimage_mount_is_the_application_folder  # POSIX paths only
+tests/test_svg_import.py::TestBenchmark::test_20000_elements  # benchmark: runs only with SVG_BENCH=1
+tests/updater/test_updater_permissions.py::test_apply_and_rollback_preserve_execute_bits  # needs UNIX permission bits

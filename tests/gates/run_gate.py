@@ -8,6 +8,7 @@ Runs pytest, builds a map ``test id -> outcome`` and compares it with the baseli
     python tests/gates/run_gate.py --save-baseline                  # full run, write the baseline
     python tests/gates/run_gate.py --save-on-pass                   # full run, compare, write the baseline if passed
     python tests/gates/run_gate.py --targeted "tests/test_x*.py"    # run the files that match, compare those ids
+    python tests/gates/run_gate.py --workers 0                      # 1 serial process (default: 8 xdist workers)
 
 Outcomes: passed, failed, error, skipped, xfailed, collect_error. A collection error has the id
 ``<file>::<collection>``. The test ids have the form ``file::Class::test`` (as in check_gate.py).
@@ -143,8 +144,22 @@ def check_junit(junit_path, subtest_count=0):
     return None, counts
 
 
-def run_pytest(targets):
-    """Run pytest in this process. Return (return code, outcome map, junit error, junit counts)."""
+def default_workers():
+    """8 pytest-xdist workers if the package is installed, else 0 (1 serial process)."""
+    try:
+        # optional package: its absence is the normal case, so the import stays in the try
+        import xdist  # noqa: F401
+    except ImportError:
+        return 0
+    return min(8, os.cpu_count() or 1)
+
+
+def run_pytest(targets, workers=0):
+    """Run pytest in this process. Return (return code, outcome map, junit error, junit counts).
+
+    :param workers: the number of pytest-xdist workers; 0 runs all tests in this process. The workers get whole
+        files (--dist loadfile), so the tests of 1 file keep their order and their module state.
+    """
     import pytest
     os.chdir(str(ROOT))
     if str(ROOT) not in sys.path:
@@ -153,9 +168,10 @@ def run_pytest(targets):
     os.close(fd)
     os.remove(junit_path)
     plugin = OutcomePlugin()
+    parallel = ['-n', str(workers), '--dist', 'loadfile'] if workers > 0 else []
     try:
-        code = pytest.main(targets + ['-q', '-p', 'no:cacheprovider', '--continue-on-collection-errors',
-                                      '--junitxml', junit_path], plugins=[plugin])
+        code = pytest.main(targets + parallel + ['-q', '-p', 'no:cacheprovider', '--continue-on-collection-errors',
+                                                 '--junitxml', junit_path], plugins=[plugin])
         junit_error, junit_counts = check_junit(junit_path, subtest_count=plugin.subtest_count)
     finally:
         if os.path.exists(junit_path):
@@ -186,7 +202,8 @@ def compare(current, baseline, removed, allowed, full):
         if was != now:
             print('  change  %s: %s -> %s' % (node_id, was or 'new', now))
         if was is None:
-            if now != 'passed':
+            # a new test may skip only if allowed_skips.txt names it (a platform or opt-in skip)
+            if now != 'passed' and not (now in ('skipped', 'xfailed') and node_id in allowed):
                 failures.append('new test does not pass (%s): %s' % (now, node_id))
         elif now in ('failed', 'error', 'collect_error'):
             if now != was:
@@ -216,6 +233,8 @@ def main():
     parser.add_argument('--save-on-pass', action='store_true',
                         help='full run, compare, and write outcome_baseline.json only if the gate passes')
     parser.add_argument('--targeted', nargs='+', metavar='PATTERN', help='run only the files that match')
+    parser.add_argument('--workers', type=int, default=default_workers(),
+                        help='pytest-xdist workers (default: 8 if pytest-xdist is installed); 0 = 1 serial process')
     args = parser.parse_args()
 
     if (args.save_baseline or args.save_on_pass) and args.targeted:
@@ -230,7 +249,7 @@ def main():
         targets = ['tests']
 
     start = time.time()
-    code, current, junit_error, junit_counts = run_pytest(targets)
+    code, current, junit_error, junit_counts = run_pytest(targets, args.workers)
     elapsed = time.time() - start
 
     if code not in (0, 1):

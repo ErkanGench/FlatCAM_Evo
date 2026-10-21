@@ -157,6 +157,15 @@ def test_transport_requests_execute_only_on_existing_worker_without_serial_repli
         port.close()
 
 
+def read_reply(port, limit=2.0):
+    """The next reply line; the port read time is short, so a busy machine may need more than 1 read."""
+    deadline = time.monotonic() + limit
+    line = port.readline()
+    while not line and time.monotonic() < deadline:
+        line = port.readline()
+    return line
+
+
 def real_port(tmp_path):
     from appPlugins.Common.ecut.ecut_sender_port import EcutSenderPort
     from test_ecut_sender_port import wait_for
@@ -258,7 +267,7 @@ def test_manual_generic_output_preserves_spindle_cache_and_manual_spindle_off_re
     port, engine, api = real_port(tmp_path)
     try:
         port.write(b'M3 S1000\n')
-        assert port.readline() == b'ok\r\n'
+        assert read_reply(port) == b'ok\r\n'
         wait_for(lambda: not port._active)
         revision = port.get_motion_settings()['revision']
         port.set_manual_output(7, True, revision)
@@ -269,7 +278,7 @@ def test_manual_generic_output_preserves_spindle_cache_and_manual_spindle_off_re
         with pytest.raises(Exception, match='spindle.*off'):
             port.calibration_move(0, 1, 60, revision)
         port.write(b'M5\n')
-        assert port.readline() == b'ok\r\n'
+        assert read_reply(port) == b'ok\r\n'
         wait_for(lambda: not port._active)
         assert api._spindle_rpm == 0
     finally:

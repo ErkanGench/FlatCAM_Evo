@@ -18,3 +18,25 @@ tests/test_app_refactor_characterization.py::TestLifecycleBehavior::test_default
 tests/test_vispy_only_settings.py::test_project_settings_import[False-False]  # a7852aab options split: a project saves and loads only the project options
 tests/test_vispy_only_settings.py::test_project_settings_import[False-True]  # a7852aab options split: a project saves and loads only the project options
 tests/test_vispy_only_settings.py::test_project_settings_import[True-True]  # a7852aab options split: a project saves and loads only the project options
+tests/test_levelling_audit.py::TestProbingShapes::test_vispy_collection_uses_scene_and_pool  # 7c86b7ee removed it with the Sender rework (E-Cut controller)
+tests/test_levelling_audit.py::TestSignalsOnce::test_port_force_closes_on_app_quit  # 7c86b7ee removed it (the machine stop on close replaces the forced port close)
+tests/test_paint_geometry.py::TestPaintGeometry::test_shrink_uses_full_circle_steps_for_every_offset  # 90539cd8 renamed it to test_shrink_uses_configured_circle_accuracy_for_cumulative_offsets
+tests/test_pdf_hole_detection.py::test_class_constants  # 9f24965c replaced the mode tests with test_hole_detection_modes
+tests/test_pdf_hole_detection.py::test_default_mode  # 9f24965c replaced the mode tests with test_hole_detection_modes
+tests/test_pdf_hole_detection.py::test_fill_only_mode  # 9f24965c replaced the mode tests with test_hole_detection_modes
+tests/test_pdf_hole_detection.py::test_invalid_mode  # 9f24965c replaced the mode tests with test_hole_detection_modes
+tests/test_pdf_hole_detection.py::test_stroke_only_mode  # 9f24965c replaced the mode tests with test_hole_detection_modes
+tests/updater/test_ticket3.py::test_archive_staging_cancel_failure_and_success_are_atomic  # 8ee96468 moved the updater to GitHub Releases (Digi share URL tests replaced)
+tests/updater/test_ticket3.py::test_download_worker_emits_error_when_transport_setup_fails  # 8ee96468 moved the updater to GitHub Releases (Digi share URL tests replaced)
+tests/updater/test_ticket3.py::test_download_worker_uses_factory_url_when_option_and_default_are_missing  # 8ee96468 moved the updater to GitHub Releases (Digi share URL tests replaced)
+tests/updater/test_ticket3.py::test_download_worker_uses_the_configured_share_url  # 8ee96468 moved the updater to GitHub Releases (Digi share URL tests replaced)
+tests/updater/test_ticket3.py::test_factory_defaults_seed_the_update_share_url  # 8ee96468 moved the updater to GitHub Releases (Digi share URL tests replaced)
+tests/updater/test_ticket3.py::test_update_check_uses_the_configured_share_url  # 8ee96468 moved the updater to GitHub Releases (Digi share URL tests replaced)
+tests/test_pick_consumers.py::TestAlignExcellon::test_overlapping_drills_of_two_tools_give_two_points  # Align Objects upgrade: 1 click gives at most 1 point (tests/test_align_objects.py test_overlap_gives_smallest)
+tests/test_pick_consumers.py::TestAlignGerber::test_two_overlapping_flashes_give_two_points  # Align Objects upgrade: 1 click gives at most 1 point (tests/test_align_objects.py)
+tests/test_pick_consumers.py::TestAlignGerber::test_center_is_the_solid_centroid_not_the_follow_point  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
+tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click0-center0]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
+tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click1-center1]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
+tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click2-center2]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
+tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click3-center3]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
+tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click4-center4]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid

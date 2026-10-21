@@ -129,10 +129,17 @@ class SenderView3dTest(unittest.TestCase):
         accepted = view.accepted.pos.copy()
         view.set_selected_line(2)
         self.assertTrue(view.selected.visible)
-        QtTest.QTest.qWait(550)
-        self.assertFalse(view.selected.visible)
-        QtTest.QTest.qWait(500)
-        self.assertTrue(view.selected.visible)
+
+        # wait for each toggle (not a fixed time): a busy machine delays the 500 ms timer
+        def wait_until(condition, timeout_ms=3000):
+            for _ in range(timeout_ms // 10):
+                if condition():
+                    return True
+                QtTest.QTest.qWait(10)
+            return condition()
+
+        self.assertTrue(wait_until(lambda: not view.selected.visible))
+        self.assertTrue(wait_until(lambda: view.selected.visible))
         self.assertEqual(view._selection_timer.interval(), 500)
         self.assertEqual(view._selection_timer.timerType(), QtCore.Qt.TimerType.PreciseTimer)
         np.testing.assert_array_equal(view.accepted.pos, accepted)

@@ -75,11 +75,16 @@ def pytest_runtest_call(item):
 import pytest  # noqa: E402
 
 HARDWARE_TESTS = os.environ.get('FLATCAM_TEST_HARDWARE') == '1'
+# Timing tests measure the GUI thread while a worker holds the GIL; the result depends on the machine load and on
+# the earlier tests, so they do not run by default. Mark such a test with @pytest.mark.timing and set
+# FLATCAM_TEST_TIMING=1 to run it.
+TIMING_TESTS = os.environ.get('FLATCAM_TEST_TIMING') == '1'
 _HARDWARE_BLOCKED = 'real hardware access is blocked in tests; mark the test hardware and set FLATCAM_TEST_HARDWARE=1'
 
 
 def pytest_configure(config):
     config.addinivalue_line('markers', 'hardware: needs a connected E-Cut or GRBL board (FLATCAM_TEST_HARDWARE=1)')
+    config.addinivalue_line('markers', 'timing: measures GUI responsiveness, not reliable in a full run (FLATCAM_TEST_TIMING=1)')
     # slow tests are never skipped. The fast default run is: pytest tests -m "not slow". A plain run does all tests.
     config.addinivalue_line('markers', 'slow: takes a long time (benchmarks, big boards, subprocess runs); deselect with -m "not slow"')
     # pytest resets the warning filters for each test; this line keeps the SWIG filter in the tests
@@ -87,12 +92,13 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    if HARDWARE_TESTS:
-        return
-    skip = pytest.mark.skip(reason='hardware test: set FLATCAM_TEST_HARDWARE=1 to run it')
+    skip_hardware = pytest.mark.skip(reason='hardware test: set FLATCAM_TEST_HARDWARE=1 to run it')
+    skip_timing = pytest.mark.skip(reason='timing test: set FLATCAM_TEST_TIMING=1 to run it')
     for item in items:
-        if item.get_closest_marker('hardware'):
-            item.add_marker(skip)
+        if not HARDWARE_TESTS and item.get_closest_marker('hardware'):
+            item.add_marker(skip_hardware)
+        if not TIMING_TESTS and item.get_closest_marker('timing'):
+            item.add_marker(skip_timing)
 
 
 class _BlockedHid:
@@ -117,3 +123,21 @@ def _no_real_hardware(request, monkeypatch):
 
     # the platform class of serial.Serial; loop:// and the test fakes use other classes
     monkeypatch.setattr(serial.Serial, 'open', blocked_open)
+
+
+# MainGUI.__init__ sets FCLabel / FCButton.patching_text_color to its theme_safe_color for the whole process. A test
+# that makes a real App (headless) would leave the theme colors of that App to the label tests that come after it.
+# optional: skip the restore when the GUI package cannot be imported
+try:
+    from appGUI.GUIElements import FCButton as _FCButton, FCLabel as _FCLabel
+    _THEME_COLOR_CLASSES = [(cls, vars(cls)['patching_text_color']) for cls in (_FCLabel, _FCButton)]
+except (ImportError, KeyError):
+    _THEME_COLOR_CLASSES = []
+
+
+@pytest.fixture(autouse=True)
+def _restore_theme_colors():
+    yield
+    for cls, original in _THEME_COLOR_CLASSES:
+        if vars(cls).get('patching_text_color') is not original:
+            cls.patching_text_color = original
