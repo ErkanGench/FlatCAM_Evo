@@ -15,6 +15,12 @@ If the program shows a text in English although your language translates everyth
 code: the maintainers update it with `extract` and `merge` (see the last section), then the new texts can be
 translated.
 
+**Waiting for approval:** many translations were corrected or added with machine help (one model translated, a
+second one reviewed every change, and the check below passed for each). They need a native speaker's approval.
+[`docs/translation_review/`](translation_review/README.md) lists every such entry of each language, with the old
+and the new text and the reason, as a readable table and as a spreadsheet with an *Approved* column. In the `.po`
+file these entries carry the comment `# auto-review 2026-10-09: <type>`; delete it when you have checked the entry.
+
 ## Ways to help (easiest first)
 
 1. **Report a bad text you saw in the program.** Open an issue with the *Translation problem* form: the language,
