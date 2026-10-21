@@ -358,3 +358,47 @@ def test_running_save_is_not_killed_by_a_restart(restart, monkeypatch, entry, st
     # the tray icon is shown again when the app does not restart
     s.app.trayIcon.show.assert_called_once_with()
     s.save_dialog.assert_not_called()
+
+
+@pytest.mark.parametrize('dirty', [True, False], ids=['changed', 'unchanged'])
+def test_running_geometry_editor_save_is_not_killed_by_a_restart(restart, dirty):
+    # the editor closed and still writes its result into the source object
+    s = restart
+    s.app.should_we_save = dirty
+    s.app.geo_editor = SimpleNamespace(_source_save_pending=True)
+
+    appTranslation.restart_program(app=s.app)
+
+    assert s.dialogs.asked == 0
+    assert_no_restart(s)
+    assert 'Geometry save is running' in s.app.inform.emit.call_args[0][0]
+
+
+@pytest.mark.parametrize('busy', ['editor', 'task'])
+def test_busy_app_with_changes_does_not_ask_and_does_not_restart(restart, busy):
+    # save_context() cannot save now, so the question is not asked and the reason is the last message
+    s = restart
+    if busy == 'editor':
+        s.app.call_source = 'geo_editor'
+    else:
+        s.app.proc_container = SimpleNamespace(new=lambda text: nullcontext(), get_procs_count=lambda: 1)
+
+    appTranslation.restart_program(app=s.app)
+
+    assert s.dialogs.asked == 0
+    assert_no_restart(s)
+    text = s.app.inform.emit.call_args[0][0]
+    assert ('Close the editor first.' if busy == 'editor' else 'A task is running.') in text
+    assert 'FlatCAM did not restart.' in text
+
+
+def test_busy_app_without_changes_restarts(restart):
+    # nothing to save: the busy check does not stop the restart, as before
+    s = restart
+    s.app.should_we_save = False
+    s.app.proc_container = SimpleNamespace(new=lambda text: nullcontext(), get_procs_count=lambda: 1)
+
+    appTranslation.restart_program(app=s.app)
+
+    assert s.dialogs.asked == 0
+    assert len(s.restarts) == 1

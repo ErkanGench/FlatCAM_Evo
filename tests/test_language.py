@@ -6,6 +6,7 @@ The language names and the fall back to English (appTranslation.languages_dict, 
 
 import builtins
 import unittest
+import unittest.mock
 
 import appTranslation as fcTranslate
 
@@ -45,6 +46,38 @@ class TestApplyLanguage(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual('English', fcTranslate.apply_language('strings', lang=name))
                 self.assertEqual('Preferences', builtins.__dict__['_']('Preferences'))
+
+    def _fake_settings(self, value):
+        store = {'language': value}
+
+        class FakeSettings:
+            def __init__(self, *args):
+                pass
+
+            def contains(self, key):
+                return key in store
+
+            def value(self, key, *args, **kwargs):
+                return store[key]
+
+            def setValue(self, key, val):
+                store[key] = val
+
+        patcher = unittest.mock.patch.object(fcTranslate, 'QSettings', FakeSettings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return store
+
+    def test_an_unknown_name_in_the_settings_is_written_back_as_english(self):
+        # else Preferences -> Apply of English compares with the old name and asks for a restart
+        store = self._fake_settings('Deutsche')
+        self.assertEqual('English', fcTranslate.apply_language('strings'))
+        self.assertEqual('English', store['language'])
+
+    def test_a_known_name_in_the_settings_is_kept(self):
+        store = self._fake_settings('Deutsch')
+        self.assertEqual('Deutsch', fcTranslate.apply_language('strings'))
+        self.assertEqual('Deutsch', store['language'])
 
 
 if __name__ == '__main__':

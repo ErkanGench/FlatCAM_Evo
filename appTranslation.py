@@ -170,6 +170,11 @@ def apply_language(domain, lang=None):
         if lang_code != '':
             lang_code = 'en'
             name = 'English'
+            # write the name back: else Preferences -> Apply of English compares with the old name and restarts
+            if lang is None:
+                settings = QSettings("Open Source", "FlatCAM_EVO")
+                settings.setValue('language', name)
+                del settings
 
     if lang_code == '':
         return "no language"
@@ -183,17 +188,23 @@ def apply_language(domain, lang=None):
         return name
 
 
-def save_before_restart(app, ask=None):
+def save_before_restart(app):
     """
     Before a restart, ask about each project with unsaved changes and save it, the same way as the exit of the app
     (AppLifecycle.final_save()). The save runs in this thread and has ended when this function returns: os.execl()
     ends the process at once, so a save in a worker thread would be killed before the file is written.
 
     :param app: the App
-    :param ask: if True, the active project is asked about also when it has no changes
     :return:    True if the restart can go on
     """
     next_start = _("The setting will be applied at the next application start.")
+    not_restarted = _("FlatCAM did not restart.")
+
+    # the Geometry Editor writes its result into the source object after the editor closes
+    if getattr(getattr(app, 'geo_editor', None), '_source_save_pending', False) is True:
+        app.inform.emit('[WARNING_NOTCL] %s %s %s' % (
+            _("Geometry save is running. Wait until it ends."), not_restarted, next_start))
+        return False
 
     # a running save (File -> Save, Save As, a Tcl save) is not killed. project_save_pending stays set until the
     # GUI has the result of a File -> Save
@@ -204,8 +215,14 @@ def save_before_restart(app, ask=None):
     projects = app.projects
     start = projects.active
     to_ask = projects.dirty_contexts()
-    if ask is True and start not in to_ask:
-        to_ask.insert(0, start)
+    # save_context() refuses a save while an editor is open or a task runs: do not ask a question that cannot be done
+    if to_ask and projects.is_busy():
+        if projects.is_editing():
+            reason = _("Close the editor first.")
+        else:
+            reason = _("A task is running. Wait until it ends.")
+        app.inform.emit('[WARNING_NOTCL] %s %s %s' % (reason, not_restarted, next_start))
+        return False
     try:
         for ctx in to_ask:
             answer = projects.ask_save(ctx)
@@ -219,7 +236,7 @@ def save_before_restart(app, ask=None):
     return True
 
 
-def restart_program(app, ask=None):
+def restart_program(app):
     """Restarts the current program.
     Note: after a restart this function does not return. The projects with unsaved changes are saved first
     (save_before_restart()); while a project save runs, or when a save is cancelled or fails, there is no restart.
@@ -240,7 +257,7 @@ def restart_program(app, ask=None):
         resource_loc = 'assets/resources/dark_resources'
 
     # before the ArgsThread is stopped: without a restart the app goes on as it was
-    if not save_before_restart(app, ask=ask):
+    if not save_before_restart(app):
         # on_app_restart() hid the tray icon
         tray = getattr(app, 'trayIcon', None)
         if tray is not None and app.options.get("global_systray_icon", app.defaults.get("global_systray_icon")):
