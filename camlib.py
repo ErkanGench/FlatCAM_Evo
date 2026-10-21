@@ -3733,11 +3733,16 @@ class CNCjob(Geometry):
                 t_gcode += self.doformat(p.lift_code)
             t_gcode += self.doformat(p.startz_code)
 
-        # Spindle start
-        t_gcode += self.doformat(p.spindle_code)
-        # Dwell time
-        if self.dwell is True:
-            t_gcode += self.doformat(p.dwell_code)
+        if 'laser' not in self.pp_excellon_name.lower():
+            # Spindle start
+            t_gcode += self.doformat(p.spindle_code)
+            # Dwell time
+            if self.dwell is True:
+                t_gcode += self.doformat(p.dwell_code)
+        elif toolchange:
+            # for laser the spindle code turns the laser ON: keep it OFF for the travel to the first hole, the down
+            # code turns it ON at each hole (without toolchange the lift code above already turned it OFF)
+            t_gcode += self.doformat(p.lift_code, x=temp_locx, y=temp_locy)
 
         current_tooldia = self.app.dec_format(float(tools[tool]["tooldia"]), self.decimals)
         self.app.inform.emit(
