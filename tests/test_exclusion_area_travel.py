@@ -8,6 +8,7 @@ so both went straight through the area at the travel Z. A travel that really cro
 0.1 mm margin was accepted and its travels started or ended inside the grown area.
 """
 
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -17,6 +18,7 @@ from shapely.geometry import LineString, Point, Polygon, box
 from appCommon.Common import ExclusionAreas
 from appPlugins.ToolDrilling import ToolDrilling
 from camlib import CNCjob
+from test_cncjob_gcode_speed import gcode_job
 from test_unify_regressions_0b import make_app, make_excellon
 
 TOOLDIA = 1.0
@@ -207,3 +209,105 @@ def test_drillcncjob_check_uses_the_travel_margin(point, accepted):
 
     assert (results == ['fail']) is not accepted
     assert any('Drill points inside the exclusion zones' in m for m in messages) is not accepted
+
+
+def assert_safe_clearance(exc, start, end, travels, travel_z=2.0):
+    """Check the XY move before each Z change, as the G-code consumers emit them."""
+    position, height = start, travel_z
+    for next_z, destination in travels:
+        segment = LineString([position, destination])
+        new_height = travel_z if next_z is None else next_z
+        for area in exc.exclusion_areas_storage:
+            interior = exc.grown_shape(area['shape'], TOOLDIA).buffer(-1e-6, join_style='mitre')
+            if segment.intersection(interior).length > 1e-9:
+                assert area['strategy'] == 'over', (segment.wkt, travels)
+                assert height >= area['overz'], (height, area['overz'], travels)
+            if interior.contains(Point(destination)):
+                assert area['strategy'] == 'over' and new_height >= area['overz'], travels
+        position, height = destination, new_height
+    assert tuple(position) == tuple(end)
+    assert height == travel_z
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('second', [box(0.8, 1, 1.5, 2), box(5, 0, 8, 2)])
+def test_around_checks_every_detour_leg(second, reverse):
+    areas = [AREA, second]
+    exc = exclusion_areas(*areas[::(-1 if reverse else 1)], strategy='around')
+    start, end = (0, 0), (10, 0)
+    travels = exc.travel_coordinates(start, end, TOOLDIA)
+
+    assert_safe_clearance(exc, start, end, travels)
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('backwards', [False, True])
+@pytest.mark.parametrize('second', [box(5, -1, 9, 1), box(4, -0.5, 5, 0.5)])
+def test_overlapping_over_areas_keep_the_highest_clearance(second, reverse, backwards):
+    exc = exclusion_areas(AREA, second)
+    exc.exclusion_areas_storage[1]['overz'] = 10.0
+    if reverse:
+        exc.exclusion_areas_storage.reverse()
+    start, end = ((12, 0), (0, 0)) if backwards else ((0, 0), (12, 0))
+    travels = exc.travel_coordinates(start, end, TOOLDIA)
+
+    assert_safe_clearance(exc, start, end, travels)
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_around_detour_applies_over_clearance_on_its_legs(reverse):
+    exc = exclusion_areas(AREA, box(0.8, 1, 1.5, 2), box(0.8, -2, 1.5, -1))
+    exc.exclusion_areas_storage[0]['strategy'] = 'around'
+    for area in exc.exclusion_areas_storage[1:]:
+        area['overz'] = 10.0
+    if reverse:
+        exc.exclusion_areas_storage.reverse()
+    start, end = (0, 0), (10, 0)
+    travels = exc.travel_coordinates(start, end, TOOLDIA)
+
+    assert any(z == 10.0 for z, xy in travels)
+    assert_safe_clearance(exc, start, end, travels)
+
+
+def test_disjoint_over_areas_still_lower_between_them():
+    exc = exclusion_areas(AREA, box(9, -1, 10, 1))
+    exc.exclusion_areas_storage[1]['overz'] = 10.0
+    travels = exc.travel_coordinates((0, 0), (12, 0), TOOLDIA)
+
+    assert travels == [[5.0, pytest.approx((2.4, 0))], [None, pytest.approx((6.6, 0))],
+                       [10.0, pytest.approx((8.4, 0))], [None, pytest.approx((10.6, 0))], [None, (12, 0)]]
+    assert_safe_clearance(exc, (0, 0), (12, 0), travels)
+
+
+def test_enclosed_start_fails_instead_of_crossing_an_around_area():
+    exc = exclusion_areas(box(-3, -3, 3, -2), box(-3, 2, 3, 3),
+                          box(-3, -2, -2, 2), box(2, -2, 3, 2), strategy='around')
+
+    with pytest.raises(ValueError, match='cannot go around'):
+        exc.travel_coordinates((0, 0), (10, 0), TOOLDIA)
+
+
+@pytest.mark.parametrize('pp_name', ['default', 'GRBL_11'])
+@pytest.mark.parametrize('strategy', ['over', 'around'])
+def test_generated_gcode_keeps_multi_area_clearance(pp_name, strategy):
+
+    exc = exclusion_areas(AREA, box(5, -1, 9, 1), strategy=strategy)
+    exc.exclusion_areas_storage[1]['overz'] = 10.0
+    job = gcode_job(pp_name)
+    job.app.exc_areas = exc
+    end = (12, 0)
+    gcode = job.linear2gcode(LineString([end, (13, 0)]), TOOLDIA, old_point=(0, 0))
+    down = job.doformat(job.pp_geometry.down_code, x=end[0], y=end[1], z_cut=job.z_cut)
+    assert down in gcode
+    rapids = gcode.split(down, 1)[0]
+    position, height = (0, 0), 2.0
+    travels = []
+    for line in rapids.splitlines():
+        if not re.match(r'^\s*G0+(?:\s|$)', line):
+            continue
+        axes = {axis: float(value) for axis, value in re.findall(r'([XYZ])([-+\d.]+)', line)}
+        position = (axes.get('X', position[0]), axes.get('Y', position[1]))
+        height = axes.get('Z', height)
+        travels.append([None if height == 2.0 else height, position])
+
+    assert_safe_clearance(exc, (0, 0), end, travels)

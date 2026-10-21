@@ -21,6 +21,7 @@ from appTool import AppTool
 from copy import deepcopy
 import collections
 from datetime import datetime
+from heapq import heappop, heappush
 
 import numpy as np
 # from voronoi import Voronoi
@@ -691,10 +692,8 @@ class ExclusionAreas(QtCore.QObject):
         :type tooldia           float
         :return:                A list of x,y tuples that describe the avoiding path
         :rtype:                 list
-        :raises ValueError:     when the travel starts or ends inside an 'around' area grown by the tool radius
+        :raises ValueError:     when no path around the grown 'around' areas is possible
         """
-
-        ret_list = []
 
         # Travel lines: rapids. Should not pass through Exclusion areas
         travel_line = LineString([start_point, end_point])
@@ -705,170 +704,86 @@ class ExclusionAreas(QtCore.QObject):
             new_area['shape'] = self.grown_shape(area['shape'], tooldia)
             buffered_storage.append(new_area)
 
-        # sort the Exclusion areas in the order in which the travel line enters them (the area closest to the
-        # start_point is not always the first one entered); the areas that the travel line does not enter come last,
-        # from the closest to the start_point to the farthest, because a path around an area can still enter them
-        tmp = []
-        for area in buffered_storage:
-            crossing = line_crossing(travel_line, area['shape'])
-            if crossing is not None:
-                dist = (0, crossing[0])
-            else:
-                dist = (1, Point(start_point).distance(area['shape']))
-            tmp.append((dist, area))
-        tmp.sort(key=lambda k: k[0])
+        # Plan XY against all 'around' areas together. The union includes the boundary intersections of overlapping
+        # areas, and each candidate leg is checked against the whole union, not only the area being detoured.
+        around = unary_union([area['shape'] for area in buffered_storage if area['strategy'] == 'around'])
+        route = [tuple(start_point), tuple(end_point)]
+        if line_crossing(travel_line, around) is not None:
+            if around.contains(Point(start_point)) or around.contains(Point(end_point)):
+                raise ValueError(_("Failed. The tool cannot go around an exclusion area: "
+                                   "a travel starts or ends too close to the area. "
+                                   "Use the 'Over' strategy or change the area."))
 
-        sorted_area_storage = [k[1] for k in tmp]
+            vertices = list(dict.fromkeys(route + [tuple(xy) for xy in get_coordinates(around.boundary)]))
+            distances = {0: 0.0}
+            previous = {}
+            pending = [(0.0, 0)]
+            visited = set()
+            # ponytail: O(V^2) visibility search for the exclusion vertices; add a spatial index if large areas need it.
+            while pending:
+                distance, idx = heappop(pending)
+                if idx in visited:
+                    continue
+                visited.add(idx)
+                if idx == 1:
+                    break
+                for next_idx, vertex in enumerate(vertices):
+                    if next_idx in visited:
+                        continue
+                    leg = LineString([vertices[idx], vertex])
+                    next_distance = distance + leg.length
+                    if next_distance >= distances.get(next_idx, float('inf')):
+                        continue
+                    if line_crossing(leg, around) is None:
+                        distances[next_idx] = next_distance
+                        previous[next_idx] = idx
+                        heappush(pending, (next_distance, next_idx))
+            if 1 not in visited:
+                raise ValueError(_("Failed. The tool cannot go around the exclusion areas. Change the areas."))
+            route = [vertices[1]]
+            idx = 1
+            while idx != 0:
+                idx = previous[idx]
+                route.append(vertices[idx])
+            route.reverse()
 
-        # process the ordered exclusion areas list
-        for area in sorted_area_storage:
-            outline = area['shape'].exterior
-            # the travel line is tested against the whole area, not only against its outline: when the start or the
-            # end point is inside the area the line meets the outline once or not at all, but it still goes through it
-            crossing = line_crossing(travel_line, area['shape'])
-            if crossing is not None:
-                __, entry_pt, exit_pt = crossing
-
+        # Collect the 'over' intervals along every leg of the complete XY route, including the detour legs.
+        intervals = []
+        route_points = []
+        offset = 0.0
+        for first, last in zip(route, route[1:]):
+            leg = LineString([first, last])
+            for area in buffered_storage:
                 if area['strategy'] == 'around':
-                    # after a detour the travel line starts where the detour ended
-                    line_start = travel_line.coords[0]
+                    continue
+                crossing = line_crossing(leg, area['shape'])
+                if crossing is not None:
+                    entry_distance, entry_pt, exit_pt = crossing
+                    intervals.append([offset + entry_distance, offset + leg.project(exit_pt), float(area['overz']),
+                                      (entry_pt.x, entry_pt.y), (exit_pt.x, exit_pt.y)])
+            offset += leg.length
+            route_points.append((offset, last))
 
-                    # a path on the outline can only join two points outside the area; going over the area instead is
-                    # not safe: the Over Z of an 'around' area is not set by the user
-                    if area['shape'].contains(Point(line_start)) or area['shape'].contains(Point(end_point)):
-                        raise ValueError(_("Failed. The tool cannot go around an exclusion area: "
-                                           "a travel starts or ends too close to the area. "
-                                           "Use the 'Over' strategy or change the area."))
+        # Stay at the highest Over Z for an entire connected group of intervals. In particular, never lower inside
+        # another area or reach a higher area before raising. Disjoint groups still lower to the normal travel Z.
+        merged = []
+        for interval in sorted(intervals, key=lambda item: item[0]):
+            if merged and interval[0] <= merged[-1][1]:
+                current = merged[-1]
+                current[2] = max(current[2], interval[2])
+                if interval[1] > current[1]:
+                    current[1], current[4] = interval[1], interval[4]
+            else:
+                merged.append(interval)
 
-                    full_vertex_points = [Point(x) for x in list(outline.coords)]
-
-                    # the last coordinate in outline, a LinearRing, is the closing one
-                    # therefore a duplicate of the first one; discard it
-                    vertex_points = full_vertex_points[:-1]
-
-                    # dist_from_entry = [(entry_pt.distance(vt), vertex_points.index(vt)) for vt in vertex_points]
-                    # closest_point_entry = nsmallest(1, dist_from_entry, key=lambda x: x[0])
-                    # start_idx = closest_point_entry[0][1]
-                    #
-                    # dist_from_exit = [(exit_pt.distance(vt), vertex_points.index(vt)) for vt in vertex_points]
-                    # closest_point_exit = nsmallest(1, dist_from_exit, key=lambda x: x[0])
-                    # end_idx = closest_point_exit[0][1]
-
-                    # pts_line_entry = None
-                    # pts_line_exit = None
-                    # for i in range(len(full_vertex_points)):
-                    #     try:
-                    #         line = LineString(
-                    #             [
-                    #                 (full_vertex_points[i].x, full_vertex_points[i].y),
-                    #                 (full_vertex_points[i + 1].x, full_vertex_points[i + 1].y)
-                    #             ]
-                    #         )
-                    #     except IndexError:
-                    #         continue
-                    #
-                    #     if entry_pt.within(line) or entry_pt.equals(Point(line.coords[0])) or \
-                    #             entry_pt.equals(Point(line.coords[1])):
-                    #         pts_line_entry = [Point(x) for x in line.coords]
-                    #
-                    #     if exit_pt.within(line) or exit_pt.equals(Point(line.coords[0])) or \
-                    #             exit_pt.equals(Point(line.coords[1])):
-                    #         pts_line_exit = [Point(x) for x in line.coords]
-                    #
-                    # closest_point_entry = nearest_point(entry_pt, pts_line_entry)
-                    # start_idx = vertex_points.index(closest_point_entry)
-                    #
-                    # closest_point_exit = nearest_point(exit_pt, pts_line_exit)
-                    # end_idx = vertex_points.index(closest_point_exit)
-
-                    # find all vertexes for which a line from start_point does not cross the Exclusion area polygon
-                    # the same for end_point
-                    # we don't need closest points for which the path leads to crosses of the Exclusion area
-
-                    close_start_points = []
-                    close_end_points = []
-                    for i in range(len(vertex_points)):
-                        try:
-                            start_line = LineString(
-                                [
-                                    line_start,
-                                    (vertex_points[i].x, vertex_points[i].y)
-                                ]
-                            )
-                            end_line = LineString(
-                                [
-                                    end_point,
-                                    (vertex_points[i].x, vertex_points[i].y)
-                                ]
-                            )
-                        except IndexError:
-                            continue
-
-                        # not crosses(): a line from a point on the outline through the area does not 'cross' it
-                        if line_crossing(start_line, area['shape']) is None:
-                            close_start_points.append(vertex_points[i])
-                        if line_crossing(end_line, area['shape']) is None:
-                            close_end_points.append(vertex_points[i])
-
-                    closest_point_entry = nearest_point(entry_pt, close_start_points)
-                    closest_point_exit = nearest_point(exit_pt, close_end_points)
-
-                    start_idx = vertex_points.index(closest_point_entry)
-                    end_idx = vertex_points.index(closest_point_exit)
-
-                    # calculate possible paths: one clockwise the other counterclockwise on the exterior of the
-                    # exclusion area outline (Polygon.exterior)
-                    vp_len = len(vertex_points)
-                    if end_idx > start_idx:
-                        path_1 = vertex_points[start_idx:(end_idx + 1)]
-                        path_2 = [vertex_points[start_idx]]
-                        idx = start_idx
-                        for __ in range(vp_len):
-                            idx = idx - 1 if idx > 0 else (vp_len - 1)
-                            path_2.append(vertex_points[idx])
-                            if idx == end_idx:
-                                break
-                    else:
-                        path_1 = vertex_points[end_idx:(start_idx + 1)]
-                        path_2 = [vertex_points[end_idx]]
-                        idx = end_idx
-                        for __ in range(vp_len):
-                            idx = idx - 1 if idx > 0 else (vp_len - 1)
-                            path_2.append(vertex_points[idx])
-                            if idx == start_idx:
-                                break
-                        path_1.reverse()
-                        path_2.reverse()
-
-                    # choose the one with the lesser length
-                    length_path_1 = 0
-                    for i in range(len(path_1)):
-                        try:
-                            length_path_1 += path_1[i].distance(path_1[i + 1])
-                        except IndexError:
-                            pass
-
-                    length_path_2 = 0
-                    for i in range(len(path_2)):
-                        try:
-                            length_path_2 += path_2[i].distance(path_2[i + 1])
-                        except IndexError:
-                            pass
-
-                    path = path_1 if length_path_1 < length_path_2 else path_2
-
-                    # transform the list of Points into a list of Points coordinates
-                    path_coords = [[None, (p.x, p.y)] for p in path]
-                    ret_list += path_coords
-
-                else:
-                    path_coords = [[float(area['overz']), (entry_pt.x, entry_pt.y)], [None, (exit_pt.x, exit_pt.y)]]
-                    ret_list += path_coords
-
-                # create a new LineString to test again for possible other Exclusion zones
-                last_pt_in_path = path_coords[-1][1]
-                travel_line = LineString([last_pt_in_path, end_point])
-
+        waypoints = {}
+        for distance, point in route_points[:-1]:
+            height = next((item[2] for item in merged if item[0] <= distance < item[1]), None)
+            waypoints[distance] = [height, point]
+        for entry, exit_distance, height, entry_xy, exit_xy in merged:
+            waypoints[entry] = [height, entry_xy]
+            waypoints[exit_distance] = [None, exit_xy]
+        ret_list = [waypoints[distance] for distance in sorted(waypoints)]
         ret_list.append([None, end_point])
         return ret_list
 
