@@ -253,6 +253,10 @@ class AppLifecycle(QtCore.QObject):
         """
         from PyQt6 import QtGui, QtWidgets
 
+        if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
+            return False
+
         # project_save_pending stays set until the GUI has the result of a File -> Save; before that, the dirty
         # flag of a failed save is not restored yet
         if self.app.save_in_progress or getattr(self.app, 'project_save_pending', False):
@@ -362,12 +366,21 @@ class AppLifecycle(QtCore.QObject):
         from PyQt6.QtCore import QSettings
         from PyQt6 import QtCore, QtWidgets
 
+        if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
+            return False
+
         if getattr(self.app, 'headless', False):
             # headless mode: quit_app ends the run; the preferences and the window state of the user stay as they are
             self.app.headless_exit_code = 0
             raise HeadlessExit(0)
 
         if not self._confirm_tools_database():
+            return False
+
+        # Tools DB confirmation can process a geometry Save request in its modal event loop.
+        if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
             return False
 
         # make sure that any change we made while working in the app is saved to the defaults
@@ -405,11 +418,7 @@ class AppLifecycle(QtCore.QObject):
             editor = self.app._editor_for(kind)
             if editor is not None:
                 self.app._deactivate_editor(kind)
-                try:
-                    # QObject.disconnect() with no arguments raises TypeError when nothing is connected
-                    editor.disconnect()
-                except TypeError:
-                    pass
+                # Keep destroyed() connections intact; Qt disconnects signals when the editor is destroyed.
                 if silent is False:
                     self.log.debug("App.quit_application() --> %s deactivated." % editor_name)
 

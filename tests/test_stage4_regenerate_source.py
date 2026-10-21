@@ -4,7 +4,9 @@
 from unittest.mock import patch
 
 import pytest
+import ezdxf
 from PyQt6 import QtWidgets
+from shapely.geometry import LineString, Polygon
 
 from appHandlers.appIO import appIO
 from appObjects.AppObjectTemplate import FlatCAMObj
@@ -108,7 +110,38 @@ def test_kinds_without_an_exporter_do_nothing(app, cls):
 
 def test_geometry_stores_the_dxf_export(app):
     geo = GeometryObject('geo', app)
-    doc = object()
+    doc = 'DXF text'
     app.f_handlers.export_dxf = lambda **kw: doc
     assert geo.regenerate_source() is True
-    assert geo.source_file is doc
+    assert geo.source_file == doc
+
+
+@pytest.mark.parametrize('units,unit_code', [('MM', 4), ('IN', 1)])
+@pytest.mark.parametrize('multigeo', [False, True])
+def test_geometry_real_dxf_snapshot_and_project_boundary(app, tmp_path, units, unit_code, multigeo):
+    """GEO-09: the usable DXF snapshot is text in the existing project source field."""
+    app.app_units = units
+    app.options['geometry_dxf_format'] = 'R2010'
+    geo = GeometryObject('geo', app)
+    polygon = Polygon([(0, 0), (4, 0), (4, 4), (0, 4)],
+                      holes=[[(1, 1), (2, 1), (2, 2), (1, 2)]])
+    line = LineString([(5, 0), (6, 1)])
+    geo.multigeo = multigeo
+    geo.solid_geometry = [polygon, line]
+    if multigeo:
+        geo.solid_geometry = []
+        geo.tools = {1: {'solid_geometry': [polygon]}, 2: {'solid_geometry': [line]}}
+
+    assert geo.regenerate_source() is True
+    filename = tmp_path / 'snapshot.dxf'
+    filename.write_text(geo.source_file, encoding='utf-8')
+    again = ezdxf.readfile(filename)
+    assert again.units == unit_code
+    assert again.header['$MEASUREMENT'] == (1 if units == 'MM' else 0)
+    paths = list(again.modelspace())
+    assert [entity.dxftype() for entity in paths] == ['LWPOLYLINE'] * 3
+    assert [entity.closed for entity in paths] == [True, True, False]
+    assert [list(entity.get_points('xy')) for entity in paths] == [
+        list(polygon.exterior.coords), list(polygon.interiors[0].coords), list(line.coords)]
+    app.file_saved.emit.assert_not_called()
+    assert geo.to_dict()['source_file'] == geo.source_file

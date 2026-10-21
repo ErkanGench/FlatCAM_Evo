@@ -529,10 +529,20 @@ class TestTitleBar(unittest.TestCase):
         window.menu = QtWidgets.QMenuBar(window)
         window.menu.addMenu('File')
         window.menu_toggle_nb = QtGui.QAction('Notebook', window)
+        # MainGUI.__init__ makes the Undo / Redo actions before the title bar
+        window.undo_btn = QtGui.QAction('Undo', window)
+        window.redo_btn = QtGui.QAction('Redo', window)
         window.app = SimpleNamespace(options={}, defaults=AppDefaults(beta=False))
         MainGUI.build_titlebar(window)
         self.assertIs(window.menuWidget(), window.title_bar)
         self.assertIs(window.title_toolbar, window.title_bar.toolbar)
+        # the Undo / Redo buttons are just before the main menu button
+        layout = window.title_bar.layout()
+        widgets = [layout.itemAt(i).widget() for i in range(layout.count())]
+        undo_btn, redo_btn = window.title_bar.history_buttons
+        self.assertEqual(widgets.index(undo_btn) + 1, widgets.index(redo_btn))
+        self.assertEqual(widgets.index(redo_btn) + 1, widgets.index(window.title_bar.menu_button))
+        self.assertIs(undo_btn.defaultAction(), window.undo_btn)
 
     def test_main_window_can_use_native_titlebar_and_original_menu(self):
         window = QtWidgets.QMainWindow()

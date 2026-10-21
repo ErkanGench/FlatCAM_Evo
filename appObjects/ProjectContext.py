@@ -25,6 +25,8 @@ class ProjectContext:
         self.should_we_save = False
         # the canvas view rectangle when the project was last active
         self.view_rect = None
+        # the Undo / Redo history (appHandlers.appHistory.HistoryManager); made by ProjectManager
+        self.history = None
 
 
 def unique_name(base, used):

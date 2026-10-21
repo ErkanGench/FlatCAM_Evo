@@ -3,6 +3,7 @@ import os
 
 from PyQt6 import QtCore, QtWidgets
 
+from appHandlers.appHistory import HistoryManager
 from appObjects.ProjectContext import ProjectContext, unique_name, same_path, name_from_filename, \
     is_valid_name, PROJECT_EXT
 from defaults import project_options
@@ -42,6 +43,7 @@ class ProjectManager(QtCore.QObject):
         self.displayed = first
         self.stack.addWidget(first.collection.view)
         self.stack.setCurrentWidget(first.collection.view)
+        app.history = self._ensure_history(first)
 
     def _make_collection(self):
         from appObjects.ObjectCollection import ObjectCollection
@@ -49,6 +51,12 @@ class ProjectManager(QtCore.QObject):
         collection = ObjectCollection(app=self.app)
         collection.view.setMinimumWidth(290)
         return collection
+
+    def _ensure_history(self, ctx):
+        """Every project has its own Undo / Redo history."""
+        if ctx.history is None:
+            ctx.history = HistoryManager(self.app, ctx.collection)
+        return ctx.history
 
     # ------------------------------------------------------------------------------------------------------------
     # Queries
@@ -156,6 +164,8 @@ class ProjectManager(QtCore.QObject):
         self.app.should_we_save = ctx.should_we_save
         self.app.all_objects_list = ctx.collection.get_list()
         self.stack.setCurrentWidget(ctx.collection.view)
+        self.app.history = self._ensure_history(ctx)
+        self.app.history.notify()
 
     def switch(self, ctx, visuals=True):
         """

@@ -24,6 +24,7 @@ import shapely
 from shapely import LineString, MultiLineString, Polygon, MultiPolygon, Point, LinearRing
 from shapely.ops import unary_union
 
+from appHandlers.appHistory import history_of
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -1713,11 +1714,12 @@ class ToolIsolation(Geometry, AppTool):
 
         def buffer_task(app_obj):
             with app_obj.proc_container.new('%s...' % _("Buffering")):
-                if isinstance(self.grb_obj.solid_geometry, list):
-                    self.grb_obj.solid_geometry = MultiPolygon(self.grb_obj.solid_geometry)
+                with history_of(app_obj).snapshot(_("Buffer"), [self.grb_obj]):
+                    if isinstance(self.grb_obj.solid_geometry, list):
+                        self.grb_obj.solid_geometry = MultiPolygon(self.grb_obj.solid_geometry)
 
-                self.grb_obj.solid_geometry = self.grb_obj.solid_geometry.buffer(0.0000001)
-                self.grb_obj.solid_geometry = self.grb_obj.solid_geometry.buffer(-0.0000001)
+                    self.grb_obj.solid_geometry = self.grb_obj.solid_geometry.buffer(0.0000001)
+                    self.grb_obj.solid_geometry = self.grb_obj.solid_geometry.buffer(-0.0000001)
                 app_obj.inform.emit('[success] %s' % _("Done."))
                 self.grb_obj.plot_single_object.emit()
 

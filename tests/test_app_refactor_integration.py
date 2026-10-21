@@ -93,6 +93,7 @@ FACADE_MANIFEST = {
         'on_delete_keypress': invocation(),
         'on_delete': invocation(force_deletion=True),
         'delete_first_selected': invocation(del_obj=ARG),
+        'delete_objects_now': invocation(ARG),
         'on_selectall': invocation(),
         'on_deselect_all': invocation(),
         'on_copy_name': invocation(),
@@ -187,7 +188,7 @@ ACTION_NAMES = """
     menueditedit menueditok menuedit_join2geo menuedit_join_exc2exc menuedit_join_grb2grb
     menuedit_convert_sg2mg menuedit_convert_mg2sg menueditdelete menueditcopyobject
     menueditconvert_any2geo menueditconvert_any2gerber menueditconvert_any2excellon menuedit_numeric_move
-    menueditorigin menuedit_move2origin menuedit_center_in_origin menueditjump menueditlocate
+    menueditorigin menuedit_move2origin menuedit_center_in_origin menueditjump menueditlocate menuedit_undo menuedit_redo undo_btn redo_btn
     menueditselectall menueditpreferences
     menuoptions_transform_rotate menuoptions_transform_skewx menuoptions_transform_skewy
     menuoptions_transform_flipx menuoptions_transform_flipy menuoptions_view_source menuoptions_tools_db
@@ -228,6 +229,9 @@ class StrictUI:
         pass
 
     def showMaximized(self):
+        pass
+
+    def on_history_changed(self, undo_label, redo_label):
         pass
 
     def __init__(self):

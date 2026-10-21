@@ -203,6 +203,8 @@ class AppDefaults:
         "global_mselect_key": 'Control',
 
         "global_delete_confirmation": True,
+        "global_history_steps": 100,
+        "global_history_memory_mb": 256,
         "global_allow_edit_in_project_tab": False,
         "global_open_style": True,
         "global_toggle_tooltips": True,
@@ -890,6 +892,8 @@ class AppDefaults:
 
         # Align Objects Tool
         "tools_align_objects_align_type": 'sp',
+        "tools_align_objects_fit_model": 'rigid',
+        "tools_align_objects_allow_mirror": False,
 
         # Invert Gerber Tool
         "tools_invert_margin": 0.1,

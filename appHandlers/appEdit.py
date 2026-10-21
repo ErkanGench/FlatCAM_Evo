@@ -1,10 +1,12 @@
 
+from appHandlers.appHistory import history_of
 from PyQt6 import QtCore, QtGui
 
 from appObjects.ObjectCollection import GeometryObject, GerberObject, ExcellonObject
 from appGUI.GUIElements import DialogBoxChoice
 from appCommon.SafeEval import safe_eval
-from appHandlers.appObjectOps import _finish_origin_move
+from appHandlers.appObjectOps import _finish_origin_move, history_guard
+from camlib import affine_translate_matrix
 
 from copy import deepcopy
 from shapely import MultiPolygon, Polygon, LinearRing, LineString, Point, unary_union
@@ -456,12 +458,13 @@ class appEditor(QtCore.QObject):
             self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Expected a GeometryObject, got"), type(obj)))
             return
 
-        obj.multigeo = True
-        for tooluid, dict_value in obj.tools.items():
-            dict_value['solid_geometry'] = deepcopy(obj.solid_geometry)
+        with history_of(self.app).snapshot(_("Convert to MultiGeo"), [obj]):
+            obj.multigeo = True
+            for tooluid, dict_value in obj.tools.items():
+                dict_value['solid_geometry'] = deepcopy(obj.solid_geometry)
 
-        if not isinstance(obj.solid_geometry, list):
-            obj.solid_geometry = [obj.solid_geometry]
+            if not isinstance(obj.solid_geometry, list):
+                obj.solid_geometry = [obj.solid_geometry]
 
         # obj.solid_geometry[:] = []
         obj.plot()
@@ -492,16 +495,17 @@ class appEditor(QtCore.QObject):
             self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Expected a GeometryObject, got"), type(obj)))
             return
 
-        obj.multigeo = False
-        total_solid_geometry = []
-        for tool_uid, dict_value in obj.tools.items():
-            total_solid_geometry += deepcopy(dict_value['solid_geometry'])
-            # clear the original geometry
-            if isinstance(dict_value['solid_geometry'], list):
-                dict_value['solid_geometry'][:] = []
-            else:
-                dict_value['solid_geometry'] = []
-        obj.solid_geometry = deepcopy(total_solid_geometry)
+        with history_of(self.app).snapshot(_("Convert to SingleGeo"), [obj]):
+            obj.multigeo = False
+            total_solid_geometry = []
+            for tool_uid, dict_value in obj.tools.items():
+                total_solid_geometry += deepcopy(dict_value['solid_geometry'])
+                # clear the original geometry
+                if isinstance(dict_value['solid_geometry'], list):
+                    dict_value['solid_geometry'][:] = []
+                else:
+                    dict_value['solid_geometry'] = []
+            obj.solid_geometry = deepcopy(total_solid_geometry)
         obj.plot()
 
         self.app.should_we_save = True
@@ -700,10 +704,16 @@ class appEditor(QtCore.QObject):
                         cy = y0 + abs((y1 - y0) / 2)
                         location = (cx, cy)
 
-                    for obj in obj_list:
-                        if obj.offset((-location[0], -location[1])) == 'fail':
-                            raise ValueError('Object movement failed')
-                        result['updates'].append((obj, obj.bounds()))
+                    label = _("Custom Origin")
+                    with history_of(self.app).group(label):
+                        for obj in obj_list:
+                            with history_guard(history_of(self.app), label, obj) as before:
+                                failed = obj.offset((-location[0], -location[1])) == 'fail'
+                            if failed:
+                                raise ValueError('Object movement failed')
+                            history_of(self.app).record_matrix(
+                                label, [(obj, affine_translate_matrix(-location[0], -location[1]), before)])
+                            result['updates'].append((obj, obj.bounds()))
                     for obj in obj_list:
                         obj.plot()
                     for obj in obj_list:

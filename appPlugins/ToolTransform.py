@@ -5,6 +5,8 @@
 # MIT Licence                                              #
 # ##########################################################
 
+from appHandlers.appHistory import (history_of, object_state, restore_object_state, states_equal,
+                                    transform_metadata, SnapshotStep, HistoryManager)
 from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
@@ -13,6 +15,8 @@ from defaults import AppDefaults
 from appCommon.SafeEval import safe_eval
 
 import logging
+from camlib import (affine_rotate_matrix, affine_scale_matrix, affine_skew_matrix, affine_mirror_matrix,
+                    affine_translate_matrix)
 import numpy as np
 
 import gettext
@@ -190,6 +194,9 @@ class ToolTransform(AppTool):
             sel_list = self.app.collection.get_selected()
             if sel_list:
                 xmin, ymin, xmax, ymax = self.alt_bounds(obj_list=sel_list)
+                if not all(np.isfinite((xmin, ymin, xmax, ymax))):
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("The selected objects have no geometry."))
+                    return "fail"
                 px = (xmax + xmin) * 0.5
                 py = (ymax + ymin) * 0.5
                 return px, py
@@ -207,7 +214,13 @@ class ToolTransform(AppTool):
         else:               # "Object" reference
             obj_name = self.ui.object_combo.get_value()
             ref_obj = self.app.collection.get_by_name(obj_name)
+            if ref_obj is None:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Reference object not found"), str(obj_name)))
+                return "fail"
             xmin, ymin, xmax, ymax = ref_obj.bounds()
+            if not all(np.isfinite((xmin, ymin, xmax, ymax))):
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Reference object has no geometry"), str(obj_name)))
+                return "fail"
             px = (xmax + xmin) * 0.5
             py = (ymax + ymin) * 0.5
             return px, py
@@ -341,230 +354,217 @@ class ToolTransform(AppTool):
 
         self.app.worker_task.emit({'fcn': self.on_buffer_action, 'params': [value, join, factor]})
 
-    def on_rotate_action(self, num, point):
-        obj_list = self.app.collection.get_selected()
+    def _transform_selected(self, title, cncjob_msg, apply_fn, matrix, meta_fn, done_msg, set_offset=True):
+        """
+        Runs one affine action on the selected objects (called from a worker thread). Per object: apply_fn(obj) does
+        the transform, meta_fn(obj) stores the metadata in obj_options, then locally computed bounds update the
+        Offset field. AppObject.on_object_changed computes fresh bounds when its queued signal is delivered.
+        A failure on one object is logged and does not stop the others; the failed names are reported at the end.
 
+        :param title:       text for the progress container
+        :param cncjob_msg:  message for the CNCJob objects, shown once
+        :param apply_fn:    callable(obj) that executes the transform; may return 'fail' (object unchanged)
+        :param matrix:      the shapely 6-tuple that apply_fn applies to the geometry; None: not affine, plot() is used
+        :param meta_fn:     callable(obj) that updates obj.obj_options
+        :param done_msg:    success message
+        :param set_offset:  update the Offset field in the Properties tab
+        :return:            None
+        """
+
+        obj_list = self.app.collection.get_selected()
         if not obj_list:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
             return
-        else:
-            with self.app.proc_container.new('%s...' % _("Rotating")):
-                try:
-                    px, py = point
-                    for sel_obj in obj_list:
-                        if sel_obj.kind == 'cncjob':
-                            self.app.inform.emit(_("CNCJob objects can't be rotated."))
+
+        with self.app.proc_container.new('%s...' % title):
+            failed = []
+            skipped_cnc = False
+            done = 0
+            history = history_of(self.app)
+            with history.group(title):
+                for sel_obj in obj_list:
+                    if sel_obj.kind == 'cncjob':
+                        skipped_cnc = True
+                        continue
+                    checkpoint = object_state(sel_obj)
+                    before_meta = transform_metadata(sel_obj)
+                    group_steps = history._group[1] if isinstance(history, HistoryManager) else None
+                    recorded = len(group_steps) if group_steps is not None else 0
+                    try:
+                        result = apply_fn(sel_obj)
+                        if result == 'fail':
+                            raise ValueError('Object transformation failed')
+                        meta_fn(sel_obj)
+                        ToolTransform._after_change(self, sel_obj, matrix, set_offset)
+                        if matrix is not None:
+                            history_of(self.app).record_matrix(title, [(sel_obj, matrix, before_meta)])
                         else:
-                            sel_obj.rotate(-num, point=(px, py))
-                            self.app.app_obj.object_changed.emit(sel_obj)
-
-                            # make sure to update the Offset field in Properties Tab
+                            after = object_state(sel_obj)
+                            if not states_equal(checkpoint, after):
+                                history.push(SnapshotStep(title, [(sel_obj.history_uid, checkpoint, after)]))
+                        done += 1
+                    except Exception as e:
+                        if group_steps is not None:
+                            del group_steps[recorded:]
+                        self.app.log.error("ToolTransform.%s --> %s" % (title, str(e)))
+                        failed.append(ToolTransform._obj_name(sel_obj))
+                        if not states_equal(checkpoint, object_state(sel_obj)):
+                            restore_object_state(sel_obj, checkpoint)
                             try:
-                                sel_obj.set_offset_values()
-                            except AttributeError:
-                                # not all objects have this attribute
-                                pass
+                                ToolTransform._after_change(self, sel_obj, None, set_offset)
+                            except Exception as recovery:
+                                self.app.log.error("ToolTransform rollback plot --> %s" % str(recovery))
 
-                        # add information to the object that it was changed and how much
-                        sel_obj.obj_options['rotate'] = num
-                        sel_obj.plot()
-                    self.app.inform.emit('[success] %s...' % _('Rotate done'))
+            if skipped_cnc:
+                self.app.inform.emit(cncjob_msg)
+            if failed:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), ", ".join(failed)))
+            elif done:
+                self.app.inform.emit(done_msg)
+
+    @staticmethod
+    def _obj_name(obj):
+        try:
+            return str(obj.obj_options['name'])
+        except Exception:
+            return str(obj)
+
+    def _after_change(self, sel_obj, matrix, set_offset=True):
+        """
+        Bounds once per object, the object_changed signal and the plot after a geometry change.
+
+        :param sel_obj:     the changed object
+        :param matrix:      affine matrix that was applied to the geometry; None if it is not an affine transform
+        :param set_offset:  update the Offset field in the Properties tab
+        :return:            None
+        """
+        try:
+            bounds = sel_obj.bounds()
+        except Exception:
+            bounds = None
+
+        if bounds is not None:
+            if set_offset:
+                try:
+                    sel_obj.set_offset_values(bounds=bounds)
+                except AttributeError:
+                    # not all objects have this attribute
+                    pass
                 except Exception as e:
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+                    self.app.log.debug("ToolTransform.set_offset_values() --> %s" % str(e))
+
+        self.app.app_obj.object_changed.emit(sel_obj)
+
+        if matrix is None:
+            sel_obj.plot()
+        else:
+            sel_obj.plot_transformed(matrix)
+
+    def on_rotate_action(self, num, point):
+        px, py = point
+        matrix = affine_rotate_matrix(-num, (px, py))
+
+        def meta(o):
+            # add information to the object that it was changed and how much
+            o.obj_options['rotate'] = num
+
+        ToolTransform._transform_selected(self,
+            _("Rotating"), _("CNCJob objects can't be rotated."),
+            lambda o: o.rotate(-num, point=(px, py)), matrix, meta, '[success] %s...' % _('Rotate done'))
 
     def on_flip(self, axis, point):
-        obj_list = self.app.collection.get_selected()
+        px, py = point
+        matrix = affine_mirror_matrix(axis, (px, py))
 
-        if not obj_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s!' % _("No object is selected."))
-            return
+        def meta(o):
+            # add information to the object that it was changed and how much
+            # the axis is reversed because of the reference
+            key = 'mirror_y' if axis == 'X' else 'mirror_x'
+            if key in o.obj_options:
+                o.obj_options[key] = not o.obj_options[key]
+            else:
+                o.obj_options[key] = True
+
+        if axis == 'X':
+            msg = '[success] %s...' % _('Flip on Y axis done')
         else:
-            with self.app.proc_container.new('%s...' % _("Flipping")):
-                try:
-                    px, py = point
+            msg = '[success] %s...' % _('Flip on X axis done')
 
-                    # execute mirroring
-                    for sel_obj in obj_list:
-                        if sel_obj.kind == 'cncjob':
-                            self.app.inform.emit(_("CNCJob objects can't be mirrored/flipped."))
-                        else:
-                            if axis == 'X':
-                                sel_obj.mirror('X', (px, py))
-                                # add information to the object that it was changed and how much
-                                # the axis is reversed because of the reference
-                                if 'mirror_y' in sel_obj.obj_options:
-                                    sel_obj.obj_options['mirror_y'] = not sel_obj.obj_options['mirror_y']
-                                else:
-                                    sel_obj.obj_options['mirror_y'] = True
-                                self.app.inform.emit('[success] %s...' % _('Flip on Y axis done'))
-                            elif axis == 'Y':
-                                sel_obj.mirror('Y', (px, py))
-                                # add information to the object that it was changed and how much
-                                # the axis is reversed because of the reference
-                                if 'mirror_x' in sel_obj.obj_options:
-                                    sel_obj.obj_options['mirror_x'] = not sel_obj.obj_options['mirror_x']
-                                else:
-                                    sel_obj.obj_options['mirror_x'] = True
-                                self.app.inform.emit('[success] %s...' % _('Flip on X axis done'))
-                            self.app.app_obj.object_changed.emit(sel_obj)
-                        sel_obj.plot()
-                except Exception as e:
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+        ToolTransform._transform_selected(self,
+            _("Flipping"), _("CNCJob objects can't be mirrored/flipped."),
+            lambda o: o.mirror(axis, (px, py)), matrix, meta, msg, set_offset=False)
 
     def on_skew(self, axis, xvalue, yvalue, point):
-        obj_list = self.app.collection.get_selected()
-
         if xvalue in [90, 180] or yvalue in [90, 180] or xvalue == yvalue == 0:
             self.app.inform.emit('[WARNING_NOTCL] %s' %
                                  _("Skew transformation can not be done for 0, 90 and 180 degrees."))
             return
 
-        if not obj_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-        else:
-            with self.app.proc_container.new('%s...' % _("Skewing")):
-                try:
-                    px, py = point
+        px, py = point
+        matrix = affine_skew_matrix(xvalue, yvalue, (px, py))
 
-                    for sel_obj in obj_list:
-                        if sel_obj.kind == 'cncjob':
-                            self.app.inform.emit(_("CNCJob objects can't be skewed."))
-                        else:
-                            sel_obj.skew(xvalue, yvalue, point=(px, py))
-                            # add information to the object that it was changed and how much
-                            sel_obj.obj_options['skew_x'] = xvalue
-                            sel_obj.obj_options['skew_y'] = yvalue
+        def meta(o):
+            # add information to the object that it was changed and how much
+            o.obj_options['skew_x'] = xvalue
+            o.obj_options['skew_y'] = yvalue
 
-                            # make sure to update the Offset field in Properties Tab
-                            try:
-                                sel_obj.set_offset_values()
-                            except AttributeError:
-                                # not all objects have this attribute
-                                pass
-
-                            self.app.app_obj.object_changed.emit(sel_obj)
-                        sel_obj.plot()
-                    self.app.inform.emit('[success] %s %s %s...' % (_('Skew on the'),  str(axis), _("axis done")))
-                except Exception as e:
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+        ToolTransform._transform_selected(self,
+            _("Skewing"), _("CNCJob objects can't be skewed."),
+            lambda o: o.skew(xvalue, yvalue, point=(px, py)), matrix, meta,
+            '[success] %s %s %s...' % (_('Skew on the'), str(axis), _("axis done")))
 
     def on_scale(self, axis, xfactor, yfactor, point=None):
-        obj_list = self.app.collection.get_selected()
+        px, py = (0, 0) if point is None else point
+        matrix = affine_scale_matrix(xfactor, yfactor, (px, py))
 
-        if not obj_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-        else:
-            with self.app.proc_container.new('%s...' % _("Scaling")):
-                try:
-                    px, py = point
+        def meta(o):
+            # add information to the object that it was changed and how much
+            o.obj_options['scale_x'] = xfactor
+            o.obj_options['scale_y'] = yfactor
 
-                    for sel_obj in obj_list:
-                        if sel_obj.kind == 'cncjob':
-                            self.app.inform.emit(_("CNCJob objects can't be scaled."))
-                        else:
-                            sel_obj.scale(xfactor, yfactor, point=(px, py))
-                            # add information to the object that it was changed and how much
-                            sel_obj.obj_options['scale_x'] = xfactor
-                            sel_obj.obj_options['scale_y'] = yfactor
-
-                            # make sure to update the Offset field in Properties Tab
-                            try:
-                                sel_obj.set_offset_values()
-                            except AttributeError:
-                                # not all objects have this attribute
-                                pass
-
-                            self.app.app_obj.object_changed.emit(sel_obj)
-                        sel_obj.plot()
-
-                    self.app.inform.emit('[success] %s %s %s...' % (_('Scale on the'), str(axis), _('axis done')))
-                except Exception as e:
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+        ToolTransform._transform_selected(self,
+            _("Scaling"), _("CNCJob objects can't be scaled."),
+            lambda o: o.scale(xfactor, yfactor, point=(px, py)), matrix, meta,
+            '[success] %s %s %s...' % (_('Scale on the'), str(axis), _('axis done')))
 
     def on_offset(self, axis, num):
-        obj_list = self.app.collection.get_selected()
+        vect = (num, 0) if axis == 'X' else (0, num)
+        matrix = affine_translate_matrix(vect[0], vect[1])
 
-        if not obj_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-        else:
-            with self.app.proc_container.new('%s...' % _("Offsetting")):
-                try:
-                    for sel_obj in obj_list:
-                        if sel_obj.kind == 'cncjob':
-                            self.app.inform.emit(_("CNCJob objects can't be offset."))
-                        else:
-                            if axis == 'X':
-                                sel_obj.offset((num, 0))
-                                # add information to the object that it was changed and how much
-                                sel_obj.obj_options['offset_x'] = num
-                            elif axis == 'Y':
-                                sel_obj.offset((0, num))
-                                # add information to the object that it was changed and how much
-                                sel_obj.obj_options['offset_y'] = num
+        def meta(o):
+            # add information to the object that it was changed and how much
+            o.obj_options['offset_x' if axis == 'X' else 'offset_y'] = num
 
-                            # make sure to update the Offset field in Properties Tab
-                            try:
-                                sel_obj.set_offset_values()
-                            except AttributeError:
-                                # not all objects have this attribute
-                                pass
-
-                            self.app.app_obj.object_changed.emit(sel_obj)
-                        sel_obj.plot()
-
-                    self.app.inform.emit('[success] %s %s %s...' % (_('Offset on the'), str(axis), _('axis done')))
-                except Exception as e:
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+        ToolTransform._transform_selected(self,
+            _("Offsetting"), _("CNCJob objects can't be offset."),
+            lambda o: o.offset(vect), matrix, meta,
+            '[success] %s %s %s...' % (_('Offset on the'), str(axis), _('axis done')))
 
     def on_buffer_action(self, value, join, factor=None):
-        obj_list = self.app.collection.get_selected()
+        # the buffer is not an affine transform: every object is plotted again
+        def apply(o):
+            kind = o.kind.lower()
+            if kind == 'gerber':
+                if o.buffer(value, join, factor) == 'fail':
+                    # Gerber.buffer() told the user why; the object is not changed
+                    return 'fail'
+                o.regenerate_source()
+            elif kind == 'excellon':
+                o.buffer(value, join, factor)
+                o.regenerate_source()
+            elif kind == 'geometry':
+                o.buffer(value, join, factor)
 
-        if not obj_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-        else:
-            with self.app.proc_container.new('%s...' % _("Buffering")):
-                try:
-                    rejected = False
-                    for sel_obj in obj_list:
-                        if sel_obj.kind == 'cncjob':
-                            self.app.inform.emit(_("CNCJob objects can't be buffered."))
-                        elif sel_obj.kind.lower() == 'gerber':
-                            if sel_obj.buffer(value, join, factor) == 'fail':
-                                # Gerber.buffer() told the user why; the object is not changed
-                                rejected = True
-                                continue
-                            sel_obj.regenerate_source()
-                        elif sel_obj.kind.lower() == 'excellon':
-                            sel_obj.buffer(value, join, factor)
-                            sel_obj.regenerate_source()
-                        elif sel_obj.kind.lower() == 'geometry':
-                            sel_obj.buffer(value, join, factor)
-
-                        self.app.app_obj.object_changed.emit(sel_obj)
-                        sel_obj.plot()
-
-                    if not rejected:
-                        self.app.inform.emit('[success] %s...' % _('Buffer done'))
-
-                except Exception as e:
-                    self.app.log.error("ToolTransform.on_buffer_action() --> %s" % str(e))
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+        ToolTransform._transform_selected(self,
+            _("Buffering"), _("CNCJob objects can't be buffered."),
+            apply, None, lambda o: None, '[success] %s...' % _('Buffer done'), set_offset=False)
 
     @staticmethod
     def alt_bounds(obj_list):
         """
         Returns coordinates of rectangular bounds
         of an object with geometry: (xmin, ymin, xmax, ymax).
+        Objects with an empty geometry (infinite bounds) are skipped.
         """
 
         def bounds_rec(lst):
@@ -577,6 +577,8 @@ class ToolTransform(AppTool):
                 for obj in lst:
                     if obj.kind != 'cncjob':
                         minx_, miny_, maxx_, maxy_ = bounds_rec(obj)
+                        if not all(np.isfinite((minx_, miny_, maxx_, maxy_))):
+                            continue
                         minx = min(minx, minx_)
                         miny = min(miny, miny_)
                         maxx = max(maxx, maxx_)

@@ -26,6 +26,7 @@ from shapely.ops import unary_union
 import numpy as np
 from copy import deepcopy
 
+from appHandlers.appHistory import history_of
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -444,8 +445,9 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
 
         def buffer_task():
             with self.app.proc_container.new('%s ...' % _("Buffering")):
-                output = self.app.pool.apply_async(self.buffer_handler, args=([self.solid_geometry]))
-                self.solid_geometry = output.get()
+                with history_of(self.app).snapshot(_("Buffer"), [self]):
+                    output = self.app.pool.apply_async(self.buffer_handler, args=([self.solid_geometry]))
+                    self.solid_geometry = output.get()
 
                 self.app.inform.emit('[success] %s' % _("Done."))
                 self.plot_single_object.emit()

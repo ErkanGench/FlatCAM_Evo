@@ -38,6 +38,7 @@ from appHandlers.appIO import appIO  # noqa: E402
 from appHandlers.appObjectOps import AppObjectOps  # noqa: E402
 from appObjects.ExcellonObject import ExcellonObject  # noqa: E402
 from appObjects.GerberObject import GerberObject  # noqa: E402
+from appObjects.GeometryObject import GeometryObject  # noqa: E402
 from camlib import dict2obj  # noqa: E402
 from defaults import AppDefaults  # noqa: E402
 
@@ -74,7 +75,7 @@ def make_app():
         abort_flag=False, app_obj=Mock(), plot_all=Mock(), defaults=defaults, decimals=4,
         version='test', version_date='test', proc_container=MagicMock(), plotcanvas=Mock(), pool=Mock(),
         collection=Mock(), new_project_signal=Mock(), file_opened=Mock(), file_saved=Mock(), call_source='app', ui=MagicMock(),
-        should_we_save=False, save_in_progress=False, start_delayed_quit=Mock(),
+        should_we_save=False, save_in_progress=False, start_delayed_quit=Mock(), history=Mock(),
     )
     return app
 
@@ -617,7 +618,7 @@ def save_and_load(app, objects, tmp_path):
     restored = []
 
     def new_object(kind, name, initialize, *args, **kwargs):
-        new_obj = (GerberObject if kind == 'gerber' else ExcellonObject)(name, app)
+        new_obj = {'gerber': GerberObject, 'excellon': ExcellonObject, 'geometry': GeometryObject}[kind](name, app)
         if initialize(new_obj, app) == 'fail':
             return 'fail'
         restored.append(new_obj)

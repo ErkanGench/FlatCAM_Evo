@@ -5,10 +5,11 @@ import tempfile
 import unittest
 from contextlib import nullcontext
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 from PyQt6 import QtCore, QtWidgets
 
+from appHandlers.appHistory import HistoryManager, HistoryStep
 from appHandlers.appIO import appIO
 from defaults import AppOptions
 
@@ -57,6 +58,32 @@ class AppIOTestBase(unittest.TestCase):
 
 
 class TestNewAndOpen(AppIOTestBase):
+    def test_reset_clears_only_active_history_in_both_branches(self):
+        for keep_scripts in (False, True):
+            app = MagicMock()
+            app.headless = False
+            app.call_source = 'app'
+            app.collection.get_list.return_value = []
+            app.history = HistoryManager(app, app.collection)
+            app.history.push(HistoryStep())
+            inactive, _unused = __import__('test_app_history').manager()
+            inactive.push(HistoryStep())
+            io = appIO(app)
+            io.on_file_new_project(cli=True, use_thread=True, keep_scripts=keep_scripts)
+            self.assertFalse(app.history.can_undo())
+            self.assertTrue(inactive.can_undo())
+            app.history_changed.emit.assert_called_with('', '')
+
+    def test_cancelled_editor_shutdown_preserves_history_and_objects(self):
+        app = MagicMock()
+        app.call_source = 'geo_editor'
+        app.on_editing_finished.return_value = 'fail'
+        io = appIO(app)
+        self.assertEqual(io.on_file_new_project(), 'fail')
+        app.history.clear.assert_not_called()
+        app.collection.delete_all.assert_not_called()
+        app.collection.delete_by_name.assert_not_called()
+
     def test_file_new_adds_a_project(self):
         self.io.on_file_new_project = Mock()
         self.io.on_file_new_click()

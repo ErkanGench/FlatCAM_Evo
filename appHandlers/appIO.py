@@ -1,4 +1,5 @@
 
+from appHandlers.appHistory import history_of
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import Qt
 
@@ -1097,11 +1098,15 @@ class appIO(QtCore.QObject):
 
         # close any editor that might be open
         if self.app.call_source != 'app':
-            self.app.on_editing_finished(cleanup=True)
+            if self.app.on_editing_finished(cleanup=True) == 'fail':
+                return 'fail'
             # ## EDITOR section
             self.app.geo_editor = AppGeoEditor(self.app)
             self.app.exc_editor = AppExcEditor(self.app)
             self.app.grb_editor = AppGerberEditor(self.app)
+
+        # The reset is now committed. Only this project's history is no longer replayable.
+        history_of(self.app).clear()
 
         for obj in self.app.collection.get_list():
             # delete shapes left drawn from mark shape_collections, if any
@@ -1426,6 +1431,9 @@ class appIO(QtCore.QObject):
 
         :return:    True if the save is queued
         """
+        if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
+            return False
         if getattr(self.app, 'project_save_pending', False):
             self.inform.emit('[WARNING_NOTCL] %s' % _("A save of the project is running. Wait until it ends."))
             return False
@@ -1952,7 +1960,7 @@ class appIO(QtCore.QObject):
 
         fc_units = (obj.units if obj.obj_options.get('pcbdoc_import', False) else self.app_units).upper()
         if fc_units == 'MM':
-            factor = 1 if e_units == 'METRIC' else 0.03937
+            factor = 1 if e_units == 'METRIC' else 1 / 25.4
         else:
             factor = 25.4 if e_units == 'METRIC' else 1
 
@@ -1975,11 +1983,11 @@ class appIO(QtCore.QObject):
                         if e_units == 'METRIC':
                             header += "T{tool}F00S00C{:.{dec}f}\n".format(float(obj.tools[tool]['tooldia']) * factor,
                                                                           tool=str(tool),
-                                                                          dec=2)
+                                                                          dec=max(2, e_fract))
                         else:
                             header += "T{tool}F00S00C{:.{dec}f}\n".format(float(obj.tools[tool]['tooldia']) * factor,
                                                                           tool=str(tool),
-                                                                          dec=4)
+                                                                          dec=max(4, e_fract))
                 else:
                     if e_zeros == 'LZ':
                         has_slots, excellon_code = obj.export_excellon(e_whole, e_fract,
@@ -1993,12 +2001,12 @@ class appIO(QtCore.QObject):
                                 header += "T{tool}F00S00C{:.{dec}f}\n".format(
                                     float(obj.tools[tool]['tooldia']) * factor,
                                     tool=str(tool),
-                                    dec=2)
+                                    dec=max(2, e_fract))
                             else:
                                 header += "T{tool}F00S00C{:.{dec}f}\n".format(
                                     float(obj.tools[tool]['tooldia']) * factor,
                                     tool=str(tool),
-                                    dec=4)
+                                    dec=max(4, e_fract))
                     else:
                         has_slots, excellon_code = obj.export_excellon(e_whole, e_fract,
                                                                        form='ndec', e_zeros='TZ', factor=factor,
@@ -2011,12 +2019,12 @@ class appIO(QtCore.QObject):
                                 header += "T{tool}F00S00C{:.{dec}f}\n".format(
                                     float(obj.tools[tool]['tooldia']) * factor,
                                     tool=str(tool),
-                                    dec=2)
+                                    dec=max(2, e_fract))
                             else:
                                 header += "T{tool}F00S00C{:.{dec}f}\n".format(
                                     float(obj.tools[tool]['tooldia']) * factor,
                                     tool=str(tool),
-                                    dec=4)
+                                    dec=max(4, e_fract))
                 header += '%\n'
                 footer = 'M30\n'
 
@@ -2231,9 +2239,9 @@ class appIO(QtCore.QObject):
 
         :param obj_name:    the name of the FlatCAM object to be saved as DXF
         :param filename:    Path to the DXF file to save to.
-        :param local_use:   if the Gerber code is to be saved to a file (None) or used within FlatCAM.
+        :param local_use:   if the DXF code is to be saved to a file (None) or used within FlatCAM.
                             When not None, the value will be the actual Geometry object for which to create
-                            the Geometry/DXF code
+                            the Geometry/DXF code as serialization-safe text
         :param use_thread:  if to be run in a separate thread
         :return:
         """
@@ -2255,6 +2263,8 @@ class appIO(QtCore.QObject):
         def make_dxf():
             try:
                 dxf_code = obj.export_dxf()
+                if dxf_code is None:
+                    return 'fail'
                 if local_use is None:
                     try:
                         dxf_code.saveas(filename)
@@ -2269,7 +2279,9 @@ class appIO(QtCore.QObject):
                     self.app.file_saved.emit("DXF", filename)
                     self.inform.emit('[success] %s: %s' % (_("DXF file exported to"), filename))
                 else:
-                    return dxf_code
+                    with StringIO() as stream:
+                        dxf_code.write(stream)
+                        return stream.getvalue()
             except Exception as e:
                 self.log.error("App.export_dxf.make_dxf() --> %s" % str(e))
                 return 'fail'
@@ -2966,6 +2978,9 @@ class appIO(QtCore.QObject):
         self._on_project_load_failed()
 
     def _restore_project_handler(self, proj_dict, filename, run_from_arg, from_tcl, cli, plot):
+        if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
+            return False
         # Legacy approval belongs on the GUI thread, before clearing the current project.
         found_older_project = any(
             'cnc_tools' in obj or 'exc_cnc_tools' in obj or 'apertures' in obj for obj in proj_dict['objs'])
@@ -2991,6 +3006,11 @@ class appIO(QtCore.QObject):
                 self.app.log.error("Legacy Project. Loading not supported.")
                 return False
 
+        # The legacy-project modal dialog can process a geometry Save request.
+        if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
+            return False
+
         # Clear the current project
         # # NOT THREAD SAFE # ##
         if run_from_arg is True:
@@ -2998,7 +3018,8 @@ class appIO(QtCore.QObject):
         elif cli is True:
             self.app.delete_selection_shape()
         else:
-            self.on_file_new_project()
+            if self.on_file_new_project() == 'fail':
+                return False
 
         # Project options. The application settings in the file are ignored.
         self.app.options.load_project(proj_dict['options'])
@@ -3031,6 +3052,7 @@ class appIO(QtCore.QObject):
                 self.app.file_opened.emit("project", filename)
             if cli is None:
                 self.app.ui.set_ui_title(name=self.app.project_filename)
+            history_of(self.app).clear()
             self.log.debug(" **************** Finished PROJECT loading... **************** ")
 
         batch = ObjectLoadBatch(self.app.app_obj, 1, finished, parent=self,
@@ -3120,11 +3142,13 @@ class appIO(QtCore.QObject):
                             new_obj.is_loaded_from_project = True
 
                     try:
-                        ret = self.app.app_obj.new_object(obj['kind'], obj['obj_options']['name'], obj_init, plot=plot)
+                        ret = self.app.app_obj.new_object(obj['kind'], obj['obj_options']['name'], obj_init, plot=plot,
+                                                          record_history=False)
                     except KeyError:
                         # allowance for older projects
                         try:
-                            ret = self.app.app_obj.new_object(obj['kind'], obj_name, obj_init, plot=plot)
+                            ret = self.app.app_obj.new_object(obj['kind'], obj_name, obj_init, plot=plot,
+                                                              record_history=False)
                         except Exception:
                             batch.batch_event.emit('error', traceback.format_exc())
                             continue
@@ -3148,6 +3172,9 @@ class appIO(QtCore.QObject):
         :param from_tcl         True is run from Tcl Shell
         :return:                True if the file is written and verified, else False
         """
+        if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
+            return False
         self.log.debug("save_project() -> Saving Project")
         self.app.save_in_progress = True
 

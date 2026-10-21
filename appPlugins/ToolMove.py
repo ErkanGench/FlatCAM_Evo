@@ -8,6 +8,8 @@
 from PyQt6 import QtWidgets, QtCore
 from appTool import AppTool
 from appGUI.VisPyVisuals import ShapeCollection
+from appHandlers.appHistory import history_of, supports_matrix, transform_metadata
+from camlib import affine_translate_matrix
 
 import logging
 import os
@@ -221,13 +223,26 @@ class ToolMove(AppTool):
             with self.app.proc_container.new('%s...' % _("Moving")):
                 # The vectorized Shapely calls of offset() release the GIL, so the objects move in parallel.
                 # Each object owns its geometry; plot() stays sequential because the canvas is not thread-safe.
+                # The move is 1 Undo / Redo step: a matrix for the objects that have a matrix path, a snapshot
+                # for the others (CNCJob).
+                history = history_of(self.app)
+                label = _("Move")
+                no_matrix = [obj for obj in obj_list if not supports_matrix(obj)]
+                before = {id(obj): transform_metadata(obj) if history.is_recording() else {}
+                          for obj in obj_list if supports_matrix(obj)}
                 t_start = time.perf_counter()
-                if len(obj_list) == 1:
-                    offset_results = [offset_one(obj_list[0])]
-                else:
-                    workers = min(len(obj_list), os.cpu_count() or 1)
-                    with ThreadPoolExecutor(max_workers=workers) as executor:
-                        offset_results = list(executor.map(offset_one, obj_list))
+                with history.group(label), history.snapshot(label, no_matrix):
+                    if len(obj_list) == 1:
+                        offset_results = [offset_one(obj_list[0])]
+                    else:
+                        workers = min(len(obj_list), os.cpu_count() or 1)
+                        with ThreadPoolExecutor(max_workers=workers) as executor:
+                            offset_results = list(executor.map(offset_one, obj_list))
+                    # an object that failed is left out: its state is not known
+                    history.record_matrix(label, [
+                        (obj, affine_translate_matrix(dx, dy), before[id(obj)])
+                        for obj, (_bounds, error) in zip(obj_list, offset_results)
+                        if error is None and supports_matrix(obj)])
                 t_offset = time.perf_counter() - t_start
 
                 for sel_obj, (bounds, error) in zip(obj_list, offset_results):

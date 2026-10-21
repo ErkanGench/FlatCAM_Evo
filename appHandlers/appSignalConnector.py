@@ -81,6 +81,29 @@ class AppSignalConnector(QtCore.QObject):
         self.ui.menueditedit.triggered.connect(lambda: self.app.on_editing_start())
         self.ui.menueditok.triggered.connect(lambda: self.app.on_editing_finished())
 
+        def history_changed(undo_label, redo_label):
+            if self.app.call_source == 'app':
+                self.ui.on_history_changed(undo_label, redo_label)
+
+        def replay(redo=False):
+            if self.ui.app_focus_in_text():
+                return
+            if self.app.call_source == 'geo_editor':
+                history = self.app.geo_editor
+            elif self.app.call_source == 'grb_editor':
+                history = self.app.grb_editor
+            elif self.app.call_source == 'app':
+                history = self.app.history
+            else:
+                return
+            history.redo() if redo else history.undo()
+
+        self.app.history_changed.connect(history_changed)
+        self.ui.menuedit_undo.triggered.connect(lambda: replay())
+        self.ui.menuedit_redo.triggered.connect(lambda: replay(True))
+        self.ui.undo_btn.triggered.connect(lambda: replay())
+        self.ui.redo_btn.triggered.connect(lambda: replay(True))
+
         self.ui.menuedit_join2geo.triggered.connect(self.app.edit_class.on_edit_join)
         self.ui.menuedit_join_exc2exc.triggered.connect(self.app.edit_class.on_edit_join_exc)
         self.ui.menuedit_join_grb2grb.triggered.connect(self.app.edit_class.on_edit_join_grb)

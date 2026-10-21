@@ -1,9 +1,11 @@
+from appHandlers.appHistory import history_of
 import sys
 import re
 import math
 import ast
 
 import abc
+import contextlib
 import collections
 from PyQt6 import QtCore
 
@@ -332,6 +334,11 @@ class TclCommand(object):
 
         return named_args, unnamed_args
 
+    def _history_suspended(self):
+        """Context manager: the app Undo history records nothing while a Tcl command runs."""
+        history = history_of(self.app)
+        return history.suspended() if history is not None else contextlib.nullcontext()
+
     def raise_tcl_unknown_error(self, unknown_exception):
         """
         raise Exception if is different type  than TclErrorException
@@ -355,11 +362,12 @@ class TclCommand(object):
 
         # self.worker_task.emit({'fcn': self.exec_command_test, 'params': [text, False]})
         try:
-            self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
-            self.original_args = args
-            args, unnamed_args = self.check_args(args)
-            result = self.execute(args, unnamed_args)
-            return result if self.returns_value else self.check_result(result)
+            with self._history_suspended():
+                self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
+                self.original_args = args
+                args, unnamed_args = self.check_args(args)
+                result = self.execute(args, unnamed_args)
+                return result if self.returns_value else self.check_result(result)
         except Exception as unknown:
             error_info = sys.exc_info()
             self.log.error("TCL command '%s' failed. Error text: %s" % (str(self), str(unknown)))
@@ -416,57 +424,58 @@ class TclCommandSignaled(TclCommand):
         state = {'output': None, 'error': None, 'error_info': None, 'finished': False}
         self.output = self.error = self.error_info = None
         try:
-            self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
-            self.original_args = args
-            args, unnamed_args = self.check_args(args)
-            passed_timeout = args.pop('timeout', self._app_option('global_background_timeout'))
-            if passed_timeout is not None:
-                passed_timeout = int(passed_timeout)
-                if not 0 < passed_timeout <= 2147483647:
-                    self.raise_tcl_error('Timeout must be between 1 and 2147483647 milliseconds')
-
-            # set detail for processing, it will be there until next open or close
-            self.app.shell.open_processing(self.get_current_command())
-
-            loop = QtCore.QEventLoop()
-            timer = QtCore.QTimer()
-            timer.setSingleShot(True)
-            timer.timeout.connect(loop.quit)
-
-            def handle_finished(invocation):
-                if invocation is state:
-                    loop.quit()
-
-            def execute_call():
-                try:
-                    state['output'] = self.check_result(self.execute(args, unnamed_args))
-                except Exception as error:
-                    state['error'] = error
-                    state['error_info'] = sys.exc_info()
-                finally:
-                    state['finished'] = True
-                    self.app.shell_command_finished.emit(state)
-
-            self.app.shell_command_finished.connect(handle_finished)
-            try:
+            with self._history_suspended():
+                self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
+                self.original_args = args
+                args, unnamed_args = self.check_args(args)
+                passed_timeout = args.pop('timeout', self._app_option('global_background_timeout'))
                 if passed_timeout is not None:
-                    timer.start(passed_timeout)
-                self.app.worker_task.emit({'fcn': execute_call, 'params': []})
-                if not state['finished']:
-                    loop.exec()
-                if not state['finished']:
-                    self.raise_tcl_error('Operation timed out. Queued or running work has not been cancelled. '
-                                         'Consider increasing -timeout <milliseconds>.')
-                self.error_info = state['error_info']
-                self.error = state['error']
-                if self.error is not None:
-                    raise self.error
-                self.output = state['output']
-                return self.output
-            finally:
-                timer.stop()
-                self.app.shell_command_finished.disconnect(handle_finished)
-                timer.timeout.disconnect(loop.quit)
+                    passed_timeout = int(passed_timeout)
+                    if not 0 < passed_timeout <= 2147483647:
+                        self.raise_tcl_error('Timeout must be between 1 and 2147483647 milliseconds')
+
+                # set detail for processing, it will be there until next open or close
+                self.app.shell.open_processing(self.get_current_command())
+
+                loop = QtCore.QEventLoop()
+                timer = QtCore.QTimer()
+                timer.setSingleShot(True)
+                timer.timeout.connect(loop.quit)
+
+                def handle_finished(invocation):
+                    if invocation is state:
+                        loop.quit()
+
+                def execute_call():
+                    try:
+                        state['output'] = self.check_result(self.execute(args, unnamed_args))
+                    except Exception as error:
+                        state['error'] = error
+                        state['error_info'] = sys.exc_info()
+                    finally:
+                        state['finished'] = True
+                        self.app.shell_command_finished.emit(state)
+
+                self.app.shell_command_finished.connect(handle_finished)
+                try:
+                    if passed_timeout is not None:
+                        timer.start(passed_timeout)
+                    self.app.worker_task.emit({'fcn': execute_call, 'params': []})
+                    if not state['finished']:
+                        loop.exec()
+                    if not state['finished']:
+                        self.raise_tcl_error('Operation timed out. Queued or running work has not been cancelled. '
+                                             'Consider increasing -timeout <milliseconds>.')
+                    self.error_info = state['error_info']
+                    self.error = state['error']
+                    if self.error is not None:
+                        raise self.error
+                    self.output = state['output']
+                    return self.output
+                finally:
+                    timer.stop()
+                    self.app.shell_command_finished.disconnect(handle_finished)
+                    timer.timeout.disconnect(loop.quit)
 
         except Exception as unknown:
             # if error happens inside thread execution, then pass correct error_info to display

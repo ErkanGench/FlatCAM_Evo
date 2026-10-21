@@ -10,11 +10,13 @@
 # File modified by: Marius Stanciu                         #
 # ##########################################################
 
+from appHandlers.appHistory import history_of
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from appGUI.ObjectUI import ObjectUI
 from appCommon.Common import LoudDict
-from camlib import app_option, Geometry
+from camlib import app_option, Geometry, affine_translate_matrix, affine_scale_matrix
+from appHandlers.appObjectOps import history_guard
 from appGUI.VisPyVisuals import ShapeCollection
 
 from shapely.ops import unary_union
@@ -22,6 +24,7 @@ from shapely import Polygon, MultiPolygon, Point, LineString
 
 from copy import deepcopy, copy
 import sys
+import uuid
 import math
 import inspect
 import numpy as np
@@ -130,7 +133,7 @@ class FlatCAMObj(QtCore.QObject):
     def _app_option(self, key, fallback=None):
         return app_option(self.app, key, fallback)
 
-    def regenerate_source(self, name=None):
+    def regenerate_source(self, name=None, *, store=True):
         """
         Rewrites self.source_file after an operation changed the geometry of the object (move, transform, edit,
         origin change, ...). The single place of the ``obj.source_file = f_handlers.export_xxx(...)`` call that
@@ -156,7 +159,9 @@ class FlatCAMObj(QtCore.QObject):
           'fail' or None as the source text.)
 
         :param name: the name for the header of the exported text; None: the name of the object
-        :return:     True if source_file was rewritten, False if the kind has no exporter or the export failed
+        :param store: False returns generated text without assigning source_file, for queued GUI completion
+        :return:     True if source_file was rewritten (the generated text with store=False),
+                     False if the kind has no exporter or the export failed
         """
         exporter = self.source_exporter
         if exporter is None:
@@ -172,6 +177,8 @@ class FlatCAMObj(QtCore.QObject):
                                  (exporter, name))
             return False
 
+        if not store:
+            return result
         self.source_file = result
         return True
 
@@ -239,6 +246,9 @@ class FlatCAMObj(QtCore.QObject):
         # this is the treeWidget from the UI; it is updated when the add_properties_items() method is called
         self.treeWidget = None
 
+        # a stable id for the Undo / Redo history: an object that Undo makes again (after a delete) keeps it
+        self.history_uid = uuid.uuid4().hex
+
         self.plot_single_object.connect(self.single_object_plot)
 
     def __del__(self):
@@ -260,10 +270,14 @@ class FlatCAMObj(QtCore.QObject):
         :return: None
         """
 
+        # the history id of a rebuilt object (an old project has none: the object keeps its new id)
+        if d.get('history_uid'):
+            self.history_uid = d['history_uid']
+
         for attr in self.ser_attrs:
 
-            if attr == 'options':
-                self.obj_options.update(d[attr])
+            if attr in ('options', 'obj_options'):
+                self.obj_options.update(d.get('obj_options', d.get('options', {})))
             else:
                 try:
                     setattr(self, attr, d[attr])
@@ -323,6 +337,36 @@ class FlatCAMObj(QtCore.QObject):
         self.clear()
         self._full_plot_sig = None
         return True
+
+    def plot_transformed(self, matrix, kind=None):
+        """
+        Update the plot after an affine transform of the geometry of this object, without a new triangulation:
+        the vertex arrays of the shapes of the last full plot are mapped by the matrix. If that is not possible
+        (no full plot, text annotations, a shape without buffers) it plots the object again.
+        Like plot(), it runs in the calling thread (the plugins call it from a worker thread).
+        The simplification tolerance of the last plot stays as it was (it was applied before the transform).
+
+        :param matrix:  shapely 6-tuple (a, b, d, e, xoff, yoff) that was applied to the geometry
+        :param kind:    passed to plot() on fallback
+        :return:        True if the shapes were mapped, False if plot() was called
+        """
+        if self.deleted:
+            return False
+
+        done = False
+        try:
+            annotation = getattr(self, 'annotation', None)
+            has_text = annotation is not None and getattr(annotation, '_index', None) is not None
+            if not has_text and self._has_full_plot() and hasattr(self.shapes, 'transform'):
+                # the shapes keep their keys, so the signature of the full plot stays valid
+                done = bool(self.shapes.transform(matrix, update=True))
+        except Exception as e:
+            self.app.log.debug("FlatCAMObj.plot_transformed() --> %s" % str(e))
+            done = False
+
+        if not done:
+            self.plot(kind=kind) if kind is not None else self.plot()
+        return done
 
     def _shapes_signature(self):
         try:
@@ -552,6 +596,7 @@ class FlatCAMObj(QtCore.QObject):
                 self.app.log.debug(
                     "on_name_activate() --> Could not remove the old object name from auto-completer model list")
 
+            history_of(self.app).record_rename(self, old_name, new_name)
             self.obj_options["name"] = new_name
             self.default_data["name"] = new_name
             try:
@@ -573,7 +618,15 @@ class FlatCAMObj(QtCore.QObject):
 
         def worker_task():
             with self.app.proc_container.new(_("Offsetting...")):
-                self.offset(vector_val)
+                with history_guard(history_of(self.app), _("Offset"), self) as before:
+                    result = self.offset(vector_val)
+                try:
+                    dx, dy = vector_val
+                    if result != 'fail' and (dx != 0 or dy != 0):
+                        history_of(self.app).record_matrix(
+                            _("Offset"), [(self, affine_translate_matrix(dx, dy), before)])
+                except (TypeError, ValueError):
+                    pass
             self.app.proc_container.update_view_text('')
             with self.app.proc_container.new('%s ...' % _("Plotting")):
                 self.plot()
@@ -602,7 +655,12 @@ class FlatCAMObj(QtCore.QObject):
 
         def worker_task():
             with self.app.proc_container.new(_("Scaling...")):
-                self.scale(factor)
+                # scale() of every object kind scales around (0, 0) when no point is given
+                with history_guard(history_of(self.app), _("Scale"), self) as before:
+                    result = self.scale(factor)
+                if result != 'fail':
+                    history_of(self.app).record_matrix(
+                        _("Scale"), [(self, affine_scale_matrix(factor, factor, (0, 0)), before)])
                 self.app.inform.emit('[success] %s' % _("Scale done."))
 
             self.app.proc_container.update_view_text('')
@@ -620,7 +678,9 @@ class FlatCAMObj(QtCore.QObject):
 
         def worker_task():
             with self.app.proc_container.new(_("Skewing...")):
-                self.skew(x_angle, y_angle)
+                # skew() takes its origin inside the object kind: a snapshot does not depend on it
+                with history_of(self.app).snapshot(_("Skew"), [self]):
+                    self.skew(x_angle, y_angle)
             self.app.proc_container.update_view_text('')
             with self.app.proc_container.new('%s ...' % _("Plotting")):
                 self.plot()

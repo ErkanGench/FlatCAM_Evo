@@ -158,7 +158,7 @@ class ToolInvertGerber(AppTool):
 
         xmin, ymin, xmax, ymax = grb_obj.bounds()
 
-        grb_box = box(xmin, ymin, xmax, ymax).buffer(margin, resolution=grb_circle_steps, join_style=join_style)
+        grb_box = box(xmin, ymin, xmax, ymax).buffer(margin, quad_segs=grb_circle_steps, join_style=join_style)
         new_solid_geometry = deepcopy(grb_box)
 
         grb_obj.solid_geometry = flatten_shapely_geometry(grb_obj.solid_geometry)

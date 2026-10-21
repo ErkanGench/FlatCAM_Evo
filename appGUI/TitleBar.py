@@ -125,7 +125,7 @@ class NotebookButton(QtWidgets.QToolButton):
 class TitleBar(QtWidgets.QWidget):
     """Project title, existing application menus and portable window controls."""
 
-    def __init__(self, window, menu, notebook_action):
+    def __init__(self, window, menu, notebook_action, history_actions=()):
         super().__init__(window)
         self.menu = menu
         self.project_title = None
@@ -172,6 +172,15 @@ class TitleBar(QtWidgets.QWidget):
         self.notebook_button.setDefaultAction(notebook_action)
         layout.addWidget(self.notebook_button)
 
+        # Undo / Redo of the app history, just before the main menu button
+        self.history_buttons = []
+        for action in history_actions:
+            button = QtWidgets.QToolButton(self)
+            button.setDefaultAction(action)
+            button.setAccessibleName(action.text())
+            layout.addWidget(button)
+            self.history_buttons.append(button)
+
         self.menu_button = MenuButton(self)
         self.menu_button.setToolTip(_('Main menu'))
         self.menu_button.setAccessibleName(_('Main menu'))
@@ -212,7 +221,7 @@ class TitleBar(QtWidgets.QWidget):
         self.close_button.setToolTip(_('Close'))
         self.close_button.setAccessibleName(_('Close'))
         self.close_button.clicked.connect(window.close)
-        for button in (self.icon_button, self.notebook_button, self.menu_button,
+        for button in (self.icon_button, self.notebook_button, *self.history_buttons, self.menu_button,
                        self.minimize_button, self.maximize_button, self.close_button):
             button.setMinimumSize(30, 26)
             button.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Ignored)

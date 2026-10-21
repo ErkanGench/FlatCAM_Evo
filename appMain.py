@@ -7,6 +7,7 @@
 # Modified by Marius Stanciu (2019)                         #
 # ###########################################################
 
+from appHandlers.appHistory import history_of, object_state, SnapshotStep
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa
 from PyQt6.QtCore import QSettings, pyqtSlot  # noqa
 from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject  # noqa
@@ -118,7 +119,7 @@ from appPreProcessor import load_preprocessors
 # App appEditors
 from appEditors.appGeoEditor import AppGeoEditor
 from appEditors.appExcEditor import AppExcEditor
-from appEditors.appGerberEditor import AppGerberEditor
+from appEditors.appGerberEditor import AppGerberEditor, edit_copy_name
 from appEditors.appTextEditor import AppTextEditor
 from appEditors.appGCodeEditor import AppGCodeEditor
 from appParsers import feature_access
@@ -274,6 +275,8 @@ class App(QtCore.QObject):
     # Inform the user
     # Handled by: App.info() --> Print on the status bar
     inform = QtCore.pyqtSignal([str], [str, bool])
+    # the Undo / Redo labels of the active project changed: (undo label, redo label), '' for nothing
+    history_changed = QtCore.pyqtSignal(str, str)
     # Handled by: App.info_shell() --> Print on the shell
     inform_shell = QtCore.pyqtSignal([str], [str, bool])
     inform_no_echo = QtCore.pyqtSignal(str)
@@ -494,6 +497,10 @@ class App(QtCore.QObject):
 
         # Object management
         self.collection = None
+        # the Undo / Redo history of the active project (set by ProjectManager)
+        self.history = None
+        # (object, its state) when an editor changes the object in place; see _history_edit_begin()
+        self._history_edit = None
         self.app_obj = None
         self.area_3d_tab = None
 
@@ -2181,6 +2188,28 @@ class App(QtCore.QObject):
         """
         self.lifecycle.on_layout(lay=lay, connect_signals=connect_signals)
 
+    def _history_edit_begin(self, obj):
+        """Keep the state of an object that its editor changes in place (Geometry, Gerber, Excellon, CNCJob)."""
+        self._history_edit = None
+        if obj.kind not in ('geometry', 'gerber', 'excellon', 'cncjob'):
+            return
+        try:
+            self._history_edit = (obj, object_state(obj))
+        except Exception as e:
+            self.log.error("App._history_edit_begin() --> %s" % str(e))
+            self._history_edit = None
+
+    def _history_edit_saved(self, obj):
+        """Record the editor save of the object as 1 history step, with the state kept by _history_edit_begin()."""
+        edit = getattr(self, '_history_edit', None)
+        self._history_edit = None
+        if edit is None or edit[0] is not obj:
+            return
+        try:
+            history_of(self).push(SnapshotStep(_("Edit"), [(obj.history_uid, edit[1], object_state(obj))]))
+        except Exception as e:
+            self.log.error("App._history_edit_saved() --> %s" % str(e))
+
     def on_editing_start(self):
         """
         Send the current Geometry, Gerber, "Excellon" object or CNCJob (if any) its editor.
@@ -2188,6 +2217,12 @@ class App(QtCore.QObject):
         :return: None
         """
         self.defaults.report_usage("on_editing_start()")
+
+        if self.call_source == 'geo_editor' and AppGeoEditor.reject_busy(self.geo_editor):
+            return 'fail'
+        if (self.call_source == 'grb_editor' and isinstance(self.grb_editor, AppGerberEditor) and
+                not self.grb_editor.history.ready()):
+            return 'fail'
 
         edited_object = self.collection.get_active()
         if edited_object is None:
@@ -2201,6 +2236,8 @@ class App(QtCore.QObject):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Select a Geometry, Gerber, Excellon or CNCJob Object to edit."))
             self.ui.menuobjects.setDisabled(False)
             return
+
+        self._history_edit_begin(edited_object)
 
         self.ui.notebook.setCurrentWidget(self.ui.properties_tab)
 
@@ -2357,19 +2394,52 @@ class App(QtCore.QObject):
             return feature_access.is_empty(obj)
         return False
 
+    def _copy_geometry_for_save_as_new(self, source):
+        """
+        Save as New of the Geometry Editor: make the copy of the source object that gets the edited content (its
+        name is <name>_edit, <name>_edit_1...). The copy has the content and the options of the source, so the
+        editor can write the edited content into it like into the source. It is not plotted, not selected and not
+        in the history yet: the caller records it after the content is in.
+
+        :param source:  the GeometryObject that is edited
+        :return:        the new GeometryObject, or None if it could not be made
+        """
+        def init(new_obj, app_obj):
+            new_obj.copy_from(source)
+            for key, val in source.obj_options.items():
+                if key != 'name':
+                    new_obj.obj_options[key] = deepcopy(val)
+
+        try:
+            new_obj = self.app_obj.new_object('geometry', edit_copy_name(source.obj_options['name']), init,
+                                              plot=False, autoselected=False, record_history=False)
+        except Exception as e:
+            self.log.error("App._copy_geometry_for_save_as_new() --> %s" % str(e))
+            new_obj = None
+        if new_obj is None or isinstance(new_obj, str):
+            self.inform.emit('[ERROR_NOTCL] %s' % _("The copy of the object could not be made."))
+            return None
+        return new_obj
+
     def on_editing_finished(self, cleanup=None, force_cancel=None):
         """
         Transfers the Geometry or an "Excellon", from its editor to the current object.
 
         :param cleanup:         if True then we closed the app when the editor was open, so we close first the editor
         :param force_cancel:    if True always add Cancel button
-        :return:                None
+        :return:                'fail' if busy, 'pending' while geometry source generation is deferred, else None
         """
         self.defaults.report_usage("on_editing_finished()")
 
         # do not update a Geometry/"Excellon"/Gerber/GCode object unless it comes out of an editor
         if self.call_source == 'app':
             return
+
+        if self.call_source == 'geo_editor' and AppGeoEditor.reject_busy(self.geo_editor):
+            return 'fail'
+        if (self.call_source == 'grb_editor' and isinstance(self.grb_editor, AppGerberEditor) and
+                not self.grb_editor.history.ready()):
+            return 'fail'
 
         # make sure that when we exit an Editor with a tool active then we make some clean-up
         try:
@@ -2396,7 +2466,12 @@ class App(QtCore.QObject):
             msgbox.setInformativeText(txt)
             msgbox.setIconPixmap(QtGui.QPixmap(self.resource_location + '/save_as.png'))
 
-            bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
+            # Save changes the source object, Save as New leaves it unchanged and makes a new object
+            has_save_as_new = edited_obj.kind in ["geometry", "gerber", "excellon"]
+            bt_yes = msgbox.addButton(_('Save') if has_save_as_new else _('Yes'),
+                                      QtWidgets.QMessageBox.ButtonRole.YesRole)
+            bt_new = msgbox.addButton(_('Save as New'), QtWidgets.QMessageBox.ButtonRole.ActionRole) \
+                if has_save_as_new else None
             bt_no = msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
             if edited_obj.kind in ["geometry", "gerber", "excellon"] or force_cancel is not None:
                 msgbox.addButton(_('Cancel'), QtWidgets.QMessageBox.ButtonRole.RejectRole)
@@ -2405,107 +2480,169 @@ class App(QtCore.QObject):
             msgbox.exec()
             response = msgbox.clickedButton()
 
-            if response == bt_yes:
-                # show the Tools Toolbar
-                plugins_tb = self.ui.toolbarplugins
-                if self.old_state_of_tools_toolbar is True:
-                    plugins_tb.show()
+            # The modal dialog processes events: recheck before accepting either Save or Discard.
+            if self.call_source == 'geo_editor' and AppGeoEditor.reject_busy(self.geo_editor):
+                return 'fail'
+            if (self.call_source == 'grb_editor' and isinstance(self.grb_editor, AppGerberEditor) and
+                    not self.grb_editor.history.ready()):
+                return 'fail'
 
-                # clean the Tools Tab
-                found_idx = None
-                for idx in range(self.ui.notebook.count()):
-                    if self.ui.notebook.widget(idx).objectName() == "plugin_tab":
-                        found_idx = idx
-                        break
-                if found_idx is not None:
-                    self.ui.notebook.setCurrentWidget(self.ui.properties_tab)
-                    self.ui.notebook.removeTab(found_idx)
+            if response == bt_yes or (bt_new is not None and response == bt_new):
+                save_as_new = response != bt_yes
+                # the object that gets the edited content: the source, or its copy (Geometry, Save as New)
+                saved_obj = edited_obj
+
+                def finish_save():
+                    # GUI-only continuation: geometry source generation may still be queued when Save returns.
+                    # show the Tools Toolbar
+                    plugins_tb = self.ui.toolbarplugins
+                    if self.old_state_of_tools_toolbar is True:
+                        plugins_tb.show()
+
+                    # clean the Tools Tab
+                    found_idx = None
+                    for idx in range(self.ui.notebook.count()):
+                        if self.ui.notebook.widget(idx).objectName() == "plugin_tab":
+                            found_idx = idx
+                            break
+                    if found_idx is not None:
+                        self.ui.notebook.setCurrentWidget(self.ui.properties_tab)
+                        self.ui.notebook.removeTab(found_idx)
+
+                    if edited_obj.kind == 'geometry':
+                        obj_type = "Geometry"
+                        # self.geo_editor.update_options(edited_obj)
+
+                        # restore GUI to the Selected TAB
+                        # Remove anything else in the appGUI
+                        self.ui.plugin_scroll_area.takeWidget()
+
+                        # update the geo object options, so it is including the bounding box values
+                        try:
+                            xmin, ymin, xmax, ymax = saved_obj.bounds(flatten=True)
+                            saved_obj.obj_options['xmin'] = xmin
+                            saved_obj.obj_options['ymin'] = ymin
+                            saved_obj.obj_options['xmax'] = xmax
+                            saved_obj.obj_options['ymax'] = ymax
+                        except (AttributeError, ValueError) as e:
+                            self.inform.emit('[WARNING] %s' % _("Object empty after edit."))
+                            self.log.debug("App.on_editing_finished() --> Geometry --> %s" % str(e))
+
+                        saved_obj.build_ui()
+                        saved_obj.plot()
+                        if save_as_new:
+                            # the copy got its content after it was created: record it as new only now
+                            history_of(self).record_create('%s: %s' % (_("New"), saved_obj.obj_options['name']),
+                                                           [saved_obj])
+                            # select the new object, as the Gerber and the Excellon Save as New do (after the
+                            # editor teardown, which still works on the selection)
+                            new_name = saved_obj.obj_options['name']
+
+                            def select_new():
+                                self.collection.set_all_inactive()
+                                self.collection.set_active(new_name)
+                            QtCore.QTimer.singleShot(0, select_new)
+                        self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
+
+                    elif edited_obj.kind == 'gerber':
+                        obj_type = "Gerber"
+                        if save_as_new:
+                            self.grb_editor.update_fcgerber()
+                            # self.grb_editor.update_options(edited_obj)
+
+                            # delete the old object (the source object) if it was an empty one
+                            if self._edited_obj_is_empty(edited_obj):
+                                old_name = edited_obj.obj_options['name']
+                                history_of(self).record_delete(_("Edit"), [edited_obj])
+                                self.collection.delete_by_name(old_name)
+
+                        self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
+
+                        # restore GUI to the Selected TAB
+                        # Remove anything else in the GUI
+                        self.ui.properties_scroll_area.takeWidget()
+                        if not save_as_new:
+                            # the source was updated before this continuation
+                            self.grb_editor.refresh_edited_gerber(edited_obj)
+
+                    elif edited_obj.kind == 'excellon':
+                        obj_type = "Excellon"
+
+                        # restore GUI to the Selected TAB
+                        # Remove anything else in the GUI
+                        self.ui.plugin_scroll_area.takeWidget()
+
+                        if not save_as_new:
+                            # the source was updated before this continuation
+                            self.exc_editor.refresh_edited_excellon(edited_obj)
+                        self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
+
+                    elif edited_obj.kind == 'cncjob':
+                        obj_type = "CNCJob"
+                        self.gcode_editor.update_fcgcode(edited_obj)
+                        # self.exc_editor.update_options(edited_obj)
+
+                        # restore GUI to the Selected TAB
+                        # Remove anything else in the GUI
+                        self.ui.plugin_scroll_area.takeWidget()
+                        edited_obj.build_ui()
+
+                        # close the open tab
+                        for idx in range(self.ui.plot_tab_area.count()):
+                            if self.ui.plot_tab_area.widget(idx).objectName() == 'gcode_editor_tab':
+                                self.ui.plot_tab_area.closeTab(idx)
+                        self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
+
+                    else:
+                        self.inform.emit('[WARNING_NOTCL] %s' %
+                                         _("Select a Gerber, Geometry, Excellon or CNCJob Object to update."))
+                        return
+
+                    # Save changes the source object in place: 1 history step (the earlier steps stay valid, the
+                    # step has the full before / after state). Save as New makes a new object (a New step) and
+                    # the source stays as it was.
+                    if save_as_new:
+                        self._history_edit = None
+                    else:
+                        self._history_edit_saved(edited_obj)
+
+                    # make sure to update the Offset field in Properties Tab
+                    try:
+                        saved_obj.set_offset_values()
+                    except AttributeError:
+                        # not all objects have this attribute
+                        pass
+
+                    self.inform.emit('[selected] %s %s' % (obj_type, _("is updated, returning to App...")))
+                    self.post_edit_sig.emit()
 
                 if edited_obj.kind == 'geometry':
-                    obj_type = "Geometry"
-                    self.geo_editor.update_editor_geometry(edited_obj)
-                    # self.geo_editor.update_options(edited_obj)
-
-                    # restore GUI to the Selected TAB
-                    # Remove anything else in the appGUI
-                    self.ui.plugin_scroll_area.takeWidget()
-
-                    # update the geo object options, so it is including the bounding box values
+                    if save_as_new:
+                        saved_obj = self._copy_geometry_for_save_as_new(edited_obj)
+                        if saved_obj is None:
+                            return 'fail'
+                    result = self.geo_editor.update_editor_geometry(saved_obj, on_complete=finish_save)
+                    if result == 'fail' and save_as_new:
+                        # the save was rejected: the copy is not needed
+                        self.collection.delete_by_name(saved_obj.obj_options['name'])
+                    return result
+                if edited_obj.kind == 'gerber' and not save_as_new:
+                    # the source is updated by a worker task and on the GUI thread; finish_save is the continuation
+                    self.grb_editor.update_fcgerber_in_place(on_complete=finish_save)
+                    return 'pending'
+                if edited_obj.kind == 'excellon':
                     try:
-                        xmin, ymin, xmax, ymax = edited_obj.bounds(flatten=True)
-                        edited_obj.obj_options['xmin'] = xmin
-                        edited_obj.obj_options['ymin'] = ymin
-                        edited_obj.obj_options['xmax'] = xmax
-                        edited_obj.obj_options['ymax'] = ymax
-                    except (AttributeError, ValueError) as e:
-                        self.inform.emit('[WARNING] %s' % _("Object empty after edit."))
-                        self.log.debug("App.on_editing_finished() --> Geometry --> %s" % str(e))
-
-                    edited_obj.build_ui()
-                    edited_obj.plot()
-                    self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
-
-                elif edited_obj.kind == 'gerber':
-                    obj_type = "Gerber"
-                    self.grb_editor.update_fcgerber()
-                    # self.grb_editor.update_options(edited_obj)
-
-                    # delete the old object (the source object) if it was an empty one
-                    if self._edited_obj_is_empty(edited_obj):
-                        old_name = edited_obj.obj_options['name']
-                        self.collection.delete_by_name(old_name)
-
-                    self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
-
-                    # restore GUI to the Selected TAB
-                    # Remove anything else in the GUI
-                    self.ui.properties_scroll_area.takeWidget()
-
-                elif edited_obj.kind == 'excellon':
-                    obj_type = "Excellon"
-                    self.exc_editor.update_fcexcellon(edited_obj)
-                    # self.exc_editor.update_options(edited_obj)
-
-                    # restore GUI to the Selected TAB
-                    # Remove anything else in the GUI
-                    self.ui.plugin_scroll_area.takeWidget()
-
-                    # delete the old object (the source object) if it was an empty one
-                    if self._edited_obj_is_empty(edited_obj):
-                        old_name = edited_obj.obj_options['name']
-                        self.collection.delete_by_name(name=old_name)
-                    self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
-
-                elif edited_obj.kind == 'cncjob':
-                    obj_type = "CNCJob"
-                    self.gcode_editor.update_fcgcode(edited_obj)
-                    # self.exc_editor.update_options(edited_obj)
-
-                    # restore GUI to the Selected TAB
-                    # Remove anything else in the GUI
-                    self.ui.plugin_scroll_area.takeWidget()
-                    edited_obj.build_ui()
-
-                    # close the open tab
-                    for idx in range(self.ui.plot_tab_area.count()):
-                        if self.ui.plot_tab_area.widget(idx).objectName() == 'gcode_editor_tab':
-                            self.ui.plot_tab_area.closeTab(idx)
-                    self.inform.emit('[success] %s' % _("Editor exited. Editor content saved."))
-
-                else:
-                    self.inform.emit('[WARNING_NOTCL] %s' %
-                                     _("Select a Gerber, Geometry, Excellon or CNCJob Object to update."))
-                    return
-
-                # make sure to update the Offset field in Properties Tab
-                try:
-                    edited_obj.set_offset_values()
-                except AttributeError:
-                    # not all objects have this attribute
-                    pass
-
-                self.inform.emit('[selected] %s %s' % (obj_type, _("is updated, returning to App...")))
+                        result = self.exc_editor.update_fcexcellon(
+                            edited_obj, in_place=not save_as_new, on_complete=finish_save)
+                    except Exception as e:
+                        self.log.error("App.on_editing_finished() --> Excellon --> %s" % str(e))
+                        self.inform.emit('[ERROR_NOTCL] %s' % _("The edited content could not be saved. "
+                                                                "The object is unchanged."))
+                        return 'fail'
+                    return 'fail' if result == 'fail' else 'pending'
+                return finish_save()
             elif response == bt_no:
+                self._history_edit = None
                 # show the Tools Toolbar
                 plugins_tb = self.ui.toolbarplugins
                 if self.old_state_of_tools_toolbar is True:
@@ -2550,6 +2687,7 @@ class App(QtCore.QObject):
             # Switch notebook to Properties page
             # self.ui.notebook.setCurrentWidget(self.ui.properties_tab)
         else:
+            self._history_edit = None
             # show the Tools Toolbar
             plugins_tb = self.ui.toolbarplugins
             if self.old_state_of_tools_toolbar is True:
@@ -3420,6 +3558,9 @@ class App(QtCore.QObject):
 
     def delete_first_selected(self, del_obj=None):
         self.object_ops.delete_first_selected(del_obj=del_obj)
+
+    def delete_objects_now(self, objects):
+        self.object_ops.delete_objects_now(objects)
 
     def on_set_origin(self):
         self.object_ops.on_set_origin()

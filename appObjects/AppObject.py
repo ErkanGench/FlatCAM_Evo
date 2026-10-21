@@ -7,6 +7,7 @@
 # Modified by Marius Stanciu (2020)                         #
 # ###########################################################
 
+from appHandlers.appHistory import history_of
 from PyQt6 import QtCore, QtWidgets
 
 from appObjects.CNCJobObject import CNCJobObject
@@ -224,7 +225,7 @@ class AppObject(QtCore.QObject):
         return self.app.options.get(key, defaults.get(key, factory_defaults.get(key, fallback)))
 
     def new_object(self, kind, name, initialize, plot=True, autoselected=True, callback=None,
-                   callback_params=None):
+                   callback_params=None, record_history=True):
         """
         Creates a new specialized FlatCAMObj and attaches it to the application,
         this is, updates the GUI accordingly, any other records and plots it.
@@ -251,6 +252,8 @@ class AppObject(QtCore.QObject):
 
         :param callback_params: a list of parameters for the parameter: callback
         :type callback_params:  list
+        :param record_history:  record a Create step in the Undo / Redo history (False: project open, the rebuild
+                                of an object by Undo / Redo, Tcl commands)
 
         :return:                Either the object or the string 'fail'
         :rtype:                 object
@@ -379,6 +382,10 @@ class AppObject(QtCore.QObject):
         # ############################################################################################################
         obj.moveToThread(self.app.main_thread)
 
+        # the suspension is read here because the history can be suspended only while new_object runs
+        history = history_of(self.app)
+        obj._record_history = bool(record_history and history is not None and history.is_recording())
+
         batch = getattr(self.load_context, 'batch', None)
         if batch is not None:
             if return_value == 'drill_gx2':
@@ -425,6 +432,9 @@ class AppObject(QtCore.QObject):
         # #############################################################################################################
         # The Collection might change the name if there is a collision
         self.app.collection.append(obj)
+
+        if getattr(obj, '_record_history', False):
+            history_of(self.app).record_create('%s: %s' % (_("New"), obj.obj_options['name']), [obj])
 
         creation_context = getattr(obj, '_plugin_creation_context', None)
         auto_switch = False

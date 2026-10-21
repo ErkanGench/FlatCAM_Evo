@@ -7,19 +7,34 @@
 # Modified by Marius Stanciu (2019)                          #
 # ###########################################################
 
+from appHandlers.appHistory import history_of
 from PyQt6 import QtGui, QtWidgets, QtCore
 from PyQt6.QtCore import QPoint
 
+from contextlib import nullcontext
 from copy import deepcopy
 import numpy as np
 
 from appCommon.SafeEval import safe_eval
+
+from camlib import (affine_mirror_matrix, affine_rotate_matrix, affine_skew_matrix, affine_translate_matrix)
+from appHandlers.appHistory import supports_matrix, transform_metadata
 
 import builtins
 import gettext
 
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
+
+
+def history_guard(history, label, obj):
+    """
+    Context manager for the change of 1 object: a matrix kind is recorded with record_matrix() after the change, the
+    other kinds (a CNCJob object) get a snapshot step.
+    """
+    if supports_matrix(obj):
+        return nullcontext(transform_metadata(obj))
+    return history.snapshot(label, [obj])
 
 
 def _finish_origin_move(app, result, retry):
@@ -98,10 +113,15 @@ class AppObjectOps(QtCore.QObject):
                 py = 0.5 * (yminimal + ymaximal)
 
                 # execute mirroring
-                for obj in obj_list:
-                    obj.mirror('X', [px, py])
-                    obj.plot()
-                    self.app.app_obj.object_changed.emit(obj)
+                label = _("Flip on Y axis")
+                with history_of(self.app).group(label):
+                    for obj in obj_list:
+                        with history_guard(history_of(self.app), label, obj) as before:
+                            obj.mirror('X', [px, py])
+                        history_of(self.app).record_matrix(
+                            label, [(obj, affine_mirror_matrix('X', (px, py)), before)])
+                        obj.plot()
+                        self.app.app_obj.object_changed.emit(obj)
                 self.inform.emit('[success] %s.' % _("Flip on Y axis done"))
 
             except Exception as e:
@@ -144,10 +164,15 @@ class AppObjectOps(QtCore.QObject):
                 py = 0.5 * (yminimal + ymaximal)
 
                 # execute mirroring
-                for obj in obj_list:
-                    obj.mirror('Y', [px, py])
-                    obj.plot()
-                    self.app.app_obj.object_changed.emit(obj)
+                label = _("Flip on X axis")
+                with history_of(self.app).group(label):
+                    for obj in obj_list:
+                        with history_guard(history_of(self.app), label, obj) as before:
+                            obj.mirror('Y', [px, py])
+                        history_of(self.app).record_matrix(
+                            label, [(obj, affine_mirror_matrix('Y', (px, py)), before)])
+                        obj.plot()
+                        self.app.app_obj.object_changed.emit(obj)
                 self.inform.emit('[success] %s.' % _("Flip on X axis done"))
 
             except Exception as e:
@@ -203,10 +228,15 @@ class AppObjectOps(QtCore.QObject):
                     px = 0.5 * (xminimal + xmaximal)
                     py = 0.5 * (yminimal + ymaximal)
 
-                    for sel_obj in obj_list:
-                        sel_obj.rotate(-float(num), point=(px, py))
-                        sel_obj.plot()
-                        self.app.app_obj.object_changed.emit(sel_obj)
+                    label = _("Rotate")
+                    matrix = affine_rotate_matrix(-float(num), (px, py))
+                    with history_of(self.app).group(label):
+                        for sel_obj in obj_list:
+                            with history_guard(history_of(self.app), label, sel_obj) as before:
+                                sel_obj.rotate(-float(num), point=(px, py))
+                            history_of(self.app).record_matrix(label, [(sel_obj, matrix, before)])
+                            sel_obj.plot()
+                            self.app.app_obj.object_changed.emit(sel_obj)
                     self.inform.emit('[success] %s' % _("Rotation done."))
                 except Exception as e:
                     self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Rotation movement was not executed."), str(e)))
@@ -245,17 +275,22 @@ class AppObjectOps(QtCore.QObject):
                 xminimal = min(xminlist)
                 yminimal = min(yminlist)
 
-                for obj in obj_list:
-                    obj.skew(num, 0, point=(xminimal, yminimal))
+                label = _("Skew on X axis")
+                matrix = affine_skew_matrix(num, 0, (xminimal, yminimal))
+                with history_of(self.app).group(label):
+                    for obj in obj_list:
+                        with history_guard(history_of(self.app), label, obj) as before:
+                            obj.skew(num, 0, point=(xminimal, yminimal))
+                        history_of(self.app).record_matrix(label, [(obj, matrix, before)])
 
-                    # make sure to update the Offset field in Properties Tab
-                    try:
-                        obj.set_offset_values()
-                    except AttributeError:
-                        pass
+                        # make sure to update the Offset field in Properties Tab
+                        try:
+                            obj.set_offset_values()
+                        except AttributeError:
+                            pass
 
-                    obj.plot()
-                    self.app.app_obj.object_changed.emit(obj)
+                        obj.plot()
+                        self.app.app_obj.object_changed.emit(obj)
                 self.inform.emit('[success] %s' % _("Skew on X axis done."))
 
     def on_skewy(self):
@@ -291,17 +326,22 @@ class AppObjectOps(QtCore.QObject):
                 xminimal = min(xminlist)
                 yminimal = min(yminlist)
 
-                for obj in obj_list:
-                    obj.skew(0, num, point=(xminimal, yminimal))
+                label = _("Skew on Y axis")
+                matrix = affine_skew_matrix(0, num, (xminimal, yminimal))
+                with history_of(self.app).group(label):
+                    for obj in obj_list:
+                        with history_guard(history_of(self.app), label, obj) as before:
+                            obj.skew(0, num, point=(xminimal, yminimal))
+                        history_of(self.app).record_matrix(label, [(obj, matrix, before)])
 
-                    # make sure to update the Offset field in Properties Tab
-                    try:
-                        obj.set_offset_values()
-                    except AttributeError:
-                        pass
+                        # make sure to update the Offset field in Properties Tab
+                        try:
+                            obj.set_offset_values()
+                        except AttributeError:
+                            pass
 
-                    obj.plot()
-                    self.app.app_obj.object_changed.emit(obj)
+                        obj.plot()
+                        self.app.app_obj.object_changed.emit(obj)
                 self.inform.emit('[success] %s' % _("Skew on Y axis done."))
 
     def on_set_origin(self):
@@ -355,22 +395,26 @@ class AppObjectOps(QtCore.QObject):
             with app_obj.proc_container.new(_("Setting Origin...")):
                 obj_list = app_obj.collection.get_list()
 
-                for obj in obj_list:
-                    obj.offset((x, y))
-                    app_obj.app_obj.object_changed.emit(obj)
+                label = _("Set Origin")
+                with history_of(app_obj).group(label):
+                    for obj in obj_list:
+                        with history_guard(history_of(app_obj), label, obj) as before:
+                            obj.offset((x, y))
+                        history_of(app_obj).record_matrix(label, [(obj, affine_translate_matrix(x, y), before)])
+                        app_obj.app_obj.object_changed.emit(obj)
 
-                    # Update the object bounding box options
-                    a, b, c, d = obj.bounds()
-                    obj.obj_options['xmin'] = a
-                    obj.obj_options['ymin'] = b
-                    obj.obj_options['xmax'] = c
-                    obj.obj_options['ymax'] = d
+                        # Update the object bounding box options
+                        a, b, c, d = obj.bounds()
+                        obj.obj_options['xmin'] = a
+                        obj.obj_options['ymin'] = b
+                        obj.obj_options['xmax'] = c
+                        obj.obj_options['ymax'] = d
 
-                    # make sure to update the Offset field in Properties Tab
-                    try:
-                        obj.set_offset_values()
-                    except AttributeError:
-                        pass
+                        # make sure to update the Offset field in Properties Tab
+                        try:
+                            obj.set_offset_values()
+                        except AttributeError:
+                            pass
 
                 app_obj.inform.emit('[success] %s...' % _('Origin set'))
 
@@ -441,10 +485,16 @@ class AppObjectOps(QtCore.QObject):
                     bounds = [obj.bounds() for obj in obj_list]
                     x = min(bound[0] for bound in bounds)
                     y = min(bound[1] for bound in bounds)
-                    for obj in obj_list:
-                        if obj.offset((-x, -y)) == 'fail':
-                            raise ValueError('Object movement failed')
-                        result['updates'].append((obj, obj.bounds()))
+                    label = _("Move to Origin")
+                    with history_of(self.app).group(label):
+                        for obj in obj_list:
+                            with history_guard(history_of(self.app), label, obj) as before:
+                                failed = obj.offset((-x, -y)) == 'fail'
+                            if failed:
+                                raise ValueError('Object movement failed')
+                            history_of(self.app).record_matrix(
+                                label, [(obj, affine_translate_matrix(-x, -y), before)])
+                            result['updates'].append((obj, obj.bounds()))
                     for obj in obj_list:
                         obj.plot()
                     for obj in obj_list:
@@ -806,7 +856,8 @@ class AppObjectOps(QtCore.QObject):
         named_obj = self.app.collection.get_active()
         if named_obj is not None:
             try:
-                named_obj.obj_options['name'] = text
+                history_of(self.app).record_rename(named_obj, named_obj.obj_options['name'], text)
+                self.app.collection.rename_object(named_obj, text)
             except Exception as e:
                 self.log.error("App.on_rename_object() --> Could not rename: %s" % str(e))
 
@@ -886,52 +937,72 @@ class AppObjectOps(QtCore.QObject):
                     self.log.debug("App.on_delete()")
 
                     selected = list(self.app.collection.get_selected())
-                    bulk = len(selected) > 1
-                    clear_tool_shapes = False
-                    for obj_active in selected:
-                        if obj_active.kind == 'gerber':
-                            obj_active.mark_shapes_storage.clear()
-                            obj_active.mark_shapes.clear(update=not bulk)
-                            obj_active.mark_shapes.enabled = False
-                            if self.app.tool_shapes is not None:
-                                clear_tool_shapes = True
-
-                        elif obj_active.kind == 'cncjob':
-                            try:
-                                obj_active.text_col.enabled = False
-                                del obj_active.text_col
-                                obj_active.annotation.clear(update=not bulk)
-                                del obj_active.annotation
-                                obj_active.probing_shapes.clear(update=True)
-                            except AttributeError as e:
-                                self.log.debug(
-                                    "App.on_delete() --> CNCJob object: %s. %s" % (str(obj_active.obj_options['name']),
-                                                                       str(e))
-                                )
-
-                    if clear_tool_shapes:
-                        self.app.tool_shapes.clear(update=True)
-
-                    if bulk:
-                        names = [ob.obj_options['name'] for ob in selected]
-                        self.app.collection.delete_objects(selected)
-                        self.app.setup_default_properties_tab()
-                        for name in names:
-                            self.inform.emit('%s: %s' % (_("Object deleted"), name))
-                    else:
-                        for ob in selected:
-                            self.delete_first_selected(ob)
-
-                    # make sure that the selection shape is deleted, too
-                    self.app.delete_selection_shape()
-
-                    # if there are no longer objects delete also the exclusion areas shapes
-                    if not self.app.collection.get_list():
-                        self.app.exc_areas.clear_shapes()
+                    history_of(self.app).record_delete(
+                        '%s: %s' % (_("Delete"), ", ".join(o.obj_options['name'] for o in selected)), selected)
+                    self.delete_objects_now(selected)
                 else:
                     self.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No object is selected.")))
         else:
             self.inform.emit(_("Save the work in Editor and try again ..."))
+
+    def delete_objects_now(self, objects):
+        """
+        Delete the objects without a confirmation and without a history step: the cleanup of the visuals of each
+        object, then the removal from the collection. on_delete() and the Undo / Redo history use it.
+        """
+        selected = list(objects)
+        bulk = len(selected) > 1
+        clear_tool_shapes = False
+        for obj_active in selected:
+            if obj_active.kind == 'gerber':
+                obj_active.mark_shapes_storage.clear()
+                obj_active.mark_shapes.clear(update=not bulk)
+                obj_active.mark_shapes.enabled = False
+                if self.app.tool_shapes is not None:
+                    clear_tool_shapes = True
+
+            elif obj_active.kind == 'cncjob':
+                try:
+                    obj_active.text_col.enabled = False
+                    del obj_active.text_col
+                    obj_active.annotation.clear(update=not bulk)
+                    del obj_active.annotation
+                    obj_active.probing_shapes.clear(update=True)
+                except AttributeError as e:
+                    self.log.debug(
+                        "App.on_delete() --> CNCJob object: %s. %s" % (str(obj_active.obj_options['name']),
+                                                           str(e))
+                    )
+
+        if clear_tool_shapes:
+            self.app.tool_shapes.clear(update=True)
+
+        if bulk:
+            names = [ob.obj_options['name'] for ob in selected]
+            self.app.collection.delete_objects(selected)
+            if self.app.collection.get_active() is None:
+                self.app.setup_default_properties_tab()
+            for name in names:
+                self.inform.emit('%s: %s' % (_("Object deleted"), name))
+        else:
+            for ob in selected:
+                if self.app.collection.get_active() is ob:
+                    self.delete_first_selected(ob)
+                else:
+                    # delete_first_selected() removes the active object; this one is not the active one.
+                    # The name is read first: the delete removes the attributes of the object.
+                    name = ob.obj_options['name']
+                    self.app.collection.delete_objects([ob])
+                    if self.app.collection.get_active() is None:
+                        self.app.setup_default_properties_tab()
+                    self.inform.emit('%s: %s' % (_("Object deleted"), name))
+
+        # make sure that the selection shape is deleted, too
+        self.app.delete_selection_shape()
+
+        # if there are no longer objects delete also the exclusion areas shapes
+        if not self.app.collection.get_list():
+            self.app.exc_areas.clear_shapes()
 
     def delete_first_selected(self, del_obj=None):
         # Keep this for later
@@ -950,7 +1021,8 @@ class AppObjectOps(QtCore.QObject):
         self.app.collection.delete_active()
 
         # Clear form
-        self.app.setup_default_properties_tab()
+        if self.app.collection.get_active() is None:
+            self.app.setup_default_properties_tab()
 
         self.inform.emit('%s: %s' % (_("Object deleted"), name))
 

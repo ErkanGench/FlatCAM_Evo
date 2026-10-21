@@ -27,6 +27,7 @@ from io import StringIO
 from datetime import datetime as dt
 from copy import deepcopy
 
+from appHandlers.appHistory import history_of
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -597,7 +598,9 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             self.source_file = gc
 
         if self.append_snippet != '' or self.prepend_snippet != '':
-            self.ui.snippets_cb.set_value(True)
+            # the object creation is not a history step of its own
+            with history_of(self.app).suspended():
+                self.ui.snippets_cb.set_value(True)
 
         # Show/Hide Advanced Options
         app_mode = self._app_option("global_app_level")
@@ -827,7 +830,8 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
             self.app.inform.emit('[ERROR_NOTCL] %s %s...' % (_('Failed.'), _('CNC Machine Code could not be updated')))
             return
         else:
-            self.source_file = gco.getvalue()
+            with history_of(self.app).snapshot(_("Update Source File"), [self]):
+                self.source_file = gco.getvalue()
             self.app.inform.emit('[success] %s...' % _('CNC Machine Code was updated'))
 
     def gcode_header(self, comment_start_symbol=None, comment_stop_symbol=None):

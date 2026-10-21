@@ -11,6 +11,7 @@
 # File modified by: Marius Stanciu                         #
 # ##########################################################
 
+from appHandlers.appHistory import history_of
 from PyQt6 import QtGui, QtCore, QtWidgets
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QColor
@@ -574,6 +575,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
                 new_name = str(data)
                 if old_name != new_name and new_name != '':
                     # rename the object
+                    history_of(self.app).record_rename(obj, old_name, new_name)
                     obj.obj_options["name"] = deepcopy(data)
 
                     self.app.object_status_changed.emit(obj, 'rename', old_name)
@@ -595,6 +597,20 @@ class ObjectCollection(QtCore.QAbstractItemModel):
             return True
         else:
             return False
+
+    def rename_object(self, obj, new_name):
+        """Rename as the Project tree does (the keyword list, the status signal), without a history step."""
+        old_name = obj.obj_options['name']
+        if old_name == new_name or new_name == '':
+            return
+        obj.obj_options['name'] = new_name
+        self.app.object_status_changed.emit(obj, 'rename', old_name)
+        try:
+            self.app.regFK.remove_keyword(old_name, update=False)
+            self.app.regFK.prepend_keyword(new_name)
+        except Exception as e:
+            self.app.log.error("rename_object() --> could not update the auto-completer: %s" % str(e))
+        self.update_view()
 
     def supportedDropActions(self):
         return Qt.DropAction.MoveAction

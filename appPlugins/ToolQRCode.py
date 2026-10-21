@@ -22,6 +22,7 @@ import math
 from shapely import MultiPolygon, box, Polygon
 from shapely.ops import unary_union
 from shapely.affinity import translate
+from appHandlers.appHistory import history_of
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -296,6 +297,14 @@ class QRCode(AppTool):
     def make(self, pos):
         self.on_exit()
 
+        with history_of(self.app).snapshot(_("QRCode"), [self.grb_object]):
+            self._write_qrcode(pos)
+
+        self.replot(obj=self.grb_object)
+        self.app.inform.emit('[success] %s' % _("QRCode Tool done."))
+
+    def _write_qrcode(self, pos):
+        """Write the QRCode into the source Gerber object (the in-place change that the history snapshots)."""
         # make sure that the source object solid geometry is an Iterable
         if not isinstance(self.grb_object.solid_geometry, Iterable):
             self.grb_object.solid_geometry = [self.grb_object.solid_geometry]
@@ -403,9 +412,6 @@ class QRCode(AppTool):
 
         # update the source file with the new geometry:
         self.grb_object.regenerate_source()
-
-        self.replot(obj=self.grb_object)
-        self.app.inform.emit('[success] %s' % _("QRCode Tool done."))
 
     def draw_utility_geo(self, pos):
 

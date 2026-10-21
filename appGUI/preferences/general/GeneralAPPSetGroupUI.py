@@ -479,6 +479,26 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         par_grid.addWidget(self.activity_label, 10, 0)
         par_grid.addWidget(self.activity_combo, 10, 1)
 
+        # Undo / Redo history limits
+        self.history_steps_spinner = FCSpinner()
+        self.history_steps_spinner.set_range(1, 1000)
+        self.history_steps_label = FCLabel('%s:' % _('Undo steps'))
+        self.history_steps_label.setToolTip(
+            _("The number of actions that Undo can go back, for each project.")
+        )
+        par_grid.addWidget(self.history_steps_label, 11, 0)
+        par_grid.addWidget(self.history_steps_spinner, 11, 1)
+
+        self.history_memory_spinner = FCSpinner()
+        self.history_memory_spinner.set_range(16, 4096)
+        self.history_memory_label = FCLabel('%s:' % _('Undo memory (MB)'))
+        self.history_memory_label.setToolTip(
+            _("The memory that the Undo history can keep for each project.\n"
+              "The oldest steps are dropped first.")
+        )
+        par_grid.addWidget(self.history_memory_label, 12, 0)
+        par_grid.addWidget(self.history_memory_spinner, 12, 1)
+
         GLay.set_common_column_size(
             [grids_grid, m_grid, par_grid, wk_grid, fnt_grid, ax_grid], 0
         )

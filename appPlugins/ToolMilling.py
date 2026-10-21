@@ -17,6 +17,7 @@ import numpy as np
 import sys
 import math
 import traceback
+from contextlib import contextmanager
 
 from shapely import LineString, box
 
@@ -27,6 +28,7 @@ import builtins
 from appDatabase import load_tools_database
 from defaults import AppDefaults
 from camlib import Geometry, grace, deepcopy_keep_geometry
+from appHandlers.appHistory import history_of, object_state, SnapshotStep
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -193,6 +195,34 @@ class HybridGeoExc:
 
         self.multigeo = True
         self.multitool = True
+
+
+@contextmanager
+def _history_step(tool, label):
+    """
+    1 Undo step with the state of the target object of the plugin before and after the body (none if the body changed
+    nothing). A step recorded inside another step is part of it. Only the handlers of a user action use it: building
+    the UI never records.
+    """
+    obj = tool.target_obj
+    history = history_of(tool.app)
+    nested = getattr(tool, '_history_depth', 0)
+    if obj is None or nested or not hasattr(obj, 'history_uid') or not history.is_recording():
+        yield
+        return
+    tool._history_depth = 1
+    before = object_state(obj)
+    try:
+        yield
+    finally:
+        tool._history_depth = 0
+        after = object_state(obj)
+        try:
+            same = before == after
+        except Exception:
+            same = False
+        if not same:
+            history.push(SnapshotStep(_("Milling") + ': ' + label, [(obj.history_uid, before, after)]))
 
 
 class ToolMilling(Geometry, AppTool):
@@ -982,6 +1012,10 @@ class ToolMilling(Geometry, AppTool):
         self.on_pp_changed()
 
     def on_exc_rebuild_ui(self):
+        with _history_step(self, _("Reorder tools")):
+            ToolMilling._exc_rebuild_ui(self)
+
+    def _exc_rebuild_ui(self):
         # read the table tools uid
         current_uid_list = []
         # we have (n+2) rows because there are 'n' tools, each a row, plus the last 2 rows for totals.
@@ -2205,6 +2239,10 @@ class ToolMilling(Geometry, AppTool):
         return [str(x.text()) for x in self.ui.tools_table_mill_exc.selectedItems()]
 
     def on_apply_param_to_all_clicked(self):
+        with _history_step(self, _("Apply to all tools")):
+            return ToolMilling._on_apply_param_to_all_clicked(self)
+
+    def _on_apply_param_to_all_clicked(self):
         # the tools table of the current target; the hidden Excellon table is not cleared for a Geometry target
         if self.ui.target_radio.get_value() == 'geo':
             tools_table = self.ui.tools_table_mill_geo
@@ -2247,9 +2285,15 @@ class ToolMilling(Geometry, AppTool):
 
     def on_order_changed(self, order):
         if order != 0:  # "default" choice
-            self.build_ui()
+            # the rebuild sorts the tools of an Excellon target: a user action
+            with _history_step(self, _("Tool order")):
+                self.build_ui()
 
     def on_tool_add(self, dia=None, new_geo=None):
+        with _history_step(self, _("Add tool")):
+            return ToolMilling._on_tool_add(self, dia, new_geo)
+
+    def _on_tool_add(self, dia=None, new_geo=None):
         self.app.log.debug("GeometryObject.on_add_tool()")
 
         if self.target_obj is None:
@@ -2371,6 +2415,10 @@ class ToolMilling(Geometry, AppTool):
         self.app.inform.emit('[success] %s' % _("New tool added to Tool Table from Tools Database."))
 
     def on_tool_default_add(self, dia=None, new_geo=None, muted=None):
+        with _history_step(self, _("Add tool")):
+            return ToolMilling._on_tool_default_add(self, dia, new_geo, muted)
+
+    def _on_tool_default_add(self, dia=None, new_geo=None, muted=None):
         self.ui_disconnect()
 
         tooldia = dia if dia is not None else self.ui.addtool_entry.get_value()
@@ -2457,6 +2505,10 @@ class ToolMilling(Geometry, AppTool):
         self.app.tools_db_tab.ui.cancel_tool_from_db.show()
 
     def on_tool_from_db_inserted(self, tool):
+        with _history_step(self, _("Add tool from DB")):
+            return ToolMilling._on_tool_from_db_inserted(self, tool)
+
+    def _on_tool_from_db_inserted(self, tool):
         """
         Called from the Tools DB object through an App method when adding a tool from Tools Database
         :param tool: a dict with the tool data
@@ -2508,6 +2560,10 @@ class ToolMilling(Geometry, AppTool):
             self.ui.param_frame.setDisabled(False)
 
     def on_tool_edit(self, current_item):
+        with _history_step(self, _("Edit tool")):
+            return ToolMilling._on_tool_edit(self, current_item)
+
+    def _on_tool_edit(self, current_item):
         self.ui_disconnect()
 
         current_row = current_item.row()
@@ -2547,6 +2603,10 @@ class ToolMilling(Geometry, AppTool):
         self.target_obj.build_ui()
 
     def on_tool_copy(self, all_tools=None):
+        with _history_step(self, _("Copy tool")):
+            return ToolMilling._on_tool_copy(self, all_tools)
+
+    def _on_tool_copy(self, all_tools=None):
         self.ui_disconnect()
 
         # find the tool_uid maximum value in the self.tools
@@ -2606,6 +2666,10 @@ class ToolMilling(Geometry, AppTool):
         self.app.inform.emit('[success] %s' % _("Tool was copied in Tool Table."))
 
     def on_tool_delete(self, all_tools=None):
+        with _history_step(self, _("Delete tool")):
+            return ToolMilling._on_tool_delete(self, all_tools)
+
+    def _on_tool_delete(self, all_tools=None):
         self.ui_disconnect()
 
         if all_tools is None:

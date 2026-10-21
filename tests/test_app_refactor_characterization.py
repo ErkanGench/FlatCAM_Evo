@@ -392,7 +392,10 @@ class TestObjectBehavior(AppCharacterizationTest):
     def test_rename_active_object(self):
         app = base_app()
         obj = SimpleNamespace(obj_options={'name': 'old'})
-        app.collection = SimpleNamespace(get_active=Mock(return_value=obj))
+        app.history = Mock()
+        app.collection = SimpleNamespace(
+            get_active=Mock(return_value=obj),
+            rename_object=lambda o, name: o.obj_options.__setitem__('name', name))
         target, _ = target_for(app, 'objects')
 
         target.on_rename_object('new')
@@ -482,6 +485,7 @@ class TestObjectBehavior(AppCharacterizationTest):
         obj = SimpleNamespace(
             kind='gerber',
             obj_options={'name': 'board'},
+            tools={},
             offset=Mock(),
             bounds=Mock(return_value=(1, 2, 3, 4)),
             set_offset_values=Mock(),

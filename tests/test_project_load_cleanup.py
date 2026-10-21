@@ -43,7 +43,7 @@ class TestProjectLoadCleanup(unittest.TestCase):
             worker_task=SimpleNamespace(emit=self.tasks.append),
             proc_container=SimpleNamespace(new=lambda text: nullcontext()),
             project_filename='previous.FlatPrj', resource_location='assets/resources',
-            app_obj=SimpleNamespace(load_batches=set()))
+            app_obj=SimpleNamespace(load_batches=set()), history=Mock())
         self.io = appIO(self.app)
         self.signals.restore.connect(self.io.restore_project_handler)
         self.io.on_file_new_project = Mock()

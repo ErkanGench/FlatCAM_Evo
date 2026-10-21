@@ -6,6 +6,8 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
 from defaults import AppDefaults
 from appParsers.feature_access import iter_features
 from appCommon.SafeEval import safe_eval
+from camlib import affine_mirror_matrix
+from appHandlers.appHistory import history_of, transform_metadata
 
 import logging
 from copy import deepcopy
@@ -527,7 +529,10 @@ class DblSidedTool(AppTool):
                                                               "Add coords and try again ..."))
                 return
 
-        fcobj.mirror(axis, [px, py])
+        before = transform_metadata(fcobj)
+        if fcobj.mirror(axis, [px, py]) == 'fail':
+            return
+        history_of(self.app).record_matrix(_("Mirror"), [(fcobj, affine_mirror_matrix(axis, (px, py)), before)])
         self.app.app_obj.object_changed.emit(fcobj)
         fcobj.plot()
         self.app.inform.emit('[success] %s: %s' % (_("Object was mirrored"), str(fcobj.obj_options['name'])))

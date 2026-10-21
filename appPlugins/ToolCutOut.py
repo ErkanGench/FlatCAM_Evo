@@ -29,6 +29,7 @@ import shapely
 from shapely.ops import unary_union, linemerge, polygonize_full, substring
 
 
+from appHandlers.appHistory import history_of
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -2314,42 +2315,43 @@ class CutOut(AppTool):
                 mb_path = min(mb_paths, key=Point(snapped_pos).distance)
                 self.mb_manual_cuts.extend(_cutout_paths(mb_path.intersection(cut_poly)))
 
-        # first subtract geometry for the total solid_geometry
-        try:
-            new_solid_geometry = linemerge(new_solid_geometry)
-        except ValueError:
-            pass
-        self.man_cutout_obj.solid_geometry = new_solid_geometry
+        with history_of(self.app).snapshot(_("Manual Cutout"), [self.man_cutout_obj]):
+            # first subtract geometry for the total solid_geometry
+            try:
+                new_solid_geometry = linemerge(new_solid_geometry)
+            except ValueError:
+                pass
+            self.man_cutout_obj.solid_geometry = new_solid_geometry
 
-        # then do it on each tool in the manual cutout Geometry object
-        try:
-            self.man_cutout_obj.multigeo = True
+            # then do it on each tool in the manual cutout Geometry object
+            try:
+                self.man_cutout_obj.multigeo = True
 
-            self.man_cutout_obj.tools[1]['solid_geometry'] = new_solid_geometry
-            self.man_cutout_obj.tools[1]['data']['name'] = self.man_cutout_obj.obj_options['name'] + '_cutout'
-            self.man_cutout_obj.tools[1]['data']['tools_mill_cutz'] = self.ui.cutz_entry.get_value()
-            self.man_cutout_obj.tools[1]['data']['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
-            self.man_cutout_obj.tools[1]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
-        except KeyError:
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("No tool in the Geometry object."))
-            return
+                self.man_cutout_obj.tools[1]['solid_geometry'] = new_solid_geometry
+                self.man_cutout_obj.tools[1]['data']['name'] = self.man_cutout_obj.obj_options['name'] + '_cutout'
+                self.man_cutout_obj.tools[1]['data']['tools_mill_cutz'] = self.ui.cutz_entry.get_value()
+                self.man_cutout_obj.tools[1]['data']['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
+                self.man_cutout_obj.tools[1]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
+            except KeyError:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("No tool in the Geometry object."))
+                return
 
-        dia = abs(self.ui.dia.get_value())
-        if gaps_solid_geo:
-            if 99 not in self.man_cutout_obj.tools:
-                self.man_cutout_obj.tools.update({
-                    99: deepcopy(self.cut_tool_dict)
-                })
-                self.man_cutout_obj.tools[99]['tooldia'] = str(dia)
-                self.man_cutout_obj.tools[99]['solid_geometry'] = [gaps_solid_geo]
+            dia = abs(self.ui.dia.get_value())
+            if gaps_solid_geo:
+                if 99 not in self.man_cutout_obj.tools:
+                    self.man_cutout_obj.tools.update({
+                        99: deepcopy(self.cut_tool_dict)
+                    })
+                    self.man_cutout_obj.tools[99]['tooldia'] = str(dia)
+                    self.man_cutout_obj.tools[99]['solid_geometry'] = [gaps_solid_geo]
 
-                self.man_cutout_obj.tools[99]['data']['name'] = self.man_cutout_obj.obj_options['name'] + '_cutout'
-                self.man_cutout_obj.tools[99]['data']['tools_mill_cutz'] = self.ui.thin_depth_entry.get_value()
-                self.man_cutout_obj.tools[99]['data']['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
-                self.man_cutout_obj.tools[99]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
-                self.man_cutout_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
-            else:
-                self.man_cutout_obj.tools[99]['solid_geometry'].append(gaps_solid_geo)
+                    self.man_cutout_obj.tools[99]['data']['name'] = self.man_cutout_obj.obj_options['name'] + '_cutout'
+                    self.man_cutout_obj.tools[99]['data']['tools_mill_cutz'] = self.ui.thin_depth_entry.get_value()
+                    self.man_cutout_obj.tools[99]['data']['tools_mill_multidepth'] = self.ui.mpass_cb.get_value()
+                    self.man_cutout_obj.tools[99]['data']['tools_mill_depthperpass'] = self.ui.maxdepth_entry.get_value()
+                    self.man_cutout_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
+                else:
+                    self.man_cutout_obj.tools[99]['solid_geometry'].append(gaps_solid_geo)
 
         self.man_cutout_obj.plot(plot_tool=1)
         self.app.inform.emit('%s' % _("Added manual Bridge Gap. Left click to add another or right click to finish."))

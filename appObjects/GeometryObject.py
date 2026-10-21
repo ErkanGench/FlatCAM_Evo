@@ -19,7 +19,8 @@ from shapely import MultiLineString, LinearRing, Polygon, MultiPolygon, LineStri
 from shapely.affinity import scale, translate
 from shapely.ops import unary_union
 
-from camlib import Geometry, flatten_shapely_geometry, translate_geometry
+from camlib import (Geometry, flatten_shapely_geometry, translate_geometry, affine_geometry, affine_geometry_many,
+                    affine_scale_matrix)
 from appCommon.SafeEval import safe_eval
 
 import shapely
@@ -32,6 +33,7 @@ from copy import deepcopy
 from collections import defaultdict
 from functools import reduce
 
+from appHandlers.appHistory import history_of
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -186,7 +188,12 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         # Attributes to be included in serialization
         # Always append to it because it carries contents
         # from predecessors.
-        self.ser_attrs += ['obj_options', 'kind', 'multigeo', 'fill_color', 'outline_color', 'alpha_level']
+        self.source_file = ''
+        self.ser_attrs += ['obj_options', 'kind', 'multigeo', 'fill_color', 'outline_color', 'alpha_level', 'source_file']
+
+    def from_dict(self, d):
+        # Older geometry project objects did not persist the interchange snapshot.
+        super().from_dict(dict(d, source_file=d.get('source_file', '')))
 
     def copy_from(self, src):
         """
@@ -536,20 +543,21 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
 
         def task_job():
             with self.app.proc_container.new('%s...' % _("Simplify")):
-                for tool in self.tools:
-                    new_tool_geo = []
-                    geometry = self.tools[tool]['solid_geometry']
-                    flattened_geo = self.flatten_list(obj_list=geometry)
-                    for geo in flattened_geo:
-                        new_tool_geo.append(geo.simplify(tolerance=tol))
-                    self.tools[tool]['solid_geometry'] = deepcopy(new_tool_geo)
+                with history_of(self.app).snapshot(_("Simplify"), [self]):
+                    for tool in self.tools:
+                        new_tool_geo = []
+                        geometry = self.tools[tool]['solid_geometry']
+                        flattened_geo = self.flatten_list(obj_list=geometry)
+                        for geo in flattened_geo:
+                            new_tool_geo.append(geo.simplify(tolerance=tol))
+                        self.tools[tool]['solid_geometry'] = deepcopy(new_tool_geo)
 
-                # update the solid_geometry
-                total_geo = []
-                for tool in self.tools:
-                    total_geo += self.tools[tool]['solid_geometry']
+                    # update the solid_geometry
+                    total_geo = []
+                    for tool in self.tools:
+                        total_geo += self.tools[tool]['solid_geometry']
 
-                self.solid_geometry = unary_union(total_geo)
+                    self.solid_geometry = unary_union(total_geo)
 
                 # plot the new geometry
                 self.app.plot_all()
@@ -588,6 +596,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             self.ui.geo_tools_table.setCurrentItem(self.ui.geo_tools_table.item(row, 0))
 
     def export_dxf(self):
+        """Return a complete DXF drawing, or None on failure (never a partial drawing)."""
         dwg = None
         dxf_format = self._app_option('geometry_dxf_format')
 
@@ -603,19 +612,19 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 if isinstance(geo_obj, MultiPolygon):
                     for poly in geo_obj.geoms:
                         ext_points = list(poly.exterior.coords)
-                        dxf_space.add_lwpolyline(ext_points)
+                        dxf_space.add_lwpolyline(ext_points, close=True)
                         for interior in poly.interiors:
-                            dxf_space.add_lwpolyline(list(interior.coords))
+                            dxf_space.add_lwpolyline(list(interior.coords), close=True)
                 if isinstance(geo_obj, Polygon):
                     ext_points = list(geo_obj.exterior.coords)
-                    dxf_space.add_lwpolyline(ext_points)
+                    dxf_space.add_lwpolyline(ext_points, close=True)
                     for interior in geo_obj.interiors:
-                        dxf_space.add_lwpolyline(list(interior.coords))
+                        dxf_space.add_lwpolyline(list(interior.coords), close=True)
                 if isinstance(geo_obj, MultiLineString):
                     for line in geo_obj.geoms:
-                        dxf_space.add_lwpolyline(list(line.coords))
+                        dxf_space.add_lwpolyline(list(line.coords), close=line.is_closed)
                 if isinstance(geo_obj, LineString) or isinstance(geo_obj, LinearRing):
-                    dxf_space.add_lwpolyline(list(geo_obj.coords))
+                    dxf_space.add_lwpolyline(list(geo_obj.coords), close=geo_obj.is_closed)
 
             multigeo_solid = []
             if self.multigeo:
@@ -640,6 +649,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
                 # msp.add_lwpolyline(points)
         except Exception as e:
             self.app.log.error(str(e))
+            return None
 
         return dwg
 
@@ -1198,52 +1208,16 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         else:
             px, py = point
 
-        self.geo_len = 0
-        self.old_disp_number = 0
-        self.el_count = 0
-
-        def scale_recursion(geom):
-            if type(geom) is list:
-                geoms = []
-                for local_geom in geom:
-                    geoms.append(scale_recursion(local_geom))
-                return geoms
-            else:
-                try:
-                    self.el_count += 1
-                    disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-                    if self.old_disp_number < disp_number <= 100:
-                        self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                        self.old_disp_number = disp_number
-
-                    return scale(geom, xfactor, yfactor, origin=(px, py))
-                except AttributeError:
-                    return geom
+        matrix = affine_scale_matrix(xfactor, yfactor, (px, py))
 
         if self.multigeo is True:
-            for tool in self.tools:
-                # variables to display the percentage of work done
-                self.geo_len = 0
-                try:
-                    self.geo_len = len(self.tools[tool]['solid_geometry'])
-                except TypeError:
-                    self.geo_len = 1
-                self.old_disp_number = 0
-                self.el_count = 0
-
-                self.tools[tool]['solid_geometry'] = scale_recursion(self.tools[tool]['solid_geometry'])
+            keys = list(self.tools)
+            results = affine_geometry_many([self.tools[k]['solid_geometry'] for k in keys], matrix)
+            for k, res in zip(keys, results):
+                self.tools[k]['solid_geometry'] = res
 
         try:
-            # variables to display the percentage of work done
-            self.geo_len = 0
-            try:
-                self.geo_len = len(self.solid_geometry)
-            except TypeError:
-                self.geo_len = 1
-            self.old_disp_number = 0
-            self.el_count = 0
-
-            self.solid_geometry = scale_recursion(self.solid_geometry)
+            self.solid_geometry = affine_geometry(self.solid_geometry, matrix)
         except AttributeError:
             self.solid_geometry = []
             return

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets, sip
 from PyQt6.QtCore import Qt
 from shapely.geometry import LineString
 
@@ -57,7 +57,7 @@ METHOD_MANIFEST = {
         "on_flipy", "on_flipx", "on_rotate", "on_skewx", "on_skewy", "on_set_origin",
         "on_set_zero_click", "on_move2origin", "on_jump_to", "on_locate", "on_numeric_move",
         "on_copy_command", "on_copy_object2", "on_rename_object", "on_delete_keypress", "on_delete",
-        "delete_first_selected", "on_selectall", "on_deselect_all", "on_copy_name",
+        "delete_first_selected", "delete_objects_now", "on_selectall", "on_deselect_all", "on_copy_name",
     ),
     "canvas_events": (
         "on_mouse_click_over_plot", "on_mouse_double_click_over_plot", "on_mouse_move_over_plot",
@@ -140,6 +140,16 @@ class Recorder:
                 self.sink.append((self.target, name, args, kwargs))
 
         return record
+
+
+class HistoryRecorder(Recorder):
+    """The app.history stub: the group and the snapshot are context managers."""
+
+    def group(self, *args):
+        return Context()
+
+    def snapshot(self, *args):
+        return Context()
 
 
 class Value:
@@ -395,6 +405,9 @@ class Collection:
         if not state:
             self.set_all_inactive()
 
+    def rename_object(self, obj, new_name):
+        obj.obj_options["name"] = new_name
+
     def delete_active(self):
         if self.active in self.objects:
             self.objects.remove(self.active)
@@ -617,8 +630,13 @@ class TestLifecycle(AppTestCase):
         # quit_application saves the GUI state, so the ui needs these members (QSettings is patched below)
         app.ui = SimpleNamespace(hide=Recorder(("call",)).call, saveState=lambda: b"",
                                  isMaximized=lambda: False, general_pref_form=MagicMock())
-        app.geo_editor = app.exc_editor = app.grb_editor = app.gcode_editor = None
-        app._editor_for = lambda kind: None
+        editors = {kind: QtCore.QObject() for kind in ("geometry", "excellon", "gerber", "cncjob")}
+        destroyed = []
+        for kind, editor in editors.items():
+            editor.destroyed.connect(lambda obj, kind=kind: destroyed.append(kind))
+        app.geo_editor = editors["geometry"]
+        app._editor_for = editors.get
+        app._deactivate_editor = MagicMock()
         app.plotcanvas = PlotCanvas()
         app.on_mouse_move_over_plot = object()
         app.on_mouse_click_over_plot = object()
@@ -627,10 +645,20 @@ class TestLifecycle(AppTestCase):
         app.ui.keyPressEvent = object()
         app.pool = Recorder(("terminate", "join"))
         app.workers = Recorder(("quit",))
-        with patch.object(lifecycle_module.sys, "platform", "linux"), \
-                patch("PyQt6.QtCore.QSettings"), \
-                patch.object(QtWidgets.QApplication, "quit"):
-            invoke("lifecycle", handler, "quit_application", silent=True)
+        messages = []
+        previous_handler = QtCore.qInstallMessageHandler(lambda kind, context, text: messages.append(text))
+        try:
+            with patch.object(lifecycle_module.sys, "platform", "linux"), \
+                    patch("PyQt6.QtCore.QSettings"), \
+                    patch.object(QtWidgets.QApplication, "quit"):
+                invoke("lifecycle", handler, "quit_application", silent=True)
+        finally:
+            QtCore.qInstallMessageHandler(previous_handler)
+        for editor in editors.values():
+            sip.delete(editor)
+        self.assertEqual([], [text for text in messages if "QObject::disconnect" in text])
+        self.assertEqual(list(editors), destroyed)
+        self.assertEqual([(kind,) for kind in editors], [call.args for call in app._deactivate_editor.call_args_list])
         self.assertEqual([
             ("mouse_move", app.on_mouse_move_over_plot),
             ("mouse_press", app.on_mouse_click_over_plot),
@@ -935,6 +963,7 @@ class TestObjectOps(AppTestCase):
                 "global_cursor_color_enabled": False, "global_cursor_width": 1, "global_cursor_size": 10,
             },
             ui=SimpleNamespace(), collection=Collection(objects, selected),
+            history=HistoryRecorder(("record_delete", "record_rename", "record_matrix")),
         )
         app.resource_location = ""
         return app, AppObjectOps(app)
@@ -1009,7 +1038,8 @@ class TestObjectOps(AppTestCase):
 
     @covers(
         "object_ops", "on_jump_to", "on_locate", "on_numeric_move", "on_copy_command", "on_copy_object2",
-        "on_rename_object", "on_delete_keypress", "on_delete", "delete_first_selected", "on_selectall",
+        "on_rename_object", "on_delete_keypress", "on_delete", "delete_first_selected", "delete_objects_now",
+        "on_selectall",
         "on_deselect_all", "on_copy_name",
     )
     def test_navigation_copy_delete_and_selection_paths(self):
@@ -1076,6 +1106,12 @@ class TestObjectOps(AppTestCase):
         survivor = ObjectStub("survivor")
         app.collection = Collection([survivor])
         invoke("object_ops", handler, "delete_first_selected", survivor)
+        self.assertEqual([], app.collection.objects)
+
+        # the delete without a confirmation and without a history step (Undo / Redo uses it)
+        gone = ObjectStub("gone")
+        app.collection = Collection([gone])
+        invoke("object_ops", handler, "delete_objects_now", [gone])
         self.assertEqual([], app.collection.objects)
 
         a, b = ObjectStub("a"), ObjectStub("b")
@@ -1279,7 +1315,7 @@ SIGNAL_ACTIONS = {
         "menufileimportpref"
     ).split(),
     "connect_editmenu_signals": (
-        "menufile_exit menueditedit menueditok menuedit_join2geo menuedit_join_exc2exc menuedit_join_grb2grb "
+        "menufile_exit menueditedit menueditok menuedit_undo menuedit_redo undo_btn redo_btn menuedit_join2geo menuedit_join_exc2exc menuedit_join_grb2grb "
         "menuedit_convert_sg2mg menuedit_convert_mg2sg menueditdelete menueditcopyobject menueditconvert_any2geo "
         "menueditconvert_any2gerber menueditconvert_any2excellon menuedit_numeric_move menueditorigin "
         "menuedit_move2origin menuedit_center_in_origin menueditjump menueditlocate menueditselectall menueditpreferences"
@@ -1365,6 +1401,10 @@ SIGNAL_EXPECTED_CALLS = {
     "menufile_exit": expected_call("ui", "close"),
     "menueditedit": expected_call("app", "on_editing_start"),
     "menueditok": expected_call("app", "on_editing_finished"),
+    "menuedit_undo": expected_call("history", "undo"),
+    "menuedit_redo": expected_call("history", "redo"),
+    "undo_btn": expected_call("history", "undo"),
+    "redo_btn": expected_call("history", "redo"),
     "menuedit_join2geo": expected_call("edit_class", "on_edit_join"),
     "menuedit_join_exc2exc": expected_call("edit_class", "on_edit_join_exc"),
     "menuedit_join_grb2grb": expected_call("edit_class", "on_edit_join_grb"),
@@ -1539,6 +1579,12 @@ class TestSignalConnector(AppTestCase):
         app.app_obj = Recorder(self.OBJECT_METHODS, target="app_obj", sink=route_log)
         app.edit_class = Recorder(self.EDIT_METHODS, target="edit_class", sink=route_log)
         app.collection = Collection()
+        app.history = Recorder(("undo", "redo"), target="history", sink=route_log)
+        app.history_changed = Signal()
+        ui.on_history_changed = ui_route("on_history_changed")
+        # the shared Undo / Redo actions skip a text field and route by call_source
+        ui.app_focus_in_text = lambda: False
+        app.call_source = "app"
         app.plotcanvas = Recorder(
             ("on_toggle_grid_lines", "on_toggle_axis", "on_toggle_hud", "zoom"),
             target="plotcanvas", sink=route_log

@@ -448,7 +448,7 @@ class TestSmallBugs_0B6:
             def on_options_change(self, key):
                 self.changed.append(key)
 
-        def new_object(kind, name, initialize, plot=True):
+        def new_object(kind, name, initialize, plot=True, record_history=True):
             obj = FakeObj()
             new_objs.append(obj)
             return initialize(obj, app)

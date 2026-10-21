@@ -97,7 +97,7 @@ class TestBatchPropertiesQt(unittest.TestCase):
             ui=self.window, options=defaults, defaults=defaults, resource_location='assets/resources',
             log=Mock(), inform=Mock(), regFK=Mock(), worker_task=Mock(),
             object_status_changed=self.signals.status, proj_selection_changed=self.signals.selection,
-            on_plots_updated=Mock(), on_zoom_fit=Mock(), flush_recent_items=Mock(),
+            on_plots_updated=Mock(), on_zoom_fit=Mock(), flush_recent_items=Mock(), history=Mock(),
             call_source='app')
         self.window.app = self.app
         self.app.collection = ObjectCollection(self.app)

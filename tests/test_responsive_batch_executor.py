@@ -127,6 +127,7 @@ class TestResponsiveBatch(unittest.TestCase):
         self.app.splash = None
         self.app.app_units = 'MM'
         self.app.new_project_signal = Mock()
+        self.app.history = Mock()
         io = appIO(self.app)
         io.restore_project_objects({'objs': []}, 'empty.FlatPrj', False, False)
         tasks[0]['fcn'](*tasks[0]['params'])

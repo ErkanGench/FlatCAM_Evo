@@ -18,6 +18,8 @@ from appCommon.SafeEval import safe_eval
 
 import logging
 from copy import deepcopy
+from contextlib import nullcontext
+from appHandlers.appHistory import history_of
 import numpy as np
 import sys
 import platform
@@ -97,6 +99,8 @@ class ToolDrilling(Geometry, AppTool):
         # #############################################################################
         self.units = ''
         self.excellon_tools = {}
+        # True while self.excellon_tools is the dict of self.excellon_obj.tools (an edit reaches the object)
+        self.tools_are_object_tools = False
         self.tooluid = 0
         self.kind = "excellon"
 
@@ -261,6 +265,8 @@ class ToolDrilling(Geometry, AppTool):
         self.ui.reset_button.clicked.connect(self.set_tool_ui)
         # Cleanup on Graceful exit (CTRL+ALT+X combo key)
         self.app.cleanup.connect(self.set_tool_ui)
+        # Undo / Redo gives the object a new tools dict
+        self.app.app_obj.object_changed.connect(self.on_object_tools_replaced)
 
     def disconnect_main_signals(self):
         # #############################################################################
@@ -334,6 +340,10 @@ class ToolDrilling(Geometry, AppTool):
         try:
             self.app.cleanup.disconnect()
         except (TypeError, AttributeError):
+            pass
+        try:
+            self.app.app_obj.object_changed.disconnect(self.on_object_tools_replaced)
+        except (TypeError, AttributeError, RuntimeError):
             pass
 
     def set_context_menu(self):
@@ -536,6 +546,7 @@ class ToolDrilling(Geometry, AppTool):
         # make sure to update the UI on init
         try:
             self.excellon_tools = self.excellon_obj.tools
+            self.tools_are_object_tools = True
         except AttributeError:
             # no object loaded
             pass
@@ -711,6 +722,7 @@ class ToolDrilling(Geometry, AppTool):
             new_uid += 1
 
         self.excellon_tools = new_tools
+        self.tools_are_object_tools = False
 
         # the tools table changed therefore we need to rebuild it
         QtCore.QTimer.singleShot(20, self.build_tool_ui)
@@ -1004,6 +1016,7 @@ class ToolDrilling(Geometry, AppTool):
 
         if self.excellon_obj is None:
             self.excellon_tools = {}
+            self.tools_are_object_tools = False
             self.ui.exc_param_frame.setDisabled(True)
             self.set_tool_ui()
         else:
@@ -1015,10 +1028,12 @@ class ToolDrilling(Geometry, AppTool):
                     "excellon_autoload_db",
                     app_defaults.get("excellon_autoload_db", AppDefaults.factory_defaults.get("excellon_autoload_db"))):
                 self.excellon_tools = self.excellon_obj.tools
+                self.tools_are_object_tools = True
                 self.on_tool_db_load()
             else:
                 # self.on_tool_db_load() already build once the tool UI, no need to do it twice
                 self.excellon_tools = self.excellon_obj.tools
+                self.tools_are_object_tools = True
                 self.build_tool_ui()
 
         self.update_ui()
@@ -1289,6 +1304,7 @@ class ToolDrilling(Geometry, AppTool):
 
             # more than one original tool can fit in the tolerance of the same DB tool
             self.excellon_tools = merge_same_diameter_tools(new_tools_dict)
+            self.tools_are_object_tools = False
             self.build_tool_ui()
 
     def on_toggle_all_rows(self):
@@ -1421,6 +1437,31 @@ class ToolDrilling(Geometry, AppTool):
                         self.app.log.error("ToolDrilling.storage_to_form() -> common parameters --> %s" % str(e))
                         pass
 
+    def history_step(self, label):
+        """
+        The Undo / Redo step (a snapshot of the Excellon object) for an action of the user on the tools (apply to all,
+        Order). The parameter edits are not recorded: each widget has its own undo. It is
+        used only in the handlers of the user's actions, never in a UI rebuild. If self.excellon_tools is not the dict
+        of the object (after a Tools DB load or a drag and drop of the rows) the edit does not reach the object and
+        there is nothing to record.
+        """
+        obj = self.excellon_obj
+        if obj is None or not self.tools_are_object_tools or self.excellon_tools is not getattr(obj, 'tools', None):
+            return nullcontext()
+        return history_of(self.app).snapshot(label, [obj])
+
+    def on_object_tools_replaced(self, obj):
+        """Undo / Redo restores the tools of the Excellon object as a new dict: take it again and show it."""
+        if obj is not self.excellon_obj or not self.tools_are_object_tools:
+            return
+        if self.excellon_tools is not obj.tools:
+            self.excellon_tools = obj.tools
+            # the restored order must not be sorted again by the Order combo
+            self.ui.order_combo.blockSignals(True)
+            self.ui.order_combo.set_value(0)
+            self.ui.order_combo.blockSignals(False)
+            self.build_tool_ui()
+
     def form_to_storage(self):
         """
         Will update the 'storage' attribute which is the dict self.tools with data collected from GUI
@@ -1526,15 +1567,17 @@ class ToolDrilling(Geometry, AppTool):
                 temp_tool_data = tooluid_val['data']
                 break
 
-        for tooluid_key, tooluid_val in self.excellon_tools.items():
-            tooluid_val['data'] = deepcopy(temp_tool_data)
+        with self.history_step(_("Drilling: apply the parameters to all tools")):
+            for tooluid_key, tooluid_val in self.excellon_tools.items():
+                tooluid_val['data'] = deepcopy(temp_tool_data)
 
         self.app.inform.emit('[success] %s' % _("Current Tool parameters were applied to all tools."))
         self.blockSignals(False)
 
     def on_order_changed(self, order):
         if order != 0:  # 'default'
-            self.build_tool_ui()
+            with self.history_step(_("Drilling: order the tools")):
+                self.build_tool_ui()
 
     def on_tooltable_cellwidget_change(self):
         cw = self.sender()
@@ -2130,7 +2173,7 @@ class ToolDrilling(Geometry, AppTool):
                                 for drill in points[selected_id]:
                                     sol_geo.append(
                                         drill.buffer((selected_tooldia / 2.0),
-                                                     resolution=cnc_job_obj.geo_steps_per_circle)
+                                                     quad_segs=cnc_job_obj.geo_steps_per_circle)
                                     )
 
                             slot_no = 0
@@ -2143,7 +2186,7 @@ class ToolDrilling(Geometry, AppTool):
                                     line_geo = LineString([start, stop])
                                     buff_distance = selected_tooldia / 2.0
                                     sol_geo.append(
-                                        line_geo.buffer(buff_distance, resolution=cnc_job_obj.geo_steps_per_circle)
+                                        line_geo.buffer(buff_distance, quad_segs=cnc_job_obj.geo_steps_per_circle)
                                     )
 
                             # adjust Offset for current tool
@@ -2182,7 +2225,7 @@ class ToolDrilling(Geometry, AppTool):
                                 for drill in points[selected_id]:
                                     sol_geo.append(
                                         drill.buffer((selected_tooldia / 2.0),
-                                                     resolution=cnc_job_obj.geo_steps_per_circle)
+                                                     quad_segs=cnc_job_obj.geo_steps_per_circle)
                                     )
 
                             convert_slots = self.excellon_tools[selected_id]['data']['tools_drill_drill_slots']
@@ -2194,7 +2237,7 @@ class ToolDrilling(Geometry, AppTool):
                                     line_geo = LineString([start, stop])
                                     buff_distance = selected_tooldia / 2.0
                                     sol_geo.append(
-                                        line_geo.buffer(buff_distance, resolution=cnc_job_obj.geo_steps_per_circle)
+                                        line_geo.buffer(buff_distance, quad_segs=cnc_job_obj.geo_steps_per_circle)
                                     )
 
                 # adjust Offset for current tool

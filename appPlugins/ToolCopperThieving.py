@@ -778,7 +778,7 @@ class ToolCopperThieving(AppTool):
                     new_y = y0 + radius
                     while new_x <= x1 - radius:
                         while new_y <= y1 - radius:
-                            dot_geo = Point((new_x, new_y)).buffer(radius, resolution=64)
+                            dot_geo = Point((new_x, new_y)).buffer(radius, quad_segs=64)
                             thieving_list.append(dot_geo)
                             new_y += dot_dia + dot_spacing
                         new_x += dot_dia + dot_spacing
@@ -841,7 +841,7 @@ class ToolCopperThieving(AppTool):
                 for geo_o in outline_geometry:
                     outline_line.append(
                         geo_o.exterior.buffer(
-                            half_thick_line, resolution=int(int(tool_obj.geo_steps_per_circle) / 4)
+                            half_thick_line, quad_segs=int(int(tool_obj.geo_steps_per_circle) / 4)
                         )
                     )
 
@@ -852,7 +852,7 @@ class ToolCopperThieving(AppTool):
                 box_outline_geo_exterior = box_outline_geo.exterior
                 box_outline_geometry = box_outline_geo_exterior.buffer(
                     half_thick_line,
-                    resolution=int(int(tool_obj.geo_steps_per_circle) / 4)
+                    quad_segs=int(int(tool_obj.geo_steps_per_circle) / 4)
                 )
 
                 bx0, by0, bx1, by1 = box_outline_geo.bounds
@@ -862,7 +862,7 @@ class ToolCopperThieving(AppTool):
                 while new_x <= x1 - half_thick_line:
                     line_geo = LineString([(new_x, by0), (new_x, by1)]).buffer(
                         half_thick_line,
-                        resolution=int(int(tool_obj.geo_steps_per_circle) / 4)
+                        quad_segs=int(int(tool_obj.geo_steps_per_circle) / 4)
                     )
                     thieving_lines_geo.append(line_geo)
                     new_x += line_size + line_spacing
@@ -870,7 +870,7 @@ class ToolCopperThieving(AppTool):
                 while new_y <= y1 - half_thick_line:
                     line_geo = LineString([(bx0, new_y), (bx1, new_y)]).buffer(
                         half_thick_line,
-                        resolution=int(int(tool_obj.geo_steps_per_circle) / 4)
+                        quad_segs=int(int(tool_obj.geo_steps_per_circle) / 4)
                     )
                     thieving_lines_geo.append(line_geo)
                     new_y += line_size + line_spacing

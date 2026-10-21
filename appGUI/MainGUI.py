@@ -21,7 +21,7 @@ from appGUI.preferences.excellon.ExcellonPreferencesUI import ExcellonPreference
 from appGUI.preferences.general.GeneralPreferencesUI import GeneralPreferencesUI
 from appGUI.preferences.geometry.GeometryPreferencesUI import GeometryPreferencesUI
 from appGUI.preferences.gerber.GerberPreferencesUI import GerberPreferencesUI
-from appEditors.appGeoEditor import FCShapeTool
+from appEditors.appGeoEditor import AppGeoEditor, FCShapeTool
 
 import webbrowser
 
@@ -411,6 +411,19 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################## Edit # ######################################
         # ########################################################################
         self.menuedit = self.menu.addMenu(_('Edit'))
+        self.menuedit_undo = self.menuedit.addAction(
+            QtGui.QIcon(self.app.resource_location + '/undo64.png'),
+            '%s	%s' % (_('Undo'), _('Ctrl+Z')))
+        self.menuedit_redo = self.menuedit.addAction(
+            QtGui.QIcon(self.app.resource_location + '/redo64.png'),
+            '%s	%s' % (_('Redo'), _('Ctrl+Shift+Z')))
+        self.menuedit_undo.setEnabled(False)
+        self.menuedit_redo.setEnabled(False)
+        # the Undo / Redo buttons of the title bar (made once: a toolbar rebuild does not replace them)
+        self.undo_btn = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/undo64.png'), _("Undo"), self)
+        self.redo_btn = QtGui.QAction(QtGui.QIcon(self.app.resource_location + '/redo64.png'), _("Redo"), self)
+        self.undo_btn.setEnabled(False)
+        self.redo_btn.setEnabled(False)
         # Separator
         self.menuedit.addSeparator()
         self.menueditedit = self.menuedit.addAction(
@@ -785,6 +798,9 @@ class MainGUI(QtWidgets.QMainWindow):
         self.geo_copy_menuitem = self.geo_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/copy16.png'),
             '%s\t%s' % (_("Copy"), _('C')))
+        self.geo_import_menuitem = self.geo_editor_menu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/import.png'),
+            '%s\t%s' % (_("Import"), ''))
         self.geo_delete_menuitem = self.geo_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/deleteshape16.png'),
             '%s\t%s' % (_("Delete"), _('DEL'))
@@ -859,6 +875,15 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################################################################
         self.grb_editor_menu = QtWidgets.QMenu('>%s<' % _('Gerber Editor'))
         self.menu.addMenu(self.grb_editor_menu)
+
+        self.grb_add_rectangle_menuitem = self.grb_editor_menu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rectangle Region"))
+        self.grb_add_text_menuitem = self.grb_editor_menu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Regions"))
+        self.grb_add_arc_menuitem = self.grb_editor_menu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc (Circular FOLLOW)"))
+        self.grb_difference_keep_menuitem = self.grb_editor_menu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Difference (Keep Cutters)"))
 
         self.grb_add_pad_menuitem = self.grb_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/aperture16.png'),
@@ -1340,6 +1365,8 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/cutpath32.png'), _('Cut Path'))
         self.geo_copy_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/copy32.png'), _("Copy"))
+        self.geo_import_btn = self.geo_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/import.png'), _("Import"))
 
         self.geo_delete_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/trash32.png'), _("Delete"))
@@ -1369,6 +1396,14 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/semidisc32.png'), _("SemiDisc"))
         self.grb_add_disc_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/disc32.png'), _("Disc"))
+        self.grb_add_rectangle_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rectangle Region"))
+        self.grb_add_text_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Regions"))
+        self.grb_add_arc_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc (Circular FOLLOW)"))
+        self.grb_difference_keep_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Difference (Keep Cutters)"))
         self.grb_edit_toolbar.addSeparator()
 
         self.aperture_buffer_btn = self.grb_edit_toolbar.addAction(
@@ -2261,7 +2296,8 @@ class MainGUI(QtWidgets.QMainWindow):
         self.title_bar = None
         self.title_toolbar = None
         if _database_option(self.app, 'global_custom_titlebar'):
-            self.title_bar = TitleBar(self, self.menu, self.menu_toggle_nb)
+            self.title_bar = TitleBar(self, self.menu, self.menu_toggle_nb,
+                                      history_actions=(self.undo_btn, self.redo_btn))
             self.title_toolbar = self.title_bar.toolbar
             self.setMenuWidget(self.title_bar)
         else:
@@ -2689,6 +2725,8 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/cutpath32.png'), _('Cut Path'))
         self.geo_copy_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/copy32.png'), _("Copy"))
+        self.geo_import_btn = self.geo_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/import.png'), _("Import"))
         self.geo_delete_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/trash32.png'), _("Delete"))
         self.geo_transform_btn = self.geo_edit_toolbar.addAction(
@@ -2718,6 +2756,14 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/semidisc32.png'), _("SemiDisc"))
         self.grb_add_disc_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/disc32.png'), _("Disc"))
+        self.grb_add_rectangle_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rectangle Region"))
+        self.grb_add_text_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Regions"))
+        self.grb_add_arc_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc (Circular FOLLOW)"))
+        self.grb_difference_keep_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Difference (Keep Cutters)"))
         self.grb_edit_toolbar.addSeparator()
 
         self.aperture_buffer_btn = self.grb_edit_toolbar.addAction(
@@ -3012,6 +3058,29 @@ class MainGUI(QtWidgets.QMainWindow):
             #                       no_km)
             # QtCore.QCoreApplication.instance().sendEvent(self.shell._edit, f)
 
+    def on_history_changed(self, undo_label, redo_label):
+        """The Edit menu items and the toolbar buttons show the next Undo / Redo step."""
+        for action, label, name, keys in (
+                (self.menuedit_undo, undo_label, _('Undo'), _('Ctrl+Z')),
+                (self.menuedit_redo, redo_label, _('Redo'), _('Ctrl+Shift+Z'))):
+            text = '%s %s' % (name, label) if label else name
+            action.setText('%s	%s' % (text, keys))
+            action.setEnabled(bool(label))
+        for button, label, name in ((self.undo_btn, undo_label, _('Undo')), (self.redo_btn, redo_label, _('Redo'))):
+            button.setToolTip('%s %s' % (name, label) if label else name)
+            button.setEnabled(bool(label))
+
+    @staticmethod
+    def app_focus_in_text():
+        """True if the keyboard focus is in a text or number field (Ctrl+Z belongs to the field then)."""
+        focus = QtWidgets.QApplication.focusWidget()
+        while focus is not None:
+            if isinstance(focus, (QtWidgets.QLineEdit, QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit,
+                                  QtWidgets.QAbstractSpinBox)):
+                return True
+            focus = focus.parentWidget()
+        return False
+
     def keyPressEvent(self, event):
         """
         Key event handler for the entire app.
@@ -3050,6 +3119,17 @@ class MainGUI(QtWidgets.QMainWindow):
             pass
 
         if self.app.call_source == 'app':
+            ctrl = QtCore.Qt.KeyboardModifier.ControlModifier
+            shift = QtCore.Qt.KeyboardModifier.ShiftModifier
+            undo_key = key == QtCore.Qt.Key.Key_Z or key == 'Z'
+            redo_key = key == QtCore.Qt.Key.Key_Y or key == 'Y'
+            if (modifiers == ctrl and (undo_key or redo_key)) or (modifiers == ctrl | shift and undo_key):
+                if not self.app_focus_in_text():
+                    if redo_key or modifiers == ctrl | shift:
+                        self.app.history.redo()
+                    else:
+                        self.app.history.undo()
+                return
             # CTRL + ALT
             if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier | QtCore.Qt.KeyboardModifier.AltModifier:
                 if key == QtCore.Qt.Key.Key_X:
@@ -3535,6 +3615,22 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 return
         elif self.app.call_source == 'geo_editor':
+            ctrl = QtCore.Qt.KeyboardModifier.ControlModifier
+            shift = QtCore.Qt.KeyboardModifier.ShiftModifier
+            undo_key = key == QtCore.Qt.Key.Key_Z or key == 'Z'
+            redo_key = key == QtCore.Qt.Key.Key_Y or key == 'Y'
+            if (modifiers == ctrl and (undo_key or redo_key)) or (modifiers == ctrl | shift and undo_key):
+                focus = QtWidgets.QApplication.focusWidget()
+                while focus is not None:
+                    if isinstance(focus, (QtWidgets.QLineEdit, QtWidgets.QTextEdit,
+                                          QtWidgets.QPlainTextEdit, QtWidgets.QAbstractSpinBox)):
+                        return
+                    focus = focus.parentWidget()
+                if redo_key or modifiers == ctrl | shift:
+                    self.app.geo_editor.redo()
+                else:
+                    self.app.geo_editor.undo()
+                return
             # CTRL
             if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier:
                 # save (update) the current geometry and return to the App
@@ -3612,47 +3708,46 @@ class MainGUI(QtWidgets.QMainWindow):
                 # Finish the current action. Use with tools that do not
                 # complete automatically, like a polygon or path.
                 if key == QtCore.Qt.Key.Key_Enter or key == 'Enter' or key == QtCore.Qt.Key.Key_Return:
+                    if AppGeoEditor.reject_busy(self.app.geo_editor):
+                        return 'fail'
                     if isinstance(self.app.geo_editor.active_tool, FCShapeTool):
+                        tool = self.app.geo_editor.active_tool
+                        if tool.name in ('path', 'circle', 'rectangle', 'move', 'copy'):
+                            if not getattr(tool, 'points', ()) and getattr(tool, 'origin', None) is None:
+                                self.app.inform.emit('[WARNING_NOTCL] %s' %
+                                                     _("Click on the first construction or reference point before Enter."))
+                                return 'fail'
+                            if tool.name != 'path' or tool.path_tool.length != 0.0:
+                                response = tool.on_key(key)
+                                if response is not None and response != 'fail':
+                                    self.app.inform.emit(response)
+                                return response
                         if self.app.geo_editor.active_tool.name == 'rotate':
-                            self.app.geo_editor.active_tool.make()
+                            if self.app.geo_editor.active_tool.make() == 'fail':
+                                return 'fail'
 
                             if self.app.geo_editor.active_tool.complete:
-                                self.app.geo_editor.on_shape_complete()
+                                if self.app.geo_editor.on_shape_complete() == 'fail':
+                                    return 'fail'
                                 self.app.inform.emit('[success] %s' % _("Done."))
                             # automatically make the selection tool active after completing current action
                             self.app.geo_editor.select_tool('select')
                             return
                         else:
-                            if self.app.geo_editor.active_tool.name == 'path' \
-                                    and self.app.geo_editor.active_tool.path_tool.length != 0.0:
-                                pass
-                            elif self.app.geo_editor.active_tool.name == 'polygon' \
+                            if self.app.geo_editor.active_tool.name == 'polygon' \
                                     and self.app.geo_editor.active_tool.polygon_tool.length != 0.0:
                                 pass
-                            elif self.app.geo_editor.active_tool.name == 'circle' \
-                                    and self.app.geo_editor.active_tool.circle_tool.x != 0.0 \
-                                    and self.app.geo_editor.active_tool.circle_tool.y != 0.0:
-                                pass
-                            elif self.app.geo_editor.active_tool.name == 'rectangle' \
-                                    and self.app.geo_editor.active_tool.rect_tool.length != 0.0 \
-                                    and self.app.geo_editor.active_tool.rect_tool.width != 0.0:
-                                pass
-                            elif self.app.geo_editor.active_tool.name == 'move' \
-                                    and self.app.geo_editor.active_tool.move_tool.length != 0.0 \
-                                    and self.app.geo_editor.active_tool.move_tool.width != 0.0:
-                                pass
-                            elif self.app.geo_editor.active_tool.name == 'copy' \
-                                    and self.app.geo_editor.active_tool.copy_tool.length != 0.0 \
-                                    and self.app.geo_editor.active_tool.copy_tool.width != 0.0:
-                                pass
                             else:
-                                self.app.geo_editor.active_tool.click(
-                                    self.app.geo_editor.snap(self.app.geo_editor.x, self.app.geo_editor.y))
+                                if self.app.geo_editor.active_tool.click(
+                                        self.app.geo_editor.snap(self.app.geo_editor.x, self.app.geo_editor.y)) == 'fail':
+                                    return 'fail'
 
-                                self.app.geo_editor.active_tool.make()
+                                if self.app.geo_editor.active_tool.make() == 'fail':
+                                    return 'fail'
 
                                 if self.app.geo_editor.active_tool.complete:
-                                    self.app.geo_editor.on_shape_complete()
+                                    if self.app.geo_editor.on_shape_complete() == 'fail':
+                                        return 'fail'
                                     self.app.inform.emit('[success] %s' % _("Done."))
                                 # automatically make the selection tool active after completing current action
                                 self.app.geo_editor.select_tool('select')
@@ -3663,7 +3758,8 @@ class MainGUI(QtWidgets.QMainWindow):
                     self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
 
                     self.app.geo_editor.delete_utility_geometry()
-                    self.app.geo_editor.active_tool.clean_up()
+                    if self.app.geo_editor.active_tool.name not in ('path', 'circle', 'rectangle', 'move', 'copy'):
+                        self.app.geo_editor.active_tool.clean_up()
                     self.app.geo_editor.select_tool('select')
 
                     return
@@ -3844,6 +3940,14 @@ class MainGUI(QtWidgets.QMainWindow):
                 if key == 'F3':
                     self.on_shortcut_list()
         elif self.app.call_source == 'grb_editor':
+            ctrl = QtCore.Qt.KeyboardModifier.ControlModifier
+            shift = QtCore.Qt.KeyboardModifier.ShiftModifier
+            undo_key = key in (QtCore.Qt.Key.Key_Z, 'Z')
+            redo_key = key in (QtCore.Qt.Key.Key_Y, 'Y')
+            if (modifiers == ctrl and (undo_key or redo_key)) or (modifiers == ctrl | shift and undo_key):
+                if not MainGUI.app_focus_in_text():
+                    self.app.grb_editor.redo() if redo_key or modifiers == ctrl | shift else self.app.grb_editor.undo()
+                return
             # CTRL
             if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier:
                 # Select All
@@ -4085,6 +4189,14 @@ class MainGUI(QtWidgets.QMainWindow):
                     self.on_shortcut_list()
                     return
         elif self.app.call_source == 'exc_editor':
+            ctrl = QtCore.Qt.KeyboardModifier.ControlModifier
+            shift = QtCore.Qt.KeyboardModifier.ShiftModifier
+            undo_key = key in (QtCore.Qt.Key.Key_Z, 'Z')
+            redo_key = key in (QtCore.Qt.Key.Key_Y, 'Y')
+            if (modifiers == ctrl and (undo_key or redo_key)) or (modifiers == ctrl | shift and undo_key):
+                if not MainGUI.app_focus_in_text():
+                    self.app.exc_editor.redo() if redo_key or modifiers == ctrl | shift else self.app.exc_editor.undo()
+                return
             # CTRL
             if modifiers == QtCore.Qt.KeyboardModifier.ControlModifier:
                 # Select All
@@ -5423,6 +5535,14 @@ class ShortcutsTab(QtWidgets.QWidget):
                         <td height="20"><strong>%s</strong></td>
                         <td>&nbsp;%s</td>
                     </tr>
+                    <tr height="20">
+                        <td height="20"><strong>%s</strong></td>
+                        <td>&nbsp;%s</td>
+                    </tr>
+                    <tr height="20">
+                        <td height="20"><strong>%s</strong></td>
+                        <td>&nbsp;%s</td>
+                    </tr>
                 </tbody>
             </table>
             <br>
@@ -5460,7 +5580,9 @@ class ShortcutsTab(QtWidgets.QWidget):
             _('Space'), _("Rotate Geometry"),
             _('ENTER'), _("Finish drawing for certain tools"),
             _('Esc'), _("Abort and return to Select"),
-            _('Del'), _("Delete")
+            _('Del'), _("Delete"),
+            _('T'), _("Within Draw a Path / Polygon will cycle forward through the Corner Modes"),
+            _('R'), _("Within Draw a Path / Polygon will cycle backward through the Corner Modes")
         )
 
         # EXCELLON EDITOR SHORTCUT LIST

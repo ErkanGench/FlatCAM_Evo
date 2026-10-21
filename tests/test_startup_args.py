@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
-from PyQt6 import QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 
 import appMain
 from appHandlers.appIO import appIO
@@ -261,3 +261,31 @@ class TestRunScriptQuestion:
 
         result, _seen = self._ask(app, monkeypatch, click_yes)
         assert result is True
+
+    @pytest.mark.parametrize('action', ['enter', 'escape', 'close'])
+    def test_real_dialog_dismissal(self, app, qapp, action):
+        timed_out = []
+
+        def dismiss():
+            box = qapp.activeModalWidget()
+            if action == 'close':
+                box.close()
+            else:
+                key = QtCore.Qt.Key.Key_Return if action == 'enter' else QtCore.Qt.Key.Key_Escape
+                QtTest.QTest.keyClick(box, key)
+
+        def timeout():
+            timed_out.append(True)
+            qapp.activeModalWidget().reject()
+
+        watchdog = QtCore.QTimer()
+        watchdog.setSingleShot(True)
+        watchdog.timeout.connect(timeout)
+        watchdog.start(2000)
+        QtCore.QTimer.singleShot(0, dismiss)
+        try:
+            result = appMain.App.ask_run_script_arg(app, 'C:/scripts/job.tcl')
+        finally:
+            watchdog.stop()
+        assert not timed_out, 'The dismissal did not close the confirmation dialog'
+        assert result is False

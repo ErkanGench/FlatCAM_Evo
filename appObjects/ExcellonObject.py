@@ -1202,6 +1202,19 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
         self.shapes.redraw()
         self.ui_connect()
 
+    def plot_transformed(self, matrix, kind=None):
+        """
+        Scale and skew move the drills and slots but keep the tool diameters, so the holes stay circles: only a rigid
+        transform (rotate, mirror, offset) can map the plotted shapes. Any other matrix plots the object again.
+        """
+        a, b, d, e = matrix[:4]
+        if abs(a * a + d * d - 1.0) > 1e-9 or abs(b * b + e * e - 1.0) > 1e-9 or abs(a * b + d * e) > 1e-9:
+            if self.deleted:
+                return False
+            self.plot(kind=kind) if kind is not None else self.plot()
+            return False
+        return super().plot_transformed(matrix, kind=kind)
+
     def plot(self, visible=None, kind=None):
 
         # the plot state is read from the options (the UI widgets mirror them and are not needed to plot)
