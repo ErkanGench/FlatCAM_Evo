@@ -280,6 +280,11 @@ Project Tab:
 - the context menu shows only the entries that apply to the selected objects: View Source for 1 object with a source, Edit and Save for 1 object (Batch Save for several CNCJob objects), Set Color for Gerber and Excellon objects, Enable Plot or Disable Plot by the plot state (merged PR #33 from ErkanGench)
 - fixed: the context menu entries hidden for a Script or a Document object stayed hidden for the next objects (merged PR #33 from ErkanGench)
 
+Languages:
+
+- fixed: the language names are written in their own language: Deutsch (was "Deutsche"), Português do Brasil (was "Portugues do Brasil"), Русский (began with a Latin P), Türkçe (was "Türk")
+- fixed: an unknown or unavailable language in the settings (e.g. a name written by an older version) falls back to English; before, the last language of the list was used
+
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -306,6 +311,7 @@ Tests:
 - new unit tests for the milling direction of the isolation paths and for a boundary of more than 1 area (tests/test_isolation_leftovers.py, tests/test_isolation_boundary.py)
 - new unit tests for the form of the Milling tool with the tool data of an older project (tests/test_milling_old_tool_data.py)
 - the tests hide the DeprecationWarnings of the SWIG wrappers of OR-Tools ("builtin type SwigPyPacked has no __module__ attribute")
+- new unit tests for the language names and the fall back to English (tests/test_language.py)
 
 18.10.2026
 
