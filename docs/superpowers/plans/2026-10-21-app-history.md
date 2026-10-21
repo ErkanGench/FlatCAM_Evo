@@ -795,7 +795,7 @@ class HistoryManager:
 
     def delete_objects(self, objects):
         """Delete without a confirmation and without a DeleteStep (see AppObjectOps.delete_objects_now)."""
-        self.app.obj_ops.delete_objects_now(objects)
+        self.app.object_ops.delete_objects_now(objects)
 
     def rebuild(self, state):
         """Make the object again from its state, with the same history_uid (the same path as project open)."""
@@ -822,9 +822,9 @@ class HistoryManager:
 
 - [ ] **Step 4: Check 2 names that the module uses**
 
-The class above calls 2 app functions that Task 3 adds: `app.obj_ops.delete_objects_now(objects)` and `collection.rename_object(obj, name)`. The manager tests do not call them.
+The class above calls 2 app functions that Task 3 adds: `app.object_ops.delete_objects_now(objects)` and `collection.rename_object(obj, name)`. The manager tests do not call them.
 
-Check the attribute name of the `AppObjectOps` instance on the App: `& .\.venv\Scripts\python.exe -c "import re;print(set(re.findall(r'self\.(\w+) = AppObjectOps', open('appMain.py',encoding='utf-8').read())))"`. If it is not `obj_ops`, use the real name here and in Task 3.
+Check the attribute name of the `AppObjectOps` instance on the App: `& .\.venv\Scripts\python.exe -c "import re;print(set(re.findall(r'self\.(\w+) = AppObjectOps', open('appMain.py',encoding='utf-8').read())))"`. If it is not `object_ops`, use the real name here and in Task 3.
 
 Check the import path of `LoudDict`: `& .\.venv\Scripts\python.exe -c "import re;print(re.findall(r'^from .* import .*LoudDict.*$', open('appHandlers/appIO.py',encoding='utf-8').read(), re.M))"`. Use the same import line in `rebuild`.
 
@@ -1114,7 +1114,7 @@ def test_delete_undo_rebuilds_same_uid_and_later_steps_work(fc, no_plot):
     apply_matrix_to_object(exc, m)
     fc.history.record_matrix('move', [(exc, m)])
     fc.history.record_delete('del', [exc])
-    fc.obj_ops.delete_objects_now([exc])
+    fc.object_ops.delete_objects_now([exc])
     assert fc.history.find(uid) is None
     assert fc.history.undo()                    # rebuild
     rebuilt = fc.history.find(uid)
@@ -1368,7 +1368,7 @@ A CNCJob object in these loops: wrap its call in `with self.app.history.snapshot
 Use the real name of the edited object variable in that method.
 
 - [ ] **Step 6: Tests** — append to `tests/test_app_history_app.py`:
-  - select 2 Gerber objects (`fc.collection.set_active` / the selection API used in the other tests), call `fc.obj_ops.on_flipy()`, check 1 history step, undo, both bounds back;
+  - select 2 Gerber objects (`fc.collection.set_active` / the selection API used in the other tests), call `fc.object_ops.on_flipy()`, check 1 history step, undo, both bounds back;
   - Align: `fc.align_objects_tool` with `apply_matrix_to_object` + `record_matrix` gives 1 step labelled "Align Objects";
   - after `fc.history.forget(uid)` no step touches the uid.
 

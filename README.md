@@ -76,7 +76,10 @@ The program keeps all objects of a job in 1 **project** file (`.FlatPrj`).
 - **Autolevelling** (Levelling plugin): probe the board surface and correct the Z of a CNC job.
 - **Board preparation tools**: copper thieving, robber bar, fiducials, markers, QR codes, punched pads, inverted
   Gerbers, etch compensation, film output for photo processes, design rule check.
-- **3 built-in editors** for Gerber, Excellon and Geometry objects, and a G-code editor.
+- **3 built-in editors** for Gerber, Excellon and Geometry objects, with their own Undo / Redo history, snaps,
+  vertex grips and numeric input, and a G-code editor.
+- **Undo / Redo** for each project (`Ctrl+Z`, `Ctrl+Y`): moves, transforms, alignments, deletes, renames and the
+  objects that the plugins make.
 - **Path optimization** of the drill and mill paths (Rtree, Google OR-Tools, travelling salesman).
 - **27 G-code preprocessors**: GRBL, Marlin, Repetier, MACH3-compatible controllers, Roland, ISEL, Berta, NCCAD,
   HPGL, lasers and solder paste dispensers. You can add your own.
@@ -381,8 +384,12 @@ of the object that they use.
 - **2-Sided** — Mirrors an object for the bottom side of a double-sided board. The mirror axis goes through a point,
   the center of a box object, or a hole that you pick on the canvas. It shows the bounds and the center of the
   selection, and it makes an Excellon object with alignment drills for the 2 sides of the board.
-- **Align Objects** — Moves an object so that 1 or 2 points on it fall on 1 or 2 points of another object, for
-  example to align a drill file to its copper layer.
+- **Align Objects** — Moves an object so that points on it fall on points of another object, for example to align
+  a drill file to its copper layer. The modes are 1 point, 2 points, 2 points with scale, and Best fit (3 or more
+  point pairs, with the Rigid, Similarity or Affine model and the error of each pair). A click snaps to the nearest
+  pad, drill or vertex. The Auto mode finds the rotation and the offset that put the most holes inside the pads,
+  without clicks, and can also test the mirrored object. Gerber, Excellon and Geometry objects can be aligned. An
+  alignment is 1 step of the Undo / Redo history.
 - **Panelize PCB** — Makes a panel: a grid of copies of a Gerber, Excellon or Geometry object, with a number of
   columns and rows and the spacing between them. The copy size comes from the object or from the bounding box of
   another object. The panel can be limited to a maximum width and height (it then has fewer copies). A Gerber or
@@ -439,8 +446,18 @@ of the object that they use.
 
 - **Transformation** (Options menu, `Alt+T`) — Rotates, skews, scales, mirrors, offsets and buffers the selected
   objects, about the origin, the selection, a point or another object. A Gerber keeps its aperture sizes in
-  agreement with the new geometry where this is possible.
+  agreement with the new geometry where this is possible. Each action is 1 Undo step for all the selected objects.
 - **Move** (Edit menu, `M`) — Moves the selected objects with 2 clicks: a start point and an end point.
+
+### Undo and Redo
+
+Each project has its own Undo / Redo history: **Edit > Undo** (`Ctrl+Z`) and **Edit > Redo** (`Ctrl+Y` or
+`Ctrl+Shift+Z`), and 2 buttons in the custom title bar. The menu items show the name of the next step. The history
+records the Move tool, the Transformation plugin, the Edit menu transforms (flip, rotate, skew, origin), Align
+Objects, the in-place changes of the plugins, and the create, delete and rename of objects. An editor session is 1
+step. The history does not record Tcl commands, the headless mode, the project open and the changes of the
+parameter fields. Preferences > General > App Settings sets the number of steps (default 100) and the memory limit
+(default 256 MB). The history is not saved in the project file.
 
 ### Import plugins (File > Import)
 
@@ -460,17 +477,30 @@ of the object that they use.
 ## Editors
 
 Select an object and click the editor button in its Properties, or use **Edit > Edit Object** (`E`). Click the
-button again to save the changes into the object. An editor menu appears in the menu bar while an editor is open.
+button again to finish. An editor menu appears in the menu bar while an editor is open. At the exit, **Save**
+updates the object in place (1 step of the app history), and **Save as New** keeps the object and makes a new
+`_edit` object.
 
-- **Gerber Editor** — Pad, pad array, track and region tools; polygonize, semi-disc and disc shapes; buffer,
-  simplify, scale, mark an area, eraser and transformation; select, move and copy. New pads and tracks use the
-  aperture that you select in the aperture table. An object with clear (negative) features is loaded as its final
+Each editor has its own Undo / Redo history (buttons and a history list in the side panel, `Ctrl+Z`, `Ctrl+Y`).
+A step keeps only the changed shapes, so the history stays small on a large board.
+
+- **Gerber Editor** — Pad, pad array, track and region tools with 5 corner modes and arc modes; Rectangle Region
+  and Text Regions with typed values; polygonize, semi-disc and disc shapes; buffer, simplify, scale, mark an area,
+  eraser and transformation; select, move and copy. Vertex grips, arc grips and an Edit vertices dialog; move a
+  track bend; split and join FOLLOW paths; resize circular flashes; select and delete by size; a Features list;
+  snaps to the FOLLOW endpoints, bends, midpoints and segments; a read-only inspection of the selected geometry.
+  New pads and tracks use the aperture that you select in the aperture table. An object with clear (negative)
+  features is loaded as its final geometry.
+- **Excellon Editor** — Drill, drill array, slot and slot array tools; resize drills; copy, move and delete;
+  rotate, mirror, scale and offset of the selected features; edit or drag the endpoints of a slot; filter, select
+  and delete by type, diameter and size; a read-only inspection; a second click at the same place selects the next
+  stacked drill. Each tool works with the diameter that you select in the tool table.
+- **Geometry Editor** — Circle, arc, rectangle, polygon, path and text tools (5 corner modes for path and polygon);
+  union, intersection, subtraction and cut path operations; buffer, simplify, paint and transformation; copy, move
+  and delete; Import of shapes from other objects; Select by Size; Resize Circles; vertex grips and arc grips on the
+  selected shape; Edit vertices; Split path and Join paths; a read-only inspection of the selected geometry; snap to
+  the grid, to corners, to segment midpoints and to the nearest segment. A save also writes a DXF source of the
   geometry.
-- **Excellon Editor** — Drill, drill array, slot and slot array tools; resize drills; copy, move and delete.
-  Each tool works with the diameter that you select in the tool table.
-- **Geometry Editor** — Circle, arc, rectangle, polygon, path and text tools; union, intersection, subtraction and
-  cut path operations; buffer, simplify, paint and transformation; copy, move and delete; snap to the grid and to
-  corners.
 - **G-code Editor** — Opens the G-code of a CNCJob object as text, so that you can change it before you save it.
 
 ---
@@ -713,15 +743,19 @@ There are 75 commands. Some have short aliases, for example `bbox`, `ncc`, `pan`
 - Project objects: [`appObjects`](appObjects). Plugins: [`appPlugins`](appPlugins). Editors: [`appEditors`](appEditors).
 - Tcl commands: [`tclCommands`](tclCommands). Preprocessors: [`preprocessors`](preprocessors).
 - User interface: [`appGUI`](appGUI). File input and output: [`appHandlers/appIO.py`](appHandlers/appIO.py).
+- App Undo / Redo history: [`appHandlers/appHistory.py`](appHandlers/appHistory.py). A plugin records a change with
+  `history_of(app).record_matrix()`, `snapshot()` or `group()`; `new_object()` records new objects.
 
 ### Run the tests
 
 The tests use `pytest` and run without a display:
 
 ```bash
-python -m pip install pytest
-python -m pytest tests -q
+python -m pip install pytest pytest-xdist
+python -m pytest tests -q -n 8 --dist loadfile
 ```
+
+Without `pytest-xdist`, omit `-n 8 --dist loadfile` (1 process, about 10 minutes).
 
 [`tests/README_gates.md`](tests/README_gates.md) describes the test areas and the faster subsets.
 

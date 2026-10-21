@@ -13,6 +13,54 @@ Security:
 - fixed: a file given to FlatCAM on the command line (a double-click on an associated file, or a file sent by a second launch) got its type from a text found anywhere in its path, so 'top_copper.tcl.gtl' (a Gerber for Windows) or a file in a folder named 'board.tcl' was run as a Tcl script without a question; the type now comes from the last extension only, and quit, exit and save are commands only as the whole argument (a path with 'exit' in it closed the application, one with 'save' in it saved the preferences and opened nothing)
 - a Tcl script (.tcl, .FlatScript) given as a file to open is opened in the Code Editor and runs only after a Yes to "Run this script?" (the default answer is No); --shellfile and the headless runs still run their script without a question
 
+Undo / Redo:
+
+- new Undo / Redo history for each project, outside the editors (the editors keep their own): Edit menu (the items show the next step), 2 buttons in the custom title bar before the main menu button, Ctrl+Z = Undo, Ctrl+Shift+Z and Ctrl+Y = Redo; the keys do nothing when the focus is in a text or number field
+- recorded: Align Objects, the Move tool (1 step for all the moved objects), the Transform plugin (1 step for each action on all the selected objects; Buffer as a snapshot), the Edit menu Flip X / Flip Y, Rotate, Skew X / Skew Y, Set Origin, Move to Origin, Custom Origin, the Offset and Scale buttons of the object Properties, object delete, object create (a tool result or a file import) and rename
+- the affine changes keep only the matrix (Undo applies the inverse); the other changes keep the old state with the Shapely geometries shared, not copied; Undo of a delete makes the object again with the same history id, so the older steps of that object still work
+- limits for each project in Preferences > General > App Settings: "Undo steps" (default 100) and "Undo memory (MB)" (default 256); the oldest steps go first
+- not recorded: Tcl commands, the headless mode and the project open; an editor save drops the steps of the edited object; Undo / Redo wait while a task runs and are off while an editor is open
+- the history is not saved in the project file
+- Exit Editor (Geometry, Gerber, Excellon): "Save" updates the edited object in place (same name, place in the project and options; the Excellon tools keep their data) and is 1 Edit step in the history; "Save as New" leaves the object as it was and makes a new "_edit" object
+
+Align Objects Plugin:
+
+- moved to the MVC pattern: appPlugins/ToolAlignObjects/ (Align.py, AlignUI.py, AlignGen.py)
+- a click snaps through an STRtree index of the features (it was a Python loop over all features for each click); 1 click gives at most 1 point: the smallest feature under the click. Gerber flashes snap to the flash point, drills to the drill point, slots to the slot middle; if no feature is under the click, the point snaps to the nearest vertex within 10 pixels
+- Geometry objects can be aligned and can be the aligner (snap to vertices)
+- new modes: 2 points + scale (rotate, move and uniform scale) and Best fit (3 or more pairs, least squares) with the Rigid, Similarity or Affine model; a table shows the pairs and the error of each pair, and the RMS and maximum error show after the alignment
+- the alignment is 1 affine matrix applied 1 time (it was an offset and then a rotate); only the aligned object is plotted again (it was plot_all())
+- markers for the clicked points and a line for each pair; Backspace removes the last point, Enter applies the Best fit, Esc or a right click cancels
+- the alignments are steps of the app Undo / Redo history (the plugin has no Undo / Redo of its own)
+- new Auto mode: "Find" searches the rotation and the translation that put the most holes (or pads) of the aligned object inside the pads (or holes) of the aligner object; no clicks are needed. A histogram of the nearest neighbor angles gives the rotation, a vote of the offsets gives the translation, then an ICP refine with the selected fit model. "Allow mirror" also tests the mirrored object (bottom layer). The search runs in a worker thread; the result shows "matched / total", RMS and the pairs as markers before "Apply". If another solution has almost the same score (a symmetric pattern), a warning shows and "Next candidate" shows the other solutions. A board with about 2700 pads: about 1 s
+- fixed: the rotation angle used atan and was wrong by 180 degrees for some point pairs; the rotation was skipped if only the X or only the Y coordinates were equal; a vertical pair raised a division by zero that was hidden
+- fixed: overlapping pads or drills added 2 or more points for 1 click
+
+Geometry Editor - vertex grips:
+
+- in the Select tool, 1 selected shape shows grips on its vertices (filled squares) and on the middle of its segments (small hollow squares)
+- drag a vertex grip to move the vertex; drag a midpoint grip to insert a vertex; Ctrl+click a vertex grip to remove the vertex; Esc or the right mouse button cancels the drag
+- works on all rings (the exterior and the holes) and on multipart shapes; grid snap and corner snap apply during the drag
+- the preview is red if the result is not valid; the release then leaves the shape as it was and tells the reason; if red is near an editor color, the opposite color is used (the same rule for the orange grips)
+- each drag is 1 Undo step; shapes with more than 5000 vertices get no grips (use Edit vertices)
+- Edit vertices dialog: new Part and Ring fields, so the dialog also edits holes and multipart shapes
+- rounded corners and other arcs (found from the vertices: at least 3 equal segments with the same turn) show 3 grips: begin, middle (a diamond) and end, and no grips on their inner vertices; drag the middle grip to bend the arc; drag the begin or end grip to move that end (the arc stays through its middle point); Ctrl+click the middle grip to make the arc a straight segment; a full circle shows 4 radius grips; a new arc uses the "Circle steps" of the Geometry preferences; Explode and Edit vertices still use all the vertices
+- with the grid on, a press takes the nearest grip within 1 grid step, so a vertex that is not on the grid can be picked with the snapped cursor
+
+Transformation Plugin:
+
+- rotate, mirror, skew, scale and offset of Gerber, Excellon, Geometry and CNCJob objects transform all the geometry (and all the Gerber apertures) in 1 vectorized call; they called shapely.affinity once for each shape and updated the progress once for each shape. eagle.GTL rotate 0.36 s to 0.12 s, scale 0.54 s to 0.07 s; 20000 Geometry polygons rotate 0.39 s to 0.03 s; Excellon with 20000 drills and 2000 slots rotate 1.22 s to 0.27 s, skew 2.52 s to 0.59 s
+- the Excellon drill and slot shapes are made with 1 vectorized buffer for each tool
+- the plot after rotate, mirror, skew, scale and offset maps the vertices that are already on the canvas (no new triangulation); 20000 polygons: 2.47 s to 0.12 s. Excellon scale and skew plot again, because the holes keep their diameter
+- bounds() of Gerber, Excellon and Geometry objects is 1 vectorized call (about 5x faster); the plugin computes the bounds 1 time for each object (it was 2 or 3 times)
+- 1 message for each action (not 1 for each object); a failure on 1 object does not stop the other objects, and the final message names the objects that failed; the CNCJob objects are skipped
+- fixed: the 'Object' reference with a missing object raised an exception
+- the shutdown no longer prints "QItemSelectionModel: Selecting when no model has been set" for the views that Qt destroys after their models
+
+Canvas:
+
+- the X axis keeps only the space for the ticks, the labels and a small gap (the height follows the font size and does not change on resize); the outer margin of 10 pixels is removed and the right gap is 8 pixels, so the plot area is larger
+
 Milling:
 
 - fixed: a tool with a Cut Z of 0 and a non-laser preprocessor showed the "Cut Z is zero" warning and then an internal error ('too many values to unpack'); the job now fails cleanly and no CNC job is made; same fix for the Geometry object CNC job (issue #40 reported by ErkanGench)
@@ -20,7 +68,34 @@ Milling:
 
 Drilling:
 
-- fixed: with a laser preprocessor (GRBL_laser, GRBL_laser_z, default_laser, Marlin_laser_*) the G-code turned the laser on before the travel to the first hole of each tool, so the move from the start or the tool change position to the first hole was made with the laser on; on a controller without the GRBL laser mode this burns a line across the board; the laser is now off for every travel and on only at the holes, like the Tcl drillcncjob command and the Milling tool; the G-code of the other preprocessors does not change
+- fixed: with a laser preprocessor (GRBL_laser, GRBL_laser_z, default_laser, Marlin_laser_*) the G-code used full drilling power before the travel to the first hole of each tool; on a controller without the GRBL laser mode this burns a line across the board; the laser now uses the preprocessor's lift code for travel (the configured minimum power, or off when minimum power is zero) and drilling power only at the holes, like the Tcl drillcncjob command and the Milling tool; the G-code of the other preprocessors does not change
+
+Gerber Editor:
+
+- the Transform tool (rotate, flip, skew, scale, offset, buffer) changes all the selected shapes in 1 vectorized call for each geometry kind and plots only the changed shapes; the affine actions map the vertices already on the canvas (no new triangulation); 2000 pads rotate: 125 ms to 52 ms without the plot
+- the reference point of the selection is 1 vectorized bounds call
+- fixed: the buffer by factor scaled the 'follow' and 'clear' geometry about the center of the already scaled 'solid'; the Y offset and Y skew keys did the X offset and X skew; the Skew Y button did nothing; a transform did not mark the edited object as changed
+- removed the second copy of the Transform tool from the editor module; the editor uses the plugin in grb_plugins (same layout as the Geometry Editor Transform tool)
+- the corner modes of Track and Region use the real distances (not the rounded grid steps), so a point off the grid gets an exact 45 or 90 degrees corner; the modes also work with the grid snap off
+- fixed: in the corner modes 1 and 2 an exact diagonal move kept the corner of a previous mouse position, so Region added a wrong vertex; Region added the same vertex 2 times on a horizontal or vertical segment; Track added a segment of zero length in the modes 3 and 4
+- fixed: Backspace in Region always removed 2 points (now it removes the points of the last click); Backspace in Track did not remove the last segment; Region and Track always showed "Corner Mode 1" at the start
+- new history of the editor ("Undo" and "Redo" buttons in the side panel; the labels show the step name; also from the menu, the toolbar and the keys): a step keeps only the changed records and the aperture data, not a copy of the board; 1 user action is 1 step (delete, add and edit aperture, draw, move, copy, erase, import, scale, buffer, simplify, polygonize and track edits); a failed action leaves no partial edit; the memory of the history has a limit
+- new snaps on the FOLLOW lines (not on the solid outline): endpoint / bend, flash center, grid, and the new "FOLLOW midpoint snap" and "Nearest FOLLOW segment snap"; "Snap radius (px)" sets the pick distance; the "Snap:" label shows the active snap
+- new "Features" list: it selects single records and follows the canvas selection
+- new "Select by Size" (Width, Height, Solid area, FOLLOW length, Tolerance) searches the whole board; "Delete by Size" acts on the selection if there is one, else on the whole board; 1 Undo step (Undo also gives back the apertures); an invalid value keeps the selection
+- Simplify of the selected shapes runs in the worker and writes all the shapes in 1 step on the GUI thread; the components, the aperture data and the selection are kept; the whole batch is refused if the tolerance is invalid, the geometry fails or the board changed during the work
+- new FOLLOW operations that keep the circular sweep: "Split path" (click on a path; the width and the order are kept) and "Join paths" (paths with the same endpoints and the same width); a branch, an overlap or a gap is refused
+- new "Resize" for the selected circular flashes: a matching aperture is used again, else a new aperture is made; a shared aperture does not change; 1 Undo step
+- new "Move Track Bend": drag a bend of a track with a circular aperture; the neighbor bends stay; the width and the aperture are kept; the destination snaps; Esc or a tool change cancels the preview; a bend that makes the track invalid is refused
+- new "Rectangle Region" and "Text Regions" (typed values): they make region material, not aperture sweeps; the rectangle has an anchor (center or 1 of 4 corners), square, round or bevel corners, a corner radius and a rotation; the text uses the font outlines with holes, a size in points and a rotation; 1 Undo step
+- new arc modes for Track and Region, with preview and Undo; unsupported apertures and repeated or collinear points are refused
+- the region operations (union, intersection, difference with "Difference (Keep Cutters)", explode) and Import plot only the changed records and keep holes, islands and the other records; Import takes polygons, multi-geometry, closed outlines and open paths and refuses the whole batch if 1 shape is invalid
+- vertex grips and arc grips on the canvas for 1 selected shape (like the Geometry Editor), and the "Edit vertices" dialog (Part, Ring, Vertex / segment index; Move, Insert, Remove): a region edits its solid (ring 0 is the exterior, the next rings are holes); a track edits its FOLLOW line and the solid is made again with the same width; a flashed pad has no vertices; 1 Undo step
+- new "Inspect selected geometry" (read-only) for the Solid, Follow or Clear component with an "Endpoint tolerance": it counts missing, empty, zero-length, duplicate, invalid and open records and near endpoint pairs; open FOLLOW paths are not errors
+- fixed: decorated Qt slots (the edit tool, Scale) failed with a TypeError because Qt sends extra signal arguments; Scale from the menu did not start; Scale removed more canvas click connections than its own
+- fixed: a move of a round FOLLOW pad marked the regions for export; the aperture table signal was connected again after an error; a failed import left the object hidden; the lists of marked shapes stayed after a delete
+- fixed: translations and reshapes were not in the history; Scale and Buffer with no selected shape made an empty step; a buffer factor of 0 or less was accepted; a non-numeric aperture key broke the aperture codes; the intersection of separate shapes removed the source shapes; update_ui with zoom off moved the camera
+- fixed: the editor, the save and the selection refuse changes while a worker runs; a result of an old revision or a closed session is ignored; the exit of a busy editor is refused before the dialog; save and load results are applied on the GUI thread only
 
 Geometry Editor:
 
@@ -37,6 +112,18 @@ Geometry Editor:
 - fixed: Subtract with an open path as a tool used the previous tool geometry; the Buffer sub tool failed on a MultiLineString and used the old Shapely 'resolution' argument; Change Orientation skipped the LinearRing shapes and lost the shape data
 - fixed: Move and Copy dropped the z coordinate of 3D shapes (translate_geometry)
 - the Circle, Rectangle and Move tools select the shape under the click with 1 index query (they made 1 query for each shape)
+- new corner modes for the Path and Polygon tools (from the Gerber Editor Track and Region): 1 = 45 degrees, 2 = reverse 45 degrees, 3 = 90 degrees, 4 = reverse 90 degrees, 5 = free angle (the default); T = next mode, R = previous mode; Backspace removes all the points of the last click. The corner math is shared with the Gerber Editor (appEditors/editor_corner.py)
+- new "Select by Size" in the side panel: a Min / Max area for the polygons and a Min / Max length for the lines; "Select" makes the matches the selection, "Delete" deletes them (1 Undo step); it searches the selected shapes, or all the shapes if nothing is selected
+- new Import tool (toolbar and menu): a click picks the shapes of other visible Geometry, Gerber and Excellon objects, a drag picks by area, a right click or Enter copies them into the edited object (1 Undo step), Esc cancels
+- new "Resize Circles" in the side panel: the selected circles get the new diameter about their own center (type and vertex count are kept); the other shapes are skipped; 1 Undo step
+- the editor Undo / Redo records each finished operation as 1 step with only the added, removed and changed shapes (a boolean of many shapes is 1 step; a preview makes no step; a new edit clears the Redo steps); the side panel has Undo and Redo buttons and a History list that goes to any state; Ctrl+Z = Undo, Ctrl+Shift+Z and Ctrl+Y = Redo (not when the focus is in a text field); the history starts again with each edit session
+- the Path, Polygon, Circle, Rectangle, Move and Copy tools check the typed and clicked values: Enter before the first point, a zero length or a value that is not a finite number shows a message that tells what to correct and adds no shape; Esc removes the preview and leaves the shapes as they were; Backspace removes only construction points
+- new "Midpoint snap" and "Nearest segment snap" in the side panel, with an "Acquisition (px)" distance on the screen (it needs the grid snap on); the closest candidate wins (equal distances: corner, midpoint, segment, grid) and a label shows the active snap; curves are straight segments for the snap (no exact centers or tangents)
+- new "Edit vertices" button: move, insert or remove 1 vertex of 1 selected contour with typed X and Y values; the ring stays closed and the holes are kept; a removal below the minimum number of points is refused; 1 Undo step
+- new "Split path": select 1 open path and click inside it; the path becomes 2 paths at the projected point; a click near an endpoint or outside the "Split tolerance" is refused; 1 Undo step
+- new "Join paths": the selected open paths with endpoints within the "Join tolerance" become 1 path; a gap gets a straight bridge (no vertex moves); branching or ambiguous endpoints are refused; separate groups stay separate; 1 Undo step
+- new "Inspect selected geometry": a read-only report of the selected shapes: zero-length paths, duplicate paths (also reversed), invalid or self-intersecting shapes, open paths and endpoints nearer than the "Endpoint tolerance"; nothing is repaired
+- a save of the editor also makes a DXF source of the saved geometry (the object source); a failed DXF export keeps the previous source and tells that it is old; sampled arcs stay polylines in the DXF
 
 CNCJob:
 
@@ -46,24 +133,59 @@ CNCJob:
 - the R-tree storages are bulk loaded from NumPy arrays (insert_many(), new_rtree_index(points=..., boxes=...)): clearing, paint, connect, cleanup order, solder paste, panelize and the Excellon editor; about 3 times faster than an insert for each object
 - fixed: exclusion areas: a travel move that started or ended inside an area grown by the tool radius and 0.1 mm went straight through the area at the travel Z, so the tool could hit the clamp the area was drawn for; a travel that crossed an area failed with an internal error ('MultiPoint' object is not iterable, Shapely 2); now the tool rises before the move ('Over') or goes around the area ('Around'; a travel that starts or ends inside an 'Around' area fails with a message); the areas are avoided in the order the travel enters them
 - fixed: the drill point checks of the Drilling tool and of the Tcl drillcncjob used only the tool radius; they use the same grown areas as the travel moves, so a drill in the 0.1 mm margin is refused and no travel starts or ends inside an area
+- fixed: every leg of an 'Around' detour avoids all the grown 'Around' areas, including overlapping ones; 'Over' clearance is checked on the detour legs too, and overlapping travel intervals keep the highest Over Z until all their areas are cleared; an enclosed travel with no way out fails with a message
 
 Preferences:
 
-- fixed: a restart (Apply Language, Apply font size, Preferences -> Save with a new appearance, style, dark canvas or title bar, the icon color) killed the project save that the user had just confirmed: the save ran in a worker thread and os.execl() replaced the process at once, so the project file was not written; the projects are now saved in the GUI thread before the restart, the same way as on exit (each project with changes is asked about: Yes / No / Cancel)
-- fixed: a cancelled Save As dialog, a failed save or a save that is still running (File -> Save, Save As) no longer restart the app; the setting is applied at the next start and the app goes on as it was
+- fixed: a restart (Apply Language, Apply font size, Preferences -> Save with a new appearance, style, dark canvas or title bar, the icon color) killed the project save that the user had just confirmed: the save ran in a worker thread and os.execl() replaced the process at once, so the project file was not written; the projects are now saved in the GUI thread before the restart, the same way as on exit (each project with changes is asked about: Yes / No / Cancel) (merged PR #43 from ErkanGench)
+- fixed: a cancelled Save As dialog, a failed save or a save that is still running (File -> Save, Save As) no longer restart the app; the setting is applied at the next start and the app goes on as it was (merged PR #43 from ErkanGench)
+- a restart also waits for a Geometry Editor save that still runs; with an open editor or a running task, a project with changes is not asked about and the app does not restart (the message tells the reason)
+
+Languages:
+
+- fixed: the language names are written in their own language: Deutsch (was "Deutsche"), Português do Brasil (was "Portugues do Brasil"), Русский (began with a Latin P), Türkçe (was "Türk") (merged PR #26 from ErkanGench)
+- fixed: an unknown or unavailable language in the settings (e.g. a name written by an older version) falls back to English; before, the last language of the list was used (merged PR #26 from ErkanGench)
+- the fall back to English also writes English into the settings; before, Apply of English in Preferences compared with the old name and asked for a restart
+- reviewed translations for all 9 languages: fuzzy entries (never shown) confirmed or corrected, missing texts translated, format errors and wrong translations corrected (de 1486, es 1042, fr 1305, it 894, pt_BR 574, ro 924, ru 1353, tr 1097, zh 1009 entries); each entry carries a "# auto-review 2026-10-09" comment and is listed for the translators in docs/translation_review/ (merged PR #39 from ErkanGench)
+- the string template and the catalogs are updated from the current code: 3943 strings, 192 new strings untranslated, 2 old translations used again
+- fixed: the fuzzy translation of "The laser power when the laser is travelling." had the text of the probe feedrate (de, fr, it, ru, zh); it is now translated
+- the 635 untranslated texts of each language are translated (machine translation, reviewed by a second model, checked with scripts/i18n_tool.py) and the fuzzy "Calibration" entry is corrected (de, fr, ru) or confirmed (pt_BR); all 9 languages are now 100 % translated; each entry carries a "# auto-review 2026-10-21" comment and needs a native translator's approval
 
 Excellon Editor:
 
 - fixed: the save of the editor gave a new slot diameter the tool number after the last matching tool, so it could overwrite an existing drill tool (drills 0.8 / 1.0 / 3.2 mm and slots 1.0 / 1.5 mm: the 3.2 mm tool became a 1.5 mm tool with the 3.2 mm holes in it); a new slot diameter now gets a new tool number after the highest one
 - fixed: the save of the editor made the tools with only slots without the 'drills' key and the tools with only drills without the 'slots' key, so the Excellon export (and the object source) of an object with slots failed with KeyError: 'slots' and the Tcl drillcncjob failed on a tool with only slots; every saved tool now has both lists, like a tool of a parsed Excellon file
+- new history of the editor: the editor keeps its own Undo and Redo list (Ctrl+Z, Ctrl+Shift+Z, Ctrl+Y; the text fields keep their own text undo); each operation is 1 step and keeps only the changed drills and slots, not a copy of the whole board; a failed operation goes back to the old tools, counters, geometry and order; an operation that changes nothing adds no step and does not mark the editor as changed; a click on a row of the history list goes to that step
+- the editor draws only what changed: select, deselect and local edits keep the canvas buffers of the unchanged drills and slots; the inspector keeps its measurements and table rows until the storage or the filter changes
+- the editor snaps to a local cached index of its own drills, slots and endpoints (not the Geometry Editor storage); the index follows add, delete, Undo and Redo; the grid snap keeps its priority
+- new "Feature selection / filters": filter the drills and slots by type, diameter range, slot length range and bounds, also for the selected features only; "Select matches" selects the result; "Delete matches" deletes it in 1 Undo step; a bad filter value changes nothing
+- new "Feature diagnostics / inspection": a read-only list of the features with a "Tolerance" value; a slot shows its length, orientation and endpoints; empty, invalid and zero-length slots are marked
+- new "Transform selected features": "Rotate", "Mirror X", "Mirror Y" and "Uniform scale (positions and diameters)" about the origin, the selection center or a point; the slot endpoints are kept (no polygon estimates); a scale that gives a new diameter moves those features to a new tool; the menu, the toolbar and the panel use the same operation; 1 Undo step
+- new "Offset selected features" ("Offset X", "Offset Y"): the selected drills and slots move by the typed values; the diameters stay; 1 Undo step; a zero or invalid offset adds no step
+- new click-select cycling: a second click at the same place selects the next stacked drill (A, B, A, ...); a drill on a slot comes before the slot; a click at another place starts again at the first one; a click on an empty canvas clears the selection; the tool table selects the row of the selected feature
+- new slots keep their start and stop points: "Add Slot", the linear and circular slot arrays, Copy and Move keep the slot endpoints and rotate them with the geometry; save and load keep the endpoints in the document units and in the export units
+- new "Edit slot endpoints" (Start X / Start Y / Stop X / Stop Y, "Apply endpoints") and "Drag endpoint" on the canvas: move 1 end of a selected slot; the width and the other end stay; the drag shows a preview, snaps to the grid and Esc cancels it; 1 Undo step
+- the save and the other long jobs of the editor have a reservation: a late result of an old job does not change a new editor session; an edit or a second Save waits while a save runs; a failed job frees the editor; a save refuses a feature that is not a circle or a slot before it changes the object
+- fixed: the editor applied the units factor (x25.4) again for an object in inches when the app used mm; load and then save now give the same file
+- fixed: after New Project the editor had each menu action 2 times
+- fixed: the tool table was not sorted after Scale and the next added drill did not select its row; the diameter of an added or edited tool is rounded to the decimals of the app; a tool add with a bad diameter changes nothing
+- fixed: the history label of a Move was the generic one; an Undo or Redo that changed only the selection did not update the canvas; the feature table shows the translated type names; the diagnostics tolerance follows the current units; the corner snap button is hidden when the editor starts
 
 Tests:
 
 - new unit tests for the exclusion area travel moves and drill point checks (tests/test_exclusion_area_travel.py)
-- new unit tests for the project save before a restart (tests/test_restart_project_save.py)
+- new unit tests for the project save before a restart (tests/test_restart_project_save.py) (merged PR #43 from ErkanGench)
+- new unit tests for the language names and the fall back to English (tests/test_language.py) (merged PR #26 from ErkanGench)
 - new unit tests for the type of a file given on the command line and for the question before a script given this way runs (tests/test_startup_args.py)
 - new unit tests for the tool numbers and the tool keys of the Excellon Editor save, with the Excellon export and the drillcncjob of the saved object (tests/test_exc_editor_slot_tools.py)
 - new unit tests for the laser state during the travels of a Drilling job with a laser preprocessor (tests/test_laser_drill_travel.py)
+- new unit tests for the app Undo / Redo history (tests/test_app_history*.py, tests/test_history_recovery.py, tests/test_history_gerber_export.py, tests/test_editor_save_modes.py)
+- new unit tests for Align Objects (tests/test_align_objects.py, tests/test_align_apply.py, tests/test_align_auto.py)
+- new unit tests for the vectorized transforms, bounds and plot (tests/test_affine_geometry.py, tests/test_geometry_transforms.py, tests/test_gerber_transforms.py, tests/test_excellon_transforms.py, tests/test_bounds_vectorized.py, tests/test_shape_transform.py, tests/test_tool_transform.py, tests/test_grb_editor_transform.py)
+- new unit tests for the Geometry Editor: history, input checks, snaps, vertex edit, split, join, diagnostics, DXF source, corner modes, Select by Size, Import, Resize Circles and vertex grips (tests/test_geo_editor_*.py, tests/test_editor_corner.py, tests/test_vertex_ops.py, tests/test_vertex_grips.py)
+- new unit tests for the Gerber Editor: history, snaps, feature selection, size select and delete, simplify, FOLLOW split / join / resize, track bend, typed drawing, region rendering, action parity, vertex edit and the defect fixes (tests/test_gerber_editor_*.py, tests/test_gerber_follow_ops.py, tests/test_gerber_track_bend.py, tests/test_gerber_drawing.py, tests/test_gerber_region_delta.py, tests/test_gerber_action_parity.py)
+- new unit tests for the Excellon Editor: defect fixes, history, click select and Offset, render cache, snaps, workers, feature filters, selected transforms, slot creation and slot endpoints (tests/test_exc_editor_*.py, tests/test_exc_feature_filters.py, tests/test_exc_selected_transforms.py, tests/test_exc_slot_creation.py, tests/test_exc_slot_endpoints.py)
+- new unit tests for the canvas axis layout (tests/test_canvas_layout.py)
 
 20.10.2026
 
@@ -309,11 +431,6 @@ Project Tab:
 - the context menu shows only the entries that apply to the selected objects: View Source for 1 object with a source, Edit and Save for 1 object (Batch Save for several CNCJob objects), Set Color for Gerber and Excellon objects, Enable Plot or Disable Plot by the plot state (merged PR #33 from ErkanGench)
 - fixed: the context menu entries hidden for a Script or a Document object stayed hidden for the next objects (merged PR #33 from ErkanGench)
 
-Languages:
-
-- fixed: the language names are written in their own language: Deutsch (was "Deutsche"), Português do Brasil (was "Portugues do Brasil"), Русский (began with a Latin P), Türkçe (was "Türk")
-- fixed: an unknown or unavailable language in the settings (e.g. a name written by an older version) falls back to English; before, the last language of the list was used
-
 Tests:
 
 - new unit tests for the DXF importer (tests/test_dxf_import.py) and the SVG importer (tests/test_svg_import.py); the image tests use the new SVG importer
@@ -340,7 +457,6 @@ Tests:
 - new unit tests for the milling direction of the isolation paths and for a boundary of more than 1 area (tests/test_isolation_leftovers.py, tests/test_isolation_boundary.py)
 - new unit tests for the form of the Milling tool with the tool data of an older project (tests/test_milling_old_tool_data.py)
 - the tests hide the DeprecationWarnings of the SWIG wrappers of OR-Tools ("builtin type SwigPyPacked has no __module__ attribute")
-- new unit tests for the language names and the fall back to English (tests/test_language.py)
 
 18.10.2026
 
