@@ -4560,12 +4560,16 @@ class CNCjob(Geometry):
 
         # check if there are drill points in the exclusion areas.
         # If we find any within the exclusion areas return 'fail'
-        # The drill touches the area if the distance from its center is not more than the tool radius. This is exact;
-        # a polygonal circle (a buffer) is inside the true circle and can miss a touch.
+        # The areas are grown as for the travel lines, by the tool radius and a little more: a drill point inside a
+        # grown area would start or end a travel inside it. Testing the point against the grown area checks the true
+        # circle of the tool (a polygonal circle, a buffer, around the point is inside the true circle and can miss a
+        # touch).
         for tool in points:
+            grown_areas = [self.app.exc_areas.grown_shape(area['shape'], self.exc_tools[tool]['tooldia'])
+                           for area in self.app.exc_areas.exclusion_areas_storage]
             for pt in points[tool]:
-                for area in self.app.exc_areas.exclusion_areas_storage:
-                    if pt.distance(area['shape']) <= self.exc_tools[tool]['tooldia'] / 2.0:
+                for grown in grown_areas:
+                    if grown.intersects(pt):
                         self.app.inform.emit("[ERROR_NOTCL] %s" % _("Failed. Drill points inside the exclusion zones."))
                         return 'fail'
 

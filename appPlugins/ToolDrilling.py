@@ -1978,10 +1978,13 @@ class ToolDrilling(Geometry, AppTool):
         if excellon_tools is None:
             excellon_tools = self.excellon_tools
         for tool_key in points:
+            # the areas grown as for the travel lines: a drill point inside a grown area would start or end a travel
+            # inside it
+            grown_areas = [self.app.exc_areas.grown_shape(area['shape'], excellon_tools[tool_key]['tooldia'])
+                           for area in self.app.exc_areas.exclusion_areas_storage]
             for pt in points[tool_key]:
-                for area in self.app.exc_areas.exclusion_areas_storage:
-                    pt_buf = pt.buffer(excellon_tools[tool_key]['tooldia'] / 2.0)
-                    if pt_buf.within(area['shape']) or pt_buf.intersects(area['shape']):
+                for grown in grown_areas:
+                    if grown.intersects(pt):
                         return True
         return False
 
