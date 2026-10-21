@@ -47,14 +47,11 @@ def save(drills=None, slots=None):
 
     editor = SimpleNamespace(
         storage_dict=storage_dict, olddia_newdia={dia: dia for dia in storage_dict}, new_tools={},
-        is_modified=False, edited_obj_name='board', new_edited_excellon=Mock(), deactivate=Mock(),
-        app=SimpleNamespace(connect_custom_signal=Mock(), worker_task=SimpleNamespace(emit=Mock())))
-    assert AppExcEditor.update_fcexcellon(editor, SimpleNamespace(geo_steps_per_circle=64)) == 'board'
-
-    task = editor.app.worker_task.emit.call_args.args[0]
-    assert task['fcn'] is editor.new_edited_excellon
-    assert task['params'][0] == 'board'
-    return task['params'][1]
+        history=SimpleNamespace(ready=lambda: True, pending=None), _save_excellon_in_place=Mock())
+    source = SimpleNamespace(geo_steps_per_circle=64)
+    AppExcEditor.update_fcexcellon(editor, source, in_place=True)
+    editor._save_excellon_in_place.assert_called_once_with(source, None)
+    return editor.new_tools
 
 
 def summary(tools):

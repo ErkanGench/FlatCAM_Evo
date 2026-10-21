@@ -5,7 +5,8 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from camlib import distance, arc, AppRTreeStorage, translate_geometry
+from appHandlers.appHistory import history_of
+from camlib import distance, arc, translate_geometry
 
 from PyQt6 import QtCore, QtWidgets, QtGui
 from PyQt6.QtCore import Qt
@@ -15,11 +16,16 @@ from appEditors.exc_plugins.ExcDrillArrayPlugin import ExcDrillArrayEditorTool
 from appEditors.exc_plugins.ExcSlotArrayPlugin import ExcSlotArrayEditorTool
 from appEditors.exc_plugins.ExcResizePlugin import ExcResizeEditorTool
 from appEditors.exc_plugins.ExcCopyPlugin import ExcCopyEditorTool
+from appEditors.exc_plugins.ExcHistory import ExcellonHistory, excellon_operation, excellon_session
+from appEditors.exc_plugins.ExcProperties import (diagnose_features, feature_properties, filter_features,
+                                                native_feature_properties)
 
 from appGUI.GUIElements import FCEntry, FCTable, FCDoubleSpinner, FCButton, FCLabel, GLay
-from appEditors.appGeoEditor import FCShapeTool, DrawTool, DrawToolShape, DrawToolUtilityShape, AppGeoEditor
+from appEditors.appGeoEditor import (FCShapeTool, DrawTool, DrawToolShape, DrawToolUtilityShape, AppGeoEditor,
+                                     PICK_TOLERANCE_PX, CLICK_DRAG_THRESHOLD_PX)
+from appEditors.appGerberEditor import edit_copy_name, get_finite_bounds
 
-from shapely import LineString, LinearRing, MultiLineString, Polygon, MultiPolygon, Point
+from shapely import LineString, LinearRing, MultiLineString, Polygon, MultiPolygon, Point, STRtree, box
 from shapely.geometry.base import BaseGeometry
 from shapely.affinity import scale, rotate, translate
 # from appCommon.Common import LoudDict
@@ -27,7 +33,6 @@ from shapely.affinity import scale, rotate, translate
 import numpy as np
 
 
-import traceback
 import math
 import logging
 from copy import deepcopy
@@ -41,6 +46,82 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 log = logging.getLogger('base')
+
+# property that tags the menu/toolbar actions owned by an AppExcEditor instance
+EDITOR_ACTION_PROPERTY = 'exc_editor_action'
+
+# display text of the internal feature types
+FEATURE_TYPE_LABELS = {'drill': _('Drill'), 'slot': _('Slot')}
+
+
+class SlotEndpointEditorExc(DrawTool):
+    """Drag native centerline endpoints; the capsule is only a preview."""
+
+    def __init__(self, draw_app):
+        super().__init__(draw_app)
+        self.name = 'slot_endpoint'
+        self.drag = None
+        self.draw_app.app.inform.emit(_('Drag an endpoint of a selected native slot.'))
+
+    def click(self, point):
+        self.clean_up()
+        editor = self.draw_app
+        if not editor.history.ready() or editor.history.pending is not None or editor.history.suspended:
+            return
+        radius = float(editor.app.geo_editor.editor_options.get('global_snap_max', 0.05))
+        if not math.isfinite(radius) or radius < 0:
+            return
+        hits = []
+        for diameter, storage in editor.storage_dict.items():
+            for shape in storage.get_objects():
+                native = getattr(shape, 'exc_slot', None)
+                if shape not in editor.selected or native is None or \
+                        getattr(shape, 'exc_slot_geometry', None) is not shape.geo:
+                    continue
+                for index, endpoint in enumerate(native):
+                    delta = math.dist(point, endpoint)
+                    if delta <= radius:
+                        hits.append((delta, len(hits), shape, diameter, index, native))
+        if hits:
+            _, _, shape, diameter, index, native = min(hits, key=lambda hit: hit[:2])
+            self.drag = (shape, shape.geo, diameter, index, native,
+                         (editor.history.session, editor.history.revision))
+            editor.in_action = True
+
+    def utility_geometry(self, data=None):
+        if self.drag is None or data is None:
+            return None
+        shape, geo, diameter, index, native, expected = self.drag
+        editor = self.draw_app
+        if expected != (editor.history.session, editor.history.revision) or editor.history.pending is not None:
+            self.clean_up()
+            return None
+        endpoints = list(native)
+        endpoints[index] = tuple(data)
+        if not all(math.isfinite(value) for point in endpoints for value in point) or endpoints[0] == endpoints[1]:
+            editor.tool_shape.clear(update=True)
+            return None
+        return DrawToolUtilityShape(LineString(endpoints).buffer(diameter / 2))
+
+    def click_release(self, point):
+        if self.drag is None:
+            return
+        shape, geo, diameter, index, native, expected = self.drag
+        endpoints = list(native)
+        endpoints[index] = tuple(point)
+        self.clean_up()
+        if shape.geo is not geo:
+            return
+        self.draw_app.edit_slot_endpoints(shape, endpoints, expected=expected)
+
+    def clean_up(self):
+        self.drag = None
+        self.draw_app.in_action = False
+        self.draw_app.delete_utility_geometry()
+
+    def on_key(self, key):
+        if key == 'Escape' or key == Qt.Key.Key_Escape:
+            self.clean_up()
 
 
 class SelectEditorExc(FCShapeTool):
@@ -96,150 +177,8 @@ class SelectEditorExc(FCShapeTool):
             self.draw_app.selected = []
 
     def click_release(self, pos):
-        self.draw_app.ui.tools_table_exc.clearSelection()
-        xmin, ymin, xmax, ymax = 0, 0, 0, 0
-
-        try:
-            for storage in self.draw_app.storage_dict:
-                # for sh in self.draw_app.storage_dict[storage].get_objects():
-                #     self.sel_storage.insert(sh)
-                _, st_closest_shape = self.draw_app.storage_dict[storage].nearest(pos)
-                self.sel_storage.insert(st_closest_shape)
-
-            _, closest_shape = self.sel_storage.nearest(pos)
-
-            # constrain selection to happen only within a certain bounding box; it works only for MultiLineStrings
-            if isinstance(closest_shape.geo, MultiLineString):
-                x_coord, y_coord = closest_shape.geo.geoms[0].xy
-                delta = (x_coord[1] - x_coord[0])
-                # closest_shape_coords = (((x_coord[0] + delta / 2)), y_coord[0])
-                xmin = x_coord[0] - (0.7 * delta)
-                xmax = x_coord[0] + (1.7 * delta)
-                ymin = y_coord[0] - (0.7 * delta)
-                ymax = y_coord[0] + (1.7 * delta)
-            elif isinstance(closest_shape.geo, Polygon):
-                xmin, ymin, xmax, ymax = closest_shape.geo.bounds
-                dx = xmax - xmin
-                dy = ymax - ymin
-                delta = dx if dx > dy else dy
-                xmin -= 0.7 * delta
-                xmax += 0.7 * delta
-                ymin -= 0.7 * delta
-                ymax += 0.7 * delta
-        except StopIteration:
-            return ""
-
-        if pos[0] < xmin or pos[0] > xmax or pos[1] < ymin or pos[1] > ymax:
-            self.draw_app.selected.clear()
-        else:
-            modifiers = QtWidgets.QApplication.keyboardModifiers()
-
-            if modifiers == QtCore.Qt.KeyboardModifier.ShiftModifier:
-                mod_key = 'Shift'
-            elif modifiers == QtCore.Qt.KeyboardModifier.ControlModifier:
-                mod_key = 'Control'
-            else:
-                mod_key = None
-
-            if mod_key == self.draw_app.app.options.get(
-                    "global_mselect_key",
-                    self.draw_app.app.defaults.get(
-                        "global_mselect_key",
-                        self.draw_app.app.defaults.factory_defaults.get("global_mselect_key")
-                    )
-            ):
-                if closest_shape in self.draw_app.selected:
-                    self.draw_app.selected.remove(closest_shape)
-                else:
-                    self.draw_app.selected.append(closest_shape)
-            else:
-                self.draw_app.selected.clear()
-                self.draw_app.selected.append(closest_shape)
-
-            # select the diameter of the selected shape in the tool table
-            try:
-                self.draw_app.ui.tools_table_exc.cellPressed.disconnect()
-            except (TypeError, AttributeError):
-                pass
-
-            # if mod_key == self.draw_app.app.options["global_mselect_key"]:
-            #     self.draw_app.ui.tools_table_exc.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
-            self.sel_tools.clear()
-
-            for shape_s in self.draw_app.selected:
-                for storage in self.draw_app.storage_dict:
-                    if shape_s in self.draw_app.storage_dict[storage].get_objects():
-                        self.sel_tools.add(storage)
-
-            self.draw_app.ui.tools_table_exc.clearSelection()
-            for storage in self.sel_tools:
-                for k, v in self.draw_app.tool2tooldia.items():
-                    if v == storage:
-                        self.draw_app.ui.tools_table_exc.selectRow(int(k) - 1)
-                        self.draw_app.last_tool_selected = int(k)
-                        break
-
-            # self.draw_app.ui.tools_table_exc.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-
-            self.draw_app.ui.tools_table_exc.cellPressed.connect(self.draw_app.on_row_selected)
-
-        # delete whatever is in selection storage, there is no longer need for those shapes
-        self.sel_storage = AppExcEditor.make_storage()
-
+        self.draw_app.click_select(pos)
         return ""
-
-        # clicked_pos[0] and clicked_pos[1] are the mouse click coordinates (x, y)
-        # for storage in self.draw_app.storage_dict:
-        #     for obj_shape in self.draw_app.storage_dict[storage].get_objects():
-        #         minx, miny, maxx, maxy = obj_shape.geo.bounds
-        #         if (minx <= clicked_pos[0] <= maxx) and (miny <= clicked_pos[1] <= maxy):
-        #             over_shape_list.append(obj_shape)
-        #
-        # try:
-        #     # if there is no shape under our click then deselect all shapes
-        #     if not over_shape_list:
-        #         self.draw_app.selected = []
-        #         AppExcEditor.draw_shape_idx = -1
-        #         self.draw_app.ui.tools_table_exc.clearSelection()
-        #     else:
-        #         # if there are shapes under our click then advance through the list of them, one at the time in a
-        #         # circular way
-        #         AppExcEditor.draw_shape_idx = (AppExcEditor.draw_shape_idx + 1) % len(over_shape_list)
-        #         obj_to_add = over_shape_list[int(AppExcEditor.draw_shape_idx)]
-        #
-        #         if self.draw_app.app.options["global_mselect_key"] == 'Shift':
-        #             if self.draw_app.modifiers == Qt.KeyboardModifier.ShiftModifier:
-        #                 if obj_to_add in self.draw_app.selected:
-        #                     self.draw_app.selected.remove(obj_to_add)
-        #                 else:
-        #                     self.draw_app.selected.append(obj_to_add)
-        #             else:
-        #                 self.draw_app.selected = []
-        #                 self.draw_app.selected.append(obj_to_add)
-        #         else:
-        #             # if CONTROL key is pressed then we add to the selected list the current shape but if it's already
-        #             # in the selected list, we removed it. Therefore first click selects, second deselects.
-        #             if self.draw_app.modifiers == Qt.KeyboardModifier.ControlModifier:
-        #                 if obj_to_add in self.draw_app.selected:
-        #                     self.draw_app.selected.remove(obj_to_add)
-        #                 else:
-        #                     self.draw_app.selected.append(obj_to_add)
-        #             else:
-        #                 self.draw_app.selected = []
-        #                 self.draw_app.selected.append(obj_to_add)
-        #
-        #     for storage in self.draw_app.storage_dict:
-        #         for shape in self.draw_app.selected:
-        #             if shape in self.draw_app.storage_dict[storage].get_objects():
-        #                 for key in self.draw_app.tool2tooldia:
-        #                     if self.draw_app.tool2tooldia[key] == storage:
-        #                         item = self.draw_app.ui.tools_table_exc.item((key - 1), 1)
-        #                         item.setSelected(True)
-        #                         # self.draw_app.ui.tools_table_exc.selectItem(key - 1)
-        #
-        # except Exception as e:
-        #     log.error("[ERROR] Something went bad. %s" % str(e))
-        #     raise
 
     def clean_up(self):
         pass
@@ -486,8 +425,9 @@ class DrillAdd(FCShapeTool):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
             self.cursor_data_control = not self.cursor_data_control
 
+    @excellon_operation(_('Add drill'))
     def add_drill(self, drill_pos):
-        curr_pos = self.draw_app.app.geo_editor.snap(drill_pos[0], drill_pos[1])
+        curr_pos = self.draw_app.snap(drill_pos[0], drill_pos[1])
         self.draw_app.snap_x = curr_pos[0]
         self.draw_app.snap_y = curr_pos[1]
 
@@ -781,6 +721,18 @@ class DrillArray(FCShapeTool):
         return MultiLineString([(start_hor_line, stop_hor_line), (start_vert_line, stop_vert_line)])
 
     def make(self):
+        self.geometry = []
+        self.complete = False
+        if self.drill_array_size < 1 or (self.drill_array != 'linear' and
+                (not math.isfinite(self.drill_angle) or abs(self.drill_angle) * self.drill_array_size > 360 or
+                 distance(self.destination, self.origin) == 0)):
+            self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % _('Invalid array size, angle or radius.'))
+            return 'fail'
+        if self.drill_array == 'linear' and (self.drill_axis not in ('X', 'Y', 'A') or
+                not math.isfinite(self.drill_pitch) or not all(math.isfinite(value) for value in self.points) or
+                (self.drill_axis == 'A' and not math.isfinite(self.drill_linear_angle))):
+            self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % _('Invalid array pitch, direction or angle.'))
+            return 'fail'
         self.selected_dia = self.draw_app.tool2tooldia[self.draw_app.last_tool_selected]
         self.geometry = []
         geo = None
@@ -814,19 +766,8 @@ class DrillArray(FCShapeTool):
 
                 self.geometry.append(DrawToolShape(geo))
         else:   # 'Circular'
-            if (self.drill_angle * self.drill_array_size) > 360:
-                self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
-                                              _("Too many items for the selected spacing angle."))
-                self.draw_app.app.jump_signal.disconnect()
-                return
-
+            # the angle, size and radius were validated at the top of make()
             radius = distance(self.destination, self.origin)
-            if radius == 0:
-                self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                self.draw_app.delete_utility_geometry()
-                self.draw_app.select_tool('drill_select')
-                return
-
             if self.destination[0] < self.origin[0]:
                 radius = -radius
             initial_angle = math.asin((self.destination[1] - self.origin[1]) / radius)
@@ -934,11 +875,12 @@ class DrillArray(FCShapeTool):
             if key == QtCore.Qt.Key.Key_J or key == 'J':
                 self.draw_app.app.on_jump_to()
 
+    @excellon_operation(_('Drill array'))
     def add_drill_array(self, array_pos):
         self.drill_radius = self.ui.radius_entry.get_value()
         self.drill_array = self.ui.array_type_radio.get_value()
 
-        curr_pos = self.draw_app.app.geo_editor.snap(array_pos[0], array_pos[1])
+        curr_pos = self.draw_app.snap(array_pos[0], array_pos[1])
         self.draw_app.snap_x = curr_pos[0]
         self.draw_app.snap_y = curr_pos[1]
 
@@ -1172,10 +1114,44 @@ class SlotAdd(FCShapeTool):
 
             return Polygon(geo)
 
+    def native_shape(self, point, array_angle=0.0):
+        """Build a capsule and its exact native centerline using the same rotations."""
+        diameter = self.draw_app.tool2tooldia[self.draw_app.last_tool_selected]
+        length = float(self.ui.slot_length_entry.get_value())
+        angle_entry = self.ui.slot_angle_spinner if isinstance(self, SlotAdd) else self.ui.slot_angle_entry
+        angle = float(angle_entry.get_value())
+        if not all(math.isfinite(value) for value in (*point, diameter, length, angle, array_angle)) or \
+                diameter <= 0 or length <= diameter:
+            raise ValueError(_('Invalid slot length, diameter, angle or position.'))
+        direction = self.ui.slot_direction_radio.get_value()
+        if direction not in ('X', 'Y', 'A'):
+            raise ValueError(_('Invalid slot direction.'))
+        half_length = (length - diameter) / 2.0
+        dx, dy = (half_length, 0) if direction == 'X' else (0, half_length)
+        centerline = LineString([(point[0] - dx, point[1] - dy), (point[0] + dx, point[1] + dy)])
+        if direction == 'A':
+            centerline = rotate(centerline, -angle, origin=point)
+        geometry = self.util_shape(point)
+        if array_angle:
+            geometry = rotate(geometry, array_angle, origin=point, use_radians=True)
+            centerline = rotate(centerline, array_angle, origin=point, use_radians=True)
+        shape = DrawToolShape(geometry)
+        shape.exc_slot = tuple(centerline.coords)
+        shape.exc_slot_geometry = geometry
+        return shape
+
     def make(self):
+        self.complete = False
         if self.slot_point is None:
             self.slot_point = (self.draw_app.snap_x, self.draw_app.snap_y)
         self.selected_dia = self.draw_app.tool2tooldia[self.draw_app.last_tool_selected]
+
+        try:
+            self.geometry = self.native_shape(self.slot_point)
+        except (ValueError, TypeError) as error:
+            self.geometry = []
+            self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % str(error))
+            return 'fail'
 
         try:
             QtGui.QGuiApplication.restoreOverrideCursor()
@@ -1185,15 +1161,11 @@ class SlotAdd(FCShapeTool):
         # add the point to drills/slots if the diameter is a key in the dict, if not, create it add the drill location
         # to the value, as a list of itself
         if self.selected_dia in self.draw_app.slot_points_edit:
-            self.draw_app.slot_points_edit[self.selected_dia].append(self.slot_point)
+            self.draw_app.slot_points_edit[self.selected_dia].append(self.geometry.exc_slot)
         else:
-            self.draw_app.slot_points_edit[self.selected_dia] = [self.slot_point]
+            self.draw_app.slot_points_edit[self.selected_dia] = [self.geometry.exc_slot]
 
         self.draw_app.current_storage = self.draw_app.storage_dict[self.selected_dia]
-        try:
-            self.geometry = DrawToolShape(self.util_shape(self.slot_point))
-        except Exception as e:
-            log.error("SlotAdd.make() --> %s" % str(e))
         self.draw_app.in_action = False
         self.complete = True
 
@@ -1323,8 +1295,9 @@ class SlotAdd(FCShapeTool):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
             self.cursor_data_control = not self.cursor_data_control
 
+    @excellon_operation(_('Add slot'))
     def add_slot(self, slot_pos):
-        curr_pos = self.draw_app.app.geo_editor.snap(slot_pos[0], slot_pos[1])
+        curr_pos = self.draw_app.snap(slot_pos[0], slot_pos[1])
         self.draw_app.snap_x = curr_pos[0]
         self.draw_app.snap_y = curr_pos[1]
 
@@ -1604,20 +1577,14 @@ class SlotArray(FCShapeTool):
                 x = self.origin[0] + radius * math.cos(-angle_radians + angle)
                 y = self.origin[1] + radius * math.sin(-angle_radians + angle)
 
-                geo_sol = self.util_shape((x, y))
-                geo_sol = rotate(geo_sol, angle=(math.pi - angle_radians + angle), use_radians=True)
-
-                circular_geo.append(DrawToolShape(geo_sol))
+                circular_geo.append(SlotAdd.native_shape(self, (x, y), math.pi - angle_radians + angle))
         else:
             for i in range(self.slot_array_size):
                 angle_radians = math.radians(self.slot_angle * i)
                 x = self.origin[0] + radius * math.cos(angle_radians + angle)
                 y = self.origin[1] + radius * math.sin(angle_radians + angle)
 
-                geo_sol = self.util_shape((x, y))
-                geo_sol = rotate(geo_sol, angle=(angle_radians + angle - math.pi), use_radians=True)
-
-                circular_geo.append(DrawToolShape(geo_sol))
+                circular_geo.append(SlotAdd.native_shape(self, (x, y), angle_radians + angle - math.pi))
 
         return circular_geo
 
@@ -1709,6 +1676,23 @@ class SlotArray(FCShapeTool):
             return Polygon(geo)
 
     def make(self):
+        self.complete = False
+        if self.slot_array_size < 1 or (self.slot_array != 'linear' and
+                (not math.isfinite(self.slot_angle) or abs(self.slot_angle) * self.slot_array_size > 360 or
+                 distance(self.destination, self.origin) == 0)):
+            self.geometry = []
+            self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % _('Invalid array size, angle or radius.'))
+            return 'fail'
+        try:
+            SlotAdd.native_shape(self, self.points)
+            if self.slot_array == 'linear' and (self.slot_axis not in ('X', 'Y', 'A') or
+                    not math.isfinite(self.slot_pitch) or
+                    (self.slot_axis == 'A' and not math.isfinite(self.slot_linear_angle))):
+                raise ValueError(_('Invalid array pitch, direction or angle.'))
+        except (ValueError, TypeError) as error:
+            self.geometry = []
+            self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % str(error))
+            return 'fail'
         self.geometry = []
         geo = None
 
@@ -1717,65 +1701,25 @@ class SlotArray(FCShapeTool):
         except Exception:
             pass
 
-        # add the point to slots if the diameter is a key in the dict, if not, create it add the drill location
-        # to the value, as a list of itself
-        if self.selected_dia not in self.draw_app.slot_points_edit:
-            self.draw_app.slot_points_edit[self.selected_dia] = []
-        for i in range(self.slot_array_size):
-            self.draw_app.slot_points_edit[self.selected_dia].append(self.points)
-
         self.draw_app.current_storage = self.draw_app.storage_dict[self.selected_dia]
 
         if self.slot_array == 'linear':    # 'Linear'
             for item in range(self.slot_array_size):
                 if self.slot_axis == 'X':
-                    geo = self.util_shape(((self.points[0] + (self.slot_pitch * item)), self.points[1]))
+                    geo = SlotAdd.native_shape(self, ((self.points[0] + (self.slot_pitch * item)), self.points[1]))
                 if self.slot_axis == 'Y':
-                    geo = self.util_shape((self.points[0], (self.points[1] + (self.slot_pitch * item))))
+                    geo = SlotAdd.native_shape(self, (self.points[0], (self.points[1] + (self.slot_pitch * item))))
                 if self.slot_axis == 'A':
                     x_adj = self.slot_pitch * math.cos(math.radians(self.slot_linear_angle))
                     y_adj = self.slot_pitch * math.sin(math.radians(self.slot_linear_angle))
-                    geo = self.util_shape(
+                    geo = SlotAdd.native_shape(self,
                         ((self.points[0] + (x_adj * item)), (self.points[1] + (y_adj * item)))
                     )
 
-                self.geometry.append(DrawToolShape(geo))
+                self.geometry.append(geo)
         else:   # 'Circular'
-            if (self.slot_angle * self.slot_array_size) > 360:
-                self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
-                                              _("Too many items for the selected spacing angle."))
-                try:
-                    self.draw_app.app.jump_signal.disconnect()
-                except (AttributeError, TypeError):
-                    pass
-                return
-
-            # radius = distance(self.destination, self.origin)
-            # initial_angle = math.asin((self.destination[1] - self.origin[1]) / radius)
-            # for i in range(self.slot_array_size):
-            #     angle_radians = math.radians(self.slot_angle * i)
-            #     if self.slot_direction == 'CW':
-            #         x = self.origin[0] + radius * math.cos(-angle_radians + initial_angle)
-            #         y = self.origin[1] + radius * math.sin(-angle_radians + initial_angle)
-            #     else:
-            #         x = self.origin[0] + radius * math.cos(angle_radians + initial_angle)
-            #         y = self.origin[1] + radius * math.sin(angle_radians + initial_angle)
-            #
-            #     geo = self.util_shape((x, y))
-            #     if self.slot_direction == 'CW':
-            #         geo = affinity.rotate(geo, angle=(math.pi - angle_radians), use_radians=True)
-            #     else:
-            #         geo = affinity.rotate(geo, angle=(angle_radians - math.pi), use_radians=True)
-            #
-            #     self.geometry.append(DrawToolShape(geo))
-
+            # the angle, size and radius were validated at the top of make()
             radius = distance(self.destination, self.origin)
-            if radius == 0:
-                self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                self.draw_app.delete_utility_geometry()
-                self.draw_app.select_tool('drill_select')
-                return
-
             if self.destination[0] < self.origin[0]:
                 radius = -radius
             initial_angle = math.asin((self.destination[1] - self.origin[1]) / radius)
@@ -1783,6 +1727,8 @@ class SlotArray(FCShapeTool):
             circular_geo = self.circular_util_shape(radius, initial_angle)
             self.geometry += circular_geo
 
+        self.draw_app.slot_points_edit.setdefault(self.selected_dia, []).extend(
+            shape.exc_slot for shape in self.geometry)
         self.complete = True
         self.draw_app.app.inform.emit('[success] %s' % _("Done."))
         self.draw_app.in_action = False
@@ -1901,6 +1847,7 @@ class SlotArray(FCShapeTool):
                 # ## Utility geometry (animated)
                 self.draw_app.update_utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
 
+    @excellon_operation(_('Slot array'))
     def add_slot_array(self, array_pos):
         self.array_radius = self.ui.radius_entry.get_value()
 
@@ -1913,7 +1860,7 @@ class SlotArray(FCShapeTool):
         self.slot_linear_angle = float(self.ui.array_linear_angle_entry.get_value())
         self.slot_angle = float(self.ui.array_angle_entry.get_value())
 
-        curr_pos = self.draw_app.app.geo_editor.snap(array_pos[0], array_pos[1])
+        curr_pos = self.draw_app.snap(array_pos[0], array_pos[1])
         self.draw_app.snap_x = curr_pos[0]
         self.draw_app.snap_y = curr_pos[1]
 
@@ -2038,202 +1985,13 @@ class ResizeEditorExc(FCShapeTool):
 
         self.ui.dia_entry.set_value(', '.join([i for i in list(sel_dia_list)]))
 
+    @excellon_operation(_('Resize features'))
     def make(self):
-        self.draw_app.is_modified = True
-
-        try:
-            self.draw_app.ui.tools_table_exc.itemChanged.disconnect()
-        except TypeError:
-            pass
-
         new_dia = self.ui.res_dia_entry.get_value()
-        if new_dia == 0.0:
-            self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' %
-                                          _("Resize drill(s) failed. Please enter a diameter for resize."))
-            return
-
-        if new_dia not in self.draw_app.olddia_newdia:
-            self.destination_storage = AppGeoEditor.make_storage()
-            self.draw_app.storage_dict[new_dia] = self.destination_storage
-
-            # self.olddia_newdia dict keeps the evidence on current tools diameters as keys and gets updated on values
-            # each time a tool diameter is edited or added
-            self.draw_app.olddia_newdia[new_dia] = new_dia
-        else:
-            self.destination_storage = self.draw_app.storage_dict[new_dia]
-
-        for index in self.draw_app.ui.tools_table_exc.selectedIndexes():
-            row = index.row()
-            # on column 1 in tool tables we hold the diameters, and we retrieve them as strings
-            # therefore below we convert to float
-            dia_on_row = self.draw_app.ui.tools_table_exc.item(row, 1).text()
-            self.selected_dia_set.add(float(dia_on_row))
-
-        # since we add a new tool, we update also the intial state of the plugin_table through it's dictionary
-        # we add a new entry in the tool2tooldia dict
-        self.draw_app.tool2tooldia[len(self.draw_app.olddia_newdia)] = new_dia
-
-        sel_shapes_to_be_deleted = []
-
-        if self.selected_dia_set:
-            for sel_dia in self.selected_dia_set:
-                self.current_storage = self.draw_app.storage_dict[sel_dia]
-                for select_shape in self.draw_app.get_selected():
-                    if select_shape in self.current_storage.get_objects():
-
-                        # add new geometry according to the new size
-                        if isinstance(select_shape.geo, MultiLineString):
-                            factor = new_dia / sel_dia
-                            self.geometry.append(DrawToolShape(scale(select_shape.geo, xfact=factor, yfact=factor,
-                                                                     origin='center')))
-                        elif isinstance(select_shape.geo, Polygon):
-                            # I don't have any info regarding the angle of the slot geometry, nor how thick it is or
-                            # how long it is given the angle. So I will have to make an approximation because
-                            # we need to conserve the slot length, we only resize the diameter for the tool
-                            # Therefore scaling won't work and buffering will not work either.
-
-                            # First we get the Linestring that is one that the original slot is built around with the
-                            # tool having the diameter sel_dia
-                            poly = select_shape.geo
-                            xmin, ymin, xmax, ymax = poly.bounds
-                            # a line that is certain to be bigger than our slot because it's the diagonal
-                            # of it's bounding box
-                            poly_diagonal = LineString([(xmin, ymin), (xmax, ymax)])
-                            poly_centroid = poly.centroid
-                            # center of the slot geometry
-                            poly_center = (poly_centroid.x, poly_centroid.y)
-
-                            # make a list of intersections with the rotated line
-                            list_of_cuttings = []
-                            for angle in range(0, 359, 1):
-                                rot_poly_diagonal = rotate(poly_diagonal, angle=angle, origin=poly_center)
-                                cut_line = rot_poly_diagonal.intersection(poly)
-                                cut_line_len = cut_line.length
-                                list_of_cuttings.append(
-                                    (cut_line_len, cut_line)
-                                )
-                            # find the cut_line with the maximum length which is the LineString for which the start
-                            # and stop point are the start and stop point of the slot as in the Gerber file
-                            cut_line_with_max_length = max(list_of_cuttings, key=lambda i: i[0])[1]
-                            # find the coordinates of this line
-                            cut_line_with_max_length_coords = list(cut_line_with_max_length.coords)
-                            # extract the first and last point of the line and build some buffered polygon circles
-                            # around them
-                            start_pt = Point(cut_line_with_max_length_coords[0])
-                            stop_pt = Point(cut_line_with_max_length_coords[1])
-                            start_cut_geo = start_pt.buffer(new_dia / 2)
-                            stop_cut_geo = stop_pt.buffer(new_dia / 2)
-
-                            # and we cut the above circle polygons from our line and get in this way a line around
-                            # which we can build the new slot by buffering with the new tool diameter
-                            new_line = cut_line_with_max_length.difference(start_cut_geo)
-                            new_line = new_line.difference(stop_cut_geo)
-
-                            # create the geometry for the resized slot by buffering with half of the
-                            # new diameter value, new_dia
-                            new_poly = new_line.buffer(new_dia / 2)
-
-                            self.geometry.append(DrawToolShape(new_poly))
-                        else:
-                            # unexpected geometry so we cancel
-                            self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % _("Cancelled."))
-                            return
-
-                        # remove the geometry with the old size
-                        self.current_storage.remove(select_shape)
-
-                        # a hack to make the plugin_table display less drills per diameter when shape(drill) is deleted
-                        # self.points_edit it's only useful first time when we load the data into the storage
-                        # but is still used as reference when building plugin_table in self.build_ui()
-                        # the number of drills displayed in column 2 is just a len(self.points_edit) therefore
-                        # deleting self.points_edit elements (doesn't matter who but just the number)
-                        # solved the display issue.
-                        if isinstance(select_shape.geo, MultiLineString):
-                            try:
-                                del self.draw_app.points_edit[sel_dia][0]
-                            except KeyError:
-                                # if the exception happen here then we are not dealing with drills but with slots
-                                # This should not happen as the drills have MultiLineString geometry and slots have
-                                # Polygon geometry
-                                pass
-                        if isinstance(select_shape.geo, Polygon):
-                            try:
-                                del self.draw_app.slot_points_edit[sel_dia][0]
-                            except KeyError:
-                                # if the exception happen here then we are not dealing with slots but with drills
-                                # This should not happen as the drills have MultiLineString geometry and slots have
-                                # Polygon geometry
-                                pass
-
-                        sel_shapes_to_be_deleted.append(select_shape)
-
-                        # a hack to make the plugin_table display more drills/slots per diameter when shape(drill/slot)
-                        # is added.
-                        # self.points_edit it's only useful first time when we load the data into the storage
-                        # but is still used as reference when building plugin_table in self.build_ui()
-                        # the number of drills displayed in column 2 is just a len(self.points_edit) therefore
-                        # deleting self.points_edit elements (doesn't matter who but just the number)
-                        # solved the display issue.
-
-                        # for drills
-                        if isinstance(select_shape.geo, MultiLineString):
-                            if new_dia not in self.draw_app.points_edit:
-                                self.draw_app.points_edit[new_dia] = [(0, 0)]
-                            else:
-                                self.draw_app.points_edit[new_dia].append((0, 0))
-
-                        # for slots
-                        if isinstance(select_shape.geo, Polygon):
-                            if new_dia not in self.draw_app.slot_points_edit:
-                                self.draw_app.slot_points_edit[new_dia] = [(0, 0)]
-                            else:
-                                self.draw_app.slot_points_edit[new_dia].append((0, 0))
-
-            for dia_key in list(self.draw_app.storage_dict.keys()):
-                # if following the resize of the drills there will be no more drills for some of the tools then
-                # delete those tools
-                try:
-                    if not self.draw_app.points_edit[dia_key]:
-                        self.draw_app.on_tool_delete(dia_key)
-                except KeyError:
-                    # if the exception happen here then we are not dealing with drills but with slots
-                    # so we try for them
-                    try:
-                        if not self.draw_app.slot_points_edit[dia_key]:
-                            self.draw_app.on_tool_delete(dia_key)
-                    except KeyError:
-                        # if the exception happen here then we are not dealing with slots neither
-                        # therefore something else is not OK so we return
-                        self.draw_app.app.inform.emit('[ERROR_NOTCL] %s' % _("Cancelled."))
-                        return
-
-            # this simple hack is used so we can delete form self.draw_app.selected but
-            # after we no longer iterate through it
-            for shp in sel_shapes_to_be_deleted:
-                self.draw_app.selected.remove(shp)
-
-            # add the new geometry to storage
-            self.draw_app.on_exc_shape_complete(self.destination_storage)
-
-            self.draw_app.build_ui()
-            self.draw_app.replot()
-
-            # empty the self.geometry
-            self.geometry = []
-
-            # we reactivate the signals after the after the tool editing
-            self.draw_app.ui.tools_table_exc.itemChanged.connect(self.draw_app.on_tool_edit)
-
-            self.draw_app.app.inform.emit('[success] %s' % _("Done."))
-        else:
-            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Cancelled."), _("Nothing selected")))
-
-        # init this set() for another use perhaps
-        self.selected_dia_set = set()
-
+        result = self.draw_app.resize_features(self.draw_app.selected, new_dia)
+        if result == 'fail':
+            return result
         self.complete = True
-
-        # MS: always return to the Select Tool
         self.draw_app.select_tool("drill_select")
 
     def on_resize(self):
@@ -2373,6 +2131,7 @@ class MoveEditorExc(FCShapeTool):
             self.draw_app.select_tool("drill_select")
             return
 
+    @excellon_operation(_('Move features'))
     def make(self):
         # Create new geometry
         dx = self.destination[0] - self.origin[0]
@@ -2392,7 +2151,9 @@ class MoveEditorExc(FCShapeTool):
 
                 translated = translate_geometry([shape.geo for shape in shapes], dx, dy)
                 # 1 change of the storage index instead of a delete and an insert for each point
-                self.current_storage.replace(removed=shapes, inserted=[DrawToolShape(geo) for geo in translated])
+                self.current_storage.replace(removed=shapes, inserted=[
+                    translated_exc_shape(shape, geo) for shape, geo in zip(shapes, translated)
+                ])
                 moved_ids |= {id(shape) for shape in shapes}
 
             if moved_ids:
@@ -2558,49 +2319,54 @@ class CopyEditorExc(FCShapeTool):
             self.draw_app.select_tool("drill_select")
             return
 
+    @excellon_operation(_('Copy features'))
     def make(self):
-        # Create new geometry
-        # dx = self.destination[0] - self.origin[0]
-        # dy = self.destination[1] - self.origin[1]
-        sel_shapes_to_be_deleted = []
-
-        if len(self.draw_app.get_selected()) > self.sel_limit:
-            self.util_geo = self.array_util_geometry((self.destination[0], self.destination[1]))
-
-        # when doing circular array we remove the last geometry item in the list because it is the temp_line
-        if self.ui.mode_radio.get_value() == 'a' and \
-                self.ui.array_type_radio.get_value() == 'circular':
-            del self.util_geo.geo[-1]
-
-        self.geometry = [DrawToolShape(deepcopy(shp)) for shp in self.util_geo.geo]
-
-        for sel_dia in self.selected_dia_list:
-            self.current_storage = self.draw_app.storage_dict[sel_dia]
-            for select_shape in self.draw_app.get_selected():
-                if select_shape in self.current_storage.get_objects():
-
-                    # Add some fake drills into the self.draw_app.points_edit to update the drill count in tool table
-                    # This may fail if we copy slots.
-                    try:
-                        self.draw_app.points_edit[sel_dia].append((0, 0))
-                    except KeyError:
-                        pass
-
-                    # add some fake slots into the self.draw_app.slots_points_edit
-                    # to update the slot count in tool table
-                    # This may fail if we copy drills.
-                    try:
-                        self.draw_app.slot_points_edit[sel_dia].append((0, 0))
-                    except KeyError:
-                        pass
-
-                    sel_shapes_to_be_deleted.append(select_shape)
-                    self.draw_app.on_exc_shape_complete(self.current_storage)
-                    self.geometry = []
-
-            for shp in sel_shapes_to_be_deleted:
-                self.draw_app.selected.remove(shp)
-            sel_shapes_to_be_deleted = []
+        selected = list(self.draw_app.get_selected())
+        if not selected:
+            return 'fail'
+        dx, dy = self.destination[0] - self.origin[0], self.destination[1] - self.origin[1]
+        if self.ui.mode_radio.get_value() == 'n':
+            geometries = translate_geometry([shape.geo for shape in selected], dx, dy)
+        else:
+            preview = self.array_util_geometry((dx, dy))
+            if preview is None:
+                return 'fail'
+            geometries = list(preview.geo)
+            if self.ui.array_type_radio.get_value() == 'circular':
+                geometries = geometries[:-1]  # cursor radius line, not an Excellon feature
+        if not geometries or len(geometries) % len(selected):
+            return 'fail'
+        owners = {id(shape): diameter for diameter, storage in self.draw_app.storage_dict.items()
+                  for shape in storage.get_objects()}
+        batches = {}
+        circular = self.ui.mode_radio.get_value() != 'n' and self.ui.array_type_radio.get_value() == 'circular'
+        for index, geo in enumerate(geometries):
+            source = selected[index % len(selected)]
+            diameter = owners[id(source)]
+            replacement = translated_exc_shape(source, geo)
+            if circular and isinstance(source.geo, Polygon):
+                angle = float(self.ui.angle_entry.get_value()) * (index // len(selected))
+                if self.ui.array_dir_radio.get_value() == 'CW':
+                    angle = -angle
+                endpoints = feature_properties(source, diameter, 0)['endpoints']
+                line = rotate(LineString(endpoints), angle, origin=self.origin)
+                rotated = rotate(source.geo, angle, origin=self.origin)
+                line = translate(line, geo.centroid.x - rotated.centroid.x, geo.centroid.y - rotated.centroid.y)
+                replacement.exc_slot = tuple(tuple(point) for point in line.coords)
+                replacement.exc_slot_geometry = geo
+            if hasattr(source, 'exc_source_diameter'):
+                replacement.exc_source_diameter = source.exc_source_diameter
+            batches.setdefault(diameter, []).append(replacement)
+        for diameter, shapes in batches.items():
+            self.draw_app.add_exc_shape(shapes, self.draw_app.storage_dict[diameter])
+            for shape in shapes:
+                counters = self.draw_app.points_edit if isinstance(shape.geo, MultiLineString) \
+                    else self.draw_app.slot_points_edit
+                counters.setdefault(diameter, []).append((0, 0))
+        self.draw_app.selected.clear()
+        self.geometry = []
+        self.draw_app.delete_utility_geometry()
+        self.draw_app.replot()
 
         self.complete = True
         self.origin = None
@@ -2830,8 +2596,10 @@ class CopyEditorExc(FCShapeTool):
 
     def circular_util_shape(self, radius, ini_angle):
         direction = self.ui.array_dir_radio.get_value()      # CW or CCW
-        angle = self.ui.angle_entry.get_value()
+        angle = float(self.ui.angle_entry.get_value())
         array_size = int(self.ui.array_size_entry.get_value())
+        if not all(math.isfinite(value) for value in (radius, ini_angle, angle)) or array_size < 1:
+            raise ValueError(_('Invalid circular array.'))
 
         circular_geo = []
         for i in range(array_size):
@@ -2844,8 +2612,8 @@ class CopyEditorExc(FCShapeTool):
                 y = radius * math.sin(angle_radians + ini_angle)
 
             for sshp in self.draw_app.get_selected():
-                geo_sol = translate(sshp.geo, x, y)
-                # geo_sol = affinity.rotate(geo_sol, angle=(math.pi - angle_radians), use_radians=True)
+                rotation = -angle * i if direction == 'CW' else angle * i
+                geo_sol = translate(rotate(sshp.geo, rotation, origin=self.origin), x, y)
 
                 circular_geo.append(DrawToolShape(geo_sol))
 
@@ -2973,7 +2741,73 @@ class CopyEditorExc(FCShapeTool):
         self.copy_tool.on_tab_close()
 
 
+def translated_exc_shape(source, geometry):
+    """Keep native slot centerlines when translation creates a replacement wrapper."""
+    shape = DrawToolShape(geometry)
+    if hasattr(source, 'exc_source_diameter'):
+        shape.exc_source_diameter = source.exc_source_diameter
+    native = getattr(source, 'exc_slot', None)
+    if native is not None and getattr(source, 'exc_slot_geometry', None) is source.geo:
+        dx = geometry.centroid.x - source.geo.centroid.x
+        dy = geometry.centroid.y - source.geo.centroid.y
+        shape.exc_slot = tuple((x + dx, y + dy) for x, y in native)
+        shape.exc_slot_geometry = geometry
+    return shape
+
+
+def match_tool_data(old_tools, new_tools, olddia_newdia, decimals):
+    """
+    Match each tool of the edited content to the tool of the source object that it comes from, by diameter. The
+    editor can renumber the tools and change a diameter (olddia_newdia: source diameter -> diameter in the editor),
+    so an old tool is matched by the diameter that it has in the editor. An old tool is used for 1 new tool at most.
+
+    :param old_tools:       tools of the source object (the tool id is the key, 'tooldia' in the value)
+    :param new_tools:       tools of the edited content, same structure
+    :param olddia_newdia:   the editor dict: source diameter -> diameter now
+    :param decimals:        diameters are compared rounded to this number of decimals
+    :return:                dict: new tool id -> old tool id; None for a tool with no match
+    """
+    def key(dia):
+        return round(float(dia), decimals)
+
+    renamed = {key(old): key(new) for old, new in olddia_newdia.items()}
+    unused = list(old_tools)
+    matches = {}
+    for new_id, new_tool in new_tools.items():
+        wanted = key(new_tool['tooldia'])
+        found = None
+        for old_id in unused:
+            old_dia = key(old_tools[old_id]['tooldia'])
+            if renamed.get(old_dia, old_dia) == wanted:
+                found = old_id
+                break
+        matches[new_id] = found
+        if found is not None:
+            unused.remove(found)
+    return matches
+
+
+def tools_with_data(old_tools, new_tools, olddia_newdia, data_defaults, decimals):
+    """
+    A deep copy of the tools of the edited content, each with a 'data' dict: the data of the matching tool of the
+    source object (match_tool_data()), or the defaults for a tool with no match.
+
+    :return: dict of tools
+    """
+    matches = match_tool_data(old_tools, new_tools, olddia_newdia, decimals)
+    result = deepcopy(new_tools)
+    for new_id, old_id in matches.items():
+        if old_id is not None and old_tools[old_id].get('data'):
+            result[new_id]['data'] = deepcopy(old_tools[old_id]['data'])
+        else:
+            result[new_id]['data'] = deepcopy(data_defaults)
+    return result
+
+
 class AppExcEditor(QtCore.QObject):
+
+    history_changed = QtCore.pyqtSignal()
+    worker_result = QtCore.pyqtSignal(object)
 
     draw_shape_idx = -1
 
@@ -3106,6 +2940,7 @@ class AppExcEditor(QtCore.QObject):
 
         self.complete = False
 
+        # read by MainGUI (the G shortcut); snap() shares the grid preferences of app.geo_editor.editor_options
         self.editor_options = {
             "global_gridx":     0.1,
             "global_gridy":     0.1,
@@ -3127,6 +2962,9 @@ class AppExcEditor(QtCore.QObject):
 
         # flag to show if the object was modified
         self.is_modified = False
+        self.history = ExcellonHistory(self)
+        self.worker_result.connect(self.history.finish)
+        self.history_changed.connect(self.update_history_ui)
 
         self.edited_obj_name = ""
 
@@ -3148,6 +2986,45 @@ class AppExcEditor(QtCore.QObject):
         # #############################################################################################################
 
         self.ui.level.toggled.connect(self.on_level_changed)
+        self.ui.undo_button.clicked.connect(self.undo)
+        self.ui.redo_button.clicked.connect(self.redo)
+        self.ui.diagnostics_button.clicked.connect(self.on_diagnostics)
+        self.ui.history_list.itemClicked.connect(lambda item: self.on_history_row(self.ui.history_list.row(item)))
+        self.ui.feature_apply.clicked.connect(self.refresh_feature_table)
+        self.ui.feature_select.clicked.connect(lambda: self.on_feature_filter_action())
+        self.ui.feature_delete.clicked.connect(lambda: self.on_feature_filter_action(delete=True))
+        self.ui.feature_table.itemSelectionChanged.connect(self.on_feature_selection)
+        # the app rebuilds the editors (New Project) while the UI stays: drop the actions of the previous editor
+        self.remove_editor_actions()
+        self.undo_action = self.app.ui.exc_editor_menu.addAction(_('Undo'), self.undo)
+        self.redo_action = self.app.ui.exc_editor_menu.addAction(_('Redo'), self.redo)
+        self.undo_action.setIcon(self.ui.undo_button.icon())
+        self.redo_action.setIcon(self.ui.redo_button.icon())
+        self.undo_action.setProperty(EDITOR_ACTION_PROPERTY, True)
+        self.redo_action.setProperty(EDITOR_ACTION_PROPERTY, True)
+        self.app.ui.exc_edit_toolbar.addAction(self.undo_action)
+        self.app.ui.exc_edit_toolbar.addAction(self.redo_action)
+        self.slot_endpoint_action = self.app.ui.exc_editor_menu.addAction(_('Edit slot endpoints'))
+        self.slot_endpoint_action.setIcon(QtGui.QIcon(self.app.resource_location + '/move32.png'))
+        self.slot_endpoint_action.setProperty(EDITOR_ACTION_PROPERTY, True)
+        self.app.ui.exc_edit_toolbar.addAction(self.slot_endpoint_action)
+        self.ui.slot_endpoint_drag.clicked.connect(lambda: self.select_tool('slot_endpoint'))
+        self.ui.slot_endpoint_load.clicked.connect(self.load_slot_endpoints)
+        self.ui.slot_endpoint_apply.clicked.connect(self.on_slot_endpoints_apply)
+        self.transform_actions = {}
+        for kind, label in (('rotate', _('Rotate selected features')), ('mirror_x', _('Mirror X')),
+                            ('mirror_y', _('Mirror Y')), ('scale', _('Scale selected features')),
+                            ('offset', _('Offset selected features'))):
+            action =self.app.ui.exc_editor_menu.addAction(label)
+            action.setIcon(QtGui.QIcon(self.app.resource_location + '/move32.png'))
+            action.setProperty(EDITOR_ACTION_PROPERTY, True)
+            action.triggered.connect(lambda checked=False, operation=kind: self.on_transform_features(operation))
+            self.app.ui.exc_edit_toolbar.addAction(action)
+            self.transform_actions[kind] = action
+            self.ui.transform_buttons[kind].clicked.connect(
+                lambda checked=False, operation=kind: self.on_transform_features(operation))
+        self.undo_action.setEnabled(False)
+        self.redo_action.setEnabled(False)
 
         # connect the toolbar signals
         self.connect_exc_toolbar_signals()
@@ -3188,6 +3065,29 @@ class AppExcEditor(QtCore.QObject):
 
         self.app.log.debug("Initialization of the Excellon Editor is finished ...")
 
+    def remove_editor_actions(self):
+        """Remove the menu/toolbar actions added by a previous Excellon editor and cut their connections."""
+        # the Excellon-only app actions are still connected to the previous (orphaned) editor
+        ui = self.app.ui
+        for action in (ui.select_drill_btn, ui.add_drill_btn, ui.add_drill_array_btn, ui.add_slot_btn,
+                       ui.add_slot_array_btn, ui.resize_drill_btn, ui.copy_drill_btn, ui.move_drill_btn,
+                       ui.delete_drill_btn, ui.exc_add_array_drill_menuitem, ui.exc_add_drill_menuitem,
+                       ui.exc_add_array_slot_menuitem, ui.exc_add_slot_menuitem, ui.exc_resize_drill_menuitem,
+                       ui.exc_copy_drill_menuitem, ui.exc_delete_drill_menuitem, ui.exc_move_drill_menuitem):
+            try:
+                action.triggered.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+        for container in (self.app.ui.exc_editor_menu, self.app.ui.exc_edit_toolbar):
+            for action in container.actions():
+                if action.property(EDITOR_ACTION_PROPERTY):
+                    try:
+                        action.triggered.disconnect()
+                    except (TypeError, RuntimeError):
+                        pass
+                    container.removeAction(action)
+                    action.deleteLater()
+
     def make_callback(self, thetool):
         def f():
             self.on_tool_select(thetool)
@@ -3201,6 +3101,7 @@ class AppExcEditor(QtCore.QObject):
             "drill_array":      {"button": self.app.ui.add_drill_array_btn, "constructor": DrillArray},
             "slot_add":         {"button": self.app.ui.add_slot_btn,        "constructor": SlotAdd},
             "slot_array":       {"button": self.app.ui.add_slot_array_btn,  "constructor": SlotArray},
+            "slot_endpoint":    {"button": self.slot_endpoint_action,     "constructor": SlotEndpointEditorExc},
             "drill_resize":     {"button": self.app.ui.resize_drill_btn,    "constructor": ResizeEditorExc},
             "drill_copy":       {"button": self.app.ui.copy_drill_btn,      "constructor": CopyEditorExc},
             "drill_move":       {"button": self.app.ui.move_drill_btn,      "constructor": MoveEditorExc},
@@ -3217,14 +3118,13 @@ class AppExcEditor(QtCore.QObject):
     @staticmethod
     def make_storage():
         # ## Shape storage.
-        storage = AppRTreeStorage()
-        storage.get_points = DrawToolShape.get_pts
-
-        return storage
+        return AppGeoEditor.make_storage()
 
     def set_editor_ui(self):
         # updated units
         self.units = self.app.app_units.upper()
+        # the default diagnostics tolerance follows the current units
+        self.ui.diagnostics_tolerance.set_value(0.001 if self.units == 'MM' else 0.00004)
 
         self.olddia_newdia.clear()
         self.tool2tooldia.clear()
@@ -3429,33 +3329,14 @@ class AppExcEditor(QtCore.QObject):
             drill_cnt = 0  # variable to store the nr of drills per tool
             slot_cnt = 0  # variable to store the nr of slots per tool
 
-            # Find no of drills for the current tool
-            for tool_dia in self.points_edit:
-                if float(tool_dia) == tool_no:
-                    drill_cnt = len(self.points_edit[tool_dia])
-
+            if first_run is not True and tool_no in self.storage_dict:
+                for shape in self.storage_dict[tool_no].get_objects():
+                    drill_cnt += isinstance(shape.geo, MultiLineString)
+                    slot_cnt += isinstance(shape.geo, Polygon)
+            else:
+                drill_cnt = len(self.points_edit.get(tool_no, ()))
+                slot_cnt = len(self.slot_points_edit.get(tool_no, ()))
             self.tot_drill_cnt += drill_cnt
-
-            # try:
-            #     # Find no of slots for the current tool
-            #     for slot in self.slot_points_edit:
-            #         if float(slot) == tool_no:
-            #             slot_cnt += 1
-            #
-            #     self.tot_slot_cnt += slot_cnt
-            # except AttributeError:
-            #     # self.app.log.debug("No slots in the Excellon file")
-            #     # Find no of slots for the current tool
-            #     for tool_dia in self.slot_points_edit:
-            #         if float(tool_dia) == tool_no:
-            #             slot_cnt = len(self.slot_points_edit[tool_dia])
-            #
-            #     self.tot_slot_cnt += slot_cnt
-
-            for tool_dia in self.slot_points_edit:
-                if float(tool_dia) == tool_no:
-                    slot_cnt = len(self.slot_points_edit[tool_dia])
-
             self.tot_slot_cnt += slot_cnt
 
             idd = QtWidgets.QTableWidgetItem('%d' % int(tool_id))
@@ -3602,6 +3483,24 @@ class AppExcEditor(QtCore.QObject):
         self.ui.tools_table_exc.itemChanged.connect(self.on_tool_edit)
         self.ui.tools_table_exc.cellPressed.connect(self.on_row_selected)
 
+        self.sync_tool_rows()
+
+    def sync_tool_rows(self):
+        selected = set(self.selected)
+        diameters = {dia for dia, storage in self.storage_dict.items()
+                     if any(shape in selected for shape in storage.get_objects())}
+        table = self.ui.tools_table_exc
+        blocker = QtCore.QSignalBlocker(table)
+        selection_blocker = QtCore.QSignalBlocker(table.selectionModel())
+        table.clearSelection()
+        for row in range(table.rowCount() - 2):
+            item = table.item(row, 1)
+            if item is not None and float(item.text()) in diameters:
+                table.selectionModel().select(table.model().index(row, 0),
+                                              QtCore.QItemSelectionModel.SelectionFlag.Select |
+                                              QtCore.QItemSelectionModel.SelectionFlag.Rows)
+        del selection_blocker, blocker
+
     def change_level(self, level):
         """
 
@@ -3640,9 +3539,225 @@ class AppExcEditor(QtCore.QObject):
             # Context Menu section
             # self.ui.tools_table_exc.setupContextMenu()
 
-    def on_tool_add(self, tooldia=None):
+    def on_transform_features(self, operation):
+        reference = self.ui.transform_reference.currentData()
+        if reference == 'point':
+            reference = tuple(entry.get_value() for entry in self.ui.transform_point)
+        if operation == 'offset':
+            return self.transform_features(operation, tuple(entry.get_value() for entry in self.ui.transform_offset))
+        value = self.ui.transform_angle.get_value() if operation == 'rotate' else self.ui.transform_scale.get_value()
+        return self.transform_features(operation, value, reference)
+
+    @excellon_operation(_('Transform features'))
+    def transform_features(self, operation, value=1.0, reference='origin'):
+        """Transform native features, including circular width for uniform scaling."""
+        if self.history.suspended:
+            return 'fail'
+        selected = set(self.selected)
+        try:
+            if self.in_action:
+                raise ValueError(_('Finish the active drawing operation first.'))
+            if operation == 'offset':
+                # the value is the (dx, dy) translation in editor units
+                offset = tuple(float(coordinate) for coordinate in value)
+                if len(offset) != 2 or not all(math.isfinite(coordinate) for coordinate in offset):
+                    raise ValueError(_('Invalid offset.'))
+                if offset == (0.0, 0.0) or not selected:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % (
+                        _('Nothing selected.') if not selected else _('The offset is zero.')))
+                    return 'fail'
+                value = 0.0
+            else:
+                value = float(value)
+            if operation not in ('rotate', 'mirror_x', 'mirror_y', 'scale', 'offset') or not math.isfinite(value):
+                raise ValueError(_('Invalid transform.'))
+            if operation == 'scale' and value <= 0:
+                raise ValueError(_('Scale must be positive and uniform.'))
+            if not selected:
+                raise ValueError(_('Nothing selected.'))
+            if any(shape.geo is None or shape.geo.is_empty for shape in selected):
+                raise ValueError(_('Empty Excellon feature.'))
+            if reference == 'origin':
+                origin = (0.0, 0.0)
+            elif reference == 'selection':
+                bounds = [shape.geo.bounds for shape in selected]
+                origin = ((min(b[0] for b in bounds) + max(b[2] for b in bounds)) / 2,
+                          (min(b[1] for b in bounds) + max(b[3] for b in bounds)) / 2)
+            else:
+                origin = tuple(float(coordinate) for coordinate in reference)
+            if len(origin) != 2 or not all(math.isfinite(coordinate) for coordinate in origin):
+                raise ValueError(_('Invalid reference point.'))
+            angle = math.radians(value)
+            cosine, sine = math.cos(angle), math.sin(angle)
+
+            def point_transform(point):
+                x, y = point[0] - origin[0], point[1] - origin[1]
+                if operation == 'rotate':
+                    x, y = x * cosine - y * sine, x * sine + y * cosine
+                elif operation == 'mirror_x':
+                    y = -y
+                elif operation == 'mirror_y':
+                    x = -x
+                elif operation == 'offset':
+                    x, y = x + offset[0], y + offset[1]
+                else:
+                    x, y = x * value, y * value
+                result = (x + origin[0], y + origin[1])
+                if not all(math.isfinite(coordinate) for coordinate in result):
+                    raise ValueError(_('Transform exceeds the coordinate range.'))
+                return result
+
+            removed, inserted, replacements = {}, {}, []
+            replacement_map = {}
+            found = set()
+            for diameter, storage in self.storage_dict.items():
+                for shape in storage.get_objects():
+                    if shape not in selected:
+                        continue
+                    found.add(shape)
+                    record = native_feature_properties(shape, diameter, 0)
+                    target = diameter * value if operation == 'scale' else diameter
+                    if not math.isfinite(target) or target <= 0:
+                        raise ValueError(_('Invalid transformed tool diameter.'))
+                    if record['type'] == 'drill':
+                        x, y = point_transform(record['center'])
+                        radius = target / 2
+                        geometry = MultiLineString([[(x - radius, y), (x + radius, y)],
+                                                    [(x, y - radius), (x, y + radius)]])
+                        replacement = DrawToolShape(geometry)
+                    else:
+                        start, stop = map(point_transform, record['endpoints'])
+                        geometry = (LineString([start, stop]).buffer(target / 2) if start != stop
+                                    else Point(start).buffer(target / 2))
+                        replacement = DrawToolShape(geometry)
+                        replacement.exc_slot = (start, stop)
+                        replacement.exc_slot_geometry = geometry
+                    native_feature_properties(replacement, target, 0)
+                    replacement.exc_source_diameter = getattr(shape, 'exc_source_diameter', diameter)
+                    removed.setdefault(diameter, []).append(shape)
+                    inserted.setdefault(target, []).append(replacement)
+                    replacements.append(replacement)
+                    replacement_map[shape] = (target, replacement)
+            if found != selected:
+                raise ValueError(_('Selection changed. Retry the operation.'))
+        except (ValueError, TypeError, OverflowError) as error:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_('Invalid Excellon transform'), str(error)))
+            return 'fail'
+        if (operation == 'rotate' and value % 360 == 0) or (operation == 'scale' and value == 1):
+            return
+        for diameter in dict.fromkeys([*removed, *inserted]):
+            if diameter not in self.storage_dict:
+                self.storage_dict[diameter] = self.make_storage()
+                self.olddia_newdia[diameter] = diameter
+            storage = self.storage_dict[diameter]
+            previous = list(storage.get_objects())
+            records = [replacement_map[shape][1] if shape in replacement_map else shape
+                       for shape in previous if shape not in replacement_map or replacement_map[shape][0] == diameter]
+            local = {replacement_map[shape][1] for shape in removed.get(diameter, [])
+                     if replacement_map[shape][0] == diameter}
+            records.extend(shape for shape in inserted.get(diameter, []) if shape not in local)
+            storage.replace(removed=previous, inserted=records)
+            self.points_edit[diameter] = [shape.geo.centroid for shape in records
+                                          if isinstance(shape.geo, MultiLineString)]
+            self.slot_points_edit[diameter] = [(0, 0) for shape in records if isinstance(shape.geo, Polygon)]
+            if not records:
+                self.storage_dict.pop(diameter)
+                self.olddia_newdia.pop(diameter, None)
+                self.points_edit.pop(diameter, None)
+                self.slot_points_edit.pop(diameter, None)
+        self.selected = replacements
+        self.tool2tooldia = {index: diameter for index, diameter in enumerate(sorted(self.storage_dict), 1)}
+        self.last_tool_selected = next(key for key, diameter in self.tool2tooldia.items()
+                                       if diameter == next(iter(inserted)))
+        self.current_storage = self.storage_dict[next(iter(inserted))]
         self.is_modified = True
-        if tooldia:
+        self.build_ui()
+        self.replot()
+
+    @excellon_operation(_('Resize features'))
+    def resize_features(self, shapes, diameter):
+        try:
+            diameter = float(diameter)
+            if not math.isfinite(diameter) or diameter <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Please enter a finite positive tool diameter.'))
+            return 'fail'
+        selected = set(shapes)
+        if not selected:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _('Nothing selected'))
+            return 'fail'
+        changes = {}
+        replacements = []
+        found = set()
+        # Compute and validate the entire result before touching any tool storage.
+        for source_dia, storage in self.storage_dict.items():
+            for shape in storage.get_objects():
+                if shape not in selected:
+                    continue
+                found.add(shape)
+                if source_dia == diameter:
+                    continue
+                geo = shape.geo
+                if geo is None or geo.is_empty or not geo.is_valid or source_dia <= 0:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _('Empty or invalid Excellon feature.'))
+                    return 'fail'
+                if isinstance(geo, MultiLineString):
+                    new_shape = DrawToolShape(scale(geo, xfact=diameter / source_dia,
+                                                   yfact=diameter / source_dia, origin='center'))
+                elif isinstance(geo, Polygon):
+                    record = feature_properties(shape, source_dia, 0)
+                    start, stop = record['endpoints']
+                    line = LineString([start, stop])
+                    native = line.buffer(source_dia / 2) if start != stop else Point(start).buffer(source_dia / 2)
+                    if native.hausdorff_distance(geo) > max(1e-8, source_dia * 0.005):
+                        self.app.inform.emit('[ERROR_NOTCL] %s' % _('The selected polygon is not a native slot.'))
+                        return 'fail'
+                    resized = line.buffer(diameter / 2) if start != stop else Point(start).buffer(diameter / 2)
+                    new_shape = DrawToolShape(resized)
+                    new_shape.exc_slot = (start, stop)
+                    new_shape.exc_slot_geometry = resized
+                else:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _('Unsupported Excellon feature.'))
+                    return 'fail'
+                new_shape.exc_source_diameter = getattr(shape, 'exc_source_diameter', source_dia)
+                changes.setdefault(source_dia, []).append(shape)
+                replacements.append(new_shape)
+        if found != selected:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Selection changed. Retry the operation.'))
+            return 'fail'
+        if not replacements:
+            return
+        if diameter not in self.storage_dict:
+            self.storage_dict[diameter] = AppGeoEditor.make_storage()
+            self.olddia_newdia[diameter] = diameter
+        self.storage_dict[diameter].insert_many(replacements)
+        for source_dia, removed in changes.items():
+            self.storage_dict[source_dia].replace(removed=removed, inserted=[])
+        for source_dia in set(changes) | {diameter}:
+            records = list(self.storage_dict[source_dia].get_objects())
+            self.points_edit[source_dia] = [shape.geo.centroid for shape in records
+                                             if isinstance(shape.geo, MultiLineString)]
+            self.slot_points_edit[source_dia] = [(0, 0) for shape in records if isinstance(shape.geo, Polygon)]
+            if not records:
+                self.storage_dict.pop(source_dia)
+                self.olddia_newdia.pop(source_dia, None)
+                self.points_edit.pop(source_dia, None)
+                self.slot_points_edit.pop(source_dia, None)
+        self.tool2tooldia = {index: dia for index, dia in enumerate(sorted(self.storage_dict), 1)}
+        self.last_tool_selected = next(key for key, dia in self.tool2tooldia.items() if dia == diameter)
+        self.current_storage = self.storage_dict[diameter]
+        unchanged = [shape for shape in self.selected if shape in found and
+                     all(shape not in removed for removed in changes.values())]
+        self.selected = unchanged + replacements
+        self.is_modified = True
+        self.build_ui()
+        self.replot()
+        self.app.inform.emit('[success] %s' % _('Done.'))
+
+    @excellon_operation(_('Add tool'))
+    def on_tool_add(self, tooldia=None):
+        if tooldia is not None and tooldia is not False:
             tool_dia = tooldia
         else:
             try:
@@ -3655,6 +3770,18 @@ class AppExcEditor(QtCore.QObject):
                     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
                     return
 
+        try:
+            tool_dia = float(tool_dia)
+        except (ValueError, TypeError):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
+            return 'fail'
+        if math.isfinite(tool_dia):
+            # storage keys and tool2tooldia values use the rounded diameter
+            tool_dia = float('%.*f' % (self.decimals, tool_dia))
+        if not math.isfinite(tool_dia) or tool_dia <= 0:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Please enter a finite positive tool diameter.'))
+            return 'fail'
+
         if tool_dia not in self.olddia_newdia:
             storage_elem = AppGeoEditor.make_storage()
             self.storage_dict[tool_dia] = storage_elem
@@ -3662,6 +3789,7 @@ class AppExcEditor(QtCore.QObject):
             # self.olddia_newdia dict keeps the evidence on current tools diameters as keys and gets updated on values
             # each time a tool diameter is edited or added
             self.olddia_newdia[tool_dia] = tool_dia
+            self.is_modified = True
         else:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Tool already in the original or actual tool list.\n" 
                                                           "Save and reedit Excellon if you need to add this tool. "))
@@ -3687,6 +3815,7 @@ class AppExcEditor(QtCore.QObject):
         except TypeError as e:
             self.app.log.debug("AppExcEditor.on_tool_add() --> %s" % str(e))
 
+    @excellon_operation(_('Delete tools'))
     def on_tool_delete(self, dia=None):
         self.is_modified = True
         deleted_tool_dia_list = []
@@ -3709,6 +3838,9 @@ class AppExcEditor(QtCore.QObject):
             return
 
         for deleted_tool_dia in deleted_tool_dia_list:
+
+            removed = set(self.storage_dict[deleted_tool_dia].get_objects())
+            self.selected[:] = [shape for shape in self.selected if shape not in removed]
 
             # delete the storage used for that tool
             storage_elem = AppGeoEditor.make_storage()
@@ -3733,6 +3865,7 @@ class AppExcEditor(QtCore.QObject):
                     self.points_edit[deleted_tool_dia] = []
 
             self.olddia_newdia.pop(deleted_tool_dia, None)
+            self.slot_points_edit.pop(deleted_tool_dia, None)
 
             self.app.inform.emit('[success] %s: %s %s' %
                                  (_("Deleted tool with diameter"), str(deleted_tool_dia), str(self.units)))
@@ -3742,149 +3875,38 @@ class AppExcEditor(QtCore.QObject):
 
         self.build_ui()
 
+    @excellon_operation(_('Change tool diameter'))
     def on_tool_edit(self, item_changed):
-        # if connected, disconnect the signal from the slot on item_changed as it creates issues
-        try:
-            self.ui.tools_table_exc.itemChanged.disconnect()
-        except TypeError:
-            pass
-
-        try:
-            self.ui.tools_table_exc.cellPressed.disconnect()
-        except TypeError:
-            pass
-        # self.ui.tools_table_exc.selectionModel().currentChanged.disconnect()
-
-        self.is_modified = True
-        # new_dia = None
-
         try:
             new_dia = float(self.ui.tools_table_exc.currentItem().text())
-        except ValueError as e:
-            self.app.log.debug("AppExcEditor.on_tool_edit() --> %s" % str(e))
+            if math.isfinite(new_dia):
+                # storage keys and tool2tooldia values use the rounded diameter
+                new_dia = float('%.*f' % (self.decimals, new_dia))
+            old_dia = self.tool2tooldia[self.ui.tools_table_exc.currentRow() + 1]
+            if not math.isfinite(new_dia) or new_dia <= 0:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError, KeyError):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Please enter a finite positive tool diameter.'))
+            self.build_ui()
+            return 'fail'
+        if new_dia == old_dia:
             return
-
-        row_of_item_changed = self.ui.tools_table_exc.currentRow()
-        # rows start with 0, tools start with 1 so we adjust the value by 1
-        key_in_tool2tooldia = row_of_item_changed + 1
-        old_dia = self.tool2tooldia[key_in_tool2tooldia]
-
-        # SOURCE storage
-        source_storage = self.storage_dict[old_dia]
-
-        # DESTINATION storage
-        # tool diameter is not used so we create a new tool with the desired diameter
-        if new_dia not in self.olddia_newdia:
-            destination_storage = AppGeoEditor.make_storage()
-            self.storage_dict[new_dia] = destination_storage
-
-            # self.olddia_newdia dict keeps the evidence on current tools diameters as keys and gets updated on values
-            # each time a tool diameter is edited or added
+        shapes = list(self.storage_dict[old_dia].get_objects())
+        if shapes:
+            return self.resize_features(shapes, new_dia)
+        if new_dia not in self.storage_dict:
+            self.storage_dict[new_dia] = self.storage_dict[old_dia]
             self.olddia_newdia[new_dia] = new_dia
-        else:
-            # tool diameter is already in use so we move the drills from the prior tool to the new tool
-            destination_storage = self.storage_dict[new_dia]
-
-        # since we add a new tool, we update also the intial state of the plugin_table through it's dictionary
-        # we add a new entry in the tool2tooldia dict
-        self.tool2tooldia[len(self.olddia_newdia)] = new_dia
-
-        # CHANGE the elements geometry according to the new diameter
-        factor = new_dia / old_dia
-        new_geo = Polygon()
-        for shape_exc in source_storage.get_objects():
-            geo_list = []
-            if isinstance(shape_exc.geo, MultiLineString):
-                for subgeo in shape_exc.geo.geoms:
-                    geo_list.append(scale(subgeo, xfact=factor, yfact=factor, origin='center'))
-                new_geo = MultiLineString(geo_list)
-            elif isinstance(shape_exc.geo, Polygon):
-                # I don't have any info regarding the angle of the slot geometry, nor how thick it is or
-                # how long it is given the angle. So I will have to make an approximation because
-                # we need to conserve the slot length, we only resize the diameter for the tool
-                # Therefore scaling won't work and buffering will not work either.
-
-                # First we get the Linestring that is one that the original slot is built around with the
-                # tool having the diameter sel_dia
-                poly = shape_exc.geo
-                xmin, ymin, xmax, ymax = poly.bounds
-                # a line that is certain to be bigger than our slot because it's the diagonal
-                # of it's bounding box
-                poly_diagonal = LineString([(xmin, ymin), (xmax, ymax)])
-                poly_centroid = poly.centroid
-                # center of the slot geometry
-                poly_center = (poly_centroid.x, poly_centroid.y)
-
-                # make a list of intersections with the rotated line
-                list_of_cuttings = []
-                for angle in range(0, 359, 1):
-                    rot_poly_diagonal = rotate(poly_diagonal, angle=angle, origin=poly_center)
-                    cut_line = rot_poly_diagonal.intersection(poly)
-                    cut_line_len = cut_line.length
-                    list_of_cuttings.append(
-                        (cut_line_len, cut_line)
-                    )
-                # find the cut_line with the maximum length which is the LineString for which the start
-                # and stop point are the start and stop point of the slot as in the Gerber file
-                cut_line_with_max_length = max(list_of_cuttings, key=lambda i: i[0])[1]
-                # find the coordinates of this line
-                cut_line_with_max_length_coords = list(cut_line_with_max_length.coords)
-                # extract the first and last point of the line and build some buffered polygon circles
-                # around them
-                start_pt = Point(cut_line_with_max_length_coords[0])
-                stop_pt = Point(cut_line_with_max_length_coords[1])
-                start_cut_geo = start_pt.buffer(new_dia / 2)
-                stop_cut_geo = stop_pt.buffer(new_dia / 2)
-
-                # and we cut the above circle polygons from our line and get in this way a line around
-                # which we can build the new slot by buffering with the new tool diameter
-                new_line = cut_line_with_max_length.difference(start_cut_geo)
-                new_line = new_line.difference(stop_cut_geo)
-
-                # create the geometry for the resized slot by buffering with half of the
-                # new diameter value: new_dia
-                new_geo = new_line.buffer(new_dia / 2)
-
-            try:
-                self.points_edit.pop(old_dia, None)
-            except KeyError:
-                pass
-            try:
-                self.slot_points_edit.pop(old_dia, None)
-            except KeyError:
-                pass
-
-            # add bogus drill/slots points (for total count of drills/slots)
-            # for drills
-            if isinstance(shape_exc.geo, MultiLineString):
-                if new_dia not in self.points_edit:
-                    self.points_edit[new_dia] = [(0, 0)]
-                else:
-                    self.points_edit[new_dia].append((0, 0))
-
-            # for slots
-            if isinstance(shape_exc.geo, Polygon):
-                if new_dia not in self.slot_points_edit:
-                    self.slot_points_edit[new_dia] = [(0, 0)]
-                else:
-                    self.slot_points_edit[new_dia].append((0, 0))
-
-            self.add_exc_shape(shp=DrawToolShape(new_geo), storage=destination_storage)
-
-        # update the UI and the CANVAS
+        self.storage_dict.pop(old_dia)
+        self.olddia_newdia.pop(old_dia, None)
+        self.points_edit.pop(old_dia, None)
+        self.slot_points_edit.pop(old_dia, None)
+        self.tool2tooldia = {index: dia for index, dia in enumerate(sorted(self.storage_dict), 1)}
+        self.last_tool_selected = next(key for key, dia in self.tool2tooldia.items() if dia == new_dia)
+        self.current_storage = self.storage_dict[new_dia]
+        self.is_modified = True
         self.build_ui()
         self.replot()
-
-        # delete the old tool
-        self.on_tool_delete(dia=old_dia)
-
-        # we reactivate the signals after the after the tool editing
-        self.ui.tools_table_exc.itemChanged.connect(self.on_tool_edit)
-        self.ui.tools_table_exc.cellPressed.connect(self.on_row_selected)
-
-        self.app.inform.emit('[success] %s' % _("Done."))
-
-        # self.ui.tools_table_exc.selectionModel().currentChanged.connect(self.on_row_selected)
 
     def on_name_activate(self):
         self.edited_obj_name = self.ui.name_entry.get_value()
@@ -3893,6 +3915,7 @@ class AppExcEditor(QtCore.QObject):
         # adjust the status of the menu entries related to the editor
         self.app.ui.menueditedit.setDisabled(True)
         self.app.ui.menueditok.setDisabled(False)
+        self.app.ui.on_history_changed('', '')
         # adjust the visibility of some of the canvas context menu
         self.app.ui.popmenu_edit.setVisible(False)
         self.app.ui.popmenu_save.setVisible(True)
@@ -3913,7 +3936,8 @@ class AppExcEditor(QtCore.QObject):
         self.tool_shape.enabled = True
         # self.app.app_cursor.enabled = True
 
-        self.app.ui.corner_snap_btn.setVisible(True)
+        # the Excellon editor has its own snap modes (see snap()), the app corner snap button does not apply
+        self.app.ui.corner_snap_btn.setVisible(False)
         self.app.ui.snap_magnet.setVisible(True)
 
         self.app.ui.exc_editor_menu.setDisabled(False)
@@ -3946,6 +3970,7 @@ class AppExcEditor(QtCore.QObject):
         self.ui.drills_frame.show()
 
     def deactivate(self):
+        self.history.reset()
         try:
             QtGui.QGuiApplication.restoreOverrideCursor()
         except Exception:
@@ -3954,6 +3979,7 @@ class AppExcEditor(QtCore.QObject):
         # adjust the status of the menu entries related to the editor
         self.app.ui.menueditedit.setDisabled(False)
         self.app.ui.menueditok.setDisabled(True)
+        history_of(self.app).notify()
         # adjust the visibility of some of the canvas context menu
         self.app.ui.popmenu_edit.setVisible(True)
         self.app.ui.popmenu_save.setVisible(False)
@@ -4078,6 +4104,13 @@ class AppExcEditor(QtCore.QObject):
             pass
 
     def clear(self):
+        if isinstance(self.active_tool, SlotEndpointEditorExc):
+            self.active_tool.clean_up()
+        self._exc_rendered = {}
+        self._exc_render_state = None
+        self._exc_render_owned = {}
+        self._exc_feature_rows = None
+        self._slot_numeric_target = None
         self.active_tool = None
         # self.shape_buffer = []
         self.selected.clear()
@@ -4093,6 +4126,7 @@ class AppExcEditor(QtCore.QObject):
         # self.storage = AppExcEditor.make_storage()
         self.replot()
 
+    @excellon_session
     def edit_fcexcellon(self, edited_obj):
         """
         Imports the geometry from the given FlatCAM Excellon object into the editor.
@@ -4175,10 +4209,22 @@ class AppExcEditor(QtCore.QObject):
             if opt_key.find('excellon_') == 0:
                 self.data_defaults[opt_key] = deepcopy(opt_val)
 
+        # Normalize detached native values, never the source object, into editor units.
+        # the editor units always follow the application units, never a value left by a previous session
+        self.units = self.app.app_units.upper()
+        factor = 1.0 if edited_obj.units.upper() == self.units else (25.4 if self.units == 'MM' else 1 / 25.4)
+        native_tools = {}
+        for tool, values in edited_obj.tools.items():
+            native_tools[tool] = dict(values)
+            native_tools[tool]['tooldia'] = values['tooldia'] * factor
+            native_tools[tool]['drills'] = [scale(point, xfact=factor, yfact=factor, origin=(0, 0))
+                                             for point in values.get('drills', [])]
+            native_tools[tool]['slots'] = [tuple(scale(point, xfact=factor, yfact=factor, origin=(0, 0))
+                                                  for point in slot) for slot in values.get('slots', [])]
         self.points_edit = {}
         # build the self.points_edit dict {dimaters: [point_list]}
-        for tool, tool_dict in self.edited_obj.tools.items():
-            tool_dia = self.dec_format(self.edited_obj.tools[tool]['tooldia'])
+        for tool, tool_dict in native_tools.items():
+            tool_dia = self.dec_format(tool_dict['tooldia'])
 
             if 'drills' in tool_dict and tool_dict['drills']:
                 for drill in tool_dict['drills']:
@@ -4189,8 +4235,8 @@ class AppExcEditor(QtCore.QObject):
 
         self.slot_points_edit = {}
         # build the self.slot_points_edit dict {dimaters: {"start": Point, "stop": Point}}
-        for tool, tool_dict in self.edited_obj.tools.items():
-            tool_dia = float('%.*f' % (self.decimals, self.edited_obj.tools[tool]['tooldia']))
+        for tool, tool_dict in native_tools.items():
+            tool_dia = float('%.*f' % (self.decimals, tool_dict['tooldia']))
 
             if 'slots' in tool_dict and tool_dict['slots']:
                 for slot in tool_dict['slots']:
@@ -4220,8 +4266,7 @@ class AppExcEditor(QtCore.QObject):
         # now that we have data, create the appGUI interface and add it to the Tool Tab
         self.build_ui(first_run=True)
 
-        # we activate this after the initial build as we don't need to see the tool been populated
-        self.ui.tools_table_exc.itemChanged.connect(self.on_tool_edit)
+        # build_ui() connects itemChanged to on_tool_edit() exactly once, after populating the table
 
         # build the geometry for each tool-diameter, each drill will be represented by a '+' symbol
         # and then add it to the storage elements (each storage elements is a member of a list
@@ -4255,7 +4300,10 @@ class AppExcEditor(QtCore.QObject):
                     self.storage_dict[tool_dia] = storage_elem
 
                 if shape_geo is not None:
-                    slot_shapes.append(DrawToolShape(shape_geo))
+                    shape = DrawToolShape(shape_geo)
+                    shape.exc_slot = (tuple(elem_dict['start'].coords[0]), tuple(elem_dict['stop'].coords[0]))
+                    shape.exc_slot_geometry = shape_geo
+                    slot_shapes.append(shape)
             # 1 batch for each tool
             if slot_shapes:
                 self.add_exc_shape(slot_shapes, self.storage_dict[tool_dia])
@@ -4272,13 +4320,26 @@ class AppExcEditor(QtCore.QObject):
                 )
             ))))
 
-    def update_fcexcellon(self, exc_obj):
+    def update_fcexcellon(self, exc_obj, in_place=False, on_complete=None):
         """
-        Create a new Excellon object that contain the edited content of the source Excellon object
+        Save as New (in_place False): create a new Excellon object that contain the edited content of the source
+        Excellon object; the source object is not changed.
+        Save (in_place True): the edited content goes into the source object, see _save_excellon_in_place().
 
-        :param exc_obj: ExcellonObject
+        :param exc_obj:     ExcellonObject
+        :param in_place:    True to update the source object
+        :param on_complete: in_place only: called on the GUI thread after the source is updated and the editor is
+                            deactivated
         :return: None
         """
+
+        if not self.history.ready() or self.history.pending is not None:
+            if self.history.pending is not None:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("A save is already in progress."))
+            return 'fail'
+
+        # a second save (after a failed one) must not append to the tools of the first
+        self.new_tools = {}
 
         # this dictionary will contain tooldia's as keys and a list of coordinates tuple as values
         # the values of this dict are coordinates of the holes (drills)
@@ -4296,60 +4357,22 @@ class AppExcEditor(QtCore.QObject):
         """
         edited_slot_points = {}
 
-        for storage_tooldia in self.storage_dict:
-            for x in self.storage_dict[storage_tooldia].get_objects():
-                if isinstance(x.geo, MultiLineString):
-                    # all x.geo in self.storage_dict[storage] are MultiLinestring objects for drills
-                    # each MultiLineString is made out of Linestrings
-                    # select first Linestring object in the current MultiLineString
-                    first_linestring = x.geo.geoms[0]
-                    # get it's coordinates
-                    first_linestring_coords = first_linestring.coords
-                    x_coord = first_linestring_coords[0][0] + (float(first_linestring.length / 2))
-                    y_coord = first_linestring_coords[0][1]
-
-                    # create a tuple with the coordinates (x, y) and add it to the list that is the value of the
-                    # edited_points dictionary
-                    point = (x_coord, y_coord)
-                    if storage_tooldia not in edited_points:
-                        edited_points[storage_tooldia] = [point]
+        try:
+            for storage_tooldia, storage in self.storage_dict.items():
+                if not math.isfinite(storage_tooldia) or storage_tooldia <= 0:
+                    raise ValueError('Invalid Excellon tool diameter.')
+                for index, shape in enumerate(storage.get_objects()):
+                    record = native_feature_properties(shape, storage_tooldia, index)
+                    if record['type'] == 'drill':
+                        edited_points.setdefault(storage_tooldia, []).append(record['center'])
                     else:
-                        edited_points[storage_tooldia].append(point)
-                elif isinstance(x.geo, Polygon):
-                    # create a tuple with the points (start, stop) and add it to the list that is the value of the
-                    # edited_points dictionary
-
-                    # first determine the start and stop coordinates for the slot knowing the geometry and the tool
-                    # diameter
-                    radius = float(storage_tooldia) / 2
-                    radius = radius - 0.0000001
-
-                    poly = x.geo
-                    poly = poly.buffer(-radius)
-
-                    if not poly.is_valid or poly.is_empty:
-                        # print("Polygon not valid: %s" % str(poly.wkt))
-                        continue
-
-                    xmin, ymin, xmax, ymax = poly.bounds
-                    line_one = LineString([(xmin, ymin), (xmax, ymax)]).intersection(poly).length
-                    line_two = LineString([(xmin, ymax), (xmax, ymin)]).intersection(poly).length
-
-                    if line_one < line_two:
-                        point_elem = {
-                            "start": (xmin, ymax),
-                            "stop": (xmax, ymin)
-                        }
-                    else:
-                        point_elem = {
-                            "start": (xmin, ymin),
-                            "stop": (xmax, ymax)
-                        }
-
-                    if storage_tooldia not in edited_slot_points:
-                        edited_slot_points[storage_tooldia] = [point_elem]
-                    else:
-                        edited_slot_points[storage_tooldia].append(point_elem)
+                        start, stop = record['endpoints']
+                        edited_slot_points.setdefault(storage_tooldia, []).append({'start': start, 'stop': stop})
+        except ValueError as error:
+            self.app.log.error('Excellon editor save --> %s' % str(error))
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                'The edited geometry cannot be represented by circular Excellon drills or slots.'))
+            return 'fail'
 
         # recreate the drills and tools to be added to the new Excellon edited object
         # first, we look in the tool table if one of the tool diameters was changed then
@@ -4373,8 +4396,10 @@ class AppExcEditor(QtCore.QObject):
             #     edited_points[initial_dia] = []
 
         for el in changed_key:
-            edited_points[el[1]] = edited_points.pop(el[0])
-            edited_slot_points[el[1]] = edited_slot_points.pop(el[0])
+            if el[0] in edited_points:
+                edited_points.setdefault(el[1], []).extend(edited_points.pop(el[0]))
+            if el[0] in edited_slot_points:
+                edited_slot_points.setdefault(el[1], []).extend(edited_slot_points.pop(el[0]))
 
         # Let's sort the edited_points dictionary by keys (diameters) and store the result in a zipped list
         # ordered_edited_points is a ordered list of tuples;
@@ -4446,99 +4471,140 @@ class AppExcEditor(QtCore.QObject):
                 )
                 self.new_tools[current_tool]['solid_geometry'].append(poly)
 
-        if self.is_modified is True:
-            if "_edit" in self.edited_obj_name:
-                try:
-                    idd = int(self.edited_obj_name[-1]) + 1
-                    self.edited_obj_name = self.edited_obj_name[:-1] + str(idd)
-                except ValueError:
-                    self.edited_obj_name += "_1"
-            else:
-                self.edited_obj_name += "_edit"
+        for values in self.new_tools.values():
+            values.setdefault('drills', [])
+            values.setdefault('slots', [])
+        if in_place:
+            return self._save_excellon_in_place(exc_obj, on_complete)
 
-        def deactivate_signal_handler(_):
+        return AppExcEditor._queue_excellon_save(self, exc_obj, False, on_complete)
+
+    def _queue_excellon_save(self, source, in_place, on_complete):
+        """Snapshot on the GUI thread; workers never read mutable editor/session state."""
+        outname = source.obj_options['name'] if in_place else edit_copy_name(self.edited_obj_name)
+        tools = tools_with_data(source.tools, self.new_tools, self.olddia_newdia, self.data_defaults, self.decimals)
+        units = getattr(self, 'units', source.units)
+        factor = 1.0 if source.units.upper() == units else (25.4 if units == 'MM' else 1 / 25.4)
+        # Splits inherit machining data. A merged diameter keeps its first owner's data.
+        source_data = {}
+        for values in source.tools.values():
+            source_data.setdefault(round(values['tooldia'] * factor, self.decimals), values.get('data'))
+        for values in tools.values():
+            storage = self.storage_dict.get(values['tooldia'])
+            first = next(iter(storage.get_objects()), None) if storage is not None else None
+            diameter = getattr(first, 'exc_source_diameter', values['tooldia'])
+            if source_data.get(round(diameter, self.decimals)):
+                values['data'] = deepcopy(source_data[round(diameter, self.decimals)])
+        options = {key: deepcopy(value) for key, value in source.obj_options.items()}
+        attrs = {key: deepcopy(getattr(source, key)) for key in (
+            'units', 'zeros', 'excellon_format_upper_mm', 'excellon_format_lower_mm',
+            'excellon_format_upper_in', 'excellon_format_lower_in', 'excellon_units', 'geo_steps_per_circle'
+        ) if hasattr(source, key)}
+        attrs['units'] = units
+        object_type, app = type(source), self.app
+
+        def build():
+            with app.proc_container.new('%s...' % _("Generating")):
+                edited = object_type(outname, app=app)
+                edited.tools = tools
+                for key, value in options.items():
+                    edited.obj_options[key] = value
+                edited.obj_options['name'] = outname
+                for key, value in attrs.items():
+                    setattr(edited, key, value)
+                if edited.create_geometry() == 'fail':
+                    raise ValueError('create_geometry() failed')
+                if not edited.regenerate_source(name=outname):
+                    raise ValueError('regenerate_source() failed')
+                edited.moveToThread(app.main_thread)
+                return edited
+
+        def commit(edited):
+            if self.edited_obj is not source:
+                # history.finish() clears the pending save after this returns, the editor is not blocked
+                app.inform.emit('[WARNING_NOTCL] %s' % _("The edited object changed while saving. "
+                                                         "The saved content was discarded."))
+                return
+            if in_place:
+                AppExcEditor.apply_edited_excellon(source, edited)
+            else:
+                def initialize(new_obj, app_obj):
+                    for key, value in attrs.items():
+                        setattr(new_obj, key, value)
+                    AppExcEditor.apply_edited_excellon(new_obj, edited)
+
+                created = app.app_obj.new_object('excellon', outname, initialize)
+                if created is None or created == 'fail':
+                    raise ValueError('Excellon object creation failed')
             self.deactivate()
+            self.edited_obj = None
+            app.inform.emit('[success] %s' % _("Excellon editing finished."))
+            if on_complete is not None:
+                on_complete()
 
-        self.app.connect_custom_signal(deactivate_signal_handler, object)
-        self.app.worker_task.emit({'fcn': self.new_edited_excellon,
-                                   'params': [self.edited_obj_name, self.new_tools]})
+        return self.history.submit(build, commit)
 
-
-        return self.edited_obj_name
-
-    @staticmethod
-    def update_options(obj):
-        try:
-            if not obj.obj_options:
-                obj.obj_options = {'xmin': 0, 'ymin': 0, 'xmax': 0, 'ymax': 0}
-                return True
-            else:
-                return False
-        except AttributeError:
-            obj.obj_options = {}
-            return True
-
-    def new_edited_excellon(self, outname,  n_tools):
+    def _save_excellon_in_place(self, source, on_complete):
         """
-        Creates a new Excellon object for the edited Excellon. Thread-safe.
+        The edited content goes into the source Excellon object, which keeps its name, history uid, place in the
+        project and options (the bounds are recomputed). The tools keep their 'data' (see tools_with_data()).
 
-        :param outname:     Name of the resulting object. None causes the
-                            name to be that of the file.
-        :type outname:      str
+        The content is built by a worker task in a detached Excellon object, without touching the source. The source
+        is changed on the GUI thread, in one step (apply_edited_excellon()). A failed build leaves the source
+        unchanged and the editor open, with an error message.
 
-        :param n_tools:     The new Tools storage
+        :param source:      the source ExcellonObject
+        :param on_complete: called on the GUI thread after the source is updated and the editor is deactivated; it
+                            calls refresh_edited_excellon() (after it cleans the Properties area)
         :return:            None
         """
+        return AppExcEditor._queue_excellon_save(self, source, True, on_complete)
 
-        self.app.log.debug("Update the Excellon object with edited content. Source is %s" %
-                           self.edited_obj.obj_options['name'])
+    @staticmethod
+    def apply_edited_excellon(source, edited):
+        """
+        Put the content of a detached edited Excellon object into the source object. The name, history uid, tree
+        position and obj_options of the source stay; the bounds in obj_options are recomputed. All the values are
+        read before the first assignment, a failure leaves the source unchanged.
 
-        new_tools = n_tools
+        :param source:  the source ExcellonObject
+        :param edited:  the detached ExcellonObject made by _queue_excellon_save()
+        :return:        None
+        """
+        bounds = get_finite_bounds(edited)
+        tools = edited.tools
+        solid_geometry = edited.solid_geometry
+        source_file = edited.source_file
+        keys = ('xmin', 'ymin', 'xmax', 'ymax')
+        previous = (source.tools, source.solid_geometry, source.source_file, source.shape_indexes_dict)
+        previous_units = source.units
+        previous_bounds = {key: source.obj_options[key] for key in keys if key in source.obj_options}
+        try:
+            source.tools = tools
+            source.units = edited.units
+            source.solid_geometry = solid_geometry
+            source.source_file = source_file
+            source.shape_indexes_dict = {}
+            for key, value in zip(keys, bounds):
+                source.obj_options[key] = value
+        except Exception:
+            source.tools, source.solid_geometry, source.source_file, source.shape_indexes_dict = previous
+            source.units = previous_units
+            for key in keys:
+                if key in previous_bounds:
+                    source.obj_options[key] = previous_bounds[key]
+                else:
+                    source.obj_options.pop(key, None)
+            raise
 
-        # How the object should be initialized
-        def obj_init(new_obj, app_obj):
-            new_obj.tools = deepcopy(new_tools)
-
-            new_obj.obj_options['name'] = outname
-
-            # add a 'data' dict for each tool with the default values
-            for tool in new_obj.tools:
-                new_obj.tools[tool]['data'] = {}
-                new_obj.tools[tool]['data'].update(deepcopy(self.data_defaults))
-
-            try:
-                new_obj.create_geometry()
-            except KeyError:
-                self.app.inform.emit('[ERROR_NOTCL] %s' %
-                                     _("There are no Tools definitions in the file. Aborting Excellon creation.")
-                                     )
-            except Exception:
-                msg = '[ERROR] %s' % \
-                      _("An internal error has occurred. See shell.\n")
-                msg += traceback.format_exc()
-                app_obj.inform.emit(msg)
-                return
-
-        with self.app.proc_container.new('%s...' % _("Generating")):
-
-            try:
-                edited_obj = self.app.app_obj.new_object("excellon", outname, obj_init)
-                edited_obj.regenerate_source()
-            except Exception as e:
-                self.app.custom_signal.emit(None) # calls deactivate_signal_handler() on UI Thread
-
-                # make sure that we do not carry the reference of the edited object further along
-                self.edited_obj = None
-
-                self.app.log.error("Error on Edited object creation: %s" % str(e))
-                return
-
-            self.app.custom_signal.emit(None)  # calls deactivate_signal_handler() on UI Thread
-
-            # make sure that we do not carry the reference of the edited object further along
-            self.edited_obj = None
-
-            self.app.inform.emit('[success] %s' % _("Excellon editing finished."))
+    @staticmethod
+    def refresh_edited_excellon(source):
+        """
+        Refresh the GUI of a source object after apply_edited_excellon(): tools table, plot, Properties.
+        """
+        source.build_ui()
+        source.plot()
+        source.app.app_obj.object_changed.emit(source)
 
     def on_tool_select(self, tool):
         """
@@ -4546,6 +4612,8 @@ class AppExcEditor(QtCore.QObject):
 
         :rtype : None
         """
+        if isinstance(self.active_tool, SlotEndpointEditorExc):
+            self.active_tool.clean_up()
         current_tool = tool
 
         self.app.log.debug("on_tool_select('%s')" % tool)
@@ -4575,8 +4643,154 @@ class AppExcEditor(QtCore.QObject):
                 self.select_tool('drill_select')
                 self.active_tool = SelectEditorExc(self)
 
+    def get_pick_index(self):
+        """
+        :return: (tree, refs): tree is a STRtree on the pick areas of the features of all the tools (None if there are
+                 none), refs is the list of the shapes in the same order. The index is made again only when a tool
+                 storage changed.
+        """
+        state = tuple((dia, id(storage), getattr(storage, 'revision', None))
+                      for dia, storage in self.storage_dict.items())
+        cache = getattr(self, '_pick_cache', None)
+        if cache is not None and cache[0] == state:
+            return cache[1], cache[2]
+
+        refs, areas = [], []
+        for storage in self.storage_dict.values():
+            for shape in storage.get_objects():
+                geo = shape.geo
+                if not isinstance(geo, BaseGeometry) or geo.is_empty:
+                    continue
+                if isinstance(geo, MultiLineString):
+                    # a drill is the cross of its circle: the whole circle is the pick area
+                    minx, miny, maxx, maxy = geo.bounds
+                    geo = Point((minx + maxx) / 2, (miny + maxy) / 2).buffer(max(maxx - minx, maxy - miny) / 2)
+                refs.append(shape)
+                areas.append(geo)
+        tree = STRtree(areas) if refs else None
+        self._pick_cache = (state, tree, refs, areas)
+        self._pick_cycle = None
+        return tree, refs
+
+    def pick_candidates(self, point):
+        """
+        All the features under (or near, PICK_TOLERANCE_PX screen pixels) a point, the best first: the nearest, then
+        the smaller area (a drill on a slot is picked before the slot), then the storage order.
+
+        :param point:   (x, y) in plot units
+        :return:        list of DrawToolShape
+        """
+        tree, refs = self.get_pick_index()
+        if tree is None:
+            return []
+        areas = self._pick_cache[3]
+
+        try:
+            tol = PICK_TOLERANCE_PX * self.canvas.pixel_size()
+        except (AttributeError, TypeError):
+            tol = 0
+        if not tol or not math.isfinite(tol):
+            tol = 0
+        pt = Point(point[0], point[1])
+        found = []
+        for index in tree.query(box(point[0] - tol, point[1] - tol, point[0] + tol, point[1] + tol)):
+            distance = pt.distance(areas[int(index)])
+            if distance <= tol:
+                found.append((round(distance, 9), areas[int(index)].area, int(index)))
+        found.sort()
+        return [refs[index] for distance, area, index in found]
+
+    def pick_cycle_at(self, point):
+        """
+        Pick a feature, and go to the next candidate when the click is repeated at the same place (less than
+        CLICK_DRAG_THRESHOLD_PX screen pixels from the last pick, same candidates, same storages).
+
+        :return: (hit, previous, position, count): hit is the picked shape or None; previous is the shape that the last
+                 click picked when this click is a repeat, else None; position is the index of hit in the candidates;
+                 count is the number of candidates
+        """
+        candidates = self.pick_candidates(point)
+        if not candidates:
+            self._pick_cycle = None
+            return None, None, 0, 0
+        ids = tuple(id(shape) for shape in candidates)
+        state = self._pick_cache[0]
+        last = getattr(self, '_pick_cycle', None)
+        position, previous = 0, None
+        if last is not None and len(candidates) > 1 and last['ids'] == ids and last['state'] == state:
+            try:
+                moved = math.hypot(point[0] - last['point'][0], point[1] - last['point'][1]) / self.canvas.pixel_size()
+            except (AttributeError, TypeError, ZeroDivisionError):
+                moved = float('inf')
+            if moved < CLICK_DRAG_THRESHOLD_PX:
+                position = (last['position'] + 1) % len(candidates)
+                previous = candidates[last['position']]
+        self._pick_cycle = {'point': tuple(point), 'ids': ids, 'state': state, 'position': position}
+        return candidates[position], previous, position, len(candidates)
+
+    def click_select(self, point):
+        """
+        Select the feature under a click. With the multiple selection key, the click adds the feature to the
+        selection or removes it; without the key, the feature is the new selection. A click where there is no feature
+        clears the selection. A repeated click at the same place selects the next feature under the cursor. The
+        tool table follows the selection.
+
+        :param point:   (x, y) in plot units
+        """
+        obj_to_add, previous, position, count = self.pick_cycle_at(point)
+        if obj_to_add is None:
+            self.selected = []
+        else:
+            key_modifier = QtWidgets.QApplication.keyboardModifiers()
+            if key_modifier == QtCore.Qt.KeyboardModifier.ShiftModifier:
+                mod_key = 'Shift'
+            elif key_modifier == QtCore.Qt.KeyboardModifier.ControlModifier:
+                mod_key = 'Control'
+            else:
+                mod_key = None
+
+            if mod_key == self.app.options.get(
+                    "global_mselect_key",
+                    self.app.defaults.get(
+                        "global_mselect_key",
+                        self.app.defaults.factory_defaults.get("global_mselect_key")
+                    )):
+                if previous is not None:
+                    self.selected = [shape for shape in self.selected if shape is not previous]
+                    if not any(shape is obj_to_add for shape in self.selected):
+                        self.selected.append(obj_to_add)
+                # a single candidate still toggles with the multiple selection key
+                elif any(shape is obj_to_add for shape in self.selected):
+                    self.selected = [shape for shape in self.selected if shape is not obj_to_add]
+                else:
+                    self.selected.append(obj_to_add)
+            else:
+                self.selected = [obj_to_add]
+            if count > 1:
+                self.app.inform.emit('%s %d / %d. %s' % (
+                    _("Feature"), position + 1, count, _("Click again at the same place to select the next one.")))
+        self.sync_tool_table_selection()
+
+    def sync_tool_table_selection(self):
+        """Select in the tools table the rows of the tools that have selected features."""
+        table = self.ui.tools_table_exc
+        table.clearSelection()
+        selected = set(self.selected)
+        tools = {dia for dia, storage in self.storage_dict.items()
+                 if any(shape in selected for shape in storage.get_objects())}
+        # selecting the rows must not run the row click handler
+        try:
+            table.cellPressed.disconnect()
+        except (TypeError, AttributeError):
+            pass
+        for key, dia in self.tool2tooldia.items():
+            if dia in tools:
+                table.selectRow(int(key) - 1)
+                self.last_tool_selected = int(key)
+        table.cellPressed.connect(self.on_row_selected)
+
     def on_row_selected(self, row, col):
-        key_modifier = QtWidgets.QApplication.keyboardModifiers()
+        key_modifier =QtWidgets.QApplication.keyboardModifiers()
         if self.app.options.get(
                 "global_mselect_key",
                 self.app.defaults.get(
@@ -4626,13 +4840,14 @@ class AppExcEditor(QtCore.QObject):
 
         if event.button == 1:
             self.clicked_pos = self.canvas.translate_coords(event_pos)
-            if self.app.grid_status():
-                self.clicked_pos = self.app.geo_editor.snap(self.clicked_pos[0], self.clicked_pos[1])
+            if self.app.grid_status() and self.active_tool.name not in ('drill_select', 'slot_endpoint'):
+                self.clicked_pos = self.snap(self.clicked_pos[0], self.clicked_pos[1])
             else:
                 self.clicked_pos = (self.clicked_pos[0], self.clicked_pos[1])
 
             self.on_canvas_click_left_handler()
 
+    @excellon_operation(_('Draw features'), generic=True)
     def on_canvas_click_left_handler(self, custom_pos=None):
         self.app.ui.rel_position_label.setText("<b>Dx</b>: %.4f&nbsp;&nbsp;  <b>Dy</b>: "
                                                "%.4f&nbsp;&nbsp;&nbsp;&nbsp;" % (0, 0))
@@ -4694,8 +4909,8 @@ class AppExcEditor(QtCore.QObject):
 
         pos_canvas = self.canvas.translate_coords(event_pos)
 
-        if self.app.grid_status():
-            pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
+        if self.app.grid_status() and self.active_tool.name != 'drill_select':
+            pos = self.snap(pos_canvas[0], pos_canvas[1])
         else:
             pos = (pos_canvas[0], pos_canvas[1])
 
@@ -4733,6 +4948,10 @@ class AppExcEditor(QtCore.QObject):
         # if the released mouse button was LMB then test if we had a right-to-left selection or a left-to-right
         # selection and then select a type of selection ("enclosing" or "touching")
         if event.button == 1:  # left click
+            if isinstance(self.active_tool, SlotEndpointEditorExc):
+                self.app.selection_type = None
+                self.active_tool.click_release(pos)
+                return
             if self.app.selection_type is not None:
                 try:
                     self.draw_selection_area_handler(self.clicked_pos, pos, self.app.selection_type)
@@ -4800,9 +5019,8 @@ class AppExcEditor(QtCore.QObject):
             return
 
         # ## Snap coordinates
+        x, y = self.snap(x, y)
         if self.app.grid_status():
-            x, y = self.app.geo_editor.snap(x, y)
-
             # Update cursor
             self.app.app_cursor.set_data(np.asarray([(x, y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
                                          edge_width=self.app.options.get(
@@ -4859,7 +5077,8 @@ class AppExcEditor(QtCore.QObject):
         if event_is_dragging == 1 and event.button == 1:
             # I make an exception for FCDrillAdd and DrillArray because clicking and dragging while making regions
             # can create strange issues. Also for SlotAdd and SlotArray
-            if isinstance(self.active_tool, DrillAdd) or isinstance(self.active_tool, DrillArray) or \
+            if isinstance(self.active_tool, SlotEndpointEditorExc) or \
+                    isinstance(self.active_tool, DrillAdd) or isinstance(self.active_tool, DrillArray) or \
                     isinstance(self.active_tool, SlotAdd) or isinstance(self.active_tool, SlotArray):
                 self.app.selection_type = None
             else:
@@ -4905,6 +5124,7 @@ class AppExcEditor(QtCore.QObject):
                                          )
                                      ))
 
+    @excellon_operation(_('Add features'))
     def add_exc_shape(self, shp, storage):
         """
         Adds a shape (or a list of shapes) to a specified shape storage. The shapes go in the storage in 1 batch: an
@@ -4978,6 +5198,7 @@ class AppExcEditor(QtCore.QObject):
         # else:
         #     self.storage.insert(shape)
 
+    @excellon_operation(_('Add features'))
     def on_exc_shape_complete(self, storage):
         self.app.log.debug("on_shape_complete()")
 
@@ -5168,8 +5389,326 @@ class AppExcEditor(QtCore.QObject):
             )
         )
 
+    def snap(self, x, y):
+        """Acquire Excellon features from a local index; picking remains unsnapped."""
+        self.snap_kind = None
+        if not self.app.grid_status() or not all(math.isfinite(value) for value in (x, y)):
+            if hasattr(self.ui, 'snap_result'):
+                self.ui.snap_result.setText('')
+            return x, y
+        # Only share grid preferences. Never query the inactive Geometry editor's storage.
+        options = self.app.geo_editor.editor_options
+        radius = float(options.get('global_snap_max', 0.05))
+        modes = {kind: control.isChecked() for kind, control in self.ui.snap_modes.items()}
+        cached = getattr(self, '_exc_snap_index', None)
+        signature = tuple((dia, id(storage), getattr(storage, 'revision', None))
+                          for dia, storage in self.storage_dict.items())
+        if getattr(self, '_exc_snap_revision', None) != signature:
+            cached = None
+        if cached is None:
+            geometries, kinds = [], []
+            for storage in self.storage_dict.values():
+                for shape in storage.get_objects():
+                    geo = shape.geo
+                    if geo is None or geo.is_empty or not geo.is_valid:
+                        continue
+                    if isinstance(geo, MultiLineString):
+                        geometries.append(geo.centroid)
+                        kinds.append('center')
+                    elif isinstance(geo, Polygon):
+                        native = getattr(shape, 'exc_slot', None)
+                        geometries.append(geo.centroid)
+                        kinds.append('center')
+                        if native is not None and getattr(shape, 'exc_slot_geometry', None) is geo:
+                            line = LineString(native)
+                            geometries.extend([Point(native[0]), Point(native[1]),
+                                               line.interpolate(0.5, normalized=True), line])
+                            kinds.extend(['endpoint', 'endpoint', 'midpoint', 'nearest'])
+            cached = self._exc_snap_index = (STRtree(geometries), geometries, kinds)
+            self._exc_snap_revision = signature
+        tree, geometries, kinds = cached
+        query = Point(x, y)
+        points, nearest = [], []
+        if math.isfinite(radius) and radius >= 0:
+            for index in tree.query(box(x - radius, y - radius, x + radius, y + radius)):
+                kind = kinds[index]
+                if not modes.get(kind, False):
+                    continue
+                geometry = geometries[index]
+                point = geometry.interpolate(geometry.project(query)) if kind == 'nearest' else geometry
+                delta = query.distance(point)
+                if delta <= radius:
+                    candidate = (delta, {'endpoint': 0, 'midpoint': 1, 'center': 2, 'nearest': 3}[kind],
+                                 (point.x, point.y), kind)
+                    (nearest if kind == 'nearest' else points).append(candidate)
+        candidate = min(points or nearest) if points or nearest else (math.inf, 4, (x, y), None)
+        if options.get('grid_snap', False):
+            gx = float(options.get('global_gridx', 0))
+            gy = gx if self.app.ui.grid_gap_link_cb.isChecked() else float(options.get('global_gridy', 0))
+            grid = (round(x / gx) * gx if gx else x, round(y / gy) * gy if gy else y)
+            grid_distance = math.dist((x, y), grid)
+            if grid_distance < candidate[0]:
+                candidate = (grid_distance, 4, grid, 'grid')
+        self.snap_kind = candidate[3]
+        self.ui.snap_result.setText(_('Snap') + ': ' + self.snap_kind if self.snap_kind else '')
+        return candidate[2]
+
     def replot(self):
         self.plot_all()
+        self.refresh_feature_table()
+
+    def undo(self):
+        return self.history.replay()
+
+    def redo(self):
+        return self.history.replay(redo=True)
+
+    def update_history_ui(self):
+        history = self.history
+        for action in getattr(self, 'transform_actions', {}).values():
+            action.setEnabled(not history.suspended and history.pending is None)
+        for button in getattr(self.ui, 'transform_buttons', {}).values():
+            button.setEnabled(not history.suspended and history.pending is None)
+        self.ui.undo_button.setEnabled(bool(history.undo_stack) and not history.suspended and history.pending is None)
+        self.ui.redo_button.setEnabled(bool(history.redo_stack) and not history.suspended and history.pending is None)
+        self.undo_action.setEnabled(self.ui.undo_button.isEnabled())
+        self.redo_action.setEnabled(self.ui.redo_button.isEnabled())
+        self.ui.history_list.clear()
+        labels = [_('Oldest retained state') if history.baseline_evicted else _('Initial state')]
+        labels.extend(step['label'] for step in history.undo_stack)
+        labels.extend('↪ ' + step['label'] for step in reversed(history.redo_stack))
+        self.ui.history_list.addItems(labels)
+        self.ui.history_list.setCurrentRow(len(history.undo_stack))
+        self.ui.history_list.setEnabled(not history.suspended and history.pending is None)
+        self.refresh_feature_table()
+
+    def on_history_row(self, row):
+        history = self.history
+        if not isinstance(row, int) or row < 0 or row > len(history.undo_stack) + len(history.redo_stack):
+            return False
+        if history.pending is not None or history.suspended or history.depth or history.replaying:
+            return False
+        while len(history.undo_stack) != row:
+            if not history.replay(redo=len(history.undo_stack) < row):
+                return False
+        return True
+
+    def filter_features(self, selected_only=False, **filters):
+        try:
+            return filter_features(self.storage_dict, set(self.selected) if selected_only else None, **filters)
+        except (ValueError, TypeError) as error:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(error))
+            return 'fail'
+
+    def select_filtered_features(self, **filters):
+        if self.history.pending is not None or not self.history.ready():
+            return 'fail'
+        records = self.filter_features(**filters)
+        if records == 'fail':
+            return 'fail'
+        self.selected = [record['shape'] for record in records]
+        self.replot()
+        return len(records)
+
+    @excellon_operation(_('Delete filtered features'))
+    def delete_filtered_features(self, **filters):
+        records = self.filter_features(**filters)
+        if records == 'fail':
+            return 'fail'
+        for record in records:
+            self.delete_shape(record['shape'])
+        self.build_ui()
+        self.replot()
+        return len(records)
+
+    def feature_filter_values(self):
+        filters = {'kind': self.ui.feature_kind.currentData(),
+                   'selected_only': self.ui.feature_selected.isChecked()}
+        for name, size in (('diameter', 2), ('length', 2), ('bounds', 4)):
+            text = self.ui.feature_ranges[name].text().strip()
+            if text:
+                values = tuple(float(value.strip()) for value in text.split(','))
+                if len(values) != size:
+                    raise ValueError(_('Enter comma-separated range values.'))
+                filters[name] = values
+        return filters
+
+    def on_feature_filter_action(self, delete=False):
+        try:
+            filters = self.feature_filter_values()
+        except (ValueError, TypeError) as error:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(error))
+            return 'fail'
+        return self.delete_filtered_features(**filters) if delete else self.select_filtered_features(**filters)
+
+    @excellon_operation(_('Edit slot endpoints'))
+    def edit_slot_endpoints(self, shape, endpoints, expected=None):
+        if self.history.suspended:
+            return 'fail'
+        if expected is not None and expected != (self.history.session, self.history.revision):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _('The slot changed since the endpoints were loaded. '
+                                                          'Load them again.'))
+            return 'fail'
+        try:
+            endpoints = tuple(tuple(float(value) for value in point) for point in endpoints)
+            if len(endpoints) != 2 or any(len(point) != 2 for point in endpoints) or \
+                    not all(math.isfinite(value) for point in endpoints for value in point) or \
+                    endpoints[0] == endpoints[1]:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Enter two distinct finite slot endpoints.'))
+            return 'fail'
+        native = getattr(shape, 'exc_slot', None)
+        if not isinstance(shape.geo, Polygon) or native is None or \
+                getattr(shape, 'exc_slot_geometry', None) is not shape.geo or shape not in self.selected:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _('Select one native slot.'))
+            return 'fail'
+        for diameter, storage in self.storage_dict.items():
+            objects = list(storage.get_objects())
+            if shape not in objects:
+                continue
+            if not math.isfinite(diameter) or diameter <= 0:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _('Please enter a finite positive tool diameter.'))
+                return 'fail'
+            if endpoints == native:
+                return
+            geometry = LineString(endpoints).buffer(diameter / 2)
+            if geometry.is_empty or not geometry.is_valid or not all(math.isfinite(v) for v in geometry.bounds):
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _('Enter two distinct finite slot endpoints.'))
+                return 'fail'
+            replacement = DrawToolShape(geometry)
+            replacement.exc_slot = endpoints
+            replacement.exc_slot_geometry = geometry
+            if hasattr(shape, 'exc_source_diameter'):
+                replacement.exc_source_diameter = shape.exc_source_diameter
+            # replace() appends its insertions. Replace the suffix once to retain feature order.
+            index = objects.index(shape)
+            storage.replace(removed=objects[index:], inserted=[replacement] + objects[index + 1:])
+            self.selected = [replacement if selected is shape else selected for selected in self.selected]
+            self._exc_snap_index = None
+            self.replot()
+            return replacement
+        self.app.inform.emit('[WARNING_NOTCL] %s' % _('Select one native slot.'))
+        return 'fail'
+
+    def load_slot_endpoints(self):
+        if len(self.selected) != 1:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _('Select one native slot.'))
+            return 'fail'
+        shape = self.selected[0]
+        native = getattr(shape, 'exc_slot', None)
+        if native is None or getattr(shape, 'exc_slot_geometry', None) is not shape.geo:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _('Select one native slot.'))
+            return 'fail'
+        self._slot_numeric_target = (shape, shape.geo, self.history.session, self.history.revision)
+        for entry, value in zip(self.ui.slot_endpoint_entries, (v for point in native for v in point)):
+            entry.set_value(value)
+
+    def on_slot_endpoints_apply(self):
+        target = getattr(self, '_slot_numeric_target', None)
+        if target is None:
+            return self.load_slot_endpoints()
+        shape, geo, session, revision = target
+        if shape.geo is not geo:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _('The slot changed since the endpoints were loaded. '
+                                                          'Load them again.'))
+            return 'fail'
+        values = [entry.get_value() for entry in self.ui.slot_endpoint_entries]
+        result = self.edit_slot_endpoints(shape, (values[:2], values[2:]), expected=(session, revision))
+        if result != 'fail':
+            self.load_slot_endpoints()
+        return result
+
+    def refresh_feature_table(self):
+        if not hasattr(self.ui, 'feature_table'):
+            return
+        try:
+            filters = self.feature_filter_values()
+        except (ValueError, TypeError):
+            return
+        table = self.ui.feature_table
+        signature = (id(table), tuple((dia, id(storage), getattr(storage, 'revision', None))
+                                     for dia, storage in self.storage_dict.items()),
+                     tuple(filters.items()), tuple(self.selected) if filters.get('selected_only') else None)
+        cached = getattr(self, '_exc_feature_rows', None)
+        reuse = cached is not None and cached[0] == signature and table.rowCount() == len(cached[1])
+        records = cached[1] if reuse else self.filter_features(**filters)
+        if records == 'fail':
+            return
+        self._exc_feature_rows = (signature, records)
+        selected = set(self.selected)
+        blocker = QtCore.QSignalBlocker(table)
+        if not reuse:
+            table.setRowCount(len(records))
+        for row, record in enumerate(records):
+            if not reuse:
+                values = (record['index'] + 1, FEATURE_TYPE_LABELS.get(record['type'], record['type']),
+                          record['diameter'], record['center'],
+                          record.get('length', ''), record['bounds'])
+                for column, value in enumerate(values):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    item.setData(Qt.ItemDataRole.UserRole, record['shape'])
+                    table.setItem(row, column, item)
+            for column in range(table.columnCount()):
+                table.item(row, column).setSelected(record['shape'] in selected)
+        del blocker
+        # Tool rows summarize the feature selection; never invoke row-click select-all handlers.
+        self.sync_tool_rows()
+
+    def on_feature_selection(self):
+        if self.history.pending is not None:
+            self.refresh_feature_table()
+            return
+        live = {shape for storage in self.storage_dict.values() for shape in storage.get_objects()}
+        table = self.ui.feature_table
+        self.selected = [table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                         for index in table.selectionModel().selectedRows()
+                         if table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole) in live]
+        self.replot()
+
+    def diagnose_features(self, selected_only=False, tolerance=0.001):
+        try:
+            tolerance = float(tolerance)
+            if not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Tolerance must be a finite non-negative number.'))
+            return 'fail'
+        selected = set(self.selected) if selected_only else None
+        return diagnose_features(self.storage_dict, selected, tolerance)
+
+    def on_diagnostics(self):
+        report = self.diagnose_features(self.ui.diagnostics_selected.isChecked(),
+                                        self.ui.diagnostics_tolerance.get_value())
+        if report == 'fail':
+            return
+        lines = [_('Read-only snapshot. Drill crosses are not open-contour errors.'),
+                 '%s: %d; %s: %d' % (_('Drills'), report['drills'], _('Slots'), report['slots'])]
+        names = {'empty': _('Empty'), 'invalid': _('Invalid'), 'degenerate': _('Degenerate'),
+                 'duplicate': _('Duplicate'), 'coincident': _('Coincident'),
+                 'invalid_tools': _('Invalid tool diameter')}
+        for key, label in names.items():
+            lines.append('%s: %d' % (label, len(report[key])))
+        for record in report['features']:
+            lines.append('%s %s / %s %d: %s; %s' %
+                         (_('Diameter'), record['diameter'], _('Feature'), record['index'] + 1,
+                          _('Drill') if record['type'] == 'drill' else _('Slot'),
+                          record.get('center', _('Empty or invalid'))))
+            if 'endpoints' in record:
+                lines.append('  %s: %s; %s: %.*f; %s: %.*f°%s' %
+                             (_('Endpoints'), record['endpoints'], _('Centerline length'), self.decimals,
+                              record['length'], _('Orientation'), self.decimals, record['orientation'],
+                              ' (' + _('estimated from capsule') + ')' if record['inferred'] else ''))
+        for key in ('empty', 'invalid', 'degenerate'):
+            for record in report[key]:
+                lines.append('%s: %s / %d' % (names[key], record['diameter'], record['index'] + 1))
+        for key in ('duplicate', 'coincident'):
+            for first, second in report[key]:
+                lines.append('%s: %s / %d ↔ %s / %d' %
+                             (names[key], first['diameter'], first['index'] + 1, second['diameter'],
+                              second['index'] + 1))
+        self.ui.diagnostics_result.setPlainText('\n'.join(lines))
+        return report
 
     def plot_all(self):
         """
@@ -5179,25 +5718,54 @@ class AppExcEditor(QtCore.QObject):
         :rtype:     None
         """
 
-        self.shapes.clear(update=True)
-
-        for storage in self.storage_dict:
-            for shape_plus in self.storage_dict[storage].get_objects():
-                if shape_plus.geo is None:
-                    continue
-
-                if shape_plus in self.selected:
-                    self.plot_shape(geometry=shape_plus.geo,
-                                    color=self.get_sel_color()[:-2] + 'FF',
-                                    linewidth=2)
-                    continue
-                self.plot_shape(geometry=shape_plus.geo, color=self.get_draw_color()[:-2] + 'FF')
-
-        for shape_form in self.utility:
-            self.plot_shape(geometry=shape_form.geo, linewidth=1)
-            continue
-
-        self.shapes.redraw()
+        # Cache belongs to this collection, not to the wrappers or the pick index. Collection
+        # clears and style/tolerance changes invalidate it, including clears made by other tools.
+        state = (id(self.shapes), getattr(self.shapes, 'last_key', None), len(self.shapes.data),
+                 tuple((id(shape), id(shape.geo)) for shape in self.utility), self.tolerance)
+        rendered = getattr(self, '_exc_rendered', {})
+        changed = False
+        owned = getattr(self, '_exc_render_owned', {})
+        if getattr(self, '_exc_render_state', None) != state or \
+                any(self.shapes.data.get(key) is not data for key, data in owned.items()):
+            self.shapes.clear(update=False)
+            rendered = {}
+            changed = True
+            for shape in self.utility:
+                self.plot_shape(geometry=shape.geo, linewidth=1)
+        selected = set(self.selected)
+        draw_color = self.get_draw_color()[:-2] + 'FF'
+        sel_color = self.get_sel_color()[:-2] + 'FF'
+        seen, recolor = set(), {}
+        for storage in self.storage_dict.values():
+            for shape in storage.get_objects():
+                seen.add(id(shape))
+                color = sel_color if shape in selected else draw_color
+                entry = rendered.get(id(shape))
+                if entry is None or entry[0] is not shape or entry[1] is not shape.geo:
+                    if entry is not None:
+                        for key in entry[2]:
+                            self.shapes.remove(key)
+                    keys = self.plot_shape(geometry=shape.geo, color=color) if shape.geo is not None else []
+                    rendered[id(shape)] = [shape, shape.geo, keys, color]
+                    changed = True
+                elif entry[3] != color:
+                    recolor.setdefault(color, set()).update(entry[2])
+                    entry[3] = color
+        for shape_id in list(rendered):
+            if shape_id not in seen:
+                for key in rendered.pop(shape_id)[2]:
+                    self.shapes.remove(key)
+                changed = True
+        for color, keys in recolor.items():
+            if keys:
+                self.shapes.update_color(new_line_color=color, indexes=keys)
+                changed = True
+        if changed:
+            self.shapes.redraw()
+        self._exc_rendered = rendered
+        self._exc_render_owned = dict(self.shapes.data)
+        self._exc_render_state = (id(self.shapes), getattr(self.shapes, 'last_key', None), len(self.shapes.data),
+                                  tuple((id(shape), id(shape.geo)) for shape in self.utility), self.tolerance)
 
     def plot_shape(self, geometry=None, color='0x000000FF', linewidth=1):
         """
@@ -5263,6 +5831,7 @@ class AppExcEditor(QtCore.QObject):
         """
         return self.selected
 
+    @excellon_operation(_('Delete features'))
     def delete_selected(self):
         temp_ref = [s for s in self.selected]
         for shape_sel in temp_ref:
@@ -5272,6 +5841,7 @@ class AppExcEditor(QtCore.QObject):
         self.build_ui()
         self.app.inform.emit('[success] %s' % _("Done."))
 
+    @excellon_operation(_('Delete feature'))
     def delete_shape(self, del_shape):
         self.is_modified = True
 
@@ -5363,6 +5933,7 @@ class AppExcEditor(QtCore.QObject):
         self.select_tool('drill_move')
         return
 
+    @excellon_operation(_('Convert slots to drills'))
     def on_slots_conversion(self):
         # selected rows
         selected_rows = set()
@@ -5380,6 +5951,7 @@ class AppExcEditor(QtCore.QObject):
 
         # temporary new storage: a dist with keys the tool diameter and values Rtree storage
         new_storage_dict = {}
+        replacements = {}
 
         for row in selected_rows:
             table_tooldia = self.dec_format(float(self.ui.tools_table_exc.item(row, 1).text()))
@@ -5394,13 +5966,19 @@ class AppExcEditor(QtCore.QObject):
                         if isinstance(shp.geo, Polygon):
                             # it's a slot, convert drill to slot and then add it to storage
                             new_shape = convert_slot2drill(shp.geo, table_tooldia)
-                            new_shapes.append(DrawToolShape(new_shape))
+                            replacement = DrawToolShape(new_shape)
+                            new_shapes.append(replacement)
+                            replacements[shp] = replacement
                     # 1 batch for each tool
                     self.add_exc_shape(new_shapes, storage_elem)
 
                     new_storage_dict[table_tooldia] = storage_elem
+                    self.points_edit[table_tooldia] = [shape.geo.centroid for shape in new_shapes]
+                    self.slot_points_edit[table_tooldia] = []
 
         self.storage_dict.update(new_storage_dict)
+        self.selected[:] = [replacements.get(shape, shape) for shape in self.selected]
+        self.build_ui()
         self.replot()
 
 
@@ -5471,6 +6049,23 @@ class AppExcEditorUI:
 
         self.name_box.addWidget(name_label)
         self.name_box.addWidget(self.name_entry)
+
+        history_layout = QtWidgets.QHBoxLayout()
+        self.undo_button = FCButton(_('Undo'))
+        self.redo_button = FCButton(_('Redo'))
+        self.undo_button.setIcon(QtGui.QIcon(self.app.resource_location + '/undo64.png'))
+        self.redo_button.setIcon(QtGui.QIcon(self.app.resource_location + '/redo64.png'))
+        self.undo_button.setToolTip(_('Undo the last editor operation (Ctrl+Z).'))
+        self.redo_button.setToolTip(_('Redo the last editor operation (Ctrl+Shift+Z / Ctrl+Y).'))
+        self.undo_button.setEnabled(False)
+        self.redo_button.setEnabled(False)
+        history_layout.addWidget(self.undo_button)
+        history_layout.addWidget(self.redo_button)
+        self.ui_vertical_lay.addLayout(history_layout)
+        self.history_list = QtWidgets.QListWidget()
+        self.history_list.setMaximumHeight(80)
+        self.history_list.setToolTip(_('Editor-local operation history. Saving uses project history.'))
+        self.ui_vertical_lay.addWidget(self.history_list)
 
         # Tools Drills Table Title
         self.tools_table_label = FCLabel('%s' % _('Tools Table'), bold=True)
@@ -5557,6 +6152,138 @@ class AppExcEditorUI:
               "by selecting a row in the tool table.")
         )
         grid1.addWidget(self.deltool_btn, 2, 0, 1, 2)
+
+        self.ui_vertical_lay.addWidget(FCLabel(_('Feature diagnostics / inspection'), bold=True))
+        self.diagnostics_selected = QtWidgets.QCheckBox(_('Selected features only'))
+        self.ui_vertical_lay.addWidget(self.diagnostics_selected)
+        diagnostics_layout = QtWidgets.QHBoxLayout()
+        diagnostics_layout.addWidget(FCLabel(_('Tolerance')))
+        self.diagnostics_tolerance = FCDoubleSpinner(policy=False)
+        self.diagnostics_tolerance.set_precision(max(self.decimals, 6))
+        self.diagnostics_tolerance.set_range(0.0, 10000.0)
+        self.diagnostics_tolerance.set_value(0.001 if self.units == 'MM' else 0.00004)
+        diagnostics_layout.addWidget(self.diagnostics_tolerance)
+        self.diagnostics_button = FCButton(_('Inspect'))
+        diagnostics_layout.addWidget(self.diagnostics_button)
+        self.ui_vertical_lay.addLayout(diagnostics_layout)
+        self.diagnostics_result = QtWidgets.QPlainTextEdit()
+        self.diagnostics_result.setReadOnly(True)
+        self.diagnostics_result.setMaximumHeight(180)
+        self.ui_vertical_lay.addWidget(self.diagnostics_result)
+
+        self.ui_vertical_lay.addWidget(FCLabel(_('Feature selection / filters'), bold=True))
+        self.feature_kind = QtWidgets.QComboBox()
+        for label, value in ((_('All features'), 'all'), (_('Drills'), 'drill'), (_('Slots'), 'slot')):
+            self.feature_kind.addItem(label, value)
+        self.ui_vertical_lay.addWidget(self.feature_kind)
+        self.feature_selected = QtWidgets.QCheckBox(_('Search selected features only'))
+        self.ui_vertical_lay.addWidget(self.feature_selected)
+        self.feature_ranges = {}
+        for name, label, hint in (('diameter', _('Diameter range'), 'min, max'),
+                                  ('length', _('Slot centerline length range'), 'min, max'),
+                                  ('bounds', _('Fully contained in bounds'), 'xmin, ymin, xmax, ymax')):
+            self.ui_vertical_lay.addWidget(FCLabel(label))
+            entry = QtWidgets.QLineEdit()
+            entry.setPlaceholderText(hint)
+            entry.setToolTip(_('Optional finite values, comma-separated. Blank disables this filter.'))
+            self.feature_ranges[name] = entry
+            self.ui_vertical_lay.addWidget(entry)
+        feature_buttons = QtWidgets.QHBoxLayout()
+        self.feature_apply = FCButton(_('Refresh'))
+        self.feature_select = FCButton(_('Select matches'))
+        self.feature_delete = FCButton(_('Delete matches'))
+        for button in (self.feature_apply, self.feature_select, self.feature_delete):
+            feature_buttons.addWidget(button)
+        self.ui_vertical_lay.addLayout(feature_buttons)
+        self.feature_table = QtWidgets.QTableWidget(0, 6)
+        self.feature_table.setHorizontalHeaderLabels([_('Feature'), _('Type'), _('Diameter'), _('Center'),
+                                                      _('Slot length'), _('Bounds')])
+        self.feature_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.feature_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.feature_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.feature_table.setMaximumHeight(200)
+        self.ui_vertical_lay.addWidget(self.feature_table)
+
+        self.ui_vertical_lay.addWidget(FCLabel(_('Transform selected features'), bold=True))
+        self.transform_reference = QtWidgets.QComboBox()
+        for label, reference in ((_('Origin'), 'origin'), (_('Selection center'), 'selection'),
+                                  (_('Point'), 'point')):
+            self.transform_reference.addItem(label, reference)
+        self.ui_vertical_lay.addWidget(self.transform_reference)
+        transform_grid = GLay(v_spacing=5, h_spacing=3)
+        self.transform_point = []
+        for row, label in enumerate((_('Reference X'), _('Reference Y'))):
+            entry = FCDoubleSpinner(policy=False)
+            entry.set_precision(max(self.decimals, 6))
+            entry.set_range(-1e9, 1e9)
+            self.transform_point.append(entry)
+            transform_grid.addWidget(FCLabel(label), row, 0)
+            transform_grid.addWidget(entry, row, 1)
+        self.transform_angle = FCDoubleSpinner(policy=False)
+        self.transform_angle.set_precision(max(self.decimals, 6))
+        self.transform_angle.set_range(-360000, 360000)
+        self.transform_angle.set_value(90)
+        self.transform_scale = FCDoubleSpinner(policy=False)
+        self.transform_scale.set_precision(max(self.decimals, 6))
+        self.transform_scale.set_range(0.000001, 1e6)
+        self.transform_scale.set_value(1)
+        # the offset (in editor units) is a translation of the selected features
+        self.transform_offset = []
+        for label in (_('Offset X'), _('Offset Y')):
+            entry = FCDoubleSpinner(policy=False)
+            entry.set_precision(max(self.decimals, 6))
+            entry.set_range(-1e9, 1e9)
+            self.transform_offset.append(entry)
+        for row, label, entry in ((2, _('Angle (CCW)'), self.transform_angle),
+                                   (3, _('Uniform scale (positions and diameters)'), self.transform_scale),
+                                   (4, _('Offset X'), self.transform_offset[0]),
+                                   (5, _('Offset Y'), self.transform_offset[1])):
+            transform_grid.addWidget(FCLabel(label), row, 0)
+            transform_grid.addWidget(entry, row, 1)
+        self.ui_vertical_lay.addLayout(transform_grid)
+        self.transform_buttons = {}
+        for kind, label in (('rotate', _('Rotate')), ('mirror_x', _('Mirror X')),
+                            ('mirror_y', _('Mirror Y')), ('scale', _('Uniform scale')),
+                            ('offset', _('Offset'))):
+            button = FCButton(label)
+            button.setToolTip(_('Transform selected features only. Mirror X reflects across the horizontal axis; '
+                                'Mirror Y across the vertical axis. Scaling changes circular tool diameters too.'))
+            self.transform_buttons[kind] = button
+            self.ui_vertical_lay.addWidget(button)
+
+        self.ui_vertical_lay.addWidget(FCLabel(_('Native slot endpoints'), bold=True))
+        self.slot_endpoint_entries = []
+        endpoint_grid = GLay(v_spacing=5, h_spacing=3)
+        for row, label in enumerate((_('Start X'), _('Start Y'), _('Stop X'), _('Stop Y'))):
+            endpoint_grid.addWidget(FCLabel(label), row, 0)
+            entry = FCDoubleSpinner(policy=False)
+            entry.set_precision(max(self.decimals, 6))
+            entry.set_range(-1e9, 1e9)
+            self.slot_endpoint_entries.append(entry)
+            endpoint_grid.addWidget(entry, row, 1)
+        self.ui_vertical_lay.addLayout(endpoint_grid)
+        endpoint_buttons = QtWidgets.QHBoxLayout()
+        self.slot_endpoint_load = FCButton(_('Load selected slot'))
+        self.slot_endpoint_apply = FCButton(_('Apply endpoints'))
+        self.slot_endpoint_drag = FCButton(_('Drag endpoint'))
+        self.slot_endpoint_drag.setIcon(QtGui.QIcon(self.app.resource_location + '/move32.png'))
+        self.slot_endpoint_drag.setToolTip(_('Drag a selected slot centerline endpoint. Width and opposite endpoint stay fixed.'))
+        for button in (self.slot_endpoint_load, self.slot_endpoint_apply, self.slot_endpoint_drag):
+            endpoint_buttons.addWidget(button)
+        self.ui_vertical_lay.addLayout(endpoint_buttons)
+        self.ui_vertical_lay.addWidget(FCLabel(_('Overall slot length = endpoint distance + tool diameter.')))
+
+        self.ui_vertical_lay.addWidget(FCLabel(_('Excellon snapping'), bold=True))
+        self.snap_modes = {}
+        for kind, label in (('center', _('Centers')), ('endpoint', _('Native slot endpoints')),
+                             ('midpoint', _('Native slot midpoints')), ('nearest', _('Nearest slot centerline'))):
+            control = QtWidgets.QCheckBox(label)
+            control.setChecked(kind in ('center', 'endpoint'))
+            self.snap_modes[kind] = control
+            self.ui_vertical_lay.addWidget(control)
+        self.snap_result = FCLabel('')
+        self.snap_result.setToolTip(_('Feature snap uses the configured maximum snap distance in project units.'))
+        self.ui_vertical_lay.addWidget(self.snap_result)
 
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
