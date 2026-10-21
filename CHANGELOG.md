@@ -46,10 +46,16 @@ Preferences:
 - fixed: a restart (Apply Language, Apply font size, Preferences -> Save with a new appearance, style, dark canvas or title bar, the icon color) killed the project save that the user had just confirmed: the save ran in a worker thread and os.execl() replaced the process at once, so the project file was not written; the projects are now saved in the GUI thread before the restart, the same way as on exit (each project with changes is asked about: Yes / No / Cancel)
 - fixed: a cancelled Save As dialog, a failed save or a save that is still running (File -> Save, Save As) no longer restart the app; the setting is applied at the next start and the app goes on as it was
 
+Excellon Editor:
+
+- fixed: the save of the editor gave a new slot diameter the tool number after the last matching tool, so it could overwrite an existing drill tool (drills 0.8 / 1.0 / 3.2 mm and slots 1.0 / 1.5 mm: the 3.2 mm tool became a 1.5 mm tool with the 3.2 mm holes in it); a new slot diameter now gets a new tool number after the highest one
+- fixed: the save of the editor made the tools with only slots without the 'drills' key and the tools with only drills without the 'slots' key, so the Excellon export (and the object source) of an object with slots failed with KeyError: 'slots' and the Tcl drillcncjob failed on a tool with only slots; every saved tool now has both lists, like a tool of a parsed Excellon file
+
 Tests:
 
 - new unit tests for the project save before a restart (tests/test_restart_project_save.py)
 - new unit tests for the type of a file given on the command line and for the question before a script given this way runs (tests/test_startup_args.py)
+- new unit tests for the tool numbers and the tool keys of the Excellon Editor save, with the Excellon export and the drillcncjob of the saved object (tests/test_exc_editor_slot_tools.py)
 
 20.10.2026
 
