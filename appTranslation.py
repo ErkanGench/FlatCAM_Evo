@@ -24,17 +24,18 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 # ISO639-1 codes from here: https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes
+# the name of each language is written in that language (the settings keep the name)
 languages_dict = {
     'zh': '简体中文',
-    'de': 'Deutsche',
+    'de': 'Deutsch',
     'en': 'English',
     'es': 'Español',
     'fr': 'Français',
     'it': 'Italiano',
-    'pt_BR': 'Portugues do Brasil',
+    'pt_BR': 'Português do Brasil',
     'ro': 'Română',
-    'ru': 'Pусский',
-    'tr': 'Türk',
+    'ru': 'Русский',
+    'tr': 'Türkçe',
 }
 
 translations = {}
@@ -163,6 +164,12 @@ def apply_language(domain, lang=None):
         if lang_usable == name:
             # break and then use the current key as language
             break
+    else:
+        # an unknown or unavailable language (e.g. a name written by an older version) is English; without this
+        # the loop left lang_code at the last language of the list
+        if lang_code != '':
+            lang_code = 'en'
+            name = 'English'
 
     if lang_code == '':
         return "no language"
