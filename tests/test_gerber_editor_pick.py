@@ -18,10 +18,11 @@ from shapely.geometry import LineString, Point, Polygon, box
 from appEditors import appGerberEditor as module
 from appEditors.appGerberEditor import (
     AppGerberEditor, CopyEditorGrb, EraserEditorGrb, ImportEditorGrb, MoveEditorGrb, SelectEditorGrb, SimplifyEditorGrb,
-    TransformEditorTool, aperture_rank,
+    aperture_rank,
 )
 from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
 from appEditors.grb_plugins.GrbCommon import DrawToolShape, ShapeToolEditorGrb
+from appEditors.grb_plugins.GrbTransformationPlugin import queue_transform
 
 ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'assets', 'resources')
 GRID = 2.54
@@ -116,6 +117,15 @@ def set_storage(editor, storage):
         table.setRowCount(len(storage))
         for row, key in enumerate(storage):
             table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(key)))
+
+
+def run_transform(tool, kind, params):
+    """The Transformation plugin path of the UI (queue_transform), with the worker job run on the spot."""
+    if queue_transform(tool, kind, params) == 'fail':
+        return 'fail'
+    job = tool.app.worker_task.emit.call_args.args[0]
+    job['fcn'](*job['params'])
+    QtWidgets.QApplication.processEvents()
 
 
 def make_select(editor):
@@ -326,12 +336,12 @@ class TestIndexFreshness(PickCase):
             return new_ed
 
         actions = {
-            'rotate': lambda s: TransformEditorTool.on_rotate_action(tool, 90, (5, 0)),
-            'flip': lambda s: TransformEditorTool.on_flip(tool, 'Y', (5, 0)),
-            'skew': lambda s: TransformEditorTool.on_skew(tool, 'X', 30, 0, (0, 5)),
-            'scale': lambda s: TransformEditorTool.on_scale(tool, 'X', 6, 1, (0, 0)),
-            'offset': lambda s: TransformEditorTool.on_offset(tool, 'X', 30),
-            'buffer': lambda s: TransformEditorTool.on_buffer_action(tool, 3, 1),
+            'rotate': lambda s: run_transform(tool, 'rotate', [90, (5, 0)]),
+            'flip': lambda s: run_transform(tool, 'flip', ['Y', (5, 0)]),
+            'skew': lambda s: run_transform(tool, 'skew', ['X', 30, 0, (0, 5)]),
+            'scale': lambda s: run_transform(tool, 'scale', ['X', 6, 1, (0, 0)]),
+            'offset': lambda s: run_transform(tool, 'offset', ['X', 30]),
+            'buffer': lambda s: run_transform(tool, 'buffer', [3, 1]),
         }
         for name, action in actions.items():
             with self.subTest(name):
@@ -450,12 +460,12 @@ class TestRevisionCounter(PickCase):
         # T1 to T6
         tool = SimpleNamespace()
         calls = {
-            'T1': lambda: TransformEditorTool.on_rotate_action(tool, 10, (0, 0)),
-            'T2': lambda: TransformEditorTool.on_flip(tool, 'X', (0, 0)),
-            'T3': lambda: TransformEditorTool.on_skew(tool, 'X', 10, 0, (0, 0)),
-            'T4': lambda: TransformEditorTool.on_scale(tool, 'X', 2, 2, (0, 0)),
-            'T5': lambda: TransformEditorTool.on_offset(tool, 'X', 1),
-            'T6': lambda: TransformEditorTool.on_buffer_action(tool, 0.5, 1),
+            'T1': lambda: run_transform(tool, 'rotate', [10, (0, 0)]),
+            'T2': lambda: run_transform(tool, 'flip', ['X', (0, 0)]),
+            'T3': lambda: run_transform(tool, 'skew', ['X', 10, 0, (0, 0)]),
+            'T4': lambda: run_transform(tool, 'scale', ['X', 2, 2, (0, 0)]),
+            'T5': lambda: run_transform(tool, 'offset', ['X', 1]),
+            'T6': lambda: run_transform(tool, 'buffer', [0.5, 1]),
         }
         for name, call in calls.items():
             ed = editor()

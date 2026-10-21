@@ -1,11 +1,11 @@
 
 from PyQt6 import QtWidgets
 from appTool import AppToolEditor
-from appEditors.grb_plugins.GrbCommon import DrawToolShape
+from appEditors.grb_plugins.GrbHistory import gerber_operation
+from appEditors.grb_plugins.GrbTransformationPlugin import buffer_selection
+import math
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCDoubleSpinner, FCComboBox
 
-from copy import deepcopy
-import traceback
 
 import gettext
 import appTranslation as fcTranslate
@@ -136,54 +136,27 @@ class BufferEditorTool(AppToolEditor):
     #     join_style = self.ui.buffer_corner_cb.currentIndex() + 1
     #     self.buffer_ext(buffer_distance, join_style)
 
+    @gerber_operation(_('Buffer'))
     def buffer(self, buff_value, join_style):
         self.app.log.debug("AppGerberEditor.BufferEditorTool.buffer()")
-
-        def buffer_recursion(geom_el, selection):
-            if type(geom_el) == list:
-                geoms = []
-                for local_geom in geom_el:
-                    geoms.append(buffer_recursion(local_geom, selection=selection))
-                return geoms
-            else:
-                if geom_el in selection:
-                    geometric_data = geom_el.geo
-                    buffered_geom_el = {}
-                    if 'solid' in geometric_data:
-                        buffered_geom_el['solid'] = geometric_data['solid'].buffer(buff_value, join_style=join_style)
-                    if 'follow' in geometric_data:
-                        buffered_geom_el['follow'] = geometric_data['follow'].buffer(buff_value, join_style=join_style)
-                    if 'clear' in geometric_data:
-                        buffered_geom_el['clear'] = geometric_data['clear'].buffer(buff_value, join_style=join_style)
-                    geom_el.geo = buffered_geom_el
-                    return geom_el
-                else:
-                    return geom_el
-
+        if not math.isfinite(float(buff_value)):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Buffer distance must be finite."))
+            return 'fail'
         if not self.draw_app.ui.apertures_table.selectedItems():
             self.app.inform.emit('[WARNING_NOTCL] %s' %
                                  _("No aperture to buffer. Select at least one aperture and try again."))
-            return
-
-        rows_list = set()
-        for x in self.draw_app.ui.apertures_table.selectedItems():
-            rows_list.add(x.row())
-
-        selection = set(self.draw_app.selected)
-        for row in rows_list:
-            try:
-                apcode = int(self.draw_app.ui.apertures_table.item(row, 1).text())
-                target_geo = self.draw_app.storage_dict[apcode]['geometry']
-                buffered_geo = buffer_recursion(target_geo, selection)
-                self.draw_app.storage_dict[apcode]['geometry'] = buffered_geo
-                self.draw_app.touch_geometry()
-            except Exception as e:
-                self.app.log.error(
-                    "AppGerberEditor.BufferEditorTool.buffer() --> %s\n%s" % (str(e)), str(traceback.print_exc()))
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                return
-
-        self.draw_app.plot_all()
+            return 'fail'
+        rows = {item.row() for item in self.draw_app.ui.apertures_table.selectedItems()}
+        codes = {self.draw_app.ui.apertures_table.item(row, 1).text() for row in rows}
+        selected = set(self.draw_app.selected)
+        shapes = list(dict.fromkeys(shape for key, aperture in self.draw_app.storage_dict.items()
+                                    if str(key) in codes for shape in aperture.get('geometry', ()) if shape in selected))
+        if not shapes:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
+            return 'fail'
+        steps = int(self.app.options.get('gerber_circle_steps', 64))
+        buffer_selection(shapes, float(buff_value), join_style, steps)
+        self.draw_app.plot_transformed(shapes)
         self.app.inform.emit('[success] %s' % _("Done."))
 
     def hide_tool(self):

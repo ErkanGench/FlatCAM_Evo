@@ -5,22 +5,30 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from appEditors.grb_plugins.GrbCommon import DrawToolUtilityShape, DrawToolShape, DrawTool, ShapeToolEditorGrb
+from appHandlers.appHistory import history_of
+from appEditors.grb_plugins.GrbCommon import (DrawToolUtilityShape, DrawToolShape, DrawTool, ShapeToolEditorGrb,
+                                                   numeric_aperture_codes)
 
 from camlib import distance, arc, three_point_circle, flatten_shapely_geometry, translate_geometry
 from appGUI.GUIElements import *
 
-from appTool import AppTool
-from appCommon.SafeEval import safe_eval
 from appEditors.grb_plugins.GrbPadPlugin import PadEditorTool
 
 from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
-from appEditors.grb_plugins.GrbTransformationPlugin import TransformEditorTool
+from appEditors.grb_plugins.GrbTransformationPlugin import TransformEditorTool, scale_selection_about_centers
 from appEditors.grb_plugins.GrbPadArrayPlugin import GrbPadArrayEditorTool
 from appEditors.grb_plugins.GrbTrackPlugin import GrbTrackEditorTool
+from appEditors.grb_plugins.GrbTrackBend import TrackBendEditorGrb
+from appEditors.grb_plugins.GrbFollowPlugin import (FollowSplitEditorGrb, apply_path_split, apply_path_join,
+                                                 apply_resize_circles, circular_aperture)
+from appEditors.grb_plugins.GrbHistory import GerberHistory, gerber_operation, metadata
 from appEditors.grb_plugins.GrbSimplificationPlugin import SimplificationTool
-from appEditors.grb_plugins.GrbCopyPlugin import CopyEditorTool
 from appEditors.grb_plugins.GrberRegionPlugin import GrbRegionEditorTool
+from appEditors.grb_plugins.GrbVertices import grip_geometry, grip_state, apply_vertex_edit, edit_vertices_dialog
+from appEditors.vertex_grips import VertexGrips
+from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message
+from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingDialog
+from appParsers.ParseGerber import Gerber
 
 # import inspect
 
@@ -32,10 +40,12 @@ import numpy as np
 from numpy.linalg import norm as numpy_norm
 import math
 from copy import deepcopy
+from types import SimpleNamespace
 
 from shapely import Point, Polygon, MultiPolygon, LineString, LinearRing, box, STRtree
+import shapely
 from shapely.ops import unary_union
-from shapely.affinity import translate, scale, skew, rotate
+from shapely.affinity import translate, rotate
 
 import gettext
 import appTranslation as fcTranslate
@@ -48,6 +58,8 @@ if '_' not in builtins.__dict__:
 # pick tolerance and click versus drag threshold, in screen pixels
 PICK_TOLERANCE_PX = 5
 CLICK_DRAG_THRESHOLD_PX = 5
+# the property of the actions that the Gerber editor adds to the app menu, to remove them when the editor is rebuilt
+EDITOR_ACTION_PROPERTY = 'grb_editor_action'
 
 
 def aperture_rank(key):
@@ -1063,7 +1075,10 @@ class PoligonizeEditorGrb(ShapeToolEditorGrb):
     def click(self, point):
         return ""
 
+    @gerber_operation(_('Polygonize'))
     def make(self):
+        if self.complete:
+            return
         if not self.draw_app.selected:
             self.draw_app.in_action = False
             self.complete = True
@@ -1072,64 +1087,11 @@ class PoligonizeEditorGrb(ShapeToolEditorGrb):
             self.draw_app.select_tool("select")
             return
 
-        apcode_set = set()
-        for elem in self.draw_app.selected:
-            for apcode in self.draw_app.storage_dict:
-                if 'geometry' in self.draw_app.storage_dict[apcode]:
-                    if elem in self.draw_app.storage_dict[apcode]['geometry']:
-                        apcode_set.add(apcode)
-                        break
-
-        if len(apcode_set) > 1:
+        if self.draw_app.apply_region_operation('union') == 'fail':
             self.draw_app.in_action = False
             self.complete = True
-            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s' %
-                                          _("Failed. Poligonize works only on geometries belonging "
-                                            "to the same aperture."))
-            self.draw_app.select_tool("select")
-            return
-
-        # exterior_geo = [Polygon(sh.geo.exterior) for sh in self.draw_app.selected]
-
-        exterior_geo = []
-        for geo_shape in self.draw_app.selected:
-            geometric_data = geo_shape.geo
-            if 'solid' in geometric_data:
-                exterior_geo.append(Polygon(geometric_data['solid'].exterior))
-
-        fused_geo = MultiPolygon(exterior_geo)
-        fused_geo = fused_geo.buffer(0.0000001)
-
-        current_storage = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
-        if isinstance(fused_geo, MultiPolygon):
-            for geo in fused_geo.geoms:
-                # clean-up the geo
-                geo = geo.buffer(0)
-
-                if len(geo.interiors) == 0:
-                    try:
-                        current_storage = self.draw_app.storage_dict[0]['geometry']
-                    except KeyError:
-                        self.draw_app.on_aperture_add(apcode=0)
-                        current_storage = self.draw_app.storage_dict[0]['geometry']
-                new_el = {'solid': geo, 'follow': LineString(geo.exterior)}
-                self.draw_app.on_grb_shape_complete(current_storage, specific_shape=DrawToolShape(deepcopy(new_el)))
-        else:
-            # clean-up the geo
-            fused_geo = fused_geo.buffer(0)
-
-            if len(fused_geo.interiors) == 0 and len(exterior_geo) == 1:
-                try:
-                    current_storage = self.draw_app.storage_dict[0]['geometry']
-                except KeyError:
-                    self.draw_app.on_aperture_add(apcode=0)
-                    current_storage = self.draw_app.storage_dict[0]['geometry']
-
-            new_el = {'solid': fused_geo, 'follow': LineString(fused_geo.exterior)}
-            self.draw_app.on_grb_shape_complete(current_storage, specific_shape=DrawToolShape(deepcopy(new_el)))
-
-        self.draw_app.delete_selected()
-        self.draw_app.plot_all()
+            self.draw_app.select_tool('select')
+            return 'fail'
 
         self.draw_app.in_action = False
         self.complete = True
@@ -1181,11 +1143,7 @@ class RegionEditorGrb(ShapeToolEditorGrb):
             )
         )
 
-        # regions are added always in the 0 aperture
-        if 0 not in self.draw_app.storage_dict:
-            self.draw_app.on_aperture_add(apcode=0)
-        else:
-            self.draw_app.last_aperture_selected = 0
+        # Aperture 0 is created only when the region is committed, not by opening a drawing tool.
 
         self.buf_val = 0.0000001    # so we can see something on the screen
 
@@ -1195,6 +1153,8 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         self.temp_points = []
         # this will store the inflexion point in the geometry
         self.inter_point = None
+        # how many points each click added (corner included), to backtrack exactly that many
+        self.click_sizes = []
 
         self.cursor_data_control = True
 
@@ -1218,11 +1178,11 @@ class RegionEditorGrb(ShapeToolEditorGrb):
 
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
-        self.draw_app.app.inform.emit(_('Corner Mode 1: 45 degrees ...'))
+        self.draw_app.app.inform.emit(bend_mode_message(self.draw_app.bend_mode))
         self.start_msg = _("Click on 1st point ...")
 
     def set_plugin_ui(self):
-        dia = float(self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['size'])
+        dia = 0.0
         self.ui.dia_entry.set_value(dia)
         self.ui.x_entry.set_value(float(self.draw_app.snap_x))
         self.ui.y_entry.set_value(float(self.draw_app.snap_y))
@@ -1230,9 +1190,14 @@ class RegionEditorGrb(ShapeToolEditorGrb):
     def click(self, point):
         self.draw_app.in_action = True
 
-        if self.inter_point is not None:
-            self.points.append(self.inter_point)
-        self.points.append(point)
+        # the corner is computed from the clicked point, so it can not be stale
+        if self.points:
+            self.inter_point = corner_point(self.draw_app.bend_mode, self.points[-1], point)
+        else:
+            self.inter_point = None
+        added = [self.inter_point, point] if self.inter_point is not None else [point]
+        self.points.extend(added)
+        self.__dict__.setdefault('click_sizes', []).append(len(added))
         self.draw_app.last_length = self.reg_tool.length
         self.ui.x_entry.set_value(float(self.draw_app.snap_x))
         self.ui.y_entry.set_value(float(self.draw_app.snap_y))
@@ -1257,193 +1222,50 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         y = data[1]
 
         if len(self.points) == 0:
-            new_geo_el['solid'] = Point((x, y)).buffer(self.buf_val, resolution=int(self.steps_per_circle))
+            new_geo_el['solid'] = Point((x, y)).buffer(self.buf_val, quad_segs=int(self.steps_per_circle))
             return DrawToolUtilityShape(new_geo_el)
 
-        elif len(self.points) == 1:
-            self.temp_points = [x for x in self.points]
-
+        else:
             # previous point coordinates
-            old_x = self.points[0][0]
-            old_y = self.points[0][1]
-            # how many grid sections between old point and new point
-            mx = abs(round((x - old_x) / self.gridx_size))
-            my = abs(round((y - old_y) / self.gridy_size))
+            old_x = self.points[-1][0]
+            old_y = self.points[-1][1]
 
-            if self.draw_app.app.ui.grid_snap_btn.isChecked() and mx and my:
-                # calculate intermediary point
-                if self.draw_app.bend_mode != 5:
-                    if self.draw_app.bend_mode == 1:
-                        # if we move from left to right
-                        if x > old_x:
-                            # if the number of grid sections is greater on the X axis
-                            if mx > my:
-                                self.inter_point = (old_x + self.gridx_size * (mx - my), old_y)
-                            # if the number of grid sections is greater on the Y axis
-                            if mx < my:
-                                # if we move from top to down
-                                if y < old_y:
-                                    self.inter_point = (old_x, old_y - self.gridy_size * (my - mx))
-                                # if we move from down to top or at the same height
-                                else:
-                                    self.inter_point = (old_x, old_y - self.gridy_size * (mx - my))
-                        # if we move from right to left
-                        elif x < old_x:
-                            # if the number of grid sections is greater on the X axis
-                            if mx > my:
-                                self.inter_point = (old_x - self.gridx_size * (mx - my), old_y)
-                            # if the number of grid sections is greater on the Y axis
-                            if mx < my:
-                                # if we move from top to down
-                                if y < old_y:
-                                    self.inter_point = (old_x, old_y - self.gridy_size * (my - mx))
-                                # if we move from down to top or at the same height
-                                else:
-                                    self.inter_point = (old_x, old_y - self.gridy_size * (mx - my))
-                    elif self.draw_app.bend_mode == 2:
-                        if x > old_x:
-                            if mx > my:
-                                self.inter_point = (old_x + self.gridx_size * my, y)
-                            if mx < my:
-                                if y < old_y:
-                                    self.inter_point = (x, old_y - self.gridy_size * mx)
-                                else:
-                                    self.inter_point = (x, old_y + self.gridy_size * mx)
-                        if x < old_x:
-                            if mx > my:
-                                self.inter_point = (old_x - self.gridx_size * my, y)
-                            if mx < my:
-                                if y < old_y:
-                                    self.inter_point = (x, old_y - self.gridy_size * mx)
-                                else:
-                                    self.inter_point = (x, old_y + self.gridy_size * mx)
-                    elif self.draw_app.bend_mode == 3:
-                        self.inter_point = (x, old_y)
-                    elif self.draw_app.bend_mode == 4:
-                        self.inter_point = (old_x, y)
+            # the intermediary point (None if none is needed); it is recomputed on every call
+            self.inter_point = corner_point(self.draw_app.bend_mode, (old_x, old_y), (x, y))
 
-                    # add the intermediary point to the points storage
-                    if self.inter_point is not None:
-                        self.temp_points.append(self.inter_point)
-                    else:
-                        self.inter_point = (x, y)
-                else:
-                    self.inter_point = None
-
-            else:
-                self.inter_point = (x, y)
-
+            self.temp_points = [pt for pt in self.points]
+            if self.inter_point is not None:
+                self.temp_points.append(self.inter_point)
             # add click point to the points storage
-            self.temp_points.append(
-                (x, y)
-            )
+            self.temp_points.append((x, y))
 
-            if len(self.temp_points) > 1:
-                try:
-                    geo_sol = LineString(self.temp_points)
-                    geo_sol = geo_sol.buffer(self.buf_val, int(self.steps_per_circle), join_style="round")
+            if len(self.points) == 1:
+                if len(self.temp_points) > 1:
+                    try:
+                        geo_sol = LineString(self.temp_points)
+                        geo_sol = geo_sol.buffer(self.buf_val, int(self.steps_per_circle), join_style="round")
+                        new_geo_el = {
+                            'solid': geo_sol
+                        }
+                        return DrawToolUtilityShape(new_geo_el)
+                    except Exception as e:
+                        log.error("AppGerberEditor.RegionEditorGrb.utility_geometry() --> %s" % str(e))
+                else:
+                    geo_sol = Point(self.temp_points).buffer(self.buf_val, quad_segs=int(self.steps_per_circle))
                     new_geo_el = {
                         'solid': geo_sol
                     }
                     return DrawToolUtilityShape(new_geo_el)
-                except Exception as e:
-                    log.error("AppGerberEditor.RegionEditorGrb.utility_geometry() --> %s" % str(e))
             else:
-                geo_sol = Point(self.temp_points).buffer(self.buf_val, resolution=int(self.steps_per_circle))
+                # create the geometry
+                geo_line = LinearRing(self.temp_points)
+                geo_sol = geo_line.buffer(self.buf_val, int(self.steps_per_circle), join_style="round")
                 new_geo_el = {
-                    'solid': geo_sol
+                    'solid': geo_sol,
+                    'follow': geo_line
                 }
+
                 return DrawToolUtilityShape(new_geo_el)
-
-        elif len(self.points) > 1:
-            self.temp_points = [x for x in self.points]
-
-            # previous point coordinates
-            old_x = self.points[-1][0]
-            old_y = self.points[-1][1]
-            # how many grid sections between old point and new point
-            mx = abs(round((x - old_x) / self.gridx_size))
-            my = abs(round((y - old_y) / self.gridy_size))
-
-            if self.draw_app.app.ui.grid_snap_btn.isChecked() and mx and my:
-                # calculate intermediary point
-                if self.draw_app.bend_mode != 5:
-                    if self.draw_app.bend_mode == 1:
-                        # if we move from left to right
-                        if x > old_x:
-                            # if the number of grid sections is greater on the X axis
-                            if mx > my:
-                                self.inter_point = (old_x + self.gridx_size * (mx - my), old_y)
-                            # if the number of grid sections is greater on the Y axis
-                            elif mx < my:
-                                # if we move from top to down
-                                if y < old_y:
-                                    self.inter_point = (old_x, old_y - self.gridy_size * (my - mx))
-                                # if we move from down to top or at the same height
-                                else:
-                                    self.inter_point = (old_x, old_y + self.gridy_size * (my - mx))
-                            elif mx == my:
-                                pass
-                        # if we move from right to left
-                        if x < old_x:
-                            # if the number of grid sections is greater on the X axis
-                            if mx > my:
-                                self.inter_point = (old_x - self.gridx_size * (mx - my), old_y)
-                            # if the number of grid sections is greater on the Y axis
-                            elif mx < my:
-                                # if we move from top to down
-                                if y < old_y:
-                                    self.inter_point = (old_x, old_y - self.gridy_size * (my - mx))
-                                # if we move from down to top or at the same height
-                                else:
-                                    self.inter_point = (old_x, old_y + self.gridy_size * (my - mx))
-                            elif mx == my:
-                                pass
-                    elif self.draw_app.bend_mode == 2:
-                        if x > old_x:
-                            if mx > my:
-                                self.inter_point = (old_x + self.gridx_size * my, y)
-                            if mx < my:
-                                if y < old_y:
-                                    self.inter_point = (x, old_y - self.gridy_size * mx)
-                                else:
-                                    self.inter_point = (x, old_y + self.gridy_size * mx)
-                        if x < old_x:
-                            if mx > my:
-                                self.inter_point = (old_x - self.gridx_size * my, y)
-                            if mx < my:
-                                if y < old_y:
-                                    self.inter_point = (x, old_y - self.gridy_size * mx)
-                                else:
-                                    self.inter_point = (x, old_y + self.gridy_size * mx)
-                    elif self.draw_app.bend_mode == 3:
-                        self.inter_point = (x, old_y)
-                    elif self.draw_app.bend_mode == 4:
-                        self.inter_point = (old_x, y)
-
-                    # add the intermediary point to the points storage
-                    # self.temp_points.append(self.inter_point)
-                    if self.inter_point is not None:
-                        self.temp_points.append(self.inter_point)
-                else:
-                    self.inter_point = None
-            else:
-                self.inter_point = (x, y)
-
-            # add click point to the points storage
-            self.temp_points.append(
-                (x, y)
-            )
-
-            # create the geometry
-            geo_line = LinearRing(self.temp_points)
-            geo_sol = geo_line.buffer(self.buf_val, int(self.steps_per_circle), join_style="round")
-            new_geo_el = {
-                'solid': geo_sol,
-                'follow': geo_line
-            }
-
-            return DrawToolUtilityShape(new_geo_el)
 
         return None
 
@@ -1516,6 +1338,19 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         if self.draw_app.app.plotcanvas.text_cursor.parent is None:
             self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
+    def cycle_bend_mode(self, forward):
+        """
+        Change the corner mode (T = forward, R = backward) and refresh the utility shape.
+        """
+        self.draw_app.bend_mode = next_bend_mode(self.draw_app.bend_mode, forward)
+
+        # Remove any previous utility shape
+        self.draw_app.tool_shape.clear(update=False)
+        geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
+        self.draw_app.draw_utility_geometry(geo_shape=geo)
+
+        return bend_mode_message(self.draw_app.bend_mode)
+
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
             self.cursor_data_control = not self.cursor_data_control
@@ -1526,10 +1361,10 @@ class RegionEditorGrb(ShapeToolEditorGrb):
 
         if key == 'Backspace' or key == QtCore.Qt.Key.Key_Backspace:
             if len(self.points) > 0:
-                if self.draw_app.bend_mode == 5:
-                    self.points = self.points[0:-1]
-                else:
-                    self.points = self.points[0:-2]
+                # remove the points added by the last click (the corner included)
+                sizes = self.__dict__.setdefault('click_sizes', [])
+                count = sizes.pop() if sizes else 1
+                self.points = self.points[0:-count] if count else self.points[:]
                 # Remove any previous utility shape
                 self.draw_app.tool_shape.clear(update=False)
                 geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
@@ -1537,52 +1372,10 @@ class RegionEditorGrb(ShapeToolEditorGrb):
                 return _("Backtracked one point ...")
 
         if key == 'T' or key == QtCore.Qt.Key.Key_T:
-            if self.draw_app.bend_mode == 1:
-                self.draw_app.bend_mode = 2
-                msg = _('Corner Mode 2: Reverse 45 degrees ...')
-            elif self.draw_app.bend_mode == 2:
-                self.draw_app.bend_mode = 3
-                msg = _('Corner Mode 3: 90 degrees ...')
-            elif self.draw_app.bend_mode == 3:
-                self.draw_app.bend_mode = 4
-                msg = _('Corner Mode 4: Reverse 90 degrees ...')
-            elif self.draw_app.bend_mode == 4:
-                self.draw_app.bend_mode = 5
-                msg = _('Corner Mode 5: Free angle ...')
-            else:
-                self.draw_app.bend_mode = 1
-                msg = _('Corner Mode 1: 45 degrees ...')
-
-            # Remove any previous utility shape
-            self.draw_app.tool_shape.clear(update=False)
-            geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
-            self.draw_app.draw_utility_geometry(geo_shape=geo)
-
-            return msg
+            return self.cycle_bend_mode(True)
 
         if key == 'R' or key == QtCore.Qt.Key.Key_R:
-            if self.draw_app.bend_mode == 1:
-                self.draw_app.bend_mode = 5
-                msg = _('Corner Mode 5: Free angle ...')
-            elif self.draw_app.bend_mode == 5:
-                self.draw_app.bend_mode = 4
-                msg = _('Corner Mode 4: Reverse 90 degrees ...')
-            elif self.draw_app.bend_mode == 4:
-                self.draw_app.bend_mode = 3
-                msg = _('Corner Mode 3: 90 degrees ...')
-            elif self.draw_app.bend_mode == 3:
-                self.draw_app.bend_mode = 2
-                msg = _('Corner Mode 2: Reverse 45 degrees ...')
-            else:
-                self.draw_app.bend_mode = 1
-                msg = _('Corner Mode 1: 45 degrees ...')
-
-            # Remove any previous utility shape
-            self.draw_app.tool_shape.clear(update=False)
-            geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
-            self.draw_app.draw_utility_geometry(geo_shape=geo)
-
-            return msg
+            return self.cycle_bend_mode(False)
 
         if key in [str(i) for i in range(10)] + ['.', ',', '+', '-', '/', '*'] or \
                 key in [QtCore.Qt.Key.Key_0, QtCore.Qt.Key.Key_0, QtCore.Qt.Key.Key_1, QtCore.Qt.Key.Key_2,
@@ -1732,13 +1525,17 @@ class TrackEditorGrb(ShapeToolEditorGrb):
 
         # self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
-        self.draw_app.app.inform.emit(_('Track Mode 1: 45 degrees ...'))
+        # the segment shape added to the storage by each click, so Backspace can remove it: (shape, storage)
+        self.click_shapes = []
+
+        self.draw_app.app.inform.emit(bend_mode_message(self.draw_app.bend_mode))
 
     def set_plugin_ui(self):
         self.ui.dia_entry.set_value(self.size_ap)
         self.ui.x_entry.set_value(float(self.draw_app.snap_x))
         self.ui.y_entry.set_value(float(self.draw_app.snap_y))
 
+    @gerber_operation(_('Draw track'))
     def click(self, point):
         self.draw_app.in_action = True
         self.current_point = point
@@ -1764,8 +1561,10 @@ class TrackEditorGrb(ShapeToolEditorGrb):
                 'follow': line_geo
             }
 
-        self.draw_app.add_gerber_shape(DrawToolShape(new_geo_el),
-                                       self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry'])
+        new_shape = DrawToolShape(new_geo_el)
+        storage = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
+        self.draw_app.add_gerber_shape(new_shape, storage)
+        self.click_shapes.append((new_shape, storage))
 
         self.draw_app.plot_all()
         if len(self.points) > 0:
@@ -1798,50 +1597,9 @@ class TrackEditorGrb(ShapeToolEditorGrb):
 
             self.temp_points = [self.points[-1]]
 
-            mx = abs(round((x - old_x) / self.gridx_size))
-            my = abs(round((y - old_y) / self.gridy_size))
-
-            if self.draw_app.app.ui.grid_snap_btn.isChecked():
-                if self.draw_app.bend_mode == 1:
-                    if x > old_x:
-                        if mx > my:
-                            self.temp_points.append((old_x + self.gridx_size * (mx - my), old_y))
-                        if mx < my:
-                            if y < old_y:
-                                self.temp_points.append((old_x, old_y - self.gridy_size * (my - mx)))
-                            else:
-                                self.temp_points.append((old_x, old_y - self.gridy_size * (mx - my)))
-                    if x < old_x:
-                        if mx > my:
-                            self.temp_points.append((old_x - self.gridx_size * (mx - my), old_y))
-                        if mx < my:
-                            if y < old_y:
-                                self.temp_points.append((old_x, old_y - self.gridy_size * (my - mx)))
-                            else:
-                                self.temp_points.append((old_x, old_y - self.gridy_size * (mx - my)))
-                elif self.draw_app.bend_mode == 2:
-                    if x > old_x:
-                        if mx > my:
-                            self.temp_points.append((old_x + self.gridx_size * my, y))
-                        if mx < my:
-                            if y < old_y:
-                                self.temp_points.append((x, old_y - self.gridy_size * mx))
-                            else:
-                                self.temp_points.append((x, old_y + self.gridy_size * mx))
-                    if x < old_x:
-                        if mx > my:
-                            self.temp_points.append((old_x - self.gridx_size * my, y))
-                        if mx < my:
-                            if y < old_y:
-                                self.temp_points.append((x, old_y - self.gridy_size * mx))
-                            else:
-                                self.temp_points.append((x, old_y + self.gridy_size * mx))
-                elif self.draw_app.bend_mode == 3:
-                    self.temp_points.append((x, old_y))
-                elif self.draw_app.bend_mode == 4:
-                    self.temp_points.append((old_x, y))
-                else:
-                    pass
+            corner = corner_point(self.draw_app.bend_mode, (old_x, old_y), (x, y))
+            if corner is not None:
+                self.temp_points.append(corner)
 
             self.temp_points.append(data)
 
@@ -1937,10 +1695,40 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         if self.draw_app.app.plotcanvas.text_cursor.parent is None:
             self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
 
+    def cycle_bend_mode(self, forward):
+        """
+        Change the corner mode (T = forward, R = backward), update the cursor and refresh the utility shape.
+        """
+        try:
+            QtGui.QGuiApplication.restoreOverrideCursor()
+        except Exception as e:
+            log.error("AppGerberEditor.TrackEditorGrb.cycle_bend_mode() --> %s" % str(e))
+
+        self.draw_app.bend_mode = next_bend_mode(self.draw_app.bend_mode, forward)
+        self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location +
+                                                  '/aero_path%s.png' % self.draw_app.bend_mode))
+        QtGui.QGuiApplication.setOverrideCursor(self.cursor)
+
+        # Remove any previous utility shape
+        self.draw_app.tool_shape.clear(update=False)
+        geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
+        self.draw_app.draw_utility_geometry(geo_shape=geo)
+
+        return bend_mode_message(self.draw_app.bend_mode)
+
+    @gerber_operation(_('Edit track'))
     def on_key(self, key):
         if key == 'Backspace' or key == QtCore.Qt.Key.Key_Backspace:
             if len(self.points) > 0:
-                self.temp_points = self.points[0:-1]
+                # remove the last point and the segment shape that its click added to the storage
+                self.points = self.points[0:-1]
+                if self.click_shapes:
+                    shape, storage = self.click_shapes.pop()
+                    if shape in storage:
+                        storage.remove(shape)
+                    self.draw_app.plot_all()
+                if not self.points:
+                    self.temp_points = []
                 # Remove any previous utility shape
                 self.draw_app.tool_shape.clear(update=False)
                 geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
@@ -1959,82 +1747,10 @@ class TrackEditorGrb(ShapeToolEditorGrb):
             self.draw_app.app.on_jump_to()
 
         if key == 'T' or key == QtCore.Qt.Key.Key_T:
-            try:
-                QtGui.QGuiApplication.restoreOverrideCursor()
-            except Exception as e:
-                log.error("AppGerberEditor.TrackEditorGrb.on_key() --> %s" % str(e))
-
-            if self.draw_app.bend_mode == 1:
-                self.draw_app.bend_mode = 2
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path2.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 2: Reverse 45 degrees ...')
-            elif self.draw_app.bend_mode == 2:
-                self.draw_app.bend_mode = 3
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path3.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 3: 90 degrees ...')
-            elif self.draw_app.bend_mode == 3:
-                self.draw_app.bend_mode = 4
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path4.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 4: Reverse 90 degrees ...')
-            elif self.draw_app.bend_mode == 4:
-                self.draw_app.bend_mode = 5
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path5.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 5: Free angle ...')
-            else:
-                self.draw_app.bend_mode = 1
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path1.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 1: 45 degrees ...')
-
-            # Remove any previous utility shape
-            self.draw_app.tool_shape.clear(update=False)
-            geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
-            self.draw_app.draw_utility_geometry(geo_shape=geo)
-
-            return msg
+            return self.cycle_bend_mode(True)
 
         if key == 'R' or key == QtCore.Qt.Key.Key_R:
-            try:
-                QtGui.QGuiApplication.restoreOverrideCursor()
-            except Exception as e:
-                log.error("AppGerberEditor.TrackEditorGrb.on_key() --> %s" % str(e))
-
-            if self.draw_app.bend_mode == 1:
-                self.draw_app.bend_mode = 5
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path5.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 5: Free angle ...')
-            elif self.draw_app.bend_mode == 5:
-                self.draw_app.bend_mode = 4
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path4.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 4: Reverse 90 degrees ...')
-            elif self.draw_app.bend_mode == 4:
-                self.draw_app.bend_mode = 3
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path3.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 3: 90 degrees ...')
-            elif self.draw_app.bend_mode == 3:
-                self.draw_app.bend_mode = 2
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path2.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 2: Reverse 45 degrees ...')
-            else:
-                self.draw_app.bend_mode = 1
-                self.cursor = QtGui.QCursor(QtGui.QPixmap(self.draw_app.app.resource_location + '/aero_path1.png'))
-                QtGui.QGuiApplication.setOverrideCursor(self.cursor)
-                msg = _('Track Mode 1: 45 degrees ...')
-
-            # Remove any previous utility shape
-            self.draw_app.tool_shape.clear(update=False)
-            geo = self.utility_geometry(data=(self.draw_app.snap_x, self.draw_app.snap_y))
-            self.draw_app.draw_utility_geometry(geo_shape=geo)
-
-            return msg
+            return self.cycle_bend_mode(False)
 
         if key in [str(i) for i in range(10)] + ['.', ',', '+', '-', '/', '*'] or \
                 key in [QtCore.Qt.Key.Key_0, QtCore.Qt.Key.Key_1, QtCore.Qt.Key.Key_2,
@@ -2136,16 +1852,7 @@ class DiscEditorGrb(ShapeToolEditorGrb):
 
         self.buf_val = (size_ap / 2) if size_ap > 0 else 0.0000001
 
-        if 0 in self.draw_app.storage_dict:
-            self.storage_obj = self.draw_app.storage_dict[0]['geometry']
-        else:
-            self.draw_app.storage_dict[0] = {
-                'type': 'C',
-                'size': 0.0,
-                'geometry': []
-            }
-            self.draw_app.touch_geometry()
-            self.storage_obj = self.draw_app.storage_dict[0]['geometry']
+        self.storage_obj = self.draw_app.storage_dict.get(0, {}).get('geometry', [])
 
         self.draw_app.app.inform.emit(_("Click on Center point ..."))
 
@@ -2267,16 +1974,7 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
 
         self.buf_val = (size_ap / 2) if size_ap > 0 else 0.0000001
 
-        if 0 in self.draw_app.storage_dict:
-            self.storage_obj = self.draw_app.storage_dict[0]['geometry']
-        else:
-            self.draw_app.storage_dict[0] = {
-                'type': 'C',
-                'size': 0.0,
-                'geometry': []
-            }
-            self.draw_app.touch_geometry()
-            self.storage_obj = self.draw_app.storage_dict[0]['geometry']
+        self.storage_obj = self.draw_app.storage_dict.get(0, {}).get('geometry', [])
 
         self.steps_per_circ = self.draw_app.app.options.get(
             "gerber_circle_steps",
@@ -2519,6 +2217,104 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
             pass
 
 
+class ArcEditorGrb(DiscSemiEditorGrb):
+    """The existing three arc interactions, swept by a plain circular aperture."""
+
+    def __init__(self, draw_app):
+        DrawTool.__init__(self, draw_app)
+        self.name = 'arc'
+        self.direction, self.mode = 'cw', 'c12'
+        self.buf_val = 0.0  # FOLLOW is the centerline, not the semidisc's material boundary.
+        self.dont_execute = False
+        self.aperture_id = draw_app.last_aperture_selected
+        self.session = draw_app.history.session
+        self.revision = draw_app.geometry_revision
+        self.units = draw_app.app.app_units
+        self._jump_slot = None
+        try:
+            aperture = draw_app.storage_dict[self.aperture_id]
+            self.width = circular_aperture(aperture)
+            self.aperture_metadata = metadata(aperture)
+            self.steps_per_circ = draw_app.app.options.get('gerber_circle_steps', 64)
+            if type(self.steps_per_circ) is not int or not 4 <= self.steps_per_circ <= 4096:
+                raise ValueError(_("Circle resolution must be an integer between 4 and 4096."))
+        except (KeyError, ValueError, TypeError, OverflowError) as error:
+            self.dont_execute = self.complete = True
+            draw_app.app.inform.emit('[WARNING_NOTCL] %s' % str(error))
+            return
+        QtGui.QGuiApplication.restoreOverrideCursor()
+        self.cursor = QtGui.QCursor(QtGui.QPixmap(draw_app.app.resource_location + '/aero_arc.png'))
+        QtGui.QGuiApplication.setOverrideCursor(self.cursor)
+        self._jump_slot = lambda *args: draw_app.update_utility_geometry(data=args[0]) if args else None
+        draw_app.app.jump_signal.connect(self._jump_slot)
+        draw_app.app.inform.emit(_("Click on Center point ..."))
+
+    def utility_geometry(self, data=None):
+        if self.dont_execute or data is None:
+            return
+        points = self.points + [data]
+        if not all(len(point) == 2 and all(math.isfinite(v) for v in point) for point in points):
+            return
+        if len(self.points) == 2:
+            p0, p1, p2 = points
+            if p0 == p1 or (self.mode == 'c12' and p0 == p2):
+                return
+            if self.mode == '132' and abs((p1[0] - p0[0]) * (p2[1] - p0[1]) -
+                                           (p1[1] - p0[1]) * (p2[0] - p0[0])) <= 1e-12:
+                return
+        try:
+            preview = super().utility_geometry(data)
+            if len(self.points) == 2 and preview is not None:
+                follow = preview.geo[0]['solid']
+                # Match the native Gerber parser's circular D01 sweep convention.
+                solid = follow.buffer(self.width / 1.999, quad_segs=self.steps_per_circ)
+                if follow.length <= 0 or not follow.is_valid or solid.is_empty or not solid.is_valid:
+                    return
+                return DrawToolUtilityShape({'solid': solid, 'follow': follow})
+            return preview
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError):
+            return
+
+    def make(self):
+        editor = self.draw_app
+        if self.dont_execute or len(self.points) != 3:
+            return
+        if (self.session != editor.history.session or self.revision != editor.geometry_revision or
+                self.units != editor.app.app_units or
+                self.aperture_id != editor.last_aperture_selected or
+                self.aperture_id not in editor.storage_dict or
+                metadata(editor.storage_dict[self.aperture_id]) != self.aperture_metadata or
+                not editor.history.ready()):
+            self.dont_execute = self.complete = True
+            self.clean_up()
+            editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Editor state changed. Reopen the arc tool."))
+            return
+        last = self.points.pop()
+        try:
+            preview = self.utility_geometry(last)
+        finally:
+            self.points.append(last)
+        if preview is None:
+            self.points.pop()
+            editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Choose distinct, non-collinear arc points."))
+            return
+        self.geometry = DrawToolShape(preview.geo)
+        editor.current_storage = editor.storage_dict[self.aperture_id]['geometry']
+        editor.in_action = False
+        self.complete = True
+        self.clean_up()
+        editor.app.inform.emit('[success] %s' % _("Done."))
+
+    def clean_up(self):
+        if self._jump_slot is not None:
+            try:
+                self.draw_app.app.jump_signal.disconnect(self._jump_slot)
+            except (TypeError, AttributeError):
+                pass
+            self._jump_slot = None
+        self.draw_app.delete_utility_geometry()
+
+
 class ScaleEditorGrb(ShapeToolEditorGrb):
     def __init__(self, draw_app):
         ShapeToolEditorGrb.__init__(self, draw_app)
@@ -2539,23 +2335,31 @@ class ScaleEditorGrb(ShapeToolEditorGrb):
         self.draw_app.hide_tool('all')
         self.draw_app.ui.scale_tool_frame.show()
 
-        try:
-            self.draw_app.ui.scale_button.clicked.disconnect()
-        except (TypeError, AttributeError):
-            pass
+        # a previous Scale tool left active must not keep its connection
+        previous = self.draw_app.active_tool
+        if isinstance(previous, ScaleEditorGrb) and previous is not self:
+            previous.disconnect_scale()
+        self.disconnect_scale()
         self.draw_app.ui.scale_button.clicked.connect(self.on_scale_click)
 
+    def disconnect_scale(self):
+        try:
+            self.draw_app.ui.scale_button.clicked.disconnect(self.on_scale_click)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+
     def deactivate_scale(self):
-        self.draw_app.ui.scale_button.clicked.disconnect()
+        self.disconnect_scale()
         self.complete = True
         self.draw_app.select_tool("select")
         self.draw_app.hide_tool(self.name)
 
-    def on_scale_click(self):
+    def on_scale_click(self, *signal_args):
         self.draw_app.on_scale()
         self.deactivate_scale()
 
     def clean_up(self):
+        self.disconnect_scale()
         self.draw_app.selected = []
         self.draw_app.ui.apertures_table.clearSelection()
         self.draw_app.plot_all()
@@ -2702,10 +2506,37 @@ class SimplifyEditorGrb(ShapeToolEditorGrb):
 
     def on_simplification_click(self):
         self.app.log.debug("SimplifyEditorGrb.on_simplification_click()")
+        if not self.draw_app.history.ready():
+            return 'fail'
 
-        selected_shapes = []
-        selected_shapes_geos = []
-        tol = self.ui.geo_tol_entry.get_value()
+        try:
+            tol = float(self.ui.geo_tol_entry.get_value())
+            if not math.isfinite(tol) or tol < 0:
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Tolerance must be finite and non-negative."))
+            return
+
+        selected = set(self.draw_app.selected)
+        storage_dict = self.draw_app.storage_dict
+        revision = self.draw_app.geometry_revision
+        snapshots = []
+        geometries = {}
+        for apid, aperture in storage_dict.items():
+            storage = aperture.get('geometry', [])
+            shapes = tuple(storage)
+            owned = [shape for shape in shapes if shape in selected]
+            if owned:
+                snapshots.append((apid, storage, shapes))
+                for shape in owned:
+                    geometries[shape] = dict(shape.geo)
+        if not geometries:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No aperture geometry is selected."))
+            return
+
+        pending = self.draw_app.history.reserve()
+        if pending is None:
+            return 'fail'
 
         # init the coordinates text field and vertex points field
         self.ui.geo_coords_entry.set_value('')
@@ -2713,50 +2544,23 @@ class SimplifyEditorGrb(ShapeToolEditorGrb):
 
         def task_job():
             with self.app.proc_container.new('%s...' % _("Simplify")):
-                for obj_shape in self.draw_app.selected:
-                    try:
-                        selected_shapes.append(obj_shape)
-
-                        new_geo = {
-                            'apid': '',
-                            'geo': {}
-                        }
-
-                        # find the aperture where the shape is stored
-                        current_apid = None
-                        for apid in self.draw_app.storage_dict:
-                            if obj_shape in self.draw_app.storage_dict[apid]['geometry']:
-                                current_apid = apid
-                                break
-
-                        if current_apid is None:
-                            current_apid = self.draw_app.last_aperture_selected
-
-                        new_geo['apid'] = deepcopy(current_apid)
-
-                        if 'solid' in obj_shape.geo:
-                            new_geo['geo']['solid'] = obj_shape.geo['solid'].simplify(tolerance=tol)
-                        if 'follow' in obj_shape.geo:
-                            new_geo['geo']['follow'] = obj_shape.geo['follow'].simplify(tolerance=tol)
-                        if 'clear' in obj_shape.geo:
-                            new_geo['geo']['clear'] = obj_shape.geo['clear'].simplify(tolerance=tol)
-
-                        selected_shapes_geos.append(deepcopy(new_geo))
-                    except ValueError:
-                        pass
-
-                for shape in selected_shapes:
-                    self.draw_app.delete_shape(geo_el=shape)
-
-                for geo in selected_shapes_geos:
-                    stora = self.draw_app.storage_dict[geo['apid']]['geometry']
-                    geo_el = geo['geo']
-                    self.draw_app.add_gerber_shape(DrawToolShape(geo_el), storage=stora)
-
-                is_sel_all = self.draw_app.on_table_selection()
-                if is_sel_all:
-                    return
-                self.draw_app.plot_all()
+                result = {'revision': revision, 'storage': storage_dict, 'updates': [], 'replacements': {},
+                          'pending': pending}
+                try:
+                    replacements = result['replacements']
+                    for shape, geometry in geometries.items():
+                        new_geo = dict(geometry)
+                        for key in ('solid', 'follow', 'clear'):
+                            if geometry.get(key) is not None:
+                                new_geo[key] = geometry[key].simplify(tolerance=tol)
+                        replacements[shape] = DrawToolShape(new_geo)
+                    for apid, storage, shapes in snapshots:
+                        result['updates'].append((apid, storage, shapes,
+                                                  [replacements.get(shape, shape) for shape in shapes]))
+                except Exception as err:
+                    # No storage has changed: a failed component must never delete its source shape.
+                    result['error'] = str(err)
+                self.draw_app.simplification_finished.emit(result)
 
         self.app.worker_task.emit({'fcn': task_job, 'params': []})
 
@@ -2965,6 +2769,7 @@ class MoveEditorGrb(ShapeToolEditorGrb):
                 new_elements[pos][key] = geo
         return new_elements
 
+    @gerber_operation(_('Move / Copy'))
     def transfer_selection(self, remove_source):
         """
         Adds a translated copy of each selected shape to its aperture storage. Each storage is changed in 1 pass and
@@ -2990,7 +2795,12 @@ class MoveEditorGrb(ShapeToolEditorGrb):
                 if remove_source:
                     # slice assignment: storage_dict keeps a reference to this list
                     storage[:] = [shape for shape in storage if id(shape) not in shape_ids]
-                storage.extend(DrawToolShape(geo_el) for geo_el in self.translated_elements(shapes, dx, dy))
+                moved = [DrawToolShape(geo_el) for geo_el in self.translated_elements(shapes, dx, dy)]
+                storage.extend(moved)
+                # a pure translation keeps the flash semantics of the records: no export re-validation
+                history = getattr(self.draw_app, 'history', None)
+                if isinstance(history, GerberHistory):
+                    history.translated_shapes.update(moved)
                 done_ids |= shape_ids
 
             if done_ids:
@@ -3021,8 +2831,6 @@ class MoveEditorGrb(ShapeToolEditorGrb):
         :param data:
         :return:
         """
-        geo_list = []
-
         if self.origin is None:
             return None
 
@@ -3118,6 +2926,7 @@ class EraserEditorGrb(ShapeToolEditorGrb):
             # self.draw_app.select_tool("select")
             return
 
+    @gerber_operation(_('Erase'), all_apertures=True)
     def make(self):
         eraser_sel_shapes = []
 
@@ -3650,6 +3459,39 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
                         return ap_dict['shape_id'], idx
             idx += 1
 
+    def import_candidates(self, query):
+        """Index composed donor material for this tool; immutable geometry identities detect source edits."""
+        cache = getattr(self, '_source_candidates', None)
+        if not isinstance(cache, dict):
+            cache = self._source_candidates = {}
+        sources = [obj for obj in self.app.collection.get_list()
+                   if obj.kind in ('geometry', 'gerber', 'excellon') and obj.obj_options.get('plot') is True
+                   and obj is not self.draw_app.gerber_obj]
+        live = {id(obj) for obj in sources}
+        for key in set(cache) - live:
+            del cache[key]
+        for obj in sources:
+            geometry = obj.solid_geometry
+            if obj.kind == 'geometry' and getattr(obj, 'multigeo', False):
+                geometry = [tool.get('solid_geometry', []) for tool in obj.tools.values()]
+            raw = tuple(flatten_shapely_geometry(geometry if geometry is not None else []))
+            token = tuple(id(geo) for geo in raw)
+            entry = cache.get(id(obj))
+            if entry is None or entry[1] != token:
+                polygons = []
+                for geo in raw:
+                    if isinstance(geo, (LineString, LinearRing)) and geo.is_ring:
+                        geo = Polygon(geo)
+                    if isinstance(geo, Polygon) and not geo.is_empty and geo.is_valid:
+                        polygons.append(geo)
+                entry = (obj, token, raw, polygons, STRtree(polygons))
+                cache[id(obj)] = entry
+            polygons, tree = entry[3:]
+            records = [{'solid': polygons[int(index)], 'follow': polygons[int(index)].exterior}
+                       for index in sorted(tree.query(query, predicate='intersects'))]
+            if records:
+                yield obj, {0: {'type': 'REG', 'size': 0.0, 'geometry': records}}
+
     def select_handler(self, pos):
         """
 
@@ -3660,11 +3502,8 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         """
         added_poly_count = 0
 
-        for obj in self.app.collection.get_list():
-            # only Gerber objects and only those that are active and not the edited object
-            if obj.kind == 'gerber' and obj.obj_options['plot'] is True and \
-                    obj.obj_options['name'] != self.draw_app.gerber_obj.obj_options['name']:
-                edit_tools = AppGerberEditor.build_edit_tools(obj.tools, obj.solid_geometry)
+        for obj, edit_tools in ImportEditorGrb.import_candidates(self, Point(pos)):
+            if edit_tools:
                 for apid in edit_tools:
                     if 'geometry' in edit_tools[apid]:
                         for geo_el in edit_tools[apid]['geometry']:
@@ -3719,11 +3558,8 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         color = self.draw_app.get_sel_color() + 'AF'
         face_color = self.draw_app.get_sel_color() + 'AF'
 
-        for obj in self.app.collection.get_list():
-            # only Gerber objects and only those that are active and not the edited object
-            if obj.kind == 'gerber' and obj.obj_options['plot'] is True and \
-                    obj.obj_options['name'] != self.draw_app.gerber_obj.obj_options['name']:
-                edit_tools = AppGerberEditor.build_edit_tools(obj.tools, obj.solid_geometry)
+        for obj, edit_tools in ImportEditorGrb.import_candidates(self, poly_selection):
+            if edit_tools:
                 for apid in edit_tools:
                     if 'geometry' in edit_tools[apid]:
                         for geo_el in edit_tools[apid]['geometry']:
@@ -3782,10 +3618,19 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         else:
             self.app.inform.emit(_("No polygon in selection."))
 
+    @gerber_operation(_('Import'), all_apertures=True)
     def import_shapes(self):
+        if any(not isinstance(shape.geo.get('solid'), (Polygon, MultiPolygon)) or
+               shape.geo['solid'].is_empty or not shape.geo['solid'].is_valid
+               for aperture in self.sel_storage for shape in aperture.get('geometry', ())):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Import requires valid polygon material."))
+            # leave the import mode: restore the drawing visibility and the Select tool
+            self.draw_app.visible = True
+            self.draw_app.select_tool('select')
+            return 'fail'
         st_dict = self.draw_app.storage_dict
 
-        st_dict_keys = [int(k) for k in st_dict.keys()]
+        st_dict_keys = numeric_aperture_codes(st_dict.keys())
         if st_dict_keys:
             max_apid = max(st_dict_keys)
         else:
@@ -3865,6 +3710,7 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
 
     def clean_up(self):
         self.import_disconnect()
+        self._source_candidates = {}
         if self.grid_status_memory:
             self.app.ui.grid_snap_btn.trigger()
             self.grid_status_memory = False
@@ -3892,12 +3738,47 @@ class TransformEditorGrb(ShapeToolEditorGrb):
         self.draw_app.plot_all()
 
 
+def edit_copy_name(name):
+    """
+    The name of the object that "Save as New" of an editor creates: <name>_edit, then <name>_edit_1, _edit_2...
+
+    :param name:    name of the source object
+    :return:        name of the new object
+    """
+    if "_edit" in name:
+        try:
+            return name[:-1] + str(int(name[-1]) + 1)
+        except ValueError:
+            return name + "_1"
+    return name + "_edit"
+
+
+def get_finite_bounds(obj):
+    """
+    The bounds (xmin, ymin, xmax, ymax) of an object; zeros for an empty object or one without usable bounds.
+
+    :param obj: Gerber or Excellon object
+    :return:    tuple of 4 floats
+    """
+    try:
+        bounds = tuple(float(val) for val in obj.bounds())
+    except Exception:
+        return 0.0, 0.0, 0.0, 0.0
+    if len(bounds) != 4 or not all(math.isfinite(val) for val in bounds):
+        return 0.0, 0.0, 0.0, 0.0
+    return bounds
+
+
 class AppGerberEditor(QtCore.QObject):
     draw_shape_idx = -1
     # plot_finished = QtCore.pyqtSignal()
     mp_finished = QtCore.pyqtSignal(list)
     build_ui_sig = QtCore.pyqtSignal()
     update_ui_sig = QtCore.pyqtSignal()
+    simplification_finished = QtCore.pyqtSignal(object)
+    history_changed = QtCore.pyqtSignal()
+    geometry_result = QtCore.pyqtSignal(object)
+    load_result = QtCore.pyqtSignal(object)
     plot_object = QtCore.pyqtSignal(object)
 
     def __init__(self, app):
@@ -3958,6 +3839,9 @@ class AppGerberEditor(QtCore.QObject):
         # this will store the polygons marked by mark are to be perhaps deleted
         self.geo_to_delete = []
 
+        # set when the stored geometry can no longer be saved as native apertures (the save writes regions)
+        self.loaded_as_regions = False
+
         # this will flag if the Editor "tools" are launched from key shortcuts (True) or from menu toolbar (False)
         self.launched_from_shortcuts = False
 
@@ -3977,6 +3861,9 @@ class AppGerberEditor(QtCore.QObject):
         self.shapes = self.canvas.new_shape_collection(layers=1)
         self.tool_shape = self.canvas.new_shape_collection(layers=1)
         self.ma_annotation = self.canvas.new_text_group()
+        # grips to drag the vertices of 1 selected region or track in the Select tool
+        self.vertex_grips = VertexGrips(self, geometry=lambda shape: grip_geometry(self, shape),
+                                        steps_option='gerber_circle_steps', snapshot=lambda: grip_state(self))
 
         # Remove from scene
         self.shapes.enabled = False
@@ -4046,6 +3933,7 @@ class AppGerberEditor(QtCore.QObject):
 
         # flag to show if the object was modified
         self.is_modified = False
+        self.history = GerberHistory(self)
         self.edited_obj_name = ""
         self.tool_row = 0
 
@@ -4073,11 +3961,22 @@ class AppGerberEditor(QtCore.QObject):
         self.mp_finished.connect(self.on_multiprocessing_finished)
         self.build_ui_sig.connect(self.build_ui)
         self.update_ui_sig.connect(self.update_ui)
+        self.simplification_finished.connect(self.apply_simplification)
+        self.history_changed.connect(self.refresh_history)
+        self.geometry_result.connect(self.apply_geometry_result)
+        self.load_result.connect(self.apply_load_result)
 
         self.ui.level.toggled.connect(self.on_level_changed)
 
         # connect the toolbar signals
         self.connect_grb_toolbar_signals()
+
+        self.app.ui.grb_add_arc_menuitem.triggered.connect(lambda checked=False: self.select_tool('arc'))
+        for kind in ('rectangle', 'text'):
+            getattr(self.app.ui, 'grb_add_%s_menuitem' % kind).triggered.connect(
+                lambda checked=False, tool=kind: self.on_region_drawing(tool))
+        self.app.ui.grb_difference_keep_menuitem.triggered.connect(
+            lambda checked=False: self.apply_region_operation('difference_keep'))
 
         self.app.ui.grb_add_pad_menuitem.triggered.connect(self.on_pad_add)
         self.app.ui.grb_add_pad_array_menuitem.triggered.connect(self.on_pad_add_array)
@@ -4089,8 +3988,7 @@ class AppGerberEditor(QtCore.QObject):
         self.app.ui.grb_add_semidisc_menuitem.triggered.connect(self.on_add_semidisc)
         self.app.ui.grb_add_disc_menuitem.triggered.connect(self.on_disc_add)
         self.app.ui.grb_add_buffer_menuitem.triggered.connect(lambda: self.select_tool('buffer'))
-        self.app.ui.grb_add_buffer_menuitem.triggered.connect(self.on_simplification)
-        self.app.ui.grb_add_scale_menuitem.triggered.connect(self.on_scale)
+        self.app.ui.grb_add_scale_menuitem.triggered.connect(lambda checked=False: self.select_tool('scale'))
         self.app.ui.grb_add_eraser_menuitem.triggered.connect(self.on_eraser)
         self.app.ui.grb_add_markarea_menuitem.triggered.connect(self.on_markarea)
 
@@ -4101,7 +3999,23 @@ class AppGerberEditor(QtCore.QObject):
 
         self.app.ui.grb_move_menuitem.triggered.connect(self.on_move_button)
 
-        self.ui.scale_button.clicked.connect(self.on_scale)
+        # the scale button is owned by ScaleEditorGrb, which connects it while the tool is active
+        self.ui.size_select_btn.clicked.connect(self.on_select_by_size)
+        self.ui.size_delete_btn.clicked.connect(self.on_delete_by_size)
+        self.ui.split_action.triggered.connect(lambda: self.select_tool('split'))
+        self.ui.join_btn.clicked.connect(self.on_join_paths)
+        self.ui.resize_circles_btn.clicked.connect(self.on_resize_circles)
+        self.ui.vertex_edit_btn.clicked.connect(self.on_edit_vertices)
+        # the app rebuilds the editors (New Project) while the UI stays: drop the action of the previous editor
+        self.remove_editor_actions()
+        self.vertex_edit_action = self.app.ui.grb_editor_menu.addAction(_('Edit vertices'), self.on_edit_vertices)
+        self.vertex_edit_action.setProperty(EDITOR_ACTION_PROPERTY, True)
+        self.ui.features_table.itemSelectionChanged.connect(self.on_feature_selection)
+        self.ui.history_undo.clicked.connect(self.undo)
+        self.ui.history_redo.clicked.connect(self.redo)
+        self.ui.history_positions.activated.connect(self.history_go_to)
+        self.ui.diagnostics_btn.clicked.connect(self.on_diagnostics)
+        self.ui.diagnostics_component.currentIndexChanged.connect(self.update_component_properties)
 
         self.app.ui.aperture_delete_btn.triggered.connect(self.on_delete_btn)
         self.ui.name_entry.returnPressed.connect(self.on_name_activate)
@@ -4148,6 +4062,7 @@ class AppGerberEditor(QtCore.QObject):
             "region": {"button": self.app.ui.grb_add_region_btn, "constructor": RegionEditorGrb},
             "poligonize": {"button": self.app.ui.grb_convert_poly_btn, "constructor": PoligonizeEditorGrb},
             "semidisc": {"button": self.app.ui.grb_add_semidisc_btn, "constructor": DiscSemiEditorGrb},
+            "arc": {"button": self.app.ui.grb_add_arc_btn, "constructor": ArcEditorGrb},
             "disc": {"button": self.app.ui.grb_add_disc_btn, "constructor": DiscEditorGrb},
             "buffer": {"button": self.app.ui.aperture_buffer_btn, "constructor": BufferEditorGrb},
             "simplify": {"button": self.app.ui.aperture_simplify_btn, "constructor": SimplifyEditorGrb},
@@ -4161,8 +4076,204 @@ class AppGerberEditor(QtCore.QObject):
         })
 
         for tool in self.tools_gerber:
+            if tool in ('bend', 'split'):
+                continue  # Properties controls survive toolbar reconstruction and use clicked, not triggered.
             self.tools_gerber[tool]["button"].triggered.connect(self.make_callback(tool))  # Events
             self.tools_gerber[tool]["button"].setCheckable(True)
+
+        if 'bend' not in self.tools_gerber:
+            self.tools_gerber['bend'] = {"button": self.ui.bend_move_btn, "constructor": TrackBendEditorGrb}
+            self.ui.bend_move_btn.setCheckable(True)
+            self.ui.bend_move_btn.clicked.connect(self.make_callback('bend'))
+        self.tools_gerber['split'] = {"button": self.ui.split_action, "constructor": FollowSplitEditorGrb}
+        self.ui.split_action.setCheckable(True)
+
+        for kind in ('rectangle', 'text'):
+            getattr(self.app.ui, 'grb_add_%s_btn' % kind).triggered.connect(
+                lambda checked=False, tool=kind: self.on_region_drawing(tool))
+        self.app.ui.grb_difference_keep_btn.triggered.connect(
+            lambda checked=False: self.apply_region_operation('difference_keep'))
+
+    @QtCore.pyqtSlot()
+    def refresh_history(self):
+        history = self.history
+        history.enforce_limits()
+        undo_label = history.undo_stack[-1]['label'] if history.undo_stack else ''
+        redo_label = history.redo_stack[-1]['label'] if history.redo_stack else ''
+        busy = history.pending is not None
+        self.ui.history_undo.setEnabled(bool(undo_label) and not busy)
+        self.ui.history_redo.setEnabled(bool(redo_label) and not busy)
+        self.ui.history_undo.setText('%s %s' % (_('Undo'), undo_label))
+        self.ui.history_redo.setText('%s %s' % (_('Redo'), redo_label))
+        with QtCore.QSignalBlocker(self.ui.history_positions):
+            self.ui.history_positions.clear()
+            self.ui.history_positions.addItems(
+                [_("Oldest retained state") if history.baseline_evicted else _("Initial state")] +
+                [step['label'] for step in history.undo_stack + list(reversed(history.redo_stack))])
+            self.ui.history_positions.setCurrentIndex(len(history.undo_stack))
+            self.ui.history_positions.setEnabled(not busy)
+        self.ui.exit_editor_button.setEnabled(not busy)
+        if self.app.call_source == 'grb_editor':
+            self.app.ui.on_history_changed('' if busy else undo_label, '' if busy else redo_label)
+
+    def undo(self):
+        return self.history.replay(False)
+
+    def redo(self):
+        return self.history.replay(True)
+
+    def history_go_to(self, position):
+        if not self.history.ready():
+            return False
+        if not 0 <= position <= len(self.history.undo_stack) + len(self.history.redo_stack):
+            return False
+        while len(self.history.undo_stack) != position:
+            if not self.history.replay(len(self.history.undo_stack) < position):
+                return False
+        return True
+
+    def submit_geometry(self, label, compute, matrix=None):
+        return self.history.submit(label, compute, matrix)
+
+    @QtCore.pyqtSlot(object)
+    def apply_geometry_result(self, result):
+        self.history.apply_result(result)
+
+    @QtCore.pyqtSlot(object)
+    def apply_load_result(self, result):
+        if self.history.pending is not result['pending']:
+            return
+        self.history.pending = None
+        if result['pending'][1] != self.history.session:
+            return
+        if 'error' in result:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % result['error'])
+            # nothing was loaded: leave a clean state
+            self.loaded_as_regions = False
+            self.history.notify()
+            return
+        self.storage_dict.update(result['storage'])
+        self.loaded_as_regions = result['regions']
+        self.touch_geometry()
+        self.on_multiprocessing_finished()
+        self.history.reset()
+        self.is_modified = False
+
+    def update_component_properties(self):
+        component = self.ui.diagnostics_component.currentData() or 'solid'
+        geometry = self.selected[-1].geo.get(component) if self.selected else None
+        if geometry is None:
+            self.ui.component_properties.setText(_("No selected geometry for this component."))
+            self.ui.geo_coords_entry.setText('')
+            self.ui.geo_vertex_entry.set_value(0)
+            self.ui.area_entry.set_value(0)
+            self.ui.is_valid_entry.setText(_("None"))
+            return
+        ring = geometry.exterior if isinstance(geometry, Polygon) else geometry
+        ccw = str(ring.is_ccw) if isinstance(ring, LinearRing) else _("Not applicable")
+        self.ui.component_properties.setText(
+            '%s: %s | %s: %s | %s: %s\n%s: %s | %s: %s | %s: %.*f' % (
+                _("Empty"), geometry.is_empty, _("Valid"), geometry.is_valid, _("Simple"), geometry.is_simple,
+                _("Ring"), geometry.is_ring, _("CCW"), ccw, _("Length"), self.decimals, geometry.length))
+        def vertex_count(geo):
+            if isinstance(geo, Polygon):
+                return len(geo.exterior.coords) + sum(len(ring.coords) for ring in geo.interiors)
+            if hasattr(geo, 'geoms'):
+                return sum(vertex_count(part) for part in geo.geoms)
+            return len(geo.coords) if not geo.is_empty else 0
+
+        self.ui.is_valid_entry.setText(str(geometry.is_valid))
+        self.ui.area_entry.set_value(geometry.area)
+        self.ui.geo_coords_entry.setText(geometry.wkt)
+        self.ui.geo_vertex_entry.set_value(vertex_count(geometry))
+
+    def diagnose_selected(self, component, tolerance):
+        if not self.history.ready():
+            return 'fail'
+        try:
+            tolerance = float(tolerance)
+            if component not in ('solid', 'follow', 'clear') or not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Choose a component and a finite non-negative tolerance."))
+            return 'fail'
+        if not self.selected:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Select geometry to inspect."))
+            return 'fail'
+        report = {key: [] for key in ('missing', 'empty', 'zero_length', 'duplicate', 'invalid',
+                                      'open', 'endpoints', 'near_endpoints')}
+        selected = set(self.selected)
+        normalized = {}
+
+        def mark(kind, record):
+            if record not in report[kind]:
+                report[kind].append(record)
+
+        def inspect(geometry, record):
+            if geometry.is_empty:
+                mark('empty', record)
+                return
+            if not geometry.is_valid or not geometry.is_simple:
+                mark('invalid', record)
+            if isinstance(geometry, Polygon):
+                inspect(geometry.exterior, record)
+                for ring in geometry.interiors:
+                    inspect(ring, record)
+            elif hasattr(geometry, 'geoms'):
+                for part in geometry.geoms:
+                    inspect(part, record)
+            elif isinstance(geometry, (LineString, LinearRing)):
+                if not math.isfinite(geometry.length):
+                    mark('invalid', record)
+                    return
+                if geometry.length == 0:
+                    mark('zero_length', record)
+                    return
+                key = shapely.normalize(LineString(geometry.coords)).wkb
+                if key in normalized:
+                    mark('duplicate', normalized[key])
+                    mark('duplicate', record)
+                else:
+                    normalized[key] = record
+                if not geometry.is_closed:
+                    mark('open', record)
+                    report['endpoints'].extend((record, tuple(geometry.coords[index])) for index in (0, -1))
+
+        for apid, aperture in self.storage_dict.items():
+            for index, shape in enumerate(aperture.get('geometry', ())):
+                if shape not in selected:
+                    continue
+                record = (apid, index, component, shape)
+                geometry = shape.geo.get(component)
+                if geometry is None:
+                    mark('missing', record)
+                else:
+                    inspect(geometry, record)
+        endpoints = report['endpoints']
+        if endpoints:
+            points = [Point(coords[:2]) for record, coords in endpoints]
+            tree = STRtree(points)
+            for index, point in enumerate(points):
+                for other in tree.query(point, predicate='dwithin', distance=tolerance):
+                    if other > index:
+                        report['near_endpoints'].append((endpoints[index], endpoints[other]))
+        return report
+
+    def on_diagnostics(self):
+        report = self.diagnose_selected(self.ui.diagnostics_component.currentData(),
+                                       self.ui.diagnostics_tolerance_entry.text().replace(',', '.'))
+        if report == 'fail':
+            return
+        lines = [_('Read-only snapshot. Open FOLLOW paths are normal tracks, not automatically errors.')]
+        for key, label in (('missing', _("Missing component")), ('empty', _("Empty")),
+                           ('zero_length', _("Zero length")), ('duplicate', _("Duplicate")),
+                           ('invalid', _("Invalid")), ('open', _("Open"))):
+            records = ', '.join('%s/%s/%s' % (apid, index, component)
+                                for apid, index, component, shape in report[key])
+            lines.append('%s: %d%s' % (label, len(report[key]), ': ' + records if records else ''))
+        lines.append('%s: %d' % (_("Near endpoint pairs"), len(report['near_endpoints'])))
+        self.ui.diagnostics_result.setText('\n'.join(lines))
+        return report
 
     def pool_recreated(self, pool):
         self.shapes.pool = pool
@@ -4320,7 +4431,7 @@ class AppGerberEditor(QtCore.QObject):
         self.apertures_row = 0
         # aper_no = self.apertures_row + 1
 
-        sorted_apertures = sorted([int(k) for k in list(self.storage_dict.keys())])
+        sorted_apertures = sorted(self.storage_dict, key=aperture_rank)
 
         # sort = []
         # for k, v in list(self.gerber_obj.aperture_macros.items()):
@@ -4450,6 +4561,8 @@ class AppGerberEditor(QtCore.QObject):
         self.ui.apertures_table.itemChanged.connect(self.on_tool_edit)
         self.ui.apertures_table.cellPressed.connect(self.on_row_selected)
 
+        self.refresh_features()
+
         # for convenience set the next aperture code in the apcode field
         try:
             self.ui.apcode_entry.set_value(max(self.tid2apcode.values()) + 1)
@@ -4463,6 +4576,7 @@ class AppGerberEditor(QtCore.QObject):
                 )
             ))
 
+    @gerber_operation(_('Add aperture'))
     def on_aperture_add(self, apcode=None):
         self.is_modified = True
         if apcode is not None:
@@ -4558,6 +4672,7 @@ class AppGerberEditor(QtCore.QObject):
             row_to_be_selected = 0
         self.ui.apertures_table.selectRow(row_to_be_selected)
 
+    @gerber_operation(_('Delete aperture'))
     def on_aperture_delete(self, ap_code: str = None):
         """
         Called for aperture deletion.
@@ -4569,10 +4684,8 @@ class AppGerberEditor(QtCore.QObject):
 
         try:
             if ap_code:
-                try:
-                    deleted_apcode_list = [dd for dd in ap_code]
-                except TypeError:
-                    deleted_apcode_list = [ap_code]
+                codes = [ap_code] if isinstance(ap_code, (str, int)) else list(ap_code)
+                deleted_apcode_list = [key for code in codes for key in self.storage_dict if str(key) == str(code)]
             else:
                 # deleted_tool_dia = float(self.ui.apertures_table.item(self.ui.apertures_table.currentRow(), 1).text())
                 if len(self.ui.apertures_table.selectionModel().selectedRows()) == 0:
@@ -4620,14 +4733,25 @@ class AppGerberEditor(QtCore.QObject):
             else:
                 self.last_aperture_selected = int(self.ui.apertures_table.item(0, 1).text())
 
-    def on_tool_edit(self):
+    @gerber_operation(_('Edit aperture'))
+    def on_tool_edit(self, *signal_args):
         if self.ui.apertures_table.currentItem() is None:
             return
 
         # if connected, disconnect the signal from the slot on item_changed as it creates issues
         self.ui.apertures_table.itemChanged.disconnect()
-        # self.ui.apertures_table.cellPressed.disconnect()
+        try:
+            result = self._apply_tool_edit()
+        finally:
+            # we reactivate the signals after the tool editing, whatever the outcome
+            self.ui.apertures_table.itemChanged.connect(self.on_tool_edit)
+        if result is True:
+            self.build_ui()
+            return None
+        return result
 
+    def _apply_tool_edit(self):
+        """Apply the edited aperture table cell. Return True when the table must be rebuilt."""
         self.is_modified = True
         val_edited = None
 
@@ -4638,7 +4762,6 @@ class AppGerberEditor(QtCore.QObject):
         key_in_tid2apcode = row_of_item_changed + 1
         ap_code_old = self.tid2apcode[key_in_tid2apcode]
 
-        ap_code_new = self.ui.apertures_table.item(row_of_item_changed, 1).text()
 
         if col_of_item_changed == 1:
             # we edited the Aperture Code column (int)
@@ -4647,18 +4770,16 @@ class AppGerberEditor(QtCore.QObject):
             except ValueError as e:
                 self.app.log.debug("AppGerberEditor.on_tool_edit() --> %s" % str(e))
                 # self.ui.apertures_table.setCurrentItem(None)
-                # we reactivate the signals after the tool editing
-                self.ui.apertures_table.itemChanged.connect(self.on_tool_edit)
                 return
         elif col_of_item_changed == 3:
             # we edited the Size column (float)
             try:
                 val_edited = float(self.ui.apertures_table.currentItem().text())
+                if not math.isfinite(val_edited) or val_edited <= 0:
+                    raise ValueError('Aperture size must be finite and positive')
             except ValueError as e:
                 self.app.log.debug("AppGerberEditor.on_tool_edit() --> %s" % str(e))
                 # self.ui.apertures_table.setCurrentItem(None)
-                # we reactivate the signals after the tool editing
-                self.ui.apertures_table.itemChanged.connect(self.on_tool_edit)
                 return
         elif col_of_item_changed == 4:
             # we edit the Dimensions column (tuple)
@@ -4668,20 +4789,19 @@ class AppGerberEditor(QtCore.QObject):
                 ]
             except ValueError as e:
                 self.app.log.debug("AppGerberEditor.on_tool_edit() --> %s" % str(e))
-                # we reactivate the signals after the tool editing
-                self.ui.apertures_table.itemChanged.connect(self.on_tool_edit)
                 return
 
             if len(val_edited) != 2:
                 self.app.inform.emit("[WARNING_NOTCL] %s" % _("Dimensions need two float values separated by comma."))
-                old_dims_txt = '%s, %s' % (str(self.storage_dict[ap_code_new]['width']),
-                                           str(self.storage_dict[ap_code_new]['height']))
+                old_dims_txt = '%s, %s' % (str(self.storage_dict[ap_code_old]['width']),
+                                           str(self.storage_dict[ap_code_old]['height']))
 
                 self.ui.apertures_table.currentItem().setText(old_dims_txt)
-                # we reactivate the signals after the tool editing
-                self.ui.apertures_table.itemChanged.connect(self.on_tool_edit)
                 return
             else:
+                if not all(math.isfinite(value) and value > 0 for value in val_edited):
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("Dimensions must be finite and positive."))
+                    return 'fail'
                 self.app.inform.emit("[success] %s" % _("Dimensions edited."))
 
         # In case we edited the Aperture Code therefore the val_edited holds a new Aperture Code
@@ -4696,31 +4816,26 @@ class AppGerberEditor(QtCore.QObject):
 
                 old_aperture_val = self.storage_dict.pop(ap_code_old)
                 self.storage_dict[val_edited] = old_aperture_val
+                if self.last_aperture_selected == ap_code_old:
+                    self.last_aperture_selected = val_edited
                 self.touch_geometry()
 
             else:
                 # aperture code is already in use so, we move the pads from the prior tool to the new tool
                 # but only if they are of the same type
 
-                if self.storage_dict[ap_code_old]['type'] == self.storage_dict[ap_code_new]['type']:
-                    # TODO I have to work here; if type == 'R' or 'O' have t otake care of all attributes ...
-                    factor = val_edited / float(ap_code_old)
-                    geometry = []
-                    for geo_el in self.storage_dict[ap_code_old]:
-                        geometric_data = geo_el.geo
-                        new_geo_el = {}
-                        if 'solid' in geometric_data:
-                            new_geo_el['solid'] = deepcopy(scale(geometric_data['solid'], xfact=factor, yfact=factor))
-                        if 'follow' in geometric_data:
-                            new_geo_el['follow'] = deepcopy(scale(geometric_data['follow'], xfact=factor, yfact=factor))
-                        if 'clear' in geometric_data:
-                            new_geo_el['clear'] = deepcopy(scale(geometric_data['clear'], xfact=factor, yfact=factor))
-                        geometry.append(new_geo_el)
-
-                    self.add_gerber_shape(geometry, self.storage_dict[val_edited])
+                target = next((key for key in self.storage_dict if str(key) == str(val_edited)), None)
+                old_meta = {key: value for key, value in self.storage_dict[ap_code_old].items() if key != 'geometry'}
+                new_meta = {key: value for key, value in self.storage_dict[target].items() if key != 'geometry'}
+                if old_meta != new_meta:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("Only identical apertures can be merged."))
+                    return 'fail'
+                if target != ap_code_old:
+                    self.storage_dict[target]['geometry'].extend(self.storage_dict[ap_code_old]['geometry'])
+                    del self.storage_dict[ap_code_old]
+                    self.oldapcode_newapcode[ap_code_old] = target
+                    self.last_aperture_selected = target
                     self.touch_geometry()
-
-                    self.on_aperture_delete(ap_code=ap_code_old)
 
         # In case we edited the Size of the Aperture therefore the val_edited holds the new Aperture Size
         # It will happen only for the Aperture Type == 'C' - I make sure of that in the self.build_ui()
@@ -4731,20 +4846,25 @@ class AppGerberEditor(QtCore.QObject):
             geometry = []
             for geo_el in self.storage_dict[ap_code_old]['geometry']:
                 g_data = geo_el.geo
-                new_geo_el = {}
+                new_geo_el = dict(g_data)
                 if 'solid' in g_data:
                     if 'follow' in g_data:
                         if isinstance(g_data['follow'], Point):
                             new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(adjust_size))
                         else:
                             new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(adjust_size, join_style="mitre"))
+                    else:
+                        new_geo_el['solid'] = g_data['solid'].buffer(adjust_size)
                 if 'follow' in g_data:
                     new_geo_el['follow'] = deepcopy(g_data['follow'])
                 if 'clear' in g_data:
                     new_geo_el['clear'] = deepcopy(g_data['clear'].buffer(adjust_size, join_style="mitre"))
                 geometry.append(DrawToolShape(new_geo_el))
 
+            replacements = dict(zip(self.storage_dict[ap_code_old]['geometry'], geometry))
+            self.selected = [replacements.get(shape, shape) for shape in self.selected]
             self.storage_dict[ap_code_old]['geometry'].clear()
+            self.storage_dict[ap_code_old]['size'] = new_size
             self.add_gerber_shape(geometry, self.storage_dict[ap_code_old]['geometry'])
             self.touch_geometry()
             # self.storage_dict[ap_code_old]['geometry'] = geometry
@@ -4764,7 +4884,7 @@ class AppGerberEditor(QtCore.QObject):
                 geometry = []
                 for geo_el in self.storage_dict[ap_code_old]['geometry']:
                     g_data = geo_el.geo
-                    new_geo_el = {}
+                    new_geo_el = dict(g_data)
                     if 'solid' in g_data:
                         if 'follow' in g_data:
                             if isinstance(g_data['follow'], Point):
@@ -4795,32 +4915,59 @@ class AppGerberEditor(QtCore.QObject):
                                 new_geo_el['clear'] = deepcopy(g_data['clear'].buffer(buff_val_lines, join_style="mitre"))
                     geometry.append(DrawToolShape(new_geo_el))
 
+                replacements = dict(zip(self.storage_dict[ap_code_old]['geometry'], geometry))
+                self.selected = [replacements.get(shape, shape) for shape in self.selected]
                 self.storage_dict[ap_code_old]['geometry'].clear()
+                self.storage_dict[ap_code_old].update(width=new_width, height=new_height,
+                                                     size=math.hypot(new_width, new_height))
                 self.add_gerber_shape(geometry, self.storage_dict[ap_code_old]['geometry'])
                 self.touch_geometry()
 
+            elif self.storage_dict[ap_code_old]['type'] == 'O':
+                new_meta = dict(self.storage_dict[ap_code_old])
+                new_meta.update(width=val_edited[0], height=val_edited[1], size=math.hypot(*val_edited))
+                geometry = []
+                for shape in self.storage_dict[ap_code_old]['geometry']:
+                    geo = dict(shape.geo)
+                    if not isinstance(geo.get('follow'), Point) or not getattr(geo.get('clear'), 'is_empty', True):
+                        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Oblong dimension editing supports flashes only."))
+                        return 'fail'
+                    geo['solid'] = Gerber.create_flash_geometry(
+                        self, geo['follow'], new_meta, int(self.app.options.get('gerber_circle_steps', 64)))
+                    geometry.append(DrawToolShape(geo))
+                replacements = dict(zip(self.storage_dict[ap_code_old]['geometry'], geometry))
+                self.selected = [replacements.get(shape, shape) for shape in self.selected]
+                self.storage_dict[ap_code_old].update(new_meta)
+                self.storage_dict[ap_code_old]['geometry'][:] = geometry
+                self.touch_geometry()
+
         self.plot_all()
+        return True
 
-        # we reactivate the signals after the tool editing
-        self.ui.apertures_table.itemChanged.connect(self.on_tool_edit)
-        # self.ui.apertures_table.cellPressed.connect(self.on_row_selected)
-
-    def update_ui(self):
-        is_zoom_selected = self.ui.geo_zoom.get_value()
+    def update_ui(self, zoom=True):
+        """
+        :param zoom:    False for history refreshes: only a user selection change may move the view
+        """
+        self.refresh_features()
+        if self.selected:
+            selected = set(self.selected)
+            self.sync_aperture_rows(apid for apid, shape in self._feature_refs if shape in selected)
+        self.update_component_properties()
+        is_zoom_selected = zoom and self.ui.geo_zoom.get_value()
 
         if not self.selected:
             self.ui.geo_coords_entry.setText('')
             self.ui.geo_vertex_entry.set_value(0)
             self.ui.area_entry.set_value(0)
-            self.ui.is_valid_entry.setText('None')
+            self.ui.is_valid_entry.setText(_("None"))
             return
 
         # update the GUI only with the last selected shape information's
         last_sel_geo = self.selected[-1].geo
-        last_sel_geo_solid = last_sel_geo['solid']
+        last_sel_geo_solid = last_sel_geo.get('solid')
 
         # zoom on selected
-        if is_zoom_selected:
+        if is_zoom_selected and last_sel_geo_solid is not None and not last_sel_geo_solid.is_empty:
             xmin, ymin, xmax, ymax = last_sel_geo_solid.bounds
             if xmin == xmax and ymin != ymax:
                 xmin = ymin
@@ -4850,26 +4997,6 @@ class AppGerberEditor(QtCore.QObject):
 
             self.app.plotcanvas.view.camera.rect = rect
             self.shapes.unlock_updates()
-
-        # calculate the coordinates and vertex points number for the selected shape
-        if last_sel_geo_solid.geom_type == 'Polygon':
-            coords = list(last_sel_geo_solid.exterior.coords)
-            vertex_nr = len(coords)
-            area_val = last_sel_geo_solid.area
-            self.ui.area_entry.set_value(area_val)
-        elif last_sel_geo_solid.geom_type in ['LinearRing', 'LineString']:
-            coords = list(last_sel_geo_solid.coords)
-            vertex_nr = len(coords)
-        else:
-            return
-
-        # update Validity in GUI
-        validity = last_sel_geo_solid.is_valid
-        self.ui.is_valid_entry.setText(str(validity))
-        # update the selected shape coordinates in GUI
-        self.ui.geo_coords_entry.setText(str(coords))
-        # update the vertex number in GUI
-        self.ui.geo_vertex_entry.set_value(vertex_nr)
 
     def change_level(self, level):
         """
@@ -4929,9 +5056,11 @@ class AppGerberEditor(QtCore.QObject):
             self.ui.apsize_entry.setDisabled(False)
 
     def activate_grb_editor(self):
+        self.history.reset()
         # adjust the status of the menu entries related to the editor
         self.app.ui.menueditedit.setDisabled(True)
         self.app.ui.menueditok.setDisabled(False)
+        self.app.ui.on_history_changed('', '')
         # adjust the visibility of some of the canvas context menu
         self.app.ui.popmenu_edit.setVisible(False)
         self.app.ui.popmenu_save.setVisible(True)
@@ -4948,6 +5077,8 @@ class AppGerberEditor(QtCore.QObject):
         self.grb_plot_promises = []
         self.oldapcode_newapcode = {}
         self.tid2apcode = {}
+        self.loaded_as_regions = False
+        self.geo_to_delete = []
 
         self.shapes.enabled = True
         self.tool_shape.enabled = True
@@ -4994,6 +5125,7 @@ class AppGerberEditor(QtCore.QObject):
         # adjust the status of the menu entries related to the editor
         self.app.ui.menueditedit.setDisabled(False)
         self.app.ui.menueditok.setDisabled(True)
+        history_of(self.app).notify()
         # adjust the visibility of some of the canvas context menu
         self.app.ui.popmenu_edit.setVisible(True)
         self.app.ui.popmenu_save.setVisible(False)
@@ -5180,24 +5312,32 @@ class AppGerberEditor(QtCore.QObject):
             pass
 
     def clear(self):
+        if isinstance(getattr(self, 'history', None), GerberHistory):
+            self.history.reset()
         # try:
         #     self.thread.quit()
         #     self.thread.wait()
         # except Exception as erp:
         #     self.app.log.error("AppGerberEditor.clear() -> %s" % str(erp))
 
-        if isinstance(self.active_tool, ImportEditorGrb):
+        if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb)):
             self.active_tool.clean_up()
+        self.vertex_grips.hide()
         self.app.plotcanvas.text_cursor.parent = None
         self.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
         self.active_tool = None
         self.selected = []
+        self.geo_to_delete = []
+        self.loaded_as_regions = False
         self.storage_dict.clear()
         self.touch_geometry()
         self._pick_cache = None
         self._shape_apertures.clear()
         self._rendered_shapes.clear()
         self._rendered_selection.clear()
+        self._rendered_geometry = {}
+        self._render_style = None
+        self._render_had_utility = False
         self._render_state = None
         self.pick_cycle = None
         self.results.clear()
@@ -5205,6 +5345,8 @@ class AppGerberEditor(QtCore.QObject):
         self.shapes.clear(update=True)
         self.tool_shape.clear(update=True)
         self.ma_annotation.clear(update=True)
+
+        self.refresh_features()
 
     def edit_fcgerber(self, orig_grb_obj):
         """
@@ -5335,66 +5477,23 @@ class AppGerberEditor(QtCore.QObject):
 
         # self.app.worker_task.emit({'fcn': worker_job, 'params': [self]})
 
-        class Execute_Edit(QtCore.QObject):
+        pending = self.history.reserve()
+        source = self.gerber_obj
 
-            start = QtCore.pyqtSignal(str)
+        def load():
+            result = {'pending': pending}
+            with self.app.proc_container.new('%s ...' % _("Loading")):
+                try:
+                    tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry)
+                    result['regions'] = tools is not source.tools
+                    jobs = [self.pool.apply_async(AppGerberEditor.add_apertures, args=(key, value))
+                            for key, value in tools.items()]
+                    result['storage'] = {key: deepcopy(value) for key, value in (job.get() for job in jobs)}
+                except Exception as err:
+                    result['error'] = str(err)
+                self.load_result.emit(result)
 
-            def __init__(self, app):
-                super(Execute_Edit, self).__init__()
-                self.app = app
-                self.start.connect(self.run)
-
-            @staticmethod
-            def worker_job(app_obj):
-                with app_obj.app.proc_container.new('%s ...' % _("Loading")):
-                    # a file with clear (LPC) features is loaded as its composed geometry (regions). The source
-                    # object is not changed, the user may cancel the edit.
-                    edit_tools = AppGerberEditor.build_edit_tools(
-                        app_obj.gerber_obj.tools, app_obj.gerber_obj.solid_geometry)
-                    app_obj.loaded_as_regions = edit_tools is not app_obj.gerber_obj.tools
-                    if app_obj.loaded_as_regions:
-                        app_obj.app.inform.emit('[WARNING_NOTCL] %s' % _(
-                            "The object has clear (negative polarity) features. "
-                            "The editor loads the composed geometry as regions."))
-                    # #################################################################################################
-                    # Multi-Processing
-                    # #################################################################################################
-                    try:
-                        # Loading the Geometry into Editor Storage
-                        for ap_code, ap_dict in edit_tools.items():
-                            app_obj.results.append(
-                                app_obj.pool.apply_async(app_obj.add_apertures, args=(ap_code, ap_dict))
-                            )
-                    except Exception as ee:
-                        app_obj.app.log.error(
-                            "AppGerberEditor.edit_fcgerber.worker_job() Adding processes to pool --> %s" % str(ee))
-                        traceback.print_exc()
-
-                    output = []
-                    try:
-                        for p in app_obj.results:
-                            output.append(p.get())
-                    except Exception as err:
-                        app_obj.app.log.error(
-                            "AppGerberEditor.edit_fcgerber.Exxecute_Edit.worker_job(). "
-                            "Multiprocessing error. %s" % str(err))
-
-                    for elem in output:
-                        app_obj.storage_dict[elem[0]] = deepcopy(elem[1])
-                    app_obj.touch_geometry()
-                    app_obj.mp_finished.emit(output)
-                    # #################################################################################################
-
-            def run(self):
-                self.worker_job(self.app)
-
-        # self.thread.start(QtCore.QThread.Priority.NormalPriority)
-
-        executable_edit = Execute_Edit(app=self)
-        # executable_edit.moveToThread(self.thread)
-        # executable_edit.start.emit("Started")
-
-        self.app.worker_task.emit({'fcn': executable_edit.run, 'params': []})
+        self.app.worker_task.emit({'fcn': load, 'params': []})
 
     @staticmethod
     def build_edit_tools(tools, solid_geometry):
@@ -5464,34 +5563,194 @@ class AppGerberEditor(QtCore.QObject):
 
     def update_fcgerber(self):
         """
-        Create a new Gerber object that contain the edited content of the source Gerber object
+        Save as New: create a new Gerber object that contain the edited content of the source Gerber object.
+        The source object is not changed.
 
         :return: None
         """
-        new_grb_name = self.edited_obj_name
+        if isinstance(getattr(self, 'history', None), GerberHistory) and not self.history.ready():
+            return 'fail'
+        new_grb_name = edit_copy_name(self.edited_obj_name)
 
-        # if the 'delayed plot' malfunctioned stop the QTimer
-        # try:
-        #     self.plot_thread.stop()
-        # except Exception as e:
-        #     self.app.log.warning("AppGerberEditor.update_fcgerber() Timer malfunctioned --> %s" % str(e))
+        source = self.gerber_obj
+        history = getattr(self, 'history', None)
+        history = history if isinstance(history, GerberHistory) else None
+        pending = history.reserve() if history is not None else None
 
-        if "_edit" in self.edited_obj_name:
+        def apply_signal_handler(result):
+            if history is not None:
+                if history.pending is not pending:
+                    return
+                history.pending = None
+                history.notify()
+                if pending[1:] != (history.session, self.geometry_revision) or self.gerber_obj is not source:
+                    return
+            if not isinstance(result, dict) or 'obj' not in result:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The edited content could not be saved. "
+                                                            "The object is unchanged."))
+                return
+            edited = result['obj']
+
+            def obj_init(grb_obj, app_obj):
+                grb_obj.obj_options.update(edited.obj_options)
+                grb_obj.units = edited.units
+                for attr in ('int_digits', 'frac_digits'):
+                    if hasattr(edited, attr):
+                        setattr(grb_obj, attr, getattr(edited, attr))
+                AppGerberEditor.apply_edited_gerber(grb_obj, edited)
+
             try:
-                _id = int(self.edited_obj_name[-1]) + 1
-                new_grb_name = self.edited_obj_name[:-1] + str(_id)
-            except ValueError:
-                new_grb_name += "_1"
-        else:
-            new_grb_name = self.edited_obj_name + "_edit"
-
-        def deactivate_grb_editor_signal_handler():
+                created = self.app.app_obj.new_object('gerber', new_grb_name, obj_init)
+                if created == 'fail':
+                    return
+            except Exception as e:
+                self.app.log.error("AppGerberEditor.update_fcgerber() --> %s" % str(e))
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The edited content could not be saved. "
+                                                            "The object is unchanged."))
+                return
             self.deactivate_grb_editor()
+            self.app.inform.emit('[success] %s' % _("Done."))
 
-        self.app.connect_custom_signal(deactivate_grb_editor_signal_handler, object)
+        self.app.connect_custom_signal(apply_signal_handler, object)
+        context = AppGerberEditor._save_context(self)
+        storage = AppGerberEditor._save_storage(self.storage_dict)
+        build = lambda name, records: AppGerberEditor.build_edited_gerber(context, name, records)
+        try:
+            self.app.worker_task.emit({'fcn': build, 'params': [new_grb_name, storage]})
+        except Exception:
+            if history is not None:
+                history.pending = None
+                history.notify()
+            raise
 
-        self.app.worker_task.emit({'fcn': self.new_edited_gerber, 'params': [new_grb_name, self.storage_dict]})
-        # self.new_edited_gerber(new_grb_name, self.storage_dict)
+    def update_fcgerber_in_place(self, on_complete=None):
+        """
+        Save: the edited content goes into the source Gerber object, which keeps its name, history uid, place in the
+        project and options (the bounds are recomputed).
+
+        The content is built by a worker task in a detached Gerber object, without touching the source. The source is
+        changed on the GUI thread, in one step (apply_edited_gerber()). A failed build leaves the source unchanged
+        and the editor open, with an error message.
+
+        :param on_complete: called on the GUI thread after the source is updated and the editor is deactivated; it
+                            calls refresh_edited_gerber() (after it cleans the Properties area)
+        :return:            None
+        """
+        if isinstance(getattr(self, 'history', None), GerberHistory) and not self.history.ready():
+            return 'fail'
+        source = self.gerber_obj
+        history = getattr(self, 'history', None)
+        history = history if isinstance(history, GerberHistory) else None
+        pending = history.reserve() if history is not None else None
+        context = AppGerberEditor._save_context(self)
+        storage = AppGerberEditor._save_storage(self.storage_dict)
+
+        def apply_signal_handler(result):
+            if history is not None:
+                if history.pending is not pending:
+                    return
+                history.pending = None
+                history.notify()
+                if pending[1:] != (history.session, self.geometry_revision) or self.gerber_obj is not source:
+                    return
+            if not isinstance(result, dict) or 'obj' not in result:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The edited content could not be saved. "
+                                                            "The object is unchanged."))
+                return
+            try:
+                AppGerberEditor.apply_edited_gerber(source, result['obj'])
+            except Exception as e:
+                self.app.log.error("AppGerberEditor.update_fcgerber_in_place() --> %s" % str(e))
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The edited content could not be saved. "
+                                                            "The object is unchanged."))
+                return
+            self.deactivate_grb_editor()
+            if on_complete is not None:
+                on_complete()
+
+        self.app.connect_custom_signal(apply_signal_handler, object)
+        build = (lambda name, records: AppGerberEditor.build_edited_gerber(context, name, records)) \
+            if history is not None else self.build_edited_gerber
+        try:
+            self.app.worker_task.emit({'fcn': build, 'params': [source.obj_options['name'], storage]})
+        except Exception:
+            if history is not None:
+                history.pending = None
+                history.notify()
+            raise
+
+    def build_edited_gerber(self, outname, aperture_storage):
+        """
+        Worker thread. Builds the edited content in a detached Gerber object (not in the project, the source object
+        is only read) and sends it to the GUI thread with the custom_signal: {'obj': object} or {'error': text}.
+
+        :param outname:             name of the detached object (the name of the source)
+        :param aperture_storage:    a dictionary that holds all the objects geometry
+        :return:                    None
+        """
+        result = {}
+        try:
+            with self.app.proc_container.new('%s...' % _("Working")):
+                edited = type(self.gerber_obj)(outname, app=self.app)
+                for attr in ('int_digits', 'frac_digits'):
+                    if hasattr(self.gerber_obj, attr):
+                        setattr(edited, attr, getattr(self.gerber_obj, attr))
+                AppGerberEditor._fill_edited_gerber(
+                    self, edited, self.app, outname, AppGerberEditor._storage_with_geometry(aperture_storage))
+                edited.moveToThread(self.app.main_thread)
+                result = {'obj': edited}
+        except Exception as e:
+            self.app.log.error("AppGerberEditor.build_edited_gerber() --> %s" % str(e))
+            result = {'error': str(e)}
+        finally:
+            self.results = []
+        self.app.custom_signal.emit(result)
+
+    @staticmethod
+    def apply_edited_gerber(source, edited):
+        """
+        Put the content of a detached edited Gerber object into the source object. The name, history uid, tree
+        position and obj_options of the source stay; the bounds in obj_options are recomputed. All the values are
+        read before the first assignment, a failure leaves the source unchanged.
+
+        :param source:  the source GerberObject
+        :param edited:  the detached GerberObject made by build_edited_gerber()
+        :return:        None
+        """
+        bounds = get_finite_bounds(edited)
+        tools = edited.tools
+        solid_geometry = edited.solid_geometry
+        follow_geometry = edited.follow_geometry
+        aperture_macros = edited.aperture_macros
+        export_as_regions = edited.export_as_regions
+
+        source.tools = tools
+        source.solid_geometry = solid_geometry
+        source.follow_geometry = follow_geometry
+        source.aperture_macros = aperture_macros
+        source.export_as_regions = export_as_regions
+        source.multigeo = False
+        source.follow = False
+        if edited.source_file:
+            source.source_file = edited.source_file
+        # the aperture table and the aperture marks belong to the old apertures
+        source.ui_build = False
+        source.marked_rows = []
+        for key, value in zip(('xmin', 'ymin', 'xmax', 'ymax'), bounds):
+            source.obj_options[key] = value
+
+    @staticmethod
+    def refresh_edited_gerber(source):
+        """
+        Refresh the GUI of a source object after apply_edited_gerber(): aperture table, plot, Properties.
+        """
+        try:
+            source.clear_plot_apertures()
+        except Exception as e:
+            source.app.log.debug("AppGerberEditor.refresh_edited_gerber() --> %s" % str(e))
+        source.build_ui()
+        source.plot()
+        source.app.app_obj.object_changed.emit(source)
 
     @staticmethod
     def update_options(obj):
@@ -5505,127 +5764,123 @@ class AppGerberEditor(QtCore.QObject):
             obj.obj_options = {}
             return True
 
-    def new_edited_gerber(self, outname, aperture_storage):
+    @staticmethod
+    def _save_storage(storage):
+        return {key: {**{name: value for name, value in aperture.items() if name != 'geometry'},
+                      'geometry': [DrawToolShape(dict(shape.geo) if isinstance(shape.geo, dict) else shape.geo)
+                                   for shape in aperture.get('geometry', ())]}
+                for key, aperture in storage.items()}
+
+    @staticmethod
+    def _save_context(editor):
+        return SimpleNamespace(app=editor.app, gerber_obj=editor.gerber_obj,
+                               gerber_obj_options=dict(editor.gerber_obj_options),
+                               loaded_as_regions=getattr(editor, 'loaded_as_regions', False), results=[])
+
+    @staticmethod
+    def _storage_with_geometry(storage_dict):
         """
-        Creates a new Gerber object for the edited Gerber. Thread-safe.
-
-        :param outname:             Name of the resulting object. None causes the name to be that of the file.
-        :type outname:              str
-        :param aperture_storage:    a dictionary that holds all the objects geometry
-        :type aperture_storage:     dict
-        :return: None
+        A deep copy of the apertures of the editor storage that have geometry.
         """
-
-        self.app.log.debug("Update the Gerber object with edited content. Source is: %s" %
-                           self.gerber_obj.obj_options['name'].upper())
-
-        out_name = outname
-        storage_dict = aperture_storage
-
         local_storage_dict = {}
         for aperture in storage_dict:
             if 'geometry' in storage_dict[aperture]:
                 # add aperture only if it has geometry
                 if len(storage_dict[aperture]['geometry']) > 0:
                     local_storage_dict[aperture] = deepcopy(storage_dict[aperture])
+        return local_storage_dict
 
-        # How the object should be initialized
-        def obj_init(grb_obj, app_obj):
+    def _fill_edited_gerber(self, grb_obj, app_obj, out_name, local_storage_dict):
+        """
+        Fill a Gerber object with the edited content: tools, solid and follow geometry, aperture macros, options.
+        It reads the source object (self.gerber_obj) and writes only to grb_obj.
 
-            poly_buffer = []
-            follow_buffer = []
+        :param grb_obj:             the GerberObject to fill
+        :param app_obj:             the App
+        :param out_name:            name of the object
+        :param local_storage_dict:  the apertures that have geometry, from _storage_with_geometry()
+        :return:                    None
+        """
+        poly_buffer = []
+        follow_buffer = []
 
-            for storage_apcode, storage_val in local_storage_dict.items():
-                grb_obj.tools[storage_apcode] = {}
+        for storage_apcode, storage_val in local_storage_dict.items():
+            grb_obj.tools[storage_apcode] = {}
 
-                for k, val in storage_val.items():
-                    if k == 'geometry':
-                        grb_obj.tools[storage_apcode][k] = []
-                        for geo_el in val:
-                            geometric_data = geo_el.geo
-                            new_geo_el = {}
+            for k, val in storage_val.items():
+                if k == 'geometry':
+                    grb_obj.tools[storage_apcode][k] = []
+                    for geo_el in val:
+                        geometric_data = geo_el.geo
+                        new_geo_el = {}
+                        if 'solid' in geometric_data:
+                            new_geo_el['solid'] = geometric_data['solid']
+                            poly_buffer.append(deepcopy(new_geo_el['solid']))
+
+                        if 'follow' in geometric_data:
+                            # if isinstance(geometric_data['follow'], Polygon):
+                            #     buff_val = -(int(storage_val['size']) / 2)
+                            #     geo_f = (geometric_data['follow'].buffer(buff_val)).exterior
+                            #     new_geo_el['follow'] = geo_f
+                            # else:
+                            #     new_geo_el['follow'] = geometric_data['follow']
+                            new_geo_el['follow'] = geometric_data['follow']
+                            follow_buffer.append(deepcopy(new_geo_el['follow']))
+                        else:
                             if 'solid' in geometric_data:
-                                new_geo_el['solid'] = geometric_data['solid']
-                                poly_buffer.append(deepcopy(new_geo_el['solid']))
-
-                            if 'follow' in geometric_data:
-                                # if isinstance(geometric_data['follow'], Polygon):
-                                #     buff_val = -(int(storage_val['size']) / 2)
-                                #     geo_f = (geometric_data['follow'].buffer(buff_val)).exterior
-                                #     new_geo_el['follow'] = geo_f
-                                # else:
-                                #     new_geo_el['follow'] = geometric_data['follow']
-                                new_geo_el['follow'] = geometric_data['follow']
+                                solid = geometric_data['solid']
+                                geo_f = solid.exterior if isinstance(solid, Polygon) else solid.boundary
+                                new_geo_el['follow'] = geo_f
                                 follow_buffer.append(deepcopy(new_geo_el['follow']))
-                            else:
-                                if 'solid' in geometric_data:
-                                    solid = geometric_data['solid']
-                                    geo_f = solid.exterior if isinstance(solid, Polygon) else solid.boundary
-                                    new_geo_el['follow'] = geo_f
-                                    follow_buffer.append(deepcopy(new_geo_el['follow']))
 
-                            if 'clear' in geometric_data:
-                                new_geo_el['clear'] = geometric_data['clear']
+                        if 'clear' in geometric_data:
+                            new_geo_el['clear'] = geometric_data['clear']
 
-                            if new_geo_el:
-                                grb_obj.tools[storage_apcode][k].append(deepcopy(new_geo_el))
-                    else:
-                        grb_obj.tools[storage_apcode][k] = val
-
-            grb_obj.aperture_macros = deepcopy(self.gerber_obj.aperture_macros)
-            # the rebuilt records don't prove that they represent the edited result: keep the flag
-            # an object loaded as regions (it had clear features) is saved through the region export too: it keeps
-            # the holes and the islands of the regions in any order
-            grb_obj.export_as_regions = bool(getattr(self.gerber_obj, 'export_as_regions', False) or
-                                             getattr(self, 'loaded_as_regions', False) or
-                                             any(isinstance(poly, MultiPolygon) for poly in poly_buffer))
-
-            follow_buffer = flatten_shapely_geometry(follow_buffer)
-
-            new_poly = MultiPolygon(flatten_shapely_geometry(poly_buffer))
-            new_poly = new_poly.buffer(0.00000001)
-            new_poly = new_poly.buffer(-0.00000001)
-            new_poly = flatten_shapely_geometry(new_poly)
-            grb_obj.solid_geometry = deepcopy(new_poly)
-
-            grb_obj.follow_geometry = follow_buffer
-
-            for k, v in self.gerber_obj_options.items():
-                if k == 'name':
-                    grb_obj.obj_options[k] = out_name
+                        if new_geo_el:
+                            grb_obj.tools[storage_apcode][k].append(deepcopy(new_geo_el))
                 else:
-                    grb_obj.obj_options[k] = deepcopy(v)
+                    grb_obj.tools[storage_apcode][k] = val
 
-            grb_obj.multigeo = False
-            grb_obj.follow = False
-            grb_obj.units = app_obj.app_units
+        grb_obj.aperture_macros = deepcopy(self.gerber_obj.aperture_macros)
+        # the rebuilt records don't prove that they represent the edited result: keep the flag
+        # an object loaded as regions (it had clear features) is saved through the region export too: it keeps
+        # the holes and the islands of the regions in any order
+        grb_obj.export_as_regions = bool(getattr(self.gerber_obj, 'export_as_regions', False) or
+                                         getattr(self, 'loaded_as_regions', False) or
+                                         any(isinstance(poly, MultiPolygon) for poly in poly_buffer))
 
-            try:
-                grb_obj.create_geometry()
-            except KeyError:
-                self.app.inform.emit('[ERROR_NOTCL] %s' %
-                                     _("There are no Aperture definitions in the file. Aborting Gerber creation."))
-            except Exception:
-                msg = '[ERROR] %s' % _("An internal error has occurred. See shell.\n")
-                msg += traceback.format_exc()
-                app_obj.inform.emit(msg)
-                raise
+        follow_buffer = flatten_shapely_geometry(follow_buffer)
 
-            grb_obj.regenerate_source(name=out_name)
+        new_poly = MultiPolygon(flatten_shapely_geometry(poly_buffer))
+        new_poly = new_poly.buffer(0.00000001)
+        new_poly = new_poly.buffer(-0.00000001)
+        new_poly = flatten_shapely_geometry(new_poly)
+        grb_obj.solid_geometry = deepcopy(new_poly)
 
-        with self.app.proc_container.new('%s...' % _("Working")):
-            try:
-                self.app.app_obj.new_object("gerber", outname, obj_init)
-            except Exception as e:
-                self.app.log.error("Error on Edited object creation: %s" % str(e))
-                # make sure to clean the previous results
-                self.results = []
-                return
+        grb_obj.follow_geometry = follow_buffer
 
-            # make sure to clean the previous results
-            self.results = []
-            self.app.custom_signal.emit(None)
-            self.app.inform.emit('[success] %s' % _("Done."))
+        for k, v in self.gerber_obj_options.items():
+            if k == 'name':
+                grb_obj.obj_options[k] = out_name
+            else:
+                grb_obj.obj_options[k] = deepcopy(v)
+
+        grb_obj.multigeo = False
+        grb_obj.follow = False
+        grb_obj.units = app_obj.app_units
+
+        try:
+            grb_obj.create_geometry()
+        except KeyError:
+            self.app.inform.emit('[ERROR_NOTCL] %s' %
+                                 _("There are no Aperture definitions in the file. Aborting Gerber creation."))
+        except Exception:
+            msg = '[ERROR] %s' % _("An internal error has occurred. See shell.\n")
+            msg += traceback.format_exc()
+            app_obj.inform.emit(msg)
+            raise
+
+        grb_obj.regenerate_source(name=out_name)
 
     def on_tool_select(self, tool):
         """
@@ -5633,14 +5888,21 @@ class AppGerberEditor(QtCore.QObject):
 
         :rtype : None
         """
+        if not self.history.ready():
+            # the toolbar button was already toggled by the user: restore its previous state
+            if tool in self.tools_gerber:
+                button = self.tools_gerber[tool]["button"]
+                button.setChecked(not button.isChecked())
+            return 'fail'
         current_tool = tool
+        self.vertex_grips.cancel()
 
         self.app.log.debug("on_tool_select('%s')" % tool)
 
-        if isinstance(self.active_tool, ImportEditorGrb):
+        if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb)):
             self.active_tool.clean_up()
 
-        if self.last_aperture_selected is None and current_tool not in ['select', 'disc', 'semidisc', 'region']:
+        if self.last_aperture_selected is None and current_tool not in ['select', 'disc', 'semidisc', 'region', 'bend', 'split']:
             # self.draw_app.select_tool('select')
             self.complete = True
             current_tool = 'select'
@@ -5665,7 +5927,11 @@ class AppGerberEditor(QtCore.QObject):
                 self.select_tool('select')
                 self.active_tool = SelectEditorGrb(self)
 
+        self.vertex_grips.sync()
+
     def on_row_selected(self, row, col):
+        if not self.history.ready():
+            return 'fail'
         # log.debug("AppGerberEditor.on_row_selected() --> %s" % str(inspect.stack()[1][3]))
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
         if self.app.options.get(
@@ -5730,6 +5996,8 @@ class AppGerberEditor(QtCore.QObject):
         self.plot_selection()
 
     def on_table_selection(self):
+        if not self.history.ready():
+            return 'fail'
         # log.debug("AppGerberEditor.on_table_selection() -> %s" % str(inspect.stack()[1][3]))
         selected_rows = self.ui.apertures_table.selectionModel().selectedRows(0)
 
@@ -5783,6 +6051,7 @@ class AppGerberEditor(QtCore.QObject):
             return True
         return False
 
+    @gerber_operation(_('Draw shape'))
     def on_grb_shape_complete(self, storage=None, specific_shape=None, no_plot=False):
         """
 
@@ -5792,6 +6061,12 @@ class AppGerberEditor(QtCore.QObject):
         :return:
         """
         self.app.log.debug("on_grb_shape_complete()")
+
+        if getattr(self.active_tool, 'name', None) in ('region', 'disc', 'semidisc'):
+            self.storage_dict.setdefault(0, {'type': 'REG', 'size': 0.0, 'geometry': []})
+            storage = self.storage_dict[0]['geometry']
+            self.current_storage = storage
+            self.last_aperture_selected = 0
 
         if specific_shape:
             geo = specific_shape
@@ -5820,6 +6095,14 @@ class AppGerberEditor(QtCore.QObject):
         Every code that adds, removes, replaces or changes a shape of the storage calls this, so the pick index is
         rebuilt on the next pick.
         """
+        self._snap_cache = None
+        self._feature_state = None
+        history = getattr(self, 'history', None)
+        if isinstance(history, GerberHistory) and history.depth:
+            if history.dirty:
+                self._pick_cache = None
+                return
+            history.dirty = True
         self.geometry_revision += 1
 
     def get_pick_index(self):
@@ -5952,6 +6235,306 @@ class AppGerberEditor(QtCore.QObject):
                         self.last_aperture_selected = by_text[item.text()]
                 table.setSelectionMode(old_mode)
 
+    def get_snap_index(self):
+        """Index FOLLOW vertices and segments once per geometry revision and editor session."""
+        state = (id(self.storage_dict), self.geometry_revision, self.history.session)
+        cache = getattr(self, '_snap_cache', None)
+        if cache is not None and cache[0] == state:
+            return cache[1:]
+        points, segments = [], []
+
+        def collect(geo):
+            if geo is None or geo.is_empty:
+                return
+            if isinstance(geo, Point):
+                points.append(geo)
+            elif isinstance(geo, (LineString, LinearRing)):
+                coords = [coord[:2] for coord in geo.coords]
+                points.extend(Point(coord) for coord in coords)
+                segments.extend(LineString((a, b)) for a, b in zip(coords, coords[1:]) if a != b)
+            elif hasattr(geo, 'geoms'):
+                for part in geo.geoms:
+                    collect(part)
+
+        for aperture in self.storage_dict.values():
+            for shape in aperture.get('geometry', ()):
+                collect(shape.geo.get('follow'))
+        point_tree = STRtree(points) if points else None
+        segment_tree = STRtree(segments) if segments else None
+        self._snap_cache = (state, point_tree, points, segment_tree, segments)
+        return self._snap_cache[1:]
+
+    def snap(self, x, y):
+        """Use the shared grid settings, but acquire only this editor's FOLLOW geometry."""
+        if not self.app.grid_status():
+            self.active_snap_type = None
+            self.ui.snap_type_label.setText('%s: %s' % (_("Snap"), _("None")))
+            return x, y
+        options = self.app.geo_editor.editor_options
+        best = (float('inf'), 99, (x, y), None)
+        corner = options.get('corner_snap', False)
+        midpoint = self.ui.midpoint_snap_cb.isChecked()
+        segment = self.ui.segment_snap_cb.isChecked()
+        self.snap_acquisition = None
+        if corner or midpoint or segment:
+            point_tree, points, segment_tree, segments = self.get_snap_index()
+            point = Point(x, y)
+            if corner and point_tree is not None:
+                radius = float(options.get('global_snap_max', 0.05))
+                query = box(x - radius, y - radius, x + radius, y + radius)
+                for idx in point_tree.query(query):
+                    target = points[int(idx)]
+                    dist = point.distance(target)
+                    if dist <= radius:
+                        best = min(best, (dist, 0, (target.x, target.y), 'corner'))
+            if midpoint or segment:
+                radius = self.ui.snap_radius_entry.get_value()
+                try:
+                    screen = np.asarray(self.canvas.translate_coords_2((x, y))[:2], dtype=float)
+                    corners = np.asarray([self.canvas.translate_coords((screen[0] + dx, screen[1] + dy))[:2]
+                                          for dx, dy in ((-radius, -radius), (-radius, radius),
+                                                         (radius, -radius), (radius, radius))], dtype=float)
+                    if not np.isfinite(screen).all() or not np.isfinite(corners).all():
+                        raise ValueError
+                    query = box(*corners.min(axis=0), *corners.max(axis=0))
+                    self.snap_acquisition = 'pixels'
+                except (AttributeError, TypeError, ValueError, RuntimeError):
+                    radius = float(options.get('global_snap_max', 0.05))
+                    query = box(x - radius, y - radius, x + radius, y + radius)
+                    self.snap_acquisition = 'world'
+                for idx in segment_tree.query(query) if segment_tree is not None else ():
+                    line = segments[int(idx)]
+                    candidates = []
+                    if midpoint:
+                        candidates.append((line.interpolate(0.5, normalized=True), 1, 'midpoint'))
+                    if segment:
+                        candidates.append((line.interpolate(line.project(point)), 2, 'segment'))
+                    for target, priority, kind in candidates:
+                        coords = (target.x, target.y)
+                        acquisition = distance(screen, self.canvas.translate_coords_2(coords)[:2]) \
+                            if self.snap_acquisition == 'pixels' else point.distance(target)
+                        if acquisition <= radius:
+                            best = min(best, (point.distance(target), priority, coords, kind))
+        if options.get('grid_snap', False):
+            gx = float(options['global_gridx'])
+            gy = gx if self.app.ui.grid_gap_link_cb.isChecked() else float(options['global_gridy'])
+            coords = (round(x / gx) * gx if gx else x, round(y / gy) * gy if gy else y)
+            best = min(best, (distance((x, y), coords), 3, coords, 'grid'))
+        self.active_snap_type = best[3]
+        names = {None: _("None"), 'corner': _("Endpoint / bend"), 'midpoint': _("Midpoint"),
+                 'segment': _("Nearest FOLLOW segment"), 'grid': _("Grid")}
+        text = '%s: %s' % (_("Snap"), names[best[3]])
+        if self.snap_acquisition == 'world':
+            text += ' — ' + _("Compatibility: model units (global_snap_max)")
+        self.ui.snap_type_label.setText(text)
+        return best[2]
+
+    def refresh_features(self):
+        """List aperture records without changing aperture-table selection semantics."""
+        table = self.ui.features_table
+        state = (id(self.storage_dict), self.geometry_revision, self.history.session)
+        with QtCore.QSignalBlocker(table), QtCore.QSignalBlocker(table.selectionModel()):
+            if getattr(self, '_feature_state', None) != state:
+                self._feature_refs = [(apid, shape) for apid in sorted(self.storage_dict, key=aperture_rank)
+                                      for shape in self.storage_dict[apid].get('geometry', ())]
+                # one repaint for the whole rebuild, not one per cell
+                table.setUpdatesEnabled(False)
+                table.setRowCount(len(self._feature_refs))
+                for row, (apid, shape) in enumerate(self._feature_refs):
+                    solid, follow = shape.geo.get('solid'), shape.geo.get('follow')
+                    values = (str(apid), str(row + 1),
+                              ', '.join('%s: %s' % (key, shape.geo[key].geom_type)
+                                        for key in ('solid', 'follow', 'clear') if shape.geo.get(key) is not None),
+                              '' if solid is None else '%.*f' % (self.decimals, solid.area),
+                              '' if follow is None else '%.*f' % (self.decimals, follow.length))
+                    for col, value in enumerate(values):
+                        table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+                table.setUpdatesEnabled(True)
+                self._feature_state = state
+            selected = set(self.selected)
+            table.clearSelection()
+            selection = QtCore.QItemSelection()
+            for row, (apid, shape) in enumerate(self._feature_refs):
+                if shape in selected:
+                    selection.select(table.model().index(row, 0), table.model().index(row, table.columnCount() - 1))
+            table.selectionModel().select(selection, QtCore.QItemSelectionModel.SelectionFlag.Select)
+
+    def on_feature_selection(self):
+        if not self.history.ready():
+            self.refresh_features()
+            return 'fail'
+        matches = [self._feature_refs[index.row()] for index in self.ui.features_table.selectionModel().selectedRows()]
+        self.selected = list(dict.fromkeys(shape for apid, shape in matches))
+        selected = set(self.selected)
+        self.sync_aperture_rows(apid for apid, shape in self._feature_refs if shape in selected)
+        self.update_ui()
+        self.plot_selection()
+
+    def size_filter_matches(self, whole_board=False):
+        """
+        Validate every enabled filter before changing selection or entering history.
+        Select searches the whole board (whole_board=True), so repeating it never only narrows the selection.
+        Delete acts on the selected shapes if any, else on all the shapes.
+        """
+        dimensions = {}
+        ranges = {}
+        try:
+            for key, check, entry in (
+                    ('width', self.ui.size_width_chk, self.ui.size_width_entry),
+                    ('height', self.ui.size_height_chk, self.ui.size_height_entry)):
+                if check.isChecked():
+                    value = float(entry.text().strip().replace(',', '.'))
+                    if not math.isfinite(value) or value < 0:
+                        raise ValueError
+                    dimensions[key] = value
+            tolerance = float(self.ui.size_tolerance_entry.text().strip().replace(',', '.'))
+            if not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError
+            for key in ('area', 'length'):
+                if getattr(self.ui, 'size_%s_chk' % key).isChecked():
+                    low = float(getattr(self.ui, 'size_%s_min_entry' % key).text().strip().replace(',', '.'))
+                    high = float(getattr(self.ui, 'size_%s_max_entry' % key).text().strip().replace(',', '.'))
+                    if not math.isfinite(low) or not math.isfinite(high) or low < 0 or high < low:
+                        raise ValueError
+                    ranges[key] = (low, high)
+        except (ValueError, TypeError, OverflowError):
+            self.app.inform.emit('[WARNING_NOTCL] %s' %
+                                 _("Dimensions, range bounds and tolerance must be finite and non-negative. Minimum must not exceed maximum."))
+            return 'fail'
+        if not dimensions and not ranges:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Enable at least one size filter."))
+            return 'fail'
+
+        scope = set(self.selected) if self.selected and not whole_board else None
+        matches = []
+        matched = set()
+        for apid, aperture in self.storage_dict.items():
+            for shape in aperture.get('geometry', ()):
+                if scope is not None and shape not in scope:
+                    continue
+                solid = shape.geo.get('solid')
+                if (dimensions or 'area' in ranges) and (solid is None or solid.is_empty):
+                    continue
+                sizes = {}
+                if dimensions:
+                    xmin, ymin, xmax, ymax = solid.bounds
+                    sizes.update(width=xmax - xmin, height=ymax - ymin)
+                if 'area' in ranges:
+                    sizes['area'] = solid.area
+                if 'length' in ranges:
+                    follow = shape.geo.get('follow')
+                    if follow is None or follow.is_empty:
+                        continue
+                    sizes['length'] = follow.length
+                if all(math.isfinite(sizes[key]) and abs(sizes[key] - value) <= tolerance
+                       for key, value in dimensions.items()) and all(
+                        math.isfinite(sizes[key]) and low <= sizes[key] <= high
+                        for key, (low, high) in ranges.items()):
+                    if shape not in matched:
+                        matches.append(shape)
+                        matched.add(shape)
+        return matches
+
+    def apply_path_split(self, point, tolerance, target=None, session=None, revision=None, state=None):
+        return apply_path_split(self, point, tolerance, target, session, revision, state)
+
+    def apply_path_join(self, tolerance):
+        return apply_path_join(self, tolerance)
+
+    def on_join_paths(self):
+        return self.apply_path_join(self.ui.join_tolerance_entry.text())
+
+    def apply_resize_circles(self, diameter):
+        return apply_resize_circles(self, diameter)
+
+    def on_resize_circles(self):
+        return self.apply_resize_circles(self.ui.resize_circles_entry.get_value())
+
+    def remove_editor_actions(self):
+        """Remove the menu actions of a previous Gerber editor and cut their connections."""
+        menu = self.app.ui.grb_editor_menu
+        for action in menu.actions():
+            if action.property(EDITOR_ACTION_PROPERTY):
+                try:
+                    action.triggered.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                menu.removeAction(action)
+                action.deleteLater()
+
+    def reject_busy(self):
+        """True (with a status message) while a save or a worker holds the history."""
+        return not self.history.ready()
+
+    def apply_vertex_edit(self, action, index, point=None, target=None, on_segment=True):
+        return apply_vertex_edit(self, action, index, point, target, on_segment)
+
+    def on_edit_vertices(self):
+        return edit_vertices_dialog(self)
+
+    def on_select_by_size(self):
+        matches = self.size_filter_matches(whole_board=True)
+        if matches == 'fail':
+            return 'fail'
+        self.selected = matches
+        selected = set(matches)
+        self.sync_aperture_rows(apid for apid, aperture in self.storage_dict.items()
+                                if any(shape in selected for shape in aperture.get('geometry', ())))
+        self.update_ui()
+        self.plot_selection()
+        self.app.inform.emit(_("{n} shapes match").format(n=len(matches)))
+        return matches
+
+    def on_delete_by_size(self):
+        matches = self.size_filter_matches()
+        if matches == 'fail':
+            return 'fail'
+        if not matches:
+            self.app.inform.emit(_("{n} shapes match").format(n=0))
+            return []
+        with self.history.operation(_("Delete by Size")) as accepted:
+            if not accepted:
+                return 'fail'
+            self.selected = matches
+            self.delete_selected()
+            self.history.needs_plot = True
+        return matches
+
+    @QtCore.pyqtSlot(object)
+    def apply_simplification(self, result):
+        if self.history.pending is not result.get('pending'):
+            return
+        self.history.pending = None
+        try:
+            return self._apply_simplification(result)
+        finally:
+            self.history.notify()
+
+    @gerber_operation(_('Simplify'))
+    def _apply_simplification(self, result):
+        """Commit a completed batch on the GUI thread, only if its source is still current."""
+        if result.get('error') is not None:
+            self.app.log.error("Gerber simplification failed: %s" % result['error'])
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Geometry was not changed."))
+            return
+        if result['storage'] is not self.storage_dict or result['revision'] != self.geometry_revision:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Geometry changed. Retry simplification."))
+            return
+        updates = result['updates']
+        for apid, storage, shapes, replacements in updates:
+            if self.storage_dict.get(apid, {}).get('geometry') is not storage or tuple(storage) != shapes:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Geometry changed. Retry simplification."))
+                return
+        for apid, storage, shapes, replacements in updates:
+            storage[:] = replacements
+        self.selected = [result['replacements'].get(shape, shape) for shape in self.selected]
+        self.is_modified = True
+        self.touch_geometry()
+        selected = set(self.selected)
+        self.sync_aperture_rows(apid for apid, aperture in self.storage_dict.items()
+                                if any(shape in selected for shape in aperture.get('geometry', ())))
+        self.plot_all()
+
     def _tool_wants_raw_pick(self):
         """
         True when the active tool uses the click to pick a shape: that click is never grid snapped.
@@ -5979,6 +6562,7 @@ class AppGerberEditor(QtCore.QObject):
         dist = self._pixel_distance_from_press(pos)
         return dist is not None and dist < CLICK_DRAG_THRESHOLD_PX
 
+    @gerber_operation(_('Add shapes'))
     def add_gerber_shape(self, shape_element, storage):
         """
         Adds a shape to the shape storage.
@@ -6018,9 +6602,17 @@ class AppGerberEditor(QtCore.QObject):
         :param event: Event object dispatched by VisPy
         :return: None
         """
+        if not self.history.ready():
+            return 'fail'
         event_pos = event.pos
         self.pos = self.canvas.translate_coords(event_pos)
         self.press_pos_raw = (self.pos[0], self.pos[1])
+        # a press on a vertex grip starts a vertex drag and never reaches the tool (the Select tool would deselect)
+        if event.button == 1:
+            if self.vertex_grips.press(event_pos, self.pos, QtWidgets.QApplication.keyboardModifiers()):
+                return
+        else:
+            self.vertex_grips.cancel()
         raw_pick = self._tool_wants_raw_pick()
 
         if self.app.grid_status():
@@ -6096,16 +6688,31 @@ class AppGerberEditor(QtCore.QObject):
                 self.app.log.debug("No active tool to respond to click!")
 
     def on_canvas_click_release(self, event):
+        if not self.history.ready():
+            self.vertex_grips.cancel()
+            return 'fail'
         self.modifiers = QtWidgets.QApplication.keyboardModifiers()
         event_pos = event.pos
         right_button = 2
 
         pos_canvas = self.canvas.translate_coords(event_pos)
         raw_pos = (pos_canvas[0], pos_canvas[1])
+        if event.button == 1 and self.vertex_grips.release(event_pos, pos_canvas):
+            self.press_pos_raw = None
+            self.app.selection_type = None
+            return
         if self.app.grid_status() and not self._tool_wants_raw_pick():
             pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
         else:
             pos = raw_pos
+
+        if isinstance(self.active_tool, (TrackBendEditorGrb, FollowSplitEditorGrb)):
+            if event.button == 1:
+                self.active_tool.click_release(raw_pos)
+            elif event.button == right_button and not event.is_dragging:
+                self.active_tool.clean_up()
+            self.app.selection_type = None
+            return
 
         # if the released mouse button was RMB then test if it was a panning motion or not, if not it was a context
         # canvas menu
@@ -6307,6 +6914,8 @@ class AppGerberEditor(QtCore.QObject):
             return
 
         # # ## Snap coordinates
+        if not self.app.grid_status():
+            self.snap(x, y)
         if self.app.grid_status():
             snap_x, snap_y = self.app.geo_editor.snap(x, y)
             # the rubber band of a pick tool uses the same raw position as the release
@@ -6365,11 +6974,17 @@ class AppGerberEditor(QtCore.QObject):
                 # this can happen if the method is not implemented yet for the active_tool
                 pass
 
+        # a vertex grip drag: no rubber band selection
+        if self.vertex_grips.move(event_pos, (x, y)):
+            self.app.selection_type = None
+            return
+
         # # ## Selection area on canvas section # ##
         if event_is_dragging == 1 and event.button == 1:
             # I make an exception for RegionEditorGrb and TrackEditorGrb because clicking and dragging while making 
             # regions can create strange issues like missing a point in a track/region
-            if isinstance(self.active_tool, RegionEditorGrb) or isinstance(self.active_tool, TrackEditorGrb):
+            if isinstance(self.active_tool, (RegionEditorGrb, TrackEditorGrb, TrackBendEditorGrb,
+                                             FollowSplitEditorGrb, ArcEditorGrb)):
                 self.app.selection_type = None
             elif self._is_click_not_drag((pos_canvas[0], pos_canvas[1])):
                 self.app.selection_type = None
@@ -6471,8 +7086,11 @@ class AppGerberEditor(QtCore.QObject):
 
     def plot_selection(self):
         """Update selection colors without rebuilding the unchanged geometry buffers."""
+        self.refresh_features()
         count = sum(len(storage.get('geometry', ())) for storage in self.storage_dict.values())
         if self._render_state != (self.geometry_revision, count):
+            # Selection after an unplotted edit is a recovery path, not a structural commit.
+            self._render_state = None
             self.plot_all()
             return
 
@@ -6486,6 +7104,7 @@ class AppGerberEditor(QtCore.QObject):
                 color = color[:7] + 'AF'
                 self.shapes.redraw(indexes=indexes, update_colors=(color, color))
         self._rendered_selection = selected
+        self.vertex_grips.sync()
 
     def plot_all(self):
         """
@@ -6493,10 +7112,11 @@ class AppGerberEditor(QtCore.QObject):
 
         :return: None
         """
+        history = getattr(self, 'history', None)
+        if isinstance(history, GerberHistory) and (history.depth or history.replaying):
+            history.needs_plot = True
+            return
         with self.app.proc_container.new('%s ...' % _("Plotting")):
-            self._render_state = None
-            self._rendered_shapes.clear()
-            self.shapes.clear(update=True)
             selected = set(self.selected)
 
             if len(self.get_sel_color()) == 7:
@@ -6509,10 +7129,34 @@ class AppGerberEditor(QtCore.QObject):
             else:
                 draw_color = self.get_draw_color()[:-2] + 'FF'
 
+            style = (self.shapes, draw_color, sel_draw_color, self.tolerance)
+            previous = getattr(self, '_rendered_geometry', {})
+            reusable = self._render_state is not None and getattr(self, '_render_style', None) == style and \
+                not self.utility and not getattr(self, '_render_had_utility', False)
+            current = {elem: elem.geo.get('solid') for storage in self.storage_dict.values()
+                       for elem in storage.get('geometry', ())}
+            if reusable:
+                # Color updates refer to the existing merged mesh. Apply them before changing its membership.
+                for changed, color in ((self._rendered_selection - selected, draw_color),
+                                       (selected - self._rendered_selection, sel_draw_color)):
+                    indexes = {index for elem in changed for index in self._rendered_shapes.get(elem, ())}
+                    if indexes:
+                        self.shapes.redraw(indexes=indexes, update_colors=(color[:7] + 'AF', color[:7] + 'AF'))
+                for elem in list(self._rendered_shapes):
+                    if elem not in current or previous.get(elem) is not current[elem]:
+                        for index in self._rendered_shapes.pop(elem):
+                            self.shapes.remove(index)
+            else:
+                self._rendered_shapes.clear()
+                self.shapes.clear(update=True)
+            self._render_state = None
+
             for storage in self.storage_dict:
                 # fix for apertures with no geometry inside
                 if 'geometry' in self.storage_dict[storage]:
                     for elem in self.storage_dict[storage]['geometry']:
+                        if elem in self._rendered_shapes:
+                            continue
                         if 'solid' in elem.geo:
                             geometric_data = elem.geo['solid']
                             if geometric_data is None or geometric_data.is_empty:
@@ -6533,8 +7177,68 @@ class AppGerberEditor(QtCore.QObject):
 
             self.shapes.redraw()
             self._rendered_selection = selected
+            self._rendered_geometry = current
+            self._render_style = style
+            self._render_had_utility = bool(self.utility)
             count = sum(len(storage.get('geometry', ())) for storage in self.storage_dict.values())
             self._render_state = (self.geometry_revision, count)
+        self.vertex_grips.sync()
+
+    def plot_transformed(self, shapes, matrix=None):
+        """
+        Call after the geometry of the shapes was changed in place (transform actions). Only these shapes are plotted
+        again, with no plot_all(): an affine change (matrix is a shapely 6-tuple) maps the triangulated buffers of the
+        shapes, any other change removes the plotted shapes and adds the new ones. If the canvas was not in sync with
+        the storage before the change, it does 1 plot_all(). The selection is kept.
+
+        :param shapes:  the changed DrawToolShape
+        :param matrix:  the affine matrix that was applied, or None
+        :return:        None
+        """
+        count = sum(len(storage.get('geometry', ())) for storage in self.storage_dict.values())
+        synced = self._render_state == (self.geometry_revision, count)
+        self.is_modified = True
+        self.touch_geometry()
+        if not synced:
+            history = getattr(self, 'history', None)
+            if isinstance(history, GerberHistory) and history.depth:
+                history.needs_plot = True
+            else:
+                self.plot_all()
+            return
+
+        keys = [index for shape in shapes for index in self._rendered_shapes.get(shape, ())]
+        transform_keys = getattr(self.shapes, 'transform_keys', None)
+        if matrix is not None and transform_keys is not None and transform_keys(keys, matrix, update=True) is True:
+            if hasattr(self, '_rendered_geometry'):
+                self._rendered_geometry.update((shape, shape.geo.get('solid')) for shape in shapes)
+            self._render_state = (self.geometry_revision, count)
+            self.vertex_grips.sync()
+            return
+
+        selected = set(self.selected)
+        sel_color = self.get_sel_color()
+        sel_color = sel_color + 'FF' if len(sel_color) == 7 else sel_color[:-2] + 'FF'
+        draw_color = self.get_draw_color()
+        draw_color = draw_color + 'FF' if len(draw_color) == 7 else draw_color[:-2] + 'FF'
+        for key in keys:
+            self.shapes.remove(key)
+        for shape in shapes:
+            self._rendered_shapes.pop(shape, None)
+            solid = shape.geo.get('solid')
+            if solid is None or solid.is_empty:
+                continue
+            if shape in selected:
+                index = self.plot_shape(geometry=solid, color=sel_color, linewidth=2)
+            else:
+                index = self.plot_shape(geometry=solid, color=draw_color)
+            if index is not None:
+                self._rendered_shapes.setdefault(shape, []).append(index)
+        self.shapes.redraw()
+        if hasattr(self, '_rendered_geometry'):
+            self._rendered_geometry.update((shape, shape.geo.get('solid')) for shape in shapes)
+        self._render_state = (self.geometry_revision, count)
+        self.vertex_grips.sync()
 
     def plot_shape(self, geometry=None, color='#000000FF', linewidth=1):
         """
@@ -6672,6 +7376,7 @@ class AppGerberEditor(QtCore.QObject):
         # return [shape for shape in self.shape_buffer if shape["selected"]]
         return self.selected
 
+    @gerber_operation(_('Delete shapes'))
     def delete_selected(self):
         selected = set(self.selected)
 
@@ -6693,6 +7398,7 @@ class AppGerberEditor(QtCore.QObject):
         self.build_ui()
         self.app.inform.emit('[success] %s' % _("Done."))
 
+    @gerber_operation(_('Delete shape'))
     def delete_shape(self, geo_el):
         self.is_modified = True
 
@@ -6769,6 +7475,112 @@ class AppGerberEditor(QtCore.QObject):
     def on_poligonize(self):
         self.select_tool('poligonize')
 
+    def on_region_drawing(self, kind):
+        if self.history.ready():
+            self.select_tool('select')
+            dialog = RegionDrawingDialog(self, kind)
+            try:
+                dialog.exec()
+            finally:
+                dialog.deleteLater()
+
+    @gerber_operation(_('Draw regions'))
+    def add_region_geometry(self, geometry):
+        """Commit validated material without assigning it a guessed native aperture."""
+        if not isinstance(geometry, (Polygon, MultiPolygon)) or geometry.is_empty or not geometry.is_valid or \
+                not all(math.isfinite(value) for value in geometry.bounds):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Drawing requires valid, finite polygon material."))
+            return 'fail'
+        polygons = list(geometry.geoms) if isinstance(geometry, MultiPolygon) else [geometry]
+        shapes = [DrawToolShape({'solid': polygon, 'follow': LineString(polygon.exterior.coords)})
+                  for polygon in polygons]
+        key = next((key for key, aperture in self.storage_dict.items() if aperture['type'] == 'REG'), None)
+        if key is None:
+            key = 0 if not any(str(key) == '0' for key in self.storage_dict) else \
+                max(numeric_aperture_codes(self.storage_dict), default=0) + 1
+        self.history.capture([key])
+        region = self.storage_dict.setdefault(key, {'type': 'REG', 'size': 0.0, 'geometry': []})
+        region['geometry'].extend(shapes)
+        self.loaded_as_regions = True
+        self.selected = shapes
+        self.last_aperture_selected = key
+        self.current_storage = region['geometry']
+        self.touch_geometry()
+        self.build_ui()
+        self.sync_aperture_rows({key})
+        self.plot_all()
+        return shapes
+
+    @gerber_operation(_('Material regions'))
+    def apply_region_operation(self, operation):
+        """Difference targets the first selection; difference_keep retains the other records and their owners."""
+        shapes = list(dict.fromkeys(self.selected))
+        selected = set(shapes)
+        owners = {shape: key for key, aperture in self.storage_dict.items()
+                  for shape in aperture.get('geometry', ()) if shape in selected}
+        solids = [shape.geo.get('solid') for shape in shapes]
+        if operation not in ('union', 'intersection', 'difference', 'difference_keep', 'explode') or not shapes or \
+                len(owners) != len(shapes) or any(
+                    solid is None or solid.is_empty or not solid.is_valid or
+                    not isinstance(solid, (Polygon, MultiPolygon)) for solid in solids) or any(
+                    shape.geo.get('clear') is not None and not shape.geo['clear'].is_empty for shape in shapes):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Select valid polygon material without clear records."))
+            return 'fail'
+        if operation in ('intersection', 'difference', 'difference_keep') and len(shapes) < 2:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Select at least two material features."))
+            return 'fail'
+
+        # Compute and validate the complete output before changing ownership or history state.
+        if operation == 'union':
+            output = [unary_union(solids)]
+        elif operation in ('difference', 'difference_keep'):
+            output = [solids[0].difference(unary_union(solids[1:]))]
+        elif operation == 'intersection':
+            result = solids[0]
+            for solid in solids[1:]:
+                result = result.intersection(solid)
+            output = [result]
+        else:
+            output = solids
+        polygons = []
+        for result in output:
+            if result.is_empty:
+                continue
+            parts = flatten_shapely_geometry(result)
+            # A touching intersection has no polygon material, not a drawable open path.
+            polygons.extend(part for part in parts if isinstance(part, Polygon) and not part.is_empty)
+        if not polygons:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The operation produced no polygon material. Nothing was changed."))
+            return 'fail'
+        if any(not polygon.is_valid for polygon in polygons):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The operation produced invalid geometry. Nothing was changed."))
+            return 'fail'
+        replacements = [DrawToolShape({'solid': polygon, 'follow': LineString(polygon.exterior.coords)})
+                        for polygon in polygons]
+        cutters = shapes[1:] if operation == 'difference_keep' else []
+        removed = {shapes[0]} if cutters else selected
+        region_key = next((key for key, aperture in self.storage_dict.items() if aperture['type'] == 'REG'), None)
+        if region_key is None:
+            region_key = 0 if not any(str(key) == '0' for key in self.storage_dict) else \
+                max(numeric_aperture_codes(self.storage_dict), default=0) + 1
+        history = getattr(self, 'history', None)
+        if isinstance(history, GerberHistory):
+            history.capture(set(owners.values()) | {region_key})
+        for key in set(owners.values()):
+            storage = self.storage_dict[key]['geometry']
+            storage[:] = [shape for shape in storage if shape not in removed]
+        region = self.storage_dict.setdefault(region_key, {'type': 'REG', 'size': 0.0, 'geometry': []})
+        region['geometry'].extend(replacements)
+        self.loaded_as_regions = True
+        self.selected = replacements + cutters
+        self.last_aperture_selected = region_key
+        self.current_storage = region['geometry']
+        self.touch_geometry()
+        self.build_ui()
+        self.sync_aperture_rows({region_key} | {owners[shape] for shape in cutters})
+        self.plot_all()
+        return replacements
+
     def on_disc_add(self):
         self.select_tool('disc')
 
@@ -6778,7 +7590,8 @@ class AppGerberEditor(QtCore.QObject):
     def on_simplification(self):
         self.select_tool('simplify')
 
-    def on_scale(self):
+    @gerber_operation(_('Scale'))
+    def on_scale(self, *signal_args):
         scale_factor = 1.0
         self.app.log.debug("AppGerberEditor.on_scale()")
 
@@ -6792,66 +7605,33 @@ class AppGerberEditor(QtCore.QObject):
             except ValueError:
                 self.app.inform.emit('[WARNING_NOTCL] %s' %
                                      _("Scale factor value is missing or wrong format. Add it and retry."))
-                return
+                return 'fail'
 
-        def scale_recursion(geom_el, selection):
-            if isinstance(geom_el, list):
-                geoms = []
-                for local_geom in geom_el:
-                    geoms.append(scale_recursion(local_geom, selection=selection))
-                return geoms
-            else:
-                if geom_el in selection:
-                    geometric_data = geom_el.geo
-                    scaled_geom_el = {}
-                    if 'solid' in geometric_data:
-                        scaled_geom_el['solid'] = scale(
-                            geometric_data['solid'], scale_factor, scale_factor, origin='center'
-                        )
-                    if 'follow' in geometric_data:
-                        scaled_geom_el['follow'] = scale(
-                            geometric_data['follow'], scale_factor, scale_factor, origin='center'
-                        )
-                    if 'clear' in geometric_data:
-                        scaled_geom_el['clear'] = scale(
-                            geometric_data['clear'], scale_factor, scale_factor, origin='center'
-                        )
-
-                    geom_el.geo = scaled_geom_el
-                    return geom_el
-                else:
-                    return geom_el
+        if not math.isfinite(scale_factor) or scale_factor <= 0:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Scale factor must be finite and positive."))
+            return 'fail'
 
         if not self.ui.apertures_table.selectedItems():
             self.app.inform.emit('[WARNING_NOTCL] %s' %
                                  _("No aperture to scale. Select at least one aperture and try again."))
-            return
+            return 'fail'
 
         selection = set(self.selected)
         rows = {item.row() for item in self.ui.apertures_table.selectedItems()}
-        for row in sorted(rows):
-            try:
-                apcode = self.ui.apertures_table.item(row, 1).text()
-                if apcode not in self.storage_dict:
-                    apcode = int(apcode)
-
-                self.storage_dict[apcode]['geometry'] = scale_recursion(
-                    self.storage_dict[apcode]['geometry'], selection
-                )
-                self.touch_geometry()
-
-            except Exception as e:
-                self.app.log.error("AppGerberEditor.on_scale() --> %s" % str(e))
-                self.plot_all()
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                return
-
-        self.plot_all()
+        codes = {self.ui.apertures_table.item(row, 1).text() for row in rows}
+        shapes = list(dict.fromkeys(shape for key, aperture in self.storage_dict.items() if str(key) in codes
+                                    for shape in aperture.get('geometry', ()) if shape in selection))
+        if not shapes:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
+            return 'fail'
+        scale_selection_about_centers(shapes, scale_factor)
+        self.plot_transformed(shapes)
         self.app.inform.emit('[success] %s' % _("Done."))
 
     def on_markarea(self):
         # clear previous marking
         self.ma_annotation.clear(update=True)
+        self.geo_to_delete = []
 
         self.units = self.app.app_units.upper()
 
@@ -6894,8 +7674,10 @@ class AppGerberEditor(QtCore.QObject):
         else:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No polygons were marked. None fit within the limits."))
 
+    @gerber_operation(_('Delete marked polygons'))
     def delete_marked_polygons(self):
-        for shape_sel in self.geo_to_delete:
+        marked, self.geo_to_delete = self.geo_to_delete, []
+        for shape_sel in marked:
             self.delete_shape(shape_sel)
 
         self.build_ui()
@@ -6978,6 +7760,19 @@ class AppGerberEditorUI:
         self.name_entry = FCEntry()
         self.name_entry.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.name_box.addWidget(self.name_entry)
+
+        history_grid = GLay(v_spacing=5, h_spacing=3)
+        layout.addLayout(history_grid)
+        self.history_undo = FCButton(_("Undo"))
+        self.history_redo = FCButton(_("Redo"))
+        self.history_undo.setIcon(QtGui.QIcon(self.app.resource_location + '/undo64.png'))
+        self.history_redo.setIcon(QtGui.QIcon(self.app.resource_location + '/redo64.png'))
+        self.history_positions = QtWidgets.QComboBox()
+        self.history_undo.setEnabled(False)
+        self.history_redo.setEnabled(False)
+        history_grid.addWidget(self.history_undo, 0, 0)
+        history_grid.addWidget(self.history_redo, 0, 1)
+        history_grid.addWidget(self.history_positions, 1, 0, 1, 2)
 
         # Box for custom widgets
         # This gets populated in offspring implementations.
@@ -7195,6 +7990,165 @@ class AppGerberEditorUI:
         self.shape_grid.addWidget(vertex_lbl, 8, 0)
         self.shape_grid.addWidget(self.geo_vertex_entry, 8, 1, 1, 2)
 
+        # Select by Size
+        self.shape_grid.addWidget(FCLabel(_("Select by Size"), bold=True), 9, 0, 1, 3)
+        self.size_width_chk = FCCheckBox(_("Width"))
+        self.size_width_entry = FCEntry()
+        self.size_width_entry.setText('1')
+        self.size_height_chk = FCCheckBox(_("Height"))
+        self.size_height_entry = FCEntry()
+        self.size_height_entry.setText('1')
+        self.size_tolerance_entry = FCEntry()
+        self.size_tolerance_entry.setText('0')
+        for row, check, entry in ((10, self.size_width_chk, self.size_width_entry),
+                                  (11, self.size_height_chk, self.size_height_entry)):
+            self.shape_grid.addWidget(check, row, 0)
+            self.shape_grid.addWidget(entry, row, 1)
+            self.shape_grid.addWidget(FCLabel(self.units), row, 2)
+        self.shape_grid.addWidget(FCLabel(_("Tolerance")), 12, 0)
+        self.shape_grid.addWidget(self.size_tolerance_entry, 12, 1)
+        self.shape_grid.addWidget(FCLabel(self.units), 12, 2)
+        self.size_select_btn = FCButton(_("Select"))
+        self.size_select_btn.setToolTip(
+            _("Select shapes by their solid bounding-box width and height in current units.\n"
+              "All enabled dimensions must match within the tolerance (inclusive).\n"
+              "Searches the selected shapes if any, else all shapes. Replaces the current selection."))
+        self.shape_grid.addWidget(self.size_select_btn, 15, 0, 1, 3)
+
+        self.bend_move_btn = FCButton(_("Move Track Bend"))
+        self.bend_move_btn.setToolTip(
+            _("Drag a FOLLOW bend of a circular-aperture track. Neighboring bends stay fixed.\n"
+              "Supports one path or a two-record same-aperture join. Arc samples are polyline vertices."))
+        self.shape_grid.addWidget(self.bend_move_btn, 17, 0, 1, 3)
+
+        self.diagnostics_component = FCComboBox()
+        for label, value in ((_('Solid'), 'solid'), (_('Follow'), 'follow'), (_('Clear'), 'clear')):
+            self.diagnostics_component.addItem(label, value)
+        self.diagnostics_tolerance_entry = FCEntry()
+        self.diagnostics_tolerance_entry.setText('0.01')
+        self.diagnostics_btn = FCButton(_("Inspect selected geometry"))
+        self.diagnostics_result = FCLabel('')
+        self.diagnostics_result.setWordWrap(True)
+        self.diagnostics_result.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.diagnostics_result.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.component_properties = FCLabel('')
+        self.component_properties.setWordWrap(True)
+        self.component_properties.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        self.shape_grid.addWidget(self.diagnostics_component, 19, 0, 1, 3)
+        self.shape_grid.addWidget(FCLabel(_("Endpoint tolerance")), 20, 0)
+        self.shape_grid.addWidget(self.diagnostics_tolerance_entry, 20, 1, 1, 2)
+        self.shape_grid.addWidget(self.diagnostics_btn, 21, 0, 1, 3)
+        self.shape_grid.addWidget(self.component_properties, 22, 0, 1, 3)
+        self.shape_grid.addWidget(self.diagnostics_result, 23, 0, 1, 3)
+
+        self.size_area_chk = FCCheckBox(_("Solid area"))
+        self.size_length_chk = FCCheckBox(_("FOLLOW length"))
+        self.size_area_min_entry, self.size_area_max_entry = FCEntry(), FCEntry()
+        self.size_length_min_entry, self.size_length_max_entry = FCEntry(), FCEntry()
+        for row, check, low, high, units in (
+                (13, self.size_area_chk, self.size_area_min_entry, self.size_area_max_entry, self.units + '²'),
+                (14, self.size_length_chk, self.size_length_min_entry, self.size_length_max_entry, self.units)):
+            low.setText('0')
+            high.setText('10000')
+            low.setPlaceholderText(_("Minimum"))
+            high.setPlaceholderText(_("Maximum"))
+            low.setToolTip(_("Minimum (inclusive)") + ' (' + units + ')')
+            high.setToolTip(_("Maximum (inclusive)") + ' (' + units + ')')
+            check.setToolTip(_("Inclusive range. All enabled filters must match. Missing or empty components don't match.")
+                             + ' (' + units + ')')
+            self.shape_grid.addWidget(check, row, 0)
+            self.shape_grid.addWidget(low, row, 1)
+            self.shape_grid.addWidget(high, row, 2)
+        self.size_delete_btn = FCButton(_("Delete by Size"))
+        self.size_delete_btn.setToolTip(_("Delete matching records from the selected subset, or all records if none are selected. Undo as one operation."))
+        self.shape_grid.addWidget(self.size_delete_btn, 16, 0, 1, 3)
+        self.size_select_btn.setToolTip(self.size_select_btn.toolTip() + '\n' +
+                                       _("Solid area and FOLLOW length use inclusive ranges, without dimension tolerance."))
+
+        self.midpoint_snap_cb = FCCheckBox(_("FOLLOW midpoint snap"))
+        self.segment_snap_cb = FCCheckBox(_("Nearest FOLLOW segment snap"))
+        self.snap_radius_entry = FCDoubleSpinner()
+        self.snap_radius_entry.set_range(1, 100)
+        self.snap_radius_entry.set_precision(1)
+        self.snap_radius_entry.set_value(8)
+        self.snap_radius_entry.setToolTip(_("Acquisition radius in pixels. Falls back to global_snap_max model units if canvas conversion is unavailable."))
+        self.snap_type_label = FCLabel(_("Snap: None"))
+        self.snap_type_label.setWordWrap(True)
+        self.snap_type_label.setToolTip(_("Nearest target wins. Ties prefer endpoint/bend, midpoint, segment, then grid. Corner snapping uses FOLLOW vertices and flash centers, never solid outlines."))
+        self.shape_grid.addWidget(self.midpoint_snap_cb, 24, 0, 1, 3)
+        self.shape_grid.addWidget(self.segment_snap_cb, 25, 0, 1, 3)
+        self.shape_grid.addWidget(FCLabel(_("Snap radius (px)")), 26, 0)
+        self.shape_grid.addWidget(self.snap_radius_entry, 26, 1, 1, 2)
+        self.shape_grid.addWidget(self.snap_type_label, 27, 0, 1, 3)
+
+        self.features_table = FCTable()
+        self.features_table.setColumnCount(5)
+        self.features_table.setHorizontalHeaderLabels([_("Aperture"), _("Feature"), _("Components"),
+                                                       _("Solid area"), _("FOLLOW length")])
+        self.features_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.features_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.features_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.features_table.setSortingEnabled(False)
+        self.features_table.setToolTip(_("Select individual records for component inspection. Shared records select all of their aperture owners. Values use current units; area uses squared units."))
+        self.shape_grid.addWidget(FCLabel(_("Features"), bold=True), 28, 0, 1, 3)
+        self.shape_grid.addWidget(self.features_table, 29, 0, 1, 3)
+
+        self.split_action = QtGui.QAction(_("Split path"), self.grb_edit_widget)
+        self.split_action.setToolTip(_("Select one open circular-aperture FOLLOW path, then click its interior."))
+        self.split_btn = QtWidgets.QToolButton()
+        self.split_btn.setDefaultAction(self.split_action)
+        self.shape_grid.addWidget(self.split_btn, 30, 0, 1, 3)
+        self.split_tolerance_entry = FCEntry()
+        self.split_tolerance_entry.setText('0.01')
+        self.split_tolerance_entry.setToolTip(_("Maximum click distance and excluded endpoint distance in current units. Zero requires an exact interior click."))
+        self.shape_grid.addWidget(FCLabel('%s (%s)' % (_("Split tolerance"), self.app.app_units)), 31, 0)
+        self.shape_grid.addWidget(self.split_tolerance_entry, 31, 1, 1, 2)
+        self.join_btn = FCButton(_("Join paths"))
+        self.join_btn.setToolTip(_("Join compatible same-aperture circular FOLLOW records. Endpoints must coincide; branches, gaps and material changes are rejected."))
+        self.shape_grid.addWidget(self.join_btn, 32, 0, 1, 3)
+        self.join_tolerance_entry = FCEntry()
+        self.join_tolerance_entry.setText('0.01')
+        self.join_tolerance_entry.setToolTip(_("Endpoint ambiguity search radius in current units. Unlike Geometry, Gerber does not bridge gaps or move endpoints."))
+        self.shape_grid.addWidget(FCLabel('%s (%s)' % (_("Join tolerance"), self.app.app_units)), 33, 0)
+        self.shape_grid.addWidget(self.join_tolerance_entry, 33, 1, 1, 2)
+        self.resize_circles_entry = FCDoubleSpinner(policy=False)
+        self.resize_circles_entry.set_precision(self.decimals)
+        self.resize_circles_entry.set_range(0.0000, 10000.0000)
+        self.resize_circles_entry.setSingleStep(10 ** -self.decimals)
+        self.resize_circles_entry.setToolTip(_("New diameter of selected plain circular flashes. Tracks and noncircular features are skipped; shared apertures are not resized."))
+        self.shape_grid.addWidget(FCLabel('%s (%s)' % (_("Diameter"), self.app.app_units)), 34, 0)
+        self.shape_grid.addWidget(self.resize_circles_entry, 34, 1, 1, 2)
+        self.resize_circles_btn = FCButton(_("Resize"))
+        self.resize_circles_btn.setToolTip(_("Resize selected circular flashes about their own centers, as one undo step."))
+        self.shape_grid.addWidget(self.resize_circles_btn, 35, 0, 1, 3)
+
+        self.region_buttons = {}
+        for row, (operation, label) in enumerate((('union', _("Material Union")),
+                                                 ('intersection', _("Material Intersection")),
+                                                 ('difference', _("Material Difference")),
+                                                 ('difference_keep', _("Difference (Keep Cutters)")),
+                                                 ('explode', _("Explode Regions"))), 36):
+            button = FCButton(label)
+            button.setToolTip(_("Replace selected polygon material with explicit regions. Holes are retained. "
+                                "Difference subtracts the other selections from the first. Keep Cutters retains them. "
+                                "Clear records are rejected."))
+            button.clicked.connect(lambda checked=False, op=operation: self.app.grb_editor.apply_region_operation(op))
+            self.shape_grid.addWidget(button, row, 0, 1, 3)
+            self.region_buttons[operation] = button
+
+        self.rectangle_region_btn = FCButton(_("Rectangle Region"))
+        self.text_region_btn = FCButton(_("Text Regions"))
+        for row, (kind, button) in enumerate((('rectangle', self.rectangle_region_btn),
+                                               ('text', self.text_region_btn)), 41):
+            button.setToolTip(_("Draw numeric material as explicit regions, retaining text holes and islands."))
+            button.clicked.connect(lambda checked=False, tool=kind: self.app.grb_editor.on_region_drawing(tool))
+            self.shape_grid.addWidget(button, row, 0, 1, 3)
+
+        self.vertex_edit_btn = FCButton(_("Edit vertices"))
+        self.vertex_edit_btn.setToolTip(_("Numerically move, insert or remove a vertex of one selected region or track.\n"
+                                          "A region edits its solid, a track its FOLLOW line. Pads have no vertices."))
+        self.shape_grid.addWidget(self.vertex_edit_btn, 43, 0, 1, 3)
+
         # #############################################################################################################
         # ########################################### SCALE TOOL ######################################################
         # #############################################################################################################
@@ -7327,1168 +8281,6 @@ class AppGerberEditorUI:
             _("Exit from Editor.")
         )
         layout.addWidget(self.exit_editor_button)
-
-
-class TransformEditorTool(AppTool):
-    """
-    Inputs to specify how to paint the selected polygons.
-    """
-
-    pluginName = _("Transformation")
-    rotateName = _("Rotate")
-    skewName = _("Skew/Shear")
-    scaleName = _("Scale")
-    flipName = _("Mirror")
-    offsetName = _("Offset")
-    bufferName = _("Buffer")
-
-    def __init__(self, app, draw_app):
-        AppTool.__init__(self, app)
-
-        self.app = app
-        self.draw_app = draw_app
-        self.decimals = self.app.decimals
-
-        # ## Title
-        title_label = FCLabel("%s" % self.pluginName, size=16, bold=True)
-        self.layout.addWidget(title_label)
-        self.layout.addWidget(FCLabel(''))
-
-        # ## Layout
-        grid0 = GLay(v_spacing=5, h_spacing=3, c_stretch=[0, 1, 0])
-        self.layout.addLayout(grid0)
-
-        grid0.addWidget(FCLabel(''))
-
-        # Reference
-        ref_label = FCLabel('%s:' % _("Reference"))
-        ref_label.setToolTip(
-            _("The reference point for Rotate, Skew, Scale, Mirror.\n"
-              "Can be:\n"
-              "- Origin -> it is the 0, 0 point\n"
-              "- Selection -> the center of the bounding box of the selected objects\n"
-              "- Point -> a custom point defined by X,Y coordinates\n"
-              "- Min Selection -> the point (minx, miny) of the bounding box of the selection")
-        )
-        self.ref_combo = FCComboBox()
-        self.ref_items = [_("Origin"), _("Selection"), _("Point"), _("Minimum")]
-        self.ref_combo.addItems(self.ref_items)
-
-        grid0.addWidget(ref_label, 0, 0)
-        grid0.addWidget(self.ref_combo, 0, 1, 1, 2)
-
-        self.point_label = FCLabel('%s:' % _("Value"))
-        self.point_label.setToolTip(
-            _("A point of reference in format X,Y.")
-        )
-        self.point_entry = NumericalEvalTupleEntry()
-
-        grid0.addWidget(self.point_label, 1, 0)
-        grid0.addWidget(self.point_entry, 1, 1, 1, 2)
-
-        self.point_button = FCButton(_("Add"))
-        self.point_button.setToolTip(
-            _("Add point coordinates from clipboard.")
-        )
-        grid0.addWidget(self.point_button, 2, 0, 1, 3)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        grid0.addWidget(separator_line, 5, 0, 1, 3)
-
-        # ## Rotate Title
-        rotate_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.rotateName)
-        grid0.addWidget(rotate_title_label, 6, 0, 1, 3)
-
-        self.rotate_label = FCLabel('%s:' % _("Angle"))
-        self.rotate_label.setToolTip(
-            _("Angle, in degrees.\n"
-              "Float number between -360 and 359.\n"
-              "Positive numbers for CW motion.\n"
-              "Negative numbers for CCW motion.")
-        )
-
-        self.rotate_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        self.rotate_entry.set_precision(self.decimals)
-        self.rotate_entry.setSingleStep(45)
-        self.rotate_entry.setWrapping(True)
-        self.rotate_entry.set_range(-360, 360)
-
-        # self.rotate_entry.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-
-        self.rotate_button = FCButton(_("Rotate"))
-        self.rotate_button.setToolTip(
-            _("Rotate the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects.")
-        )
-        self.rotate_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.rotate_label, 7, 0)
-        grid0.addWidget(self.rotate_entry, 7, 1)
-        grid0.addWidget(self.rotate_button, 7, 2)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        grid0.addWidget(separator_line, 8, 0, 1, 3)
-
-        # ## Skew Title
-        skew_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.skewName)
-        grid0.addWidget(skew_title_label, 9, 0, 1, 2)
-
-        self.skew_link_cb = FCCheckBox()
-        self.skew_link_cb.setText(_("Link"))
-        self.skew_link_cb.setToolTip(
-            _("Link the Y entry to X entry and copy its content.")
-        )
-
-        grid0.addWidget(self.skew_link_cb, 9, 2)
-
-        self.skewx_label = FCLabel('%s:' % _("X angle"))
-        self.skewx_label.setToolTip(
-            _("Angle for Skew action, in degrees.\n"
-              "Float number between -360 and 360.")
-        )
-        self.skewx_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        # self.skewx_entry.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.skewx_entry.set_precision(self.decimals)
-        self.skewx_entry.set_range(-360, 360)
-
-        self.skewx_button = FCButton(_("Skew X"))
-        self.skewx_button.setToolTip(
-            _("Skew/shear the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects."))
-        self.skewx_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.skewx_label, 10, 0)
-        grid0.addWidget(self.skewx_entry, 10, 1)
-        grid0.addWidget(self.skewx_button, 10, 2)
-
-        self.skewy_label = FCLabel('%s:' % _("Y angle"))
-        self.skewy_label.setToolTip(
-            _("Angle for Skew action, in degrees.\n"
-              "Float number between -360 and 360.")
-        )
-        self.skewy_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        # self.skewy_entry.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.skewy_entry.set_precision(self.decimals)
-        self.skewy_entry.set_range(-360, 360)
-
-        self.skewy_button = FCButton(_("Skew Y"))
-        self.skewy_button.setToolTip(
-            _("Skew/shear the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects."))
-        self.skewy_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.skewy_label, 12, 0)
-        grid0.addWidget(self.skewy_entry, 12, 1)
-        grid0.addWidget(self.skewy_button, 12, 2)
-
-        self.ois_sk = OptionalInputSection(self.skew_link_cb, [self.skewy_label, self.skewy_entry, self.skewy_button],
-                                           logic=False)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        grid0.addWidget(separator_line, 14, 0, 1, 3)
-
-        # ## Scale Title
-        scale_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.scaleName)
-        grid0.addWidget(scale_title_label, 15, 0, 1, 2)
-
-        self.scale_link_cb = FCCheckBox()
-        self.scale_link_cb.setText(_("Link"))
-        self.scale_link_cb.setToolTip(
-            _("Link the Y entry to X entry and copy its content.")
-        )
-
-        grid0.addWidget(self.scale_link_cb, 15, 2)
-
-        self.scalex_label = FCLabel('%s:' % _("X factor"))
-        self.scalex_label.setToolTip(
-            _("Factor for scaling on X axis.")
-        )
-        self.scalex_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        # self.scalex_entry.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.scalex_entry.set_precision(self.decimals)
-        self.scalex_entry.setMinimum(-1e6)
-
-        self.scalex_button = FCButton(_("Scale X"))
-        self.scalex_button.setToolTip(
-            _("Scale the selected object(s).\n"
-              "The point of reference depends on \n"
-              "the Scale reference checkbox state."))
-        self.scalex_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.scalex_label, 17, 0)
-        grid0.addWidget(self.scalex_entry, 17, 1)
-        grid0.addWidget(self.scalex_button, 17, 2)
-
-        self.scaley_label = FCLabel('%s:' % _("Y factor"))
-        self.scaley_label.setToolTip(
-            _("Factor for scaling on Y axis.")
-        )
-        self.scaley_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        # self.scaley_entry.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.scaley_entry.set_precision(self.decimals)
-        self.scaley_entry.setMinimum(-1e6)
-
-        self.scaley_button = FCButton(_("Scale Y"))
-        self.scaley_button.setToolTip(
-            _("Scale the selected object(s).\n"
-              "The point of reference depends on \n"
-              "the Scale reference checkbox state."))
-        self.scaley_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.scaley_label, 19, 0)
-        grid0.addWidget(self.scaley_entry, 19, 1)
-        grid0.addWidget(self.scaley_button, 19, 2)
-
-        self.ois_s = OptionalInputSection(self.scale_link_cb,
-                                          [
-                                              self.scaley_label,
-                                              self.scaley_entry,
-                                              self.scaley_button
-                                          ], logic=False)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        grid0.addWidget(separator_line, 21, 0, 1, 3)
-
-        # ## Flip Title
-        flip_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.flipName)
-        grid0.addWidget(flip_title_label, 23, 0, 1, 3)
-
-        self.flipx_button = FCButton(_("Flip on X"))
-        self.flipx_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
-        )
-
-        self.flipy_button = FCButton(_("Flip on Y"))
-        self.flipy_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
-        )
-
-        hlay0 = QtWidgets.QHBoxLayout()
-        grid0.addLayout(hlay0, 25, 0, 1, 3)
-
-        hlay0.addWidget(self.flipx_button)
-        hlay0.addWidget(self.flipy_button)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        grid0.addWidget(separator_line, 27, 0, 1, 3)
-
-        # ## Offset Title
-        offset_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.offsetName)
-        grid0.addWidget(offset_title_label, 29, 0, 1, 3)
-
-        self.offx_label = FCLabel('%s:' % _("X val"))
-        self.offx_label.setToolTip(
-            _("Distance to offset on X axis. In current units.")
-        )
-        self.offx_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        # self.offx_entry.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.offx_entry.set_precision(self.decimals)
-        self.offx_entry.setMinimum(-1e6)
-
-        self.offx_button = FCButton(_("Offset X"))
-        self.offx_button.setToolTip(
-            _("Offset the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects.\n"))
-        self.offx_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.offx_label, 31, 0)
-        grid0.addWidget(self.offx_entry, 31, 1)
-        grid0.addWidget(self.offx_button, 31, 2)
-
-        self.offy_label = FCLabel('%s:' % _("Y val"))
-        self.offy_label.setToolTip(
-            _("Distance to offset on Y axis. In current units.")
-        )
-        self.offy_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        # self.offy_entry.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.offy_entry.set_precision(self.decimals)
-        self.offy_entry.setMinimum(-1e6)
-
-        self.offy_button = FCButton(_("Offset Y"))
-        self.offy_button.setToolTip(
-            _("Offset the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects.\n"))
-        self.offy_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.offy_label, 32, 0)
-        grid0.addWidget(self.offy_entry, 32, 1)
-        grid0.addWidget(self.offy_button, 32, 2)
-
-        separator_line = QtWidgets.QFrame()
-        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        grid0.addWidget(separator_line, 34, 0, 1, 3)
-
-        # ## Buffer Title
-        buffer_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.bufferName)
-        grid0.addWidget(buffer_title_label, 35, 0, 1, 2)
-
-        self.buffer_rounded_cb = FCCheckBox('%s' % _("Rounded"))
-        self.buffer_rounded_cb.setToolTip(
-            _("If checked then the buffer will surround the buffered shape,\n"
-              "every corner will be rounded.\n"
-              "If not checked then the buffer will follow the exact geometry\n"
-              "of the buffered shape.")
-        )
-
-        grid0.addWidget(self.buffer_rounded_cb, 35, 2)
-
-        self.buffer_label = FCLabel('%s:' % _("Distance"))
-        self.buffer_label.setToolTip(
-            _("A positive value will create the effect of dilation,\n"
-              "while a negative value will create the effect of erosion.\n"
-              "Each geometry element of the object will be increased\n"
-              "or decreased with the 'distance'.")
-        )
-
-        self.buffer_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        self.buffer_entry.set_precision(self.decimals)
-        self.buffer_entry.setSingleStep(0.1)
-        self.buffer_entry.setWrapping(True)
-        self.buffer_entry.set_range(-10000.0000, 10000.0000)
-
-        self.buffer_button = FCButton(_("Buffer D"))
-        self.buffer_button.setToolTip(
-            _("Create the buffer effect on each geometry,\n"
-              "element from the selected object, using the distance.")
-        )
-        self.buffer_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.buffer_label, 37, 0)
-        grid0.addWidget(self.buffer_entry, 37, 1)
-        grid0.addWidget(self.buffer_button, 37, 2)
-
-        self.buffer_factor_label = FCLabel('%s:' % _("Value"))
-        self.buffer_factor_label.setToolTip(
-            _("A positive value will create the effect of dilation,\n"
-              "while a negative value will create the effect of erosion.\n"
-              "Each geometry element of the object will be increased\n"
-              "or decreased to fit the 'Value'. Value is a percentage\n"
-              "of the initial dimension.")
-        )
-
-        self.buffer_factor_entry = FCDoubleSpinner(callback=self.confirmation_message, suffix='%')
-        self.buffer_factor_entry.set_range(-100.0000, 1000.0000)
-        self.buffer_factor_entry.set_precision(self.decimals)
-        self.buffer_factor_entry.setWrapping(True)
-        self.buffer_factor_entry.setSingleStep(1)
-
-        self.buffer_factor_button = FCButton(_("Buffer F"))
-        self.buffer_factor_button.setToolTip(
-            _("Create the buffer effect on each geometry,\n"
-              "element from the selected object, using the factor.")
-        )
-        self.buffer_factor_button.setMinimumWidth(90)
-
-        grid0.addWidget(self.buffer_factor_label, 38, 0)
-        grid0.addWidget(self.buffer_factor_entry, 38, 1)
-        grid0.addWidget(self.buffer_factor_button, 38, 2)
-
-        grid0.addWidget(FCLabel(''), 42, 0, 1, 3)
-
-        self.layout.addStretch()
-
-        # Signals
-        self.ref_combo.currentIndexChanged.connect(self.on_reference_changed)
-        self.point_button.clicked.connect(self.on_add_coords)
-
-        self.rotate_button.clicked.connect(lambda: self.on_rotate())
-
-        self.skewx_button.clicked.connect(lambda: self.on_skewx())
-        self.skewy_button.clicked.connect(lambda: self.on_skewy)
-
-        self.scalex_button.clicked.connect(lambda: self.on_scalex())
-        self.scaley_button.clicked.connect(lambda: self.on_scaley())
-
-        self.offx_button.clicked.connect(lambda: self.on_offx())
-        self.offy_button.clicked.connect(lambda: self.on_offy())
-
-        self.flipx_button.clicked.connect(lambda: self.on_flipx())
-        self.flipy_button.clicked.connect(lambda: self.on_flipy())
-
-        self.buffer_button.clicked.connect(lambda: self.on_buffer_by_distance())
-        self.buffer_factor_button.clicked.connect(lambda: self.on_buffer_by_factor())
-
-        # self.rotate_entry.editingFinished.connect(self.on_rotate)
-        # self.skewx_entry.editingFinished.connect(self.on_skewx)
-        # self.skewy_entry.editingFinished.connect(self.on_skewy)
-        # self.scalex_entry.editingFinished.connect(self.on_scalex)
-        # self.scaley_entry.editingFinished.connect(self.on_scaley)
-        # self.offx_entry.editingFinished.connect(self.on_offx)
-        # self.offy_entry.editingFinished.connect(self.on_offy)
-
-        self.set_tool_ui()
-
-    def run(self, toggle=True):
-        self.app.defaults.report_usage("Gerber Editor Transform Tool()")
-
-        # if the splitter is hidden, display it, else hide it but only if the current widget is the same
-        if self.app.ui.splitter.sizes()[0] == 0:
-            self.app.ui.splitter.setSizes([1, 1])
-
-        # if the Tool Tab is hidden display it, else hide it but only if the objectName is the same
-        found_idx = None
-        for idx in range(self.app.ui.notebook.count()):
-            if self.app.ui.notebook.widget(idx).objectName() == "plugin_tab":
-                found_idx = idx
-                break
-        # show the Tab
-        if not found_idx:
-            try:
-                self.app.ui.notebook.addTab(self.app.ui.plugin_tab, _("Plugin"))
-            except RuntimeError:
-                self.app.ui.plugin_tab = QtWidgets.QWidget()
-                self.app.ui.plugin_tab.setObjectName("plugin_tab")
-                self.app.ui.plugin_tab_layout = QtWidgets.QVBoxLayout(self.app.ui.plugin_tab)
-                self.app.ui.plugin_tab_layout.setContentsMargins(2, 2, 2, 2)
-
-                self.app.ui.plugin_scroll_area = VerticalScrollArea()
-                self.app.ui.plugin_tab_layout.addWidget(self.app.ui.plugin_scroll_area)
-                self.app.ui.notebook.addTab(self.app.ui.plugin_tab, _("Plugin"))
-            # focus on Tool Tab
-            self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
-
-        # self.app.ui.notebook.callback_on_close = self.on_tab_close
-
-        if toggle:
-            try:
-                if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName:
-                    self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
-                else:
-                    self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
-            except AttributeError:
-                pass
-
-        super().run()
-        self.set_tool_ui()
-
-        self.app.ui.notebook.setTabText(2, _("Transformation"))
-
-    def install(self, icon=None, separator=None, **kwargs):
-        AppTool.install(self, icon, separator, shortcut='Alt+R', **kwargs)
-
-    def set_tool_ui(self):
-        # Initialize form
-        ref_val = self.app.options.get(
-            "tools_transform_reference",
-            self.app.defaults.get(
-                "tools_transform_reference",
-                self.app.defaults.factory_defaults.get("tools_transform_reference")
-            )
-        )
-        if ref_val == _("Object"):
-            ref_val = _("Selection")
-        self.ref_combo.set_value(ref_val)
-        self.point_entry.set_value(self.app.options.get(
-            "tools_transform_ref_point",
-            self.app.defaults.get(
-                "tools_transform_ref_point",
-                self.app.defaults.factory_defaults.get("tools_transform_ref_point")
-            )
-        ))
-        self.rotate_entry.set_value(self.app.options.get(
-            "tools_transform_rotate",
-            self.app.defaults.get(
-                "tools_transform_rotate",
-                self.app.defaults.factory_defaults.get("tools_transform_rotate")
-            )
-        ))
-
-        self.skewx_entry.set_value(self.app.options.get(
-            "tools_transform_skew_x",
-            self.app.defaults.get(
-                "tools_transform_skew_x",
-                self.app.defaults.factory_defaults.get("tools_transform_skew_x")
-            )
-        ))
-        self.skewy_entry.set_value(self.app.options.get(
-            "tools_transform_skew_y",
-            self.app.defaults.get(
-                "tools_transform_skew_y",
-                self.app.defaults.factory_defaults.get("tools_transform_skew_y")
-            )
-        ))
-        self.skew_link_cb.set_value(self.app.options.get(
-            "tools_transform_skew_link",
-            self.app.defaults.get(
-                "tools_transform_skew_link",
-                self.app.defaults.factory_defaults.get("tools_transform_skew_link")
-            )
-        ))
-
-        self.scalex_entry.set_value(self.app.options.get(
-            "tools_transform_scale_x",
-            self.app.defaults.get(
-                "tools_transform_scale_x",
-                self.app.defaults.factory_defaults.get("tools_transform_scale_x")
-            )
-        ))
-        self.scaley_entry.set_value(self.app.options.get(
-            "tools_transform_scale_y",
-            self.app.defaults.get(
-                "tools_transform_scale_y",
-                self.app.defaults.factory_defaults.get("tools_transform_scale_y")
-            )
-        ))
-        self.scale_link_cb.set_value(self.app.options.get(
-            "tools_transform_scale_link",
-            self.app.defaults.get(
-                "tools_transform_scale_link",
-                self.app.defaults.factory_defaults.get("tools_transform_scale_link")
-            )
-        ))
-
-        self.offx_entry.set_value(self.app.options.get(
-            "tools_transform_offset_x",
-            self.app.defaults.get(
-                "tools_transform_offset_x",
-                self.app.defaults.factory_defaults.get("tools_transform_offset_x")
-            )
-        ))
-        self.offy_entry.set_value(self.app.options.get(
-            "tools_transform_offset_y",
-            self.app.defaults.get(
-                "tools_transform_offset_y",
-                self.app.defaults.factory_defaults.get("tools_transform_offset_y")
-            )
-        ))
-
-        self.buffer_entry.set_value(self.app.options.get(
-            "tools_transform_buffer_dis",
-            self.app.defaults.get(
-                "tools_transform_buffer_dis",
-                self.app.defaults.factory_defaults.get("tools_transform_buffer_dis")
-            )
-        ))
-        self.buffer_factor_entry.set_value(self.app.options.get(
-            "tools_transform_buffer_factor",
-            self.app.defaults.get(
-                "tools_transform_buffer_factor",
-                self.app.defaults.factory_defaults.get("tools_transform_buffer_factor")
-            )
-        ))
-        self.buffer_rounded_cb.set_value(self.app.options.get(
-            "tools_transform_buffer_corner",
-            self.app.defaults.get(
-                "tools_transform_buffer_corner",
-                self.app.defaults.factory_defaults.get("tools_transform_buffer_corner")
-            )
-        ))
-
-        # initial state is hidden
-        self.point_label.hide()
-        self.point_entry.hide()
-        self.point_button.hide()
-
-    def template(self):
-        if not self.draw_app.selected:
-            self.draw_app.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Cancelled."), _("No shape selected.")))
-            return
-
-        self.draw_app.select_tool("select")
-        self.app.ui.notebook.setTabText(2, "Plugins")
-        self.app.ui.notebook.setCurrentWidget(self.app.ui.project_tab)
-
-        self.app.ui.splitter.setSizes([0, 1])
-
-    def on_tab_close(self):
-        self.draw_app.select_tool("select")
-        self.app.ui.notebook.callback_on_close = lambda: None
-
-    def on_reference_changed(self, index):
-        if index == 0 or index == 1:  # "Origin" or "Selection" reference
-            self.point_label.hide()
-            self.point_entry.hide()
-            self.point_button.hide()
-
-        elif index == 2:  # "Point" reference
-            self.point_label.show()
-            self.point_entry.show()
-            self.point_button.show()
-
-    def on_calculate_reference(self, ref_index=None):
-        if ref_index:
-            ref_val = ref_index
-        else:
-            ref_val = self.ref_combo.currentIndex()
-
-        if ref_val == 0:  # "Origin" reference
-            return 0, 0
-        elif ref_val == 1:  # "Selection" reference
-            sel_list = self.draw_app.selected
-            if sel_list:
-                xmin, ymin, xmax, ymax = self.alt_bounds(sel_list)
-                px = (xmax + xmin) * 0.5
-                py = (ymax + ymin) * 0.5
-                return px, py
-            else:
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("No shape selected."))
-                return "fail"
-        elif ref_val == 2:  # "Point" reference
-            point_val = self.point_entry.get_value()
-            try:
-                px, py = safe_eval('{}'.format(point_val))
-                return px, py
-            except Exception:
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Incorrect format for Point value. Needs format X,Y"))
-                return "fail"
-        else:
-            sel_list = self.draw_app.selected
-            if sel_list:
-                xmin, ymin, xmax, ymax = self.alt_bounds(sel_list)
-                if ref_val == 3:
-                    return xmin, ymin  # lower left corner
-                elif ref_val == 4:
-                    return xmax, ymin  # lower right corner
-                elif ref_val == 5:
-                    return xmax, ymax  # upper right corner
-                else:
-                    return xmin, ymax  # upper left corner
-            else:
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("No shape selected."))
-                return "fail"
-
-    def on_add_coords(self):
-        val = self.app.clipboard.text()
-        self.point_entry.set_value(val)
-
-    def on_rotate(self, val=None, ref=None):
-        value = float(self.rotate_entry.get_value()) if val is None else val
-        if value == 0:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Rotate transformation can not be done for a value of 0."))
-            return
-        point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
-        if point == 'fail':
-            return
-        self.app.worker_task.emit({'fcn': self.on_rotate_action, 'params': [value, point]})
-
-    def on_flipx(self, ref=None):
-        axis = 'Y'
-        point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
-        if point == 'fail':
-            return
-        self.app.worker_task.emit({'fcn': self.on_flip, 'params': [axis, point]})
-
-    def on_flipy(self, ref=None):
-        axis = 'X'
-        point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
-        if point == 'fail':
-            return
-        self.app.worker_task.emit({'fcn': self.on_flip, 'params': [axis, point]})
-
-    def on_skewx(self, val=None, ref=None):
-        xvalue = float(self.skewx_entry.get_value()) if val is None else val
-
-        if xvalue == 0:
-            return
-
-        if self.skew_link_cb.get_value():
-            yvalue = xvalue
-        else:
-            yvalue = 0
-
-        axis = 'X'
-        point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
-        if point == 'fail':
-            return
-
-        self.app.worker_task.emit({'fcn': self.on_skew, 'params': [axis, xvalue, yvalue, point]})
-
-    def on_skewy(self, val=None, ref=None):
-        xvalue = 0
-        yvalue = float(self.skewy_entry.get_value()) if val is None else val
-
-        if yvalue == 0:
-            return
-
-        axis = 'Y'
-        point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
-        if point == 'fail':
-            return
-
-        self.app.worker_task.emit({'fcn': self.on_skew, 'params': [axis, xvalue, yvalue, point]})
-
-    def on_scalex(self, val=None, ref=None):
-        xvalue = float(self.scalex_entry.get_value()) if val is None else val
-
-        if xvalue == 0 or xvalue == 1:
-            self.app.inform.emit('[WARNING_NOTCL] %s' %
-                                 _("Scale transformation can not be done for a factor of 0 or 1."))
-            return
-
-        if self.scale_link_cb.get_value():
-            yvalue = xvalue
-        else:
-            yvalue = 1
-
-        axis = 'X'
-        point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
-        if point == 'fail':
-            return
-
-        self.app.worker_task.emit({'fcn': self.on_scale, 'params': [axis, xvalue, yvalue, point]})
-
-    def on_scaley(self, val=None, ref=None):
-        xvalue = 1
-        yvalue = float(self.scaley_entry.get_value()) if val is None else val
-
-        if yvalue == 0 or yvalue == 1:
-            self.app.inform.emit('[WARNING_NOTCL] %s' %
-                                 _("Scale transformation can not be done for a factor of 0 or 1."))
-            return
-
-        axis = 'Y'
-        point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
-        if point == 'fail':
-            return
-
-        self.app.worker_task.emit({'fcn': self.on_scale, 'params': [axis, xvalue, yvalue, point]})
-
-    def on_offx(self, val=None):
-        value = float(self.offx_entry.get_value()) if val is None else val
-        if value == 0:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Offset transformation can not be done for a value of 0."))
-            return
-        axis = 'X'
-
-        self.app.worker_task.emit({'fcn': self.on_offset, 'params': [axis, value]})
-
-    def on_offy(self, val=None):
-        value = float(self.offy_entry.get_value()) if val is None else val
-        if value == 0:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Offset transformation can not be done for a value of 0."))
-            return
-        axis = 'Y'
-
-        self.app.worker_task.emit({'fcn': self.on_offset, 'params': [axis, value]})
-
-    def on_buffer_by_distance(self):
-        value = self.buffer_entry.get_value()
-        join = "round" if self.buffer_rounded_cb.get_value() else "mitre"
-
-        self.app.worker_task.emit({'fcn': self.on_buffer_action, 'params': [value, join]})
-
-    def on_buffer_by_factor(self):
-        value = 1 + (self.buffer_factor_entry.get_value() / 100.0)
-        join = "round" if self.buffer_rounded_cb.get_value() else "mitre"
-
-        # tell the buffer method to use the factor
-        factor = True
-
-        self.app.worker_task.emit({'fcn': self.on_buffer_action, 'params': [value, join, factor]})
-
-    def on_rotate_action(self, val, point):
-        """
-        Rotate geometry
-
-        :param val:     Rotate with a known angle value, val
-        :param point:   Reference point for rotation: tuple
-        :return:
-        """
-
-        elem_list = self.draw_app.selected
-        px, py = point
-
-        if not elem_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new(_("Appying Rotate")):
-            try:
-                for sel_el_shape in elem_list:
-                    sel_el = sel_el_shape.geo
-                    if 'solid' in sel_el:
-                        sel_el['solid'] = rotate(sel_el['solid'], angle=-val, origin=(px, py))
-                    if 'follow' in sel_el:
-                        sel_el['follow'] = rotate(sel_el['follow'], angle=-val, origin=(px, py))
-                    if 'clear' in sel_el:
-                        sel_el['clear'] = rotate(sel_el['clear'], angle=-val, origin=(px, py))
-                self.draw_app.touch_geometry()
-                self.draw_app.plot_all()
-
-                self.app.inform.emit('[success] %s' % _("Done."))
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_flip(self, axis, point):
-        """
-        Mirror (flip) geometry
-
-        :param axis:    Mirror on a known axis given by the axis parameter
-        :param point:   Mirror reference point
-        :return:
-        """
-
-        elem_list = self.draw_app.selected
-        px, py = point
-
-        if not elem_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new(_("Applying Flip")):
-            try:
-                # execute mirroring
-                for sel_el_shape in elem_list:
-                    sel_el = sel_el_shape.geo
-                    if axis == 'X':
-                        if 'solid' in sel_el:
-                            sel_el['solid'] = scale(sel_el['solid'], xfact=1, yfact=-1, origin=(px, py))
-                        if 'follow' in sel_el:
-                            sel_el['follow'] = scale(sel_el['follow'], xfact=1, yfact=-1, origin=(px, py))
-                        if 'clear' in sel_el:
-                            sel_el['clear'] = scale(sel_el['clear'], xfact=1, yfact=-1, origin=(px, py))
-                        self.app.inform.emit('[success] %s...' % _('Flip on Y axis done'))
-                    elif axis == 'Y':
-                        if 'solid' in sel_el:
-                            sel_el['solid'] = scale(sel_el['solid'], xfact=-1, yfact=1, origin=(px, py))
-                        if 'follow' in sel_el:
-                            sel_el['follow'] = scale(sel_el['follow'], xfact=-1, yfact=1, origin=(px, py))
-                        if 'clear' in sel_el:
-                            sel_el['clear'] = scale(sel_el['clear'], xfact=-1, yfact=1, origin=(px, py))
-                        self.app.inform.emit('[success] %s...' % _('Flip on X axis done'))
-                self.draw_app.touch_geometry()
-                self.draw_app.plot_all()
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_skew(self, axis, xval, yval, point):
-        """
-        Skew geometry
-
-        :param axis:    Axis on which to deform (or skew)
-        :param xval:    Skew value on X axis
-        :param yval:    Skew value on Y axis
-        :param point:   Point of reference for deformation: tuple
-        :return:
-        """
-        elem_list = self.draw_app.selected
-        px, py = point
-
-        if not elem_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new(_("Applying Skew")):
-            try:
-
-                for sel_el_shape in elem_list:
-                    sel_el = sel_el_shape.geo
-
-                    if 'solid' in sel_el:
-                        sel_el['solid'] = skew(sel_el['solid'], xval, yval, origin=(px, py))
-                    if 'follow' in sel_el:
-                        sel_el['follow'] = skew(sel_el['follow'], xval, yval, origin=(px, py))
-                    if 'clear' in sel_el:
-                        sel_el['clear'] = skew(sel_el['clear'], xval, yval, origin=(px, py))
-
-                self.draw_app.touch_geometry()
-                self.draw_app.plot_all()
-
-                if str(axis) == 'X':
-                    self.app.inform.emit('[success] %s...' % _('Skew on the X axis done'))
-                else:
-                    self.app.inform.emit('[success] %s...' % _('Skew on the Y axis done'))
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_scale(self, axis, xfactor, yfactor, point=None):
-        """
-        Scale geometry
-
-        :param axis:        Axis on which to scale
-        :param xfactor:     Factor for scaling on X axis
-        :param yfactor:     Factor for scaling on Y axis
-        :param point:       Point of origin for scaling
-
-        :return:
-        """
-        elem_list = self.draw_app.selected
-        px, py = point
-
-        if not elem_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-        else:
-            with self.app.proc_container.new(_("Applying Scale")):
-                try:
-                    for sel_el_shape in elem_list:
-                        sel_el = sel_el_shape.geo
-                        if 'solid' in sel_el:
-                            sel_el['solid'] = scale(sel_el['solid'], xfactor, yfactor, origin=(px, py))
-                        if 'follow' in sel_el:
-                            sel_el['follow'] = scale(sel_el['follow'], xfactor, yfactor, origin=(px, py))
-                        if 'clear' in sel_el:
-                            sel_el['clear'] = scale(sel_el['clear'], xfactor, yfactor, origin=(px, py))
-                    self.draw_app.touch_geometry()
-                    self.draw_app.plot_all()
-
-                    if str(axis) == 'X':
-                        self.app.inform.emit('[success] %s...' % _('Scale on the X axis done'))
-                    else:
-                        self.app.inform.emit('[success] %s...' % _('Scale on the Y axis done'))
-
-                except Exception as e:
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(e)))
-                    return
-
-    def on_offset(self, axis, num):
-        """
-        Offset geometry
-
-        :param axis:        Axis on which to apply offset
-        :param num:         The translation factor
-
-        :return:
-        """
-        elem_list = self.draw_app.selected
-
-        if not elem_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new(_("Applying Offset")):
-            try:
-                for sel_el_shape in elem_list:
-                    sel_el = sel_el_shape.geo
-                    if axis == 'X':
-                        if 'solid' in sel_el:
-                            sel_el['solid'] = translate(sel_el['solid'], num, 0)
-                        if 'follow' in sel_el:
-                            sel_el['follow'] = translate(sel_el['follow'], num, 0)
-                        if 'clear' in sel_el:
-                            sel_el['clear'] = translate(sel_el['clear'], num, 0)
-                    elif axis == 'Y':
-                        if 'solid' in sel_el:
-                            sel_el['solid'] = translate(sel_el['solid'], 0, num)
-                        if 'follow' in sel_el:
-                            sel_el['follow'] = translate(sel_el['follow'], 0, num)
-                        if 'clear' in sel_el:
-                            sel_el['clear'] = translate(sel_el['clear'], 0, num)
-                self.draw_app.touch_geometry()
-                self.draw_app.plot_all()
-
-                if str(axis) == 'X':
-                    self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
-                else:
-                    self.app.inform.emit('[success] %s %s' % (_('Offset on the Y axis.'), _("Done.")))
-
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_buffer_action(self, value, join, factor=None):
-        elem_list = self.draw_app.selected
-
-        if not elem_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new(_("Applying Buffer")):
-            try:
-                for sel_el_shape in elem_list:
-                    sel_el = sel_el_shape.geo
-
-                    if factor:
-                        if 'solid' in sel_el:
-                            sel_el['solid'] = scale(sel_el['solid'], value, value, origin='center')
-                        if 'follow' in sel_el:
-                            sel_el['follow'] = scale(sel_el['solid'], value, value, origin='center')
-                        if 'clear' in sel_el:
-                            sel_el['clear'] = scale(sel_el['solid'], value, value, origin='center')
-                    else:
-                        if 'solid' in sel_el:
-                            sel_el['solid'] = sel_el['solid'].buffer(
-                                value,
-                                resolution=self.app.options.get(
-                                    "gerber_circle_steps",
-                                    self.app.defaults.get(
-                                        "gerber_circle_steps",
-                                        self.app.defaults.factory_defaults.get("gerber_circle_steps")
-                                    )
-                                ),
-                                join_style=join)
-                        if 'clear' in sel_el:
-                            sel_el['clear'] = sel_el['clear'].buffer(
-                                value,
-                                resolution=self.app.options.get(
-                                    "gerber_circle_steps",
-                                    self.app.defaults.get(
-                                        "gerber_circle_steps",
-                                        self.app.defaults.factory_defaults.get("gerber_circle_steps")
-                                    )
-                                ),
-                                join_style=join)
-
-                self.draw_app.touch_geometry()
-                self.draw_app.plot_all()
-
-                self.app.inform.emit('[success] %s...' % _('Buffer done'))
-
-            except Exception as e:
-                self.app.log.error("TransformEditorTool.on_buffer_action() --> %s" % str(e))
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_rotate_key(self):
-        val_box = FCInputDoubleSpinner(title=_("Rotate ..."),
-                                       text='%s:' % _('Enter an Angle Value (degrees)'),
-                                       min=-359.9999, max=360.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options.get(
-                                           'tools_transform_rotate',
-                                           self.app.defaults.get(
-                                               'tools_transform_rotate',
-                                               self.app.defaults.factory_defaults.get('tools_transform_rotate')
-                                           )
-                                       )),
-                                       parent=self.app.ui)
-        val_box.set_icon(QtGui.QIcon(self.app.resource_location + '/rotate.png'))
-
-        val, ok = val_box.get_value()
-        if ok:
-            self.on_rotate(val=val, ref=1)
-            self.app.inform.emit('[success] %s...' % _("Rotate done"))
-            return
-        else:
-            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Rotate cancelled"))
-
-    def on_offx_key(self):
-        units = self.app.app_units.lower()
-
-        val_box = FCInputDoubleSpinner(title=_("Offset on X axis ..."),
-                                       text='%s: (%s)' % (_('Enter a distance Value'), str(units)),
-                                       min=-10000.0000, max=10000.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options.get(
-                                           'tools_transform_offset_x',
-                                           self.app.defaults.get(
-                                               'tools_transform_offset_x',
-                                               self.app.defaults.factory_defaults.get('tools_transform_offset_x')
-                                           )
-                                       )),
-                                       parent=self.app.ui)
-        val_box.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/offsetx32.png'))
-
-        val, ok = val_box.get_value()
-        if ok:
-            self.on_offx(val=val)
-            self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
-            return
-        else:
-            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Offset X cancelled"))
-
-    def on_offy_key(self):
-        units = self.app.app_units.lower()
-
-        val_box = FCInputDoubleSpinner(title=_("Offset on Y axis ..."),
-                                       text='%s: (%s)' % (_('Enter a distance Value'), str(units)),
-                                       min=-10000.0000, max=10000.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options.get(
-                                           'tools_transform_offset_y',
-                                           self.app.defaults.get(
-                                               'tools_transform_offset_y',
-                                               self.app.defaults.factory_defaults.get('tools_transform_offset_y')
-                                           )
-                                       )),
-                                       parent=self.app.ui)
-        val_box.set_icon(QtGui.QIcon(self.app.resource_location + '/offsety32.png'))
-
-        val, ok = val_box.get_value()
-        if ok:
-            self.on_offx(val=val)
-            self.app.inform.emit('[success] %s...' % _("Offset on Y axis done"))
-            return
-        else:
-            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Offset Y cancelled"))
-
-    def on_skewx_key(self):
-        val_box = FCInputDoubleSpinner(title=_("Skew on X axis ..."),
-                                       text='%s:' % _('Enter an Angle Value (degrees)'),
-                                       min=-359.9999, max=360.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options.get(
-                                           'tools_transform_skew_x',
-                                           self.app.defaults.get(
-                                               'tools_transform_skew_x',
-                                               self.app.defaults.factory_defaults.get('tools_transform_skew_x')
-                                           )
-                                       )),
-                                       parent=self.app.ui)
-        val_box.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/skewX.png'))
-
-        val, ok = val_box.get_value()
-        if ok:
-            self.on_skewx(val=val, ref=3)
-            self.app.inform.emit('[success] %s...' % _("Skew on X axis done"))
-            return
-        else:
-            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Skew X cancelled"))
-
-    def on_skewy_key(self):
-        val_box = FCInputDoubleSpinner(title=_("Skew on Y axis ..."),
-                                       text='%s:' % _('Enter an Angle Value (degrees)'),
-                                       min=-359.9999, max=360.0000, decimals=self.decimals,
-                                       init_val=float(self.app.options.get(
-                                           'tools_transform_skew_y',
-                                           self.app.defaults.get(
-                                               'tools_transform_skew_y',
-                                               self.app.defaults.factory_defaults.get('tools_transform_skew_y')
-                                           )
-                                       )),
-                                       parent=self.app.ui)
-        val_box.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/skewY.png'))
-
-        val, ok = val_box.get_value()
-        if ok:
-            self.on_skewx(val=val, ref=3)
-            self.app.inform.emit('[success] %s...' % _("Skew on Y axis done"))
-            return
-        else:
-            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Skew Y cancelled"))
-
-    @staticmethod
-    def alt_bounds(shapelist):
-        """
-        Returns coordinates of rectangular bounds of a selection of shapes
-        """
-
-        def bounds_rec(lst):
-            minx = np.inf
-            miny = np.inf
-            maxx = -np.inf
-            maxy = -np.inf
-
-            try:
-                for shape in lst:
-                    el = shape.geo
-                    if 'solid' in el:
-                        minx_, miny_, maxx_, maxy_ = bounds_rec(el['solid'])
-                        minx = min(minx, minx_)
-                        miny = min(miny, miny_)
-                        maxx = max(maxx, maxx_)
-                        maxy = max(maxy, maxy_)
-                return minx, miny, maxx, maxy
-            except TypeError:
-                # it's an object, return its bounds
-                return lst.bounds
-
-        return bounds_rec(shapelist)
 
 
 def get_shapely_list_bounds(geometry_list):

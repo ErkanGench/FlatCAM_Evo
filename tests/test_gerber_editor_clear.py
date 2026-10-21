@@ -7,12 +7,14 @@ from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from PyQt6 import QtCore
 from shapely.geometry import Point, box
 
-from appEditors.appGerberEditor import AppGerberEditor, EraserEditorGrb, ImportEditorGrb, TransformEditorTool
+from appEditors.appGerberEditor import AppGerberEditor, EraserEditorGrb, ImportEditorGrb
+from appEditors.grb_plugins.GrbTransformationPlugin import affine_selection
+from camlib import affine_translate_matrix
 from appEditors.grb_plugins.GrbCommon import DrawToolShape
 from appHandlers.appIO import appIO
-from appObjects.GerberObject import GerberObject
 
 from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
     MIXED_GBR, NATIVE_GBR, _headless_qt, app, assert_poly_equiv, export_gerber_text, make_gerber, polygon_union,
@@ -29,27 +31,22 @@ def snapshot(tools):
 
 
 def editor_save(app, source, tools, loaded_as_regions=False):
-    """The real new_edited_gerber() on a stand-in editor, fed with a storage built from ``tools`` (what the editor
-    holds after the load)."""
+    """The real build_edited_gerber() (the worker step of the save) on a stand-in editor, fed with a storage built
+    from ``tools`` (what the editor holds after the load). Returns the detached edited Gerber object."""
     storage = {}
     for ap, tool in tools.items():
         storage[ap] = {k: v for k, v in tool.items() if k != 'geometry'}
         storage[ap]['geometry'] = [SimpleNamespace(geo=dict(rec)) for rec in tool['geometry']]
-    created = {}
-
-    def new_object(kind, name, initialize, *args, **kwargs):
-        new_obj = GerberObject(name, app)
-        initialize(new_obj, app)
-        created[name] = new_obj
-
-    app.app_obj.new_object.side_effect = new_object
     app.app_units = 'MM'
     app.f_handlers = appIO(app)
     app.custom_signal = MagicMock()
+    app.main_thread = QtCore.QThread.currentThread()
     stand_in = SimpleNamespace(app=app, gerber_obj=source, gerber_obj_options=source.obj_options, results=[1],
                                loaded_as_regions=loaded_as_regions)
-    AppGerberEditor.new_edited_gerber(stand_in, 'edited', storage)
-    return created['edited']
+    AppGerberEditor.build_edited_gerber(stand_in, 'edited', storage)
+    result = app.custom_signal.emit.call_args.args[0]
+    assert 'obj' in result, result
+    return result['obj']
 
 
 class TestBuildEditTools:
@@ -195,6 +192,6 @@ class TestImportWithClear:
         tool.draw_app.selected = [shape for value in tool.draw_app.storage_dict.values()
                                   for shape in value['geometry']]
         original = tool.draw_app.selected[0].geo['solid']
-        TransformEditorTool.on_offset(tool, 'X', 100)
+        affine_selection(tool.draw_app.selected, affine_translate_matrix(100, 0))
         assert tool.draw_app.selected[0].geo['solid'].bounds[0] == pytest.approx(original.bounds[0] + 100)
         assert snapshot(source.tools) == before

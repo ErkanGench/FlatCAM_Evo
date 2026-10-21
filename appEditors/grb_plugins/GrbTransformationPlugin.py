@@ -6,6 +6,11 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     FCInputDoubleSpinner, FCComboBox, NumericalEvalTupleEntry, FCCheckBox, OptionalInputSection
 
 import numpy as np
+import shapely
+import math
+
+from camlib import (affine_geometry_many, affine_rotate_matrix, affine_scale_matrix, affine_skew_matrix,
+                    affine_mirror_matrix, affine_translate_matrix)
 
 import gettext
 import appTranslation as fcTranslate
@@ -16,10 +21,125 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
+GEO_KEYS = ('solid', 'follow', 'clear')
+
+
+def selection_bounds(shapes):
+    """
+    Bounds (xmin, ymin, xmax, ymax) of the 'solid' of the shapes, in ONE vectorized call.
+
+    :return: the tuple, or None if there is no geometry
+    """
+    solids = [shape.geo['solid'] for shape in shapes if shape.geo.get('solid') is not None]
+    if not solids:
+        return None
+    arr = np.empty(len(solids), dtype=object)
+    arr[:] = solids
+    bounds = shapely.total_bounds(arr)
+    if not np.all(np.isfinite(bounds)):
+        return None
+    return tuple(float(v) for v in bounds)
+
+
+def affine_selection(shapes, matrix):
+    """
+    Applies 1 affine matrix to the 'solid', 'follow' and 'clear' of all the shapes. 1 vectorized call per key. The
+    shapes are changed only after all the keys are computed.
+    """
+    updates = []
+    for key in GEO_KEYS:
+        owners = [shape for shape in shapes if shape.geo.get(key) is not None]
+        if owners:
+            new_geos = affine_geometry_many([shape.geo[key] for shape in owners], matrix)
+            updates.append((key, owners, new_geos))
+    for key, owners, new_geos in updates:
+        for shape, geo in zip(owners, new_geos):
+            shape.geo[key] = geo
+
+
+def scale_selection_about_centers(shapes, factor):
+    """
+    Scales every shape by factor around the center of the bounds of its own 'solid' (of its own geometry if it has
+    no solid). All the keys of a shape use the same center.
+    """
+    updates = []
+    for key in GEO_KEYS:
+        owners = [shape for shape in shapes if shape.geo.get(key) is not None]
+        if not owners:
+            continue
+        geos = np.empty(len(owners), dtype=object)
+        geos[:] = [shape.geo[key] for shape in owners]
+        solids = np.empty(len(owners), dtype=object)
+        solids[:] = [shape.geo['solid'] if shape.geo.get('solid') is not None else shape.geo[key] for shape in owners]
+        bounds = shapely.bounds(solids)
+        centers = np.column_stack(((bounds[:, 0] + bounds[:, 2]) * 0.5, (bounds[:, 1] + bounds[:, 3]) * 0.5))
+        coords, index = shapely.get_coordinates(geos, return_index=True)
+        new_coords = centers[index] + (coords - centers[index]) * factor
+        updates.append((key, owners, shapely.set_coordinates(geos.copy(), new_coords)))
+    for key, owners, new_geos in updates:
+        for shape, geo in zip(owners, new_geos):
+            shape.geo[key] = geo
+
+
+def buffer_selection(shapes, value, join, steps):
+    """Buffers the 'solid' and the 'clear' of the shapes (the 'follow' is not changed), 1 vectorized call per key."""
+    updates = []
+    for key in ('solid', 'clear'):
+        owners = [shape for shape in shapes if shape.geo.get(key) is not None]
+        if owners:
+            geos = np.empty(len(owners), dtype=object)
+            geos[:] = [shape.geo[key] for shape in owners]
+            updates.append((key, owners, shapely.buffer(geos, value, quad_segs=steps, join_style=join)))
+    for key, owners, new_geos in updates:
+        for shape, geo in zip(owners, new_geos):
+            shape.geo[key] = geo
+
+
+def queue_transform(tool, kind, params):
+    """Capture the selection on the GUI thread; workers only change detached wrappers."""
+    if kind == 'rotate':
+        value, point = params
+        matrix = affine_rotate_matrix(-value, point)
+    elif kind == 'flip':
+        axis, point = params
+        matrix = affine_mirror_matrix(axis, point)
+    elif kind == 'skew':
+        axis, xvalue, yvalue, point = params
+        matrix = affine_skew_matrix(xvalue, yvalue, point)
+    elif kind == 'scale':
+        axis, xvalue, yvalue, point = params
+        matrix = affine_scale_matrix(xvalue, yvalue, point)
+    elif kind == 'offset':
+        axis, value = params
+        matrix = affine_translate_matrix(value if axis == 'X' else 0, value if axis == 'Y' else 0)
+    else:
+        value, join = params[:2]
+        if not math.isfinite(float(value)):
+            tool.app.inform.emit('[WARNING_NOTCL] %s' % _("Buffer value must be finite."))
+            return 'fail'
+        factor = len(params) == 3 and params[2]
+        if factor and float(value) <= 0:
+            tool.app.inform.emit('[WARNING_NOTCL] %s' % _("Buffer factor must be greater than -100%."))
+            return 'fail'
+        steps = int(tool.app.options.get('gerber_circle_steps', 64))
+
+        def compute(shapes):
+            if factor:
+                scale_selection_about_centers(shapes, value)
+            else:
+                buffer_selection(shapes, value, join, steps)
+
+        return tool.draw_app.submit_geometry(_("Buffer"), compute)
+    return tool.draw_app.submit_geometry(_(kind.capitalize()), lambda shapes: affine_selection(shapes, matrix), matrix)
+
+
 class TransformEditorTool(AppToolEditor):
     """
-    Inputs to specify how to paint the selected polygons.
+    The Transformation plugin of the Gerber Editor. The Rotate, Flip, Skew, Scale, Offset and Buffer actions change
+    the whole selection in a few vectorized calls, plot once and inform once.
     """
+
+    pluginName = _("Transformation")
 
     def __init__(self, app, draw_app):
         AppToolEditor.__init__(self, app)
@@ -55,7 +175,7 @@ class TransformEditorTool(AppToolEditor):
         self.ui.buffer_factor_button.clicked.connect(lambda: self.on_buffer_by_factor())
 
     def run(self, toggle=True):
-        self.app.defaults.report_usage("Geo Editor Transform Tool()")
+        self.app.defaults.report_usage("Gerber Editor Transform Tool()")
 
         # if the splitter us hidden, display it
         if self.app.ui.splitter.sizes()[0] == 0:
@@ -284,21 +404,21 @@ class TransformEditorTool(AppToolEditor):
         point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
         if point == 'fail':
             return
-        self.app.worker_task.emit({'fcn': self.on_rotate_action, 'params': [value, point]})
+        queue_transform(self, 'rotate', [value, point])
 
     def on_flipx(self, ref=None):
         axis = 'Y'
         point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
         if point == 'fail':
             return
-        self.app.worker_task.emit({'fcn': self.on_flip, 'params': [axis, point]})
+        queue_transform(self, 'flip', [axis, point])
 
     def on_flipy(self, ref=None):
         axis = 'X'
         point = self.on_calculate_reference() if ref is None else self.on_calculate_reference(ref_index=ref)
         if point == 'fail':
             return
-        self.app.worker_task.emit({'fcn': self.on_flip, 'params': [axis, point]})
+        queue_transform(self, 'flip', [axis, point])
 
     def on_skewx(self, val=None, ref=None):
         xvalue = float(self.ui.skewx_entry.get_value()) if val is None else val
@@ -313,7 +433,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_skew, 'params': [axis, xvalue, yvalue, point]})
+        queue_transform(self, 'skew', [axis, xvalue, yvalue, point])
 
     def on_skewy(self, val=None, ref=None):
         xvalue = 0
@@ -327,7 +447,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_skew, 'params': [axis, xvalue, yvalue, point]})
+        queue_transform(self, 'skew', [axis, xvalue, yvalue, point])
 
     def on_scalex(self, val=None, ref=None):
         xvalue = float(self.ui.scalex_entry.get_value()) if val is None else val
@@ -344,7 +464,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_scale, 'params': [axis, xvalue, yvalue, point]})
+        queue_transform(self, 'scale', [axis, xvalue, yvalue, point])
 
     def on_scaley(self, val=None, ref=None):
         xvalue = 1
@@ -360,7 +480,7 @@ class TransformEditorTool(AppToolEditor):
         if point == 'fail':
             return
 
-        self.app.worker_task.emit({'fcn': self.on_scale, 'params': [axis, xvalue, yvalue, point]})
+        queue_transform(self, 'scale', [axis, xvalue, yvalue, point])
 
     def on_offx(self, val=None):
         value = float(self.ui.offx_entry.get_value()) if val is None else val
@@ -369,7 +489,7 @@ class TransformEditorTool(AppToolEditor):
             return
         axis = 'X'
 
-        self.app.worker_task.emit({'fcn': self.on_offset, 'params': [axis, value]})
+        queue_transform(self, 'offset', [axis, value])
 
     def on_offy(self, val=None):
         value = float(self.ui.offy_entry.get_value()) if val is None else val
@@ -378,13 +498,13 @@ class TransformEditorTool(AppToolEditor):
             return
         axis = 'Y'
 
-        self.app.worker_task.emit({'fcn': self.on_offset, 'params': [axis, value]})
+        queue_transform(self, 'offset', [axis, value])
 
     def on_buffer_by_distance(self):
         value = self.ui.buffer_entry.get_value()
         join = 1 if self.ui.buffer_rounded_cb.get_value() else 2
 
-        self.app.worker_task.emit({'fcn': self.on_buffer_action, 'params': [value, join]})
+        queue_transform(self, 'buffer', [value, join])
 
     def on_buffer_by_factor(self):
         value = 1 + (self.ui.buffer_factor_entry.get_value() / 100.0)
@@ -393,189 +513,7 @@ class TransformEditorTool(AppToolEditor):
         # tell the buffer method to use the factor
         factor = True
 
-        self.app.worker_task.emit({'fcn': self.on_buffer_action, 'params': [value, join, factor]})
-
-    def on_rotate_action(self, val, point):
-        """
-        Rotate geometry
-
-        :param val:     Rotate with a known angle value, val
-        :param point:   Reference point for rotation: tuple
-        :return:
-        """
-
-        with self.app.proc_container.new('%s...' % _("Rotating")):
-            shape_list = self.draw_app.selected
-            px, py = point
-
-            if not shape_list:
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-                return
-
-            try:
-                for sel_sha in shape_list:
-                    sel_sha.rotate(-val, point=(px, py))
-                    self.draw_app.plot_all()
-
-                self.app.inform.emit('[success] %s' % _("Done."))
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_flip(self, axis, point):
-        """
-        Mirror (flip) geometry
-
-        :param axis:    Mirror on a known axis given by the axis parameter
-        :param point:   Mirror reference point
-        :return:
-        """
-
-        shape_list = self.draw_app.selected
-
-        if not shape_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new('%s...' % _("Flipping")):
-            try:
-                px, py = point
-
-                # execute mirroring
-                for sha in shape_list:
-                    if axis == 'X':
-                        sha.mirror('X', (px, py))
-                        self.app.inform.emit('[success] %s...' % _('Flip on Y axis done'))
-                    elif axis == 'Y':
-                        sha.mirror('Y', (px, py))
-                        self.app.inform.emit('[success] %s' % _('Flip on X axis done'))
-                    self.draw_app.plot_all()
-
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_skew(self, axis, xval, yval, point):
-        """
-        Skew geometry
-
-        :param point:
-        :param axis:    Axis on which to deform, skew
-        :param xval:    Skew value on X axis
-        :param yval:    Skew value on Y axis
-        :return:
-        """
-
-        shape_list = self.draw_app.selected
-
-        if not shape_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new('%s...' % _("Skewing")):
-            try:
-                px, py = point
-                for sha in shape_list:
-                    sha.skew(xval, yval, point=(px, py))
-
-                    self.draw_app.plot_all()
-
-                if axis == 'X':
-                    self.app.inform.emit('[success] %s...' % _('Skew on the X axis done'))
-                else:
-                    self.app.inform.emit('[success] %s...' % _('Skew on the Y axis done'))
-
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_scale(self, axis, xfactor, yfactor, point=None):
-        """
-        Scale geometry
-
-        :param axis:        Axis on which to scale
-        :param xfactor:     Factor for scaling on X axis
-        :param yfactor:     Factor for scaling on Y axis
-        :param point:       Point of origin for scaling
-
-        :return:
-        """
-
-        shape_list = self.draw_app.selected
-
-        if not shape_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new('%s...' % _("Scaling")):
-            try:
-                px, py = point
-
-                for sha in shape_list:
-                    sha.scale(xfactor, yfactor, point=(px, py))
-                    self.draw_app.plot_all()
-
-                if str(axis) == 'X':
-                    self.app.inform.emit('[success] %s...' % _('Scale on the X axis done'))
-                else:
-                    self.app.inform.emit('[success] %s...' % _('Scale on the Y axis done'))
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_offset(self, axis, num):
-        """
-        Offset geometry
-
-        :param axis:        Axis on which to apply offset
-        :param num:         The translation factor
-
-        :return:
-        """
-        shape_list = self.draw_app.selected
-
-        if not shape_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-
-        with self.app.proc_container.new('%s...' % _("Offsetting")):
-            try:
-                for sha in shape_list:
-                    if axis == 'X':
-                        sha.offset((num, 0))
-                    elif axis == 'Y':
-                        sha.offset((0, num))
-                    self.draw_app.plot_all()
-
-                if axis == 'X':
-                    self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
-                else:
-                    self.app.inform.emit('[success] %s %s' % (_('Offset on the Y axis.'), _("Done.")))
-
-            except Exception as e:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
-
-    def on_buffer_action(self, value, join, factor=None):
-        shape_list = self.draw_app.selected
-
-        if not shape_list:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
-        else:
-            with self.app.proc_container.new('%s...' % _("Buffering")):
-                try:
-                    for sel_obj in shape_list:
-                        sel_obj.buffer(value, join, factor)
-
-                        self.draw_app.plot_all()
-
-                    self.app.inform.emit('[success] %s...' % _('Buffer done'))
-
-                except Exception as e:
-                    self.app.log.error("TransformEditorTool.on_buffer_action() --> %s" % str(e))
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+        queue_transform(self, 'buffer', [value, join, factor])
 
     def on_rotate_key(self):
         val_box = FCInputDoubleSpinner(title=_("Rotate ..."),
@@ -641,7 +579,7 @@ class TransformEditorTool(AppToolEditor):
 
         val, ok = val_box.get_value()
         if ok:
-            self.on_offx(val=val)
+            self.on_offy(val=val)
             self.app.inform.emit('[success] %s...' % _("Offset on Y axis done"))
             return
         else:
@@ -685,7 +623,7 @@ class TransformEditorTool(AppToolEditor):
 
         val, ok = val_box.get_value()
         if ok:
-            self.on_skewx(val=val, ref=3)
+            self.on_skewy(val=val, ref=3)
             self.app.inform.emit('[success] %s...' % _("Skew on Y axis done"))
             return
         else:
@@ -696,26 +634,7 @@ class TransformEditorTool(AppToolEditor):
         """
         Returns coordinates of rectangular bounds of a selection of shapes
         """
-
-        def bounds_rec(lst):
-            minx = np.inf
-            miny = np.inf
-            maxx = -np.inf
-            maxy = -np.inf
-
-            try:
-                for shp in lst:
-                    minx_, miny_, maxx_, maxy_ = bounds_rec(shp)
-                    minx = min(minx, minx_)
-                    miny = min(miny, miny_)
-                    maxx = max(maxx, maxx_)
-                    maxy = max(maxy, maxy_)
-                return minx, miny, maxx, maxy
-            except TypeError:
-                # it's an object, return its bounds
-                return lst.bounds()
-
-        return bounds_rec(shapelist)
+        return selection_bounds(shapelist)
 
 
 class TransformationEditorUI:

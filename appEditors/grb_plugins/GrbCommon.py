@@ -13,6 +13,19 @@ import logging
 log = logging.getLogger('base')
 
 
+def numeric_aperture_codes(keys):
+    """
+    The aperture keys that are integer codes (or digit strings), as ints. Other keys are skipped.
+    """
+    codes = []
+    for key in keys:
+        if isinstance(key, int) and not isinstance(key, bool):
+            codes.append(key)
+        elif isinstance(key, str) and key.isascii() and key.isdigit():
+            codes.append(int(key))
+    return codes
+
+
 class DrawToolShape(object):
     """
     Encapsulates "shapes" under a common class.
