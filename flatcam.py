@@ -33,6 +33,9 @@ def debug_trace():
 def _shutdown_message_handler(message_type, context, message):
     if message.startswith('QThreadStorage: entry ') and ' destroyed before end of thread ' in message:
         return
+    # the views and their selection models are destroyed after their models on exit; the selection is a no-op then
+    if message.startswith('QItemSelectionModel: Selecting when no model has been set'):
+        return
 
     prefixes = {
         QtCore.QtMsgType.QtDebugMsg: 'DEBUG',

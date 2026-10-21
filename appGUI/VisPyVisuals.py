@@ -193,6 +193,14 @@ class ShapeGroup(object):
         if update:
             self._collection.redraw([])             # Skip waiting results
 
+    def transform(self, matrix, update=True):
+        """
+        Applies an affine transform (shapely 6-tuple) to the shapes of the group without a new triangulation.
+
+        :return: True if done. False if the caller has to plot the shapes again.
+        """
+        return self._collection.transform_keys(list(self._indexes), matrix, update)
+
     def redraw(self, update_colors=None):
         """
         Redraws shape collection
@@ -854,12 +862,12 @@ class ShapeCollectionVisual(CompoundVisual):
         
         self.update_lock.release()
 
-    def redraw(self, indexes=None, update_colors=None):
+    def _collect_results(self, indexes=None):
         """
-        Redraws collection
-        :param indexes:     list
-            Shape indexes to get from process pool
-        :param update_colors:
+        Stores the finished (or waits for the pending) process pool results in self.data.
+
+        :param indexes: shape keys to get the single-shape (add()) results for; all if empty
+        :return:        True if any data was replaced
         """
         # Only one thread can update data
         self.results_lock.acquire(True)
@@ -895,9 +903,95 @@ class ShapeCollectionVisual(CompoundVisual):
                           (str(e), str(indexes)))
 
         self.results_lock.release()
+        return results_collected
 
+    def transform_keys(self, keys, matrix, update=True):
+        """
+        Applies an affine transform to the already triangulated shapes, by mapping the stored vertex arrays.
+        There is no new simplification and triangulation.
+
+        :param keys:    shape keys to transform
+        :param matrix:  shapely 6-tuple (a, b, d, e, xoff, yoff): x' = a*x + b*y + xoff; y' = d*x + e*y + yoff
+        :param update:  True to redraw the collection
+        :return:        True if done. False if a shape has no buffers (yet) or is not a plain buffer shape; nothing
+                        is changed then and the caller has to plot again.
+        """
+        a, b, d, e, xoff, yoff = (float(v) for v in matrix)
+
+        # pool results of the keys (also of the other keys: same wait as in redraw())
+        if self._collect_results(keys):
+            self._dirty = True
+
+        data = self.data
+        keys = [k for k in keys if k in data]
+        for k in keys:
+            if 'geometry' in data[k] or k in self.results:
+                return False
+
+        # The position arrays can be shared with other keys (add_copy()): they are never changed in place.
+        # Every key gets new arrays; the buffers of all the keys are mapped by ONE matrix multiplication.
+        flip = (a * e - b * d) < 0          # mirror: the winding of the triangles is reversed (backface culling)
+
+        def _map(field):
+            arrays = [data[k][field] for k in keys]
+            lens = np.fromiter((len(x) for x in arrays), dtype=np.int64, count=len(arrays))
+            total = int(lens.sum())
+            if total == 0:
+                return None, lens
+            pts = np.concatenate(arrays).astype(np.float64, copy=False)
+            out = np.empty((total, 2), dtype=np.float32)
+            out[:, 0] = pts[:, 0] * a + pts[:, 1] * b + xoff
+            out[:, 1] = pts[:, 0] * d + pts[:, 1] * e + yoff
+            return out, lens
+
+        new_line, line_lens = _map('line_pts')
+        new_mesh, mesh_lens = _map('mesh_vertices')
+
+        new_tris = None
+        tri_lens = None
+        if flip:
+            tri_arrays = [data[k]['mesh_tris'] for k in keys]
+            tri_lens = np.fromiter((len(x) for x in tri_arrays), dtype=np.int64, count=len(tri_arrays))
+            if int(tri_lens.sum()):
+                all_tris = np.concatenate(tri_arrays).reshape(-1, 3)
+                new_tris = np.ascontiguousarray(all_tris[:, (0, 2, 1)]).reshape(-1)
+
+        def _split(arr, lens):
+            if arr is None:
+                return None
+            return np.split(arr, np.cumsum(lens)[:-1])
+
+        line_parts = _split(new_line, line_lens)
+        mesh_parts = _split(new_mesh, mesh_lens)
+        tri_parts = _split(new_tris, tri_lens) if flip else None
+
+        self.update_lock.acquire(True)
+        try:
+            for i, k in enumerate(keys):
+                dk = data[k]
+                if line_parts is not None and line_lens[i]:
+                    dk['line_pts'] = line_parts[i]
+                if mesh_parts is not None and mesh_lens[i]:
+                    dk['mesh_vertices'] = mesh_parts[i]
+                if tri_parts is not None and tri_lens[i]:
+                    dk['mesh_tris'] = tri_parts[i]
+            self._dirty = True
+        finally:
+            self.update_lock.release()
+
+        if update:
+            self.__update()
+        return True
+
+    def redraw(self, indexes=None, update_colors=None):
+        """
+        Redraws collection
+        :param indexes:     list
+            Shape indexes to get from process pool
+        :param update_colors:
+        """
         # Mark dirty if pool results were collected (data changed)
-        if results_collected:
+        if self._collect_results(indexes):
             self._dirty = True
 
         if update_colors is None or update_colors is False:

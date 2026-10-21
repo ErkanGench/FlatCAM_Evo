@@ -5,6 +5,7 @@ Everything is headless. The helpers come from ``test_unify_characterization``.
 """
 
 import pytest
+from PyQt6.QtCore import QThread
 from shapely.geometry import MultiPolygon, Point, Polygon, box
 
 from appObjects.GerberObject import GerberObject
@@ -329,30 +330,22 @@ class TestLifecycleProject:
 
 
 class TestLifecycleEditor:
-    """The editor object cannot be built headless (it needs the whole GUI), so new_edited_gerber() runs on
-    a stand-in ``self``: the real function, with the app object factory replaced by one that calls
-    ``initialize``."""
+    """The editor object cannot be built headless (it needs the whole GUI), so build_edited_gerber() runs on
+    a stand-in ``self``: the real worker step of the save, and its detached result is checked."""
 
     def run_editor_save(self, app, source):
         storage = {}
         for ap, tool in source.tools.items():
             storage[ap] = {k: v for k, v in tool.items() if k != 'geometry'}
             storage[ap]['geometry'] = [SimpleNamespace(geo=dict(rec)) for rec in tool['geometry']]
-        created = {}
-
-        def new_object(kind, name, initialize, *args, **kwargs):
-            new_obj = GerberObject(name, app)
-            initialize(new_obj, app)
-            created[name] = new_obj
-
-        app.app_obj.new_object.side_effect = new_object
         app.app_units = 'MM'
         app.f_handlers = appIO(app)
         app.custom_signal = MagicMock()
+        app.main_thread = QThread.currentThread()
         stand_in = SimpleNamespace(
             app=app, gerber_obj=source, gerber_obj_options=source.obj_options, results=[1])
-        AppGerberEditor.new_edited_gerber(stand_in, 'edited', storage)
-        return created['edited']
+        AppGerberEditor.build_edited_gerber(stand_in, 'edited', storage)
+        return app.custom_signal.emit.call_args.args[0]['obj']
 
     def test_editor_save_keeps_the_flag_and_exports_the_result(self, app, tmp_path):
         source = flagged_native(app)

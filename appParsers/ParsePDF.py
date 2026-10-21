@@ -663,7 +663,7 @@ class PdfParser:
             if subpath.get('closed') and points[0] != points[-1]:
                 points.append(points[0])
             try:
-                geometry = LineString(points).buffer(half_width, resolution=self.step_per_circles)
+                geometry = LineString(points).buffer(half_width, quad_segs=self.step_per_circles)
                 if geometry.is_empty:
                     continue
                 geometries.append(affine_transform(geometry, self._shapely_ctm(subpath['ctm'])))
@@ -1135,7 +1135,7 @@ class PdfParser:
                 try:
                     geo = LineString(geo).buffer(
                         (float(applied_size) / 2),
-                        resolution=self.step_per_circles
+                        quad_segs=self.step_per_circles
                     )
                     path_geo.append(geo)
                 except ValueError:
@@ -1149,7 +1149,7 @@ class PdfParser:
                 try:
                     geo = LineString(geo).buffer(
                         (float(applied_size) / 2),
-                        resolution=self.step_per_circles
+                        quad_segs=self.step_per_circles
                     )
                     path_geo.append(geo)
                 except ValueError:
@@ -1179,7 +1179,7 @@ class PdfParser:
                 try:
                     geo_el = Polygon(geo).buffer(
                         self.BUFFER_EPSILON,
-                        resolution=self.step_per_circles
+                        quad_segs=self.step_per_circles
                     )
                     path_geo.append(geo_el)
                 except ValueError:
@@ -1195,7 +1195,7 @@ class PdfParser:
                     try:
                         geo_el = Polygon(geo).buffer(
                             self.BUFFER_EPSILON,
-                            resolution=self.step_per_circles
+                            quad_segs=self.step_per_circles
                         )
                         path_geo.append(geo_el)
                     except ValueError:
@@ -1207,7 +1207,7 @@ class PdfParser:
                 try:
                     geo_el = Polygon(geo).buffer(
                         self.BUFFER_EPSILON,
-                        resolution=self.step_per_circles
+                        quad_segs=self.step_per_circles
                     )
                     path_geo.append(geo_el)
                 except ValueError:

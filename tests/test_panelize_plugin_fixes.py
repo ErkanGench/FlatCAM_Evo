@@ -1,5 +1,8 @@
 """Bug fixes of the Panelize plugin (Stage 5), headless (driver: test_panelize_plugin.run_plugin)."""
 
+from io import StringIO
+
+import ezdxf
 import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -109,8 +112,8 @@ def test_gerber_to_geometry_panel_has_tools_options_and_source(app):
         assert 'tooldia' in tool and isinstance(tool['data'], dict) and tool['data']
     first = pan.tools[min(pan.tools)]['tooldia']
     assert pan.obj_options['tools_mill_tooldia'] == first
-    # a Geometry keeps its source as a DXF document
-    assert pan.source_file and len(pan.source_file.modelspace()) > 0
+    # a Geometry keeps its source as DXF text
+    assert pan.source_file and len(ezdxf.read(StringIO(pan.source_file)).modelspace()) > 0
 
 
 def test_build_geometry_tool_table_matches_the_convert_any2geo_rules(app):

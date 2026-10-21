@@ -6,7 +6,8 @@
 # MIT Licence                                                 #
 # ########################################################## ##
 
-from camlib import Geometry, grace, translate_geometry, map_geometry
+from camlib import (list_total_bounds, Geometry, grace, affine_geometry_many, affine_translate_matrix, affine_rotate_matrix,
+                    affine_scale_matrix, affine_skew_matrix, affine_mirror_matrix)
 
 import shapely
 import shapely.affinity as affinity
@@ -1096,6 +1097,34 @@ class Excellon(Geometry):
         }
         return tool_id
 
+    @staticmethod
+    def _buffer_drills(drills, radius, steps):
+        """One vectorized shapely.buffer for all the drill points (same result as Point.buffer(radius, steps))."""
+        if not drills:
+            return []
+        arr = np.empty(len(drills), dtype=object)
+        arr[:] = drills
+        return list(shapely.buffer(arr, radius, quad_segs=steps))
+
+    @staticmethod
+    def _buffer_slots(slots, radius, steps):
+        """
+        One vectorized shapely.buffer for all the slots (same result as LineString([start, stop]).buffer(radius,
+        steps)). Slots with Z coordinates or that are not 2 plain Points go through the per-slot path.
+        """
+        if not slots:
+            return []
+        try:
+            ends = np.empty(2 * len(slots), dtype=object)
+            ends[0::2] = [slot[0] for slot in slots]
+            ends[1::2] = [slot[1] for slot in slots]
+            if shapely.has_z(ends).any() or shapely.is_empty(ends).any() or                     not (shapely.get_type_id(ends) == 0).all():
+                raise ValueError('not plain 2D points')
+            lines = shapely.linestrings(shapely.get_coordinates(ends).reshape(len(slots), 2, 2))
+            return list(shapely.buffer(lines, radius, quad_segs=steps))
+        except ValueError:
+            return [LineString([slot[0], slot[1]]).buffer(radius, steps) for slot in slots]
+
     def create_geometry(self):
         """
         Creates circles of the tool diameter at every point
@@ -1130,29 +1159,19 @@ class Excellon(Geometry):
                 if not self.tools[tool].get('data'):
                     self.tools[tool]['data'] = deepcopy(getattr(self, 'default_data', {}))
 
+                steps = int(self.excellon_circle_steps)
+                radius = tooldia / 2.0
+                tool_geo = self.tools[tool]['solid_geometry']
+
                 if 'drills' in self.tools[tool]:
-                    for drill in self.tools[tool]['drills']:
-                        poly = drill.buffer(tooldia / 2.0, int(self.excellon_circle_steps))
-
-                        # add poly in the tools geometry
-                        self.tools[tool]['solid_geometry'].append(poly)
-
-                        # add poly to the total solid geometry
-                        self.solid_geometry.append(poly)
+                    polys = Excellon._buffer_drills(self.tools[tool]['drills'], radius, steps)
+                    tool_geo.extend(polys)
+                    self.solid_geometry.extend(polys)
 
                 if 'slots' in self.tools[tool]:
-                    for slot in self.tools[tool]['slots']:
-                        start = slot[0]
-                        stop = slot[1]
-
-                        lines_string = LineString([start, stop])
-                        poly = lines_string.buffer(tooldia / 2.0, int(self.excellon_circle_steps))
-
-                        # add poly in the tools geometry
-                        self.tools[tool]['solid_geometry'].append(poly)
-
-                        # add poly to the total solid geometry
-                        self.solid_geometry.append(poly)
+                    polys = Excellon._buffer_slots(self.tools[tool]['slots'], radius, steps)
+                    tool_geo.extend(polys)
+                    self.solid_geometry.extend(polys)
 
         except Exception as e:
             err_msg = "appParsers.ParseExcellon.Excellon.create_geometry() -> " \
@@ -1199,6 +1218,12 @@ class Excellon(Geometry):
             else:
                 # it's a Shapely object, return it's bounds
                 return obj.bounds
+
+        _bounds_rec_slow = bounds_rec
+
+        def bounds_rec(obj):
+            res = list_total_bounds(obj)
+            return _bounds_rec_slow(obj) if res is None else res
 
         minx_list = []
         miny_list = []
@@ -1255,36 +1280,47 @@ class Excellon(Geometry):
         self.create_geometry()
         return factor
 
-    def _transform_tools(self, fn, any_iterable=False):
+    def _transform_tools(self, matrix, transform_solid=False):
         """
-        Apply fn (1 shapely.affinity call on 1 geometry) to the drills, the slot ends and the solid_geometry of every
-        tool and show the progress per tool. The caller recreates the geometry (create_geometry) and applies the
-        tooldia rules.
+        Apply the affine matrix (a, b, d, e, xoff, yoff) to the drills and to the slot ends of every tool with ONE
+        vectorized call (camlib.affine_geometry_many). With transform_solid the per tool solid_geometry is moved in
+        the same call (only for the transforms that do not recreate the geometry afterwards).
 
-        :param fn:           callable(geometry) -> transformed geometry
-        :param any_iterable: passed to map_geometry for the solid_geometry (mirror / skew walk any iterable)
+        :param matrix:          the affine matrix, see camlib.affine_geometry_many
+        :param transform_solid: also transform self.tools[tool]['solid_geometry']
         """
-        # variables to display the percentage of work done
-        self.geo_len = len(self.tools)
-        self.old_disp_number = 0
-        self.el_count = 0
+        tools = list(self.tools.values())
+        items = []
+        for tool in tools:
+            items.append(tool['drills'] if 'drills' in tool else [])
+            starts, stops = [], []
+            for slot in (tool['slots'] if 'slots' in tool else []):
+                starts.append(slot[0])
+                stops.append(slot[1])
+            items.append(starts)
+            items.append(stops)
+            if transform_solid:
+                items.append(tool.get('solid_geometry', []))
 
-        for tool in self.tools:
-            if 'drills' in self.tools[tool]:
-                self.tools[tool]['drills'] = [fn(drill) for drill in self.tools[tool]['drills']]
+        if transform_solid:
+            items.append(self.solid_geometry)
 
-            if 'slots' in self.tools[tool]:
-                self.tools[tool]['slots'] = [(fn(slot[0]), fn(slot[1])) for slot in self.tools[tool]['slots']]
+        out = affine_geometry_many(items, matrix)
+        if transform_solid:
+            self.solid_geometry = out[-1]
 
-            self.tools[tool]['solid_geometry'] = map_geometry(self.tools[tool]['solid_geometry'], fn,
-                                                              any_iterable=any_iterable)
+        step = 4 if transform_solid else 3
+        for idx, tool in enumerate(tools):
+            base = idx * step
+            if 'drills' in tool:
+                tool['drills'] = out[base]
+            if 'slots' in tool:
+                tool['slots'] = list(zip(out[base + 1], out[base + 2]))
+            if transform_solid:
+                tool['solid_geometry'] = out[base + 3]
 
-            # update status display
-            self.el_count += 1
-            disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-            if self.old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                self.old_disp_number = disp_number
+        if tools:
+            self.app.proc_container.update_view_text(' %d%%' % 100)
 
     def scale(self, xfactor, yfactor=None, point=None):
         """
@@ -1315,7 +1351,7 @@ class Excellon(Geometry):
         if xfactor == 0 and yfactor == 0:
             return
 
-        self._transform_tools(lambda geo: affinity.scale(geo, xfactor, yfactor, origin=(px, py)))
+        Excellon._transform_tools(self, affine_scale_matrix(xfactor, yfactor, (px, py)))
 
         self.create_geometry()
         self.app.proc_container.new_text = ''
@@ -1335,55 +1371,8 @@ class Excellon(Geometry):
         if dx == 0 and dy == 0:
             return
 
-        # Progress tracking
-        tool_count = len(self.tools)
-        old_disp_number = 0
-
-        for idx, tool in enumerate(self.tools.values()):
-            # Offset Drills - vectorized batch operation
-            if 'drills' in tool and tool['drills']:
-                drills = tool['drills']
-                arr = np.array(drills, dtype=object)
-                coords = shapely.get_coordinates(arr)
-                coords[:, 0] += dx
-                coords[:, 1] += dy
-                tool['drills'] = list(shapely.set_coordinates(arr, coords))
-
-            # Offset Slots - vectorized batch operation
-            if 'slots' in tool and tool['slots']:
-                slots = tool['slots']
-                # Extract all start and stop points
-                start_points = [slot[0] for slot in slots]
-                stop_points = [slot[1] for slot in slots]
-                
-                # Batch translate start points
-                start_arr = np.array(start_points, dtype=object)
-                start_coords = shapely.get_coordinates(start_arr)
-                start_coords[:, 0] += dx
-                start_coords[:, 1] += dy
-                translated_starts = shapely.set_coordinates(start_arr, start_coords)
-                
-                # Batch translate stop points
-                stop_arr = np.array(stop_points, dtype=object)
-                stop_coords = shapely.get_coordinates(stop_arr)
-                stop_coords[:, 0] += dx
-                stop_coords[:, 1] += dy
-                translated_stops = shapely.set_coordinates(stop_arr, stop_coords)
-                
-                # Reconstruct slots
-                tool['slots'] = list(zip(translated_starts, translated_stops))
-
-            # Offset solid_geometry using vectorized translate
-            tool['solid_geometry'] = translate_geometry(tool['solid_geometry'], dx, dy)
-
-            # update status display per tool
-            disp_number = int(np.interp(idx + 1, [0, tool_count], [0, 100]))
-            if old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                old_disp_number = disp_number
-
-        # Translation preserves hole/slot outlines; don't buffer every drill again.
-        self.solid_geometry = [geo for tool in self.tools.values() for geo in tool['solid_geometry']]
+        # Translation preserves hole/slot outlines: move the solid_geometry too, don't buffer every drill again.
+        Excellon._transform_tools(self, affine_translate_matrix(dx, dy), transform_solid=True)
         self.app.proc_container.new_text = ''
 
     def mirror(self, axis, point):
@@ -1398,9 +1387,8 @@ class Excellon(Geometry):
         self.app.log.debug("appParsers.ParseExcellon.Excellon.mirror()")
 
         px, py = point
-        xscale, yscale = {"X": (1.0, -1.0), "Y": (-1.0, 1.0)}[axis]
 
-        self._transform_tools(lambda geo: affinity.scale(geo, xscale, yscale, origin=(px, py)), any_iterable=True)
+        Excellon._transform_tools(self, affine_mirror_matrix(axis, (px, py)))
 
         # Recreate geometry
         self.create_geometry()
@@ -1437,7 +1425,7 @@ class Excellon(Geometry):
         else:
             px, py = point
 
-        self._transform_tools(lambda geo: affinity.skew(geo, angle_x, angle_y, origin=(px, py)), any_iterable=True)
+        Excellon._transform_tools(self, affine_skew_matrix(angle_x, angle_y, (px, py)))
 
         self.create_geometry()
         self.app.proc_container.new_text = ''
@@ -1461,7 +1449,7 @@ class Excellon(Geometry):
         else:
             orig = point
 
-        self._transform_tools(lambda geo: affinity.rotate(geo, angle, origin=orig))
+        Excellon._transform_tools(self, affine_rotate_matrix(angle, orig))
 
         self.create_geometry()
         self.app.proc_container.new_text = ''
@@ -1480,32 +1468,9 @@ class Excellon(Geometry):
         if distance == 0:
             return
 
-        def buffer_geom(obj):
-            new_obj = []
-            try:
-                work_geo = obj.geoms if isinstance(obj, (MultiPolygon, MultiLineString)) else obj
-                for g in work_geo:
-                    new_obj.append(buffer_geom(g))
-            except TypeError:
-                try:
-                    if not factor:
-                        new_obj = obj.buffer(distance, resolution=self.excellon_circle_steps)
-                        if isinstance(obj, (LinearRing, LineString)) and only_exterior is True:
-                            new_obj = new_obj.exterior
-                    else:
-                        new_obj = affinity.scale(obj, xfact=distance, yfact=distance, origin='center')
-                except AttributeError:
-                    new_obj = obj
-            return new_obj
-
-        # buffer solid_geometry
-        for tool, tool_dict in list(self.tools.items()):
-            res = buffer_geom(tool_dict['solid_geometry'])
-            try:
-                __ = iter(res)
-                self.tools[tool]['solid_geometry'] = res
-            except TypeError:
-                self.tools[tool]['solid_geometry'] = [res]
+        # create_geometry() below rebuilds every drill / slot polygon from the tool diameter, so only the diameters
+        # change here (buffering the old polygons first would be thrown away)
+        for tool in self.tools:
             if not factor:
                 self.tools[tool]['tooldia'] += (distance * 2)
             else:

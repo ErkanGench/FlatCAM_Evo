@@ -857,6 +857,12 @@ class Geometry(object):
                 # it's a Shapely object, return its bounds
                 return obj.bounds
 
+        _bounds_rec_slow = bounds_rec
+
+        def bounds_rec(obj):
+            res = list_total_bounds(obj)
+            return _bounds_rec_slow(obj) if res is None else res
+
         if self.multigeo is True:
             minx_list = []
             miny_list = []
@@ -2640,6 +2646,22 @@ class Geometry(object):
         svg_elem = geom.svg(scale_factor=scale_stroke_factor)
         return svg_elem
 
+    def _affine_solid_geometry(self, matrix, any_iterable=False):
+        """
+        Applies one affine matrix to the solid geometry: for a multigeo object to the 'solid_geometry' of all the tools
+        in ONE vectorized call, otherwise to self.solid_geometry. The container shape is kept.
+        """
+        if self.multigeo is True:
+            keys = list(self.tools)
+            results = affine_geometry_many([self.solid_geometry] +
+                                           [self.tools[k].get('solid_geometry', []) for k in keys],
+                                           matrix, any_iterable)
+            self.solid_geometry = results[0]
+            for k, res in zip(keys, results[1:]):
+                self.tools[k]['solid_geometry'] = res
+        else:
+            self.solid_geometry = affine_geometry(self.solid_geometry, matrix, any_iterable)
+
     def mirror(self, axis, point):
         """
         Mirrors the object around a specified axis passign through
@@ -2654,50 +2676,10 @@ class Geometry(object):
         self.app.log.debug("camlib.Geometry.mirror()")
 
         px, py = point
-        xscale, yscale = {"X": (1.0, -1.0), "Y": (-1.0, 1.0)}[axis]
-
-        def mirror_geom(obj):
-            if type(obj) is list:
-                new_obj = []
-                for g in obj:
-                    new_obj.append(mirror_geom(g))
-                return new_obj
-            else:
-                try:
-                    self.el_count += 1
-                    disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-                    if self.old_disp_number < disp_number <= 100:
-                        self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                        self.old_disp_number = disp_number
-
-                    return affinity.scale(obj, xscale, yscale, origin=(px, py))
-                except AttributeError:
-                    return obj
+        matrix = affine_mirror_matrix(axis, (px, py))
 
         try:
-            if self.multigeo is True:
-                for tool in self.tools:
-                    # variables to display the percentage of work done
-                    self.geo_len = 0
-                    try:
-                        self.geo_len = len(self.tools[tool]['solid_geometry'])
-                    except TypeError:
-                        self.geo_len = 1
-                    self.old_disp_number = 0
-                    self.el_count = 0
-
-                    self.tools[tool]['solid_geometry'] = mirror_geom(self.tools[tool]['solid_geometry'])
-            else:
-                # variables to display the percentage of work done
-                self.geo_len = 0
-                try:
-                    self.geo_len = len(self.solid_geometry)
-                except TypeError:
-                    self.geo_len = 1
-                self.old_disp_number = 0
-                self.el_count = 0
-
-                self.solid_geometry = mirror_geom(self.solid_geometry)
+            Geometry._affine_solid_geometry(self, matrix)
             self.app.inform.emit('[success] %s...' % _('Object was mirrored'))
         except AttributeError:
             self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No object is selected.")))
@@ -2722,55 +2704,10 @@ class Geometry(object):
         self.app.log.debug("camlib.Geometry.rotate()")
 
         px, py = point
-
-        def rotate_geom(obj):
-            try:
-                new_obj = []
-                for g in obj:
-                    new_obj.append(rotate_geom(g))
-                return new_obj
-            except TypeError:
-                try:
-                    self.el_count += 1
-                    disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-                    if self.old_disp_number < disp_number <= 100:
-                        self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                        self.old_disp_number = disp_number
-
-                    return affinity.rotate(obj, angle, origin=(px, py))
-                except AttributeError:
-                    return obj
+        matrix = affine_rotate_matrix(angle, (px, py))
 
         try:
-            if self.multigeo is True:
-                for tool in self.tools:
-                    # variables to display the percentage of work done
-                    self.geo_len = 0
-                    try:
-                        work_geo = self.tools[tool]['solid_geometry']
-                        self.geo_len = len(
-                            work_geo.geoms if isinstance(work_geo, (MultiPolygon, MultiLineString)) else work_geo
-                        )
-                    except TypeError:
-                        self.geo_len = 1
-                    self.old_disp_number = 0
-                    self.el_count = 0
-
-                    self.tools[tool]['solid_geometry'] = rotate_geom(self.tools[tool]['solid_geometry'])
-            else:
-                # variables to display the percentage of work done
-                self.geo_len = 0
-                try:
-                    work_geo = self.solid_geometry
-                    self.geo_len = len(
-                        work_geo.geoms if isinstance(work_geo, (MultiPolygon, MultiLineString)) else work_geo
-                    )
-                except TypeError:
-                    self.geo_len = 1
-                self.old_disp_number = 0
-                self.el_count = 0
-
-                self.solid_geometry = rotate_geom(self.solid_geometry)
+            Geometry._affine_solid_geometry(self, matrix, any_iterable=True)
             self.app.inform.emit('[success] %s...' % _('Object was rotated'))
         except AttributeError:
             self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No object is selected.")))
@@ -2796,61 +2733,15 @@ class Geometry(object):
         self.app.log.debug("camlib.Geometry.skew()")
 
         px, py = point
-
-        def skew_geom(obj):
-            try:
-                new_obj = []
-                for g in obj:
-                    new_obj.append(skew_geom(g))
-                return new_obj
-            except TypeError:
-                try:
-                    self.el_count += 1
-                    disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-                    if self.old_disp_number < disp_number <= 100:
-                        self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                        self.old_disp_number = disp_number
-
-                    return affinity.skew(obj, angle_x, angle_y, origin=(px, py))
-                except AttributeError:
-                    return obj
+        matrix = affine_skew_matrix(angle_x, angle_y, (px, py))
 
         try:
-            if self.multigeo is True:
-                for tool in self.tools:
-                    # variables to display the percentage of work done
-                    self.geo_len = 0
-                    try:
-                        self.geo_len = len(self.tools[tool]['solid_geometry'])
-                    except TypeError:
-                        self.geo_len = 1
-                    self.old_disp_number = 0
-                    self.el_count = 0
-
-                    self.tools[tool]['solid_geometry'] = skew_geom(self.tools[tool]['solid_geometry'])
-            else:
-                # variables to display the percentage of work done
-                self.geo_len = 0
-                try:
-                    self.geo_len = len(self.solid_geometry)
-                except TypeError:
-                    self.geo_len = 1
-                self.old_disp_number = 0
-                self.el_count = 0
-
-                self.solid_geometry = skew_geom(self.solid_geometry)
+            Geometry._affine_solid_geometry(self, matrix, any_iterable=True)
             self.app.inform.emit('[success] %s...' % _('Object was skewed'))
         except AttributeError:
             self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No object is selected.")))
 
         self.app.proc_container.new_text = ''
-
-        # if type(self.solid_geometry) == list:
-        #     self.solid_geometry = [affinity.skew(g, angle_x, angle_y, origin=(px, py))
-        #                            for g in self.solid_geometry]
-        # else:
-        #     self.solid_geometry = affinity.skew(self.solid_geometry, angle_x, angle_y,
-        #                                         origin=(px, py))
 
     def buffer(
             self,
@@ -2885,7 +2776,7 @@ class Geometry(object):
                 try:
                     if factor is None or factor is False or factor == 0:
                         if distance >= 0:
-                            new_obj = obj.buffer(distance, resolution=self.geo_steps_per_circle, join_style=join)
+                            new_obj = obj.buffer(distance, quad_segs=self.geo_steps_per_circle, join_style=join)
                             if isinstance(obj, (LinearRing, LineString)) and only_exterior is True:
                                 new_obj = new_obj.exterior
                         else:
@@ -2893,11 +2784,11 @@ class Geometry(object):
                                 if not obj.is_closed:
                                     obj = Polygon(obj).exterior
 
-                            new_obj = obj.buffer(abs(distance*2), resolution=self.geo_steps_per_circle, join_style=join)
+                            new_obj = obj.buffer(abs(distance*2), quad_segs=self.geo_steps_per_circle, join_style=join)
                             new_obj_ints = new_obj.interiors
                             new_obj_union = unary_union(new_obj_ints)
                             new_obj = new_obj_union.buffer(
-                                abs(distance), resolution=self.geo_steps_per_circle, join_style=join).exterior
+                                abs(distance), quad_segs=self.geo_steps_per_circle, join_style=join).exterior
 
                     else:
                         new_obj = affinity.scale(obj, xfact=distance, yfact=distance, origin='center')
@@ -4510,7 +4401,7 @@ class CNCjob(Geometry):
                     if 'drills' in exobj.tools[to_ol]:
                         drill_no = len(exobj.tools[to_ol]['drills'])
                         for drill in exobj.tools[to_ol]['drills']:
-                            sol_geo.append(drill.buffer((it[1] / 2.0), resolution=self.geo_steps_per_circle))
+                            sol_geo.append(drill.buffer((it[1] / 2.0), quad_segs=self.geo_steps_per_circle))
 
                     slot_no = 0
                     if 'slots' in exobj.tools[to_ol]:
@@ -4519,7 +4410,7 @@ class CNCjob(Geometry):
                             start = (slot[0].x, slot[0].y)
                             stop = (slot[1].x, slot[1].y)
                             sol_geo.append(
-                                LineString([start, stop]).buffer((it[1] / 2.0), resolution=self.geo_steps_per_circle)
+                                LineString([start, stop]).buffer((it[1] / 2.0), quad_segs=self.geo_steps_per_circle)
                             )
 
                     z_off = 0
@@ -7763,6 +7654,16 @@ class CNCjob(Geometry):
         return bounds_coords
 
     # TODO This function should be replaced at some point with a "real" function. Until then it's an ugly hack ...
+    @staticmethod
+    def _affine_gcode_parsed(gcode_parsed, matrix):
+        """
+        Applies one affine matrix to the 'geom' of every dict of a gcode_parsed list in ONE vectorized call.
+        """
+        dicts = list(gcode_parsed)
+        results = affine_geometry_many([d['geom'] for d in dicts], matrix)
+        for d, geom in zip(dicts, results):
+            d['geom'] = geom
+
     def scale(self, xfactor, yfactor=None, point=None):
         """
         Scales all the geometry on the XY plane in the object by the
@@ -7894,27 +7795,8 @@ class CNCjob(Geometry):
             # offset Gcode
             self.gcode = scale_g(self.gcode)
 
-            # variables to display the percentage of work done
-            self.geo_len = 0
-            try:
-                self.geo_len = len(self.gcode_parsed)
-            except TypeError:
-                self.geo_len = 1
-            self.old_disp_number = 0
-            self.el_count = 0
-
             # scale geometry
-            for g in self.gcode_parsed:
-                try:
-                    g['geom'] = affinity.scale(g['geom'], xfactor, yfactor, origin=(px, py))
-                except AttributeError:
-                    return g['geom']
-
-                self.el_count += 1
-                disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-                if self.old_disp_number < disp_number <= 100:
-                    self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                    self.old_disp_number = disp_number
+            CNCjob._affine_gcode_parsed(self.gcode_parsed, affine_scale_matrix(xfactor, yfactor, (px, py)))
 
             self.create_geometry()
         else:
@@ -7923,28 +7805,8 @@ class CNCjob(Geometry):
                 # scale Gcode
                 v['gcode'] = scale_g(v['gcode'])
 
-                # variables to display the percentage of work done
-                self.geo_len = 0
-                try:
-                    self.geo_len = len(v['gcode_parsed'])
-                except TypeError:
-                    self.geo_len = 1
-                self.old_disp_number = 0
-                self.el_count = 0
-
                 # scale gcode_parsed
-                g_code_geos_dicts = v['gcode_parsed']
-                for g in g_code_geos_dicts:
-                    try:
-                        g['geom'] = affinity.scale(g['geom'], xfactor, yfactor, origin=(px, py))        # noqa
-                    except AttributeError:
-                        return g['geom']    # noqa
-
-                    self.el_count += 1
-                    disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-                    if self.old_disp_number < disp_number <= 100:
-                        self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                        self.old_disp_number = disp_number
+                CNCjob._affine_gcode_parsed(v['gcode_parsed'], affine_scale_matrix(xfactor, yfactor, (px, py)))
 
                 g_code_geos: list[BaseGeometry | MultiPolygon] = [geo['geom'] for geo in v['gcode_parsed']] # noqa
                 v['solid_geometry'] = unary_union(g_code_geos)
@@ -8069,28 +7931,8 @@ class CNCjob(Geometry):
         self.app.log.debug("camlib.CNCJob.mirror()")
 
         px, py = point
-        xscale, yscale = {"X": (1.0, -1.0), "Y": (-1.0, 1.0)}[axis]
 
-        # variables to display the percentage of work done
-        self.geo_len = 0
-        try:
-            self.geo_len = len(self.gcode_parsed)
-        except TypeError:
-            self.geo_len = 1
-        self.old_disp_number = 0
-        self.el_count = 0
-
-        for g in self.gcode_parsed:
-            try:
-                g['geom'] = affinity.scale(g['geom'], xscale, yscale, origin=(px, py))
-            except AttributeError:
-                return g['geom']
-
-            self.el_count += 1
-            disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-            if self.old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                self.old_disp_number = disp_number
+        CNCjob._affine_gcode_parsed(self.gcode_parsed, affine_mirror_matrix(axis, (px, py)))
 
         self.create_geometry()
         self.app.proc_container.new_text = ''
@@ -8114,26 +7956,7 @@ class CNCjob(Geometry):
 
         px, py = point
 
-        # variables to display the percentage of work done
-        self.geo_len = 0
-        try:
-            self.geo_len = len(self.gcode_parsed)
-        except TypeError:
-            self.geo_len = 1
-        self.old_disp_number = 0
-        self.el_count = 0
-
-        for g in self.gcode_parsed:
-            try:
-                g['geom'] = affinity.skew(g['geom'], angle_x, angle_y, origin=(px, py))
-            except AttributeError:
-                return g['geom']
-
-            self.el_count += 1
-            disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-            if self.old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                self.old_disp_number = disp_number
+        CNCjob._affine_gcode_parsed(self.gcode_parsed, affine_skew_matrix(angle_x, angle_y, (px, py)))
 
         self.create_geometry()
         self.app.proc_container.new_text = ''
@@ -8150,26 +7973,52 @@ class CNCjob(Geometry):
 
         px, py = point
 
-        # variables to display the percentage of work done
-        self.geo_len = 0
-        try:
-            self.geo_len = len(self.gcode_parsed)
-        except TypeError:
-            self.geo_len = 1
-        self.old_disp_number = 0
-        self.el_count = 0
+        CNCjob._affine_gcode_parsed(self.gcode_parsed, affine_rotate_matrix(angle, (px, py)))
 
-        for g in self.gcode_parsed:
-            try:
-                g['geom'] = affinity.rotate(g['geom'], angle, origin=(px, py))
-            except AttributeError:
-                return g['geom']
 
-            self.el_count += 1
-            disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, 100]))
-            if self.old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                self.old_disp_number = disp_number
+def list_total_bounds(obj, nested=True):
+    """
+    Vectorized bounds of a plain ``list`` of geometries (lists nested, dicts inside lists contribute their values).
+    Returns ``(minx, miny, maxx, maxy)`` as Python floats, ``(inf, inf, -inf, -inf)`` when there is no non empty leaf
+    (the result of the recursive walkers), or ``None`` when the structure holds anything unexpected (non list top
+    level, None, tuples, ...) so that the caller falls back to its own walker and keeps its exact behaviour.
+
+    :param nested:  False: a list inside a list is unexpected (Gerber walker raises on it), lists as dict values are ok
+    """
+    if type(obj) is not list:
+        return None
+    leaves = []
+    stack = [(obj, True)]
+    while stack:
+        cur, is_top = stack.pop()
+        for k in cur:
+            tk = type(k)
+            if tk is list:
+                if not nested:
+                    return None
+                stack.append((k, False))
+            elif tk is dict:
+                for v in k.values():
+                    if type(v) is list:
+                        stack.append((v, False))
+                    elif isinstance(v, BaseGeometry):
+                        leaves.append(v)
+                    else:
+                        return None
+            elif isinstance(k, BaseGeometry):
+                leaves.append(k)
+            else:
+                return None
+    if not leaves:
+        return np.inf, np.inf, -np.inf, -np.inf
+    arr = np.empty(len(leaves), dtype=object)
+    arr[:] = leaves
+    b = shapely.bounds(arr)
+    if np.isnan(b).all():
+        return np.inf, np.inf, -np.inf, -np.inf
+    with np.errstate(all='ignore'):
+        return (float(np.nanmin(b[:, 0])), float(np.nanmin(b[:, 1])),
+                float(np.nanmax(b[:, 2])), float(np.nanmax(b[:, 3])))
 
 
 def map_geometry(obj, fn, on_leaf=None, any_iterable=False):
@@ -8202,6 +8051,145 @@ def map_geometry(obj, fn, on_leaf=None, any_iterable=False):
         return fn(obj)
     except AttributeError:
         return obj
+
+
+AFFINE_IDENTITY = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def affine_translate_matrix(dx, dy):
+    """Matrix (a, b, d, e, xoff, yoff) of shapely.affinity.translate."""
+    return 1.0, 0.0, 0.0, 1.0, float(dx), float(dy)
+
+
+def affine_rotate_matrix(angle_deg, origin=(0.0, 0.0)):
+    """Matrix of shapely.affinity.rotate(geom, angle_deg, origin=(x, y)), angle in degrees, counter-clockwise."""
+    x0, y0 = origin
+    angle = math.radians(angle_deg)
+    cosp = math.cos(angle)
+    sinp = math.sin(angle)
+    # same rounding of the exact cases as shapely.affinity.rotate
+    if abs(cosp) < 2.5e-16:
+        cosp = 0.0
+    if abs(sinp) < 2.5e-16:
+        sinp = 0.0
+    return (cosp, -sinp, sinp, cosp,
+            x0 - x0 * cosp + y0 * sinp,
+            y0 - x0 * sinp - y0 * cosp)
+
+
+def affine_scale_matrix(xfact=1.0, yfact=1.0, origin=(0.0, 0.0)):
+    """Matrix of shapely.affinity.scale(geom, xfact, yfact, origin=(x, y))."""
+    x0, y0 = origin
+    return float(xfact), 0.0, 0.0, float(yfact), x0 - x0 * xfact, y0 - y0 * yfact
+
+
+def affine_skew_matrix(ax_deg=0.0, ay_deg=0.0, origin=(0.0, 0.0)):
+    """Matrix of shapely.affinity.skew(geom, ax_deg, ay_deg, origin=(x, y)), angles in degrees."""
+    x0, y0 = origin
+    tx = math.tan(math.radians(ax_deg))
+    ty = math.tan(math.radians(ay_deg))
+    return 1.0, tx, ty, 1.0, -y0 * tx, -x0 * ty
+
+
+def affine_mirror_matrix(axis, origin=(0.0, 0.0)):
+    """
+    Matrix of the mirror of Gerber.mirror / Geometry.mirror: scale with ``{"X": (1, -1), "Y": (-1, 1)}[axis]`` around
+    ``origin``. Axis "X" flips Y (mirror about a horizontal line), axis "Y" flips X.
+    """
+    xscale, yscale = {"X": (1.0, -1.0), "Y": (-1.0, 1.0)}[axis]
+    return affine_scale_matrix(xscale, yscale, origin)
+
+
+def _affine_collect(obj, leaves, any_iterable):
+    if isinstance(obj, BaseGeometry):
+        leaves.append(obj)
+    elif type(obj) is list:
+        for g in obj:
+            _affine_collect(g, leaves, any_iterable)
+    elif any_iterable and not isinstance(obj, (str, bytes)):
+        try:
+            items = iter(obj)
+        except TypeError:
+            return
+        for g in items:
+            _affine_collect(g, leaves, any_iterable)
+
+
+def _affine_rebuild(obj, results, any_iterable):
+    if isinstance(obj, BaseGeometry):
+        return next(results)
+    if type(obj) is list:
+        return [_affine_rebuild(g, results, any_iterable) for g in obj]
+    if any_iterable and not isinstance(obj, (str, bytes)):
+        try:
+            items = iter(obj)
+        except TypeError:
+            return obj
+        return [_affine_rebuild(g, results, any_iterable) for g in items]
+    return obj
+
+
+def affine_geometry_many(objs, matrix, any_iterable=False):
+    """
+    Applies one affine matrix to several geometry structures with ONE shapely.transform call per dimensionality
+    (2D / 3D). Same container rules as map_geometry: a list stays a list (nested lists are walked), a single geometry
+    (including Multi* and GeometryCollection) is transformed whole, None and non-geometry leaves are returned unchanged.
+    Z coordinates are kept.
+
+    :param objs:         list/tuple of structures (each a geometry, a list, nested lists, None, ...)
+    :param matrix:       (a, b, d, e, xoff, yoff) as in shapely.affinity.affine_transform:
+                         x' = a*x + b*y + xoff, y' = d*x + e*y + yoff
+    :param any_iterable: True: any iterable (tuple, ...) is walked and returned as a list, not only a list
+    :return:             list of the transformed structures, in the same order
+    """
+    objs = list(objs)
+    matrix = tuple(float(m) for m in matrix)
+    if matrix == AFFINE_IDENTITY:
+        return objs
+    a, b, d, e, xoff, yoff = matrix
+
+    leaves = []
+    for o in objs:
+        _affine_collect(o, leaves, any_iterable)
+    if not leaves:
+        return objs
+
+    if b == 0.0 and d == 0.0:
+        def fn(c):
+            c[:, 0] *= a
+            c[:, 0] += xoff
+            c[:, 1] *= e
+            c[:, 1] += yoff
+            return c
+    else:
+        def fn(c):
+            x = c[:, 0].copy()
+            y = c[:, 1]
+            c[:, 0] = a * x + b * y + xoff
+            c[:, 1] = d * x + e * y + yoff
+            return c
+
+    arr = np.empty(len(leaves), dtype=object)
+    arr[:] = leaves
+    has_z = shapely.has_z(arr)
+    if has_z.any():
+        out = np.empty(len(leaves), dtype=object)
+        if (~has_z).any():
+            out[~has_z] = shapely.transform(arr[~has_z], fn, include_z=False)
+        out[has_z] = shapely.transform(arr[has_z], fn, include_z=True)
+    else:
+        out = shapely.transform(arr, fn, include_z=False)
+
+    results = iter(out)
+    return [_affine_rebuild(o, results, any_iterable) for o in objs]
+
+
+def affine_geometry(obj, matrix, any_iterable=False):
+    """
+    Vectorized replacement of ``map_geometry(obj, lambda g: affinity.<op>(g, ...))``: one shapely.transform call for
+    the whole nested structure. See affine_geometry_many for the rules and the matrix format.
+    """
+    return affine_geometry_many([obj], matrix, any_iterable)[0]
 
 
 def translate_geometry(obj, dx, dy):

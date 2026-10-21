@@ -166,7 +166,7 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
         shapes = [SimpleNamespace(geo=target), SimpleNamespace(geo=cutter)]
         app = make_app()
         app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
-        editor = SimpleNamespace(app=app, get_selected=lambda: shapes,
+        editor = SimpleNamespace(app=app, selected=shapes, get_selected=lambda: shapes,
                                  delete_shape=Mock(), plot_changes=Mock(),
                                  build_ui_sig=Mock(), flat_geo=[])
         editor.flatten = lambda *a, **k: AppGeoEditor.flatten(editor, *a, **k)

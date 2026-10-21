@@ -1,8 +1,9 @@
 
 from typing import Literal, Sequence, cast
 from PyQt6 import QtWidgets
-from camlib import Geometry, arc, arc_angle, ApertureMacro, grace, flatten_shapely_geometry, translate_geometry, \
-    map_geometry
+from camlib import list_total_bounds, Geometry, arc, arc_angle, ApertureMacro, grace, flatten_shapely_geometry, translate_geometry, \
+    map_geometry, affine_geometry_many, affine_translate_matrix, affine_rotate_matrix, affine_scale_matrix, \
+    affine_skew_matrix, affine_mirror_matrix
 
 from appParsers.clipper_fuse import fuse_parts
 from appParsers.DXF import dxf_to_shapes
@@ -2193,6 +2194,12 @@ class Gerber(Geometry):
                 # it's a Shapely object, return its bounds
                 return obj.bounds
 
+        _bounds_rec_slow = bounds_rec
+
+        def bounds_rec(obj):
+            res = list_total_bounds(obj, nested=False)
+            return _bounds_rec_slow(obj) if res is None else res
+
         bounds_coords = bounds_rec(self.solid_geometry)
         return bounds_coords
 
@@ -2274,7 +2281,7 @@ class Gerber(Geometry):
             if geos_length == 1:
                 geo_qrcode = [Polygon(geos[0].exterior)]
                 for i_el in geos[0].interiors:
-                    geo_qrcode.append(Polygon(i_el).buffer(0, resolution=res))
+                    geo_qrcode.append(Polygon(i_el).buffer(0, quad_segs=res))
                 geos = [poly for poly in geo_qrcode]
 
             solid_geometry += geos
@@ -2373,29 +2380,26 @@ class Gerber(Geometry):
             new_el = {'solid': pol, 'follow': pol}
             self.tools[0]['geometry'].append(new_el)
 
-    def _leaf_progress(self, top):
+    def _affine_all(self, matrix) -> None:
         """
-        Progress callback for map_geometry: counts the leaves against self.geo_len and shows the percentage.
-        The caller sets self.geo_len, self.old_disp_number and self.el_count first.
+        Applies one affine matrix to solid_geometry, follow_geometry and the 'solid', 'follow' and 'clear' geometry of
+        every aperture geometry element, with ONE vectorized transform call. Container shapes are kept.
 
-        :param top: the percentage that the last leaf maps to (99 or 100, kept per transform)
+        :param matrix: (a, b, d, e, xoff, yoff), see camlib.affine_geometry_many
         """
-        def tick(_leaf):
-            self.el_count += 1
-            disp_number = int(np.interp(self.el_count, [0, self.geo_len], [0, top]))
-            if self.old_disp_number < disp_number <= 100:
-                self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                self.old_disp_number = disp_number
-        return tick
+        entries = []
+        structures = [self.solid_geometry, self.follow_geometry]
+        for tool in self.tools.values():
+            for geo_el in tool.get('geometry', ()):
+                for key in ('solid', 'follow', 'clear'):
+                    if key in geo_el:
+                        entries.append((geo_el, key))
+                        structures.append(geo_el[key])
 
-    def _map_aperture_geometry(self, fn):
-        """Replace the 'solid', 'follow' and 'clear' geometry of every aperture geometry element with fn(geometry)."""
-        for apid in self.tools:
-            if 'geometry' in self.tools[apid]:
-                for geo_el in self.tools[apid]['geometry']:
-                    for key in ('solid', 'follow', 'clear'):
-                        if key in geo_el:
-                            geo_el[key] = fn(geo_el[key])
+        result = affine_geometry_many(structures, matrix)
+        self.solid_geometry, self.follow_geometry = result[0], result[1]
+        for (geo_el, key), geo in zip(entries, result[2:]):
+            geo_el[key] = geo
 
     def scale(
         self,
@@ -2452,46 +2456,10 @@ class Gerber(Geometry):
         else:
             px, py = point
 
-        # variables to display the percentage of work done
-        self.geo_len = 0
         try:
-            if isinstance(self.solid_geometry, MultiPolygon):
-                self.geo_len = len(self.solid_geometry.geoms)
-            else:
-                try:
-                    self.geo_len = len(self.solid_geometry)
-                except TypeError:
-                    self.geo_len = 1
-        except TypeError:
-            self.geo_len = 1
-
-        self.old_disp_number = 0
-        self.el_count = 0
-
-        tick = self._leaf_progress(99)
-
-        def scale_geom(obj):
-            return map_geometry(obj, lambda leaf: affinity.scale(leaf, xfactor, yfactor, origin=(px, py)), tick)
-
-        self.solid_geometry = scale_geom(self.solid_geometry)
-        self.follow_geometry = scale_geom(self.follow_geometry)
-
-        # we need to scale the geometry stored in the Gerber apertures, too
-        try:
+            Gerber._affine_all(self, affine_scale_matrix(xfactor, yfactor, (px, py)))
             for apid in self.tools:
-                new_geometry = []
-                if 'geometry' in self.tools[apid]:
-                    for geo_el in self.tools[apid]['geometry']:
-                        new_geo_el = {}
-                        if 'solid' in geo_el:
-                            new_geo_el['solid'] = scale_geom(geo_el['solid'])
-                        if 'follow' in geo_el:
-                            new_geo_el['follow'] = scale_geom(geo_el['follow'])
-                        if 'clear' in geo_el:
-                            new_geo_el['clear'] = scale_geom(geo_el['clear'])
-                        new_geometry.append(new_geo_el)
-
-                self.tools[apid]['geometry'] = deepcopy(new_geometry)
+                self.tools[apid].setdefault('geometry', [])
 
             update_scale_metadata(self, xfactor, yfactor)
         except Exception as e:
@@ -2541,32 +2509,8 @@ class Gerber(Geometry):
         if dx == 0 and dy == 0:
             return
 
-        # Use vectorized translation for better performance
-        # ## Solid geometry
-        self.solid_geometry = translate_geometry(self.solid_geometry, dx, dy)
-        self.follow_geometry = translate_geometry(self.follow_geometry, dx, dy)
-
-        aperture_count = sum(len(tool.get('geometry', [])) for tool in self.tools.values())
-        old_disp_number = 0
-        el_count = 0
-
-        # we need to offset the geometry stored in the Gerber apertures, too
         try:
-            for apid in self.tools:
-                if 'geometry' in self.tools[apid]:
-                    geometry = self.tools[apid]['geometry']
-                    entries = [(geo_el, key) for geo_el in geometry
-                               for key in ('solid', 'follow', 'clear') if key in geo_el]
-                    translated = translate_geometry([geo_el[key] for geo_el, key in entries], dx, dy)
-                    for (geo_el, key), geo in zip(entries, translated):
-                        geo_el[key] = geo
-
-                    el_count += len(geometry)
-                    disp_number = int(100 * el_count / aperture_count) if aperture_count else 100
-                    if old_disp_number < disp_number <= 100:
-                        self.app.proc_container.update_view_text(' %d%%' % disp_number)
-                        old_disp_number = disp_number
-
+            Gerber._affine_all(self, affine_translate_matrix(dx, dy))
         except Exception as e:
             self.app.log.error('ParseGerber.Gerber.offset() Exception --> %s' % str(e))
             return 'fail'
@@ -2600,27 +2544,8 @@ class Gerber(Geometry):
         px, py = point
         xscale, yscale = {"X": (1.0, -1.0), "Y": (-1.0, 1.0)}[axis]
 
-        # variables to display the percentage of work done
-        self.geo_len = 0
-        if isinstance(self.solid_geometry, BaseGeometry):
-            self.geo_len = 1
-        else:
-            self.geo_len = len(self.solid_geometry)
-
-        self.old_disp_number = 0
-        self.el_count = 0
-
-        tick = self._leaf_progress(99)
-
-        def mirror_geom(obj):
-            return map_geometry(obj, lambda leaf: affinity.scale(leaf, xscale, yscale, origin=(px, py)), tick)
-
-        self.solid_geometry = mirror_geom(self.solid_geometry)
-        self.follow_geometry = mirror_geom(self.follow_geometry)
-
-        # we need to mirror the geometry stored in the Gerber apertures, too
         try:
-            self._map_aperture_geometry(mirror_geom)
+            Gerber._affine_all(self, affine_mirror_matrix(axis, (px, py)))
             update_mirror_metadata(self, axis)
         except Exception as e:
             self.app.log.error('ParseGerber.Gerber.mirror() Exception --> %s' % str(e))
@@ -2654,27 +2579,8 @@ class Gerber(Geometry):
         if angle_x == 0 and angle_y == 0:
             return
 
-        # variables to display the percentage of work done
-        self.geo_len = 0
-        if isinstance(self.solid_geometry, BaseGeometry):
-            self.geo_len = 1
-        else:
-            self.geo_len = len(self.solid_geometry)
-
-        self.old_disp_number = 0
-        self.el_count = 0
-
-        tick = self._leaf_progress(100)
-
-        def skew_geom(obj):
-            return map_geometry(obj, lambda leaf: affinity.skew(leaf, angle_x, angle_y, origin=(px, py)), tick)
-
-        self.solid_geometry = skew_geom(self.solid_geometry)
-        self.follow_geometry = skew_geom(self.follow_geometry)
-
-        # we need to skew the geometry stored in the Gerber apertures, too
         try:
-            self._map_aperture_geometry(skew_geom)
+            Gerber._affine_all(self, affine_skew_matrix(angle_x, angle_y, (px, py)))
             update_skew_metadata(self)
         except Exception as e:
             self.app.log.error('ParseGerber.Gerber.skew() Exception --> %s' % str(e))
@@ -2697,27 +2603,8 @@ class Gerber(Geometry):
         if angle == 0:
             return
 
-        # variables to display the percentage of work done
-        self.geo_len = 0
         try:
-            self.geo_len = len(self.solid_geometry)
-        except TypeError:
-            self.geo_len = 1
-
-        self.old_disp_number = 0
-        self.el_count = 0
-
-        tick = self._leaf_progress(100)
-
-        def rotate_geom(obj):
-            return map_geometry(obj, lambda leaf: affinity.rotate(leaf, angle, origin=(px, py)), tick)
-
-        self.solid_geometry = rotate_geom(self.solid_geometry)
-        self.follow_geometry = rotate_geom(self.follow_geometry)
-
-        # we need to rotate the geometry stored in the Gerber apertures, too
-        try:
-            self._map_aperture_geometry(rotate_geom)
+            Gerber._affine_all(self, affine_rotate_matrix(angle, (px, py)))
             update_rotate_metadata(self, angle)
         except Exception as e:
             self.app.log.error('ParseGerber.Gerber.rotate() Exception --> %s' % str(e))
@@ -2770,7 +2657,7 @@ class Gerber(Geometry):
                         new_obj.append(buffer_geom(g))
                 except TypeError:
                     try:
-                        new_obj = obj.buffer(distance, resolution=self.steps_per_circle, join_style=join)   # noqa
+                        new_obj = obj.buffer(distance, quad_segs=self.steps_per_circle, join_style=join)   # noqa
                         if isinstance(obj, (LinearRing, LineString)) and only_exterior is True:
                             new_obj = new_obj.exterior
                     except AttributeError:
@@ -2795,7 +2682,7 @@ class Gerber(Geometry):
                                 new_geo_el['clear'] = buffer_geom(geo_el['clear'])
                             new_geometry.append(new_geo_el)
 
-                    self.tools[apid]['geometry'] = deepcopy(new_geometry)
+                    self.tools[apid]['geometry'] = new_geometry
 
                 update_buffer_metadata(self, distance, join)
             except Exception as e:
