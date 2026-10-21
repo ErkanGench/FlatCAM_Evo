@@ -93,8 +93,12 @@ Public calls:
 
 ### Hit test
 
-- The hit radius is `GRIP_HIT_PX` (6 px). The code changes it to canvas units with the pixel size of the canvas.
+- The hit radius is `GRIP_HIT_PX` (6 px). The code changes it to canvas units with
+  `GRIP_HIT_PX * editor.canvas.pixel_size()`, as `GrbTrackBend.py` does.
 - A vertex grip wins over a midpoint grip. The nearest grip wins.
+- If 2 grips are at the same distance, the grip with the lower address `(part, ring, index)` wins. This happens
+  when 2 parts of a `MultiPolygon` touch at 1 vertex. The drag must not fail at such a point. The drag moves only
+  the vertex of the winning part, so the parts separate.
 - If no grip is in the radius, the current Select code runs.
 
 ### Drag
@@ -154,6 +158,7 @@ With the default colors, the grips are orange and the invalid preview is red.
    - `contrast_color` with a clash and with no clash.
 2. `tests/test_vertex_grips.py` (fake editor):
    - Hit test and the priority of vertex grips over midpoint grips.
+   - Tie at a touch point of 2 `MultiPolygon` parts: the lower address wins, and only that part changes.
    - No change below the drag threshold.
    - Cancel with Esc and with the right button.
    - Ctrl+click remove.
@@ -162,6 +167,25 @@ With the default colors, the grips are orange and the invalid preview is red.
    - 1 drag gives 1 Undo step. Undo gives the old shape back.
    - The mock `translate_coords` returns 4 values, as VisPy does.
 4. `tests/test_geo_editor_vertices.py` must still pass. Its calls change to the new `address` argument.
+
+## Notes for the Gerber Editor port
+
+The Gerber Editor already has a bend drag for tracks in `appEditors/grb_plugins/GrbTrackBend.py`. The port can
+use these parts of it:
+
+- **Edit `follow`, then make `solid` again.** A Gerber shape is a dict with `solid`, `follow` and `clear`. For a
+  track, the adapter calls `edit_vertex` on `follow` and buffers the result again. `sweep_parameters` finds the
+  radius and the steps that give the current `solid`, and refuses the edit if no match exists. For a region, the
+  adapter calls `edit_vertex` on `solid` directly.
+- **Check for a stale state.** The Gerber Editor has no `target` check like `apply_vertex_edit`. Before the commit,
+  the adapter compares `geometry_revision` and a snapshot of the storage, as `BendEdit.current` does.
+
+The port must not copy these parts:
+
+- The 1-step reversal (`_bend_reversal`, `reverse()`, `bend_state_changed`). Vertex edits must go through the
+  normal Undo history.
+- The stretch of collinear runs (`stretch`, `run_limits`) and the filter that hides collinear vertices. A vertex
+  drag moves 1 vertex only, and each vertex gets a grip.
 
 ## Out of scope
 
