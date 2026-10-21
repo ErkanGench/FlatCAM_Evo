@@ -176,10 +176,48 @@ def apply_language(domain, lang=None):
         return name
 
 
+def save_before_restart(app, ask=None):
+    """
+    Before a restart, ask about each project with unsaved changes and save it, the same way as the exit of the app
+    (AppLifecycle.final_save()). The save runs in this thread and has ended when this function returns: os.execl()
+    ends the process at once, so a save in a worker thread would be killed before the file is written.
+
+    :param app: the App
+    :param ask: if True, the active project is asked about also when it has no changes
+    :return:    True if the restart can go on
+    """
+    next_start = _("The setting will be applied at the next application start.")
+
+    # a running save (File -> Save, Save As, a Tcl save) is not killed. project_save_pending stays set until the
+    # GUI has the result of a File -> Save
+    if app.save_in_progress or getattr(app, 'project_save_pending', False):
+        app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Saving the project. FlatCAM did not restart."), next_start))
+        return False
+
+    projects = app.projects
+    start = projects.active
+    to_ask = projects.dirty_contexts()
+    if ask is True and start not in to_ask:
+        to_ask.insert(0, start)
+    try:
+        for ctx in to_ask:
+            answer = projects.ask_save(ctx)
+            if answer == 'cancel' or (answer == 'yes' and not projects.save_context(ctx, visuals=False)):
+                app.inform.emit('[WARNING_NOTCL] %s %s' % (
+                    _("The project was not saved. FlatCAM did not restart."), next_start))
+                return False
+    finally:
+        # the save of an inactive project made it active, but the canvas still shows start
+        projects.return_to(start)
+    return True
+
+
 def restart_program(app, ask=None):
     """Restarts the current program.
-    Note: this function does not return. Any cleanup action (like
-    saving data) must be done before calling this function.
+    Note: after a restart this function does not return. The projects with unsaved changes are saved first
+    (save_before_restart()); while a project save runs, or when a save is cancelled or fails, there is no restart.
+
+    :return:    False if the app does not restart
     """
     log.debug("FlatCAMTranslation.restart_program()")
 
@@ -193,6 +231,17 @@ def restart_program(app, ask=None):
         resource_loc = 'assets/resources'
     else:
         resource_loc = 'assets/resources/dark_resources'
+
+    # before the ArgsThread is stopped: without a restart the app goes on as it was
+    if not save_before_restart(app, ask=ask):
+        # on_app_restart() hid the tray icon
+        tray = getattr(app, 'trayIcon', None)
+        if tray is not None and app.options.get("global_systray_icon", app.defaults.get("global_systray_icon")):
+            try:
+                tray.show()
+            except Exception:
+                pass
+        return False
 
     # try to quit the Socket opened by ArgsThread class
     try:
@@ -208,27 +257,6 @@ def restart_program(app, ask=None):
         app.listen_th.wait(1000)
     except Exception as err:
         log.error("FlatCAMTranslation.restart_program() --> %s" % str(err))
-
-    if app.should_we_save and app.collection.get_list() or ask is True:
-        msgbox = FCMessageBox(parent=app.ui)
-        title = _("Save changes")
-        txt = _("There are files/objects modified.\n"
-                "Do you want to Save the project?")
-        msgbox.setWindowTitle(title)  # taskbar still shows it
-        msgbox.setWindowIcon(QtGui.QIcon(resource_loc + '/app128.png'))
-        msgbox.setText('<b>%s</b>' % title)
-        msgbox.setInformativeText(txt)
-        msgbox.setIconPixmap(QtGui.QPixmap(resource_loc + '/save_as.png'))
-
-        bt_yes = msgbox.addButton(_('Yes'), QtWidgets.QMessageBox.ButtonRole.YesRole)
-        msgbox.addButton(_('No'), QtWidgets.QMessageBox.ButtonRole.NoRole)
-
-        msgbox.setDefaultButton(bt_yes)
-        msgbox.exec()
-        response = msgbox.clickedButton()
-
-        if response == bt_yes:
-            app.f_handlers.on_file_save_project_as(use_thread=True, quit_action=True)
 
     app.defaults.update(app.options)
     app.preferencesUiManager.save_defaults()
