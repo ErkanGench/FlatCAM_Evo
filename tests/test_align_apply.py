@@ -1,0 +1,94 @@
+"""Align Objects: one matrix applied to real Gerber / Excellon / Geometry objects, and the Undo by the inverse matrix."""
+
+
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import numpy as np
+import pytest
+import shapely
+from shapely.geometry import LineString
+
+from appObjects.GeometryObject import GeometryObject
+from appHandlers.appHistory import HistoryManager, apply_matrix_to_object, transform_metadata
+from appPlugins.ToolAlignObjects.AlignGen import apply_matrix, invert, solve_rigid, solve_similarity, solve_affine
+
+from test_app_history import fake_app
+from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
+    _headless_qt, app, make_excellon, make_gerber,
+)
+
+MATRICES = {
+    'rigid': solve_rigid([(0, 0), (10, 0)], [(3, 4), (3, 14)]),                      # 90 deg + move
+    'similarity': solve_similarity([(0, 0), (10, 0)], [(1, 1), (-9.2, 1.4)]),      # about 180 deg, scale 1.02
+    'affine': solve_affine([(0, 0), (10, 0), (0, 10)], [(1, 2), (11.1, 2.2), (0.9, 11.8)]),
+}
+
+
+def _geometry(app):
+    obj = GeometryObject('geo', app)
+    obj.solid_geometry = [LineString([(0, 0), (5, 0), (5, 3)]), LineString([(1, 1), (2, 7)])]
+    return obj
+
+
+def _make(app, kind):
+    return {'gerber': make_gerber, 'excellon': make_excellon, 'geometry': _geometry}[kind](app)
+
+
+@pytest.mark.parametrize('kind', ['gerber', 'excellon', 'geometry'])
+@pytest.mark.parametrize('model', list(MATRICES))
+def test_apply_and_undo(app, kind, model):
+    obj = _make(app, kind)
+    matrix = MATRICES[model]
+    before = np.array(obj.bounds())
+
+    apply_matrix_to_object(obj, matrix)
+    after = np.array(obj.bounds())
+    assert after == pytest.approx([obj.obj_options[k] for k in ('xmin', 'ymin', 'xmax', 'ymax')])
+    assert not np.allclose(after, before)
+
+    if kind == 'geometry' or model == 'rigid':
+        # the bounds of the transformed corners hold the new bounds for the shapes that the matrix maps exactly
+        corners = apply_matrix(matrix, [before[[0, 1]], before[[2, 1]], before[[2, 3]], before[[0, 3]]])
+        assert after[:2] == pytest.approx(corners.min(axis=0), abs=0.6)
+
+    apply_matrix_to_object(obj, invert(matrix))
+    assert np.array(obj.bounds()) == pytest.approx(before, abs=1e-6)
+
+
+def test_excellon_rigid_moves_the_hole_shapes(app):
+    exc = make_excellon(app)
+    before = [t['solid_geometry'] for t in exc.tools.values()]
+    apply_matrix_to_object(exc, MATRICES['rigid'])
+    apply_matrix_to_object(exc, invert(MATRICES['rigid']))
+    for old, tool in zip(before, exc.tools.values()):
+        for g0, g1 in zip(old, tool['solid_geometry']):
+            assert g0.equals_exact(g1, 1e-6)
+
+
+@pytest.mark.parametrize('kind', ['geometry', 'excellon'])
+def test_alignment_aggregate_bounds_agree_with_tools_through_history(app, kind):
+    obj = _make(app, kind)
+    if kind == 'geometry':
+        obj.multigeo = True
+        obj.tools = {1: {'solid_geometry': list(obj.solid_geometry)}, 2: {'solid_geometry': []}}
+    h = HistoryManager(fake_app(), SimpleNamespace(get_list=lambda: [obj]))
+    h.app.history = h
+    h.app.app_obj = SimpleNamespace(object_changed=Mock())
+    obj.plot = Mock()
+    obj.plot_transformed = Mock()
+    before = transform_metadata(obj)
+    matrix = MATRICES['rigid']
+    apply_matrix_to_object(obj, matrix)
+    h.record_matrix('align', [(obj, matrix, before)])
+
+    def check():
+        aggregate = shapely.total_bounds(obj.solid_geometry)
+        pertool = shapely.total_bounds([g for tool in obj.tools.values() for g in tool['solid_geometry']])
+        assert aggregate == pytest.approx(pertool)
+        assert aggregate == pytest.approx(obj.bounds())
+    check()
+    assert h.undo()
+    check()
+    assert h.redo()
+    check()

@@ -10,7 +10,7 @@ from appPlugins.ToolCalculators import ToolCalculator
 
 from appPlugins.ToolDblSided import DblSidedTool
 from appPlugins.ToolExtract import ToolExtract
-from appPlugins.ToolAlignObjects import AlignObjects
+from appPlugins.ToolAlignObjects.Align import AlignObjects
 
 from appPlugins.ToolFilm import Film
 

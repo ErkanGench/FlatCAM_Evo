@@ -72,7 +72,7 @@ Degenerate inputs raise `AlignError`:
 - Similarity: the scale is `<= 0` or not finite.
 - Affine: fewer than 3 pairs, or the START points are on one line (rank of the centered P is less than 2), or the determinant `a*e - b*d` is about 0.
 
-For exactly 2 pairs, rigid gives the same result as the old 2-point mode (translate START 1 to DESTINATION 1, then rotate about DESTINATION 1), but with a correct angle.
+For exactly 2 pairs, rigid gives the same angle as the old 2-point mode (now always correct). The old mode put START 1 exactly on DESTINATION 1. The least-squares fit splits a difference in pair length between the 2 pairs, so neither pair has all the error.
 
 `residuals(matrix, P, Q) -> (errors, rms)`: the distance from the transformed P to Q for each pair, and the root mean square value.
 
@@ -152,6 +152,23 @@ The current widgets stay: the object type and combo box for the aligned object a
    - A click far from all gives `None`.
    - A Geometry object snaps to vertices.
 6. Controller (headless, as the other plugin tests): align a small Gerber to a small Excellon in `dp` mode. Check the bounds after the apply. Check that Undo gives the original bounds.
+
+## Automatic mode (added 2026-10-21)
+
+Mode `auto`. The user clicks "Find". The tool finds the matrix that puts the most START centers (holes or pads of the aligned object) inside the features of the aligner object. No scipy: NumPy and the Shapely `STRtree` only.
+
+`AlignGen.auto_align(src_index, dst_index, model, allow_mirror, max_results, progress) -> list[AutoResult]`:
+
+1. The current position (identity) is always a candidate.
+2. Rotation candidates: a histogram of the angle differences between the nearest-neighbor vectors of the 2 sets (0.5° bins). It keeps 4 peaks, and each peak is also tested + 180°.
+3. Translation candidates: for each rotation, a vote of the offsets from a sample of 50 START centers to all aligner centers. The cell size is the median pad radius. It keeps 3 peaks.
+4. ICP refine: pair each center with the nearest aligner center within 2 radii, solve, repeat 5 times. The first 2 steps are rigid. The other steps use the selected model.
+5. Score: the number of START centers inside an aligner solid. If the scores are equal, the smaller RMS wins, then the smaller move.
+6. Distinct candidates only (the bounding box corners differ by more than 1 radius). `is_ambiguous(results)` is true if the second score is at least 95 % of the best score.
+
+"Allow mirror" also tests the START set mirrored (x → -x), for a bottom layer. The search runs in a worker. The result reaches the GUI thread through the signal `auto_finished(token, results, error)`. "Next candidate" cycles the results. "Apply" applies the current candidate with Undo.
+
+New preference key: `tools_align_objects_allow_mirror`, default `False`.
 
 ## Out of scope
 

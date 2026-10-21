@@ -1,4 +1,4 @@
-"""Characterization of the click-pick rules of ToolAlignObjects.on_mouse_click_release, ToolDblSided.on_mouse_click_release
+"""Characterization of the click-pick rules of the Align Objects snap (AlignGen), ToolDblSided.on_mouse_click_release
 and ToolPunchGerber.find_pad. They must pass before and after the move to ``feature_access.iter_features``.
 
 The unbound methods run with a fake ``self``; no GUI is needed."""
@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, Mock
 import pytest
 from shapely.geometry import LineString, Point, box
 
-from appPlugins.ToolAlignObjects import AlignObjects
+from appPlugins.ToolAlignObjects.AlignGen import build_snap_index, snap
 from appPlugins.ToolDblSided import DblSidedTool
 from appPlugins.ToolPunchGerber import ToolPunchGerber
 
@@ -46,19 +46,13 @@ def _custom_excellon(app, tools):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# ToolAlignObjects
+# ToolAlignObjects (AlignGen.build_snap_index + snap)
 # ---------------------------------------------------------------------------------------------------------------
 
 def align_click(target, pos):
-    """Return the list of clicked points and the number of check_points calls."""
-    fake = Mock()
-    fake.app = _fake_app()
-    fake.canvas.translate_coords = lambda p: p
-    fake.target_obj = target
-    fake.decimals = 4
-    fake.clicked_points = []
-    AlignObjects.on_mouse_click_release(fake, _event(pos))
-    return fake.clicked_points, fake.check_points.call_count
+    """Return the list of snapped points for one click (0 or 1 point)."""
+    pt = snap(build_snap_index(target), pos[0], pos[1], 0.01)
+    return [] if pt is None else [list(pt)]
 
 
 class TestAlignGerber:
@@ -69,60 +63,52 @@ class TestAlignGerber:
         ((20.1, 5.1), [20.0, 5.0]),       # P flash
         ((15.2, 35.1), [15.0, 35.0]),     # flash after the clear track
     ])
-    def test_flash_gives_the_solid_centroid(self, gerber, click, center):
-        points, calls = align_click(gerber, click)
-        assert points == [pytest.approx(center)] and calls == 1
+    def test_flash_gives_the_flash_point(self, gerber, click, center):
+        assert align_click(gerber, click) == [pytest.approx(center)]
 
     @pytest.mark.parametrize('click', [(20.0, 10.1), (5.0, 24.0), (8.0, 8.0)])   # track, region, outside
     def test_track_region_outside_give_nothing(self, gerber, click):
-        assert align_click(gerber, click) == ([], 0)
+        assert align_click(gerber, click) == []
 
-    def test_center_is_the_solid_centroid_not_the_follow_point(self):
+    def test_center_is_the_follow_point_not_the_solid_centroid(self):
         obj = _gerber_like({1: {'geometry': [{'solid': box(0, -1, 2, 1), 'follow': Point(0, 0)}]}})
-        points, calls = align_click(obj, (0.5, 0.0))
-        assert points == [pytest.approx([1.0, 0.0])]
+        assert align_click(obj, (0.5, 0.0)) == [pytest.approx([0.0, 0.0])]
 
     def test_clear_record_is_ignored(self):
         obj = _gerber_like({1: {'geometry': [{'clear': box(0, 0, 2, 2), 'follow': Point(1, 1)}]}})
-        assert align_click(obj, (1.0, 1.0)) == ([], 0)
+        assert align_click(obj, (1.0, 1.0)) == []
 
-    def test_two_overlapping_flashes_give_two_points(self):
+    def test_two_overlapping_flashes_give_the_smaller_one(self):
         obj = _gerber_like({
             1: {'geometry': [{'solid': box(0, 0, 2, 2), 'follow': Point(1, 1)}]},
             2: {'geometry': [{'solid': box(0, 0, 4, 4), 'follow': Point(2, 2)}]},
         })
-        points, calls = align_click(obj, (1.0, 1.0))
-        assert points == [pytest.approx([1.0, 1.0]), pytest.approx([2.0, 2.0])] and calls == 2
+        assert align_click(obj, (1.0, 1.0)) == [pytest.approx([1.0, 1.0])]
 
     def test_solid_record_without_follow_does_not_crash(self):
-        # the old code raised KeyError on geo_el['follow']
         obj = _gerber_like({1: {'geometry': [{'solid': box(0, 0, 2, 2)}]}})
-        assert align_click(obj, (1.0, 1.0)) == ([], 0)
+        assert align_click(obj, (1.0, 1.0)) == []
 
 
 class TestAlignExcellon:
     def test_drill_gives_its_center(self, excellon):
-        points, calls = align_click(excellon, (5.1, 12.1))
-        assert points == [pytest.approx([5.0, 12.0])] and calls == 1
+        assert align_click(excellon, (5.1, 12.1)) == [pytest.approx([5.0, 12.0])]
 
     def test_slot_gives_its_centroid(self, excellon):
-        points, calls = align_click(excellon, (24.0, 12.2))
-        assert points == [pytest.approx([24.0, 12.0])]
+        assert align_click(excellon, (24.0, 12.2)) == [pytest.approx([24.0, 12.0])]
 
     def test_vertical_slot(self, excellon):
-        points, calls = align_click(excellon, (5.1, 23.0))
-        assert points == [pytest.approx([5.0, 23.0])]
+        assert align_click(excellon, (5.1, 23.0)) == [pytest.approx([5.0, 23.0])]
 
     def test_outside_gives_nothing(self, excellon):
-        assert align_click(excellon, (8.0, 8.0)) == ([], 0)
+        assert align_click(excellon, (8.0, 8.0)) == []
 
-    def test_overlapping_drills_of_two_tools_give_two_points(self, app):
+    def test_overlapping_drills_of_two_tools_give_the_smaller_one(self, app):
         exc = _custom_excellon(app, {
             1: {'tooldia': 1.0, 'drills': [Point(5, 5)], 'slots': [], 'solid_geometry': [], 'data': {}},
             2: {'tooldia': 2.0, 'drills': [Point(5, 5.2)], 'slots': [], 'solid_geometry': [], 'data': {}},
         })
-        points, calls = align_click(exc, (5.0, 5.1))
-        assert points == [pytest.approx([5.0, 5.0]), pytest.approx([5.0, 5.2])] and calls == 2
+        assert align_click(exc, (5.0, 5.1)) == [pytest.approx([5.0, 5.0])]
 
 
 # ---------------------------------------------------------------------------------------------------------------
