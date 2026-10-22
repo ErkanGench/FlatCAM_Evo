@@ -575,14 +575,11 @@ class ExclusionAreas(QtCore.QObject):
         # draw the utility geometry
         if shape_type == "square":
             if self.first_click:
-                self.app.delete_selection_shape()
-
                 self.app.draw_moving_selection_shape(old_coords=(self.cursor_pos[0], self.cursor_pos[1]),
                                                      color=color,
                                                      face_color=face_color,
                                                      coords=(curr_pos[0], curr_pos[1]))
         else:
-            AppTool.delete_moving_selection_shape(self)
             AppTool.draw_moving_selection_shape_poly(
                 self, points=self.points,
                 color=color,

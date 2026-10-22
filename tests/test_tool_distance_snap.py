@@ -4,6 +4,7 @@ pad (flash) or of the Excellon drill / slot under the cursor. It must pass befor
 """
 
 from unittest.mock import MagicMock, Mock
+from types import MethodType, SimpleNamespace
 
 import pytest
 
@@ -79,3 +80,28 @@ class TestBothObjects:
         assert result == pytest.approx((5.0, 5.0))
         result, jump = snap([objs[0], exc], (5.25, 5.0))  # now the drill center (5.3, 5) is closer
         assert result == pytest.approx((5.3, 5.0))
+
+
+def test_multipoint_motion_replaces_the_first_preview_without_losing_committed_lines(_headless_qt):
+    from vispy.gloo.context import FakeCanvas
+    from appGUI.VisPyVisuals import ShapeCollectionVisual
+    from shapely.geometry import LineString
+
+    _canvas = FakeCanvas()
+    tool = Mock()
+    tool.sel_shapes = ShapeCollectionVisual(pool=None)
+    tool.ui.multipoint_cb.get_value.return_value = True
+    tool.app.plotcanvas.translate_coords.side_effect = lambda pos: pos
+    tool.update_position_info.side_effect = lambda pos: pos
+    tool.points = [(0, 0), (1, 1)]
+    tool.total_distance = 1.0
+    tool.update_distance.return_value = 1.0
+    tool.add_utility_shape = MethodType(Distance.add_utility_shape, tool)
+    tool.delete_utility_shape = MethodType(Distance.delete_utility_shape, tool)
+    tool.add_utility_shape((1, 1), (10, 10))
+    # The first preview has key zero. Committed segments must survive its replacement.
+    tool.sel_shapes.add(LineString([(0, 0), (1, 1)]), color='blue', update=True, layer=0)
+    Distance.on_mouse_move(tool, SimpleNamespace(pos=(2, 3), is_dragging=False))
+    assert tool.sel_shapes.bounds(axis=0) == pytest.approx((0, 2))
+    assert tool.sel_shapes.bounds(axis=1) == pytest.approx((0, 3))
+    tool.app.log.error.assert_not_called()

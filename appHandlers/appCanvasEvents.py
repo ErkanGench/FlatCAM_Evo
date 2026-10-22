@@ -165,8 +165,6 @@ class AppCanvasEvents(QtCore.QObject):
 
             self.app.selection_type = None  # no selection while mouse is moving
             if we_have_drag_selection:
-                self.delete_selection_shape()
-
                 is_alt_selection = self.app.dx < 0
                 if is_alt_selection:
                     self.draw_moving_selection_shape(
@@ -185,18 +183,16 @@ class AppCanvasEvents(QtCore.QObject):
 
             # hover effect - enabled in Preferences -> General -> appGUI Settings
             if self.options.get('global_hover_shape', self.defaults.get('global_hover_shape', False)):
+                selected = self.app.collection.get_selected()
                 for obj in self.app.collection.get_list():
                     try:
                         # select the object(s) only if it is enabled (plotted)
                         if obj.obj_options['plot']:
-                            if obj not in self.app.collection.get_selected():
-                                poly_obj = Polygon(
-                                    [(obj.obj_options['xmin'], obj.obj_options['ymin']),
-                                     (obj.obj_options['xmax'], obj.obj_options['ymin']),
-                                     (obj.obj_options['xmax'], obj.obj_options['ymax']),
-                                     (obj.obj_options['xmin'], obj.obj_options['ymax'])]
-                                )
-                                if Point(pos).within(poly_obj):
+                            if obj not in selected:
+                                xmin, xmax = obj.obj_options['xmin'], obj.obj_options['xmax']
+                                ymin, ymax = obj.obj_options['ymin'], obj.obj_options['ymax']
+                                if min(xmin, xmax) < pos[0] < max(xmin, xmax) and \
+                                        min(ymin, ymax) < pos[1] < max(ymin, ymax):
                                     if obj.isHovering is False:
                                         obj.isHovering = True
                                         obj.notHovering = True
@@ -687,10 +683,11 @@ class AppCanvasEvents(QtCore.QObject):
             return
 
         tab_idx = self.ui.notebook.currentIndex()
+        plugin_name = self.ui.notebook.tabText(tab_idx)
         for plugin in self.app.app_plugins:
             # execute this only for the current active plugin
             try:
-                if self.ui.notebook.tabText(tab_idx) != plugin.pluginName:
+                if plugin_name != plugin.pluginName:
                     continue
                 try:
                     plugin.on_plugin_mouse_move(pos)
@@ -716,6 +713,18 @@ class AppCanvasEvents(QtCore.QObject):
         if sel_obj is None:
             return
 
+        if color:
+            face = color[:-2] + str(hex(int(0.2 * 255)))[2:]
+            outline = color[:-2] + str(hex(int(0.8 * 255)))[2:]
+        else:
+            face = self.options.get('global_sel_fill', self.defaults.get('global_sel_fill', '#a5a5ffbf'))[:-2] + str(hex(int(0.2 * 255)))[2:]
+            outline = self.options.get('global_sel_line', self.defaults.get('global_sel_line', '#0000ffbf'))
+
+        if hasattr(self.app.hover_shapes, 'add_hover'):
+            bounds = tuple(float(sel_obj.obj_options[key]) for key in ('xmin', 'ymin', 'xmax', 'ymax'))
+            self.app.hover_shapes.add_hover(bounds, self.app.app_units, outline, face)
+            return
+
         pt1 = (float(sel_obj.obj_options['xmin']), float(sel_obj.obj_options['ymin']))
         pt2 = (float(sel_obj.obj_options['xmax']), float(sel_obj.obj_options['ymin']))
         pt3 = (float(sel_obj.obj_options['xmax']), float(sel_obj.obj_options['ymax']))
@@ -729,13 +738,6 @@ class AppCanvasEvents(QtCore.QObject):
         else:
             hover_rect = hover_rect.buffer(-0.00393)
             hover_rect = hover_rect.buffer(0.00787)
-
-        if color:
-            face = color[:-2] + str(hex(int(0.2 * 255)))[2:]
-            outline = color[:-2] + str(hex(int(0.8 * 255)))[2:]
-        else:
-            face = self.options.get('global_sel_fill', self.defaults.get('global_sel_fill', '#a5a5ffbf'))[:-2] + str(hex(int(0.2 * 255)))[2:]
-            outline = self.options.get('global_sel_line', self.defaults.get('global_sel_line', '#0000ffbf'))
 
         self.app.hover_shapes.add(hover_rect, color=outline, face_color=face, update=True, layer=0, tolerance=None)
 
@@ -825,6 +827,14 @@ class AppCanvasEvents(QtCore.QObject):
         else:
             face_alpha = 0.3
 
+        line_only = self.options.get(
+            'global_selection_shape_as_line', self.defaults.get('global_selection_shape_as_line', False)
+        ) is True
+        color_t = face_color[:-2] + str(hex(int(face_alpha * 255)))[2:]
+        if hasattr(self.app.sel_shapes, 'set_rectangle'):
+            self.app.sel_shapes.set_rectangle(old_coords, coords, color, None if line_only else color_t)
+            return
+
         x0, y0 = old_coords
         x1, y1 = coords
 
@@ -834,9 +844,9 @@ class AppCanvasEvents(QtCore.QObject):
         pt4 = (x0, y1)
         sel_rect = Polygon([pt1, pt2, pt3, pt4])
 
-        if self.options.get('global_selection_shape_as_line', self.defaults.get('global_selection_shape_as_line', False)) is True:
+        if line_only:
             sel_rect = sel_rect.exterior
 
-        color_t = face_color[:-2] + str(hex(int(face_alpha * 255)))[2:]
-
+        # Replace the rubber band in one upload; object visuals use separate collections.
+        self.app.sel_shapes.clear()
         self.app.sel_shapes.add(sel_rect, color=color, face_color=color_t, update=True, layer=0, tolerance=None)

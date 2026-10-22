@@ -6,6 +6,7 @@
 # MIT Licence                                              #
 # ##########################################################
 
+from PyQt6 import QtCore
 from vispy.visuals import markers, InfiniteLineVisual
 from vispy.app.backends._pyqt6 import CanvasBackendDesktop
 from vispy.visuals.axis import Ticker, _get_ticks_talbot
@@ -14,6 +15,9 @@ import numpy as np
 
 
 def apply_patches():
+    # Set before QApplication: keep canvas GL resources when tabs move between windows.
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+
     # Patch MarkersVisual to have crossed lines marker
     # cross_lines = """
     # float cross(vec2 pointcoord, float size)
@@ -105,15 +109,12 @@ def apply_patches():
 
             labels = ['%g' % x for x in major]
             majstep = major[1] - major[0]
-            minor = []
             minstep = majstep / (minor_num + 1)
             minstart = 0 if self.axis._stop_at_major[0] else -1
             minstop = -1 if self.axis._stop_at_major[1] else 0
-            for i in range(minstart, len(major) + minstop):
-                maj = major[0] + i * majstep
-                minor.extend(np.linspace(maj + minstep,
-                                         maj + majstep - minstep,
-                                         minor_num))
+            maj = major[0] + np.arange(minstart, len(major) + minstop) * majstep
+            minor = np.linspace(maj + minstep, maj + majstep - minstep,
+                                minor_num, axis=-1).ravel()
 
             major_frac = (major - offset) / scale
             major_frac = major_frac[::-1] if flip else major_frac

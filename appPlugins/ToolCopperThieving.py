@@ -540,7 +540,6 @@ class ToolCopperThieving(AppTool):
 
         # draw the utility geometry
         if self.first_click:
-            self.app.delete_selection_shape()
             self.app.draw_moving_selection_shape(old_coords=(self.cursor_pos[0], self.cursor_pos[1]),
                                                  coords=(curr_pos[0], curr_pos[1]))
 

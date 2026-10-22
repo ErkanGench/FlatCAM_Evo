@@ -8,19 +8,20 @@ import sys
 import unittest
 from itertools import product
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 if sys.platform != 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
-from PyQt6 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 from vispy import app
 
 app.use_app('pyqt6')
 
 from appGUI.PlotCanvas3d import PlotCanvas3d
+from appGUI.PlotCanvas import PlotCanvas
 
 
 class CanvasApp(QtCore.QObject):
@@ -40,7 +41,58 @@ class CanvasApp(QtCore.QObject):
 class TestPlotCanvas3d(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from appGUI.VisPyPatches import apply_patches
+        apply_patches()
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_plot_shapes_survive_detach_and_reattach(self):
+        from shapely.geometry import Polygon
+        from appGUI.GUIElements import FCDetachableTab
+        from appGUI.VisPyVisuals import ShapeCollection
+
+        for canvas_type, title in ((PlotCanvas, 'Plot Area'), (PlotCanvas3d, 'Plot 3D Area')):
+            with self.subTest(title=title):
+                fcapp = CanvasApp()
+                fcapp.options['global_axis_color'] = '#FF0000'
+                fcapp.cursor_color_3D = '#FF0000'
+                tabs = FCDetachableTab()
+                self.addCleanup(tabs.deleteLater)
+                self.addCleanup(tabs.close)
+                layout = QtWidgets.QVBoxLayout(fcapp.ui)
+                if canvas_type is PlotCanvas:
+                    canvas = canvas_type(fcapp)
+                    layout.addWidget(canvas.native)
+                    canvas.view.camera.rect = (0, 0, 400, 400)
+                else:
+                    canvas = canvas_type(layout, fcapp)
+                self.addCleanup(canvas.close)
+                self.addCleanup(tabs.closeDetachedTabs)
+                tabs.addTab(fcapp.ui, title)
+                tabs.resize(800, 600)
+                tabs.show()
+                self.qapp.processEvents()
+                shapes = ShapeCollection(parent=canvas.view.scene)
+
+                def blue_pixels():
+                    image = canvas.render()[:, :, :3].astype(int)
+                    return np.count_nonzero((image[:, :, 2] - image[:, :, 0] > 150) &
+                                            (image[:, :, 2] - image[:, :, 1] > 150))
+
+                shapes.add(shape=Polygon([(50, 50), (150, 50), (150, 150), (50, 150)]),
+                           color='blue', face_color='blue', update=True)
+                self.assertGreater(blue_pixels(), 100)
+                for _ in range(2):
+                    tabs.detachTab(tabs.indexOf(fcapp.ui), QtCore.QPoint(100, 100))
+                    self.qapp.processEvents()
+                    self.assertGreater(blue_pixels(), 100, 'Existing shapes disappeared after detaching')
+                    shapes.clear(update=True)
+                    self.assertEqual(blue_pixels(), 0)
+                    shapes.add(shape=Polygon([(200, 200), (300, 200), (300, 300), (200, 300)]),
+                               color='blue', face_color='blue', update=True)
+                    self.assertGreater(blue_pixels(), 100, 'New shapes did not render in detached window')
+                    tabs.closeDetachedTabs()
+                    self.qapp.processEvents()
+                    self.assertGreater(blue_pixels(), 100, 'Shapes disappeared after reattaching')
 
     def make_canvas(self, units='MM', custom_cursor=True):
         fcapp = CanvasApp(units, custom_cursor)
@@ -72,6 +124,104 @@ class TestPlotCanvas3d(unittest.TestCase):
         self.assertGreater(canvas.view.camera.scale_factor, 400)
         self.assertEqual(canvas.view.camera.maximum_scene_size, canvas.view.camera.scale_factor)
 
+    def test_grid_menu_and_shortcut_follow_the_active_plot(self):
+        from appGUI.MainGUI import MainGUI
+        from appHandlers.appSignalConnector import AppSignalConnector
+
+        class Window(QtWidgets.QMainWindow):
+            eventFilter = MainGUI.eventFilter
+            app_focus_in_text = staticmethod(MainGUI.app_focus_in_text)
+
+            def on_toggle_grid_lines(self):
+                MainGUI.on_toggle_grid_lines(self)
+
+            def on_toggle_grid(self):
+                pass
+
+        canvas3d = self.make_canvas()
+        fcapp = CanvasApp()
+        fcapp.options['global_axis_color'] = '#FF0000'
+        fcapp.cursor_color_3D = '#FF0000'
+        fcapp.inform = MagicMock()
+        canvas2d = PlotCanvas(fcapp)
+        canvas2d.on_toggle_grid_lines(silent=True)
+        self.addCleanup(fcapp.ui.deleteLater)
+        self.addCleanup(canvas2d.close)
+        window = Window()
+        self.addCleanup(window.deleteLater)
+        self.addCleanup(window.close)
+        window.plot_tab_area = QtWidgets.QTabWidget()
+        window.setCentralWidget(window.plot_tab_area)
+        window.plot_tab_area.addTab(canvas2d.native, 'Plot Area')
+        window.plot_tab_area.addTab(canvas3d.fcapp.ui, 'Plot 3D')
+        window.app = Mock(ui=window, plotcanvas=canvas2d, plotcanvas3d=canvas3d,
+                          area_3d_tab=canvas3d.fcapp.ui, options={'global_toggle_tooltips': True})
+        for name in ('menuviewenable', 'menuviewdisableall', 'menuviewenableother', 'menuviewdisableother',
+                     'menuview_zoom_fit', 'menuview_zoom_in', 'menuview_zoom_out', 'menuview_replot',
+                     'menuview_toggle_code_editor', 'menuview_toggle_fscreen', 'menuview_toggle_parea',
+                     'menuview_toggle_notebook', 'menu_toggle_nb', 'menuview_toggle_grid',
+                     'menuview_toggle_workspace', 'menuview_toggle_grid_lines', 'menuview_toggle_axis',
+                     'menuview_toggle_hud', 'menuview_show_log'):
+            setattr(window, name, QtGui.QAction(name, window))
+        window.on_full_screen_toggled = Mock()
+        window.on_toggle_plotarea = Mock()
+        window.on_toggle_notebook = Mock()
+        AppSignalConnector(window.app).connect_menuview_signals()
+        self.qapp.installEventFilter(window)
+        self.addCleanup(self.qapp.removeEventFilter, window)
+        for index, canvas, other in ((1, canvas3d, canvas2d), (0, canvas2d, canvas3d)):
+            with self.subTest(tab=index):
+                window.plot_tab_area.setCurrentIndex(index)
+                canvas.native.setFocus()
+                self.qapp.processEvents()
+                before, other_before = canvas.grid.visible, other.grid.visible
+                window.menuview_toggle_grid_lines.trigger()
+                self.assertEqual(canvas.grid.visible, not before)
+                self.assertEqual(other.grid.visible, other_before)
+                QtTest.QTest.keyClick(canvas.native, QtCore.Qt.Key.Key_G,
+                                     QtCore.Qt.KeyboardModifier.ShiftModifier)
+                self.assertEqual(canvas.grid.visible, before)
+                self.assertEqual(other.grid.visible, other_before)
+        before = canvas3d.grid.visible
+        canvas3d.context_menu.actions()[0].trigger()
+        self.assertEqual(canvas3d.grid.visible, not before)
+        self.assertEqual(canvas3d.grid_lines_enabled, not before)
+        window.app.plotcanvas3d = None
+        before = canvas2d.grid.visible
+        window.menuview_toggle_grid_lines.trigger()
+        self.assertEqual(canvas2d.grid.visible, not before)
+
+    def test_plot_cursor_is_only_visible_inside_canvas(self):
+        fcapp = CanvasApp()
+        fcapp.options['global_axis_color'] = '#FF0000'
+        fcapp.cursor_color_3D = '#FF0000'
+        canvas = PlotCanvas(fcapp)
+        self.addCleanup(fcapp.ui.deleteLater)
+        self.addCleanup(canvas.close)
+        for big in (False, True):
+            with self.subTest(big=big):
+                cursor = canvas.new_cursor(big=big)
+                cursor.enabled = True
+                cursor.set_data(np.array([(10., 20.)]))
+                visuals = (canvas.cursor_h_line, canvas.cursor_v_line) if big else (cursor,)
+                QtWidgets.QApplication.sendEvent(canvas.native, QtCore.QEvent(QtCore.QEvent.Type.Leave))
+                self.assertTrue(all(not visual.visible for visual in visuals))
+                # Grid/editor updates outside the canvas must not reveal the cursor.
+                cursor.enabled = False
+                cursor.enabled = True
+                cursor.set_data(np.array([(20., 30.)]))
+                self.assertTrue(all(not visual.visible for visual in visuals))
+                QtWidgets.QApplication.sendEvent(
+                    canvas.native, QtGui.QEnterEvent(QtCore.QPointF(), QtCore.QPointF(), QtCore.QPointF())
+                )
+                self.assertTrue(all(visual.visible and visual.parent is canvas.view.scene for visual in visuals))
+                cursor.enabled = False
+                QtWidgets.QApplication.sendEvent(canvas.native, QtCore.QEvent(QtCore.QEvent.Type.Leave))
+                QtWidgets.QApplication.sendEvent(
+                    canvas.native, QtGui.QEnterEvent(QtCore.QPointF(), QtCore.QPointF(), QtCore.QPointF())
+                )
+                self.assertTrue(all(visual.parent is None for visual in visuals))
+
     def test_fit_toolpath_bounds_with_canvas_padding(self):
         canvas = self.make_canvas()
         points = np.array(list(product((1000, 1020), (2000, 2010), (-3, 7))))
@@ -85,6 +235,56 @@ class TestPlotCanvas3d(unittest.TestCase):
         self.assertGreaterEqual(screen[:, 1].min(), height * 0.1 - 1e-3)
         self.assertLessEqual(screen[:, 1].max(), height * 0.9 + 1e-3)
         self.assertTrue(np.any(np.isclose(np.ptp(screen, axis=0), (width * 0.8, height * 0.8))))
+
+    def test_plot_grid_toggle_keeps_axis_and_loaded_collection(self):
+        from shapely.geometry import Polygon
+
+        fcapp = CanvasApp()
+        fcapp.options['global_axis_color'] = '#FF0000'
+        fcapp.options['global_backface_culling'] = True
+        fcapp.defaults = {}
+        fcapp.ui.axis_status_label = QtWidgets.QLabel()
+        fcapp.cursor_color_3D = '#FF0000'
+        canvas = PlotCanvas(fcapp)
+        self.addCleanup(fcapp.ui.deleteLater)
+        self.addCleanup(canvas.close)
+        canvas.size = (800, 600)
+        canvas.on_toggle_axis(state=True, silent=True)
+        fcapp.app_cursor = canvas.new_cursor(big=True)
+        fcapp.app_cursor.enabled = True
+        canvas.cursor_h_line.visible = canvas.cursor_v_line.visible = True
+        canvas.on_mouse_position((5, 5))
+        canvas.shape_collection.add(
+            shape=Polygon([(2, 2), (8, 2), (8, 8), (2, 8)]),
+            color='blue', face_color='blue', update=True
+        )
+        canvas.view.camera.rect = (-10, -10, 30, 30)
+        canvas.grid._grid_color_fn['color'] = (0, 0, 1, 1)
+        canvas.render()
+        # The origin axes must cover the grid, including at grid intersections.
+        image = canvas.render()
+        x, y = np.round(canvas.translate_coords_2((-5, 0))[:2] * canvas.pixel_scale).astype(int)
+        pixels = image[y-2:y+3, x-2:x+3, :3].astype(int)
+        self.assertGreater(np.max(pixels[:, :, 0] - pixels[:, :, 2]), 100)
+        canvas.grid.visible = False
+        hidden = canvas.render()
+        x, y = np.round(canvas.translate_coords_2((4, 4))[:2] * canvas.pixel_scale).astype(int)
+        self.assertGreater(hidden[y, x, 2], 200)
+        self.assertLess(hidden[y, x, 0], 30)
+        canvas.on_mouse_position((5, 5))
+        np.testing.assert_array_equal(canvas.render(), hidden)
+        canvas.cursor_color = '#00FF00'
+        canvas.on_mouse_position((6, 6))
+        self.assertFalse(np.array_equal(canvas.render(), hidden))
+        canvas.cursor_color = '#FF0000'
+        canvas.on_mouse_position((5, 5))
+        canvas.grid.visible = True
+        # First toggle enables the grid; the second must really remove it.
+        canvas.on_toggle_grid_lines(silent=True)
+        canvas.on_toggle_grid_lines(silent=True)
+        np.testing.assert_array_equal(canvas.render(), hidden)
+        canvas.on_toggle_grid_lines(silent=True)
+        self.assertFalse(np.array_equal(canvas.render(), hidden))
 
     def test_grid_size_changes_live_in_millimetres(self):
         for units, scale in (('MM', 1), ('IN', 1 / 25.4)):

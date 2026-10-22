@@ -142,6 +142,17 @@ def _linestring_to_segments(arr):
     return segments
 
 
+@lru_cache(maxsize=128)
+def _cached_hover_buffers(bounds, units, color, face_color):
+    xmin, ymin, xmax, ymax = bounds
+    shape = Polygon([(xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)])
+    shape = shape.buffer(-0.1).buffer(0.2) if units == 'MM' else shape.buffer(-0.00393).buffer(0.00787)
+    return _update_shape_buffers({
+        'geometry': shape, 'color': color, 'face_color': face_color,
+        'alpha': None, 'visible': True, 'layer': 0, 'tolerance': None
+    })
+
+
 class ShapeGroup(object):
     def __init__(self, collection):
         """
@@ -276,6 +287,42 @@ class ShapeGroup(object):
         self._collection.redraw([])
 
 
+class RectangleVisual(CompoundVisual):
+    """Keep rubber-band topology and styling; dragging updates only vertex positions."""
+
+    def __init__(self, linewidth):
+        self._vertices = np.array([(0, 0), (1, 0), (1, 1), (0, 1)], dtype=np.float32)
+        self._mesh = MeshVisual(vertices=self._vertices, faces=np.array([(0, 1, 2), (0, 2, 3)]))
+        self._line = LineVisual(pos=self._vertices[[0, 1, 1, 2, 2, 3, 3, 0]],
+                                connect='segments', width=linewidth, antialias=True)
+        # Reversing a drag mirrors the unit square; both windings must remain visible.
+        self._mesh.set_gl_state(polygon_offset_fill=True, polygon_offset=(1, 1), cull_face=False)
+        self._line.set_gl_state(blend=True)
+        self._rect = None
+        self._colors = None
+        super().__init__([self._mesh, self._line])
+
+    def set_data(self, start, end, color, face_color):
+        x0, y0 = start
+        x1, y1 = end
+        rect = (x0, y0, x1, y1)
+        if rect != self._rect:
+            self._vertices[:] = ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+            self._mesh.mesh_data.set_vertices(self._vertices)
+            self._mesh.set_data(meshdata=self._mesh.mesh_data)
+            self._line.set_data(pos=self._vertices[[0, 1, 1, 2, 2, 3, 3, 0]])
+            self._rect = rect
+        colors = (color, face_color)
+        if colors != self._colors:
+            if color is not None:
+                self._line.set_data(color=color)
+            if face_color is not None:
+                self._mesh.color = face_color
+            self._colors = colors
+        self._line.visible = color is not None
+        self._mesh.visible = face_color is not None and x1 != x0 and y1 != y0
+
+
 class ShapeCollectionVisual(CompoundVisual):
 
     def __init__(self, linewidth=1, triangulation='vispy', layers=3, pool=None, fcoptions=None, **kwargs):
@@ -297,6 +344,7 @@ class ShapeCollectionVisual(CompoundVisual):
         self.data = {}
         self.last_key = -1
         self._top_keys = set()
+        self._rectangle = None
         
         # Dirty flag to track whether buffers need rebuilding
         self._dirty = True
@@ -349,6 +397,31 @@ class ShapeCollectionVisual(CompoundVisual):
         """
         if isinstance(layer, bool) or not isinstance(layer, (int, np.integer)) or not 0 <= layer < len(self._meshes):
             raise ValueError("Layer %r is out of range 0..%d." % (layer, len(self._meshes) - 1))
+
+    def set_rectangle(self, start, end, color, face_color):
+        """Replace selection contents without rebuilding collection buffers on each move."""
+        if self.data:
+            self.clear(update=True)
+        if self._rectangle is None:
+            if isinstance(self, VisualNode):
+                self._rectangle = Rectangle(self._line_width, parent=self)
+            else:
+                self._rectangle = RectangleVisual(self._line_width)
+                self.add_subvisual(self._rectangle)
+        self._rectangle.set_data(start, end, color, face_color)
+        if not self._rectangle.visible:
+            self._rectangle.visible = True
+
+    def add_hover(self, bounds, units, color, face_color):
+        """Reuse rounded hover geometry and triangulation, bounded to 128 styles/bounds."""
+        buffers = _cached_hover_buffers(tuple(bounds), units.upper(), color, face_color)
+        with self.key_lock:
+            self.last_key += 1
+            key = self.last_key
+        self.data[key] = buffers.copy()
+        self._dirty = True
+        self.redraw()
+        return key
 
     def add(self, shape=None, color=None, face_color=None, alpha=None, visible=True,
             update=False, layer=1, tolerance=0.001, linewidth=None):
@@ -559,6 +632,8 @@ class ShapeCollectionVisual(CompoundVisual):
         :param update: bool
             Set True to redraw collection
         """
+        if self._rectangle is not None and self._rectangle.visible:
+            self._rectangle.visible = False
         self.last_key = -1
         self.data.clear()
         self._top_keys.clear()
@@ -1242,6 +1317,57 @@ class TextCollectionVisual(TextVisual):
         self.__update()
 
 
+class CursorTextVisual(TextVisual):
+    """Avoid rebuilding editor cursor glyphs when text and anchors haven't changed."""
+
+    @TextVisual.text.setter
+    def text(self, value):
+        value = [] if value is None else value
+        if getattr(self, '_text', None) != value:
+            TextVisual.text.fset(self, value)
+
+    @TextVisual.anchors.setter
+    def anchors(self, value):
+        if getattr(self, '_anchors', None) != value:
+            TextVisual.anchors.fset(self, value)
+
+
+class CursorVisual(MarkersVisual):
+    """Keep marker styling and its buffer bindings when only the cursor moves."""
+
+    def __init__(self, *args, **kwargs):
+        self._cursor_style = None
+        super().__init__(*args, **kwargs)
+
+    def set_data(self, pos=None, size=10., edge_width=None, edge_width_rel=None,
+                 edge_color='black', face_color='white', symbol='o'):
+        style = []
+        for value in (size, edge_width, edge_width_rel,
+                      getattr(edge_color, 'rgba', edge_color),
+                      getattr(face_color, 'rgba', face_color), symbol):
+            if isinstance(value, (np.ndarray, list, tuple)):
+                array = np.asarray(value)
+                value = (array.shape, array.dtype, array.tobytes())
+            style.append(value)
+        style = tuple(style)
+        if isinstance(pos, np.ndarray) and pos.shape == (1, 2) and \
+                self._data is not None and len(self._data) == 1 and \
+                style == self._cursor_style:
+            position = pos.astype(np.float32, copy=False)[0]
+            current = self._data['a_position'][0]
+            if current[0] != position[0] or current[1] != position[1] or current[2] != 0:
+                current[:2] = position
+                current[2] = 0
+                self._vbo.set_data(self._data)
+                self.events.data_updated()
+                self.update()
+            return
+
+        super().set_data(pos=pos, size=size, edge_width=edge_width, edge_width_rel=edge_width_rel,
+                         edge_color=edge_color, face_color=face_color, symbol=symbol)
+        self._cursor_style = style
+
+
 # Add 'enabled' property to visual nodes
 def create_fast_node(subclass):
     # Create a new subclass of Node.
@@ -1302,6 +1428,8 @@ def create_fast_node(subclass):
 
 
 ShapeCollection = create_fast_node(ShapeCollectionVisual)
+Rectangle = create_fast_node(RectangleVisual)
 GridLines = create_fast_node(GridLinesVisual)
 TextCollection = create_fast_node(TextCollectionVisual)
-Cursor = create_fast_node(MarkersVisual)
+Cursor = create_fast_node(CursorVisual)
+CursorText = create_fast_node(CursorTextVisual)

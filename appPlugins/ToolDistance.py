@@ -381,11 +381,7 @@ class Distance(AppTool):
                 d = math.sqrt(dx ** 2 + dy ** 2)
                 self.ui.total_distance_entry.set_value('%.*f' % (self.decimals, abs(d)))
 
-                self.app.ui.rel_position_label.setText(
-                    "<b>Dx</b>: {}&nbsp;&nbsp;  <b>Dy</b>: {}&nbsp;&nbsp;&nbsp;&nbsp;".format(
-                        '%.*f' % (self.decimals, pos[0]), '%.*f' % (self.decimals, pos[1])
-                    )
-                )
+                self.app.ui.update_location_labels(pos[0], pos[1], pos[0], pos[1])
 
                 self.tool_done = True
                 self.on_exit()
@@ -615,9 +611,7 @@ class Distance(AppTool):
         if event.button == 1:
             # Reset here the relative coordinates so there is a new reference on the click position
             if len(self.points) == 1:
-                self.app.ui.rel_position_label.setText("<b>Dx</b>: %.*f&nbsp;&nbsp;  <b>Dy</b>: "
-                                                       "%.*f&nbsp;&nbsp;&nbsp;&nbsp;" %
-                                                       (self.decimals, 0.0, self.decimals, 0.0))
+                self.app.ui.update_location_labels(0.0, 0.0, pos[0], pos[1])
 
             self.points.append(pos)
             self.calculate_distance(pos=pos)
@@ -677,7 +671,7 @@ class Distance(AppTool):
             if multipoint is False:
                 if len(self.points) == 1:
                     # update utility geometry
-                    self.delete_all_shapes()
+                    self.sel_shapes.clear()
                     self.add_utility_shape(start_pos=pos)
                     # update angle
                     angle_val = self.update_angle(dx=dx, dy=dy)
@@ -693,14 +687,16 @@ class Distance(AppTool):
                     self.display_distance(dist_val)
             else:
                 # update utility geometry
-                self.delete_utility_shape(self.last_shape)
                 if self.points:
+                    if self.last_shape is not None:
+                        self.sel_shapes.remove(self.last_shape, update=False)
                     self.add_utility_shape(start_pos=self.points[-1], end_pos=pos)
                     self.display_distance(self.total_distance + self.update_distance(pos, prev_pos=self.points[-1]))
+                else:
+                    self.delete_utility_shape(self.last_shape)
         except Exception as e:
             self.app.log.error("Distance.on_mouse_move() update --> %s" % str(e))
-            self.app.ui.position_label.setText("")
-            self.app.ui.rel_position_label.setText("")
+            self.app.ui.update_location_labels(None, None, None, None)
 
     def update_angle(self, dx, dy):
         try:
@@ -781,7 +777,7 @@ class Distance(AppTool):
         else:
             color = '#FFFFFFFF'
 
-        self.last_shape = self.sel_shapes.add(meas_line, color=color, update=True, layer=0, tolerance=None, linewidth=2)
+        self.last_shape = self.sel_shapes.add(meas_line, color=color, update=False, layer=0, tolerance=None, linewidth=2)
         self.sel_shapes.redraw()
 
     def delete_all_shapes(self):
@@ -789,7 +785,7 @@ class Distance(AppTool):
         self.sel_shapes.redraw()
 
     def delete_utility_shape(self, shape):
-        if shape:
+        if shape is not None:
             self.sel_shapes.remove(shape, update=True)
 
     @staticmethod

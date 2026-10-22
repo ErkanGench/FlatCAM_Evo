@@ -2595,7 +2595,6 @@ class AppGeoEditor(QtCore.QObject):
             start, selection_end = self.pos, (x, y)
         if event_is_dragging and event.button == 1 and \
                 (not selecting or AppGeoEditor._is_click_not_drag(self, event_pos) is not True):
-            self.app.delete_selection_shape()
             if dx < 0:
                 self.app.draw_moving_selection_shape(tuple(start), selection_end,
                                                      color=self.app.options.get(
@@ -2626,7 +2625,7 @@ class AppGeoEditor(QtCore.QObject):
         geo = self.active_tool.utility_geometry(data=data)
         if isinstance(geo, DrawToolShape) and geo.geo is not None:
             # Remove any previous utility shape
-            self.tool_shape.clear(update=True)
+            self.tool_shape.clear(update=False)
             self.draw_utility_geometry(geo=geo)
 
     def draw_selection_area_handler(self, start_pos, end_pos, sel_type):

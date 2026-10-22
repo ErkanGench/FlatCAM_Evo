@@ -783,8 +783,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         self.gcode_editor_tab.setObjectName('code_editor_tab')
 
         # delete the absolute and relative position and messages in the infobar
-        self.app.ui.position_label.setText("")
-        self.app.ui.rel_position_label.setText("")
+        self.app.ui.update_location_labels(None, None, None, None)
 
         self.gcode_editor_tab.code_editor.completer_enable = False
         self.gcode_editor_tab.buttonRun.hide()

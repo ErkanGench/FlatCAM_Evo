@@ -3307,8 +3307,7 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
             self.pos = (self.pos[0], self.pos[1])
 
         if event.button == 1:
-            self.app.ui.rel_position_label.setText("<b>Dx</b>: %.4f&nbsp;&nbsp;  <b>Dy</b>: "
-                                                   "%.4f&nbsp;&nbsp;&nbsp;&nbsp;" % (0, 0))
+            self.app.ui.update_location_labels(0, 0, *self.pos)
 
     def on_mouse_move(self, event):
         if not self.app.plotcanvas.native.hasFocus():
@@ -3377,7 +3376,6 @@ class ImportEditorGrb(QtCore.QObject, DrawTool):
         # Selection area on canvas section # ##
         if self.event_is_dragging == 1 and event.button == 1:
             dx = pos_canvas[0] - self.pos[0]
-            self.app.delete_selection_shape()
             if dx < 0:
                 self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y),
                                                      color=self.app.options.get(
@@ -7008,7 +7006,6 @@ class AppGerberEditor(QtCore.QObject):
                 self.app.delete_selection_shape()
             else:
                 dx = pos_canvas[0] - self.pos[0]
-                self.app.delete_selection_shape()
                 if dx < 0:
                     self.app.draw_moving_selection_shape((self.pos[0], self.pos[1]), (x, y),
                                                          color=self.app.options.get(
@@ -7038,7 +7035,7 @@ class AppGerberEditor(QtCore.QObject):
 
         if isinstance(geo, DrawToolShape) and geo.geo is not None:
             # Remove any previous utility shape
-            self.tool_shape.clear(update=True)
+            self.tool_shape.clear(update=False)
             self.draw_utility_geometry(geo_shape=geo)
 
     def draw_utility_geometry(self, geo_shape):

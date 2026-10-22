@@ -445,13 +445,12 @@ class QRCode(AppTool):
             offset_geo = [translate(self.box_poly, xoff=pos[0], yoff=pos[1])]
 
         for shp in offset_geo:
-            self.shapes.add(shp, color=outline, update=True, layer=0, tolerance=None)
+            self.shapes.add(shp, color=outline, update=False, layer=0, tolerance=None)
 
         self.shapes.redraw()
 
     def delete_utility_geo(self):
         self.shapes.clear(update=True)
-        self.shapes.redraw()
 
     def on_mouse_move(self, event):
         event_pos = event.pos
@@ -473,7 +472,7 @@ class QRCode(AppTool):
         dy = pos[1] - self.origin[1]
 
         # delete the utility geometry
-        self.delete_utility_geo()
+        self.shapes.clear()
         self.draw_utility_geo((dx, dy))
 
     def on_mouse_release(self, event):

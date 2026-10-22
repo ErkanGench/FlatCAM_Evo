@@ -5021,26 +5021,25 @@ class AppExcEditor(QtCore.QObject):
 
         # ## Snap coordinates
         x, y = self.snap(x, y)
-        if self.app.grid_status():
-            # Update cursor
-            self.app.app_cursor.set_data(np.asarray([(x, y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options.get(
+        # Update the cursor once, before constructing the preview geometry.
+        self.app.app_cursor.set_data(np.asarray([(x, y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
+                                     edge_width=self.app.options.get(
+                                         "global_cursor_width",
+                                         self.app.defaults.get(
                                              "global_cursor_width",
-                                             self.app.defaults.get(
-                                                 "global_cursor_width",
-                                                 self.app.defaults.factory_defaults.get("global_cursor_width")
-                                             )
-                                         ),
-                                         size=self.app.options.get(
+                                             self.app.defaults.factory_defaults.get("global_cursor_width")
+                                         )
+                                     ),
+                                     size=self.app.options.get(
+                                         "global_cursor_size",
+                                         self.app.defaults.get(
                                              "global_cursor_size",
-                                             self.app.defaults.get(
-                                                 "global_cursor_size",
-                                                 self.app.defaults.factory_defaults.get("global_cursor_size")
-                                             )
-                                         ))
+                                             self.app.defaults.factory_defaults.get("global_cursor_size")
+                                         )
+                                     ))
 
-        self.snap_x = deepcopy(x)
-        self.snap_y = deepcopy(y)
+        self.snap_x = x
+        self.snap_y = y
 
         if self.clicked_pos is None:
             self.clicked_pos = (0, 0)
@@ -5085,7 +5084,6 @@ class AppExcEditor(QtCore.QObject):
                 self.app.selection_type = None
             else:
                 dx = pos[0] - self.clicked_pos[0]
-                self.app.delete_selection_shape()
                 if dx < 0:
                     self.app.draw_moving_selection_shape((self.clicked_pos[0], self.clicked_pos[1]), (x, y),
                                                          color=self.app.options.get(
@@ -5108,23 +5106,6 @@ class AppExcEditor(QtCore.QObject):
                     self.app.selection_type = True
         else:
             self.app.selection_type = None
-
-        # Update cursor
-        self.app.app_cursor.set_data(np.asarray([(x, y)]), symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                     edge_width=self.app.options.get(
-                                         "global_cursor_width",
-                                         self.app.defaults.get(
-                                             "global_cursor_width",
-                                             self.app.defaults.factory_defaults.get("global_cursor_width")
-                                         )
-                                     ),
-                                     size=self.app.options.get(
-                                         "global_cursor_size",
-                                         self.app.defaults.get(
-                                             "global_cursor_size",
-                                             self.app.defaults.factory_defaults.get("global_cursor_size")
-                                         )
-                                     ))
 
     @excellon_operation(_('Add features'))
     def add_exc_shape(self, shp, storage):
@@ -5313,7 +5294,7 @@ class AppExcEditor(QtCore.QObject):
         geo = self.active_tool.utility_geometry(data=data)
         if isinstance(geo, DrawToolShape) and geo.geo is not None:
             # Remove any previous utility shape
-            self.tool_shape.clear(update=True)
+            self.tool_shape.clear(update=False)
             self.draw_utility_geometry(geo=geo)
 
     # def on_canvas_key_release(self, event):

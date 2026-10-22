@@ -305,6 +305,8 @@ class AppTool(QtWidgets.QWidget):
         else:
             s_storage = self.app.sel_shapes
 
+        s_storage.clear()
+
         if 'color' in kwargs:
             color = kwargs['color']
         else:
@@ -331,6 +333,7 @@ class AppTool(QtWidgets.QWidget):
             if data != temp_points[-1]:
                 temp_points.append(data)
         except IndexError:
+            s_storage.redraw()
             return
 
         l_points = len(temp_points)
@@ -339,15 +342,16 @@ class AppTool(QtWidgets.QWidget):
         elif l_points > 2:
             geo = Polygon(temp_points)
         else:
+            s_storage.redraw()
             return
 
         color_t = face_color[:-2] + str(hex(int(face_alpha * 255)))[2:]
         color_t_error = "#00000000"
 
         if geo.is_valid and not geo.is_empty:
-            s_storage.add(geo, color=color, face_color=color_t, update=True, layer=0, tolerance=None)
+            s_storage.add(geo, color=color, face_color=color_t, update=False, layer=0, tolerance=None)
         elif not geo.is_valid:
-            s_storage.add(geo, color="red", face_color=color_t_error, update=True, layer=0, tolerance=None)
+            s_storage.add(geo, color="red", face_color=color_t_error, update=False, layer=0, tolerance=None)
 
         s_storage.redraw()
 

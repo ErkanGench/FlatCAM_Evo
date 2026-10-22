@@ -584,8 +584,7 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
         self.gcode_viewer_tab.setObjectName('code_viewer_tab')
 
         # delete the absolute and relative position and messages in the infobar
-        self.app.ui.position_label.setText("")
-        self.app.ui.rel_position_label.setText("")
+        self.app.ui.update_location_labels(None, None, None, None)
 
         self.gcode_viewer_tab.code_editor.completer_enable = False
         self.gcode_viewer_tab.buttonRun.hide()
