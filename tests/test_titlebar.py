@@ -67,6 +67,23 @@ class TestTitleBar(unittest.TestCase):
         QtTest.QTest.mouseClick(self.bar.menu_button, QtCore.Qt.MouseButton.LeftButton)
         self.qapp.processEvents()
 
+    def test_window_created_by_the_splash_keeps_its_saved_geometry(self):
+        window = TitleWindow()
+        self.addCleanup(window.deleteLater)
+        self.addCleanup(window.hide)
+        if window.title_bar.native_filter is None:
+            self.skipTest('native Windows frame only')
+        window.ensurePolished()
+        window.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+        window.setGeometry(300, 200, 900, 500)
+        # The app start: QSplashScreen.finish() creates the native window before the first show.
+        splash = QtWidgets.QSplashScreen(QtGui.QPixmap(20, 20))
+        splash.show()
+        splash.finish(window)
+        window.show()
+        QtTest.QTest.qWait(300)
+        self.assertEqual(QtCore.QRect(300, 200, 900, 500), window.geometry())
+
     def test_existing_actions_and_project_title_are_reused(self):
         if self.bar.native_filter is not None:
             self.window.hide()

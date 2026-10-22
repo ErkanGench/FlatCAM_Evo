@@ -423,7 +423,9 @@ class TitleBar(QtWidgets.QWidget):
 
     def update_native_corners(self):
         window_id = self.window().effectiveWinId()
-        if self.native_filter is not None:
+        # A frame change on a hidden window (QSplashScreen.finish() creates it before show) makes Qt grow the
+        # geometry by the native frame margins on each start. The Show event applies it.
+        if self.native_filter is not None and self.window().isVisible():
             self.native_filter.set_handle(int(window_id) if window_id else 0)
         if sys.platform != 'win32' or not window_id:
             return
