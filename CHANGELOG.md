@@ -17,6 +17,10 @@ Tools Database:
 - the lookup of a tool by diameter takes the exact diameter first, then a tool whose tolerance contains the diameter
 - Add, Duplicate, Delete, Import, Export, Save buttons; Import adds the tools of a file, "Replace library from file…" replaces the library; the JSON export keeps the units, and an import in the wrong units is refused
 - a tool with no name or with a diameter of 0 or NaN is refused at save
+- a bad tool record is skipped, not fatal: the library shows it in red with the reason, and the editor, Save, Export and the plugins keep working with the other tools
+- a failed first save does not leave an empty tools.sqlite3 that blocks the migration; the migration also takes the newest older tools_db_*.FlatDB when the file of the current version is missing
+- an Import of the same file again does not add duplicate tools
+- a plugin tells the user when the library is in other units than the application and was not used
 
 Calculators:
 
@@ -25,6 +29,7 @@ Calculators:
 GUI:
 
 - Windows: the title bar keeps the native resize frame and caption actions behind the custom title bar: drag, edge snap, double-click and the Windows 11 Snap Layouts on the maximize button work; the title bar is 30 px high; the restore after a maximized start goes back to the saved size
+- Windows: the main window starts again at the size and position of the last stop (before, it grew by the native frame at each start); a quit from the updater or a Tcl command also saves the window geometry
 - Shift+G, Shift+A, Shift+H and Shift+W (grid lines, axis, HUD, workspace) work in the editors and plugins too, but not in a text input; Shift+G and View -> Grid lines toggle the grid of the active plot (2D or 3D)
 - the plot cursor shows only when the mouse is over the canvas
 - the plot shapes stay visible when the plot tab is detached into a window and attached again
