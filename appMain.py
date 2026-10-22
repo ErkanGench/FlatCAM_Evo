@@ -827,14 +827,16 @@ class App(QtCore.QObject):
         try:
             from appDatabase import initialize_tools_database
             migration_defaults = dict(AppDefaults().defaults)
-            if not os.path.exists(db_path) and os.path.isfile(self.defaults_path()):
+            if not (os.path.isfile(db_path) and os.path.getsize(db_path)) and os.path.isfile(self.defaults_path()):
                 with open(self.defaults_path(), encoding='utf-8') as stream:
                     saved_defaults = json.load(stream)
                 if isinstance(saved_defaults, dict):
                     migration_defaults['units'] = saved_defaults.get('units', 'MM')
-            initialize_tools_database(
-                db_path, os.path.join(self.data_path, 'tools_db_%s.FlatDB' % self.version),
-                migration_defaults)
+            # This version's library first, then the libraries of older versions, newest first.
+            current_legacy = Path(self.data_path) / ('tools_db_%s.FlatDB' % self.version)
+            older_legacy = sorted((path for path in Path(self.data_path).glob('tools_db_*.FlatDB')
+                                   if path != current_legacy), key=lambda path: path.stat().st_mtime, reverse=True)
+            initialize_tools_database(db_path, [current_legacy] + older_legacy, migration_defaults)
         except (OSError, TypeError, ValueError) as error:
             self.log.error('Could not initialize tools database: %s' % str(error))
 

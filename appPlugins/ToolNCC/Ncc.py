@@ -34,7 +34,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from appPlugins.ToolNCC.NccGen import NccGen
-from appDatabase import load_tools_database
+from appDatabase import load_tools_database, tools_database_error_message
 from defaults import AppDefaults
 from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs
 from appCommon.SafeEval import safe_eval
@@ -1369,7 +1369,7 @@ class ToolNcc(Geometry, AppTool):
         except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
             self.app.log.error(str(error))
-            self.app.inform.emit('[ERROR] %s' % _("Could not load the file."))
+            self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
             self.blockSignals(False)
             self.on_tool_default_add(dia=tool_dia)
             return

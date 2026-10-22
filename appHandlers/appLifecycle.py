@@ -447,6 +447,10 @@ class AppLifecycle(QtCore.QObject):
         stgs = QSettings("Open Source", "FlatCAM_EVO")
         stgs.setValue('saved_gui_state', gui_state)
         stgs.setValue('maximized_gui', self.app.ui.isMaximized())
+        if not self.app.ui.isMaximized():
+            # Updater and Tcl quits do not pass through MainGUI.closeEvent().
+            g_rect = self.app.ui.geometry()
+            stgs.setValue('window_geometry', (g_rect.x(), g_rect.y(), g_rect.width(), g_rect.height()))
         stgs.setValue(
             'language',
             self.app.ui.general_pref_form.general_app_group.language_combo.get_value()

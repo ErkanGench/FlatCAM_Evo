@@ -4,7 +4,8 @@ from appGUI.GUIElements import FCEntry, FCButton, FCDoubleSpinner, FCComboBox, F
     FCTree, RadioSet, FCFileSaveDialog, FCLabel, FCComboBox2, FCMessageBox, GLay
 from camlib import to_dict
 from appCommon.SafeEval import safe_eval
-from appCommon.ToolDatabase import read_database, read_library, write_database, matching_tools, OPERATION_PREFIXES
+from appCommon.ToolDatabase import read_database, read_library, write_database, matching_tools, OPERATION_PREFIXES, \
+    UnitsMismatchError
 from appGUI.ToolLibrary import ToolLibraryModel, ToolLibraryFilter, operation_names
 
 import sys
@@ -103,7 +104,8 @@ def _validate_database_option(value, default, field):
     return value
 
 
-def normalize_tools_database(records, defaults):
+def normalize_tools_database(records, defaults, skipped=None):
+    """Raise on the first bad record, or, with a ``skipped`` dictionary, leave it out and store the reason."""
     if not isinstance(records, dict):
         raise ValueError('Tools DB root: expected a dictionary')
 
@@ -117,12 +119,11 @@ def normalize_tools_database(records, defaults):
     offset_labels = [('Path', _('Path')), ('In', _('In')), ('Out', _('Out')), ('Custom', _('Custom'))]
     gap_labels = [('Bridge', _('Bridge')), ('Thin', _('Thin')), ('M-Bites', _('M-Bites'))]
 
-    for tool_id, tool in normalized.items():
-        if (type(tool_id) is not str or not tool_id.isdecimal() or
-                str(int(tool_id)) != tool_id or not 0 < int(tool_id) <= 9223372036854775807):
-            raise ValueError('record ID %r: expected a positive canonical decimal string' % tool_id)
-
+    for tool_id, tool in list(normalized.items()):
         try:
+            if (type(tool_id) is not str or not tool_id.isdecimal() or
+                    str(int(tool_id)) != tool_id or not 0 < int(tool_id) <= 9223372036854775807):
+                raise ValueError('record ID %r: expected a positive canonical decimal string' % tool_id)
             if not isinstance(tool, dict):
                 raise ValueError('expected a record dictionary')
             if not isinstance(tool.get('name'), str):
@@ -192,20 +193,45 @@ def normalize_tools_database(records, defaults):
                 if option in default_values:
                     _validate_database_option(value, default_values[option], option)
         except (TypeError, ValueError) as error:
-            raise ValueError('record %s: %s' % (tool_id, error)) from error
+            if skipped is None:
+                raise ValueError('record %s: %s' % (tool_id, error)) from error
+            skipped[str(tool_id)] = str(error)
+            del normalized[tool_id]
 
     return normalized
 
 
-def initialize_tools_database(filename, legacy_filename, defaults):
-    if Path(filename).exists():
+def tools_database_error_message(error):
+    if isinstance(error, UnitsMismatchError):
+        return _("The Tools DB uses %s and the application uses %s. The Tools DB was not used.") % (
+            error.stored, error.current)
+    return _("Could not load Tools DB file.")
+
+
+def initialize_tools_database(filename, legacy_filenames, defaults):
+    """Migrate the first legacy library that holds tools; an empty file is a failed start, not a library."""
+    if Path(filename).exists() and Path(filename).stat().st_size:
         return
-    records = load_tools_database(legacy_filename, defaults) if Path(legacy_filename).exists() else {}
+    if isinstance(legacy_filenames, (str, Path)):
+        legacy_filenames = [legacy_filenames]
+    records = {}
+    for legacy_filename in legacy_filenames:
+        if not Path(legacy_filename).is_file():
+            continue
+        try:
+            records = load_tools_database(legacy_filename, defaults)
+        except (OSError, TypeError, ValueError) as error:
+            log.error('Tools DB migration skipped %s: %s', legacy_filename, error)
+            continue
+        if records:
+            log.info('Tools DB migrated from %s', legacy_filename)
+            break
     units = dict(_database_option_items(defaults)).get('units', 'MM') if records else None
     write_tools_database(filename, records, units=units, expected_revision=0)
 
 
-def load_tools_database(filename, defaults, *, target=None, diameter=None, units=None):
+def load_tools_database(filename, defaults, *, target=None, diameter=None, units=None, skipped=None):
+    """Bad records are left out and logged; ``skipped`` collects their reasons."""
     if Path(filename).suffix.lower() == '.sqlite3':
         records, metadata = read_database(filename, target=target, diameter=diameter, units=units)
     else:
@@ -216,9 +242,12 @@ def load_tools_database(filename, defaults, *, target=None, diameter=None, units
                 raise ValueError('Unsupported tools JSON version')
             stored_units = records.get('units')
             if units and stored_units and units.upper() != stored_units:
-                raise ValueError('Tools database units are %s; current units are %s' % (stored_units, units))
+                raise UnitsMismatchError(stored_units, units.upper())
             records = records['tools']
-    normalized = normalize_tools_database(records, defaults)
+    skipped = {} if skipped is None else skipped
+    normalized = normalize_tools_database(records, defaults, skipped=skipped)
+    for tool_id, reason in skipped.items():
+        log.warning('Tools DB %s: skipped record %s: %s', filename, tool_id, reason)
     return matching_tools(normalized, target=target, diameter=diameter)
 
 
@@ -1970,22 +1999,36 @@ class ToolsDB2(QtWidgets.QWidget):
                 if str(index.data()) in self.db_tool_dict]
 
     def ensure_tools_loaded(self, tool_ids):
-        try:
-            pending = {key: json.loads(self._raw_records[key]) for key in tool_ids
-                       if key not in self._loaded_ids}
-            self.db_tool_dict.update(normalize_tools_database(pending, self.library_defaults))
-            self._loaded_ids.update(pending)
-        except (KeyError, TypeError, ValueError) as error:
-            self._db_load_valid = False
-            self._set_db_load_controls(False)
-            self.ui.status_label.setText(str(error))
-            self.app.log.error('Tools database: %s' % error)
-            return False
-        return True
+        """Load the stored properties; a bad record stays in the file untouched and is marked as skipped."""
+        pending = {key for key in tool_ids if key not in self._loaded_ids and key not in self.model.skipped}
+        loaded = self.parse_raw_records(pending)
+        self.db_tool_dict.update(loaded)
+        self._loaded_ids.update(loaded)
+        for key in pending - set(loaded):
+            self.model.update_tool(key)
+        skipped = [key for key in tool_ids if key in self.model.skipped]
+        if skipped:
+            self.ui.status_label.setText(_("Skipped tool %s: %s") % (skipped[0], self.model.skipped[skipped[0]]))
+        return not skipped
+
+    def parse_raw_records(self, tool_ids):
+        records = {}
+        skipped = {}
+        for key in tool_ids:
+            try:
+                records[key] = json.loads(self._raw_records[key])
+            except (KeyError, TypeError, ValueError) as error:
+                skipped[key] = str(error)
+        records = normalize_tools_database(records, self.library_defaults, skipped=skipped)
+        for key, reason in skipped.items():
+            self.app.log.error('Tools database: skipped record %s: %s' % (key, reason))
+        self.model.skipped.update(skipped)
+        return records
 
     def all_tool_records(self):
-        return {key: tool if key in self._loaded_ids else json.loads(self._raw_records[key])
-                for key, tool in self.db_tool_dict.items()}
+        records = {key: tool for key, tool in self.db_tool_dict.items() if key in self._loaded_ids}
+        records.update(self.parse_raw_records(set(self.db_tool_dict) - set(records) - set(self.model.skipped)))
+        return {key: records[key] for key in self.db_tool_dict if key in records}
 
     def select_tool(self, tool_id):
         row = self.model.rows.get(str(tool_id))
@@ -2011,8 +2054,9 @@ class ToolsDB2(QtWidgets.QWidget):
         self.update_selection_state()
 
     def update_selection_state(self, *args):
-        count = len(self.selected_tool_ids())
-        self.ui.param_area.setEnabled(count == 1)
+        selected = self.selected_tool_ids()
+        count = len(selected)
+        self.ui.param_area.setEnabled(count == 1 and selected[0] not in self.model.skipped)
         self.ui.copy_entry_btn.setEnabled(count > 0)
         self.ui.remove_entry_btn.setEnabled(count > 0)
         self.ui.add_tool_from_db.setEnabled(count > 0 and self._db_load_valid)
@@ -2099,6 +2143,7 @@ class ToolsDB2(QtWidgets.QWidget):
         if tool_id not in self.db_tool_dict:
             return
         if not self.ensure_tools_loaded([tool_id]):
+            self.update_selection_state()
             return
         self.ui_disconnect()
         self.current_toolid = int(tool_id)
@@ -2169,6 +2214,7 @@ class ToolsDB2(QtWidgets.QWidget):
             return
 
         self.db_tool_dict = candidate
+        self.model.skipped.clear()
         self._db_load_valid = True
         self._set_db_load_controls(True)
 
@@ -2274,13 +2320,12 @@ class ToolsDB2(QtWidgets.QWidget):
         selected_items = self.selected_tool_ids()
         if not selected_items:
             return
-        if not self.ensure_tools_loaded(selected_items):
-            return
+        self.ensure_tools_loaded(selected_items)
 
         new_tool_id = max((int(key) for key in self.db_tool_dict), default=0)
         copied = False
         for old_tool_id in selected_items:
-            if old_tool_id not in self.db_tool_dict:
+            if old_tool_id not in self._loaded_ids:
                 continue
             new_tool_id += 1
             self.db_tool_dict[str(new_tool_id)] = deepcopy(self.db_tool_dict[old_tool_id])
@@ -2360,6 +2405,8 @@ class ToolsDB2(QtWidgets.QWidget):
             return False
 
         self.app.inform.emit('[success] %s: %s' % (_("Exported Tools DB to"), filename))
+        if self.model.skipped:
+            self.ui.status_label.setText(_("Export skipped %d bad tools.") % len(self.model.skipped))
         return True
 
     def on_import_tools_db_file(self, replace=False):
@@ -2386,15 +2433,15 @@ class ToolsDB2(QtWidgets.QWidget):
         if replace and self.app.tools_db_changed_flag and not self.confirm_close():
             return False
         if not replace:
-            if not self.ensure_tools_loaded(set(candidate) & set(self.db_tool_dict)):
-                return False
+            # Tools that are already in the library, under any ID, are not added again.
+            existing = list(self.all_tool_records().values())
             merged = deepcopy(self.db_tool_dict)
             imported_ids = set()
             new_id = max((int(key) for key in set(merged) | set(candidate)), default=0)
             for key, tool in candidate.items():
+                if tool in existing:
+                    continue
                 if key in merged:
-                    if tool == merged[key]:
-                        continue
                     new_id += 1
                     key = str(new_id)
                 merged[key] = tool
@@ -2404,6 +2451,7 @@ class ToolsDB2(QtWidgets.QWidget):
         else:
             self._loaded_ids = set(candidate)
             self._raw_records = {}
+            self.model.skipped.clear()
         self.db_tool_dict = candidate
         self.current_toolid = None
         self._db_load_valid = True

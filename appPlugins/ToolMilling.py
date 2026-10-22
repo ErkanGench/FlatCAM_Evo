@@ -25,7 +25,7 @@ import gettext
 import appTranslation as fcTranslate
 import builtins
 
-from appDatabase import load_tools_database
+from appDatabase import load_tools_database, tools_database_error_message
 from defaults import AppDefaults
 from camlib import Geometry, grace, deepcopy_keep_geometry
 from appHandlers.appHistory import history_of, object_state, SnapshotStep
@@ -2332,7 +2332,7 @@ class ToolMilling(Geometry, AppTool):
         except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
             self.app.log.error(str(error))
-            self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
+            self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
             self.ui_connect()
             self.on_tool_default_add(dia=tool_dia)
             return

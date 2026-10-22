@@ -119,6 +119,7 @@ class LifecycleChecks(DatabaseCase):
         # quit_application saves the GUI state; these stand-ins keep it away from the real QSettings
         self.app.ui.saveState = MagicMock(return_value=b'')
         self.app.ui.isMaximized = MagicMock(return_value=False)
+        self.app.ui.geometry = MagicMock(return_value=QtCore.QRect(10, 20, 800, 600))
         self.app.ui.general_pref_form = MagicMock()
         self.app.new_launch = SimpleNamespace(thread_exit=False, address=('127.0.0.1', 1))
         self.app.listen_th = MagicMock()
@@ -329,6 +330,54 @@ class EditorChecks(DatabaseCase):
         self.assertTrue(self.app.tools_db_changed_flag)
         self.assertEqual('external edit', appDatabase.load_tools_database(destination, self.app.options)['7']['name'])
 
+    def test_failed_first_write_leaves_no_file_and_migration_retries(self):
+        import appDatabase
+        from appCommon.ToolDatabase import write_database
+        destination = self.path.with_suffix('.sqlite3')
+        with self.assertRaises(OSError):
+            write_database(destination, {'7': {'name': 'x', 'tooldia': -1.0, 'data': {'tool_target': 1}}},
+                           units='MM')
+        self.assertFalse(destination.exists())
+        # An empty file from an older failed start must not block the migration.
+        destination.write_bytes(b'')
+        self.path.write_text(json.dumps({'7': record(4)}), encoding='utf-8')
+        appDatabase.initialize_tools_database(destination, self.path, self.app.options)
+        self.assertEqual(['7'], list(appDatabase.load_tools_database(destination, self.app.options)))
+
+    def test_migration_skips_bad_records_and_uses_newest_legacy_library(self):
+        import appDatabase
+        bad = record(4)
+        bad['name'] = ''
+        current = self.path.parent / 'tools_db_1.1.FlatDB'
+        current.write_text('{}', encoding='utf-8')
+        self.path.write_text(json.dumps({'7': record(4), '8': bad}), encoding='utf-8')
+        destination = self.path.with_suffix('.sqlite3')
+        appDatabase.initialize_tools_database(destination, [current, self.path], self.app.options)
+        self.assertEqual(['7'], list(appDatabase.load_tools_database(destination, self.app.options)))
+
+    def test_editor_skips_bad_record_and_saves_the_rest(self):
+        import sqlite3
+        import appDatabase
+        destination = self.path.with_suffix('.sqlite3')
+        appDatabase.write_tools_database(destination, {'7': record(4), '8': record(2)}, units='MM')
+        bad = record(2)
+        bad['tooldia'] = 'wide'
+        with closing(sqlite3.connect(destination)) as connection, connection:
+            connection.execute('UPDATE tools SET record=? WHERE id=8', (json.dumps(bad),))
+        self.path = destination
+        db = self.database()
+        db.select_tool('8')
+        self.assertTrue(db.ui.status_label.text())
+        self.assertFalse(db.ui.param_area.isEnabled())
+        self.assertTrue(db.ui.save_db_btn.isEnabled())
+        db.select_tool('7')
+        db.ui.name_entry.set_value('kept edit')
+        self.assertTrue(db.on_save_tools_db())
+        self.assertEqual('kept edit', appDatabase.load_tools_database(destination, self.app.options)['7']['name'])
+        with closing(sqlite3.connect(destination)) as connection:
+            stored = connection.execute('SELECT record FROM tools WHERE id=8').fetchone()[0]
+        self.assertEqual(bad, json.loads(stored))
+
     def test_lookup_exact_precedes_tolerance_and_supports_general_tools(self):
         import appDatabase
         source = {'7': record(4), '8': record(4, 2.5), '9': record(2)}
@@ -422,11 +471,15 @@ class EditorChecks(DatabaseCase):
 
         incoming = record(2)
         incoming['name'] = 'Imported drill'
-        invalid_path.write_text(json.dumps({'1': incoming}), encoding='utf-8')
-        with patch('appDatabase.QtWidgets.QFileDialog.getOpenFileName',
-                   return_value=(str(invalid_path), '')):
-            self.assertTrue(db.on_import_tools_db_file())
-        self.assertEqual({'1', '2'}, set(db.db_tool_dict))
+        bad = record(2)
+        bad['tooldia'] = 0
+        invalid_path.write_text(json.dumps({'1': incoming, '5': bad}), encoding='utf-8')
+        for _attempt in range(2):
+            # A second import of the same file adds no duplicates.
+            with patch('appDatabase.QtWidgets.QFileDialog.getOpenFileName',
+                       return_value=(str(invalid_path), '')):
+                self.assertTrue(db.on_import_tools_db_file())
+            self.assertEqual({'1', '2'}, set(db.db_tool_dict))
         self.assertEqual('Imported drill', db.db_tool_dict['2']['name'])
         self.assertEqual(before_bytes, self.path.read_bytes())
         before_state = deepcopy(db.db_tool_dict)
@@ -711,6 +764,16 @@ class ConsumerChecks(DatabaseCase):
                 data = result['data'] if target == 6 else result[1]['data']
                 self.assertEqual(23.0, data[parameter])
                 self.assertEqual(321.0, data['tools_mill_feedrate'])
+
+                # A library in other units adds a default tool and says why on the status bar.
+                self.path.write_text(json.dumps({'format': 'flatcam-tools', 'version': 1, 'units': 'IN',
+                                                 'tools': {'1': tool}}), encoding='utf-8')
+                self.app.inform.reset_mock()
+                setattr(stub, storage, {})
+                cls.on_tool_add(stub, custom_dia=2.4)
+                stub.on_tool_default_add.assert_called_once()
+                stub.on_tool_default_add.reset_mock()
+                self.assertIn('IN', self.app.inform.emit.call_args[0][0])
 
     def test_paint_offset_comes_from_the_matching_record(self):
         from appPlugins.ToolPaint.Paint import ToolPaint

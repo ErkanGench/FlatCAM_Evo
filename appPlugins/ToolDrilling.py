@@ -11,7 +11,7 @@ from defaults import AppDefaults
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     FCComboBox2, RadioSet, FCDoubleSpinner, FCSpinner, NumericalEvalTupleEntry, NumericalEvalEntry, FCTable, \
     OptionalInputSection, OptionalHideInputSection
-from appDatabase import load_tools_database
+from appDatabase import load_tools_database, tools_database_error_message
 from appCommon.ToolDatabase import matching_tools
 from camlib import Geometry, flatten_shapely_geometry
 from appCommon.SafeEval import safe_eval
@@ -1242,7 +1242,7 @@ class ToolDrilling(Geometry, AppTool):
         except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
             self.app.log.error(str(error))
-            self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
+            self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
             return
 
         if not self.tools_db_dict:

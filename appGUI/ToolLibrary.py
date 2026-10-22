@@ -1,6 +1,6 @@
 """Qt model/view presentation for the tool library."""
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtGui
 import builtins
 import gettext
 import appTranslation as fcTranslate
@@ -22,6 +22,8 @@ class ToolLibraryModel(QtCore.QAbstractTableModel):
         self.rows = {}
         self.operations = operation_names()
         self.search_texts = {}
+        # Tool ID -> reason; these records stay in the file but cannot be edited or used.
+        self.skipped = {}
 
     def rowCount(self, parent=QtCore.QModelIndex()):
         return 0 if parent.isValid() else len(self.ids)
@@ -44,6 +46,11 @@ class ToolLibraryModel(QtCore.QAbstractTableModel):
         values = (int(key), tool['name'], target, tool['tooldia'], shape)
         if role == QtCore.Qt.ItemDataRole.UserRole:
             return values[index.column()]
+        if key in self.skipped:
+            if role == QtCore.Qt.ItemDataRole.ToolTipRole:
+                return _('Skipped: %s') % self.skipped[key]
+            if role == QtCore.Qt.ItemDataRole.ForegroundRole:
+                return QtGui.QBrush(QtGui.QColor('#c0392b'))
         if role in (QtCore.Qt.ItemDataRole.DisplayRole, QtCore.Qt.ItemDataRole.ToolTipRole):
             if index.column() == 2:
                 return self.operations[target]

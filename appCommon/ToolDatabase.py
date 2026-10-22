@@ -16,6 +16,14 @@ OPERATION_PREFIXES = {
 }
 
 
+class UnitsMismatchError(ValueError):
+    def __init__(self, stored, current):
+        super().__init__('Tools database units are %s; current units are %s. '
+                         'Switch application units before using this library.' % (stored, current))
+        self.stored = stored
+        self.current = current
+
+
 @contextmanager
 def _connection(filename, write=False):
     path = Path(filename).resolve()
@@ -46,8 +54,7 @@ def _metadata(connection, units=None):
     values = dict(connection.execute('SELECT key, value FROM metadata'))
     stored_units = values.get('units', '')
     if units and stored_units and stored_units != units.upper():
-        raise ValueError('Tools database units are %s; current units are %s. '
-                         'Switch application units before using this library.' % (stored_units, units))
+        raise UnitsMismatchError(stored_units, units.upper())
     return values
 
 
@@ -103,6 +110,19 @@ def write_database(filename, records, units=None, expected_revision=None, retain
              tool['data'].get('tools_mill_tool_shape', 0), positions[key],
              json.dumps(tool, separators=(',', ':'), ensure_ascii=False, allow_nan=False))
             for key, tool in records.items()]
+    # SQLite creates the file before the transaction; a failed first write must not leave it behind.
+    path = Path(filename)
+    created = not path.exists()
+    try:
+        return _write_rows(filename, rows, retained, units, expected_revision)
+    except BaseException:
+        if created:
+            for leftover in (path, Path(str(path) + '-journal')):
+                leftover.unlink(missing_ok=True)
+        raise
+
+
+def _write_rows(filename, rows, retained, units, expected_revision):
     with _connection(filename, write=True) as connection:
         version = connection.execute('PRAGMA user_version').fetchone()[0]
         if version == 0 and not connection.execute(

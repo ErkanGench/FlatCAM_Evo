@@ -29,7 +29,7 @@ import gettext
 import appTranslation as fcTranslate
 import builtins
 
-from appDatabase import load_tools_database
+from appDatabase import load_tools_database, tools_database_error_message
 from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs, outline_area, clip_paths_to_area, \
     area_outline_paths, boundary_passes_message, isolation_leftover_paths, milling_orient, pass_covers_area
 from appCommon.SafeEval import safe_eval
@@ -1466,7 +1466,7 @@ class ToolIsolation(Geometry, AppTool):
         except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
             self.app.log.error(str(error))
-            self.app.inform.emit('[ERROR] %s' % _("Could not load Tools DB file."))
+            self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
             self.ui_connect()
             self.on_tool_default_add(dia=tool_dia, v_derived=derive_v_dia)
             return
