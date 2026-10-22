@@ -450,7 +450,9 @@ class TestSubtests(unittest.TestCase):
             path = os.path.join(folder, 'test_subtests.py')
             with open(path, 'w', encoding='utf-8') as test_file:
                 test_file.write(source)
-            code, outcomes, error, _counts = run_pytest([path])
+            # Without confcutdir pytest lists the whole Temp folder; another xdist worker can delete an entry of it
+            # during the scan (FileNotFoundError at collection).
+            code, outcomes, error, _counts = run_pytest([path, '--confcutdir', folder])
         self.assertEqual(code, 1)
         self.assertIsNone(error)
         self.assertEqual(next(v for k, v in outcomes.items() if k.endswith('::test_failed')), 'failed')
