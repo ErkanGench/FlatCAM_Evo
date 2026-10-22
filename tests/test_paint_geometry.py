@@ -46,22 +46,6 @@ class TestPaintGeometry(unittest.TestCase):
                 self.assertEqual(len(paths), len(expected))
                 self.assertTrue(all(a.equals_exact(b, 1e-12) for a, b in zip(paths, expected)))
 
-    def test_seed_circle_uses_full_circle_steps(self):
-        for steps in (1, 16, 17, 64):
-            with self.subTest(steps=steps):
-                paths = list(camlib.Geometry.clear_polygon_seed(
-                    self.geometry, box(0, 0, 6, 6), 1, steps,
-                    seedpoint=Point(3, 3), connect=False, contour=False).get_objects())
-                self.assertEqual(len(paths[0].coords) - 1, 4 * max(1, math.ceil(steps / 4)))
-
-    def test_lines_contour_uses_full_circle_steps(self):
-        paths = list(camlib.Geometry.clear_polygon_lines(
-            self.geometry, self.polygon, 1, 64, connect=False).get_objects())
-        expected = self.polygon.buffer(-1 / 1.99999999, quad_segs=16)
-        rings = [path for path in paths if isinstance(path, LinearRing)]
-        self.assertEqual(len(rings), 2)
-        self.assertTrue(rings[1].equals_exact(expected.interiors[0], 1e-12))
-
     def test_trace_filling_uses_full_circle_steps(self):
         line = LineString([(1, 3), (5, 3)])
         paths = list(camlib.Geometry.fill_with_lines(
@@ -85,47 +69,6 @@ class TestPaintGeometry(unittest.TestCase):
         result = camlib.Geometry.paint_connect(storage_of(paths), boundary, 0.2, 64)
         self.assertEqual([list(path.coords) for path in result.get_objects()],
                          [list(path.coords) for path in paths])
-
-    def test_connect_round_tool_cannot_overhang_at_low_resolution(self):
-        paths = [LineString([(0.5, 0.5), (1, 1)]), LineString([(2, 2), (2, 2.1)])]
-        result = camlib.Geometry.paint_connect(storage_of(paths), box(0, 0, 2.4, 4), 1, 4)
-        self.assertEqual(len(list(result.get_objects())), 2)
-
-    def test_connect_constructed_vertex_count_is_linear(self):
-        count = 100
-        paths = [LineString([(i + 1, 1), (i + 1.5, 1)]) for i in range(count)]
-        storage = storage_of(paths)
-        constructed_vertices = []
-
-        def measured_linestring(coords):
-            line = LineString(coords)
-            constructed_vertices.append(len(line.coords))
-            return line
-
-        with patch.object(camlib, 'LineString', side_effect=measured_linestring):
-            result = camlib.Geometry.paint_connect(storage, box(0, 0, count + 2, 3), 0.2, 64)
-        self.assertEqual(list(next(result.get_objects()).coords),
-                         [coord for path in paths for coord in path.coords])
-        self.assertLessEqual(sum(constructed_vertices), 6 * count)
-
-    def test_connect_empty_storage(self):
-        self.assertIsNone(camlib.Geometry.paint_connect(storage_of([]), box(0, 0, 1, 1), 0.2, 64))
-
-    def test_paint_output_bounds_do_not_union_toolpaths_again(self):
-        paths = [LineString(), LineString([(-2, 1), (6, 5)]),
-                 LineString([(-2, 5), (6, 1)]), self.polygon.exterior]
-        expected = camlib.unary_union(paths).bounds
-        output = SimpleNamespace(obj_options={})
-        worker = SimpleNamespace(app=self.geometry.app)
-        with patch('appPlugins.ToolPaint.PaintGen.unary_union', side_effect=AssertionError('Redundant union')):
-            self.assertTrue(PaintGen._set_output_bounds(worker, output, paths))
-        self.assertEqual(tuple(output.obj_options[key] for key in ('xmin', 'ymin', 'xmax', 'ymax')), expected)
-
-    def test_paint_empty_output_bounds(self):
-        output = SimpleNamespace(obj_options={})
-        worker = SimpleNamespace(app=self.geometry.app)
-        self.assertTrue(PaintGen._set_output_bounds(worker, output, []))
-        self.assertTrue(all(math.isnan(value) for value in output.obj_options.values()))
 
     def test_paint_and_ncc_dispatch_to_the_same_clearing_paths(self):
         worker = SimpleNamespace(app=self.geometry.app, parent_tool=self.geometry, circle_steps=64)

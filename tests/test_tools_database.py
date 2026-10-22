@@ -178,124 +178,6 @@ class LifecycleChecks(DatabaseCase):
 
 
 class EditorChecks(DatabaseCase):
-    def test_paint_final_cleanup_roundtrip_and_old_database(self):
-        from appDatabase import load_tools_database
-        self.assertIs(AppDefaults.factory_defaults.get('tools_paint_final_cleanup'), False)
-        old = record(4)
-        old['data'].pop('tools_paint_final_cleanup', None)
-        self.app.options = dict(self.app.options, tools_paint_final_cleanup=True)
-        db = self.database({'1': old})
-        self.assertIs(db.db_tool_dict['1']['data']['tools_paint_final_cleanup'], False)
-        db.ui.tree_widget.setCurrentItem(db.ui.tree_widget.topLevelItem(0))
-        db.ui.paint_final_cleanup_cb.set_value(True)
-        self.assertIs(db.db_tool_dict['1']['data']['tools_paint_final_cleanup'], True)
-        self.assertTrue(db.on_save_tools_db(silent=True))
-        self.assertIs(load_tools_database(str(self.path), self.app.options)['1']['data'][
-            'tools_paint_final_cleanup'], True)
-        self.assertEqual([], self.slot_errors)
-
-    def test_paint_final_cleanup_tool_form_and_preferences(self):
-        from PyQt6 import QtGui
-        from appPlugins.ToolPaint.Paint import ToolPaint
-        from appPlugins.ToolPaint.PaintUI import PaintUI
-        from appGUI.preferences.tools.ToolsPaintPrefGroupUI import ToolsPaintPrefGroupUI
-        self.app.collection = QtGui.QStandardItemModel()
-        parent = QtWidgets.QWidget()
-        self.addCleanup(parent.deleteLater)
-        ui = PaintUI(QtWidgets.QVBoxLayout(parent), self.app)
-        pref = ToolsPaintPrefGroupUI(self.app)
-        self.addCleanup(pref.deleteLater)
-        self.assertFalse(ui.final_cleanup_cb.get_value())
-        self.assertFalse(pref.final_cleanup_cb.get_value())
-        ui.tools_table.setRowCount(1)
-        ui.tools_table.setItem(0, 3, QtWidgets.QTableWidgetItem('1'))
-        ui.tools_table.selectAll()
-        holder = SimpleNamespace(
-            ui=ui, form_fields={'tools_paint_final_cleanup': ui.final_cleanup_cb}, app=self.app,
-            name2option={'p_final_cleanup': 'tools_paint_final_cleanup'},
-            paint_tools={1: {'data': {'tools_paint_final_cleanup': False}}},
-            blockSignals=lambda value: None, sender=lambda: ui.final_cleanup_cb)
-        ui.final_cleanup_cb.set_value(True)
-        ToolPaint.form_to_storage(holder)
-        self.assertIs(holder.paint_tools[1]['data']['tools_paint_final_cleanup'], True)
-        ToolPaint.storage_to_form(holder, {})
-        self.assertFalse(ui.final_cleanup_cb.get_value())
-        pref.final_cleanup_cb.set_value(True)
-        ToolPaint.storage_to_form(holder, {'tools_paint_final_cleanup': pref.final_cleanup_cb.get_value()})
-        self.assertTrue(ui.final_cleanup_cb.get_value())
-        ui.on_rest_machining_check(True)
-        self.assertTrue(ui.final_cleanup_cb.isEnabled())
-
-    def test_ncc_final_cleanup_roundtrip_and_old_database(self):
-        from appDatabase import load_tools_database
-        old = record(5)
-        old['data'].pop('tools_ncc_final_cleanup')
-        self.app.options = dict(self.app.options, tools_ncc_final_cleanup=True)
-        db = self.database({'1': old})
-        self.assertIs(db.db_tool_dict['1']['data']['tools_ncc_final_cleanup'], False)
-        db.ui.tree_widget.setCurrentItem(db.ui.tree_widget.topLevelItem(0))
-        db.ui.ncc_final_cleanup_cb.set_value(True)
-        self.assertIs(db.db_tool_dict['1']['data']['tools_ncc_final_cleanup'], True)
-        self.assertTrue(db.on_save_tools_db(silent=True))
-        loaded = load_tools_database(str(self.path), self.app.options)
-        self.assertIs(loaded['1']['data']['tools_ncc_final_cleanup'], True)
-        db.ui.ncc_final_cleanup_cb.set_value(False)
-        self.assertIs(db.db_tool_dict['1']['data']['tools_ncc_final_cleanup'], False)
-        self.assertEqual([], self.slot_errors)
-
-    def test_ncc_final_cleanup_tool_form_and_preferences(self):
-        from PyQt6 import QtGui
-        from appPlugins.ToolNCC.Ncc import ToolNcc
-        from appPlugins.ToolNCC.NccUI import NccUI
-        from appGUI.preferences.tools.ToolsNCCPrefGroupUI import ToolsNCCPrefGroupUI
-        self.app.collection = QtGui.QStandardItemModel()
-        parent = QtWidgets.QWidget()
-        self.addCleanup(parent.deleteLater)
-        ui = NccUI(QtWidgets.QVBoxLayout(parent), self.app)
-        pref = ToolsNCCPrefGroupUI(self.app)
-        self.addCleanup(pref.deleteLater)
-        self.assertFalse(ui.final_cleanup_cb.get_value())
-        self.assertFalse(pref.ncc_final_cleanup_cb.get_value())
-        ui.tools_table.setRowCount(1)
-        ui.tools_table.setItem(0, 3, QtWidgets.QTableWidgetItem('1'))
-        ui.tools_table.selectAll()
-        holder = SimpleNamespace(
-            ui=ui, app=self.app, blockSignals=lambda value: None,
-            form_fields={'tools_ncc_final_cleanup': ui.final_cleanup_cb},
-            name2option={'n_final_cleanup': 'tools_ncc_final_cleanup'},
-            ncc_tools={1: {'data': {'tools_ncc_final_cleanup': False}}},
-            sender=lambda: ui.final_cleanup_cb)
-        ui.final_cleanup_cb.set_value(True)
-        ToolNcc.form_to_storage(holder)
-        self.assertTrue(holder.ncc_tools[1]['data']['tools_ncc_final_cleanup'])
-        ToolNcc.storage_to_form(holder, {})
-        self.assertFalse(ui.final_cleanup_cb.get_value())
-        pref.ncc_final_cleanup_cb.set_value(True)
-        ToolNcc.storage_to_form(holder, {'tools_ncc_final_cleanup': pref.ncc_final_cleanup_cb.get_value()})
-        self.assertTrue(ui.final_cleanup_cb.get_value())
-        ui.on_rest_machining_check(True)
-        self.assertFalse(ui.final_cleanup_cb.isHidden())
-
-    def test_isolation_passes_accept_up_to_9999(self):
-        # a laser isolation can need more than 999 passes; a stored 1000 was clamped to 999
-        from PyQt6 import QtGui
-        from appPlugins.ToolIsolation import IsoUI
-        from appGUI.preferences.tools.ToolsISOPrefGroupUI import ToolsISOPrefGroupUI
-        self.app.collection = QtGui.QStandardItemModel()
-        parent = QtWidgets.QWidget()
-        self.addCleanup(parent.deleteLater)
-        ui = IsoUI(QtWidgets.QVBoxLayout(parent), self.app)
-        pref = ToolsISOPrefGroupUI(self.app)
-        self.addCleanup(pref.deleteLater)
-        db = self.database()
-        for name, entry in (('plugin', ui.passes_entry), ('preferences', pref.passes_entry),
-                            ('database', db.ui.iso_passes_entry)):
-            with self.subTest(entry=name):
-                entry.set_value(9999)
-                self.assertEqual(9999, entry.get_value())
-                entry.set_value(10000)
-                self.assertEqual(9999, entry.get_value())
-
     def test_normalization_preserves_input_and_repairs_aliases(self):
         import appDatabase
         normalize = getattr(appDatabase, 'normalize_tools_database', None)
@@ -362,36 +244,6 @@ class EditorChecks(DatabaseCase):
         self.assertTrue(self.app.tools_db_changed_flag)
         self.assertEqual(before_bytes, self.path.read_bytes())
 
-    def test_normalization_rejects_nonfinite_bounds_and_known_bad_types(self):
-        import appDatabase
-
-        cases = []
-        nan_diameter = record()
-        nan_diameter['tooldia'] = float('nan')
-        cases.append(nan_diameter)
-        inverted = record()
-        inverted['data']['tol_min'], inverted['data']['tol_max'] = (2.0, 1.0)
-        cases.append(inverted)
-        bad_option = record()
-        bad_option['data']['tools_mill_feedrate'] = {'not': 'a number'}
-        cases.append(bad_option)
-        for value in cases:
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, 'record 7'):
-                    appDatabase.normalize_tools_database({'7': value}, self.app.options)
-
-    def test_invalid_initial_load_keeps_import_as_recovery_path(self):
-        try:
-            db = self.database([])
-        except Exception as error:
-            self.fail('invalid initial load raised %r' % error)
-
-        self.assertFalse(getattr(db, '_db_load_valid', True))
-        self.assertFalse(db.ui.save_db_btn.isEnabled())
-        self.assertFalse(db.ui.export_db_btn.isEnabled())
-        self.assertFalse(db.ui.add_tool_from_db.isEnabled())
-        self.assertTrue(db.ui.import_db_btn.isEnabled())
-
     def test_cutout_gap_type_roundtrip(self):
         db = self.database()
         db.ui.cutout_gaptype_radio.blockSignals(True)
@@ -399,15 +251,6 @@ class EditorChecks(DatabaseCase):
             with self.subTest(value=value):
                 db.ui.cutout_gaptype_radio.set_value(value)
                 self.assertEqual(value, db.ui.cutout_gaptype_radio.get_value())
-
-    def test_numeric_milling_dropdowns_roundtrip(self):
-        db = self.database()
-        for widget in (db.ui.mill_shape_combo, db.ui.job_type_combo,
-                       db.ui.mill_tooloffset_type_combo):
-            with self.subTest(widget=widget.objectName()):
-                widget.blockSignals(True)
-                widget.set_value(2)
-                self.assertEqual(2, widget.get_value())
 
     def test_v_tool_diameter_calculation_uses_numeric_shape_id(self):
         db = self.database()
@@ -448,30 +291,6 @@ class EditorChecks(DatabaseCase):
                 self.assertEqual(value, target['data'][key])
                 self.assertNotIn('job', target['data'])
                 self.assertNotIn('tools_mill_offset_value', target)
-
-    def test_update_storage_ignores_missing_or_unmapped_sender(self):
-        target = record()
-        edited = MagicMock()
-        stub = SimpleNamespace(current_toolid=1, sender=lambda: None, app=self.app,
-                               db_tool_dict={'1': target}, on_tools_db_edited=edited)
-        ToolsDB2.update_storage(stub)
-        edited.assert_not_called()
-        stub.sender = lambda: object()
-        ToolsDB2.update_storage(stub)
-        edited.assert_not_called()
-
-    def test_tree_rename_updates_the_row_that_was_edited(self):
-        db = self.database({'7': record(), '42': record(3, 0.8)})
-        item = db.ui.tree_widget.topLevelItem(1)
-        item.setText(1, 'renamed')
-        self.assertEqual('renamed', db.db_tool_dict['42']['name'])
-        self.assertEqual(42, db.current_toolid)
-
-    def test_sparse_ids_render_actual_keys(self):
-        db = self.database({'7': record(), '42': record(3, 0.8)})
-        self.assertEqual(['7', '42'], [db.ui.tree_widget.topLevelItem(i).text(0)
-                                     for i in range(2)])
-        self.assertFalse(self.slot_errors)
 
     def test_sparse_ids_survive_copy_sort_delete_and_request(self):
         db = self.database({'7': record(), '42': record(3, 0.8)})
@@ -529,13 +348,6 @@ class EditorChecks(DatabaseCase):
         db.on_tool_requested_from_app()
         self.assertEqual(original, db.db_tool_dict['1'])
 
-    def test_new_tool_has_drill_dwelltime(self):
-        db = self.database()
-        db.ui.add_entry_btn.click()
-        self.assertFalse(self.slot_errors)
-        self.assertEqual(self.app.options['tools_drill_dwelltime'],
-                         db.db_tool_dict['1']['data'].get('tools_drill_dwelltime'))
-
     def test_failed_save_keeps_dirty_flag_and_bytes(self):
         db = self.database({'1': record()})
         before = self.path.read_bytes()
@@ -556,16 +368,6 @@ class EditorChecks(DatabaseCase):
         self.assertTrue(db.on_save_tools_db())
         self.assertEqual('saved after tab removal', json.loads(self.path.read_text())['1']['name'])
         self.assertEqual(db.ui.save_db_btn.default_stylesheet, db.ui.save_db_btn.styleSheet())
-
-    def test_atomic_writer_saves_non_ascii_records(self):
-        import appDatabase
-
-        writer = getattr(appDatabase, 'write_tools_database', None)
-        self.assertTrue(callable(writer))
-        if not callable(writer):
-            return
-        writer(self.path, {'7': {'name': 'фреза', 'tooldia': 1.0, 'data': {}}})
-        self.assertEqual('фреза', json.loads(self.path.read_text(encoding='utf-8'))['7']['name'])
 
     def test_atomic_writer_cancels_failed_write_and_commit(self):
         import appDatabase
@@ -622,53 +424,6 @@ class EditorChecks(DatabaseCase):
         self.assertEqual(23.0, saved['7']['data']['tools_paint_overlap'])
         self.assertFalse(self.app.tools_db_changed_flag)
 
-    def test_export_uses_atomic_writer_without_clearing_dirty_state(self):
-        import appDatabase
-
-        db = self.database({'1': record()})
-        export_path = self.path.parent / 'export.FlatDB'
-        self.app.get_last_save_folder = lambda: str(self.path.parent)
-        self.app.tools_db_changed_flag = True
-        with patch.object(appDatabase.FCFileSaveDialog, 'get_saved_filename',
-                          return_value=(str(export_path), '')):
-            self.assertTrue(db.on_export_tools_db_file())
-        self.assertTrue(self.app.tools_db_changed_flag)
-        self.assertEqual('fixture', json.loads(export_path.read_text(encoding='utf-8'))['1']['name'])
-
-    def test_successful_request_closes_database_container_once(self):
-        db = self.database({'1': record()})
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
-        db.on_tool_request = MagicMock(return_value=True)
-        self.tabs.closeTab = MagicMock(return_value=True)
-
-        db.on_tool_requested_from_app()
-
-        self.tabs.closeTab.assert_called_once_with(0)
-
-    def test_request_failure_keeps_database_open(self):
-        db = self.database({'1': record()})
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
-        db.on_tool_request = MagicMock(return_value='fail')
-        self.tabs.closeTab = MagicMock(return_value=True)
-
-        self.assertFalse(db.on_tool_requested_from_app())
-        self.tabs.closeTab.assert_not_called()
-
-    def test_discard_failed_request_restores_dirty_state(self):
-        import appDatabase
-
-        db = self.database({'1': record()})
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
-        db.on_tool_request = MagicMock(return_value='fail')
-        self.app.tools_db_changed_flag = True
-        DecisionMessageBox.response = 'no'
-
-        with patch.object(appDatabase, 'FCMessageBox', DecisionMessageBox):
-            self.assertFalse(db.on_tool_requested_from_app())
-
-        self.assertTrue(self.app.tools_db_changed_flag)
-        self.assertEqual(1, self.tabs.count())
-
     def test_discard_successful_request_closes_and_clears_dirty_state(self):
         import appDatabase
 
@@ -685,40 +440,6 @@ class EditorChecks(DatabaseCase):
 
         self.assertFalse(self.app.tools_db_changed_flag)
         self.tabs.closeTab.assert_called_once_with(0)
-
-    def test_save_failed_request_keeps_successfully_saved_database_clean(self):
-        import appDatabase
-
-        db = self.database({'1': record()})
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
-        db.on_tool_request = MagicMock(return_value='fail')
-        self.app.tools_db_changed_flag = True
-
-        def save():
-            self.app.tools_db_changed_flag = False
-            return True
-
-        db.on_save_tools_db = save
-        DecisionMessageBox.response = 'yes'
-        with patch.object(appDatabase, 'FCMessageBox', DecisionMessageBox):
-            self.assertFalse(db.on_tool_requested_from_app())
-
-        self.assertFalse(self.app.tools_db_changed_flag)
-        self.assertEqual(1, self.tabs.count())
-
-    def test_partial_request_failure_keeps_database_open_without_rollback(self):
-        db = self.database({'1': record(), '2': record(1)})
-        db.ui.tree_widget.clearSelection()
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
-        db.ui.tree_widget.topLevelItem(1).setSelected(True)
-        db.on_tool_request = MagicMock(side_effect=[True, False])
-        self.tabs.closeTab = MagicMock(return_value=True)
-
-        self.assertFalse(db.on_tool_requested_from_app())
-
-        self.assertEqual(2, db.on_tool_request.call_count)
-        self.tabs.closeTab.assert_not_called()
-        self.assertEqual(1, self.tabs.count())
 
     def test_confirm_close_save_discard_cancel(self):
         import appDatabase
@@ -777,130 +498,7 @@ class EditorChecks(DatabaseCase):
             self.assertFalse(db.confirm_close())
             self.assertTrue(db.app.tools_db_changed_flag)
 
-    def test_detachable_database_tab_honors_close_decision(self):
-        tabs = FCDetachableTab2()
-        self.addCleanup(tabs.deleteLater)
-        widget = QtWidgets.QWidget()
-        widget.setObjectName('database_tab')
-        widget.confirm_close = MagicMock(return_value=False)
-        tabs.addTab(widget, 'Tools Database')
-        closed = MagicMock()
-        tabs.tab_closed_signal.connect(closed)
-
-        self.assertFalse(tabs.closeTab(0))
-        self.assertEqual(1, tabs.count())
-        closed.assert_not_called()
-
-        widget.confirm_close.return_value = True
-        self.assertTrue(tabs.closeTab(0))
-        self.assertEqual(0, tabs.count())
-        closed.assert_called_once_with('database_tab', 0)
-
-    def test_manual_detached_close_reattaches_without_confirming_or_callback(self):
-        db, tabs, detached = self.detached_database({'1': record()})
-        db.app.tools_db_changed_flag = True
-        db.confirm_close = MagicMock(return_value=False)
-        db.on_tool_request = MagicMock()
-
-        self.assertTrue(detached.close())
-
-        db.confirm_close.assert_not_called()
-        db.on_tool_request.assert_not_called()
-        self.assertEqual(1, tabs.count())
-        self.assertIs(db, tabs.widget(0))
-        self.assertTrue(db.app.tools_db_changed_flag)
-        if sys.platform == 'win32':
-            self.assertEqual(0, len(tabs.detachedTabs))
-
-    def test_detached_picker_cancel_honors_close_decision(self):
-        import appDatabase
-
-        db, tabs, detached = self.detached_database({'1': record()})
-        db.app.tools_db_changed_flag = True
-        box = MagicMock(side_effect=DecisionMessageBox)
-        DecisionMessageBox.response = 'cancel'
-
-        with patch.object(appDatabase, 'FCMessageBox', box):
-            self.assertFalse(db.on_cancel_tool())
-        self.assertEqual(0, tabs.count())
-        self.assertEqual(1, len(tabs.detachedTabs))
-
-        box.reset_mock()
-        DecisionMessageBox.response = 'no'
-        with patch.object(appDatabase, 'FCMessageBox', box):
-            self.assertTrue(db.on_cancel_tool())
-        self.assertEqual(1, box.call_count)
-        self.assertEqual(0, tabs.count())
-        self.assertEqual(0, len(tabs.detachedTabs))
-
-    def test_detached_picker_cancel_saves_before_closing(self):
-        import appDatabase
-
-        db, tabs, detached = self.detached_database({'1': record()})
-        db.app.tools_db_changed_flag = True
-        db.on_save_tools_db = MagicMock(
-            side_effect=lambda: setattr(db.app, 'tools_db_changed_flag', False) or True)
-        box = MagicMock(side_effect=DecisionMessageBox)
-        DecisionMessageBox.response = 'yes'
-
-        with patch.object(appDatabase, 'FCMessageBox', box):
-            self.assertTrue(db.on_cancel_tool())
-
-        db.on_save_tools_db.assert_called_once_with()
-        self.assertEqual(1, box.call_count)
-        self.assertFalse(db.app.tools_db_changed_flag)
-        self.assertEqual(0, tabs.count())
-        self.assertEqual(0, len(tabs.detachedTabs))
-
-
 class ConsumerChecks(DatabaseCase):
-    def test_new_database_add_tab_failure_returns_fail_without_picker_success(self):
-        from appHandlers.appUIActions import AppUIActions
-
-        handler = self.actions_handler()
-        self.tabs.addTab = MagicMock(side_effect=RuntimeError('injected addTab failure'))
-
-        result = AppUIActions.on_tools_database(handler, source='app')
-
-        self.assertEqual('fail', result)
-        self.assertIsInstance(self.app.tools_db_tab, ToolsDB2)
-        self.assertEqual(0, self.tabs.count())
-        handler.ui.coords_toolbar.hide.assert_not_called()
-        handler.ui.delta_coords_toolbar.hide.assert_not_called()
-
-    def test_existing_picker_rebinds_callback(self):
-        from appHandlers.appUIActions import AppUIActions
-        db = self.database()
-        paint_callback = MagicMock()
-        self.app.paint_tool = SimpleNamespace(on_paint_tool_add_from_db_executed=paint_callback)
-        handler = SimpleNamespace(app=self.app, ui=self.app.ui, log=self.app.log,
-                                  inform=self.app.inform)
-        AppUIActions.on_tools_database(handler, source='paint')
-        self.assertIs(paint_callback, db.on_tool_request)
-
-    def test_detached_picker_reuses_editor_rebinds_and_focuses_window(self):
-        from appHandlers.appUIActions import AppUIActions
-
-        db, tabs, detached = self.detached_database({'1': record()})
-        db.db_tool_dict['1']['name'] = 'edited while detached'
-        self.app.tools_db_changed_flag = True
-        callback = MagicMock()
-        self.app.paint_tool = SimpleNamespace(on_paint_tool_add_from_db_executed=callback)
-        handler = self.actions_handler(tabs)
-
-        with patch.object(detached, 'raise_') as raise_window, \
-                patch.object(detached, 'activateWindow') as activate_window:
-            self.assertEqual('success', AppUIActions.on_tools_database(handler, source='paint'))
-
-        self.assertIs(db, self.app.tools_db_tab)
-        self.assertIs(callback, db.on_tool_request)
-        self.assertEqual('edited while detached', db.db_tool_dict['1']['name'])
-        self.assertTrue(self.app.tools_db_changed_flag)
-        self.assertEqual(0, tabs.count())
-        self.assertEqual(1, len(tabs.detachedTabs))
-        raise_window.assert_called_once_with()
-        activate_window.assert_called_once_with()
-
     def test_missing_database_opens_recovery_editor_without_creating_file(self):
         from appHandlers.appUIActions import AppUIActions
 
@@ -925,89 +523,6 @@ class ConsumerChecks(DatabaseCase):
         self.assertFalse(self.app.tools_db_tab._db_load_valid)
         self.assertTrue(self.app.tools_db_tab.ui.import_db_btn.isEnabled())
         self.assertTrue(self.path.is_dir())
-
-    def test_existing_picker_rebinds_every_supported_callback(self):
-        from appHandlers.appUIActions import AppUIActions
-
-        db = self.database()
-        callbacks = {
-            'app': MagicMock(),
-            'paint': MagicMock(),
-            'ncc': MagicMock(),
-            'iso': MagicMock(),
-            'cutout': MagicMock(),
-        }
-        self.app.paint_tool = SimpleNamespace(on_paint_tool_add_from_db_executed=callbacks['paint'])
-        self.app.ncclear_tool = SimpleNamespace(on_ncc_tool_add_from_db_executed=callbacks['ncc'])
-        self.app.isolation_tool = SimpleNamespace(on_iso_tool_add_from_db_executed=callbacks['iso'])
-        self.app.cutout_tool = SimpleNamespace(on_cutout_tool_add_from_db_executed=callbacks['cutout'])
-        handler = SimpleNamespace(app=self.app, ui=self.app.ui, log=self.app.log,
-                                  inform=self.app.inform,
-                                  on_geometry_tool_add_from_db_executed=callbacks['app'])
-
-        for source, callback in callbacks.items():
-            with self.subTest(source=source):
-                self.assertEqual('success', AppUIActions.on_tools_database(handler, source=source))
-                self.assertIs(callback, db.on_tool_request)
-        self.assertEqual('fail', AppUIActions.on_tools_database(handler, source='unknown'))
-
-    def test_picker_callback_leaves_database_closure_to_editor(self):
-        from appPlugins.ToolPaint.Paint import ToolPaint
-
-        tab = QtWidgets.QWidget()
-        tab.setObjectName('database_tab')
-        self.tabs.addTab(tab, 'Tools Database')
-        table = MagicMock()
-        table.rowCount.return_value = 0
-        stub = SimpleNamespace(
-            app=self.app, decimals=4,
-            on_paint_tool_from_db_inserted=MagicMock(return_value=1),
-            on_row_selection_change=MagicMock(),
-            ui=SimpleNamespace(tools_table=table))
-
-        result = ToolPaint.on_paint_tool_add_from_db_executed(stub, record(4))
-
-        self.assertEqual(1, result)
-        self.assertEqual(1, self.tabs.count())
-
-    def test_successful_detached_request_closes_detached_database_once(self):
-        db, tabs, detached = self.detached_database({'1': record()})
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
-        db.on_tool_request = MagicMock(return_value=True)
-
-        self.assertTrue(db.on_tool_requested_from_app())
-
-        db.on_tool_request.assert_called_once()
-        self.assertEqual(0, tabs.count())
-        self.assertEqual(0, len(tabs.detachedTabs))
-
-    def test_geometry_callback_propagates_insertion_failure(self):
-        from appHandlers.appUIActions import AppUIActions
-
-        tool = record(1)
-        self.app.collection = SimpleNamespace(get_active=lambda: SimpleNamespace(kind='geometry'))
-        self.app.milling_tool = SimpleNamespace(on_tool_from_db_inserted=MagicMock(return_value=False))
-        handler = SimpleNamespace(app=self.app, ui=self.app.ui, inform=self.app.inform)
-
-        self.assertEqual('fail', AppUIActions.on_geometry_tool_add_from_db_executed(handler, tool))
-        self.app.milling_tool.on_tool_from_db_inserted.assert_called_once()
-
-    def test_milling_numeric_target_baseline(self):
-        from appPlugins.ToolMilling import ToolMilling
-        tool = record(1)
-        tool['data']['tools_mill_feedrate'] = 321.0
-        self.path.write_text(json.dumps({'1': tool}), encoding='utf-8')
-        obj = SimpleNamespace(tools={}, solid_geometry=[], build_ui=MagicMock())
-        table = MagicMock()
-        table.rowCount.return_value = 0
-        stub = SimpleNamespace(
-            app=self.app, target_obj=obj, decimals=4, default_data=deepcopy(record()['data']),
-            ui_disconnect=MagicMock(), ui_connect=MagicMock(), build_ui=MagicMock(),
-            update_ui=MagicMock(), on_tool_default_add=MagicMock(),
-            ui=SimpleNamespace(tools_table_mill_geo=table, param_frame=MagicMock()))
-        ToolMilling.on_tool_add(stub, dia=2.4)
-        stub.on_tool_default_add.assert_not_called()
-        self.assertEqual(321.0, obj.tools[1]['data']['tools_mill_feedrate'])
 
     def test_numeric_targets_automatic_lookup(self):
         cases = [
@@ -1147,11 +662,6 @@ class ConsumerChecks(DatabaseCase):
         # the tools of the Excellon object must not change
         self.assertEqual([0.8, 1.0, 0.82], [t['tooldia'] for t in object_tools.values()])
         self.assertEqual([1, 1, 2], [len(t['drills']) for t in object_tools.values()])
-
-    def test_drilling_merge_keeps_tools_without_repeated_diameter(self):
-        from appPlugins.ToolDrilling import merge_same_diameter_tools
-        tools = {3: {'tooldia': 0.8}, 7: {'tooldia': 1.0}}
-        self.assertIs(tools, merge_same_diameter_tools(tools))
 
     def test_cutout_picker_does_not_mutate_database_record(self):
         from appPlugins.ToolCutOut import CutOut

@@ -52,11 +52,6 @@ class TestGeoEditorSave(unittest.TestCase):
         self.assertEqual(obj.solid_geometry[0].geom_type, 'LineString')
         self.assertEqual(len(obj.solid_geometry[0].coords), 3)
 
-    def test_new_tool_diameter(self):
-        editor = save_editor([LineString([(0, 0), (1, 0)])], tooldia=0.8)
-        obj = geometry_object(tooldia=0.5)
-        AppGeoEditor.update_editor_geometry(editor, obj)
-        self.assertEqual(obj.obj_options['tools_mill_tooldia'], 0.8)
 
     def test_multigeo_tool_gets_the_geometry(self):
         a = LineString([(0, 0), (1, 0)])

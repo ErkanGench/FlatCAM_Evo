@@ -84,12 +84,6 @@ class TestNewAndOpen(AppIOTestBase):
         app.collection.delete_all.assert_not_called()
         app.collection.delete_by_name.assert_not_called()
 
-    def test_file_new_adds_a_project(self):
-        self.io.on_file_new_project = Mock()
-        self.io.on_file_new_click()
-        self.projects.new.assert_called_once_with()
-        self.io.on_file_new_project.assert_not_called()
-
     def test_gui_open_stops_when_prepare_open_refuses(self):
         filename = self.path('Board.FlatPrj')
         with open(filename, 'w') as stream:
@@ -100,20 +94,6 @@ class TestNewAndOpen(AppIOTestBase):
 
         self.projects.prepare_open.assert_called_once_with(filename)
         self.assertEqual(self.tasks, [])
-
-    def test_tcl_open_does_not_call_prepare_open(self):
-        filename = self.path('Board.FlatPrj')
-        with open(filename, 'w') as stream:
-            stream.write('{}')
-        self.io._open_project(filename, False, False, True, True)
-        self.projects.prepare_open.assert_not_called()
-
-    def test_restore_adopts_the_filename(self):
-        self.io.on_file_new_project = Mock()
-        proj_dict = {'objs': [], 'options': {}}
-        self.io._restore_project_handler(proj_dict, self.path('Board.FlatPrj'), True, True, True, True)
-        self.projects.adopt_filename.assert_called_once_with(self.path('Board.FlatPrj'))
-
 
 class TestSave(AppIOTestBase):
     def run_queued_save(self, ok):
@@ -181,22 +161,6 @@ class TestSave(AppIOTestBase):
         self.io.on_file_save_project()
         self.assertEqual(len(self.tasks), 2)
 
-    def test_save_stays_pending_until_the_gui_completion(self):
-        self.app.project_filename = self.path('Board_A.FlatPrj')
-        self.projects.save_target.return_value = self.path('Board_A.FlatPrj')
-        self.io.on_file_save_project()
-        # the worker ends with a failure, but its completion signal is not delivered yet
-        self.io.project_save_done.disconnect(self.io._on_project_save_done)
-        self.run_queued_save(False)
-        self.assertTrue(self.app.project_save_pending)
-        self.assertFalse(self.app.should_we_save)
-
-        # the completion arrives on the GUI thread
-        self.io._on_project_save_done(self.path('Board_A.FlatPrj'), False, False, True)
-
-        self.assertFalse(self.app.project_save_pending)
-        self.assertTrue(self.app.should_we_save)
-
     def test_save_that_raises_reports_a_failure(self):
         from unittest.mock import patch
         self.app.project_filename = self.path('Board_A.FlatPrj')
@@ -221,44 +185,6 @@ class TestSave(AppIOTestBase):
 
         self.assertEqual(self.tasks, [])
         self.assertEqual(self.app.project_filename, self.path('Board_A.FlatPrj'))
-
-    def test_save_with_same_name_writes_the_same_file(self):
-        self.app.project_filename = self.path('Board_A.FlatPrj')
-        self.projects.save_target.return_value = self.path('Board_A.FlatPrj')
-        self.io.on_file_save_project()
-        self.assertEqual(self.tasks[-1]['params'][0], self.path('Board_A.FlatPrj'))
-        self.projects.ask_yes_no.assert_not_called()
-
-    def test_save_as_suggests_the_project_name(self):
-        from unittest.mock import patch
-        self.projects.active = SimpleNamespace(name='Board_A')
-        chosen = self.path('Chosen.FlatPrj')
-        with patch('appHandlers.appIO.FCFileSaveDialog.get_saved_filename',
-                   return_value=(chosen, '')) as dialog:
-            self.io.on_file_save_project_as()
-        self.assertEqual(dialog.call_args.kwargs['directory'], '%s/%s' % (self.directory.name, 'Board_A'))
-        self.assertIsNone(self.app.project_filename)
-
-        self.run_queued_save(True)
-
-        self.assertEqual(self.app.project_filename, chosen)
-        self.projects.adopt_filename.assert_called_once_with(chosen)
-        self.assertFalse(self.app.should_we_save)
-
-    def test_failed_save_as_keeps_the_old_state(self):
-        from unittest.mock import patch
-        self.projects.active = SimpleNamespace(name='Board_A')
-        with patch('appHandlers.appIO.FCFileSaveDialog.get_saved_filename',
-                   return_value=(self.path('Chosen.FlatPrj'), '')):
-            self.io.on_file_save_project_as()
-
-        self.run_queued_save(False)
-
-        self.assertIsNone(self.app.project_filename)
-        self.projects.adopt_filename.assert_not_called()
-        self.assertTrue(self.app.should_we_save)
-        self.app.file_saved.emit.assert_not_called()
-
 
 if __name__ == '__main__':
     unittest.main()

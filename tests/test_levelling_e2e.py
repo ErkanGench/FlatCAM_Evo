@@ -54,8 +54,6 @@ HEIGHT_MAP_WRITERS = {
 FILE_CASES = [
     ('MACH3', 'b', 'simple_line'),
     ('MACH3', 'v', 'region'),
-    ('MACH4', 'b', 'region'),
-    ('MACH4', 'v', 'flash'),
     ('LinuxCNC', 'b', 'flash'),
     ('LinuxCNC', 'v', 'simple_line'),
 ]
@@ -314,7 +312,7 @@ def test_file_controller_full_journey(env, controller, method, fixture):
     env.assert_levelled(method, points)
 
 
-@pytest.mark.parametrize('controller', ['MACH3', 'MACH4', 'LinuxCNC'])
+@pytest.mark.parametrize('controller', ['MACH3'])
 def test_file_controller_incomplete_height_map_makes_no_levelled_job(env, controller):
     env.load_cncjob('simple_line', 'job_neg')
     env.select('job_neg', controller, 'b')

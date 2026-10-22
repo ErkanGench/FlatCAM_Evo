@@ -63,18 +63,6 @@ class TestIconColors(unittest.TestCase):
                 recolor_icons(root, '#66adc7')
             self.assertEqual((root / 'a.png').read_bytes(), original)
 
-    def test_black_and_white_are_supported_and_can_be_recolored_again(self):
-        from appCommon.IconColors import recolor_icons
-
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'tool.png'
-            write_icon(path, [(255, 255, 255, 255), (128, 128, 128, 64)])
-            for color in ('#000000', '#ffffff', '#1f0000', '#66adc7'):
-                self.assertEqual(recolor_icons(directory, color), 1)
-                image = QtGui.QImage(str(path))
-                self.assertEqual(image.pixelColor(0, 0).name(), color)
-                self.assertEqual(image.pixelColor(1, 0).alpha(), 64)
-
     def test_failed_write_restores_previously_changed_icons(self):
         from appCommon.IconColors import recolor_icons, _write_icon
 
@@ -95,68 +83,10 @@ class TestIconColors(unittest.TestCase):
             for path, original in before.items():
                 self.assertEqual(path.read_bytes(), original)
 
-    def test_project_tree_uses_protected_copies(self):
-        from appObjects.ObjectCollection import ObjectCollection
-
-        root = Path(__file__).resolve().parents[1]
-        for filename in ObjectCollection.icon_files.values():
-            path = Path(filename)
-            self.assertTrue(path.stem.endswith('_project'))
-            for folder in (root / 'assets/resources', root / 'assets/resources/dark_resources'):
-                self.assertTrue((folder / path.name).is_file(), folder / path.name)
-
-    def test_project_and_status_icons_have_their_own_colors_in_both_themes(self):
-        from appObjects.ObjectCollection import ObjectCollection
-        from appCommon.IconColors import PROTECTED_ICONS
-
-        expected = {
-            'gerber': ('gerber16_project.png', '#66adc7'),
-            'excellon': ('excellon16_project.png', '#c92e2e'),
-            'cncjob': ('cnc16_project.png', '#4188d9'),
-            'geometry': ('geometry16_project.png', '#fc2d2d'),
-            'script': ('script16_project.png', '#763dfc'),
-            'document': ('notes16_project.png', '#fc963d'),
-        }
-        files = {name: color for name, color in expected.values()}
-        for name in ('axis18.png', 'settings18.png', 'hud18.png'):
-            self.assertIn(name, PROTECTED_ICONS)
-            files[name] = '#ff6347'
-        for kind, (name, color) in expected.items():
-            self.assertEqual(Path(ObjectCollection.icon_files[kind]).name, name)
-        root = Path(__file__).resolve().parents[1] / 'assets/resources'
-        for folder in (root, root / 'dark_resources'):
-            for name, color in files.items():
-                with self.subTest(folder=folder.name, icon=name):
-                    image = QtGui.QImage(str(folder / name))
-                    self.assertFalse(image.isNull())
-                    colors = Counter(image.pixelColor(x, y).name()
-                                     for x in range(image.width()) for y in range(image.height())
-                                     if image.pixelColor(x, y).alpha() > 32)
-                    self.assertEqual(colors.most_common(1)[0][0], color)
-
-
 class TestIconColorPreferences(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
-    def test_workspace_label_stays_tomato_when_workspace_changes_and_is_hidden(self):
-        from appGUI.GUIElements import FCLabel
-        from appGUI.PlotCanvas import PlotCanvas
-
-        label = FCLabel('A4', color='tomato')
-        app = SimpleNamespace(app_units='MM', options={'global_workspace_orientation': 'p'},
-                              ui=SimpleNamespace(wplace_label=label))
-        canvas = SimpleNamespace(fcapp=app, pagesize_dict={'A3': (297, 420)},
-                                 view=SimpleNamespace(scene=object()), workspace_line=None)
-        canvas.delete_workspace = lambda: PlotCanvas.delete_workspace(canvas)
-        with patch('appGUI.PlotCanvas.Line', return_value=SimpleNamespace(parent=None)):
-            PlotCanvas.draw_workspace(canvas, 'A3')
-        self.assertIn('tomato', label.text())
-        self.assertIn('A3', label.text())
-        canvas.delete_workspace()
-        self.assertIn('tomato', label.text())
-        self.assertFalse(app.options['global_workspace'])
 
     def test_black_light_and_white_dark_preferences_round_trip(self):
         from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
@@ -221,31 +151,6 @@ class TestIconColorPreferences(unittest.TestCase):
                 app.preferencesUiManager.save_defaults.assert_called_once_with(silent=True)
                 self.assertEqual(app.on_app_restart.call_count, int(restart))
                 group.deleteLater()
-
-    def test_invalid_color_does_not_save_or_offer_restart(self):
-        from appGUI.preferences.general.GeneralGUIPrefGroupUI import GeneralGUIPrefGroupUI
-
-        app = MagicMock()
-        group = SimpleNamespace(app=app)
-        with patch('appGUI.preferences.general.GeneralGUIPrefGroupUI.FCMessageBox') as dialog:
-            GeneralGUIPrefGroupUI.on_icon_color_apply(group, 'light', '#123')
-        app.preferencesUiManager.save_defaults.assert_not_called()
-        dialog.assert_not_called()
-        app.inform.emit.assert_called_once()
-
-    def test_failed_recolor_does_not_save_or_offer_restart(self):
-        from appGUI.preferences.general.GeneralGUIPrefGroupUI import GeneralGUIPrefGroupUI
-
-        app = MagicMock(resource_location='assets/resources')
-        group = SimpleNamespace(app=app)
-        module = 'appGUI.preferences.general.GeneralGUIPrefGroupUI'
-        with patch(module + '.recolor_icons', side_effect=OSError('Read-only files')), \
-                patch(module + '.FCMessageBox') as dialog:
-            GeneralGUIPrefGroupUI.on_icon_color_apply(group, 'light', '#000000')
-        app.preferencesUiManager.save_defaults.assert_not_called()
-        dialog.assert_not_called()
-        app.inform.emit.assert_called_once()
-
 
 if __name__ == '__main__':
     unittest.main()

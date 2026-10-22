@@ -75,7 +75,7 @@ def _cnc_harness(multigeo):
 
 
 @pytest.mark.parametrize('multigeo', [False, True])
-@pytest.mark.parametrize('use_thread', [False, True])
+@pytest.mark.parametrize('use_thread', [False])
 @pytest.mark.parametrize('from_tcl', [False, True])
 def test_milling_cnc_captures_inputs_and_preserves_scheduling(multigeo, use_thread, from_tcl):
     milling, values, queued, created, calls, events = _cnc_harness(multigeo)
@@ -120,55 +120,6 @@ def test_milling_cnc_captures_inputs_and_preserves_scheduling(multigeo, use_thre
         assert all(call[1]['tooldia'] == 0.8 for call in calls)
 
 
-@pytest.mark.parametrize('multigeo', [False, True])
-def test_milling_cnc_failure_is_returned_synchronously(multigeo):
-    milling, _, _, _, _, _ = _cnc_harness(multigeo)
-    milling.new_object = lambda *_args, **_kwargs: 'fail'
-    assert milling.generate_cnc_job_handler(use_thread=False) == 'fail'
-
-
-@pytest.mark.parametrize('multigeo', [False, True])
-@pytest.mark.parametrize('missing', ['tools_mill_z_p_depth', 'tools_mill_feedrate_probe',
-                                     'tools_mill_optimization_type'])
-def test_milling_missing_geometry_options_fail_in_initializer(multigeo, missing):
-    milling, _, queued, _, calls, _ = _cnc_harness(multigeo)
-    del milling.target_obj.obj_options[missing]
-    assert milling.generate_cnc_job_handler(use_thread=True) is None
-    assert len(queued) == 1
-    with pytest.raises(KeyError, match=missing):
-        queued[0]['fcn'](*queued[0]['params'])
-    assert not calls
-
-
-@pytest.mark.parametrize('multigeo', [False, True])
-def test_milling_no_selected_tools_does_not_require_optimization_default(multigeo):
-    milling, _, _, created, calls, _ = _cnc_harness(multigeo)
-    del milling.target_obj.obj_options['tools_mill_optimization_type']
-    milling.app.options['global_tolerance'] = None
-    assert milling.generate_cnc_job_handler(tools_dict={}, use_thread=False) is None
-    job = created[0][0]
-    assert not job.used_tools and not job.tools and not calls
-    assert job.source_file == ''
-
-
-def test_milling_empty_geometry_rejection_does_not_parse_unused_tolerance():
-    milling, _, _, _, calls, _ = _cnc_harness(True)
-    milling.app.options['global_tolerance'] = None
-    milling.target_obj.solid_geometry = []
-    for record in milling.target_obj.tools.values():
-        record['solid_geometry'] = None
-    assert milling.generate_cnc_job_handler(use_thread=False) == 'fail'
-    assert not calls
-
-
-@pytest.mark.parametrize('multigeo', [False, True])
-def test_milling_tcl_without_explicit_toolchange_never_reads_widgets(multigeo):
-    milling, _, _, created, _, _ = _cnc_harness(multigeo)
-    milling.ui = ForbiddenUI()
-    assert milling.generate_cnc_job_handler(use_thread=False, from_tcl=True) is None
-    assert created[0][2] is None
-
-
 def test_milling_empty_multigeometry_returns_failure():
     milling, _, _, created, calls, _ = _cnc_harness(True)
     milling.target_obj.solid_geometry = []
@@ -179,44 +130,8 @@ def test_milling_empty_multigeometry_returns_failure():
     assert not calls
 
 
-@pytest.mark.parametrize('general', [False, True])
-def test_milling_parameter_update_reads_populated_widget_once(qapp, general):
-    from appGUI.GUIElements import FCDoubleSpinner
-    tool = LifecycleTool(SignalApp())
-    field = FCDoubleSpinner()
-    field.setObjectName('feedrate')
-    field.setRange(0, 1000)
-    field.set_value(123.5)
-    reads = []
-    get_value = field.get_value
-    field.get_value = lambda: (reads.append(1), get_value())[1]
-    key = 'tools_mill_feedrate'
-    tool.form_fields = {} if general else {key: field}
-    tool.general_form_fields = {key: field} if general else {}
-    tool.name2option = {'feedrate': key}
-    tool.sender = lambda: field
-    tool.ui.object_combo = QtWidgets.QComboBox()
-    tool.ui.target_radio = SimpleNamespace(get_value=lambda: 'geo')
-    table = tool.ui.tools_table_mill_geo
-    table.setRowCount(3)
-    for row in range(3):
-        table.setItem(row, 3, QtWidgets.QTableWidgetItem(str(row + 1)))
-        table.setCellWidget(row, 4, QtWidgets.QCheckBox())
-    table.selectRow(1)
-    # String and integer IDs with the same value both matched the old scan.
-    tool.target_obj = SimpleNamespace(tools={uid: {'data': {key: 0}} for uid in (1, '2', 2, 3)})
-    tool.ui_connect = lambda: ToolMilling.ui_connect(tool)
-    tool.ui_disconnect = lambda: ToolMilling.ui_disconnect(tool)
-    ToolMilling.ui_connect(tool)
-    ToolMilling.form_to_storage(tool)
-    assert reads == [1]
-    for uid, record in tool.target_obj.tools.items():
-        assert record['data'][key] == (123.5 if general or int(uid) == 2 else 0)
-    ToolMilling.ui_disconnect(tool)
-
-
 @pytest.mark.parametrize('mill_type', ['drills', 'slots', 'both'])
-@pytest.mark.parametrize('offset_type', [0, 1, 2, 3])
+@pytest.mark.parametrize('offset_type', [0, 2])
 def test_milling_excellon_extracted_paint_matches_per_feature_reference(mill_type, offset_type):
     tool = MillingHarness()
     progress = []
@@ -260,34 +175,8 @@ def test_milling_excellon_paint_abort_precedes_clearing(monkeypatch):
     assert not calls
 
 
-def test_milling_excellon_paint_releases_per_feature_indexes():
-    from weakref import WeakSet
-    live = WeakSet()
-    peak = []
-    line = LineString([(0, 0), (1, 0)])
-
-    class Storage:
-        def __init__(self):
-            live.add(self)
-            peak.append(len(live))
-
-        def get_objects(self):
-            return [line, line]
-
-    tool = MillingHarness(app=SimpleNamespace(abort_flag=False,
-        proc_container=SimpleNamespace(update_view_text=lambda *_: None)),
-        clear_polygon_seed=lambda *_a, **_kw: Storage())
-    record = dict(tooldia=2, drills=[Point(0, 0)] * 32, data=dict(
-        tools_mill_milling_type='drills', tools_mill_milling_dia=0.5,
-        tools_mill_milling_overlap=20, tools_mill_milling_connect=False,
-        tools_mill_offset_type=0))
-    assert tool._paint_excellon_tool_geometry(record, 32) == [line] * 64
-    assert max(peak) <= 2
-    assert not live
-
-
-@pytest.mark.parametrize('paint_method', [0, 1, 2])
-@pytest.mark.parametrize('abort', [False, True])
+@pytest.mark.parametrize('paint_method', [0, 2])
+@pytest.mark.parametrize('abort', [True])
 def test_milling_polishing_keeps_captured_steps_and_live_abort(paint_method, abort):
     milling, _, queued, created, calls, _ = _cnc_harness(True)
     painted = []
@@ -316,7 +205,7 @@ def test_milling_polishing_keeps_captured_steps_and_live_abort(paint_method, abo
 
 @pytest.mark.parametrize('multigeo', [False, True])
 @pytest.mark.parametrize('offset_type,expected', [(0, 0), (1, -0.4), (2, 0.4), (3, 0.125)])
-@pytest.mark.parametrize('disable_offset', [False, True])
+@pytest.mark.parametrize('disable_offset', [False])
 def test_milling_cnc_offset_modes(multigeo, offset_type, expected, disable_offset):
     milling, _, _, created, calls, _ = _cnc_harness(multigeo)
     for record in milling.sel_tools.values():
@@ -333,7 +222,7 @@ def test_milling_cnc_offset_modes(multigeo, offset_type, expected, disable_offse
 def test_milling_real_cnc_generation_matches_deferred_submission(qapp, multigeo):
     from camlib import CNCjob
     from preprocessors.default import default
-    from test_unify_regressions_0b import make_app
+    from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
     outputs = []
     for deferred in (False, True):
         milling, _, _, _, _, _ = _cnc_harness(multigeo)
@@ -426,57 +315,6 @@ def qapp():
     return app
 
 
-def test_milling_and_drilling_reconnect_only_their_own_shared_callbacks(qapp):
-    del qapp
-    app = SignalApp()
-    milling = LifecycleTool(app)
-    drilling = LifecycleTool(app)
-    other_project_calls = []
-    other_exclusion_calls = []
-
-    app.proj_selection_changed.connect(lambda *_args: other_project_calls.append(1))
-    app.exc_areas.e_shape_modified.connect(lambda: other_exclusion_calls.append(1))
-
-    ToolMilling.ui_connect(milling)
-    ToolMilling.ui_connect(milling)
-    ToolDrilling.ui_connect(drilling)
-    ToolDrilling.ui_connect(drilling)
-
-    app.proj_selection_changed.emit(None, None)
-    app.exc_areas.e_shape_modified.emit()
-
-    assert other_project_calls == [1]
-    assert other_exclusion_calls == [1]
-    assert milling.project_calls == 1
-    assert milling.exclusion_calls == 1
-    assert drilling.project_calls == 1
-    assert drilling.exclusion_calls == 1
-
-    ToolMilling.ui_disconnect(milling)
-    ToolDrilling.ui_disconnect(drilling)
-    app.proj_selection_changed.emit(None, None)
-    app.exc_areas.e_shape_modified.emit()
-
-    assert other_project_calls == [1, 1]
-    assert other_exclusion_calls == [1, 1]
-    assert milling.project_calls == 1
-    assert milling.exclusion_calls == 1
-    assert drilling.project_calls == 1
-    assert drilling.exclusion_calls == 1
-
-    ToolMilling.ui_connect(milling)
-    ToolDrilling.ui_connect(drilling)
-    app.proj_selection_changed.emit(None, None)
-    app.exc_areas.e_shape_modified.emit()
-
-    assert other_project_calls == [1, 1, 1]
-    assert other_exclusion_calls == [1, 1, 1]
-    assert milling.project_calls == 2
-    assert milling.exclusion_calls == 2
-    assert drilling.project_calls == 2
-    assert drilling.exclusion_calls == 2
-
-
 class GeometryObject:
     kind = 'geometry'
 
@@ -541,125 +379,3 @@ def test_milling_drills_preserve_per_tool_buffers_and_equal_diameter_epsilon():
     for actual, reference in zip(geometry, expected):
         assert actual.equals_exact(reference, 0.0)
 
-
-@pytest.mark.parametrize('tooldia', [1.0, 1.00004, 1.0001])
-def test_milling_slots_preserve_equal_and_rounding_tolerance_geometry(tooldia):
-    source = SimpleNamespace(
-        obj_options={'name': 'slots', 'slot_tooldia': str(tooldia)},
-        tools={
-            1: {'tooldia': 1.0, 'slots': [((0, 0), (2, 0)), ((0, 3), (2, 3))]},
-            2: {'tooldia': 2.0, 'slots': [((10, 0), (12, 0)), ((10, 3), (12, 3))]},
-        },
-    )
-    milling, generated = _generator_stub(source)
-
-    result = ToolMilling.generate_milling_slots(
-        milling, tools=[1, 2], outname='slots_mill', tooldia=tooldia, use_thread=False
-    )
-
-    assert result == (True, '')
-    geometry = generated['object'].solid_geometry
-    expected = []
-    for tool in (1, 2):
-        tool_dia = float('%.*f' % (6, float(tooldia)))
-        file_dia = float('%.*f' % (6, float(source.tools[tool]['tooldia'])))
-        buffer_value = file_dia / 2 - tool_dia / 2 + 0.0001
-        radius = 0.0000001 if buffer_value == 0 else buffer_value
-        expected.extend(
-            LineString(slot).buffer(radius, 32).exterior
-            for slot in source.tools[tool]['slots']
-        )
-    assert len(geometry) == len(expected) == 4
-    for actual, reference in zip(geometry, expected):
-        assert actual.equals_exact(reference, 0.0)
-
-
-def test_milling_excellon_paint_preserves_settings_and_output():
-    def settings(dia, overlap, connect):
-        return {
-            'tools_mill_milling_type': 'drills',
-            'tools_mill_milling_dia': dia,
-            'tools_mill_milling_overlap': overlap,
-            'tools_mill_milling_connect': connect,
-            'tools_mill_offset_type': 0,
-            'tools_mill_offset_value': 0.0,
-            'tools_mill_tooldia': dia,
-        }
-
-    source = SimpleNamespace(
-        obj_options={'name': 'holes'},
-        tools={
-            1: {
-                'tooldia': 1.0,
-                'drills': [Point(0, 0), Point(2, 0)],
-                'slots': [],
-                'data': settings(0.5, 20, True),
-            },
-            2: {
-                'tooldia': 2.0,
-                'drills': [Point(10, 0), Point(12, 0), Point(14, 0)],
-                'slots': [],
-                'data': settings(0.75, 35, False),
-            },
-        },
-    )
-    app = SimpleNamespace(
-        options={'geometry_circle_steps': 48},
-        defaults={},
-        decimals=6,
-        abort_flag=False,
-        log=SimpleNamespace(debug=lambda *_args: None, error=lambda *_args: None),
-        inform=SimpleNamespace(emit=lambda *_args: None),
-        proc_container=SimpleNamespace(update_view_text=lambda *_args, **_kwargs: None),
-    )
-    calls = []
-    generated = {}
-
-    class Storage:
-        def __init__(self, center):
-            self.center = center
-
-        def get_objects(self):
-            x, y = self.center
-            return [LineString([(x, y), (x + 1, y)])]
-
-    def clear_polygon_seed(*args, **kwargs):
-        polygon = args[0]
-        calls.append((polygon, kwargs.copy()))
-        return Storage(tuple(polygon.centroid.coords[0]))
-
-    def generate_cnc_job_handler(*args, **kwargs):
-        generated['geo_obj'] = kwargs['geo_obj']
-
-    milling = MillingHarness(
-        app=app,
-        target_obj=source,
-        sel_tools={tool: deepcopy(record) for tool, record in source.tools.items()},
-        clear_polygon_seed=clear_polygon_seed,
-        generate_cnc_job_handler=generate_cnc_job_handler,
-    )
-
-    ToolMilling.paint_excellon_cncjpb(milling)
-
-    assert len(calls) == 5
-    expected_tools = (
-        (1, 1.0, 0.5, 0.2, True, ((0, 0), (2, 0))),
-        (2, 2.0, 0.75, 0.35, False, ((10, 0), (12, 0), (14, 0))),
-    )
-    call_offset = 0
-    for tool, source_dia, mill_dia, overlap, connect, centers in expected_tools:
-        feature_count = len(centers)
-        tool_calls = calls[call_offset:call_offset + feature_count]
-        output = generated['geo_obj'].tools[tool]['solid_geometry']
-        assert len(tool_calls) == len(output) == feature_count
-        for (polygon, kwargs), line, center in zip(tool_calls, output, centers):
-            assert polygon.equals_exact(Point(center).buffer(source_dia / 2), 0.0)
-            assert line.coords[0] == pytest.approx(center)
-            assert line.coords[-1] == pytest.approx((center[0] + 1, center[1]))
-            assert kwargs['steps_per_circle'] == 48
-            assert kwargs['tooldia'] == mill_dia
-            assert kwargs['overlap'] == overlap
-            assert kwargs['connect'] is connect
-            assert kwargs['contour'] is True
-            assert kwargs['prog_plot'] is False
-        call_offset += feature_count

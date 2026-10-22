@@ -52,33 +52,6 @@ def _fake_freezer_class(calls, *, include_recovery=True, include_executable=True
 
 @unittest.skipIf(make_freeze is None, "make_freeze.py is not present")
 class TestMakeFreeze(unittest.TestCase):
-    def test_import_does_not_require_cx_freeze(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys; sys.modules['cx_Freeze'] = None; import make_freeze",
-            ],
-            cwd=make_freeze.ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        self.assertEqual(0, result.returncode, result.stderr)
-
-    def test_executable_definitions_use_windows_names_and_gui_base(self):
-        with patch.object(make_freeze, "Executable", FakeExecutable):
-            main = make_freeze.make_main_executable()
-            updater = make_freeze.make_updater_executable()
-
-        self.assertEqual("flatcam.py", Path(main.script).name)
-        self.assertEqual("FlatCAM.exe", main.kwargs["target_name"])
-        self.assertEqual("gui", main.kwargs["base"])
-        self.assertEqual("updater_app.py", Path(updater.script).name)
-        self.assertEqual("FlatCAMUpdater.exe", updater.kwargs["target_name"])
-        self.assertEqual("gui", updater.kwargs["base"])
-
     def test_windows_has_a_console_executable_for_headless_runs(self):
         created = []
 
@@ -94,72 +67,6 @@ class TestMakeFreeze(unittest.TestCase):
              ('flatcam.py', {'target_name': 'FlatCAM-cli.exe'})],
             created)
         self.assertEqual(2, len(executables))
-
-    def test_other_platforms_have_one_executable(self):
-        with patch.object(make_freeze, 'Executable', lambda script, **kwargs: kwargs),                 patch.object(make_freeze.sys, 'platform', 'linux'):
-            self.assertEqual(1, len(make_freeze.make_main_executables(make_freeze.ROOT)))
-
-    def test_updater_helper_has_no_gui_or_application_coupling(self):
-        tree = ast.parse(Path(make_freeze.UPDATER_SCRIPT).read_text(encoding="utf-8"))
-        imported = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported.add(node.module)
-
-        forbidden = ("PyQt", "appGUI", "appMain", "appObjects", "flatcam")
-        self.assertEqual([], [name for name in imported if name.startswith(forbidden)])
-        self.assertEqual(
-            {"services.updater.recovery"},
-            {name for name in imported if name.startswith("services.updater")},
-        )
-
-    def test_main_include_files_only_contains_existing_payload_directories(self):
-        root = Path(self._tempdir.name) / "source"
-        for relative in ("assets", "locale", "preprocessors"):
-            (root / relative).mkdir(parents=True)
-        (root / "docs").mkdir()
-
-        include_files = make_freeze.get_main_include_files(root)
-
-        destinations = {Path(destination).as_posix() for _, destination in include_files}
-        # the frozen application looks for its data next to its modules, in lib/
-        self.assertEqual({"lib/assets", "lib/locale", "lib/preprocessors"}, destinations)
-        self.assertNotIn("lib/docs", destinations)
-
-    def test_freezers_keep_main_and_updater_stages_independent(self):
-        calls = []
-        fake_freezer = _fake_freezer_class(calls)
-        with patch.object(make_freeze, "Executable", FakeExecutable), patch.object(
-            make_freeze, "Freezer", fake_freezer
-        ):
-            with self.subTest(stage="main"):
-                main_stage = Path(self._tempdir.name) / "main"
-                make_freeze.build_main_stage(main_stage)
-            with self.subTest(stage="updater"):
-                updater_stage = Path(self._tempdir.name) / "updater"
-                make_freeze.build_updater_stage(updater_stage)
-
-        self.assertEqual(2, len(calls))
-        self.assertEqual(main_stage, calls[0].target_dir)
-        self.assertEqual(updater_stage, calls[1].target_dir)
-        self.assertEqual("services.updater", calls[0].kwargs["packages"][0])
-        # PyOpenGL loads its platform module by name: without the package the frozen app does not start
-        self.assertIn("OpenGL", calls[0].kwargs["packages"])
-        self.assertEqual([], calls[1].kwargs["packages"])
-        self.assertEqual(["services.updater.recovery"], calls[1].kwargs["includes"])
-        self.assertTrue((main_stage / "FlatCAM.exe").is_file())
-        self.assertTrue((updater_stage / "FlatCAMUpdater.exe").is_file())
-
-    def test_optional_dynamic_packages_are_frozen_only_when_installed(self):
-        # OR-Tools loads its protobuf modules (routing_parameters_pb2 ...) by name; it is optional
-        with patch.object(make_freeze.importlib.util, "find_spec", lambda name: object()):
-            self.assertIn("ortools", make_freeze.main_packages())
-        with patch.object(make_freeze.importlib.util, "find_spec", lambda name: None):
-            packages = make_freeze.main_packages()
-        self.assertNotIn("ortools", packages)
-        self.assertIn("OpenGL", packages)
 
     def test_incomplete_updater_is_rejected_without_touching_existing_final_runtime(self):
         calls = []

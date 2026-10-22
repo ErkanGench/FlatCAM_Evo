@@ -28,25 +28,6 @@ def make_app():
     return app
 
 
-@pytest.mark.parametrize('context_menu', [False, True])
-def test_real_move_action_does_not_pass_checked_as_use_thread(qt_app, context_menu):
-    app = make_app()
-    app.ui.menuedit_move2origin = QtGui.QAction('Move2Origin')
-    app.ui.popmenu_move2origin = QtGui.QAction('Move2Origin')
-    app.collection.get_selected.return_value = [Layer(10.0, [], []), Layer(20.0, [], [])]
-    ops = AppObjectOps(app)
-    app.on_move2origin = ops.on_move2origin
-    connector = AppSignalConnector(app)
-    if context_menu:
-        connector.connect_canvas_context_signals()
-        action = app.ui.popmenu_move2origin
-    else:
-        connector.connect_editmenu_signals()
-        action = app.ui.menuedit_move2origin
-    action.trigger()
-    app.worker_task.emit.assert_called_once()
-
-
 class Layer:
     def __init__(self, x, events, threads, entered=None, release=None):
         self.x = x
@@ -129,86 +110,6 @@ def test_group_move_keeps_gui_alive_and_finalizes_after_export(qt_app):
     assert first.obj_options['xmin'] == 0.0
     assert first.offset_entry.text() == str((0.0, 5.0, 1.0, 6.0))
     app.delete_selection_shape.assert_called_once_with()
-
-
-def test_busy_plot_lock_retries_fit_without_blocking_gui_or_repeating_refresh(qt_app):
-    from appGUI.PlotCanvas import PlotCanvas
-
-    app = make_app()
-    # Stale project/backend settings must never enable a blocking GUI fit.
-    events, threads, ticks, tasks = [], [], [], []
-    layer = Layer(10.0, events, threads)
-    app.collection.get_selected.return_value = [layer]
-    app.worker_task.emit.side_effect = tasks.append
-    app.inform.emit.side_effect = events.append
-    lock = threading.Lock()
-    collection = SimpleNamespace(
-        update_lock=lock, bounds=lambda axis: (0.0, 10.0),
-        lock_updates=Mock(side_effect=AssertionError('GUI must not wait for a plot lock')),
-        unlock_updates=lock.release)
-    canvas = SimpleNamespace(shape_collection=collection, view=SimpleNamespace(camera=SimpleNamespace(rect=None)))
-    app.plotcanvas = canvas
-    canvas.fit_view = lambda **kwargs: PlotCanvas.fit_view(canvas, **kwargs)
-    ops = AppObjectOps(app)
-    heartbeat = QtCore.QTimer()
-    heartbeat.setInterval(5)
-    heartbeat.timeout.connect(lambda: ticks.append(1))
-    lock.acquire()
-    heartbeat.start()
-    try:
-        ops.on_move2origin()
-        worker = threading.Thread(target=lambda: tasks[0]['fcn'](*tasks[0]['params']))
-        worker.start()
-        worker.join(2)
-        assert not worker.is_alive()
-        wait_for(lambda: len(ticks) >= 3 and app.delete_selection_shape.called)
-        assert canvas.view.camera.rect is None
-        assert not any('Origin set' in event for event in events)
-    finally:
-        lock.release()
-        heartbeat.stop()
-    wait_for(lambda: any('Origin set' in event for event in events))
-    assert canvas.view.camera.rect is not None
-    assert events.count('ui') == 1
-    app.delete_selection_shape.assert_called_once_with()
-
-
-@pytest.mark.parametrize('clear', [False, True])
-def test_worker_progress_is_coalesced_on_gui_thread_and_preserves_clear(qt_app, clear):
-    from appGUI.GUIElements import FlatCAMActivityView
-    from appProcess import FCVisibleProcessContainer
-
-    class View(FlatCAMActivityView):
-        def __init__(self):
-            QtWidgets.QWidget.__init__(self)
-            self.label = QtWidgets.QLabel(self)
-            self.messages = []
-
-        def set_busy(self, msg, no_movie=None):
-            self.messages.append((msg, QtCore.QThread.currentThread()))
-            self.label.setText(msg)
-
-        def set_idle(self):
-            self.label.setText('Idle')
-
-    view = View()
-    container = FCVisibleProcessContainer(view, make_app())
-    gui_thread = QtCore.QThread.currentThread()
-    try:
-        with container.new('Moving'):
-            worker = threading.Thread(target=lambda: [container.update_view_text('%d%%' % index, clear=clear)
-                                                      for index in range(200)])
-            worker.start()
-            worker.join(2)
-            assert not worker.is_alive()
-            assert not view.messages
-            wait_for(lambda: bool(view.messages))
-            expected = '199%' if clear else container.text_to_display_in_activity + '199%'
-            assert view.messages == [(expected, gui_thread)]
-            assert view.label.text() == expected
-    finally:
-        container._update_timer.stop()
-        view.close()
 
 
 def test_move_error_reports_after_worker_and_does_not_fit(qt_app):

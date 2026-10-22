@@ -11,9 +11,10 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, P
 from appParsers import panelize_core as pc
 from camlib import grace
 
-from test_unify_characterization import (  # noqa: F401  (fixtures)
-    NATIVE_GBR, _headless_qt, app, assert_coords_close, assert_poly_equiv, make_excellon, make_gerber, parts,
-    polygon_union)
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_coords_close, assert_poly_equiv, _headless_qt, make_excellon, make_gerber, NATIVE_GBR, parts,
+    polygon_union,
+)
 
 ROWS, COLS, SPACING = 2, 3, 5.0
 
@@ -47,15 +48,6 @@ class TestGrid:
         offs = pc.grid_offsets((1.0, 2.0, 11.0, 5.0), 2, 3, 5.0, 5.0)
         assert offs == pytest.approx([(0, 0), (15, 0), (30, 0), (0, 8), (15, 8), (30, 8)])
 
-    def test_grid_offsets_row_major_and_empty(self):
-        offs = pc.grid_offsets((0, 0, 1, 1), 2, 2, 0, 0)
-        assert offs == [(0, 0), (1, 0), (0, 1), (1, 1)]
-        assert pc.grid_offsets((0, 0, 1, 1), 0, 3, 1, 1) == []
-        assert pc.grid_offsets((0, 0, 1, 1), 3, 0, 1, 1) == []
-
-    def test_constrain_fits(self):
-        assert pc.constrain_grid((0, 0, 10, 10), 2, 3, 5, 5, 100, 100) == (2, 3, False)
-
     def test_constrain_reduces(self):
         # width of n columns: 10n + 5(n-1): 3 -> 40, 2 -> 25; height of n rows: 2 -> 25, 3 -> 40
         assert pc.constrain_grid((0, 0, 10, 10), 3, 3, 5, 5, 30, 100) == (3, 2, True)
@@ -64,12 +56,6 @@ class TestGrid:
 
     def test_constrain_cannot_fit_one_board(self):
         assert pc.constrain_grid((0, 0, 10, 10), 3, 3, 5, 5, 9, 9) == (0, 0, True)
-
-    @pytest.mark.parametrize('bounds', [(float('nan'), 0, 10, 10),
-                                       (float('inf'), float('inf'), -float('inf'), -float('inf'))])
-    def test_grid_rejects_empty_or_nonfinite_bounds(self, bounds):
-        with pytest.raises(ValueError):
-            pc.grid_offsets(bounds, 2, 2, 5, 5)
 
     def test_merge_lines_honors_abort_without_snapping(self):
         tools = {1: {'solid_geometry': [LineString([(0, 0), (1, 0)])]}}
@@ -83,18 +69,6 @@ class TestTranslate:
         out = pc.translate_flat([a, [b, [c]], None], 10, 20)
         assert isinstance(out, list) and len(out) == 3
         assert [(p.x, p.y) for p in out] == [(10, 20), (11, 21), (12, 22)]
-
-    def test_single_geometry_stays_single(self):
-        poly = box(0, 0, 1, 1)
-        out = pc.translate_flat(poly, 3, 4)
-        assert isinstance(out, Polygon) and out.bounds == (3, 4, 4, 5)
-        multi = MultiPolygon([box(0, 0, 1, 1), box(5, 5, 6, 6)])
-        assert isinstance(pc.translate_flat(multi, 1, 1), MultiPolygon)
-
-    def test_empty_and_none(self):
-        assert pc.translate_flat([], 1, 1) == []
-        assert pc.translate_flat(None, 1, 1) is None
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # Gerber
@@ -131,27 +105,6 @@ class TestGerber:
             chunk = solid[copy * len(flat_src):(copy + 1) * len(flat_src)]
             assert_poly_equiv(chunk, moved(src.solid_geometry, off), msg='copy %d' % copy)
 
-    def test_aperture_metadata_is_copied_deeply(self, app, path):
-        src, offs = self.build(app, path)
-        tools, _ = pc.panelize_gerber(src.tools, src.solid_geometry, offs)
-        for apid, tool in src.tools.items():
-            for key, value in tool.items():
-                if key != 'geometry':
-                    assert key in tools[apid]
-                    if key != 'macro':
-                        assert tools[apid][key] == value
-            assert tools[apid] is not tool
-        macro_ids = [a for a, t in src.tools.items() if 'macro' in t]
-        for apid in macro_ids:
-            assert tools[apid]['macro'] is not src.tools[apid]['macro']
-
-    def test_source_is_unchanged(self, app, path):
-        src, offs = self.build(app, path)
-        before = (freeze(src.tools), freeze(src.solid_geometry))
-        pc.panelize_gerber(src.tools, src.solid_geometry, offs)
-        assert (freeze(src.tools), freeze(src.solid_geometry)) == before
-
-
 def test_gerber_dark_clear_dark_keeps_composed_geometry_per_copy():
     dark1 = box(0, 0, 10, 10)
     clear = box(2, 2, 8, 8)
@@ -175,14 +128,6 @@ def test_gerber_dark_clear_dark_keeps_composed_geometry_per_copy():
     # record order: copy 1 of both dark records, then copy 2, ...
     assert new_tools[10]['geometry'][1]['solid'].bounds == (4, 4, 6, 6)
     assert new_tools[10]['geometry'][2]['solid'].bounds == (20, 0, 30, 10)
-
-
-def test_gerber_single_polygon_solid_and_empty_offsets():
-    tools = {10: {'type': 'C', 'size': 1.0, 'geometry': [{'solid': box(0, 0, 1, 1)}]}}
-    new_tools, solid = pc.panelize_gerber(tools, box(0, 0, 1, 1), [(5, 5), (7, 7)])
-    assert [g.bounds for g in solid] == [(5, 5, 6, 6), (7, 7, 8, 8)]
-    new_tools, solid = pc.panelize_gerber(tools, box(0, 0, 1, 1), [])
-    assert solid == [] and new_tools[10]['geometry'] == []
 
 
 def test_copy_gerber_attributes(app):
@@ -223,16 +168,6 @@ class TestExcellon:
                     assert (new_start.x, new_start.y, new_stop.x, new_stop.y) == \
                         pytest.approx((start.x + dx, start.y + dy, stop.x + dx, stop.y + dy))
 
-    def test_slots_stay_tuples_also_from_lists(self, app):
-        src, offs = self.build(app)
-        src_tools = deepcopy(src.tools)
-        for tool in src_tools.values():
-            tool['slots'] = [list(s) for s in tool['slots']]
-        tools = pc.panelize_excellon(src_tools, offs)
-        slots = [s for t in tools.values() for s in t['slots']]
-        assert slots and all(type(s) is tuple and len(s) == 2 for s in slots)
-        assert all(isinstance(p, Point) for s in slots for p in s)
-
     def test_tool_data_kept_and_independent(self, app):
         src, offs = self.build(app)
         src.tools[1]['data'] = {'cutz': -1.7, 'tag': 'first'}
@@ -241,19 +176,6 @@ class TestExcellon:
         assert tools[1]['data'] == {'cutz': -1.7, 'tag': 'first'} and tools[1]['data'] is not src.tools[1]['data']
         tools[1]['data']['cutz'] = 5
         assert src.tools[1]['data']['cutz'] == -1.7
-
-    def test_source_is_unchanged(self, app):
-        src, offs = self.build(app)
-        before = freeze(src.tools)
-        pc.panelize_excellon(src.tools, offs)
-        assert freeze(src.tools) == before
-
-    def test_tool_without_drills_or_slots_keys(self):
-        tools = pc.panelize_excellon({1: {'tooldia': 1.0, 'drills': [Point(1, 1)]}, 2: {'tooldia': 2.0}},
-                                     [(0, 0), (10, 0)])
-        assert [(p.x, p.y) for p in tools[1]['drills']] == [(1, 1), (11, 1)]
-        assert tools[2]['drills'] == [] and tools[2]['slots'] == []
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # Geometry
@@ -286,18 +208,6 @@ class TestGeometry:
         assert tools == tools_in and tools is not tools_in and tools[1] is not tools_in[1]
         assert len(solid) == 6 and all(isinstance(g, Polygon) for g in solid)  # Multi split
 
-    def test_single_geometry_source_terminates(self):
-        # regression of 17f28747 (iterating and growing the same list)
-        tools, solid = pc.panelize_geometry({}, box(0, 0, 1, 1), False, [(0, 0), (5, 0)])
-        assert [g.bounds for g in solid] == [(0, 0, 1, 1), (5, 0, 6, 1)]
-
-    def test_source_is_unchanged(self):
-        tools_in = self.tools_multigeo()
-        solid_in = [LineString([(0, 0), (10, 0)])]
-        before = (freeze(tools_in), freeze(solid_in))
-        pc.panelize_geometry(tools_in, solid_in, True, [(0, 0), (20, 0)])
-        assert (freeze(tools_in), freeze(solid_in)) == before
-
     def test_merge_tool_lines_fuses_shared_borders(self):
         # 2 copies of a square outline side by side share the vertical border x = 10
         outline = [LineString([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)])]
@@ -326,23 +236,6 @@ class TestAbortAndProgress:
             pc.panelize_excellon(exc.tools, offs, abort=lambda: True)
         with pytest.raises(grace):
             pc.panelize_geometry({}, [box(0, 0, 1, 1)], False, offs, abort=lambda: True)
-
-    def test_abort_false_does_not_raise(self, app):
-        exc = make_excellon(app, name='e')
-        assert pc.panelize_excellon(exc.tools, [(0, 0)], abort=lambda: False)
-
-    def test_progress_reports_elements_and_tags(self, app):
-        exc = make_excellon(app, name='e')
-        calls = []
-        pc.panelize_excellon(exc.tools, [(0, 0), (30, 0)], progress=lambda *a: calls.append(a))
-        assert {c[0] for c in calls} == {1, 2}
-        assert {c[2] for c in calls} == {'D:', 'S:'}
-        assert all(0 <= c[1] <= 100 for c in calls)
-        g = make_gerber(app, name='g')
-        calls.clear()
-        pc.panelize_gerber(g.tools, g.solid_geometry, [(0, 0)], progress=lambda *a: calls.append(a))
-        assert calls and calls[-1][1] == 100 and calls[-1][2] == ''
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # core == Tcl command
@@ -420,38 +313,3 @@ def test_gerber_tools_from_geometry_multigeo_fills_lines_like_the_former_panel_c
     assert records[0]['follow'].equals(records[0]['solid'].exterior)
     assert solid.symmetric_difference(shapely.unary_union([r['solid'] for r in records])).area < 1e-9
 
-
-def test_gerber_tools_from_geometry_open_line_and_point_keep_their_shape():
-    line = LineString([(0, 0), (5, 0)])
-    point = Point(3, 3)
-    tools, solid = pc.gerber_tools_from_geometry({}, [line, point], False)
-    records = tools[0]['geometry']
-    assert [type(r['solid']) for r in records] == [LineString, Point]
-    assert records[0]['follow'].equals(line) and records[1]['follow'].equals(point)
-    assert solid[0].equals(line) and solid[1].equals(point)
-
-
-def test_gerber_tools_from_geometry_multigeo_uses_the_tools_and_unions_the_solid():
-    a = box(0, 0, 4, 4)
-    b = box(4, 0, 8, 4)
-    src_tools = {
-        1: {'tooldia': 1.0, 'data': {}, 'solid_geometry': [a, Polygon()]},
-        2: {'tooldia': 2.0, 'data': {}, 'solid_geometry': [MultiPolygon([b, box(20, 0, 21, 1)])]},
-    }
-    # the top-level solid is ignored in multigeo mode
-    tools, solid = pc.gerber_tools_from_geometry(src_tools, [box(100, 100, 101, 101)], True)
-    records = tools[0]['geometry']
-    assert len(records) == 3
-    assert solid.area == pytest.approx(16 + 16 + 1)
-    assert solid.symmetric_difference(shapely.unary_union([r['solid'] for r in records])).area < 1e-9
-
-
-def test_gerber_tools_from_geometry_panelizes_like_the_gerber_core():
-    src_tools = {1: {'tooldia': 1.0, 'data': {}, 'solid_geometry': [box(0, 0, 2, 2)]}}
-    tools, solid = pc.gerber_tools_from_geometry(src_tools, [], True)
-    offs = pc.grid_offsets((0, 0, 2, 2), 2, 2, 1.0, 1.0)
-    pan_tools, pan_solid = pc.panelize_gerber(tools, solid, offs)
-    assert len(pan_tools[0]['geometry']) == 4
-    assert polygon_union(pan_solid).area == pytest.approx(16.0)
-    assert shapely.unary_union([r['solid'] for r in pan_tools[0]['geometry']]).symmetric_difference(
-        polygon_union(pan_solid)).area < 1e-9

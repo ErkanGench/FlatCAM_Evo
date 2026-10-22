@@ -43,20 +43,10 @@ class TestAppHistoryKeys(unittest.TestCase):
         gui.app.history.redo.assert_called_once()
         gui.app.history.undo.assert_not_called()
 
-    def test_str_keys(self):
-        self.assertEqual(press('Z', CTRL).app.history.undo.call_count, 1)
-        self.assertEqual(press('Y', CTRL).app.history.redo.call_count, 1)
-
     def test_text_focus_blocks(self):
         gui = press(QtCore.Qt.Key.Key_Z, CTRL, in_text=True)
         gui.app.history.undo.assert_not_called()
         gui.app.history.redo.assert_not_called()
-
-    def test_other_call_source(self):
-        gui = press(QtCore.Qt.Key.Key_Z, CTRL, source='geo_editor')
-        gui.app.history.undo.assert_not_called()
-        gui.app.history.redo.assert_not_called()
-
 
 if __name__ == '__main__':
     unittest.main()

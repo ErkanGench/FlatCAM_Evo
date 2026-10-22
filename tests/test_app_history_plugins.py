@@ -121,29 +121,6 @@ def test_dblsided_mirror_is_a_matrix_step(fc, no_plot):
 # ---------------------------------------------------------------------------------------------------------------------
 # 2. QRCode: make() writes the existing Gerber
 # ---------------------------------------------------------------------------------------------------------------------
-def test_qrcode_make_is_a_snapshot_step(fc, no_plot):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_qr')
-    area0, tools0, b0 = _area(grb), sorted(grb.tools, key=str), _bounds(grb)
-    qr_geo = MultiPolygon([box(0, 0, 1, 1), box(2, 2, 3, 3)])
-    ui = SimpleNamespace(
-        border_size_entry=SimpleNamespace(get_value=lambda: 1.0),
-        bsize_entry=SimpleNamespace(get_value=lambda: 10.0),
-        bb_radio=SimpleNamespace(get_value=lambda: 'r'),
-        pol_radio=SimpleNamespace(get_value=lambda: 'pos'))
-    stub = SimpleNamespace(app=fc, ui=ui, grb_object=grb, qrcode_utility_geometry=qr_geo, qrcode_geometry=qr_geo,
-                           on_exit=lambda: None, replot=lambda obj=None: None)
-    stub._write_qrcode = lambda pos: QRCode._write_qrcode(stub, pos)
-    n = _stack(fc)
-    QRCode.make(stub, (50.0, 50.0))
-    _one_step(fc, n, 'QRCode')
-    area1, tools1 = _area(grb), sorted(grb.tools, key=str)
-    assert len(tools1) == len(tools0) + 1 and area1 != area0 and not np.allclose(_bounds(grb), b0)
-    assert fc.history.undo()
-    assert sorted(grb.tools, key=str) == tools0 and np.isclose(_area(grb), area0) and np.allclose(_bounds(grb), b0)
-    assert fc.history.redo()
-    assert sorted(grb.tools, key=str) == tools1 and np.isclose(_area(grb), area1)
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # 3. Cutout: manual gap, 1 step per click
 # ---------------------------------------------------------------------------------------------------------------------
@@ -180,37 +157,9 @@ def test_manual_cutout_click_is_a_snapshot_step(fc, no_plot):
     assert geo.tools[1]['solid_geometry'].equals(solid1) if hasattr(solid1, 'equals') else True
 
 
-def test_manual_cutout_that_fails_records_nothing(fc, no_plot):
-    geo = _geometry(fc, 'geo_cut_fail')
-    CutOut, stub = _cutout_stub(fc, geo)
-    stub.ui.dia = SimpleNamespace(get_value=lambda: 0.0)         # a diameter of 0 is refused before any change
-    n = _stack(fc)
-    CutOut.on_manual_cutout(stub, (10.0, 0.0))
-    assert _stack(fc) == n
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # 4 / 5. Single-geo <-> Multi-geo
 # ---------------------------------------------------------------------------------------------------------------------
-def test_convert_single_to_multi_and_back(fc, no_plot, monkeypatch):
-    geo = _geometry(fc, 'geo_conv')
-    geo.plot = lambda *a, **k: None
-    monkeypatch.setattr(fc.collection, 'get_active', lambda: geo)
-    n = _stack(fc)
-    fc.edit_class.on_convert_singlegeo_to_multigeo()
-    _one_step(fc, n, 'MultiGeo')
-    assert geo.multigeo is True and geo.tools[1]['solid_geometry']
-    n = _stack(fc)
-    fc.edit_class.on_convert_multigeo_to_singlegeo()
-    _one_step(fc, n, 'SingleGeo')
-    assert geo.multigeo is False and geo.tools[1]['solid_geometry'] == []
-    assert fc.history.undo()                                # back to multigeo
-    assert geo.multigeo is True and geo.tools[1]['solid_geometry']
-    assert fc.history.undo()                                # back to singlegeo
-    assert geo.multigeo is False and geo.tools[1]['solid_geometry'] == []
-    assert fc.history.redo() and geo.multigeo is True
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # 6. Simplify (runs in the worker)
 # ---------------------------------------------------------------------------------------------------------------------
@@ -243,24 +192,6 @@ def test_simplify_is_a_snapshot_step(fc, no_plot, monkeypatch):
 # ---------------------------------------------------------------------------------------------------------------------
 # 7. Gerber buffer, 8. Isolation buffer
 # ---------------------------------------------------------------------------------------------------------------------
-def test_gerber_generate_buffer_is_a_snapshot_step(fc, no_plot, monkeypatch):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_buf')
-    area0 = _area(grb)
-    monkeypatch.setattr(fc, 'worker_task', SimpleNamespace(emit=lambda d: d['fcn'](*d['params'])))
-    # the pool buffers by 0.5 (the real handler buffers by 1e-7 and back, which changes nothing to see)
-    fake_pool = SimpleNamespace(apply_async=lambda fcn, args: SimpleNamespace(
-        get=lambda: MultiPolygon([p.buffer(0.5) for p in args[0]]).buffer(0)))
-    monkeypatch.setattr(fc, 'pool', fake_pool, raising=False)
-    monkeypatch.setattr(type(grb), 'plot_single_object', SimpleNamespace(emit=lambda: None), raising=False)
-    n = _stack(fc)
-    grb.on_generate_buffer()
-    _one_step(fc, n, 'Buffer')
-    area1 = _area(grb)
-    assert area1 > area0
-    assert fc.history.undo() and np.isclose(_area(grb), area0)
-    assert fc.history.redo() and np.isclose(_area(grb), area1)
-
-
 def test_isolation_generate_buffer_is_a_snapshot_step(fc, no_plot, monkeypatch):
     grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_iso_buf')
     grb.solid_geometry = list(grb.solid_geometry.geoms) if hasattr(grb.solid_geometry, 'geoms') \
@@ -293,11 +224,6 @@ def cncjob(fc, no_plot):
     return job
 
 
-def test_cncjob_creation_is_no_extra_history_step(fc, cncjob):
-    # the snippets check box that is set while the job is made does not record a source file step
-    assert not any('Source' in step.label for step in fc.history.undo_stack)
-
-
 def test_cncjob_update_source_file_is_a_snapshot_step(fc, cncjob):
     src0 = cncjob.source_file
     cncjob.prepend_snippet = '(SNIPPET-START)\n'
@@ -313,24 +239,3 @@ def test_cncjob_update_source_file_is_a_snapshot_step(fc, cncjob):
     assert fc.history.undo() and cncjob.source_file == src0
     assert fc.history.redo() and cncjob.source_file == src1
 
-
-def test_properties_name_field_rename_is_a_rename_step(fc, no_plot):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_name_a')
-    n = _stack(fc)
-    grb.on_name_activate(new_name='g_name_b')
-    _one_step(fc, n, 'g_name_b')
-    assert grb.obj_options['name'] == 'g_name_b'
-    assert fc.history.undo() and grb.obj_options['name'] == 'g_name_a'
-    assert fc.history.redo() and grb.obj_options['name'] == 'g_name_b'
-    n = _stack(fc)
-    grb.on_name_activate(new_name='g_name_b')                  # no change, no step
-    assert _stack(fc) == n
-
-
-def test_cncjob_export_rename_is_a_rename_step(fc, cncjob, tmp_path):
-    n = _stack(fc)
-    cncjob.export_gcode_handler(str(tmp_path / 'exported_job.nc'))
-    assert cncjob.obj_options['name'] == 'exported_job'
-    _one_step(fc, n, 'exported_job')
-    assert fc.history.undo() and cncjob.obj_options['name'] == 'job_hist'
-    assert fc.history.redo() and cncjob.obj_options['name'] == 'exported_job'

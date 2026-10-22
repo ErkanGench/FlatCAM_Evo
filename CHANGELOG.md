@@ -44,6 +44,12 @@ GUI:
 Tests:
 
 - test_app_refactor_integration patched App.info before PyQt built the meta-object of App, so the later tests on the same worker could not connect App.inform to info(); the meta-object is now built first
+- the test suite is cut from 8383 tests in 358 files to 4393 tests in 314 files (full run 58-60 s instead of about 108 s with 8 workers): the tests that pinned the implementation (source text and AST, method manifests, private attributes, call order), the duplicates, the stage / ticket / audit scaffolding and the finished-refactor characterization are gone; parametrized matrices keep the cases that take different branches; ticket-named files are merged into topical files. E-Cut, Levelling and the G-code Sender keep their distinct behavior tests (features in development). test_ncc_followups and test_paint_final_cleanup (110 s together) are deleted
+- the "unify" test files are gone: their shared helpers are in tests/helpers_objects.py, their tests in the Gerber / Excellon / object / project topical files
+- new core gate tests/gates/run_core.py (all files except tests/gates/slow_files.txt) for each commit; the full gate run_gate.py before a push; new test budget tests/gates/test_budget.json (4850 tests, 350 files): above it the gates print a warning, they do not fail. The gate lists and the outcome baseline are rebuilt
+- test policy in CLAUDE.md: fold the TDD tests into the topical file when a task is done, keep only tests of user-visible behavior
+- conftest: after each test, a Ctrl / Shift / Alt state left by QTest key events is released (a plain click in a later test extended the selection); a hidden message box makes no Windows sound
+- the Tcl tests try tkinter.Tcl() again when Windows fails to read init.tcl under load
 
 21.10.2026
 

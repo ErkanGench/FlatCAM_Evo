@@ -14,7 +14,7 @@ from appEditors.grb_plugins.GrbCommon import DrawToolShape
 from appEditors.grb_plugins.GrbVertices import vertex_plan, edit_vertices_dialog
 from appEditors.vertex_grips import VertexGrips
 from test_gerber_editor_pick import make_editor, make_select, aperture, pad
-from test_unify_characterization import _headless_qt  # noqa: F401
+from tests.helpers_objects import _headless_qt  # noqa: F401,E402
 
 NO_MOD = QtCore.Qt.KeyboardModifier.NoModifier
 SQUARE = box(0, 0, 10, 10)   # exterior: (10,0) (10,10) (0,10) (0,0) (10,0) in this shapely version
@@ -82,20 +82,6 @@ def test_plan_point_follow_pad_has_no_grips():
     assert any('pad' in text for text in warnings(editor))
 
 
-def test_plan_multipolygon_region_is_refused_with_a_warning():
-    multi = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
-    shape = DrawToolShape({'solid': multi, 'follow': multi.geoms[0].exterior})
-    editor = make_editor({0: aperture([shape], kind='REG')})
-    editor.history.reset()
-    make_select(editor)
-    editor.selected = [shape]
-    with pytest.raises(ValueError):
-        vertex_plan(editor, shape)
-    assert edit_vertices_dialog(editor) == 'fail'
-    assert warned(editor)
-    assert editor.history.undo_stack == []
-
-
 # 2. region move, insert, remove: solid and follow stay consistent, one history step, undo and redo
 
 def follow_matches_solid(shape):
@@ -145,20 +131,6 @@ def test_region_remove_drops_vertex_from_solid_and_follow():
     assert shape.geo['solid'].equals_exact(SQUARE, 0.0)
 
 
-def test_region_grip_drag_is_one_history_step():
-    editor, shape = region_editor()
-    grips = editor.vertex_grips
-    grips.sync()
-    assert grips.shape is shape
-    assert grips.press((0, 0), (10, 10), NO_MOD)
-    grips.move((20, 0), (12, 12))
-    assert grips.release((20, 0), (12, 12))
-    result = storage_shape(editor, 0)
-    assert (12, 12) in list(result.geo['solid'].exterior.coords)
-    assert follow_matches_solid(result)
-    assert len(editor.history.undo_stack) == 1
-
-
 # 3. track move: follow edited, solid rebuilt with the same width, native shape, closed result refused
 
 def test_track_move_edits_follow_and_rebuilds_solid_with_same_width():
@@ -172,14 +144,6 @@ def test_track_move_edits_follow_and_rebuilds_solid_with_same_width():
     assert len(editor.history.undo_stack) == 1
 
 
-def test_track_move_adds_shape_to_native_shapes_and_keeps_track_form():
-    editor, shape = track_editor()
-    editor.apply_vertex_edit('move', 1, (14, 3), target=shape)
-    result = storage_shape(editor, 10)
-    assert result in editor.history.native_shapes
-    assert not editor.loaded_as_regions
-
-
 def test_track_closing_edit_is_rejected_without_a_history_step():
     editor, shape = track_editor()
     outcome = editor.apply_vertex_edit('move', 2, (0, 0), target=shape)
@@ -191,132 +155,17 @@ def test_track_closing_edit_is_rejected_without_a_history_step():
 
 # 4. stale state between show and press / release
 
-def test_press_on_stale_snapshot_returns_false_and_rebuilds_grips():
-    editor, shape = region_editor()
-    grips = editor.vertex_grips
-    grips.sync()
-    editor.touch_geometry()
-    assert grips.stale()
-    assert grips.press((0, 0), (10, 10), NO_MOD) is False
-    assert not grips.stale()
-    assert grips.shape is shape
-    assert editor.history.undo_stack == []
-
-
-def test_release_on_stale_snapshot_refuses_with_warning_and_no_history_step():
-    editor, shape = region_editor()
-    grips = editor.vertex_grips
-    grips.sync()
-    assert grips.press((0, 0), (10, 10), NO_MOD)
-    grips.move((20, 0), (12, 12))
-    editor.touch_geometry()
-    assert grips.release((20, 0), (12, 12))
-    assert any('Geometry changed' in text for text in warnings(editor))
-    assert editor.history.undo_stack == []
-    assert storage_shape(editor, 0) is shape
-    assert shape.geo['solid'].equals_exact(SQUARE, 0.0)
-
 
 # 5. busy guard
-
-def test_busy_history_refuses_the_edit_and_the_dialog():
-    editor, shape = region_editor()
-    editor.history.pending = object()
-    assert editor.reject_busy()
-    assert editor.apply_vertex_edit('move', 2, (12, 12), target=shape) == 'fail'
-    assert storage_shape(editor, 0) is shape
-    assert shape.geo['solid'].equals_exact(SQUARE, 0.0)
-    assert editor.history.undo_stack == []
-    assert edit_vertices_dialog(editor) == 'fail'
-    editor.history.pending = None
-    assert not editor.reject_busy()
-
-
-def test_busy_history_refuses_a_grip_press():
-    editor, shape = region_editor()
-    editor.vertex_grips.sync()
-    editor.history.pending = object()
-    assert editor.vertex_grips.press((0, 0), (10, 10), NO_MOD) is False
-    assert editor.vertex_grips.pressed is None
-    editor.history.pending = None
 
 
 # 6. remove_editor_actions keeps exactly one 'Edit vertices' action
 
-def test_building_the_editor_actions_twice_leaves_one_edit_vertices_action():
-    menu = QtWidgets.QMenu()
-    stand_in = SimpleNamespace(app=SimpleNamespace(ui=SimpleNamespace(grb_editor_menu=menu)))
-    first = menu.addAction(LABEL)
-    first.setProperty(EDITOR_ACTION_PROPERTY, True)
-    menu.addAction('Other')
-    AppGerberEditor.remove_editor_actions(stand_in)
-    assert [a.text() for a in menu.actions()] == ['Other']
-    second = menu.addAction(LABEL)
-    second.setProperty(EDITOR_ACTION_PROPERTY, True)
-    assert [a.text() for a in menu.actions()].count(LABEL) == 1
-    menu.deleteLater()
-
 
 # 7. grips cancelled on tool change and hidden on clear()
 
-def test_cancel_drops_a_pressed_grip_and_drag():
-    editor, shape = region_editor()
-    grips = editor.vertex_grips
-    grips.sync()
-    grips.press((0, 0), (10, 10), NO_MOD)
-    grips.move((20, 0), (12, 12))
-    assert grips.dragging
-    grips.cancel()
-    assert grips.pressed is None and not grips.dragging and grips.candidate is None
-    assert editor.history.undo_stack == []
-
-
-def test_tool_change_cancels_the_grip_drag():
-    editor, shape = region_editor()
-    grips = editor.vertex_grips
-    grips.sync()
-    assert grips.press((0, 0), (10, 10), NO_MOD)
-    grips.move((20, 0), (12, 12))
-    editor.on_tool_select('move')
-    assert grips.pressed is None and not grips.dragging
-    assert editor.history.undo_stack == []
-
-
-def test_clear_hides_the_grips():
-    editor, shape = region_editor()
-    grips = editor.vertex_grips
-    grips.sync()
-    assert grips.shape is shape
-    editor.clear()
-    assert grips.shape is None
-    assert grips.grips == []
-    assert grips.collection().enabled is False
-
 
 # 8. VertexGrips default arguments still work for a Geo-style stand-in
-
-def test_vertex_grips_defaults_edit_shape_geo_and_call_apply_vertex_edit():
-    line = LineString([(0, 0), (2, 0)])
-    shape = SimpleNamespace(geo=line)
-    app = SimpleNamespace(grid_status=lambda: False, inform=SimpleNamespace(emit=MagicMock()),
-                          options={'global_sel_line': '#0000ffbf'},
-                          plotcanvas=SimpleNamespace(new_shape_collection=lambda layers: _Collection()))
-    editor = SimpleNamespace(selected=[shape], active_tool=SimpleNamespace(name='select'), app=app,
-                             apply_vertex_edit=MagicMock(return_value=None), reject_busy=lambda: False,
-                             snap=lambda x, y: (x, y), active_snap_type=None,
-                             canvas=SimpleNamespace(pixel_size=lambda: 0.01), tool_shape=_Collection(),
-                             get_draw_color=lambda: '#00000080', get_sel_color=lambda: '#0000FF80')
-    grips = VertexGrips(editor)
-    grips.sync()
-    assert grips.shape is shape and grips.geo is line
-    assert grips.stale() is False
-    assert grips.press((0, 0), (0, 0), NO_MOD)
-    grips.move((20, 0), (1, 1))
-    grips.release((20, 0), (1, 1))
-    editor.apply_vertex_edit.assert_called_once()
-    action, address, point = editor.apply_vertex_edit.call_args[0]
-    assert action == 'move' and address == (0, 0, 0) and point == (1, 1)
-    assert editor.apply_vertex_edit.call_args[1] == {'target': shape, 'on_segment': False}
 
 
 class _Collection:

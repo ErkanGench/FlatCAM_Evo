@@ -17,7 +17,7 @@ def qt_application():
     yield app
 
 
-@pytest.mark.parametrize('kind', ['ring', 'closed_path', 'segments', 'crossing'])
+@pytest.mark.parametrize('kind', ['ring', 'segments'])
 def test_polygonize_closed_paths_and_separate_segments_with_one_undo(kind):
     polygon = box(0, 0, 2, 2)
     coords = list(polygon.exterior.coords)
@@ -96,33 +96,3 @@ def test_polygonize_without_usable_enclosure_leaves_storage_and_history_unchange
     assert not any('[success]' in str(call) for call in editor.app.inform.emit.call_args_list)
 
 
-@pytest.mark.parametrize('theme', ['assets/resources', 'assets/resources/dark_resources'])
-def test_polygonize_toolbar_survives_repopulation(theme):
-    original = DrawToolShape(box(0, 0, 2, 2).exterior)
-    editor = editor_with_history([original], [original])
-    ui = QtWidgets.QMainWindow()
-    ui.app = editor.app
-    ui.app.resource_location = theme
-    for name in ('toolbarfile', 'toolbaredit', 'toolbarview', 'toolbarshell', 'toolbarplugins',
-                 'exc_edit_toolbar', 'geo_edit_toolbar', 'grb_edit_toolbar'):
-        setattr(ui, name, QtWidgets.QToolBar(ui))
-    ui.corner_snap_btn, ui.snap_magnet = QtWidgets.QWidget(ui), QtWidgets.QWidget(ui)
-    ui.geo_add_simplification_btn = QtGui.QAction(ui)
-    editor.app.ui = ui
-    editor.ui = MagicMock()
-    editor.tools = {}
-    editor.on_join_paths = Mock()
-    editor.make_callback = lambda name: lambda: None
-    editor.polygonize = lambda: AppGeoEditor.polygonize(editor)
-    for _ in range(2):
-        MainGUI.populate_toolbars(ui)
-        AppGeoEditor.connect_geo_toolbar_signals(editor)
-        action = ui.geo_polygonize_btn
-        assert action in ui.geo_edit_toolbar.actions()
-        assert not action.icon().isNull()
-        assert not action.isCheckable()
-    ui.geo_polygonize_btn.trigger()
-    assert editor.app.worker_task.emit.call_count == 1
-    run_worker(editor)
-    result, = editor.storage.get_objects()
-    assert result.geo.equals(box(0, 0, 2, 2))

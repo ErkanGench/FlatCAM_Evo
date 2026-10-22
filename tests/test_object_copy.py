@@ -1,0 +1,391 @@
+"""Stage 4: one ``copy_from(src)`` per object kind, used by both copy paths of appHandlers/appObjectOps.py
+(``on_copy_command`` and ``on_copy_object2``).
+
+The 2 real paths run headless with a factory that creates the object and calls ``initialize`` (as in
+tests/helpers_objects.py). For each kind and path, every attribute that copy_from specifies must equal the
+source, and the copy must not share data with the source (mutate either one, the other stays the same).
+
+XFAIL_OLD lists the (kind, path, attribute) combinations the OLD per-path code lost (all fixed by copy_from, so it is empty now).
+Old-code losses: aperture_macros in on_copy_command; follow_geometry and source_file in on_copy_object2 (Gerber);
+multigeo / tooluid (Geometry); multigeo, int_digits, frac_digits (Gerber); the Excellon file format attributes.
+"""
+
+import copy
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+from PyQt6.QtCore import QObject
+from shapely.geometry import LineString, Point, box
+from shapely.geometry.base import BaseGeometry
+
+from appHandlers.appObjectOps import AppObjectOps
+from appObjects.DocumentObject import DocumentObject
+from appObjects.ExcellonObject import ExcellonObject
+from appObjects.GeometryObject import GeometryObject
+from appObjects.GerberObject import GerberObject
+from appObjects.ScriptObject import ScriptObject
+
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_coords_close, assert_poly_equiv, excellon, gerber, _headless_qt, make_excellon, make_gerber,
+    make_same_diameter_excellon, pts, run_copy, slot_coords, snapshot_excellon, snapshot_gerber,
+)
+
+CLASSES = {'gerber': GerberObject, 'excellon': ExcellonObject, 'geometry': GeometryObject,
+           'script': ScriptObject, 'document': DocumentObject}
+
+# ---------------------------------------------------------------------------------------------------------------
+# running the 2 real paths headless
+# ---------------------------------------------------------------------------------------------------------------
+
+def make_new(kind, name, app):
+    if kind in ('script', 'document'):
+        return bare(CLASSES[kind], name, app, kind)
+    return CLASSES[kind](name, app)
+
+
+def run_path(app, source, kind, path):
+    """Run on_copy_command() / on_copy_object2() headless; returns the new object (or 'fail')."""
+    created = {}
+
+    def new_object(obj_kind, name, initialize, *args, **kwargs):
+        assert obj_kind == kind
+        new_obj = make_new(kind, name, app)
+        if initialize(new_obj, app) == 'fail':
+            return 'fail'
+        created[name] = new_obj
+        return new_obj
+
+    app.app_obj.new_object.side_effect = new_object
+    app.f_handlers = SimpleNamespace(export_excellon=Mock(return_value='REGENERATED\n'))
+    app.collection.get_selected.return_value = [source]
+    ops = AppObjectOps(app)
+    if path == 'command':
+        ops.on_copy_command()
+        name = source.obj_options['name'] + '_copy'
+    else:
+        ops.on_copy_object2('_c2')
+        name = source.obj_options['name'] + '_c2'
+    assert list(created) == [name]
+    return created[name]
+
+
+def norm(value):
+    """A comparable, deep snapshot of a value (shapely geometries as WKB)."""
+    if isinstance(value, BaseGeometry):
+        return value.wkb_hex
+    if isinstance(value, dict):
+        return {k: norm(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [norm(v) for v in value]
+    if hasattr(value, '__dict__') and not isinstance(value, type):
+        return (type(value).__name__, norm(vars(value)))
+    return value
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# sources
+# ---------------------------------------------------------------------------------------------------------------
+
+def gerber_source(app):
+    obj = make_gerber(app)
+    assert obj.aperture_macros and obj.follow_geometry
+    obj.export_as_regions = True
+    obj.multigeo = True
+    obj.int_digits = 2
+    obj.frac_digits = 5
+    obj.units = 'MM'
+    obj.obj_options['name'] = 'grb'
+    return obj
+
+
+def excellon_source(app):
+    obj = make_same_diameter_excellon(app)
+    obj.source_file = 'M48\nMETRIC\nT01C1.0\n%\nM30\n'
+    obj.zeros = 'T'
+    obj.excellon_format_upper_mm = 2
+    obj.excellon_format_lower_mm = 5
+    obj.excellon_format_upper_in = 1
+    obj.excellon_format_lower_in = 6
+    obj.excellon_units = 'MM'
+    obj.obj_options['name'] = 'exc'
+    return obj
+
+
+def geometry_source(app):
+    obj = GeometryObject('geo', app)
+    obj.units = 'MM'
+    obj.multigeo = True
+    obj.tooluid = 2
+    shape_a = [box(0, 0, 4, 4), box(10, 10, 12, 13)]
+    shape_b = [LineString([(0, 0), (5, 5)]).buffer(0.5)]
+    obj.tools = {
+        1: {'tooldia': 1.0, 'data': {'cutz': -0.5, 'name': 'first'}, 'solid_geometry': shape_a},
+        2: {'tooldia': 2.0, 'data': {'cutz': -1.5, 'name': 'second'}, 'solid_geometry': shape_b},
+    }
+    obj.solid_geometry = shape_a + shape_b
+    obj.follow_geometry = [LineString([(0, 0), (5, 5)])]
+    obj.source_file = 'geometry source text'
+    obj.obj_options['name'] = 'geo'
+    return obj
+
+
+def bare(cls, name, app, kind):
+    """ScriptObject / DocumentObject cannot be constructed headless: FlatCAMObj.__init__ calls
+    super().__init__(app=app), which reaches QObject for the classes without a camlib base (PyQt6 raises
+    TypeError). The copy paths only need obj_options['name'], kind and source_file."""
+    obj = cls.__new__(cls)
+    QObject.__init__(obj)
+    obj.app = app
+    obj.kind = kind
+    obj.obj_options = {'name': name}
+    obj.source_file = ''
+    return obj
+
+
+def script_source(app):
+    obj = bare(ScriptObject, 'scr', app, 'script')
+    obj.source_file = 'puts "hello"\nnew_geometry g\n'
+    return obj
+
+
+def document_source(app):
+    obj = bare(DocumentObject, 'doc', app, 'document')
+    obj.source_file = 'Some document text\nsecond line\n'
+    return obj
+
+
+SOURCES = {'gerber': gerber_source, 'excellon': excellon_source, 'geometry': geometry_source,
+           'script': script_source, 'document': document_source}
+
+# the attributes copy_from specifies, per kind
+ATTRS = {
+    'gerber': ['solid_geometry', 'follow_geometry', 'tools', 'aperture_macros', 'source_file', 'export_as_regions',
+               'multigeo', 'int_digits', 'frac_digits', 'units'],
+    'excellon': ['tools', 'solid_geometry', 'source_file', 'units', 'zeros', 'excellon_format_upper_mm',
+                 'excellon_format_lower_mm', 'excellon_format_upper_in', 'excellon_format_lower_in',
+                 'excellon_units'],
+    'geometry': ['solid_geometry', 'follow_geometry', 'tools', 'multigeo', 'tooluid', 'source_file', 'units'],
+    'script': ['source_file'],
+    'document': ['source_file'],
+}
+
+# (kind, path) pairs that exist: on_copy_object2 handles only Gerber, Excellon and Geometry
+COMBOS = [(k, 'command') for k in SOURCES] + [(k, 'object2') for k in ('gerber', 'excellon', 'geometry')]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# tests
+# ---------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize('kind,path', [pytest.param(k, p, id='%s-%s' % (k, p)) for k, p in COMBOS])
+def test_copy_equals_source_on_every_attribute(app, kind, path):
+    source = SOURCES[kind](app)
+    attrs = [a for a in ATTRS[kind] if (kind, path, a) != ('excellon', 'object2', 'source_file')]
+    before = {a: norm(getattr(source, a)) for a in attrs}
+    clone = run_path(app, source, kind, path)
+    assert {a: norm(getattr(clone, a, None)) for a in attrs} == before
+    assert {a: norm(getattr(source, a)) for a in attrs} == before   # the copy did not touch the source
+
+
+@pytest.mark.parametrize('kind,path', [pytest.param(k, p, id='%s-%s' % (k, p)) for k, p in COMBOS
+                                       if k in ('gerber', 'excellon', 'geometry')])
+def test_copy_is_independent(app, kind, path):
+    """Mutate the source deeply, the copy stays; mutate the copy deeply, the source stays."""
+    attrs = [a for a in ATTRS[kind] if a not in ('source_file', 'units')]
+    source = SOURCES[kind](app)
+    clone = run_path(app, source, kind, path)
+    snap_clone = {a: norm(getattr(clone, a, None)) for a in attrs}
+    snap_source = {a: norm(getattr(source, a, None)) for a in attrs}
+
+    def mutate(obj):
+        obj.solid_geometry.append(Point(100, 100).buffer(3))
+        for tool in obj.tools.values():
+            if 'geometry' in tool:
+                tool['geometry'].append({'solid': Point(7, 7).buffer(1)})
+            if 'drills' in tool:
+                tool['drills'].append(Point(99, 99))
+            if 'solid_geometry' in tool and isinstance(tool['solid_geometry'], list):
+                tool['solid_geometry'].append(Point(98, 98).buffer(1))
+            if 'data' in tool and isinstance(tool['data'], dict):
+                tool['data']['mutated'] = True
+            tool['mutated'] = True
+        if getattr(obj, 'follow_geometry', None) is not None:
+            obj.follow_geometry.append(Point(100, 100))
+        if getattr(obj, 'aperture_macros', None):
+            obj.aperture_macros[next(iter(obj.aperture_macros))].raw = 'MUTATED'
+            obj.aperture_macros['EXTRA'] = 'x'
+
+    # a copy that lost an attribute (None / empty) is covered by the equality test; skip the missing parts here
+    mutate(source)
+    assert {a: norm(getattr(clone, a, None)) for a in attrs} == snap_clone
+    mutate(clone)
+    # the source only gets its own mutation: re-apply to a fresh source and compare
+    reference = SOURCES[kind](app)
+    mutate(reference)
+    assert {a: norm(getattr(source, a, None)) for a in attrs} == {a: norm(getattr(reference, a, None)) for a in attrs}
+    assert snap_source != {a: norm(getattr(source, a, None)) for a in attrs}   # the mutation was effective
+
+
+def test_gerber_without_apertures_fails_in_object2(app):
+    source = gerber_source(app)
+    source.tools = {}
+    assert run_path_or_fail(app, source, 'gerber', 'object2') == 'fail'
+
+
+def test_excellon_without_tools_fails_in_both_paths(app):
+    for path in ('command', 'object2'):
+        source = excellon_source(app)
+        source.tools = {}
+        assert run_path_or_fail(app, source, 'excellon', path) == 'fail'
+
+
+def run_path_or_fail(app, source, kind, path):
+    results = []
+
+    def new_object(obj_kind, name, initialize, *args, **kwargs):
+        new_obj = make_new(kind, name, app)
+        res ='fail' if initialize(new_obj, app) == 'fail' else new_obj
+        results.append(res)
+        return res
+
+    app.app_obj.new_object.side_effect = new_object
+    app.f_handlers = SimpleNamespace(export_excellon=Mock(return_value='REGENERATED\n'))
+    app.collection.get_selected.return_value = [source]
+    ops = AppObjectOps(app)
+    ops.on_copy_command() if path == 'command' else ops.on_copy_object2('_c2')
+    return results[0]
+
+
+def test_excellon_object2_regenerates_the_source_file_under_the_new_name(app):
+    source = excellon_source(app)
+    clone = run_path(app, source, 'excellon', 'object2')
+    assert clone.source_file == 'REGENERATED\n'
+    assert app.f_handlers.export_excellon.call_args.kwargs['obj_name'] == 'exc_c2'
+
+
+def test_excellon_same_diameter_data_is_kept_by_both_paths(app):
+    for path in ('command', 'object2'):
+        clone = run_path(app, excellon_source(app), 'excellon', path)
+        assert clone.tools[1]['data']['tag'] == 'first' and clone.tools[2]['data']['tag'] == 'second'
+        assert [clone.tools[t]['tooldia'] for t in (1, 2)] == [1.0, 1.0]
+
+
+def test_cncjob_cannot_be_copied(app):
+    job = SimpleNamespace(kind='cncjob', obj_options={'name': 'job'})
+    app.collection.get_selected.return_value = [job]
+    ops = AppObjectOps(app)
+    ops.on_copy_command()
+    app.app_obj.new_object.assert_not_called()
+
+
+class TestCopyIndependence:
+    def test_gerber_copy_matches_and_is_independent(self, app, gerber):
+        before = snapshot_gerber(gerber)
+        clone = run_copy(app, gerber, 'gerber')
+        assert_poly_equiv(clone.solid_geometry, before['solid'], msg='copy')
+        assert_coords_close(clone.follow_geometry, before['follow'])
+        assert sorted(clone.tools) == sorted(before['tools'])
+        assert {ap: len(t['geometry']) for ap, t in clone.tools.items()} == \
+               {ap: len(t['geometry']) for ap, t in before['tools'].items()}
+        assert clone.source_file == gerber.source_file
+        # mutate the source in several places
+        gerber.solid_geometry.append(Point(100, 100).buffer(3))
+        gerber.follow_geometry.append(Point(100, 100))
+        gerber.tools[10]['size'] = 99.0
+        gerber.tools[10]['geometry'][0]['solid'] = Point(100, 100).buffer(3)
+        gerber.tools[10]['geometry'].append({'solid': Point(7, 7).buffer(1)})
+        assert_poly_equiv(clone.solid_geometry, before['solid'], msg='copy after source mutation')
+        assert len(clone.follow_geometry) == len(before['follow'])
+        assert clone.tools[10]['size'] == 1.0
+        assert len(clone.tools[10]['geometry']) == 3
+        assert clone.tools[10]['geometry'][0]['solid'].bounds == pytest.approx(
+            before['tools'][10]['geometry'][0]['solid'].bounds)
+        # and the other way round
+        clone.tools[11]['geometry'][0]['solid'] = Point(0, 0).buffer(1)
+        assert gerber.tools[11]['geometry'][0]['solid'].bounds == pytest.approx((9.0, 4.5, 11.0, 5.5))
+
+    def test_excellon_copy_matches_and_is_independent(self, app, excellon):
+        before = snapshot_excellon(excellon)
+        clone = run_copy(app, excellon, 'excellon')
+        assert sorted(clone.tools) == [1, 2, 3]
+        for t in before:
+            assert pts(clone.tools[t]['drills']) == pts(before[t]['drills'])
+            assert slot_coords(clone.tools[t]['slots']) == slot_coords(before[t]['slots'])
+            assert clone.tools[t]['tooldia'] == before[t]['tooldia']
+        assert len(clone.solid_geometry) == 9
+        excellon.tools[1]['drills'].append(Point(99, 99))
+        excellon.tools[1]['tooldia'] = 9.0
+        excellon.tools[2]['slots'][0] = (Point(0, 0), Point(1, 1))
+        assert len(clone.tools[1]['drills']) == 3
+        assert clone.tools[1]['tooldia'] == 0.8
+        assert slot_coords(clone.tools[2]['slots']) == [((20, 12), (28, 12))]
+        clone.tools[3]['drills'].append(Point(1, 1))
+        assert len(excellon.tools[3]['drills']) == 1
+
+
+class _BadOptions(dict):
+    """obj_options whose 'bad' option raises KeyError on read (merge catches that and must log)."""
+
+    def __getitem__(self, key):
+        if key == 'bad':
+            raise KeyError(key)
+        return dict.__getitem__(self, key)
+
+
+def _merge_source(name, solid=None, follow=None, tool_id=10, options=None):
+    solid = solid if solid is not None else box(0, 0, 1, 1)
+    follow = follow if follow is not None else LineString([(0, 0), (1, 1)])
+    return SimpleNamespace(
+        obj_options=options if options is not None else {'name': name, 'plot': True},
+        solid_geometry=[solid],
+        follow_geometry=[follow],
+        tools={tool_id: {'type': 'C', 'size': 0.2, 'geometry': [{'solid': solid, 'follow': follow}]}},
+    )
+
+
+def _merge_final():
+    return SimpleNamespace(obj_options={'name': 'Combo'}, solid_geometry=None, follow_geometry=None, tools=None)
+
+
+def _call_merge(grb_list, grb_final, log=None):
+    return GerberObject.merge(grb_list=grb_list, grb_final=grb_final, log=log)
+
+
+class TestMerge_0B1:
+
+    def test_nested_list_input_merges_every_source(self):
+        a = _merge_source('a', solid=box(0, 0, 1, 1))
+        b = _merge_source('b', solid=box(5, 0, 6, 1), tool_id=11)
+        final = _merge_final()
+        try:
+            _call_merge([[a, b]], final, log=Mock())
+        except TypeError as e:
+            # the recursion drops a required argument today
+            raise AssertionError("merge() of a nested list raised TypeError: %s" % e)
+        assert final.solid_geometry.bounds == (0.0, 0.0, 6.0, 1.0)
+        assert set(final.tools) == {10, 11}
+
+
+    def test_tools_are_deep_copied(self):
+        src = _merge_source('a')
+        final = _merge_final()
+        _call_merge([src], final, log=Mock())
+        assert 10 in final.tools
+        src.tools[10]['size'] = 9.9
+        src.tools[10]['geometry'].append({'solid': box(9, 9, 10, 10)})
+        assert final.tools[10]['size'] == 0.2
+        assert len(final.tools[10]['geometry']) == 1
+
+    def test_follow_geometry_comes_from_source_follow(self):
+        line = LineString([(0, 0), (3, 3)])
+        src = _merge_source('a', solid=box(0, 0, 5, 5), follow=line)
+        final = _merge_final()
+        _call_merge([src], final, log=Mock())
+        assert final.follow_geometry.geom_type == 'LineString', final.follow_geometry.geom_type
+        assert final.follow_geometry.equals(line)
+        assert final.solid_geometry.geom_type == 'Polygon'
+
+
+def _temp_shapes_count(app):
+    return app.plotcanvas.new_shape_collection.call_count

@@ -14,7 +14,7 @@ from camlib import Geometry, list_total_bounds  # noqa: E402
 from appParsers.ParseGerber import Gerber  # noqa: E402
 from appParsers.ParseExcellon import Excellon  # noqa: E402
 from test_gerber_parser import MockApp  # noqa: E402
-from test_unify_regressions_0b import make_app  # noqa: E402
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 INF = (np.inf, np.inf, -np.inf, -np.inf)
 
@@ -47,19 +47,6 @@ class ListTotalBoundsTest(unittest.TestCase):
             self.assertEqual(got, old_rec(case), case)
             self.assertTrue(all(type(v) is float for v in got))
 
-    def test_unexpected_structures_return_none(self):
-        for bad in (None, box(0, 0, 1, 1), [None], [(box(0, 0, 1, 1),)], [1], [{'a': None}], [{'a': {}}]):
-            self.assertIsNone(list_total_bounds(bad), bad)
-        self.assertIsNone(list_total_bounds([[box(0, 0, 1, 1)]], nested=False))
-        self.assertEqual(list_total_bounds([{'a': [box(0, 0, 1, 1)]}], nested=False), (0.0, 0.0, 1.0, 1.0))
-
-    def test_large(self):
-        rng = np.random.default_rng(3)
-        polys = [Point(*rng.uniform(0, 100, 2)).buffer(0.2, 4) for _ in range(2000)]
-        nested = [[p] if i % 3 == 0 else p for i, p in enumerate(polys)]
-        self.assertEqual(list_total_bounds(nested), old_rec(nested))
-
-
 class ObjectBoundsTest(unittest.TestCase):
     def geometry(self):
         g = Geometry(make_app())
@@ -81,15 +68,6 @@ class ObjectBoundsTest(unittest.TestCase):
         g.solid_geometry = [[], None]
         with self.assertRaises(AttributeError):
             g.bounds()
-
-    def test_geometry_multigeo(self):
-        g = self.geometry()
-        g.multigeo = True
-        self.assertEqual(g.bounds(), (0, 0, 0, 0))
-        g.tools = {1: {'solid_geometry': []}, 2: {'solid_geometry': None}}
-        self.assertEqual(g.bounds(), (0, 0, 0, 0))
-        g.tools = {1: {'solid_geometry': [box(0, 0, 1, 1)]}, 2: {'solid_geometry': [[box(5, 5, 6, 9)], Polygon()]}}
-        self.assertEqual(g.bounds(), (0.0, 0.0, 6.0, 9.0))
 
     def test_gerber(self):
         g = Gerber(MockApp())

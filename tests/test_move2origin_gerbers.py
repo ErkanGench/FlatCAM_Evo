@@ -9,7 +9,7 @@ from shapely.ops import unary_union
 from appHandlers.appIO import appIO
 from appHandlers.appObjectOps import AppObjectOps
 from appObjects.GerberObject import GerberObject
-from test_unify_characterization import make_app, make_gerber, NATIVE_GBR
+from tests.helpers_objects import make_app, make_gerber, NATIVE_GBR  # noqa: F401,E402
 
 
 @pytest.mark.parametrize('threaded', [False, True])

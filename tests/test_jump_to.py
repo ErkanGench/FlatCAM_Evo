@@ -73,17 +73,6 @@ class TestJumpTo(unittest.TestCase):
             target = handler.on_jump_to()
         self.assertEqual(target, (start[0] + 0.125, start[1] - 0.25))
 
-    def test_consecutive_relative_jumps_do_not_wait_for_mouse_events(self):
-        fcapp, handler = self.make_handler()
-        start = tuple(fcapp.mouse_pos)
-        dialog = SimpleNamespace(ok=True, location='0.125, -0.25', reference='rel')
-        target = start
-        with patch('appGUI.GUIElements.DialogBoxRadio', return_value=dialog), \
-                patch.object(QtGui.QCursor, 'setPos'):
-            for _ in range(10):
-                target = handler.on_jump_to(fit_center=False)
-        self.assertEqual(target, (start[0] + 1.25, start[1] - 2.5))
-
     def test_locate_updates_position_for_the_next_relative_jump(self):
         fcapp, handler = self.make_handler()
         obj = SimpleNamespace(bounds=lambda: (1.125, 2.25, 8, 9))
@@ -110,17 +99,6 @@ class TestJumpTo(unittest.TestCase):
                 np.testing.assert_array_less(np.abs(screen[:2] - pixel), 0.500001)
                 np.testing.assert_allclose(canvas.translate_coords_2(canvas.translate_coords(pixel)[:2])[:2],
                                            pixel, atol=1e-5)
-
-    def test_forward_conversion_uses_canvas_not_document_pixels(self):
-        fcapp, _ = self.make_handler()
-        canvas = fcapp.plotcanvas
-        target = (17.125, -3.75)
-        expected = canvas.grid.node_transform(canvas.scene).map(target)
-        # VisPy 0.17's document_node setter calls a removed method.
-        canvas.grid._document_node = canvas.view
-        canvas.grid._update_trsys(None)
-        np.testing.assert_allclose(canvas.translate_coords_2(target), expected)
-
 
 if __name__ == '__main__':
     unittest.main()

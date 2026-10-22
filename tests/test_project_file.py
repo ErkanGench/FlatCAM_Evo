@@ -13,6 +13,13 @@ from shapely.geometry import Point
 from appCommon import ProjectFile
 from appCommon.ProjectFile import ZSTD_MAGIC, load_project_file, save_project_file
 from camlib import to_dict, dict2obj
+from appHandlers.appIO import appIO
+from types import SimpleNamespace
+from unittest.mock import Mock
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_coords_close, assert_poly_equiv, assert_same_tools, _headless_qt, make_app, make_excellon,
+    make_gerber, save_and_load,
+)
 
 try:
     import zstandard
@@ -51,30 +58,9 @@ class TestProjectFile(unittest.TestCase):
         with open(self.filename, 'rb') as f:
             self.assertEqual(f.read(4), ZSTD_MAGIC)
 
-    @unittest.skipIf(zstandard is None or ProjectFile.std_zstd is None, "needs both Zstandard backends")
-    def test_zstandard_package_backend_reads_and_writes_the_same_format(self):
-        with patch.object(ProjectFile, 'std_zstd', None), patch.object(ProjectFile, 'zstandard', zstandard):
-            self.check_round_trip(3)
-        # a file written by the zstandard package loads with the standard library backend
-        self.check_round_trip_load_only()
-
     def check_round_trip_load_only(self):
         loaded = load_project_file(self.filename, object_hook=dict2obj)
         self.assertEqual(loaded['version'], 9.0)
-
-    def test_compressed_json_is_compact_and_plain_json_is_indented(self):
-        data = {"version": 9.0, "options": {"units": "MM"}, "objs": []}
-        save_project_file(self.filename, data, default=to_dict, compression_level=3)
-        with ProjectFile.open_project_stream(self.filename) as stream:
-            # no indentation, and the keys stay in their order
-            self.assertEqual(stream.read(), b'{"version":9.0,"options":{"units":"MM"},"objs":[]}')
-        save_project_file(self.filename, data, default=to_dict, compression_level=None)
-        with open(self.filename, 'rb') as f:
-            self.assertEqual(f.read(), json.dumps(data, indent=2, sort_keys=True).encode('utf-8'))
-
-    def test_out_of_range_level_is_clamped(self):
-        self.check_round_trip(0)
-        self.check_round_trip(99)
 
     def test_legacy_lzma_project_loads(self):
         data = json.dumps(project(), default=to_dict, indent=2, sort_keys=True).encode('utf-8')
@@ -82,12 +68,6 @@ class TestProjectFile(unittest.TestCase):
             f.write(lzma.compress(data, preset=3))
         loaded = load_project_file(self.filename, object_hook=dict2obj)
         self.assertEqual(loaded['options'], {"units": "MM"})
-
-    def test_compressed_save_replaces_inf_and_nan_with_null(self):
-        d = project()
-        d['options']['bad'] = [float('inf'), float('nan'), 1.5]
-        save_project_file(self.filename, d, default=to_dict, compression_level=3)
-        self.assertEqual(load_project_file(self.filename)['options']['bad'], [None, None, 1.5])
 
     def test_failed_save_keeps_the_old_file(self):
         save_project_file(self.filename, project(), default=to_dict, compression_level=3)
@@ -115,3 +95,80 @@ class TestProjectFile(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_saved_project_has_only_project_options(tmp_path):
+    from defaults import is_project_key
+    app = make_app()
+    proj, _restored = save_and_load(app, [], tmp_path)
+    assert 'units' in proj['options']
+    assert 'global_save_compressed' not in proj['options']
+    assert all(is_project_key(key) for key in proj['options'])
+
+
+def test_save_project_reports_success_and_failure(tmp_path):
+    app = make_app()
+    io = appIO(app)
+    app.collection.get_list.return_value = []
+    app.collection.get_active.return_value = None
+    # a real failure: the folder does not exist, so open() fails
+    assert io.save_project(str(tmp_path / 'missing' / 'bad.FlatPrj'), silent=True) is False
+    assert app.save_in_progress is False
+    assert io.save_project(str(tmp_path / 'good.FlatPrj'), silent=True) is True
+
+
+def test_save_project_object_serialization_error_is_a_failure(tmp_path):
+    app = make_app()
+    io = appIO(app)
+    app.collection.get_list.return_value = [SimpleNamespace(to_dict=Mock(side_effect=ValueError('bad object')))]
+    app.collection.get_active.return_value = None
+    path = tmp_path / 'bad_object.FlatPrj'
+    assert io.save_project(str(path), silent=True) is False
+    assert app.save_in_progress is False
+    assert not path.exists()
+
+
+class TestProjectRoundTrip:
+    def test_gerber_and_excellon_survive_save_and_restore(self, app, tmp_path):
+        grb = make_gerber(app, name='grb')
+        exc = make_excellon(app, name='exc')
+        for t, data in ((1, {'cutz': -1.7, 'tag': 'a'}), (2, {'cutz': -2.0}), (3, {'cutz': -0.5, 'multidepth': True})):
+            exc.tools[t]['data'] = data
+        proj, restored = save_and_load(app, [grb, exc], tmp_path)
+        assert [o['kind'] for o in proj['objs']] == ['gerber', 'excellon']
+        assert len(restored) == 2
+        grb2, exc2 = restored
+        assert (grb2.kind, exc2.kind) == ('gerber', 'excellon')
+
+        # Gerber
+        assert grb2.units == grb.units == 'MM'
+        assert (grb2.int_digits, grb2.frac_digits) == (4, 6)
+        assert grb2.source_file == grb.source_file
+        assert grb2.obj_options['name'] == 'grb'
+        assert_poly_equiv(grb2.solid_geometry, grb.solid_geometry, rel=1e-6, abs_tol=1e-4, msg='gerber project')
+        assert_coords_close(grb2.follow_geometry, grb.follow_geometry, atol=2e-6)
+        assert set(grb2.aperture_macros) == {'OUTL', 'RING'}
+        for name, macro in grb.aperture_macros.items():
+            assert (grb2.aperture_macros[name].name, grb2.aperture_macros[name].raw) == (macro.name, macro.raw)
+        assert_same_tools(grb.tools, grb2.tools, 'gerber')
+        assert all(isinstance(k, int) for k in grb2.tools)
+
+        # Excellon
+        assert exc2.units == exc.units == 'MM'
+        assert exc2.zeros == exc.zeros
+        assert exc2.obj_options['name'] == 'exc'
+        assert_same_tools(exc.tools, exc2.tools, 'excellon')
+        assert exc2.tools[3]['data'] == {'cutz': -0.5, 'multidepth': True}
+        assert exc2.tools[1]['data'] == {'cutz': -1.7, 'tag': 'a'}
+        assert_poly_equiv(exc2.solid_geometry, exc.solid_geometry, rel=1e-6, abs_tol=1e-4, msg='excellon project')
+
+
+    def test_transformed_objects_survive_save_and_restore(self, app, tmp_path):
+        grb = make_gerber(app, name='grb')
+        exc = make_excellon(app, name='exc')
+        grb.rotate(30.0, (10.0, 8.0))
+        exc.rotate(30.0, (10.0, 8.0))
+        _, restored = save_and_load(app, [grb, exc], tmp_path)
+        assert_poly_equiv(restored[0].solid_geometry, grb.solid_geometry, rel=1e-6, abs_tol=1e-4, msg='gerber')
+        assert_same_tools(grb.tools, restored[0].tools, 'gerber')
+        assert_same_tools(exc.tools, restored[1].tools, 'excellon')

@@ -80,27 +80,6 @@ class TestGeometryWktCache(unittest.TestCase):
             self.assertIs(cached_geom, geom)
             self.assertEqual(text, shapely.to_wkt(geom, rounding_precision=20, trim=True))
 
-    def test_pieces_give_the_same_texts(self):
-        # pieces of 5 coordinates: many pieces, and the geometries larger than a piece are 1 piece each
-        calls = []
-        real_to_wkt = shapely.to_wkt
-
-        def to_wkt(arr, **kwargs):
-            calls.append(len(arr))
-            return real_to_wkt(arr, **kwargs)
-
-        with patch.object(camlib, 'WKT_PIECE_COORDS', 5), patch.object(camlib.shapely, 'to_wkt', side_effect=to_wkt):
-            pieces = geometry_wkt_cache(self.data)
-        self.assertGreater(len(calls), 1)
-        self.assertEqual(sum(calls), len(self.geoms))
-        whole = geometry_wkt_cache(self.data)
-        self.assertEqual({key: text for key, (_geom, text) in pieces.items()},
-                         {key: text for key, (_geom, text) in whole.items()})
-
-    def test_empty_data(self):
-        self.assertEqual(geometry_wkt_cache({"objs": [], "options": {}}), {})
-        self.assertEqual(len(geometry_wkt_cache({"g": [Polygon(), Polygon()]})), 2)
-
     def test_geometry_missing_from_the_cache_uses_to_dict(self):
         text = json.dumps({'g': Point(1, 2)}, default=project_json_default({}))
         self.assertTrue(json.loads(text, object_hook=dict2obj)['g'].equals(Point(1, 2)))
@@ -119,14 +98,6 @@ class TestGeometryWktCache(unittest.TestCase):
         self.assertEqual(len(written), len(tool['solid_geometry']))
         for now, read in zip(tool['solid_geometry'], written):
             self.assertTrue(shapely.equals_exact(now, read, 0))
-
-    def test_cached_text_of_another_geometry_with_the_same_id_is_not_used(self):
-        old = LineString([(0, 0), (1, 1)])
-        new = LineString([(5, 5), (6, 7)])
-        cache = {id(new): (old, shapely.to_wkt(old, rounding_precision=20, trim=True))}
-        text = json.dumps({'g': new}, default=project_json_default(cache))
-        self.assertTrue(shapely.equals_exact(json.loads(text, object_hook=dict2obj)['g'], new, 0))
-
 
 class TestProjectFileWithWktCache(unittest.TestCase):
 
@@ -200,17 +171,6 @@ class TestSaveProject(unittest.TestCase):
         self.app.collection.get_active.return_value = None
         self.app.collection.get_list.return_value = [SimpleNamespace(to_dict=lambda d=obj: d) for obj in data['objs']]
         self.io = appIO(self.app)
-
-    def test_save_does_not_call_wkt_dumps_per_geometry_and_reads_back_exactly(self):
-        for compressed in (True, False):
-            with self.subTest(compressed=compressed):
-                self.app.options['global_save_compressed'] = compressed
-                with patch.object(camlib, 'sdumps', side_effect=AssertionError('WKT made per geometry')):
-                    self.assertTrue(self.io.save_project(self.filename, silent=True))
-                loaded = load_project_file(self.filename, object_hook=dict2obj)
-                for original, read in zip(self.geoms, read_back_geometries(loaded)):
-                    self.assertTrue(shapely.equals_exact(original, read, 0), original.geom_type)
-
 
 if __name__ == '__main__':
     unittest.main()

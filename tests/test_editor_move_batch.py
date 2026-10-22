@@ -53,10 +53,6 @@ class TestGerberEditorMove(unittest.TestCase):
         tool.draw_app.plot_all.assert_called_once()
         tool.draw_app.touch_geometry.assert_called_once()
 
-    def test_storage_list_object_is_kept(self):
-        ap10 = self.storage['10']['geometry']
-        grb_tool(MoveEditorGrb, self.storage, [self.pad], ['10']).make()
-        self.assertIs(self.storage['10']['geometry'], ap10)
 
     def test_copy_keeps_the_source(self):
         selected = [self.pad]
@@ -68,21 +64,7 @@ class TestGerberEditorMove(unittest.TestCase):
         self.assertEqual(ap10[2].geo['solid'].bounds, (2.0, -1.0, 3.0, 0.0))
         tool.draw_app.plot_all.assert_called_once()
 
-    def test_zero_move_changes_nothing(self):
-        selected = [self.pad]
-        tool = grb_tool(MoveEditorGrb, self.storage, selected, ['10'], dx=0.0, dy=0.0)
-        tool.make()
-        self.assertEqual(self.storage['10']['geometry'], [self.pad, self.other])
-        tool.draw_app.touch_geometry.assert_not_called()
-        tool.draw_app.plot_all.assert_called_once()
 
-    def test_utility_geometry_is_translated(self):
-        selected = [self.pad, self.track]
-        tool = grb_tool(MoveEditorGrb, self.storage, selected, ['10', '11'])
-        tool.sel_limit = 10
-        util = tool.utility_geometry(data=(1.0, 1.0))
-        self.assertEqual(util.geo[0]['solid'].bounds, (1.0, 1.0, 2.0, 2.0))
-        self.assertEqual(self.pad.geo['solid'].bounds, (0.0, 0.0, 1.0, 1.0))
 
 
 class TestExcellonEditorMove(unittest.TestCase):
@@ -200,12 +182,6 @@ class TestStorageReplace(unittest.TestCase):
             __, found = storage.nearest((x, y))
             self.assertIs(found, shp)
 
-    def test_few_changes_use_the_incremental_path(self):
-        storage, shapes = self.make_storage(400)
-        new = GeoShape(box(1000, 0, 1001, 1))
-        storage.replace(removed=[shapes[3]], inserted=[new])
-        self.assertIs(storage.objects[3], None)       # incremental: the slot is only cleared
-        self.check_index(storage, shapes[:3] + shapes[4:] + [new])
 
     def test_many_changes_rebuild_the_index(self):
         storage, shapes = self.make_storage(50)
@@ -218,21 +194,7 @@ class TestStorageReplace(unittest.TestCase):
         storage.insert(shapes[0])
         self.check_index(storage, shapes[30:] + new[1:] + [shapes[0]])
 
-    def test_remove_everything(self):
-        storage, shapes = self.make_storage(5)
-        storage.replace(removed=shapes)
-        self.assertEqual(list(storage.get_objects()), [])
-        with self.assertRaises(StopIteration):
-            storage.nearest((0, 0))
 
-    def test_geo_add_shape_inserts_in_1_batch_and_builds_the_ui_once(self):
-        storage = AppGeoEditor.make_storage()
-        editor = SimpleNamespace(storage=storage, utility=[], selected=[], build_ui_sig=Mock(), app=counting_app())
-        editor._collect_shape = lambda shp, acc: AppGeoEditor._collect_shape(editor, shp, acc)
-        shapes = [GeoShape(box(i, 0, i + 0.5, 0.5)) for i in range(10)] + [GeoShape(Point(0, 0))]
-        AppGeoEditor.add_shape(editor, shapes)
-        self.assertEqual(len(list(storage.get_objects())), 10)     # the Point is not stored, as before
-        editor.build_ui_sig.emit.assert_called_once()
 
 
 if __name__ == '__main__':

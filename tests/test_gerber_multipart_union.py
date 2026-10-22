@@ -17,7 +17,7 @@ from shapely.ops import unary_union
 
 import appParsers.ParseGerber as pg
 from appObjects.GerberObject import GerberObject
-from test_unify_characterization import make_app, _headless_qt  # noqa: F401
+from tests.helpers_objects import _headless_qt, make_app  # noqa: F401,E402
 
 # one flash of a macro made of 2 separate circles (r=0.5 at x=0 and x=3, 1 mm apart) and a plain C flash at x=10
 TEXT = """%FSLAX46Y46*%
@@ -110,18 +110,6 @@ def _assert_valid_result(obj):
     assert all(isinstance(p, Polygon) for p in parts)
 
 
-def test_geos_fallback_branch_full_buffering(tmp_path):
-    """use_buffering == 'full', fuse_parts gives nothing: the GEOS closing at the first MultiPolygon(poly_buffer)."""
-    obj, flatten_inputs, ctor, union_calls = _parse(tmp_path, 'full', True, fuse=lambda parts: None)
-    _assert_fixture_has_multipolygon(flatten_inputs)
-    # the GEOS fallback ran: MultiPolygon(poly_buffer) called with a list of Polygons only
-    assert len(ctor.calls) == 1
-    assert all(type(g) is Polygon for g in ctor.calls[0])
-    assert len(ctor.calls[0]) == 3  # 2 parts of the macro flash + 1 plain flash
-    assert not union_calls
-    _assert_valid_result(obj)
-
-
 def test_clipper_branch_full_buffering(tmp_path):
     """use_buffering == 'full' with a successful fuse: MultiPolygon(fused) only."""
     sentinel = []
@@ -139,21 +127,3 @@ def test_clipper_branch_full_buffering(tmp_path):
     assert unary_union(obj.solid_geometry).area == pytest.approx(EXPECTED_AREA, rel=0.01)
 
 
-def test_non_full_buffering_branch(tmp_path):
-    """use_buffering != 'full': MultiPolygon(poly_buffer) directly."""
-    obj, flatten_inputs, ctor, union_calls = _parse(tmp_path, 'none', True)
-    _assert_fixture_has_multipolygon(flatten_inputs)
-    assert len(ctor.calls) == 1
-    assert all(type(g) is Polygon for g in ctor.calls[0])
-    assert not union_calls
-    _assert_valid_result(obj)
-
-
-def test_unary_union_branch(tmp_path):
-    """use_buffer_for_union False: unary_union(poly_buffer) and no MultiPolygon constructor call."""
-    obj, flatten_inputs, ctor, union_calls = _parse(tmp_path, 'full', False)
-    _assert_fixture_has_multipolygon(flatten_inputs)
-    assert len(union_calls) == 1
-    assert all(type(g) is Polygon for g in union_calls[0])
-    assert not ctor.calls
-    _assert_valid_result(obj)

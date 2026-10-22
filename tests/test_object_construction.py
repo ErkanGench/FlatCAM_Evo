@@ -13,7 +13,7 @@ from appObjects.ExcellonObject import ExcellonObject
 from appObjects.GeometryObject import GeometryObject
 from appObjects.GerberObject import GerberObject
 from appObjects.ScriptObject import ScriptObject
-from test_unify_regressions_0b import make_app, no_shape_collection  # noqa: F401  (fixture)
+from tests.helpers_objects import make_app_0b as make_app, no_shape_collection  # noqa: F401,E402
 
 KINDS = {
     GerberObject: 'gerber', ExcellonObject: 'excellon', GeometryObject: 'geometry', CNCJobObject: 'cncjob',

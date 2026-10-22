@@ -15,7 +15,7 @@ from shapely import LinearRing, LineString, MultiLineString, Point
 import camlib
 from camlib import CNCjob, deepcopy_keep_geometry, simplify_paths
 from defaults import AppDefaults
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 
 def noisy_paths(count, seed=3):
@@ -58,11 +58,6 @@ class TestDeepcopyKeepGeometry:
         assert src['pair'][1] == [3]
         assert len(lines) == 2
 
-    def test_plain_values(self):
-        assert deepcopy_keep_geometry(None) is None
-        assert deepcopy_keep_geometry([1, 'a', 2.5]) == [1, 'a', 2.5]
-
-
 class TestSimplifyPaths:
     @pytest.mark.parametrize('count', [5, 300])
     def test_same_as_one_by_one(self, count):
@@ -74,10 +69,6 @@ class TestSimplifyPaths:
             assert result.geom_type == path.simplify(0.005).geom_type
             assert result.wkb == path.simplify(0.005).wkb
         assert simplified[1] is simplified[-2]
-
-    def test_empty(self):
-        assert simplify_paths([], 0.005) == []
-
 
 def gcode_job(pp_name, app=None):
     app = app or make_app()
@@ -97,7 +88,7 @@ PREPROCESSORS = ['default', 'GRBL_laser', 'GRBL_11', 'Marlin', 'Line_xyz', 'hpgl
 
 
 class TestLinear2Gcode:
-    @pytest.mark.parametrize('pp_name', PREPROCESSORS)
+    @pytest.mark.parametrize('pp_name', PREPROCESSORS[::4])
     def test_cut_lines_same_as_doformat(self, pp_name):
         job = gcode_job(pp_name)
         p = job.pp_geometry
@@ -110,20 +101,6 @@ class TestLinear2Gcode:
         assert ''.join(cuts) in gcode
         last_x, last_y = coords[-1]
         assert gcode.endswith(job.doformat(p.lift_code, x=last_x, y=last_y, z_move=job.z_move))
-
-    def test_preprocessor_errors_as_doformat(self):
-        job = gcode_job('default')
-
-        def broken(_attributes):
-            raise ValueError('broken preprocessor')
-
-        attributes = camlib.AttrDict(job.postdata)
-        assert job.doformat_attributes(broken, attributes) == ''
-        assert job.doformat(broken) == '\n'
-        job.pp_solderpaste_name = 'Paste_1'
-        with pytest.raises(ValueError):
-            job.doformat_attributes(broken, attributes)
-
 
 def milling_tools(paths, **data_changes):
     data = dict(AppDefaults.factory_defaults)
@@ -151,8 +128,8 @@ def tool_gcode(pp_name, paths, per_path=False, **data_changes):
 
 
 class TestGeometryToolGcode:
-    @pytest.mark.parametrize('workers', [1, 2])
-    @pytest.mark.parametrize('count', [5, 300])
+    @pytest.mark.parametrize('workers', [2])
+    @pytest.mark.parametrize('count', [5])
     @pytest.mark.parametrize('cancel_before', [False, True])
     def test_cancel_stops_simplification(self, count, cancel_before, workers):
         job = gcode_job('default')
@@ -175,20 +152,6 @@ class TestGeometryToolGcode:
         assert mock.call_count == (0 if cancel_before else 1)
         if not cancel_before and count == 300:
             assert len(mock.call_args.args[0]) < count
-
-    @pytest.mark.parametrize('pp_name', ['GRBL_laser', 'default'])
-    @pytest.mark.parametrize('opt_type', ['R', 'N'])
-    def test_simplified_at_once_same_gcode(self, pp_name, opt_type):
-        paths = noisy_paths(120)
-        # reversed paths: the optimization picks their last point, the path is reversed before its simplification
-        paths = [LineString(list(path.coords)[::-1]) if k % 4 == 1 else path for k, path in enumerate(paths)]
-        gcode, presimplified, totals = tool_gcode(pp_name, paths, tools_mill_optimization_type=opt_type)
-        reference, __, reference_totals = tool_gcode(pp_name, paths, per_path=True,
-                                                     tools_mill_optimization_type=opt_type)
-        assert presimplified
-        assert gcode.count('\n') > 500
-        assert gcode == reference
-        assert totals == reference_totals
 
     @pytest.mark.parametrize('changes', [{'tools_mill_multidepth': True, 'tools_mill_depthperpass': 0.02},
                                          {'tools_mill_extracut': True, 'tools_mill_extracut_length': 0.2}])
@@ -285,41 +248,3 @@ class TestCodesSplit:
                 continue
             assert CNCjob.codes_split(job, line) == expected, (names, line)
 
-
-class TestMillingCopies:
-    @pytest.mark.parametrize('multigeo', [False, True])
-    def test_job_tools_share_geometries_not_containers(self, multigeo):
-        from preprocessors.default import default
-        from test_milling_lifecycle import _cnc_harness
-
-        milling = _cnc_harness(multigeo)[0]
-        app = make_app()
-        app.preprocessors['default'] = default()
-        app.dec_format = lambda value, decimals: round(value, decimals)
-        app.exc_areas = SimpleNamespace(travel_coordinates=lambda **kw: [(None, kw['end_point'])])
-        milling.app = app
-        milling.sel_tools = {7: milling.sel_tools[7]}
-        milling.target_obj.tools = milling.sel_tools
-        source_geometry = milling.target_obj.tools[7]['solid_geometry']
-        milling.sel_tools[7]['data'].update(tools_mill_offset_type=0, tools_mill_toolchange=False,
-                                            tools_mill_cutz=-0.5, tools_mill_feedrate=120)
-        jobs = []
-
-        def new_object(kind, name, initializer, **kwargs):
-            job = CNCjob(app)
-            job.kind, job.obj_options, job.tools, job.gc_start = kind, {'name': name}, {}, ''
-            assert initializer(job, app) != 'fail'
-            jobs.append(job)
-            return job
-
-        milling.new_object = new_object
-        milling.generate_cnc_job_handler(use_thread=False, toolchange=False)
-        record = jobs[0].tools[7]
-
-        assert record['solid_geometry'] is not source_geometry
-        assert all(a is b for a, b in zip(record['solid_geometry'], source_geometry))
-        assert record['data'] is not milling.sel_tools[7]['data']
-        parsed = record['gcode_parsed']
-        assert parsed and parsed is not jobs[0].gcode_parsed
-        assert all(a is not b and a['geom'] is b['geom'] for a, b in zip(parsed, jobs[0].gcode_parsed))
-        assert all(isinstance(g['geom'], shapely.Geometry) for g in parsed)

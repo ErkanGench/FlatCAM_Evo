@@ -6,7 +6,7 @@ same diameter and type (preference geometry_merge_fuse_tools). merge() also expe
 (the isolation geometry) or a single polygon it logged "'list' object has no attribute 'geoms'" for each object and
 kept a nested list. When it fuses the tools, it expected a list as tool geometry: the tool of a SingleGeo object (it
 holds the solid geometry, a Polygon for bbox) or of a cutout (a MultiLineString) failed the join with "'Polygon' object
-is not iterable", also in Edit -> Join. The tests use the headless fixtures of test_unify_characterization.
+is not iterable", also in Edit -> Join. The tests use the headless fixtures of tests.helpers_objects.
 """
 
 from copy import deepcopy
@@ -17,8 +17,10 @@ from shapely.geometry import MultiLineString, MultiPolygon, box
 
 from appObjects.GeometryObject import GeometryObject
 from tclCommands.TclCommandJoinGeometry import TclCommandJoinGeometry
+from tclCommands.TclCommandJoinGerber import TclCommandJoinGerber
+from appObjects.GerberObject import GerberObject
 
-from test_unify_characterization import _headless_qt, app, make_gerber, parts  # noqa: F401  (fixtures)
+from tests.helpers_objects import app, _headless_qt, make_gerber, parts  # noqa: F401,E402
 
 
 def capture_new_objects(app):
@@ -198,3 +200,52 @@ def test_fusion_preserves_singlegeo_tools_with_empty_geometry(app, use_tcl, diff
     assert [tool['data']['tools_mill_cutz'] for tool in joined.tools.values()] == \
         ([-0.05, -1.6] if different_depths else [-0.05])
     assert all(tool['solid_geometry'] == [] for tool in joined.tools.values())
+
+
+def run_join_gerber(app, objs_by_name, *argv):
+    """Runs the command. Returns (result, created) where created = {name: GerberObject built by initialize}."""
+    created = {}
+
+    def new_object(kind, name, initialize, plot=True, **kwargs):
+        assert kind == 'gerber'
+        obj = GerberObject(name, app)
+        initialize(obj, app)
+        created[name] = obj
+        return 'ok'
+
+    app.collection.get_by_name = Mock(side_effect=lambda n: objs_by_name.get(n))
+    app.app_obj.new_object = Mock(side_effect=new_object)
+    cmd = TclCommandJoinGerber(app)
+    args, unnamed = cmd.check_args(tuple(argv))
+    return cmd.execute(args, unnamed), created
+
+
+def test_join_two_gerbers_with_outname(app):
+    a = make_gerber(app, name='a')
+    b = make_gerber(app, name='b')
+    b.offset((100.0, 0.0))
+    bounds_a, bounds_b = a.bounds(), b.bounds()
+    res, created = run_join_gerber(app, {'a': a, 'b': b}, 'a', 'b', '-outname', 'both')
+    assert res is None
+    assert list(created) == ['both']
+    final = created['both']
+    bounds_f = final.bounds()
+    assert bounds_f[0] == pytest.approx(bounds_a[0]) and bounds_f[2] == pytest.approx(bounds_b[2])
+    assert bounds_f[2] - bounds_f[0] > bounds_b[2] - bounds_b[0] + 99.0
+    app.app_obj.new_object.assert_called_once()
+    # the sources are untouched
+    assert a.bounds() == bounds_a and b.bounds() == bounds_b
+
+
+def test_default_outname(app):
+    a, b = make_gerber(app, name='a'), make_gerber(app, name='b')
+    res, created = run_join_gerber(app, {'a': a, 'b': b}, 'a', 'b')
+    assert res is None and list(created) == ['joined_gerber']
+
+
+@pytest.mark.parametrize('argv', [(), ('a',)])
+def test_fails_with_fewer_than_two_objects(app, argv):
+    a = make_gerber(app, name='a')
+    res, created = run_join_gerber(app, {'a': a}, *argv)
+    assert res == 'fail' and not created
+    app.app_obj.new_object.assert_not_called()

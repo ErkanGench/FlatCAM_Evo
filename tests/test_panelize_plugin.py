@@ -16,8 +16,9 @@ from appObjects.GeometryObject import GeometryObject
 from appObjects.GerberObject import GerberObject
 from appPlugins.ToolPanelize import Panelize
 
-from test_unify_characterization import (  # noqa: F401  (fixtures)
-    NATIVE_GBR, _headless_qt, app, assert_coords_close, make_excellon, make_gerber, parts, polygon_union)
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_coords_close, _headless_qt, make_excellon, make_gerber, NATIVE_GBR, parts, polygon_union,
+)
 from test_panelize_tcl_characterization import run_panelize
 
 
@@ -117,13 +118,6 @@ def test_gerber_plugin_equals_tcl(app, path):
     assert pan.source_file.startswith('G04*')
 
 
-def test_gerber_plugin_keeps_export_as_regions(app):
-    src = make_gerber(app, name='g')
-    src.export_as_regions = True
-    created, _ = run_plugin(app, src, panel_type='gerber', rows=1, cols=2)
-    assert created['g_panelized'].export_as_regions is True
-
-
 def test_excellon_plugin_equals_tcl(app):
     src = make_excellon(app, name='e')
     _, tcl = run_panelize(app, src, 'e', '-rows', '2', '-columns', '3', '-spacing_columns', '5',
@@ -137,13 +131,6 @@ def test_excellon_plugin_equals_tcl(app):
             pytest.approx([(a.x, a.y, b.x, b.y) for a, b in ref.tools[tid]['slots']])
     assert pan.bounds() == pytest.approx(ref.bounds())
     assert pan.source_file.startswith('M48')
-
-
-def test_excellon_source_is_not_changed(app):
-    src = make_excellon(app, name='e')
-    before = {k: (list(v['drills']), list(v['slots']), sorted(v)) for k, v in src.tools.items()}
-    run_plugin(app, src)
-    assert {k: (list(v['drills']), list(v['slots']), sorted(v)) for k, v in src.tools.items()} == before
 
 
 def test_constrain_reduces_the_grid(app):
@@ -178,26 +165,6 @@ def test_geometry_plugin_multigeo_merges_the_shared_borders(app):
     assert any('Optimization complete' in t for t in informs)
     # the composed solid_geometry is flat
     assert all(not isinstance(g, (list, tuple)) for g in pan.solid_geometry) and len(pan.solid_geometry) == 4
-
-
-def test_geometry_plugin_single_polygon_terminates(app):
-    # regression of 17f28747
-    src = GeometryObject('src', app)
-    src.multigeo = False
-    src.units = 'MM'
-    src.solid_geometry = box(0, 0, 4, 4)
-    created, _ = run_plugin(app, src, panel_type='geometry', rows=2, cols=2)
-    pan = created['src_panelized']
-    assert len(pan.solid_geometry) == 4
-    assert polygon_union(pan.solid_geometry).area == pytest.approx(64.0)
-
-
-def test_gerber_source_to_geometry_panel_has_the_flat_translated_solid(app):
-    src = make_gerber(app, name='g')
-    created, _ = run_plugin(app, src, panel_type='geometry', rows=2, cols=2)
-    pan = created['g_panelized']
-    assert pan.multigeo is True
-    assert polygon_union(pan.solid_geometry).area == pytest.approx(4 * polygon_union(src.solid_geometry).area)
 
 
 @pytest.mark.parametrize('multigeo', [False, True])

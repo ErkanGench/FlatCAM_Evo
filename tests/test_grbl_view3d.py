@@ -164,10 +164,6 @@ class SenderView3dTest(unittest.TestCase):
         self.assertIsNone(view.accepted.parent)
         self.assertIsNone(view.tool.parent)
 
-    def test_module_has_no_done_names(self):
-        self.assertFalse(hasattr(view3d_module, 'DONE_COLOR'))
-        self.assertTrue(hasattr(view3d_module, 'ACCEPTED_COLOR'))
-
 
 def status_tool(units='MM', inches=None):
     tool = make_audit_tool(units)
@@ -403,11 +399,6 @@ class StaleVisualsTest(unittest.TestCase):
         grid_data = tool.view3d.set_height_map.call_args.args[0]
         self.assertEqual(len(grid_data[0]), 3)
         self.assertEqual(len(grid_data[1]), 3)
-
-    def test_no_view_no_error(self):
-        tool = status_tool()
-        tool.view3d = None
-        tool._update_3d_height_map()
 
 
 ARC_JOB = ['G21', 'G90', 'G18', 'G0 X0 Y0 Z0', 'G2 X10 Z0 I5 K0 F100', 'X20 Z0 I5 K0', 'G17', 'G1 X30',

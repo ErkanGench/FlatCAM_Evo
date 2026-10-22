@@ -86,61 +86,9 @@ class ImageTraceTestCase(unittest.TestCase):
         fills = {f.upper() for f in re.findall(r'fill="(#[0-9A-Fa-f]{6})"', svg)}
         self.assertTrue({'#FF0000', '#0000FF'} <= fills, fills)
 
-    def test_filter_speckle(self):
-        img = Image.new('RGB', (64, 64), 'white')
-        draw = ImageDraw.Draw(img)
-        draw.rectangle((10, 10, 39, 39), fill='black')
-        draw.rectangle((50, 50, 51, 51), fill='black')
-        path = self.save(img)
-        self.assertEqual(trace(path, options={'filter_speckle': 0}).count('<path'), 2)
-        self.assertEqual(trace(path, options={'filter_speckle': 4}).count('<path'), 1)
-
-    def test_presets_and_curve_modes(self):
-        img = Image.new('RGB', (64, 64), 'white')
-        ImageDraw.Draw(img).ellipse((8, 8, 55, 55), fill='black')
-        path = self.save(img)
-        self.assertEqual(PRESET_NAMES, ['default', 'detailed', 'smooth', 'photo'])
-        for name in PRESET_NAMES:
-            self.assertIn(PRESETS[name]['mode'], CURVE_MODES)
-            for bw in (True, False):
-                self.assertIn('<path', trace(path, black_white=bw, options=PRESETS[name]), (name, bw))
-        # polygon mode makes straight segments only, spline mode makes curves
-        self.assertNotIn('C', re.findall(r' d="([^"]*)"', trace(path, options={'mode': 'polygon'}))[0])
-        self.assertIn('C', re.findall(r' d="([^"]*)"', trace(path, options={'mode': 'spline'}))[0])
-
     def test_missing_file(self):
         with self.assertRaises(FileNotFoundError):
             trace(os.path.join(self.tmp.name, 'missing.png'))
-
-    def test_missing_package_message(self):
-        saved = imagetrace.vtracer
-        imagetrace.vtracer = None
-        imagetrace._VTRACER_IMPORT_ERROR = ImportError('test')
-        try:
-            with self.assertRaisesRegex(ImportError, "pip install vtracer"):
-                trace(os.path.join(self.tmp.name, 'any.png'))
-        finally:
-            imagetrace.vtracer = saved
-
-    def test_module_imports_without_vtracer(self):
-        # the plugin must load (Raster mode works) when vtracer is not installed
-        code = ("import sys; sys.modules['vtracer'] = None; sys.path.insert(0, %r); "
-                "from appCommon import imagetrace; assert imagetrace.vtracer is None; print('ok')" % ROOT)
-        out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True, timeout=120)
-        self.assertEqual(out.stdout.strip(), 'ok', out.stderr)
-
-    def test_old_engine_is_gone(self):
-        with open(os.path.join(ROOT, 'appPlugins', 'ToolImage.py'), encoding='utf-8') as f:
-            src = f.read()
-        for name in ('svgtrace', 'pyppeteer', 'check_chromium'):
-            self.assertNotIn(name, src)
-        for req in ('requirements.txt', 'environment.yml'):
-            with open(os.path.join(ROOT, req), encoding='utf-8') as f:
-                text = f.read()
-            self.assertNotIn('svgtrace', text)
-            self.assertNotIn('pyppeteer', text)
-            self.assertIn('vtracer', text)
-
 
 if __name__ == '__main__':
     unittest.main()

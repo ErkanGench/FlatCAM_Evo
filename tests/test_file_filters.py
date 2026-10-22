@@ -44,18 +44,6 @@ class AddCaseVariantsTests(unittest.TestCase):
         result = add_case_variants("Gerber Files (*.gbr *.gtl);;All Files (*.*)")
         self.assertEqual("Gerber Files (*.gbr *.GBR *.gtl *.GTL);;All Files (*.*)", result)
 
-    def test_adds_lower_case_for_an_upper_case_pattern(self):
-        self.assertEqual("DXF (*.DXF *.dxf)", add_case_variants("DXF (*.DXF)"))
-
-    def test_keeps_group_name_and_text_without_patterns(self):
-        self.assertEqual("SVG File .svg (*.svg *.SVG)", add_case_variants("SVG File .svg (*.svg)"))
-        self.assertEqual("No patterns here", add_case_variants("No patterns here"))
-
-    def test_is_idempotent(self):
-        once = add_case_variants("Excellon Files (*.drl *.txt);;All Files (*.*)")
-        self.assertEqual(once, add_case_variants(once))
-
-
 class DialogFilterTests(unittest.TestCase):
     """Run the real dialog callbacks with a patched QFileDialog and check the filter they pass to Qt."""
 
@@ -89,16 +77,6 @@ class DialogFilterTests(unittest.TestCase):
                 ext_filter = self.captured_filter(lambda stub: callback(stub))
                 self.assertTrue(matches(ext_filter, filename))
                 self.assertTrue(matches(ext_filter, filename.lower()))
-
-    def test_svg_and_dxf_import_dialogs_show_both_cases(self):
-        from appHandlers.appIO import appIO
-        cases = ((appIO.on_file_import_svg, 'art.svg'), (appIO.on_file_import_dxf, 'outline.dxf'))
-        for callback, filename in cases:
-            with self.subTest(callback=callback.__name__):
-                ext_filter = self.captured_filter(lambda stub: callback(stub, 'geometry'))
-                self.assertTrue(matches(ext_filter, filename))
-                self.assertTrue(matches(ext_filter, filename.upper()))
-
 
 class GerberSaveFilterTests(unittest.TestCase):
     """Run the real Gerber export callback with a patched save dialog and check the filter it passes to Qt."""
@@ -146,18 +124,6 @@ class GerberSaveFilterTests(unittest.TestCase):
         # .art is the last file type; it was joined to 'All Files' and saved 'board' without an extension
         for file_type, filename in (('Gerber File .gtl ', 'board.gtl'), ('Gerber File .art ', 'board.art')):
             self.assertEqual(filename, self.export(self.make_stub(), file_type)[1])
-
-    def test_last_used_file_type_is_first_and_all_files_stays_last(self):
-        stub = self.make_stub()
-        first_filter, _filename = self.export(stub, 'Gerber File .gtl ')
-        for _ in range(3):
-            ext_filter, _filename = self.export(stub, 'Gerber File .gtl ')
-            groups = ext_filter.split(';;')
-            self.assertEqual('Gerber File .gtl (*.gtl)', groups[0])
-            self.assertEqual('All Files (*.*)', groups[-1])
-            self.assertNotIn('', groups)
-            self.assertEqual(len(first_filter.split(';;')), len(groups))
-
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

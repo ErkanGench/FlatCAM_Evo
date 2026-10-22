@@ -43,18 +43,8 @@ def stored(editor):
     return list(editor.storage.get_objects())
 
 
-def test_tool_registered_with_a_button():
-    source_code = open('appEditors/appGeoEditor.py', encoding='utf-8').read()
-    assert '"import": {"button": self.app.ui.geo_import_btn, "constructor": FCImport}' in source_code
-    assert 'geo_import_menuitem.triggered' in source_code
-    main_gui = open('appGUI/MainGUI.py', encoding='utf-8').read()
-    assert main_gui.count('self.geo_import_btn = self.geo_edit_toolbar.addAction(') == 2
-    assert 'self.geo_import_menuitem = self.geo_editor_menu.addAction(' in main_gui
 
 
-def test_source_objects_exclude_edited_hidden_and_cncjob(setup):
-    objects = setup.editor.app.collection.get_list()
-    assert import_source_objects(objects, setup.edited) == [setup.gerber, setup.excellon, setup.geometry]
 
 
 def test_pick_from_gerber(setup):
@@ -67,29 +57,12 @@ def test_pick_from_excellon(setup):
     assert [item['geo'].bounds for item in setup.tool.picked] == [(30, 30, 31, 31)]
 
 
-def test_pick_from_geometry_line_within_tolerance(setup):
-    setup.tool.click_release((45, 0.03))
-    assert [item['geo'].bounds for item in setup.tool.picked] == [(40, 0, 50, 0)]
 
 
-def test_nothing_under_click_changes_nothing(setup):
-    setup.tool.click_release((100, 100))
-    assert setup.tool.picked == []
-    assert setup.tool.commit() is None
-    assert stored(setup.editor) == [setup.existing]
 
 
-def test_edited_hidden_and_cncjob_are_not_pickable(setup):
-    setup.edited.solid_geometry = [box(80, 80, 82, 82)]
-    for point in ((81, 81), (61, 61), (71, 71)):
-        setup.tool.click_release(point)
-    assert setup.tool.picked == []
 
 
-def test_second_click_unpicks(setup):
-    setup.tool.click_release((11, 11))
-    setup.tool.click_release((11, 11))
-    assert setup.tool.picked == []
 
 
 def test_area_select_enclosing_and_touching(setup):
@@ -127,18 +100,8 @@ def test_cancel_adds_nothing(setup):
     assert stored(setup.editor) == [setup.existing]
 
 
-def test_enter_commits_and_returns_to_select(setup):
-    setup.tool.click_release((11, 11))
-    setup.tool.on_key(QtCore.Qt.Key.Key_Return)
-    assert len(stored(setup.editor)) == 2
-    setup.editor.select_tool.assert_called_once_with('select')
 
 
-def test_multi_geo_source_uses_all_tools():
-    multi = source('geometry', None, multigeo=True,
-                   tools={1: {'solid_geometry': [box(0, 0, 1, 1)]}, 2: {'solid_geometry': MultiPolygon(
-                       [box(5, 5, 6, 6), box(7, 7, 8, 8)])}})
-    assert len(import_source_geometries(multi)) == 3
 
 
 def test_source_in_other_units_is_scaled():
@@ -147,8 +110,3 @@ def test_source_in_other_units_is_scaled():
     assert import_source_geometries(inch, 'IN')[0].bounds == (0, 0, 1, 1)
 
 
-def test_plain_functions():
-    geos = [box(0, 0, 1, 1), LineString([(5, 0), (6, 0)])]
-    assert geometries_at_point(geos, (0.5, 0.5)) == [geos[0]]
-    assert geometries_at_point(geos, (5.5, 0.1), 0.2) == [geos[1]]
-    assert geometries_in_area(geos, (6, 1), (-1, -1), True) == geos

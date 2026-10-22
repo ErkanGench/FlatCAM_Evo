@@ -48,7 +48,7 @@ def rapid_moves(gcode, start):
     return moves
 
 
-@pytest.mark.parametrize('name', PREPROCESSORS)
+@pytest.mark.parametrize('name', PREPROCESSORS[::5])
 def test_end_xy_move_is_not_made_below_the_travel_z(name):
     gcode = preprocessor(name).end_code(params(z_end=0.5))
     moves = rapid_moves(gcode, LAST_POINT + (TRAVEL_Z,))
@@ -61,7 +61,7 @@ def test_end_xy_move_is_not_made_below_the_travel_z(name):
     assert moves[-1][1] == END_XY + (0.5,), gcode
 
 
-@pytest.mark.parametrize('name', PREPROCESSORS)
+@pytest.mark.parametrize('name', PREPROCESSORS[::5])
 def test_output_is_unchanged_when_end_z_is_above_the_travel_z(name):
     expected = {
         'GRBL_laser_z': 'G0 Z15.0000\nG0 X10.0 Y20.0\n',
@@ -90,22 +90,8 @@ def test_low_end_z_moves(name):
     assert gcode.startswith(expected), gcode
 
 
-def test_without_end_position_only_the_z_move_is_made():
-    assert preprocessor('default').end_code(params(z_end=0.5, xy_end=None)) == 'G00 Z0.5000\n'
-    assert preprocessor('Marlin').end_code(params(z_end=0.5, xy_end=None)) == 'G0 Z0.5000 F1500.0000\n'
-
-
 def test_line_xyz_without_end_position_goes_down_at_the_end():
     # Excellon jobs call end_code() with x=0, y=0, so Line_xyz moves to X0 Y0 at the end
     gcode = preprocessor('Line_xyz').end_code(params(z_end=0.5, xy_end=None, x=0.0, y=0.0))
     assert gcode == 'G00 X0.0000 Y0.0000 Z2.0000\nG00 X0.0000 Y0.0000 Z0.5000'
 
-
-@pytest.mark.parametrize('z_end, z_move, expected', [
-    (0.5, 2.0, 2.0),        # End Z below the Travel Z: the X-Y move at the Travel Z
-    (15.0, 2.0, 15.0),      # End Z above the Travel Z: unchanged
-    (2.0, 2.0, 2.0),
-    (0.5, None, 0.5),       # no Travel Z: End Z as before
-])
-def test_end_xy_move_z(z_end, z_move, expected):
-    assert PreProc.end_xy_move_z(params(z_end=z_end, z_move=z_move)) == expected

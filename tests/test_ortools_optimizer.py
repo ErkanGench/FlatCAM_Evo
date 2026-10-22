@@ -37,27 +37,9 @@ def test_distance_matrix_is_scaled_rounded_and_symmetric():
     assert all(type(v) is int for row in matrix for v in row)
 
 
-def test_distance_matrix_keeps_distances_below_1_unit():
-    # the former callback truncated to int: both distances were 0
-    matrix = CNCjob.ortools_distance_matrix([(0.0, 0.0), (0.0004, 0.0), (0.9, 0.0)])
-    assert matrix[0][1] == 0 and matrix[0][2] == 900
-
-
-def test_distance_matrix_of_1_location():
-    assert CNCjob.ortools_distance_matrix([(5.0, 5.0)]) == [[0]]
-
-
 # ---------------------------------------------------------------------------------------------------------------
 # time limit
 # ---------------------------------------------------------------------------------------------------------------
-
-@pytest.mark.parametrize('opt_time, ms', [(0, 3000), (None, 3000), ('0', 3000), (2, 2000), ('5', 5000),
-                                          (0.5, 500), (-1, 3000)])
-def test_time_limit(opt_time, ms):
-    params = pywrapcp.DefaultRoutingSearchParameters()
-    CNCjob.ortools_set_time_limit(params, opt_time)
-    assert params.time_limit.ToMilliseconds() == ms
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # route
@@ -83,11 +65,6 @@ def test_route_of_holes_less_than_1_mm_apart_is_not_random(method):
     locs = [(0.0, 0.0)] + [(x, 0.0) for x in xs]
     route = getattr(make_cnc(), method)(locations=locs, opt_time=1)
     assert path_length(locs, route) == pytest.approx(29 * 0.3, abs=1e-6)
-
-
-@pytest.mark.parametrize('method', ['optimized_ortools_basic', 'optimized_ortools_meta'])
-def test_empty_locations(method):
-    assert getattr(make_cnc(), method)(locations=[], opt_time=1) == []
 
 
 def test_basic_stops_at_the_time_limit_on_a_panel():

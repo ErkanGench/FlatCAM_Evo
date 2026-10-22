@@ -379,14 +379,6 @@ class TestSpindleButton(unittest.TestCase):
             tool._poll_idle_status()
             self.assertEqual(tool.grbl_ser_port.written, [])
 
-    def test_a_click_waits_for_the_poll_instead_of_busy(self):
-        from appPlugins.Common.grbl.grbl_client import STATUS_POLL
-        tool = self.poll_tool()
-        poll = tool._grbl_reserve(STATUS_POLL)
-        threading.Timer(0.05, tool._grbl_release, args=(poll,)).start()
-        op = tool._grbl_reserve('command', motion=True)
-        self.assertIsNotNone(op)
-        self.assertEqual(op.name, 'command')
 
     def test_ecut_status_reports_the_spindle(self):
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ecut'))
@@ -504,13 +496,6 @@ class TestDeletedQtObjects(unittest.TestCase):
         MachineSafety.stop_all()  # the port of a deleted plugin can be open: its stop still runs
         self.assertEqual(Owner.stops, 1)
         self.assertNotIn(stop, MachineSafety._stoppers)
-
-    def test_quit_hook_connects_one_time(self):
-        from appCommon import MachineSafety
-        qt_app = MagicMock()
-        MachineSafety.connect_quit(qt_app)
-        MachineSafety.connect_quit(qt_app)
-        qt_app.aboutToQuit.connect.assert_called_once_with(MachineSafety.stop_all)
 
 
 if __name__ == '__main__':

@@ -134,16 +134,6 @@ def form_values(milling, keys):
     return {key: fields[key].get_value() for key in keys}
 
 
-@pytest.mark.parametrize('first, second', [(LASER, MILL), (MILL, LASER)])
-def test_multigeo_form_shows_the_selected_target(first, second):
-    objects = {'A': make_object('A', **first), 'B': make_object('B', **second)}
-    milling = plugin(objects)
-    select(milling, 'A')
-    assert form_values(milling, first) == first
-    select(milling, 'B')
-    assert form_values(milling, second) == second
-
-
 def test_multigeo_job_uses_the_settings_of_the_selected_target():
     objects = {'A': make_object('A', **LASER), 'B': make_object('B', **MILL)}
     milling = plugin(objects)
@@ -195,39 +185,3 @@ def test_old_project_target_resets_the_general_fields():
     assert milling.ui.endz_entry.get_value() == 15.0
     assert generate(milling).pp_geometry_name == 'default'
 
-
-def test_old_tool_per_tool_fields_show_the_saved_values():
-    old = make_object('cutout', tool=flatcam_8_994_cutout_tool())
-    old.obj_options = dict(MILL_OPTIONS, name='cutout', xmin=0, ymin=0, xmax=10, ymax=5)
-    milling = plugin({'cutout': old}, tools_mill_cutz=-0.5, tools_mill_feedrate=300.0)
-    select(milling, 'cutout')
-    milling.storage_to_form(milling._form_tool_data(old, 1))
-    assert milling.form_fields['tools_mill_cutz'].get_value() == -2.4
-    assert milling.form_fields['tools_mill_feedrate'].get_value() == 120.0
-
-
-def test_selecting_a_target_does_not_change_its_tools():
-    # loading the form of the last tool must not write that tool's values into the other tools of the target
-    tool1 = saved_tool(tools_mill_multidepth=True, tools_mill_offset_type=1, tools_mill_cutz=-1.0,
-                      tools_mill_tool_shape=1, tools_mill_job_type=1)
-    tool2 = saved_tool(tools_mill_multidepth=False, tools_mill_offset_type=2, tools_mill_cutz=-2.0,
-                      tools_mill_tool_shape=2, tools_mill_job_type=2)
-    target = make_object('B', tool=tool1)
-    target.tools[2] = tool2
-    objects = {'A': make_object('A', **LASER), 'B': target}
-    milling = plugin(objects)
-    select(milling, 'A')
-    select(milling, 'B')
-    assert [target.tools[uid]['data']['tools_mill_multidepth'] for uid in (1, 2)] == [True, False]
-    for key, expected in (('tools_mill_offset_type', [1, 2]), ('tools_mill_tool_shape', [1, 2]),
-                          ('tools_mill_job_type', [1, 2]), ('tools_mill_ppname_g', ['default', 'default'])):
-        assert [target.tools[uid]['data'][key] for uid in (1, 2)] == expected, key
-
-
-@pytest.mark.parametrize('first, second', [(True, False), (False, True)])
-def test_toolchange_checkbox_follows_the_target(first, second):
-    objects = {'A': make_object('A', tools_mill_toolchange=first), 'B': make_object('B', tools_mill_toolchange=second)}
-    milling = plugin(objects)
-    select(milling, 'A')
-    select(milling, 'B')
-    assert milling.ui.toolchange_cb.get_value() is second

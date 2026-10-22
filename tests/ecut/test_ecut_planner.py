@@ -177,8 +177,6 @@ def test_start_position_requires_six_int32_counts(planner, start):
     with pytest.raises(EcutError):
         planner.plan_linear_path(config(), start, [move(planner, x=1)])
 
-def test_planner_module_is_available():
-    assert importlib.util.find_spec('appPlugins.Common.ecut.ecut_planner') is not None
 
 def test_shared_timebase_matches_single_collinear_move(planner):
     cfg = config()

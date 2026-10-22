@@ -66,17 +66,6 @@ def test_geometry_target_uses_the_geometry_tools_table(qapp, exc_uids):
     assert any('applied to all tools' in str(msg) for msg in events)
 
 
-def test_geometry_target_keeps_the_tool_data(qapp):
-    # the current row of the hidden Excellon table holds a UID that the Geometry does not have
-    exc_table = tools_table([5, 7], totals=True)
-    exc_table.setCurrentCell(1, 0)
-    geo_table = tools_table([1, 2])
-    geo_table.setCurrentCell(0, 0)
-    milling, events, calls = harness('geo', geo_table, exc_table, [1, 2])
-    milling.on_apply_param_to_all_clicked()
-    assert feedrates(milling) == [100.0, 100.0]
-
-
 def test_excellon_target_uses_the_excellon_tools_table(qapp):
     exc_table = tools_table([1, 2], totals=True)
     exc_table.setCurrentCell(1, 0)
@@ -97,34 +86,3 @@ def test_excellon_totals_row_changes_nothing_and_keeps_the_signals(qapp, row):
     assert calls.count('disconnect') == calls.count('connect')
     assert any('No Tool Selected' in str(msg) for msg in events)
 
-
-def test_excellon_totals_row_with_a_stale_tool_uid_changes_nothing(qapp):
-    # build_ui_exc() only sets the row count: after an Excellon with 3 tools, the totals rows of an Excellon with
-    # 1 tool keep the tool UIDs 2 and 3 in the hidden column 3
-    exc_table = FCTable()
-    exc_table.setColumnCount(5)
-    milling, events, calls = harness('exc', tools_table([]), exc_table, [])
-    milling.ui.param_frame = QtWidgets.QWidget()
-    milling.ui.order_combo = SimpleNamespace(get_value=lambda: 0)
-    milling.app.app_units = 'mm'
-    milling.app.dec_format = lambda value, dec=4: round(float(value), dec)
-    milling.decimals = 4
-    milling.tot_drill_cnt = milling.tot_slot_cnt = 0
-    for dias in ([0.8, 1.0, 1.2], [0.9]):
-        milling.target_obj = SimpleNamespace(tools={
-            uid: {'tooldia': dia, 'drills': [], 'slots': [], 'data': {'tools_mill_feedrate': 100.0 * uid}}
-            for uid, dia in enumerate(dias, start=1)})
-        milling.build_ui_exc()
-    exc_table.setCurrentCell(1, 1)      # the 'Total Drills' row
-
-    milling.on_apply_param_to_all_clicked()
-    assert feedrates(milling) == [100.0]
-    assert calls.count('disconnect') == calls.count('connect')
-    assert any('No Tool Selected' in str(msg) for msg in events)
-
-
-def test_empty_geometry_table_changes_nothing(qapp):
-    milling, events, calls = harness('geo', tools_table([]), tools_table([1], totals=True), [1, 2])
-    milling.on_apply_param_to_all_clicked()
-    assert feedrates(milling) == [100.0, 200.0]
-    assert calls.count('disconnect') == calls.count('connect')

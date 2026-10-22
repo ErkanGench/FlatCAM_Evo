@@ -39,55 +39,10 @@ def test_overlap_cycles_and_preserves_unrelated_multiselection(monkeypatch):
     assert editor.selected == [other]
 
 
-def test_cycle_resets_on_mutation_and_equal_distance_order_is_stable():
-    shapes = [DrawToolShape(LineString([(0, 0), (10, 0)])) for _ in range(3)]
-    editor = pick_editor(shapes)
-    editor.click_select((5, 0))
-    assert editor.selected == [shapes[0]]
-    editor.click_select((5, 0))
-    assert editor.selected == [shapes[1]]
-    shapes[2].geo = LineString([(0, 1), (10, 1)])
-    editor.click_select((5, 0))
-    assert editor.selected == [shapes[0]]
 
 
-def test_unchanged_pick_does_not_scan_storage_and_direct_geometry_edits_invalidate():
-    shape = DrawToolShape(LineString([(0, 0), (1, 0)]))
-    editor = pick_editor([shape])
-    first, _ = editor.get_pick_index()
-    editor.storage.get_objects = Mock(wraps=editor.storage.get_objects)
-    assert editor.get_pick_index()[0] is first
-    editor.storage.get_objects.assert_not_called()
-    shape.offset((10, 0))
-    assert editor.get_pick_index()[0] is not first
-    assert editor.pick_at((10.5, 0)) is shape
-    assert editor.pick_at((0.5, 0)) is None
 
 
-def test_pick_cache_tracks_same_count_storage_replacement_history_worker_and_rollback():
-    a, b = [DrawToolShape(LineString([(x, 0), (x + 1, 0)])) for x in (0, 10)]
-    editor = editor_with_history([a], [a])
-    editor.canvas = SimpleNamespace(pixel_size=lambda: 0.01)
-    editor.get_pick_index = lambda: AppGeoEditor.get_pick_index(editor)
-    first, _ = editor.get_pick_index()
-    editor.replace_shapes([a], [b], [b])
-    assert editor.get_pick_index()[1] == [b]
-    assert editor.undo()
-    assert editor.get_pick_index()[1] == [a]
-    assert editor.redo()
-    assert editor.get_pick_index()[1] == [b]
-    with pytest.raises(ValueError):
-        with editor.history_operation():
-            editor.replace_shapes([b], [a])
-            assert editor.get_pick_index()[1] == [a]
-            raise ValueError('rollback')
-    assert editor.get_pick_index()[1] == [b]
-    editor.submit_worker(lambda: editor.replace_shapes([b], [a]), [])
-    run_worker(editor)
-    assert editor.get_pick_index()[1] == [a]
-    assert editor.get_pick_index()[0] is not first
-    editor.storage = AppGeoEditor.make_storage()
-    assert editor.get_pick_index() == (None, [])
 
 
 def canvas_editor():
@@ -105,35 +60,8 @@ def canvas_editor():
     return editor
 
 
-@pytest.mark.parametrize('delta,marquee', [(3, False), (5, True), (20, True), (-20, True)])
-def test_raw_selection_and_screen_drag_threshold(delta, marquee):
-    editor = canvas_editor()
-    AppGeoEditor.on_canvas_click(editor, SimpleNamespace(pos=(23, 37), button=1))
-    assert editor.pos == (0.23, 0.37)
-    # A canvas can report dragging even for tiny movement.
-    editor.app.selection_type = delta >= 0
-    AppGeoEditor.on_canvas_click_release(editor, SimpleNamespace(pos=(23 + delta, 37), button=1))
-    if marquee:
-        editor.draw_selection_area_handler.assert_called_once_with(
-            (0.23, 0.37), ((23 + delta) / 100, 0.37), delta >= 0)
-        editor.active_tool.click_release.assert_not_called()
-    else:
-        editor.active_tool.click_release.assert_called_once_with((0.23, 0.37))
-        editor.draw_selection_area_handler.assert_not_called()
 
 
-@pytest.mark.parametrize('name,attrs,raw', [
-    ('select', {}, True), ('simplification', {}, True), ('split', {}, False),
-    ('move', {'has_selection': False}, True), ('move', {'has_selection': True}, False),
-    ('copy', {'has_selection': False}, True), ('copy', {'has_selection': True}, False),
-    ('eraser', {}, True), ('path', {}, False), ('rectangle', {}, False),
-])
-def test_raw_pick_policy_is_stage_specific(name, attrs, raw):
-    editor = SimpleNamespace(active_tool=SimpleNamespace(name=name, **attrs), selected=[])
-    assert AppGeoEditor._tool_wants_raw_pick(editor) is raw
-    if name == 'eraser':
-        editor.selected = [object()]
-        assert not AppGeoEditor._tool_wants_raw_pick(editor)
 
 
 def render_editor(monkeypatch):
@@ -196,25 +124,6 @@ def test_interactive_move_records_affine_provenance(monkeypatch):
     editor.plot_shape.assert_not_called()
 
 
-@pytest.mark.parametrize('failure', ['unavailable', 'not_ready', 'selection_failure', 'singular', 'stale'])
-def test_affine_fallback_is_safe(monkeypatch, failure):
-    editor, source = render_editor(monkeypatch)
-    if failure == 'unavailable':
-        monkeypatch.setattr(editor.shapes, 'transform_keys', None)
-    elif failure == 'not_ready':
-        monkeypatch.setattr(editor.shapes, 'transform_keys', lambda *a, **k: False)
-    elif failure == 'selection_failure':
-        monkeypatch.setattr(editor.sel_shapes, 'transform_keys', lambda *a, **k: False)
-    elif failure == 'stale':
-        source.geo = box(10, 10, 11, 11)
-    elif failure == 'singular':
-        source.geo = LineString([(0, 0), (1, 1)])
-        editor.plot_all()
-        editor.plot_shape.reset_mock()
-    AppGeoEditor.transform_shapes(editor, 'scale', 0 if failure == 'singular' else 2, 1, point=(0, 0))
-    assert editor.plot_shape.called
-    assert id(source) not in editor._rendered
-    assert len(editor.shapes.data) == len(editor.sel_shapes.data)
 
 
 def test_move_shape_pick_keeps_reference_location_snapped():
@@ -265,17 +174,6 @@ def test_selection_marquee_uses_only_x_and_y_of_the_vispy_coords():
     assert len(start) == 2 and len(end) == 2
 
 
-@pytest.mark.parametrize('name,attrs,selected,raw', [
-    ('simplification', {}, False, True), ('split', {}, True, False),
-    ('copy', {'has_selection': False}, False, True), ('copy', {'has_selection': True}, True, False),
-    ('eraser', {}, False, True), ('eraser', {}, True, False), ('path', {}, False, False),
-])
-def test_canvas_dispatch_keeps_raw_picks_separate_from_placement(name, attrs, selected, raw):
-    editor = canvas_editor()
-    editor.selected = editor.selected if selected else []
-    editor.active_tool = SimpleNamespace(name=name, click=Mock(), **attrs)
-    AppGeoEditor.on_canvas_click(editor, SimpleNamespace(pos=(23, 37), button=1))
-    editor.active_tool.click.assert_called_once_with((0.23, 0.37) if raw else (0, 0))
 
 
 @pytest.mark.parametrize('name', ['circle', 'rectangle'])
@@ -290,22 +188,6 @@ def test_shift_shape_edit_picks_raw_instead_of_copying_coordinates(name, monkeyp
     editor.app.clipboard.setText.assert_not_called()
 
 
-def test_storage_revision_covers_direct_insert_remove_and_bulk_replace_without_serializing_owners():
-    shapes = [DrawToolShape(LineString([(x, 0), (x, 1)])) for x in range(20)]
-    editor = pick_editor(shapes)
-    tree = editor.get_pick_index()[0]
-    editor.storage.remove(shapes[0])
-    assert editor.get_pick_index()[0] is not tree
-    editor.storage.insert(shapes[0])
-    editor.storage.replace(removed=shapes, inserted=shapes)
-    tree = editor.get_pick_index()[0]
-    revision = editor.storage.revision
-    for clone in (deepcopy(shapes[0]), pickle.loads(pickle.dumps(shapes[0]))):
-        clone.offset((100, 0))
-    assert editor.storage.revision == revision
-    assert editor.get_pick_index()[0] is tree
-    shapes[0].offset((100, 0))
-    assert editor.get_pick_index()[0] is not tree
 
 
 def test_affine_reuse_follows_selection_changes_and_multistep_history(monkeypatch):

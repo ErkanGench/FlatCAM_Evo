@@ -146,30 +146,9 @@ def test_startup_restores_toolbar_settings(layout_app, saved):
     assert restored.value('menu_show_text', type=bool) == expected
 
 
-@pytest.mark.parametrize('layout', ['standard', 'compact', 'minimal'])
-def test_saved_layout_restores_lowercase_name(layout_app, layout):
-    app, group, settings = layout_app
-    settings.setValue('layout', layout)
-    restored = gui_module.GeneralGUIPrefGroupUI(app)
-    try:
-        assert restored.layout_combo.get_value() == layout
-    finally:
-        restored.close()
-
-
-def test_first_run_explicit_minimal_keeps_signal_suppression(layout_app):
-    app, group, settings = layout_app
-    app.on_layout(lay='minimal', connect_signals=False)
-    assert settings.value('layout') == 'minimal'
-    assert app.ui.toolbarview.isHidden()
-    app.ui.lock_toolbar.assert_called_once_with(lock=True)
-    app.connect_toolbar_signals.assert_not_called()
-    app.connect_editors_toolbar_signals.assert_called_once_with()
-
-
-@pytest.mark.parametrize('layout', ['standard', 'compact', 'minimal'])
+@pytest.mark.parametrize('layout', ['standard', 'minimal'])
 @pytest.mark.parametrize('saved_state', ['missing', 'invalid', 'custom', 'preset'])
-@pytest.mark.parametrize('show_text', [False, True])
+@pytest.mark.parametrize('show_text', [False])
 def test_normal_startup_restores_layout_and_custom_toolbar_state(
         layout_app, monkeypatch, layout, saved_state, show_text):
     app, group, settings = layout_app

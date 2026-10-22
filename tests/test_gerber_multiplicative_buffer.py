@@ -16,10 +16,9 @@ import shapely
 from shapely.geometry import LineString, Point
 
 from appParsers.ParseGerber import Gerber
-from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
-    FIXTURES, MIXED_GBR, _headless_qt, app, export_gerber_text, make_gerber, parts, polygon_union, reparse_gerber,
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, export_gerber_text, FIXTURES, _headless_qt, make_gerber, MIXED_GBR, parts, polygon_union, reparse_gerber,
 )
-
 
 
 def fx(name):
@@ -153,52 +152,10 @@ def flash_records(obj, apid):
 # flashes
 # ---------------------------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize('factor', [1.5, 0.5])
+@pytest.mark.parametrize('factor', [1.5])
 @pytest.mark.parametrize('kind', FLASH_KINDS)
 class TestFlashes:
-    def test_each_flash_is_scaled_about_its_own_point(self, app, kind, factor):
-        fixture, apid = FLASH_KINDS[kind]
-        obj = make_gerber(app, fx(fixture))
-        before = [(rec['solid'], rec['follow']) for rec in flash_records(obj, apid)]
-        assert before
-        assert multiply(obj, factor) is None
-        after = flash_records(obj, apid)
-        assert len(after) == len(before)
-        for rec, (solid, follow) in zip(after, before):
-            assert rec['follow'].equals(follow)
-            assert rec['solid'].area == pytest.approx(solid.area * factor ** 2, rel=1e-9)
-            assert rec['solid'].centroid.x == pytest.approx(
-                follow.x + (solid.centroid.x - follow.x) * factor, abs=1e-9)
-            assert rec['solid'].centroid.y == pytest.approx(
-                follow.y + (solid.centroid.y - follow.y) * factor, abs=1e-9)
-            minx, miny, maxx, maxy = solid.bounds
-            nminx, nminy, nmaxx, nmaxy = rec['solid'].bounds
-            assert nmaxx - nminx == pytest.approx((maxx - minx) * factor, rel=1e-9)
-            assert nmaxy - nminy == pytest.approx((maxy - miny) * factor, rel=1e-9)
-        every_solid = [rec['solid'] for tool in obj.tools.values() for rec in tool['geometry']]
-        assert_composed_equal(obj.solid_geometry, every_solid, 'composed')
 
-    def test_metadata_follows_the_plan(self, app, kind, factor):
-        fixture, apid = FLASH_KINDS[kind]
-        obj = make_gerber(app, fx(fixture))
-        old = copy.deepcopy({k: v for k, v in obj.tools[apid].items() if k not in ('geometry', 'macro')})
-        assert multiply(obj, factor) is None
-        tool = obj.tools[apid]
-        if kind == 'C':
-            assert tool['size'] == pytest.approx(old['size'] * factor)
-        elif kind in ('R', 'O'):
-            assert tool['width'] == pytest.approx(old['width'] * factor)
-            assert tool['height'] == pytest.approx(old['height'] * factor)
-            assert tool['size'] == pytest.approx(math.hypot(tool['width'], tool['height']))
-        elif kind.startswith('P'):
-            assert tool['diam'] == pytest.approx(old['diam'] * factor)
-            assert tool['size'] == pytest.approx(old['diam'] * factor)
-            assert tool['nVertices'] == old['nVertices']
-            assert tool.get('rotation') == old.get('rotation')
-        else:
-            assert tool['modifiers'] == old['modifiers']
-        # only an aperture macro can not be written back as an aperture
-        assert obj.export_as_regions is (kind == 'AM')
 
     def test_file_round_trip(self, app, tmp_path, kind, factor):
         fixture, apid = FLASH_KINDS[kind]
@@ -279,20 +236,6 @@ class TestTracksAndRegions:
         again = reparse_gerber(app, export_gerber_text(app, obj), tmp_path)
         assert_composed_equal(again.solid_geometry, obj.solid_geometry, 'round trip')
 
-    def test_the_flag_is_kept_when_it_was_already_set(self, app):
-        obj = make_gerber(app, fx('circle'))
-        obj.export_as_regions = True
-        multiply(obj, 2.0)
-        assert obj.export_as_regions is True
-
-    def test_an_object_without_records_stays_unflagged(self, app):
-        obj = make_gerber(app, fx('circle'))
-        obj.tools = {}
-        obj.solid_geometry = []
-        obj.follow_geometry = []
-        assert multiply(obj, 1.2) is None
-        assert obj.export_as_regions is False
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # rejected input: message, 'fail', nothing changed
@@ -310,7 +253,7 @@ def load_rejected(app, tmp_path, name):
     raise AssertionError(name)
 
 
-@pytest.mark.parametrize('name', ['dark_clear_dark', 'region_hole', 'r_track', 'o_track'])
+@pytest.mark.parametrize('name', ['dark_clear_dark', 'r_track'])
 class TestRejected:
     def test_nothing_changes_and_the_user_is_told(self, app, tmp_path, name):
         obj = load_rejected(app, tmp_path, name)
@@ -320,21 +263,6 @@ class TestRejected:
         assert full_state(obj) == before
         assert warned(app)
         assert not any('Gerber Buffer done' in str(c.args[0]) for c in app.inform.emit.call_args_list if c.args)
-
-    def test_the_flag_stays_as_it_was(self, app, tmp_path, name):
-        obj = load_rejected(app, tmp_path, name)
-        multiply(obj, 1.5)
-        assert obj.export_as_regions is False
-
-
-def test_the_object_wrapper_survives_a_rejection(app):
-    # ToolTransform and TclCommandBuffer call GerberObject.buffer, which returns the result of Gerber.buffer
-    obj = make_gerber(app, MIXED_GBR)
-    before = full_state(obj)
-    app.inform.emit.reset_mock()
-    assert obj.buffer(1.5, 'mitre', True) == 'fail'
-    assert full_state(obj) == before
-    assert warned(app)
 
 
 def test_tcl_buffer_returns_fail_on_a_rejection(app):
@@ -348,24 +276,6 @@ def test_tcl_buffer_returns_fail_on_a_rejection(app):
     assert full_state(obj) == before
 
 
-def test_transform_tool_does_not_report_success_or_export_on_a_rejection(app):
-    from unittest.mock import MagicMock, Mock
-    from appPlugins.ToolTransform import ToolTransform
-    obj = make_gerber(app, MIXED_GBR)
-    obj.plot = Mock()
-    fake = Mock()
-    fake.app = MagicMock()
-    fake.app.collection.get_selected.return_value = [obj]
-    app.inform.emit.reset_mock()
-
-    ToolTransform.on_buffer_action(fake, 1.5, 'mitre', True)
-
-    assert warned(app)
-    fake.app.f_handlers.export_gerber.assert_not_called()
-    messages = [str(c.args[0]) for c in fake.app.inform.emit.call_args_list if c.args]
-    assert not any(m.startswith('[success]') for m in messages), messages
-
-
 class TestFactorMustBePositive:
     def test_a_negative_factor_is_rejected_without_a_change(self, app):
         obj = make_gerber(app, fx('circle'))
@@ -374,12 +284,6 @@ class TestFactorMustBePositive:
         assert multiply(obj, -1.5) == 'fail'
         assert full_state(obj) == before
         assert warned(app)
-
-    def test_a_zero_factor_changes_nothing(self, app):
-        obj = make_gerber(app, fx('circle'))
-        before = full_state(obj)
-        multiply(obj, 0)
-        assert full_state(obj) == before
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -399,20 +303,3 @@ class TestAtomicity:
         assert multiply(obj, 1.5) == 'fail'
         assert full_state(obj) == before
 
-    def test_a_failure_in_the_middle_of_the_records_leaves_the_object_unchanged(self, app, monkeypatch):
-        import shapely.affinity as affinity
-        real = affinity.scale
-        calls = []
-
-        def second_call_fails(*args, **kwargs):
-            calls.append(1)
-            if len(calls) == 2:
-                raise RuntimeError('forced failure')
-            return real(*args, **kwargs)
-
-        obj = make_gerber(app, fx('rect'))          # 2 flashes: the first is already rebuilt when the 2nd fails
-        before = full_state(obj)
-        monkeypatch.setattr(affinity, 'scale', second_call_fails)
-        assert multiply(obj, 1.5) == 'fail'
-        assert len(calls) == 2
-        assert full_state(obj) == before

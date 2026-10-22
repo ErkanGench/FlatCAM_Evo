@@ -52,49 +52,6 @@ class TestGrblSenderConstruct(unittest.TestCase):
         tool = ToolGrblSender(make_app())
         self.assertEqual(tool.pluginName, 'GCode sender')
 
-    def test_section_labels_toggle_visibility_without_changing_controls(self):
-        tool = ToolGrblSender(make_app())
-        ui = tool.ui
-        ui.autolevel_cb.setChecked(True)
-        ui.check_mode_cb.setChecked(True)
-        ui.precision_feed_entry.set_value(12.5)
-        ui.start_button.setEnabled(False)
-        controls = (ui.object_combo, ui.al_toolbar, ui.start_button, ui.check_mode_cb,
-                    ui.autolevel_cb, ui.al_frame, ui.precision_feed_entry)
-        enabled = [widget.isEnabled() for widget in controls]
-        sections = (
-            (ui.obj_combo_label, (ui.object_combo, ui.al_toolbar)),
-            (ui.run_label, (ui.start_button, ui.check_mode_cb)),
-            (ui.al_group_label, (ui.autolevel_cb, ui.al_frame, ui.precision_feed_entry)),
-        )
-        for label, contents in sections:
-            color = label.color
-            self.assertFalse(label.clicked_state)
-            for collapsed in (True, False, True, False):
-                QtTest.QTest.mouseClick(label, QtCore.Qt.MouseButton.LeftButton)
-                self.assertEqual(label.color, 'gray' if collapsed else color)
-                self.assertIn('color="%s"' % label.color, label.text())
-                for other_label, other_contents in sections:
-                    self.assertFalse(other_label.isHidden())
-                    for widget in other_contents:
-                        self.assertEqual(widget.isVisibleTo(ui.tools_frame),
-                                         not (other_label is label and collapsed))
-                self.assertFalse(ui.reset_button.isHidden())
-                self.assertEqual([widget.isEnabled() for widget in controls], enabled)
-                self.assertTrue(ui.autolevel_cb.isChecked())
-                self.assertTrue(ui.check_mode_cb.isChecked())
-                self.assertEqual(ui.precision_feed_entry.get_value(), 12.5)
-
-        QtTest.QTest.mouseClick(ui.al_group_label, QtCore.Qt.MouseButton.LeftButton)
-        ui.autolevel_cb.setChecked(False)
-        ui.autolevel_cb.setChecked(True)
-        self.assertFalse(ui.al_frame.isVisibleTo(ui.tools_frame))
-        QtTest.QTest.mouseClick(ui.al_group_label, QtCore.Qt.MouseButton.LeftButton)
-        self.assertTrue(ui.al_frame.isVisibleTo(ui.tools_frame))
-        ui.autolevel_cb.setChecked(False)
-        for _ in range(2):
-            QtTest.QTest.mouseClick(ui.al_group_label, QtCore.Qt.MouseButton.LeftButton)
-        self.assertTrue(ui.al_frame.isHidden())
 
     def test_populate(self):
         tool = ToolGrblSender(make_app())

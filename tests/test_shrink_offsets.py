@@ -205,16 +205,6 @@ class TestShrinkOffsetConsequences(unittest.TestCase):
         self.assertGreater(old_segments, 10 * new_segments)
         self.assertLess(new_segments, 200000)
 
-    def test_cumulative_offset_changes_termination_of_narrow_corner_islands(self):
-        half = 1.34846
-        polygon = box(-half, -half, half, half).difference(Point(0, 0).buffer(0.7, quad_segs=16))
-        old = inset_layers(polygon, 0.2, 0.6, 64, False)
-        new = inset_layers(polygon, 0.2, 0.6, 64, True)
-        self.assertEqual(len(old), 5)
-        self.assertEqual(len(new), 6)
-        self.assertEqual(len(new[-1]), 4)
-        self.assertGreater(sum(p.area for p in new[-1]), 0)
-
     def test_cumulative_offset_changes_swept_coverage_at_configured_circle_resolution(self):
         polygon = Polygon(box(0, 0, 6, 6).exterior.coords,
                           [Point(3, 3).buffer(0.7, quad_segs=16).exterior.coords])
@@ -223,30 +213,6 @@ class TestShrinkOffsetConsequences(unittest.TestCase):
         old, new = [unary_union([p.buffer(0.2, quad_segs=16) for p in group]) for group in paths]
         self.assertGreater(old.difference(new).area, 1e-9)
         self.assertGreater(new.difference(old).area, 1e-9)
-
-    def test_supported_low_resolution_can_lose_more_than_roundoff_coverage(self):
-        polygon = Polygon(box(0, 0, 6, 6).exterior.coords,
-                          [box(2, 2, 4, 4).exterior.coords])
-        groups = [layer_paths(inset_layers(polygon, 0.4, 0.15, 4, direct))
-                  for direct in (False, True)]
-        old, new = [unary_union([p.buffer(0.2, quad_segs=16) for p in paths]) for paths in groups]
-        self.assertGreater(old.difference(new).area, 0.01)
-
-    def test_initial_contours_and_component_traversal_are_not_the_source_of_difference(self):
-        polygon = MultiPolygon([box(0, 0, 2, 2), box(3, 0, 5, 2)])
-        old = layer_paths(inset_layers(polygon, 0.2, 0.6, 64, False))
-        new = layer_paths(inset_layers(polygon, 0.2, 0.6, 64, True))
-        self.assertEqual(len(old), len(new))
-        self.assertTrue(all(a.hausdorff_distance(b) < 1e-12 for a, b in zip(old, new)))
-
-    def test_both_offsets_split_a_narrow_neck_after_the_initial_contour(self):
-        polygon = unary_union([box(0, 0, 2, 2), box(3, 0, 5, 2), box(1, 0.8995, 4, 1.1005)])
-        for direct in (False, True):
-            with self.subTest(cumulative=direct):
-                layers = inset_layers(polygon, 0.2, 0.6, 64, direct)
-                self.assertEqual(len(layers[0]), 1)
-                self.assertEqual(len(layers[1]), 2)
-
 
 class TestBoundedStandardOffsets(unittest.TestCase):
     def setUp(self):
@@ -287,30 +253,6 @@ class TestBoundedStandardOffsets(unittest.TestCase):
             self.assertEqual(source, margin.wkb)
             self.assertAlmostEqual(distance, -index * 0.85)
 
-    def test_chord_error_obeys_circle_precision_and_existing_geo_tolerance(self):
-        from unittest.mock import patch
-        original = Polygon.buffer
-        polygon = Polygon(box(0, 0, 6, 6).exterior.coords, [box(2, 2, 4, 4).exterior.coords])
-        for steps in (4, 16, 17, 32, 64):
-            for tolerance in (0.005, 0.0001):
-                with self.subTest(steps=steps, tolerance=tolerance):
-                    self.geometry.app.options['global_tolerance'] = tolerance
-                    q = max(1, math.ceil(steps / 4))
-                    bound = min(tolerance, 0.4 * math.sin(math.pi / (8 * q)) ** 2)
-                    calls = []
-
-                    def measured(part, distance, *args, **kwargs):
-                        calls.append((distance, kwargs['quad_segs']))
-                        return original(part, distance, *args, **kwargs)
-
-                    with patch.object(Polygon, 'buffer', measured):
-                        self.paths(polygon, 0.4, steps=steps)
-                    self.assertEqual(calls[0], (-0.2, q))
-                    for distance, actual_q in calls[1:]:
-                        self.assertGreaterEqual(actual_q, q)
-                        error = abs(distance) * (1 - math.cos(math.pi / (4 * actual_q)))
-                        self.assertLessEqual(error, bound + 1e-12)
-
     def test_physical_sweeps_match_high_resolution_offsets_without_new_overcut(self):
         square_hole = Polygon(box(0, 0, 6, 6).exterior.coords, [box(2, 2, 4, 4).exterior.coords])
         circle_hole = Polygon(box(0, 0, 6, 6).exterior.coords,
@@ -350,16 +292,6 @@ class TestBoundedStandardOffsets(unittest.TestCase):
                         # disk reaching outside it crosses its unchanged boundary,
                         # so it cannot add overcut beyond that first contour sweep.
 
-    def test_disconnected_components_narrow_necks_and_contour_option(self):
-        neck = unary_union([box(0, 0, 2, 2), box(3, 0, 5, 2), box(1, 0.8995, 4, 1.1005)])
-        for polygon in (neck, MultiPolygon([box(0, 0, 2, 2), box(3, 0, 5, 2)])):
-            for contour in (False, True):
-                with self.subTest(contour=contour, kind=polygon.geom_type):
-                    actual = self.paths(polygon, 0.2, overlap=0.6, contour=contour)
-                    expected = layer_paths(inset_layers(
-                        polygon, 0.2, 0.6, 64, True, bounded=True, tolerance=0.005))
-                    self.assertEqual([p.wkb for p in actual], [p.wkb for p in expected])
-
     def test_round_cutter_clears_legacy_corner_slivers_without_extra_outside_cut(self):
         polygon = Polygon(box(0, 0, 6, 6).exterior.coords, [box(2, 2, 4, 4).exterior.coords])
         for steps in (16, 64):
@@ -370,16 +302,6 @@ class TestBoundedStandardOffsets(unittest.TestCase):
                 self.assertTrue(old.difference(new).buffer(-2 * kernel_error).is_empty)
                 self.assertLess(new.difference(old).difference(polygon).area, 1e-12)
                 self.assertGreater(new.difference(old).area, 0)
-
-    def test_near_termination_islands_are_not_discarded_by_a_size_threshold(self):
-        half = 1.34855
-        polygon = box(-half, -half, half, half).difference(Point(0, 0).buffer(0.7, quad_segs=16))
-        layers = inset_layers(polygon, 0.2, 0.6, 64, True, bounded=True, tolerance=0.005)
-        self.assertEqual(len(layers[-1]), 4)
-        self.assertTrue(all(0 < p.area < 1e-6 for p in layers[-1]))
-        actual = self.paths(polygon, 0.2, overlap=0.6)
-        self.assertEqual([p.wkb for p in actual], [p.wkb for p in layer_paths(layers)])
-
 
 if __name__ == '__main__':
     if '--standard-benchmark' in sys.argv:

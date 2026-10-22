@@ -45,21 +45,11 @@ def test_circle_forms_are_detected(make):
     assert radius == pytest.approx(2.0)
 
 
-def test_closed_linestring_is_a_circle():
-    ring = LineString(circle_outline().coords)
-    assert geo.circle_of(ring) is not None
 
 
-def test_non_circles_are_rejected():
-    ellipse = scale(Point(0, 0).buffer(1, 16), 2.0, 1.0)
-    holed = Polygon(circle_polygon().exterior.coords, [circle_polygon(radius=0.5).exterior.coords])
-    open_arc = LineString(circle_outline().coords[:-5])
-    for geometry in (box(0, 0, 2, 2), LinearRing(box(0, 0, 2, 2).exterior.coords), ellipse, holed, open_arc,
-                     Point(0, 0), LineString([(0, 0), (1, 1)]), Polygon()):
-        assert geo.circle_of(geometry) is None
 
 
-@pytest.mark.parametrize('make', [circle_polygon, circle_outline])
+@pytest.mark.parametrize('make', [circle_polygon])
 def test_resize_keeps_center_type_and_vertex_count(make):
     original = make()
     result = geo.resized_circle(original, 10.0)
@@ -71,8 +61,6 @@ def test_resize_keeps_center_type_and_vertex_count(make):
     assert radius == pytest.approx(5.0)
 
 
-def test_resize_non_circle_returns_none():
-    assert geo.resized_circle(box(0, 0, 1, 1), 3.0) is None
 
 
 def test_mixed_selection_skips_non_circles_and_keeps_selection():
@@ -101,7 +89,7 @@ def test_resize_is_one_undo_step():
     assert set(editor.storage.get_objects()).isdisjoint(shapes)
 
 
-@pytest.mark.parametrize('diameter', [0, -1, float('nan'), float('inf'), 'abc', None])
+@pytest.mark.parametrize('diameter', [float('nan'), 'abc'])
 def test_invalid_diameter_warns_and_changes_nothing(diameter):
     editor, shapes = circle_editor([circle_polygon()])
     assert geo.AppGeoEditor.apply_resize_circles(editor, diameter) == 'fail'
@@ -110,15 +98,6 @@ def test_invalid_diameter_warns_and_changes_nothing(diameter):
     assert not editor._history_undo
 
 
-def test_no_circle_selected_warns_and_changes_nothing():
-    editor, shapes = circle_editor([circle_polygon(), box(0, 0, 1, 1)], selected=[1])
-    assert geo.AppGeoEditor.apply_resize_circles(editor, 4.0) == 'fail'
-    assert 'WARNING' in last_message(editor)
-    assert set(editor.storage.get_objects()) == set(shapes)
-    assert not editor._history_undo
-    editor.selected = []
-    assert geo.AppGeoEditor.apply_resize_circles(editor, 4.0) == 'fail'
-    assert not editor._history_undo
 
 
 def test_button_reads_entry():

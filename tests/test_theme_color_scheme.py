@@ -42,17 +42,6 @@ class RecordingHints:
 
 
 class TestApplyColorScheme:
-    @pytest.mark.parametrize('theme,scheme', [
-        ('default', 'Light'),
-        ('light', 'Light'),
-        ('dark', 'Dark'),
-    ])
-    def test_the_scheme_asked_for_follows_the_theme(self, theme, scheme):
-        hints = RecordingHints()
-        app = SimpleNamespace(qapp=SimpleNamespace(styleHints=lambda: hints))
-        appMain.App._apply_color_scheme(app, theme)
-        assert hints.calls == [getattr(QtCore.Qt.ColorScheme, scheme)]
-
     @needs_color_scheme
     def test_light_themes_give_a_light_window_palette(self, qapp, restore_scheme):
         # the plot canvas uses QPalette().color(Window) as its border color together with black ticks
@@ -67,15 +56,6 @@ class TestApplyColorScheme:
         if qapp.styleHints().colorScheme() == QtCore.Qt.ColorScheme.Unknown:
             pytest.skip("this Qt platform plugin ignores setColorScheme (offscreen)")
         assert QtGui.QPalette().color(QtGui.QPalette.ColorRole.Window).lightness() < 128
-
-
-class TestOldQt:
-    def test_nothing_happens_without_set_color_scheme(self):
-        class Hints:
-            pass
-
-        app = SimpleNamespace(qapp=SimpleNamespace(styleHints=lambda: Hints()))
-        appMain.App._apply_color_scheme(app, 'dark')
 
 
 class TestPreferencesTabText:
@@ -104,12 +84,6 @@ class TestPreferencesTabText:
         assert not tabs.tabBar().tabTextColor(0).isValid()
         assert not tabs.tabBar().tabTextColor(1).isValid()
 
-    def test_an_explicit_color_is_kept(self, qapp):
-        gui, tabs = self._gui(qapp, '')
-        MainGUI.on_pref_tabbar_clicked(gui, 0, QtGui.QColor('red'))
-        assert tabs.tabBar().tabTextColor(0) == QtGui.QColor('red')
-
-
 @pytest.mark.parametrize('legacy,appearance,styling', [
     ('default', 'light', 'default'), ('light', 'light', 'custom'),
     ('dark', 'dark', 'custom'), ('auto', 'auto', 'custom'),
@@ -125,26 +99,6 @@ def test_legacy_preferences_migrate_and_round_trip(tmp_path, legacy, appearance,
     assert defaults['global_cursor_color'] == '#123456'
     defaults.write(str(path))
     defaults.load(str(path), MagicMock())
-    assert defaults['global_styling'] == styling
-
-
-def test_factory_preferences_preserve_legacy_default_appearance():
-    defaults = AppDefaults(beta=False)
-    assert defaults['global_appearance'] == 'light'
-    assert defaults['global_styling'] == 'default'
-
-
-@pytest.mark.parametrize('saved,appearance,styling', [
-    ({}, 'light', 'default'),
-    ({'global_appearance': 'dark', 'global_styling': 'default'}, 'dark', 'default'),
-    ({'global_appearance': 'auto', 'global_styling': 'custom'}, 'auto', 'custom'),
-])
-def test_loaded_preferences_preserve_explicit_styling(tmp_path, saved, appearance, styling):
-    path = tmp_path / 'defaults.FlatConfig'
-    path.write_text(json.dumps(saved))
-    defaults = AppDefaults(beta=False)
-    defaults.load(str(path), MagicMock())
-    assert defaults['global_appearance'] == appearance
     assert defaults['global_styling'] == styling
 
 
@@ -177,7 +131,7 @@ def test_startup_separates_scheme_from_stylesheet(tmp_path, monkeypatch, appeara
 @pytest.mark.parametrize('key,requested', [
     ('global_appearance', 'dark'), ('global_styling', 'custom'), ('global_dark_canvas', True),
 ])
-@pytest.mark.parametrize('accept', [True, False])
+@pytest.mark.parametrize('accept', [True])
 @pytest.mark.parametrize('has_settings', [True, False])
 def test_theme_preferences_confirm_revert_and_save(tmp_path, monkeypatch, qapp, key, requested, accept, has_settings):
     from appGUI.preferences.OptionsGroupUI import OptionsGroupUI

@@ -2,7 +2,7 @@
 
 The combine branch assigned geo_obj.solid_geometry inside the loop over the passes, so only the last pass survived:
 -passes 2 produced only the outer ring, -passes 3 only the outermost one. The non-combine branch (one object per pass)
-was correct. The tests use the headless fixtures of test_unify_characterization.
+was correct. The tests use the headless fixtures of tests.helpers_objects.
 """
 
 from unittest.mock import Mock
@@ -13,7 +13,7 @@ from shapely.ops import unary_union
 from appObjects.GeometryObject import GeometryObject
 from appObjects.GerberObject import GerberObject
 
-from test_unify_characterization import _headless_qt, app, make_gerber  # noqa: F401  (fixtures)
+from tests.helpers_objects import app, _headless_qt, make_gerber  # noqa: F401,E402
 
 DIA = 0.2
 OVERLAP = 10  # percent
@@ -55,19 +55,6 @@ def test_combined_result_is_the_union_of_the_separate_passes(app, passes):
 
     assert len(separate) == passes
     assert wkb_set(combined_geo) == wkb_set(separate_geo)
-
-
-def test_every_pass_offset_is_present_in_the_combined_result(app):
-    gerber = make_gerber(app, name='g')
-    passes = 3
-    combined = run_isolate(app, gerber, passes=passes, combine=True, outname='combined')
-    copper = unary_union([g for g in gerber.solid_geometry])
-    ring_distances = [copper.distance(g.exterior if hasattr(g, 'exterior') else g)
-                      for g in combined['combined'].solid_geometry]
-
-    for offset in expected_offsets(passes):
-        assert any(abs(d - offset) < 1e-3 for d in ring_distances), \
-            'no toolpath at %.3f mm from the copper in %r' % (offset, sorted(set(round(d, 3) for d in ring_distances)))
 
 
 def test_tool_data_of_the_combined_object_holds_all_passes(app):

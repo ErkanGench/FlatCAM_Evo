@@ -25,17 +25,6 @@ def snapping_scene():
     return editor, drill, slot
 
 
-@pytest.mark.parametrize('raw,expected,kind', [((0.1, 0.1), (0, 0), 'center'),
-                                             ((4.05, 0.01), (4, 0), 'endpoint'),
-                                             ((5.02, 0.51), (5, 0.5), 'midpoint'),
-                                             ((4.4, 0.3), (4.44, 0.22), 'nearest')])
-def test_native_acquisition(raw, expected, kind):
-    editor, _, _ = snapping_scene()
-    assert editor.snap(*raw) == pytest.approx(expected)
-    assert editor.snap_kind == kind
-    editor.app.geo_editor.storage.nearest.assert_not_called()
-
-
 def test_cache_reuse_edit_undo_reset_and_grid_priority():
     editor, drill, slot = snapping_scene()
     editor.snap(4, 0)
@@ -62,16 +51,6 @@ def test_cache_reuse_edit_undo_reset_and_grid_priority():
     editor.app.grid_status = lambda: False
     assert editor.snap(4.01, 0.01) == (4.01, 0.01)
     assert editor.snap_kind is None
-
-
-def test_shared_snap_routes_to_excellon_before_touching_geo_storage():
-    editor, _, _ = snapping_scene()
-    geo = editor.app.geo_editor
-    geo.app = editor.app
-    editor.app.call_source = 'exc_editor'
-    editor.app.exc_editor = editor
-    assert AppGeoEditor.snap(geo, 4.01, 0.01) == (4, 0)
-    geo.storage.nearest.assert_not_called()
 
 
 @pytest.mark.parametrize('tool_name', ['drill_select', 'slot_add'])

@@ -136,8 +136,6 @@ class FakeEngine:
         self.pending_tool_change = None
 
 
-def test_transport_module_exists():
-    assert importlib.util.find_spec('appPlugins.Common.ecut.ecut_sender_port') is not None
 
 
 @pytest.fixture

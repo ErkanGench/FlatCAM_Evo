@@ -15,7 +15,7 @@ from preprocessors.default import default
 from tclCommands.TclCommandCncjob import TclCommandCncjob
 from tclCommands.TclCommandDrillcncjob import TclCommandDrillcncjob
 
-from test_unify_characterization import _headless_qt, make_app, make_excellon  # noqa: F401
+from tests.helpers_objects import _headless_qt, make_app, make_excellon  # noqa: F401,E402
 
 
 def laser_app():

@@ -200,37 +200,6 @@ def test_corner_and_center_modes_keep_group_offsets_and_explicit_inline_executio
     assert app.should_we_save is True
 
 
-def test_selection_snapshot_precedes_dialog_and_survives_in_place_selection_change(qt_app):
-    app, controller, events, threads, tasks = setup_operation()
-    first, outsider = Layer(10.0, 30.0, events, threads), Layer(100.0, 100.0, events, threads)
-    selected = [first]
-    app.collection.get_selected.return_value = selected
-
-    def dialog(**kwargs):
-        selected[:] = [outsider]
-        return SimpleNamespace(ok=True, location_point='bl')
-
-    with patch('appHandlers.appEdit.DialogBoxChoice', side_effect=dialog):
-        controller.on_custom_origin(use_thread=False)
-    assert first.geometry.bounds == (0.0, 0.0, 2.0, 3.0)
-    assert outsider.geometry.bounds == (100.0, 100.0, 102.0, 103.0)
-
-
-@pytest.mark.parametrize('empty', [False, True])
-def test_cancel_or_empty_selection_does_not_dispatch_or_mutate(qt_app, empty):
-    app, controller, events, threads, tasks = setup_operation()
-    obj = Layer(10.0, 30.0, events, threads)
-    app.collection.get_selected.return_value = [] if empty else [obj]
-    with patch('appHandlers.appEdit.DialogBoxChoice', return_value=SimpleNamespace(ok=False)) as dialog:
-        controller.on_custom_origin()
-    assert tasks == []
-    assert obj.geometry.bounds == (10.0, 30.0, 12.0, 33.0)
-    assert app.should_we_save is False
-    app.plotcanvas.fit_view.assert_not_called()
-    if empty:
-        dialog.assert_not_called()
-
-
 def test_regeneration_failure_refreshes_bounds_but_does_not_report_success(qt_app):
     app, controller, events, threads, tasks = setup_operation()
     obj = Layer(10.0, 30.0, events, threads)

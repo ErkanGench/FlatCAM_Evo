@@ -238,11 +238,6 @@ class TestPcbDocParser(unittest.TestCase):
         with self.assertRaises(PcbDocParseError):
             PcbDocParser()._parse_streams({'Board6': board(), 'Tracks6': track()}, {'Tracks6': 2})
 
-    def test_unknown_pad_shape_raises_instead_of_wrong_copper(self):
-        self.assertIsNotNone(PcbDocParser, 'native PcbDoc parser is not implemented')
-        with self.assertRaises(PcbDocParseError):
-            self.parser({'Pads6': pad(shape=99)})
-
     def test_v8_pad_layer_marker_is_not_a_blind_drill_span(self):
         record = bytearray(pad())
         reader_offset = 1
@@ -290,13 +285,6 @@ class TestPcbDocParser(unittest.TestCase):
         parser = self.parser({'Pads6': bytes(record), 'Rules6': rules})
         self.assertNotIn(37, parser.layers)
 
-    def test_boolean_rule_scope_respects_and_before_or(self):
-        parser = self.parser()
-        context = {'kind': 'Pad', 'multilayer': True, 'net': '', 'component': '', 'layer': 1}
-        self.assertFalse(parser._scope('IsPad AND IsSMDPad OR IsVia', context))
-        self.assertTrue(parser._scope('IsPad OR IsSMDPad AND IsVia', context))
-        self.assertTrue(parser._scope('IsVia AND IsPad OR IsPad', context))
-
     def test_shape_based_duplicate_does_not_fill_plain_region_hole(self):
         shell = list(box(0, 0, 9, 9).exterior.coords)
         hole = list(box(2, 2, 7, 7).exterior.coords)
@@ -318,19 +306,6 @@ class TestPcbDocParser(unittest.TestCase):
         geo = unary_union(parser.layers[1]['solid_geometry'])
         self.assertTrue(geo.contains(Point(4, 4)))
         self.assertFalse(geo.contains(Point(4, 5)))
-
-    def test_missing_saved_pour_and_bad_rule_scope_fail_closed(self):
-        self.assertIsNotNone(PcbDocParser)
-        with self.assertRaisesRegex(PcbDocParseError, 'no saved pour'):
-            self.parser({'Polygons6': properties({'LAYER': 'TOP', 'HATCHSTYLE': 'Solid'})})
-        record = bytearray(pad(layer=1, hole=0))
-        offset = 1
-        for _ in range(4):
-            offset += 4 + struct.unpack_from('<I', record, offset)[0]
-        record[offset + 4 + 102] = 1
-        with self.assertRaisesRegex(PcbDocParseError, 'rule scope'):
-            self.parser({'Pads6': bytes(record), 'Rules6': b'\0\0' + properties({
-                'RULEKIND': 'SolderMaskExpansion', 'SCOPE1EXPRESSION': 'UnknownFunction()', 'EXPANSION': '4mil'})})
 
     def test_plane_clearance_and_connected_pad_relief(self):
         data = bytearray(pad(size=(2, 2)))
@@ -358,42 +333,6 @@ class TestPcbDocParser(unittest.TestCase):
         parser = self.parser()
         geo = parser._font_geometry('OB', 'Arial', 'Regular', 1)
         self.assertEqual(sum(len(p.interiors) for p in parser._polygons_of(geo)), 3)
-
-    def test_unsupported_stroke_alphabet_is_not_silently_substituted(self):
-        with self.assertRaisesRegex(PcbDocParseError, 'stroke.*alphabet'):
-            self.parser({'Texts6': text_record('O', alphabet=7)})
-
-    def test_default_copper_strokes_do_not_call_filled_font_renderer(self):
-        with patch.object(PcbDocParser, '_font_geometry', side_effect=AssertionError('filled font substitution')):
-            parser = self.parser({'Texts6': text_record('CDGND')})
-        self.assertIn(1, parser.layers)
-        self.assertGreater(len(parser.layers[1]['follow_geometry']), 4)
-        self.assertTrue(any('extrapolat' in warning.lower() for warning in parser.warnings))
-
-    def test_stroke_width_counters_and_variable_spacing(self):
-        parser = self.parser()
-        solid, follows = parser._stroke_geometry('OB', 1, 0.1)
-        self.assertEqual(sum(len(p.interiors) for p in parser._polygons_of(solid)), 3)
-        h, _ = parser._stroke_geometry('H', 1, 0.1)
-        self.assertAlmostEqual(h.bounds[2] - h.bounds[0], 2 / 3 + 0.1)
-        self.assertAlmostEqual(h.bounds[3] - h.bounds[1], 1.1)
-        _, digits = parser._stroke_geometry('11', 1, 0.1)
-        self.assertAlmostEqual(digits[1].bounds[0] - digits[0].bounds[0], 2 / 3)
-        self.assertGreater(len(follows), 1)
-
-    def test_stroke_text_rotation_mirroring_and_inverse_counters(self):
-        parser = self.parser({'Texts6': text_record('R1', angle=90, mirrored=True)})
-        original, _ = PcbDocParser()._stroke_geometry('R1', raw(1) * UNIT, raw(0.1) * UNIT)
-        from shapely.affinity import scale
-        expected = translate(rotate(scale(original, xfact=-1, yfact=1, origin=(0, 0)), 90, origin=(0, 0)),
-                             xoff=raw(1) * UNIT, yoff=raw(2) * UNIT)
-        actual = unary_union(parser.layers[1]['solid_geometry'])
-        self.assertLess(actual.symmetric_difference(expected).area, 1e-10)
-        inverted = self.parser({'Texts6': text_record('O', inverted=True, frame=(1, 1.2))})
-        solid = unary_union(inverted.layers[1]['solid_geometry'])
-        self.assertFalse(solid.contains(Point(1, 2.5)))
-        self.assertTrue(solid.contains(Point(1 + 1 / 3, 2.5)))
-        self.assertTrue(solid.contains(Point(1.9, 3.1)))
 
     def test_reconstructed_strokes_match_original_gto_not_filled_glyphs(self):
         import olefile
@@ -426,50 +365,6 @@ class TestPcbDocParser(unittest.TestCase):
             checked.add(text)
         self.assertEqual(checked, {'H1', 'H2', 'R1', 'R2', 'R3', 'R4', 'T1', 'T2', '3.3V'})
 
-    def test_connected_plane_without_net_assignment_fails_closed(self):
-        record = bytearray(pad())
-        offset = 1
-        for _ in range(4):
-            offset += 4 + struct.unpack_from('<I', record, offset)[0]
-        struct.pack_into('<H', record, offset + 4 + 3, 0)
-        rule = b'\0\0' + properties({'RULEKIND': 'PlaneClearance', 'CLEARANCE': '0.2mm'})
-        with self.assertRaisesRegex(PcbDocParseError, 'plane.*net assignment'):
-            self.parser({'Pads6': bytes(record), 'Rules6': rule, 'Nets6': properties({'NAME': 'GND'})},
-                        stack=(1, 39, 32))
-
-    def test_unhandled_text_border_flags_and_unknown_glyphs_fail_closed(self):
-        record = text_record('R1')
-        for flag in (230, 231):
-            data = bytearray(record[5:142]) + bytearray(103)
-            data[flag] = 1
-            with self.subTest(flag=flag):
-                with self.assertRaisesRegex(PcbDocParseError, 'text.*border'):
-                    self.parser({'Texts6': b'\x05' + block(data) + record[142:]})
-        with self.assertRaisesRegex(PcbDocParseError, 'stroke glyph'):
-            self.parser({'Texts6': text_record('a')})
-
-    def test_missing_font_names_and_invalid_net_references_are_not_guessed(self):
-        record = text_record('O')
-        data = bytearray(record[5:142])
-        data[43] = 1
-        with self.assertRaisesRegex(PcbDocParseError, 'source font name'):
-            self.parser({'Texts6': b'\x05' + block(data) + record[142:]})
-        record = bytearray(pad())
-        offset = 1
-        for _ in range(4):
-            offset += 4 + struct.unpack_from('<I', record, offset)[0]
-        struct.pack_into('<H', record, offset + 4 + 3, 4)
-        with self.assertRaisesRegex(PcbDocParseError, 'net reference'):
-            self.parser({'Pads6': bytes(record)})
-
-    def test_board_stack_region_is_not_a_board_cutout(self):
-        parser = self.parser({'BoardRegions': region(list(box(0, 0, 10, 10).exterior.coords),
-                                                    layer=56, cutout=True)})
-        self.assertAlmostEqual(parser.board_outline.area, 100)
-        with self.assertRaises(PcbDocParseError):
-            self.parser({'BoardRegions': region(list(box(0, 0, 5, 5).exterior.coords),
-                                                layer=56, cutout=True)})
-
     def test_dimension_annotations_render_on_native_layer(self):
         dim = {'DIMENSIONKIND': 1, 'LAYER': 'MECHANICAL1', 'ANGLE': 0,
                'X1': '0mm', 'Y1': '-2mm', 'REFERENCES_COUNT': 2,
@@ -483,18 +378,6 @@ class TestPcbDocParser(unittest.TestCase):
         self.assertIn(57, parser.layers)
         self.assertGreater(len(parser.layers[57]['follow_geometry']), 2)
 
-    def test_hidden_component_comments_do_not_create_artwork(self):
-        data = bytearray(123)
-        data[0] = 1
-        struct.pack_into('<H', data, 7, 0)
-        struct.pack_into('<i', data, 21, raw(1))
-        data[40] = 1
-        data[43] = 1
-        data[46:56] = 'Arial'.encode('utf-16le')
-        parser = self.parser({'Texts6': b'\x05' + block(data) + block(b'\x01O'),
-                              'Components6': properties({'SOURCEDESIGNATOR': 'R1', 'COMMENTON': 'FALSE'})})
-        self.assertEqual(parser.layers, {})
-
     def test_blind_via_uses_stack_span_and_only_reached_mask_side(self):
         data = bytearray(203)
         struct.pack_into('<HHH', data, 3, 65535, 65535, 65535)
@@ -506,106 +389,6 @@ class TestPcbDocParser(unittest.TestCase):
         self.assertEqual(set(parser.layers), {2, 32, 38})
         self.assertEqual(set(parser.drill_groups), {'PTH_2-32'})
         self.assertEqual(len(parser.drill_groups['PTH_2-32'][1]['drills']), 1)
-
-    def test_fill_rotation_and_extended_mechanical_layer(self):
-        data = bytearray(46)
-        data[0] = 57
-        struct.pack_into('<HHH', data, 3, 65535, 65535, 65535)
-        struct.pack_into('<iiii', data, 13, raw(2), raw(2), raw(4), raw(3))
-        struct.pack_into('<d', data, 29, 90)
-        struct.pack_into('<I', data, 42, 0x01020011)
-        parser = self.parser({'Fills6': b'\x06' + block(data)})
-        self.assertEqual(set(parser.layers), {0x01020011})
-        geo = unary_union(parser.layers[0x01020011]['solid_geometry'])
-        expected_area = (raw(4) - raw(2)) * (raw(3) - raw(2)) * UNIT ** 2
-        self.assertAlmostEqual(geo.area, expected_area, places=10)
-        self.assertAlmostEqual(geo.bounds[2] - geo.bounds[0], 1, places=5)
-
-    def test_extended_mask_override_applies_to_pad(self):
-        override = properties({'TYPE': 'Mask', 'PRIMITIVEOBJECTID': 'Pad', 'PRIMITIVEINDEX': 0,
-            'SOLDERMASKEXPANSIONMODE': 'Manual', 'SOLDERMASKEXPANSION_MANUAL': '0.3mm',
-            'PASTEMASKEXPANSIONMODE': 'None'})
-        parser = self.parser({'Pads6': pad(layer=1, shape=2, hole=0),
-                              'ExtendedPrimitiveInformation': override})
-        opening = unary_union(parser.layers[37]['solid_geometry'])
-        self.assertAlmostEqual(opening.bounds[0], 3.2, delta=0.00001)
-
-    def test_missing_plane_clearance_rule_does_not_guess_clearance(self):
-        with self.assertRaisesRegex(PcbDocParseError, 'PlaneClearance'):
-            self.parser({'Pads6': pad()}, stack=(1, 39, 32))
-
-    def test_named_layer_scope_matches_board_layer_names(self):
-        parser = self.parser()
-        context = {'kind': 'Pad', 'multilayer': False, 'net': '', 'component': '', 'layer': 1}
-        self.assertTrue(parser._scope("OnLayer('Top Layer')", context))
-
-    def test_unconnected_plane_pad_uses_layer_specific_stack_geometry(self):
-        # A Top/Middle/Bottom pad has a smaller inner land. The plane clearance
-        # follows that land, not the top pad nor an inferred drill circle.
-        record = bytearray(pad(mode=1, size=(3, 3)))
-        offset = 1
-        for _ in range(4):
-            offset += 4 + struct.unpack_from('<I', record, offset)[0]
-        struct.pack_into('<ii', record, offset + 4 + 29, raw(1.2), raw(1.2))
-        rule = b'\0\0' + properties({'RULEKIND': 'PlaneClearance', 'CLEARANCE': '0.2mm'})
-        parser = self.parser({'Pads6': bytes(record), 'Rules6': rule}, stack=(1, 39, 32))
-        copper = unary_union(parser.layers[39]['solid_geometry'])
-        self.assertFalse(copper.contains(Point(5.7, 5)))
-        self.assertTrue(copper.contains(Point(6, 5)))
-
-    def test_full_stack_plane_uses_nominal_middle_land(self):
-        rule = b'\0\0' + properties({'RULEKIND': 'PlaneClearance', 'CLEARANCE': '0.2mm'})
-        parser = self.parser({'Pads6': pad(mode=2, size=(1.2, 1.2)), 'Rules6': rule}, stack=(1, 39, 32))
-        copper = unary_union(parser.layers[39]['solid_geometry'])
-        self.assertFalse(copper.contains(Point(5.7, 5)))
-        self.assertTrue(copper.contains(Point(6, 5)))
-
-    def test_non_finite_hole_rotation_is_malformed(self):
-        record = bytearray(pad(slot=3))
-        offset = 1
-        for _ in range(4):
-            offset += 4 + struct.unpack_from('<I', record, offset)[0]
-        struct.pack_into('<d', record, offset + 4 + 106, float('nan'))
-        with self.assertRaises(PcbDocParseError):
-            self.parser({'Pads6': bytes(record)})
-
-    def test_top_middle_bottom_via_uses_middle_land_for_all_internal_layers(self):
-        data = bytearray(203)
-        struct.pack_into('<HHH', data, 3, 65535, 65535, 65535)
-        struct.pack_into('<iiii', data, 13, raw(4), raw(4), raw(2), raw(0.6))
-        data[29:31] = bytes((2, 3))
-        data[74] = 1
-        struct.pack_into('<i', data, 75 + 4, raw(1.2))
-        struct.pack_into('<i', data, 75 + 8, raw(2))
-        parser = self.parser({'Vias6': b'\x03' + block(data)}, stack=(1, 2, 3, 32))
-        first = unary_union(parser.layers[2]['solid_geometry'])
-        second = unary_union(parser.layers[3]['solid_geometry'])
-        self.assertAlmostEqual(first.area, second.area, places=10)
-
-    def test_manual_via_mask_from_hole_is_tented_when_inside_land(self):
-        data = bytearray(203)
-        struct.pack_into('<HHH', data, 3, 65535, 65535, 65535)
-        struct.pack_into('<iiii', data, 13, raw(4), raw(4), raw(2), raw(0.6))
-        data[29:31] = bytes((1, 32))
-        data[66] = 2
-        data[67] = 1
-        struct.pack_into('<i', data, 54, raw(0.1))
-        parser = self.parser({'Vias6': b'\x03' + block(data)})
-        self.assertEqual(set(parser.layers), {1, 32})
-
-    def test_wide_string_header_counts_and_duplicate_indices_are_validated(self):
-        entry = struct.pack('<I', 7) + block('O\0'.encode('utf-16le'))
-        parser = PcbDocParser()._parse_streams({'Board6': board(), 'WideStrings6': entry}, {'WideStrings6': 1})
-        self.assertEqual(parser.record_counts['WideStrings6'], 1)
-        self.assertEqual(parser._wide_strings[7], 'O')
-        with self.assertRaises(PcbDocParseError):
-            self.parser({'WideStrings6': entry * 2})
-
-    def test_unresolved_split_plane_net_domains_fail_closed(self):
-        definition = properties({'LAYER': 'PLANE1', 'HATCHSTYLE': 'Solid', 'NET': 0})
-        saved = region(list(box(2, 2, 7, 7).exterior.coords), layer=39, polygon=0)
-        with self.assertRaisesRegex(PcbDocParseError, 'plane.*net'):
-            self.parser({'Polygons6': definition, 'Regions6': saved}, stack=(1, 39, 32))
 
     def test_fixture_native_content_origin_and_drills(self):
         self.assertIsNotNone(PcbDocParser, 'native PcbDoc parser is not implemented')

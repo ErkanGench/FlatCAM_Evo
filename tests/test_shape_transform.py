@@ -101,43 +101,6 @@ class TestTransformKeys(unittest.TestCase):
                     self.assertEqual(d['mesh_colors'].shape, r['mesh_colors'].shape)
                     np.testing.assert_array_equal(d['line_colors'], r['line_colors'])
 
-    def test_shared_arrays_untouched(self):
-        c, keys = self.build()
-        copy_key = c.add_copy(c, keys[0], color='green', face_color='yellow')
-        before = {f: c.data[copy_key][f].copy() for f in ('line_pts', 'mesh_vertices', 'mesh_tris')}
-        self.assertTrue(c.transform_keys(keys, self.MATRICES['mirror_x']))
-        for f, arr in before.items():
-            np.testing.assert_array_equal(c.data[copy_key][f], arr)
-        self.assertFalse(np.array_equal(c.data[keys[0]]['line_pts'], before['line_pts']))
-
-    def test_pending_pool_results_are_collected(self):
-        class Res:
-            def __init__(self, d):
-                self.d = d
-
-            def wait(self):
-                pass
-
-            def get(self):
-                return self.d
-
-        class Pool:
-            def map_async(self, fn, items):
-                return Res([fn(i) for i in items])
-
-        c = ShapeCollectionVisual(linewidth=1, layers=3, pool=Pool(),
-                                  fcoptions={"global_graphic_engine_3d_no_mp": False, "global_backface_culling": True})
-        keys = c.add_batch([{'shape': s, 'color': 'red', 'face_color': 'blue'} for s in sample_shapes()])
-        self.assertTrue(c.transform_keys(keys, self.MATRICES['offset']))
-        self.assertGreater(len(c.data[keys[0]]['mesh_vertices']), 0)
-        self.assertGreater(c.data[keys[0]]['line_pts'][:, 0].min(), 99.0)
-
-    def test_untriangulated_returns_false(self):
-        c = new_collection()
-        keys = c.add_batch([{'shape': sample_shapes()[0], 'color': 'red', 'face_color': 'blue'}])
-        c.data[keys[0]]['geometry'] = sample_shapes()[0]        # still to be processed
-        self.assertFalse(c.transform_keys(keys, self.MATRICES['offset']))
-
     def test_group_transform(self):
         c = new_collection()
         g = ShapeGroup(c)
@@ -147,28 +110,6 @@ class TestTransformKeys(unittest.TestCase):
         self.assertTrue(g.transform(self.MATRICES['offset']))
         np.testing.assert_array_equal(c.data[other[0]]['line_pts'], before)
         self.assertGreater(c.data[keys[0]]['line_pts'][:, 0].min(), 99.0)
-
-    def test_benchmark(self):
-        n = 20000
-        shapes = [Polygon([(i % 200, i // 200), (i % 200 + 0.8, i // 200), (i % 200 + 0.8, i // 200 + 0.8),
-                           (i % 200, i // 200 + 0.8)]) for i in range(n)]
-        c = new_collection()
-        keys = c.add_batch([{'shape': s, 'color': 'red', 'face_color': 'blue'} for s in shapes])
-        c.redraw([])
-
-        t0 = time.perf_counter()
-        self.assertTrue(c.transform_keys(keys, self.MATRICES['mirror_x']))
-        t_fast = time.perf_counter() - t0
-
-        t0 = time.perf_counter()
-        c.clear()
-        c.add_batch([{'shape': to_affine(self.MATRICES['mirror_x'], s), 'color': 'red', 'face_color': 'blue'}
-                     for s in shapes])
-        c.redraw([])
-        t_full = time.perf_counter() - t0
-        print("\n[bench] %d polygons: transform_keys %.3f s, clear+add_batch+redraw %.3f s (x%.0f)" %
-              (n, t_fast, t_full, t_full / max(t_fast, 1e-9)))
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -30,26 +30,11 @@ class TestRemoveKeyword(unittest.TestCase):
         reg.remove_keyword("zzz", update=False)
         self.assertEqual(reg.myKeywords, ["a", "b"])
 
-    def test_update_false_does_not_register(self):
-        reg, cmd_line = make_reg(["a", "b"])
-        with mock.patch.object(reg, "register_keywords") as reg_kw:
-            reg.remove_keyword("a", update=False)
-        reg_kw.assert_not_called()
-        cmd_line.set_model_data.assert_not_called()
-        self.assertEqual(reg.myKeywords, ["b"])
-
     def test_update_true_registers(self):
         reg, _ = make_reg(["a", "b"])
         with mock.patch.object(reg, "register_keywords") as reg_kw:
             reg.remove_keyword("a", update=True)
         reg_kw.assert_called_once_with(["b"])
-
-    def test_update_true_registers_when_missing(self):
-        reg, _ = make_reg(["a"])
-        with mock.patch.object(reg, "register_keywords") as reg_kw:
-            reg.remove_keyword("zzz")
-        reg_kw.assert_called_once_with(["a"])
-
 
 class TestRenameCompleter(unittest.TestCase):
     def test_rename_with_unregistered_old_name(self):

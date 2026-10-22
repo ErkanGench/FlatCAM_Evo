@@ -86,35 +86,6 @@ class TestLazyHighlight(EditorCase):
         # the lines highlighted before stay highlighted
         self.assertTrue(self.formatted(5))
 
-    def test_highlighting_does_not_report_text_changes(self):
-        changes = []
-        self.edit.textChanged.connect(lambda: changes.append(1))
-        self.edit.document().setModified(False)
-        text = self.edit.toPlainText()
-
-        self.scroll_to(4000)
-        self.frame.resize(600, 1000)
-        pump()
-        self.assertTrue(self.formatted(4001))
-        self.assertEqual(self.edit.toPlainText(), text)
-        self.assertFalse(self.edit.document().isModified())
-        self.assertEqual(changes, [])
-
-        # Real edits must still notify the editor and enable saving.
-        self.replace_line(4001, 'G1 X1.0000 Y2.0000 F800.00')
-        self.assertTrue(changes)
-        self.assertTrue(self.edit.document().isModified())
-
-    def test_lines_shown_by_a_taller_editor_are_highlighted(self):
-        # a resize of the height only (the Tcl Shell dock closed, the window made taller) emits no updateRequest
-        self.frame.resize(600, 1000)
-        pump()
-        self.assertEqual(self.edit.firstVisibleBlock().blockNumber(), 0)
-        top = self.edit.blockBoundingGeometry(self.block(40)).translated(self.edit.contentOffset()).top()
-        self.assertLess(top, self.edit.viewport().height())
-        for number in range(3, 41):
-            self.assertTrue(self.formatted(number), number)
-
     def test_typed_line_is_highlighted(self):
         self.edit.moveCursor(QtGui.QTextCursor.MoveOperation.End)
         self.edit.insertPlainText('\nG0 X1.0000 Y2.0000')
@@ -138,16 +109,6 @@ class TestLazyHighlight(EditorCase):
         self.assertIn('F1000.00', self.block(1001).text())
         self.assertTrue(self.formatted(1001))
 
-    def test_changed_line_never_shown_is_left_for_later(self):
-        self.replace_line(2500, 'G1 X1.0000 Y2.0000 F800.00')
-        self.assertEqual(self.block(2500).userState(), -1)
-        self.assertFalse(self.formatted(2500))
-        self.assertFalse(self.formatted(2501))
-
-        self.scroll_to(2498)
-        self.assertTrue(self.formatted(2500))
-
-
 class TestPrint(EditorCase):
     LINES = 400
 
@@ -163,39 +124,6 @@ class TestPrint(EditorCase):
         # the highlighting of the lines shown goes on
         self.assertIs(self.edit.highlighter.editor, self.edit)
         self.assertFalse(self.edit.highlighting_shown)
-
-    def test_print_does_not_look_for_the_lines_shown_after_each_line(self):
-        # each line highlighted by print() emits updateRequest; highlight_shown_blocks() must not run for each one
-        calls = []
-        first_visible_block = self.edit.firstVisibleBlock
-        self.edit.firstVisibleBlock = lambda: calls.append(1) or first_visible_block()
-        try:
-            with tempfile.TemporaryDirectory() as folder:
-                self.edit.print(QtGui.QPdfWriter(os.path.join(folder, 'print.pdf')))
-        finally:
-            del self.edit.firstVisibleBlock
-        self.assertTrue(self.formatted(350))
-        self.assertLess(len(calls), 10)
-
-    def test_second_print_does_not_highlight_again(self):
-        # (Print Preview prints again on each render)
-        calls = []
-        rehighlight = self.edit.highlighter.rehighlight
-        self.edit.highlighter.rehighlight = lambda: calls.append(1) or rehighlight()
-        with tempfile.TemporaryDirectory() as folder:
-            for name in ('first.pdf', 'second.pdf'):
-                self.edit.print(QtGui.QPdfWriter(os.path.join(folder, name)))
-        self.assertEqual(len(calls), 1)
-        self.assertTrue(self.formatted(350))
-
-
-class TestSmallText(EditorCase):
-    LINES = 20
-
-    def test_every_line_is_highlighted(self):
-        # (the G1 lines have X and Y coordinates)
-        self.assertTrue(all(self.formatted(n) for n in range(3, self.LINES + 3)))
-
 
 if __name__ == '__main__':
     unittest.main()

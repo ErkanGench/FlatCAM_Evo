@@ -11,11 +11,14 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-import test_unify_characterization as char
+import tests.helpers_objects as char
 from appObjects.GerberObject import GerberObject
 from tclCommands.TclCommandMirror import TclCommandMirror
 from tclCommands.TclCommandSkew import TclCommandSkew
-from test_unify_regressions_0b import assert_xy_close, drill_xy, make_app, make_excellon
+from tests.helpers_objects import (  # noqa: F401,E402
+    assert_xy_close, drill_xy, make_app_0b as make_app, make_excellon_0b as make_excellon,
+)
+from tclCommands.TclCommandScale import TclCommandScale
 
 
 def _run(cmd_cls, objs, *argv):
@@ -45,12 +48,6 @@ class TestTclMirror:
         # the Tcl command swaps the axis name to work like the GUI: -axis X is mirror('Y', ...)
         assert_xy_close(drill_xy(a), _expected_mirror(((0.0, 0.0),), 'Y', [2.0, 1.0]))
         assert_xy_close(drill_xy(b), _expected_mirror(((4.0, 2.0),), 'Y', [2.0, 1.0]))
-
-    def test_no_box_and_no_origin_uses_the_center_of_all_objects(self):
-        a, b = _two_excellons()
-        _run(TclCommandMirror, {'a': a, 'b': b}, '-axis', 'Y')
-        assert_xy_close(drill_xy(a), _expected_mirror(((0.0, 0.0),), 'X', [2.0, 1.0]))
-        assert_xy_close(drill_xy(b), _expected_mirror(((4.0, 2.0),), 'X', [2.0, 1.0]))
 
     def test_box_path_refreshes_the_bounds_options(self):
         a, _ = _two_excellons()
@@ -96,9 +93,6 @@ def _exported_body(g_zeros):
 class TestGerberExportNumberFormat:
     def test_trailing_zeros_keep_the_sign_in_front_of_the_padding(self):
         assert 'X015000Y-022500D03' in _exported_body('T')
-
-    def test_leading_zeros_omitted_adds_no_padding(self):
-        assert 'X15000Y-22500D03' in _exported_body('L')
 
     @pytest.mark.parametrize('g_zeros', ['L', 'T'])
     @pytest.mark.parametrize('whole, fract', [(2, 4), (3, 6), (4, 6)])
@@ -177,3 +171,44 @@ class TestTclBufferJoin:
         assert cmd.execute(args, unnamed) != 'fail'
 
         assert grb.bounds() == pytest.approx((xmin - 0.1, ymin - 0.1, xmax + 0.1, ymax + 0.1), abs=1e-6)
+
+
+def _tcl_scale(objs, *argv):
+    """objs: dict name -> object. Runs ``scale <names> <argv>``."""
+    app = make_app()
+    app.collection.get_by_name.side_effect = lambda n: objs.get(n)
+    cmd = TclCommandScale(app)
+    args, unnamed = cmd.check_args(tuple(objs) + argv)
+    return cmd.execute(args, unnamed)
+
+
+def _scale_target():
+    return make_excellon(default_data={}, tooldia=0.2, drills=((1.0, 1.0), (3.0, 2.0)), slots=())
+
+
+class TestTclScale_0B5:
+    def test_x_alone_scales_x_only(self):
+        ex = _scale_target()
+        _tcl_scale({'ex': ex}, '-x', '2', '-origin', 'origin')
+        assert_xy_close(drill_xy(ex), [(2.0, 1.0), (6.0, 2.0)])
+
+
+    def test_x_and_y_scale_both_axes(self):
+        ex = _scale_target()
+        _tcl_scale({'ex': ex}, '-x', '2', '-y', '3', '-origin', 'origin')
+        assert_xy_close(drill_xy(ex), [(2.0, 3.0), (6.0, 6.0)])
+
+    def test_axis_path_refreshes_bounds_options(self):
+        ex = _scale_target()
+        _tcl_scale({'ex': ex}, '-x', '2', '-y', '2', '-origin', 'origin')
+        assert 'xmax' in ex.obj_options
+        assert ex.obj_options['xmax'] == pytest.approx(ex.bounds()[2])
+
+
+    def test_two_objects_axis_path_share_one_center(self):
+        # default origin = center of the bounds of ALL named objects, computed once
+        a = make_excellon(default_data={}, tooldia=0.2, drills=((0.0, 0.0),), slots=())
+        b = make_excellon(default_data={}, tooldia=0.2, drills=((4.0, 0.0),), slots=())
+        _tcl_scale({'a': a, 'b': b}, '-x', '2', '-y', '2')
+        assert_xy_close(drill_xy(a), [(-2.0, 0.0)])
+        assert_xy_close(drill_xy(b), [(6.0, 0.0)])

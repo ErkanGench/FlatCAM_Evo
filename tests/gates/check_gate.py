@@ -10,11 +10,15 @@ the lists saved in ``tests/gates/collected_<area>.txt``.
 A removed id fails the gate. Added ids are printed as information. An id that moved from one area to another
 (because of a change in the area rules below) is printed as information, not as a failure.
 
+A WARNING is printed (the exit code does not change) when the collected counts (ids, files) are over
+tests/gates/test_budget.json.
+
 Exit codes: 0 gate passed / lists updated, 1 a saved id was removed or a saved list is missing,
 2 pytest could not collect the tests.
 """
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -22,12 +26,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 GATES = Path(__file__).resolve().parent
+BUDGET = GATES / 'test_budget.json'
 AREAS = ['tcl', 'plugins', 'objects', 'parsers', 'other']   # evaluation order: first match wins
 
 # file name patterns (matched against the path relative to the repository root, forward slashes)
-PLUGIN_PATTERNS = [r'^tests/plugins/', r'^tests/test_paint', r'^tests/test_clearing', r'^tests/test_clipper']
-OBJECT_PATTERNS = [r'^tests/test_unify', r'^tests/test_lifecycle', r'^tests/test_appmain',
-                   r'^tests/test_app_refactor', r'^tests/test_app_handler']
+PLUGIN_PATTERNS = [r'^tests/test_paint', r'^tests/test_clearing', r'^tests/test_clipper']
+OBJECT_PATTERNS = [r'^tests/test_object_', r'^tests/test_excellon_merge_contract', r'^tests/test_project_file',
+                   r'^tests/test_lifecycle']
 PARSER_PATTERNS = [r'^tests/test_[^/]*parser', r'^tests/test_[^/]*import', r'^tests/test_[^/]*e2e',
                    r'^tests/test_gerber', r'^tests/test_pdf']
 # a test file touches Tcl when it imports tclCommands or names a tclCommands module in a string (mock.patch)
@@ -72,6 +77,22 @@ def collect():
         sys.stderr.write('duplicate node ids: %s\n' % dup[:5])
         sys.exit(2)
     return ids
+
+
+def budget_warning(ids):
+    """Return a warning text when the number of test ids or test files is over tests/gates/test_budget.json."""
+    if not BUDGET.exists():
+        return None
+    budget = json.loads(BUDGET.read_text(encoding='utf-8'))
+    files = {i.split('::', 1)[0] for i in ids}
+    lines = []
+    for what, count, limit in (('tests', len(ids), budget.get('max_tests')), ('files', len(files), budget.get('max_files'))):
+        if limit is not None and count > limit:
+            lines.append('test budget exceeded: %d %s > %d' % (count, what, limit))
+    if not lines:
+        return None
+    lines.append('fold tests into topical files; the owner decides a raise of tests/gates/test_budget.json')
+    return '\n'.join(['*' * 78] + ['WARNING  ' + line for line in lines] + ['*' * 78])
 
 
 def group(ids):
@@ -129,8 +150,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--update', action='store_true', help='rewrite tests/gates/collected_<area>.txt')
     args = parser.parse_args()
-    areas = group(collect())
-    sys.exit(update(areas) if args.update else check(areas))
+    ids = collect()
+    areas = group(ids)
+    if args.update:
+        sys.exit(update(areas))
+    code = check(areas)
+    warning = budget_warning(ids)
+    if warning:
+        print(warning)
+    sys.exit(code)
 
 
 if __name__ == '__main__':

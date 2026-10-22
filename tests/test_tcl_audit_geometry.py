@@ -46,39 +46,11 @@ def test_union_updates_each_tool_without_mixing_multigeometry_depths():
     assert unary_union(geo.solid_geometry).bounds == (0, 0, 5, 0)
 
 
-@pytest.mark.parametrize('cls', [TclCommandMillDrills, TclCommandMillSlots])
-def test_each_requested_diameter_must_match_even_if_first_matches_multiple_tools(cls):
-    obj = Mock(kind='excellon', decimals=4)
-    obj.tools = {7: {'tooldia': 1}, 9: {'tooldia': 1}}
-    app = object_app(obj)
-    app.collection.has_promises.return_value = False
-    command = cls(app)
-    with pytest.raises(FCShell.TclErrorException, match='diameters'):
-        command.execute({'name': 'e', 'milled_dias': '1,2', 'tooldia': 0.5}, [])
-    obj.generate_milling_drills.assert_not_called()
-    obj.generate_milling_slots.assert_not_called()
-
-
-@pytest.mark.parametrize('cls,method', [(TclCommandMillDrills, 'generate_milling_drills'),
-                                       (TclCommandMillSlots, 'generate_milling_slots')])
-def test_milling_selection_uses_current_diameter_key_and_finishes_in_command_worker(cls, method):
-    obj = Mock(kind='excellon', decimals=4)
-    obj.tools = {7: {'tooldia': 1}, '9': {'tooldia': 2}}
-    getattr(obj, method).return_value = (True, '')
-    app = object_app(obj)
-    app.collection.has_promises.return_value = False
-    command = cls(app)
-    command.execute({'name': 'e', 'milled_dias': '1,1', 'tooldia': 0.5, 'use_thread': 'true'}, [])
-    kwargs = getattr(obj, method).call_args.kwargs
-    assert list(kwargs['tools']) == [7]
-    assert kwargs['use_thread'] is False
-
-
 @pytest.mark.parametrize('tool_id', [7, '7'])
 def test_real_drill_generator_keeps_tool_ids_and_stores_text_source(tool_id):
     from camlib import CNCjob
     from tclCommands.TclCommandDrillcncjob import TclCommandDrillcncjob
-    from test_unify_regressions_0b import make_app, make_excellon
+    from tests.helpers_objects import make_app_0b as make_app, make_excellon_0b as make_excellon  # noqa: F401,E402
     app = make_app(tools_drill_toolchange=False)
     app.exc_areas = SimpleNamespace(exclusion_areas_storage=[],
                                     travel_coordinates=lambda **kw: [(None, kw['end_point'])])

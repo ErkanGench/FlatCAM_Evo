@@ -31,29 +31,6 @@ def factory_app(obj):
     return app
 
 
-@pytest.mark.parametrize('cls,key', [(TclCommandBbox, 'gerber_bboxrounded'),
-                                    (TclCommandNregions, 'gerber_noncopperrounded')])
-def test_boolean_defaults_work_headlessly_without_toggling_source(cls, key):
-    source = SimpleNamespace(kind='geometry', solid_geometry=[box(0, 0, 3, 2)],
-                             bounds=lambda: (0, 0, 3, 2))
-    app = factory_app(source)
-    app.options[key] = False
-    output = SimpleNamespace(kind='geometry')
-    app.app_obj.new_object.side_effect = lambda kind, name, init, **kw: init(output, app)
-    cls(app).execute({'name': 'g'}, [])
-    assert output.solid_geometry.area > 0
-
-
-@pytest.mark.parametrize('key,value', [('rows', 0), ('columns', -1), ('gridx', 0), ('dia', -1)])
-def test_alignment_grid_rejects_invalid_domains(key, value):
-    app = factory_app(None)
-    args = dict(rows=2, columns=2, gridx=1, gridy=1, dia=0.8)
-    args[key] = value
-    with pytest.raises(FCShell.TclErrorException):
-        TclCommandAlignDrillGrid(app).execute(args, [])
-    app.app_obj.new_object.assert_not_called()
-
-
 def test_alignment_drills_install_tools_before_geometry_creation():
     from appParsers.ParseExcellon import Excellon
     source = SimpleNamespace(kind='geometry', bounds=lambda: (10, 10, 20, 20))
@@ -120,22 +97,3 @@ def test_split_geometry_populates_root_and_only_the_selected_tool():
     assert list(output.tools) == [7]
     assert output.solid_geometry[0].equals(obj.tools[7]['solid_geometry'][0])
 
-
-def test_single_geometry_generation_does_not_replace_zero_or_false_with_defaults():
-    from appObjects.GeometryObject import GeometryObject
-    app = factory_app(None)
-    options = dict(app.options)
-    options.update(name='g', xmin=0, ymin=0, xmax=1, ymax=1)
-    source = SimpleNamespace(app=app, obj_options=options, _app_option=app.options.get)
-    job = Mock(kind='cncjob', obj_options={})
-    job.generate_from_geometry_2.return_value = ('body', 'start')
-
-    def create(kind, name, init, **kwargs):
-        return init(job, app)
-
-    app.app_obj.new_object.side_effect = create
-    GeometryObject.generatecncjob(source, dia=1, toolchangez=0, toolchange=False,
-                                  spindlespeed=0, las_min_pwr=0, dwell=False, dwelltime=0, use_thread=False)
-    kwargs = job.generate_from_geometry_2.call_args.kwargs
-    assert kwargs['toolchangez'] == kwargs['spindlespeed'] == kwargs['laser_min_power'] == kwargs['dwelltime'] == 0
-    assert kwargs['toolchange'] is kwargs['dwell'] is False

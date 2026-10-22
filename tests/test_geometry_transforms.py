@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from appObjects.GeometryObject import GeometryObject
 from camlib import CNCjob, Geometry
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 
 def sample():

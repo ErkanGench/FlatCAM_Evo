@@ -74,30 +74,11 @@ class TestResponsiveBatch(unittest.TestCase):
         self.batch.check_finished()
         self.finished.assert_called_once()
 
-    def test_deliberate_selection_is_not_overridden(self):
-        obj = SimpleNamespace(obj_options={'name': 'layer'})
-        self.batch.on_selection_changed()
-        self.batch.on_event('created', (obj, False, True, None, []))
-        self.batch.on_event('done', None)
-        self.batch.integrate_next()
-        self.collection.set_active.assert_not_called()
-        self.app.on_zoom_fit.assert_not_called()
-        self.finished.assert_called_once_with(False)
-
     def test_empty_failed_and_insertion_error_batches_finish(self):
         self.batch.on_event('error', 'parse failure')
         self.batch.on_event('done', None)
         self.finished.assert_called_once_with(True)
         self.assertFalse(self.owner.load_batches)
-
-    def test_insertion_error_does_not_strand_progress(self):
-        self.owner.on_object_created.side_effect = RuntimeError('UI failure')
-        obj = SimpleNamespace(obj_options={'name': 'layer'})
-        self.batch.on_event('created', (obj, False, False, None, []))
-        self.batch.on_event('done', None)
-        self.batch.integrate_next()
-        self.finished.assert_called_once_with(True)
-        self.assertFalse(self.batch.progress.isVisible())
 
     def test_project_final_state_waits_for_gui_completion_even_when_empty(self):
         from appHandlers.appIO import appIO

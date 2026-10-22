@@ -63,13 +63,6 @@ class TestKiCadPcbImport(unittest.TestCase):
     def tearDown(self):
         self.qapp.processEvents()
 
-    def test_source_kind_is_kicad_only_for_kicad_pcb_names(self):
-        self.assertEqual(appIO._pcb_source_kind('board.kicad_pcb'), 'kicad_pcb')
-        self.assertEqual(appIO._pcb_source_kind('BOARD.KICAD_PCB'), 'kicad_pcb')
-        self.assertEqual(appIO._pcb_source_kind(BOARD), 'kicad_pcb')
-        self.assertEqual(appIO._pcb_source_kind('board.PcbDoc'), 'pcbdoc')
-        self.assertEqual(appIO._pcb_source_kind('board.pcbdoc'), 'pcbdoc')
-
     def test_kicad_objects_are_named_from_layer_and_drill_group(self):
         self.io.import_pcbdoc_objects(BOARD, self.parsed, ['F.Cu'], ['PTH_F.Cu-B.Cu'])
         self.assertEqual([obj.obj_options['name'] for kind, obj in self.objects],
@@ -79,57 +72,6 @@ class TestKiCadPcbImport(unittest.TestCase):
             with self.subTest(name=obj.obj_options['name']):
                 self.assertTrue(obj.obj_options['pcbdoc_import'])
                 self.assertEqual(obj.units, 'MM')
-
-    def test_layer_label_uses_underscores_for_dots(self):
-        self.io.import_pcbdoc_objects(BOARD, self.parsed, ['In1.Cu', 'F.SilkS'], [])
-        self.assertEqual([obj.obj_options['name'] for kind, obj in self.objects],
-                         ['Easyduino_RP2040_In1_Cu', 'Easyduino_RP2040_F_SilkS'])
-
-    def test_file_opened_reports_kicad_kind_after_queued_delivery(self):
-        self.io.import_pcbdoc_objects(BOARD, self.parsed, ['F.Cu'], ['PTH_F.Cu-B.Cu'])
-        self.app.file_opened.emit.assert_not_called()
-        self.qapp.processEvents()
-        self.app.file_opened.emit.assert_called_once_with('kicad_pcb', BOARD)
-
-    def test_pcbdoc_name_still_reports_pcbdoc_kind(self):
-        self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, ['F.Cu'], [])
-        self.qapp.processEvents()
-        self.app.file_opened.emit.assert_called_once_with('pcbdoc', 'board.PcbDoc')
-
-    def test_actual_qt_dialog_uses_kicad_title_and_default_layer_checks(self):
-        self.app.ui = QtWidgets.QWidget()
-        seen = {}
-
-        def rejected(dialog):
-            seen['title'] = dialog.windowTitle()
-            seen['boxes'] = {box.text(): box.isChecked() for box in dialog.findChildren(QtWidgets.QCheckBox)}
-            seen['labels'] = [label.text() for label in dialog.findChildren(QtWidgets.QLabel)]
-            return QtWidgets.QDialog.DialogCode.Rejected
-
-        with patch.object(QtWidgets.QDialog, 'exec', rejected):
-            self.io.on_pcbdoc_parsed(BOARD, self.parsed)
-        self.assertEqual(seen['title'], 'Import KiCad PCB')
-        self.assertEqual(seen['boxes'], {
-            'F.Cu': True,
-            'In1.Cu': True,
-            'F.Fab': False,
-            'F.SilkS (F.Silkscreen)': True,
-            'Edge.Cuts': True,
-            'PTH_F.Cu-B.Cu': True,
-        })
-        self.app.worker_task.emit.assert_not_called()
-
-    def test_actual_qt_dialog_title_for_pcbdoc_is_unchanged(self):
-        self.app.ui = QtWidgets.QWidget()
-        seen = {}
-
-        def rejected(dialog):
-            seen['title'] = dialog.windowTitle()
-            return QtWidgets.QDialog.DialogCode.Rejected
-
-        with patch.object(QtWidgets.QDialog, 'exec', rejected):
-            self.io.on_pcbdoc_parsed('board.PcbDoc', self.parsed)
-        self.assertEqual(seen['title'], 'Import Altium PCB')
 
     def test_dialog_accept_queues_only_selected_layers_and_drill_groups(self):
         self.app.ui = QtWidgets.QWidget()
@@ -174,32 +116,12 @@ class TestKiCadPcbImport(unittest.TestCase):
         self.assertIn('F.Cu', parsed.layers)
         self.app.inform.emit.assert_not_called()
 
-    def test_parse_kicad_pcb_respects_abort(self):
-        self.app.abort_flag = True
-        with patch.object(self.io, 'pcbdoc_parsed') as parsed_signal:
-            self.assertIsNone(self.io.parse_kicad_pcb(BOARD))
-        parsed_signal.emit.assert_not_called()
-
     def test_on_file_import_kicad_pcb_queues_parse_for_given_name(self):
         with patch.object(QtWidgets.QFileDialog, 'getOpenFileName') as chooser:
             self.io.on_file_import_kicad_pcb(BOARD)
         chooser.assert_not_called()
         self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_kicad_pcb,
                                                            'params': [BOARD]})
-
-    def test_on_file_import_kicad_pcb_without_name_uses_chooser(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName',
-                          return_value=(BOARD, 'KiCad PCB (*.kicad_pcb)')) as chooser:
-            self.io.on_file_import_kicad_pcb()
-        self.assertEqual(chooser.call_args.kwargs['filter'], 'KiCad PCB (*.kicad_pcb)')
-        self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_kicad_pcb,
-                                                           'params': [BOARD]})
-
-    def test_on_file_import_kicad_pcb_cancelled_chooser_queues_nothing(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName', return_value=('', '')):
-            self.io.on_file_import_kicad_pcb()
-        self.app.worker_task.emit.assert_not_called()
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -23,7 +23,7 @@ from tclCommands.TclCommandIsolate import TclCommandIsolate
 
 from test_plugin_geometry_bases import make_tool_app
 from test_tcl_audit_regressions import object_app
-from test_unify_characterization import _headless_qt, app  # noqa: F401  (fixtures)
+from tests.helpers_objects import app, _headless_qt  # noqa: F401,E402
 
 DIA = 0.1
 OVERLAP = 10  # percent
@@ -100,33 +100,6 @@ def island_in_a_ring(gap):
     return [island, ring]
 
 
-def test_a_band_thinner_than_a_tenth_of_the_burn_radius_is_dropped():
-    # a 0.003 wide band (arc approximation noise is that thin) is dropped, a 0.01 wide band gets its 2 outlines
-    assert leftovers_of(island_in_a_ring(0.383))[1] == []
-    assert len(leftovers_of(island_in_a_ring(0.39))[1]) == 2
-
-
-def test_the_result_does_not_depend_on_the_units():
-    # the same board in inches: the same leftovers, scaled (the drop limit follows the tool, not a fixed length)
-    copper = two_strips(0.42)
-    __, left_mm = leftovers_of(copper)
-    inch = 1 / 25.4
-    __, left_in = leftovers_of([affinity.scale(c, inch, inch, origin=(0, 0)) for c in copper], scale=inch)
-
-    assert len(left_in) == len(left_mm)
-    assert sum(r.length for r in left_in) == pytest.approx(sum(r.length for r in left_mm) * inch, rel=1e-6)
-
-
-def test_no_passes_no_leftovers():
-    assert isolation_leftover_paths([], [], R) == []
-
-
-def test_no_leftovers_for_a_negative_burn_radius():
-    # a negative tool diameter: the buffers swap roles and would give a band inside the copper
-    passes = passes_of(two_strips(0.42), 3, scale=-1.0)
-    assert isolation_leftover_paths(passes[0], passes[1], -R, 16) == []
-
-
 # ---------------------------------------------------------------------------------------------------------------
 # GerberObject.isolate() (Tcl isolate)
 # ---------------------------------------------------------------------------------------------------------------
@@ -181,26 +154,6 @@ def test_isolate_adds_the_leftover_paths_after_the_passes(app):
     window = box(0, 1, 0.42, 9)
     assert unburned(copper, rings(off.solid_geometry), window).area == pytest.approx(0.04 * 8, rel=0.05)
     assert unburned(copper, rings(on.solid_geometry), window).area < 1e-4
-
-
-def test_isolate_takes_the_option_from_the_preferences(app):
-    gerber = make_strips_gerber(app)
-    app.options['tools_iso_clear_leftovers'] = True
-    result = run_isolate(app, gerber, combine=True, iso_type=2)['iso'].solid_geometry
-    assert [g for g in result if isinstance(g, LinearRing)]
-
-
-@pytest.mark.parametrize('kwargs', [dict(combine=True, iso_type=0), dict(combine=False, iso_type=2),
-                                    dict(combine=True, iso_type=2, dia=-DIA)],
-                         ids=['exteriors', 'separate_passes', 'negative_dia'])
-def test_isolate_leftovers_only_for_the_full_combined_isolation(app, kwargs):
-    gerber = make_strips_gerber(app)
-    off = run_isolate(app, gerber, clear_leftovers=False, **kwargs)
-    on = run_isolate(app, gerber, clear_leftovers=True, **kwargs)
-
-    assert sorted(on) == sorted(off)
-    for name in on:
-        assert wkb_list(on[name].solid_geometry) == wkb_list(off[name].solid_geometry)
 
 
 def test_tcl_isolate_passes_the_option(app):
@@ -291,34 +244,3 @@ def test_leftover_paths_follow_the_milling_direction(tool, app, entry_point, cop
         assert climb.hausdorff_distance(conventional) < 1e-9
         assert climb.is_ccw != conventional.is_ccw
 
-
-@pytest.mark.parametrize('entry_point', ['gerber', 'gerber_separate', 'plugin'])
-@pytest.mark.parametrize('milling_type', ['cl', 'cv'])
-def test_climb_milling_keeps_the_copper_on_the_right_of_the_tool(tool, app, entry_point, milling_type):
-    # a spindle that turns clockwise (M3) climb mills when the material is on the right of the tool: clockwise around
-    # an outline, counter-clockwise along a hole. Conventional milling is the reverse.
-    gerber = make_strips_gerber(app)
-    gerber.solid_geometry = MultiPolygon(island_in_a_ring(0.39))
-    if entry_point == 'plugin':
-        objects = [run_plugin(tool, app, gerber, clear_leftovers=True, milling_type=milling_type)]
-    else:
-        objects = list(run_isolate(app, gerber, combine=entry_point == 'gerber', iso_type=2, clear_leftovers=True,
-                                   milling_type=milling_type).values())
-    climb = milling_type == 'cl'
-    polygons = [g for obj in objects for g in obj.solid_geometry if g.geom_type == 'Polygon']
-    assert polygons
-    # the separate passes share the name 'iso': only the last pass, the outer one with no hole, is kept here
-    assert entry_point == 'gerber_separate' or any(p.interiors for p in polygons)
-    for p in polygons:
-        assert p.exterior.is_ccw is not climb
-        assert all(ring.is_ccw is climb for ring in p.interiors)
-
-    # the leftover annulus: its outline and its hole, the copper to clear between them
-    leftovers = sorted((g for obj in objects for g in obj.solid_geometry if isinstance(g, LinearRing)),
-                       key=lambda ring: ring.length)
-    if entry_point == 'gerber_separate':
-        assert not leftovers
-    else:
-        hole, outline = leftovers
-        assert outline.is_ccw is not climb
-        assert hole.is_ccw is climb

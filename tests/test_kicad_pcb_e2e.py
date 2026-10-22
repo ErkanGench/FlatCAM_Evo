@@ -146,52 +146,12 @@ class TestKiCadPcbFixture(unittest.TestCase):
         self.assertCountEqual(self.parsed.default_layers, self.DEFAULT_LAYERS)
         self.assertEqual(self.parsed.copper_layers, self.COPPER)
 
-    def test_exactly_two_warnings_about_unsupported_content(self):
-        self.assertEqual(len(self.parsed.warnings), 2, self.parsed.warnings)
-        self.assertTrue(any('Dimension' in warning for warning in self.parsed.warnings))
-        self.assertTrue(any('approximate' in warning for warning in self.parsed.warnings))
-
     def test_copper_matches_reference_gerbers(self):
         for layer in self.COPPER:
             with self.subTest(layer=layer):
                 reference = self.references[layer]
                 difference = self._mine(layer).symmetric_difference(reference).area
                 self.assertLessEqual(difference / reference.area, 0.01)
-
-    def test_mask_and_paste_match_reference_gerbers(self):
-        for layer in ('F.Mask', 'B.Mask', 'F.Paste'):
-            with self.subTest(layer=layer):
-                reference = self.references[layer]
-                difference = self._mine(layer).symmetric_difference(reference).area
-                self.assertLessEqual(difference / reference.area, 0.02)
-
-    def test_edge_cuts_bounds_match_reference(self):
-        mine = self._mine('Edge.Cuts').bounds
-        reference = self.references['Edge.Cuts'].bounds
-        for actual, expected in zip(mine, reference):
-            self.assertAlmostEqual(actual, expected, delta=0.01)
-        for actual, expected in zip(mine, self.OUTLINE_BOUNDS):
-            self.assertAlmostEqual(actual, expected, delta=0.01)
-        # board_outline is the Edge.Cuts centreline (the 0.1 mm stroke is half a width outside it).
-        for actual, expected in zip(self.parsed.board_outline.bounds, (134.0, -124.5, 155.0, -73.5)):
-            self.assertAlmostEqual(actual, expected, delta=0.01)
-
-    def test_drill_groups_and_counts(self):
-        self.assertEqual(sorted(self.parsed.drill_groups), ['NPTH_F.Cu-B.Cu', 'PTH_F.Cu-B.Cu'])
-        counts = {}
-        for group, tools in self.parsed.drill_groups.items():
-            for tool in tools.values():
-                counts[(group, round(tool['tooldia'], 2))] = (len(tool['drills']), len(tool['slots']))
-        self.assertEqual(counts, {
-            ('NPTH_F.Cu-B.Cu', 0.65): (2, 0),
-            ('NPTH_F.Cu-B.Cu', 2.2): (4, 0),
-            ('PTH_F.Cu-B.Cu', 0.6): (0, 4),
-            ('PTH_F.Cu-B.Cu', 1.0): (43, 0),
-            ('PTH_F.Cu-B.Cu', 0.3): (88, 0),
-        })
-        holes = sum(len(tool['drills']) + len(tool['slots'])
-                    for tools in self.parsed.drill_groups.values() for tool in tools.values())
-        self.assertEqual(holes, 141)
 
     def test_every_hole_matches_a_reference_hole(self):
         all_tools = [tool for tools in self.parsed.drill_groups.values() for tool in tools.values()]

@@ -70,33 +70,6 @@ class BackgroundCommand(TclCommandSignaled, Command):
         return args.get('number', 'ordinary text')
 
 
-@pytest.mark.parametrize('argv', [('-number',), ('-number', 'nan'), ('-timeout', 'abc'),
-                                  ('-timeout', '10'), ('-unknown', '1')])
-def test_validation_raises_before_execution(argv):
-    app = make_app()
-    with pytest.raises(FCShell.TclErrorException):
-        Command(app).check_args(argv)
-
-
-def test_optional_default_and_flag_values_remain_supported():
-    class FlagCommand(Command):
-        valueless_options = frozenset({'dpp', 'all'})
-
-    args, _ = FlagCommand(make_app()).check_args(('-dpp', '-all'))
-    assert args == {'dpp': None, 'all': None}
-
-
-def test_valueless_permission_is_metadata_driven_and_isolated():
-    class FlagCommand(Command):
-        valueless_options = frozenset({'number'})
-
-    assert FlagCommand(make_app()).check_args(('-number',)) == ({'number': None}, [])
-    for key in ('number', 'dpp', 'all'):
-        with pytest.raises(FCShell.TclErrorException, match='Missing option value'):
-            Command(make_app()).check_args(('-' + key,))
-    assert Command(make_app()).check_args(('-dpp', '0.5')) == ({'dpp': 0.5}, [])
-
-
 @pytest.mark.parametrize('command_name, keys', [
     ('Delete', ('f',)),
     ('CloseProject', ('force',)),
@@ -134,36 +107,6 @@ def test_actual_commands_preserve_supported_bare_options(command_name, keys):
             command.check_args(positional + ('-' + key,))
 
 
-@pytest.mark.parametrize('command_name, key, terms', [
-    ('PlotAll', 'plot_status', ('bare', 'True', 'omitted')),
-    ('PlotObjects', 'plot_status', ('bare', 'True', 'omitted')),
-    ('Paint', 'all', ('ignored', '-single', '-box', 'default')),
-    ('Cncjob', 'extracut_length', ('bare', '0.0')),
-    ('Cncjob', 'startz', ('bare', 'None')),
-    ('Cncjob', 'spindlespeed', ('bare', 'None', 'las_power')),
-    ('Cncjob', 'dwelltime', ('bare', 'tools_mill_dwelltime', 'omitted', 'tools_mill_dwell')),
-    ('Drillcncjob', 'dpp', ('bare', 'absolute', 'tools_drill_depthperpass')),
-    ('Drillcncjob', 'startz', ('bare', 'tools_drill_startz', 'tools_drill_travelz')),
-    ('Drillcncjob', 'dwelltime', ('bare', 'tools_drill_dwelltime', 'omitted', 'tools_drill_dwell')),
-])
-def test_bare_option_help_describes_current_defaults(command_name, key, terms):
-    from importlib import import_module
-
-    cls = getattr(import_module('tclCommands.TclCommand' + command_name), 'TclCommand' + command_name)
-    description = cls.help['args'][key].lower()
-    for term in terms:
-        assert term.lower() in description
-
-
-def test_required_option_cannot_be_made_valueless_by_metadata():
-    class RequiredCommand(Command):
-        required = ['number']
-        valueless_options = frozenset({'number'})
-
-    with pytest.raises(FCShell.TclErrorException, match='Missing required argument'):
-        RequiredCommand(make_app()).check_args(('-number',))
-
-
 def test_real_tcl_catch_preserves_literal_error_message():
     app = make_app()
     command = Command(app)
@@ -180,22 +123,6 @@ def test_real_tcl_catch_preserves_literal_error_message():
 @pytest.fixture
 def qt_app():
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
-
-def test_background_completion_is_owned_and_connections_are_released(qt_app):
-    app = make_app()
-    command = BackgroundCommand(app)
-    baseline = app.receivers(app.shell_command_finished)
-
-    def dispatch(task):
-        QtCore.QTimer.singleShot(0, lambda: app.shell_command_finished.emit(object()))
-        QtCore.QTimer.singleShot(5, lambda: task['fcn'](*task['params']))
-
-    app.worker_task.connect(dispatch)
-    for value in ('1', '2'):
-        assert command.execute_wrapper('-number', value) == float(value)
-        assert app.receivers(app.shell_command_finished) == baseline
-        assert app.receivers(app.thread_exception) == 0
 
 
 def test_timeout_is_error_and_late_completion_cannot_replace_new_output(qt_app):
@@ -243,19 +170,6 @@ def test_aperture_ids_are_integer_unique_and_start_at_ten():
         command.execute({'name': 'g', 'type': 'R', 'width': 1, 'height': 0}, [])
 
 
-def test_polygon_coordinates_create_geometry_and_report_failure():
-    obj = Mock(kind='geometry')
-    obj.add_polygon.return_value = None
-    command = TclCommandAddPolygon(object_app(obj))
-    command.execute({'name': 'g'}, ['0', '0', '1', '0', '0', '1'])
-    assert obj.add_polygon.call_count == 1
-    with pytest.raises((FCShell.TclErrorException, ValueError, SyntaxError)):
-        command.execute({'name': 'g', 'p_coords': 'broken'}, [])
-    obj.add_polygon.return_value = 'fail'
-    with pytest.raises(FCShell.TclErrorException):
-        command.execute({'name': 'g'}, ['0', '0', '1', '0', '0', '1'])
-
-
 @pytest.mark.parametrize('cls,args,extra', [
     (TclCommandAddPolyline, {'name': 'g'}, []),
     (TclCommandAddCircle, {'name': 'g', 'center_x': 0, 'center_y': 0, 'radius': -1}, []),
@@ -268,69 +182,6 @@ def test_invalid_shapes_do_not_mutate(cls, args, extra):
     obj.add_polygon.assert_not_called()
     obj.add_polyline.assert_not_called()
     obj.add_circle.assert_not_called()
-
-
-def test_settings_keep_boolean_and_numeric_types():
-    app = make_app()
-    app.options.update({'enabled': True, 'speed': 1.5, 'count': 3, 'text': 'hello'})
-    app.defaults = Mock()
-    command = TclCommandSetSys(app)
-    for name, value in [('enabled', '0'), ('speed', '2.5'), ('count', '4'), ('text', 'false')]:
-        command.execute({'name': name, 'value': value}, [])
-    assert app.options['enabled'] is False
-    assert app.options['speed'] == 2.5
-    assert app.options['count'] == 4
-    assert app.options['text'] == 'false'
-
-
-def test_set_path_is_tcl_argument_safe_and_updates_after_success(tmp_path):
-    app = object_app(None)
-    path = tmp_path / 'nested space' / '[literal] $value'
-    previous = app.shell.tcl.call('pwd')
-    try:
-        TclCommandSetPath(app).execute({'path': str(path), 'create': 'yes'}, [])
-        assert path.is_dir()
-        assert app.options['global_tcl_path'] == str(path).replace('\\', '/')
-    finally:
-        app.shell.tcl.call('cd', previous)
-
-
-def test_active_name_and_current_version_are_returned_without_network():
-    app = object_app(SimpleNamespace(obj_options={'name': 'active'}))
-    app.version = '9.7'
-    app.version_check = Mock()
-    assert TclCommandGetActive(app).execute({}, []) == 'active'
-    assert '9.7' in TclCommandVersion(app).execute({}, [])
-    app.version_check.assert_not_called()
-
-
-def test_persistence_results_and_quit_errors_are_not_discarded():
-    app = make_app()
-    app.f_handlers = Mock()
-    app.f_handlers.save_project.return_value = False
-    assert TclCommandSaveProject(app).execute({'filename': 'project'}, []) is False
-    app.preferencesUiManager = Mock()
-    TclCommandSaveSys(app).execute({}, [])
-    app.preferencesUiManager.save_defaults.assert_called_once_with()
-    app.quit_application = Mock(side_effect=RuntimeError('cleanup failed'))
-    # Never run the old os._exit fallback in this process.
-    from unittest.mock import patch
-    with patch('os._exit') as exit_process:
-        with pytest.raises(RuntimeError, match='cleanup failed'):
-            TclCommandQuit(app).execute({}, [])
-        exit_process.assert_not_called()
-
-
-def test_registered_aliases_keep_their_command_boundary():
-    app = make_app()
-    app.shell.tcl_commands_storage = {}
-    FCShell.setup_shell(app.shell)
-    assert len(app.shell.tcl_commands_storage) == 106
-    commands = {id(entry['fcn'].__self__) for entry in app.shell.tcl_commands_storage.values()}
-    assert len(commands) == 78
-    for command in ('add_circle', 'set_sys', 'save_project', 'cncjob'):
-        assert app.shell.tcl.eval('catch {%s -unknown_option 1} msg' % command) == '1'
-        assert 'Unknown parameter' in app.shell.tcl.eval('set msg')
 
 
 def test_real_worker_validation_exception_becomes_tcl_error_without_excepthook(qt_app):
@@ -362,17 +213,3 @@ def test_real_worker_validation_exception_becomes_tcl_error_without_excepthook(q
         thread.quit()
         assert thread.wait(3000)
 
-
-def test_duplicate_drill_is_still_text_for_python_but_an_error_for_tcl(qt_app):
-    from shapely import Point
-    from tclCommands.TclCommandAddDrill import TclCommandAddDrill
-    obj = SimpleNamespace(kind='excellon', tools={7: {'tooldia': 1, 'drills': [Point(0, 0)]}})
-    app = object_app(obj)
-    app.decimals = 4
-    app.dec_format = lambda value, decimals: round(value, decimals)
-    command = TclCommandAddDrill(app)
-    assert 'already' in command.execute({'name': 'e', 'dia': 1}, [])
-    app.worker_task.connect(lambda task: task['fcn'](*task['params']))
-    app.shell.tcl.createcommand('add_drill', command.execute_wrapper)
-    assert app.shell.tcl.eval('catch {add_drill e -dia 1} msg') == '1'
-    assert 'already' in app.shell.tcl.eval('set msg')

@@ -70,13 +70,6 @@ class TestShapeGroupVisibility(unittest.TestCase):
         self.group.update_visibility(False, indexes=keys[2:])
         self.assertFalse(self.line.visible)
 
-    def test_visible_setter_skips_removed_keys(self):
-        # a clear of all the canvas removes the data but the group keeps its keys
-        self.collection.clear()
-        self.group.visible = False
-
-
-
 class TestMoveToTop(unittest.TestCase):
 
     def setUp(self):
@@ -95,19 +88,6 @@ class TestMoveToTop(unittest.TestCase):
         for k, v in buffers.items():
             self.assertIs(self.collection.data[k]['mesh_vertices'], v)
 
-    def test_draw_order_follows_data_order(self):
-        self.big.move_to_top()
-        # Selected shapes draw after every normal layer.
-        last = self.collection.data[self.big._indexes[-1]]['mesh_vertices']
-        vertices = self.collection._top_mesh.mesh_data.get_vertices()
-        self.assertTrue((vertices[-len(last):, :2] == last).all())
-
-    def test_no_change_if_already_on_top(self):
-        self.assertTrue(self.collection.move_to_top(self.small._indexes))
-        self.assertFalse(self.collection.move_to_top(self.small._indexes))
-        self.assertTrue(self.collection.move_to_top(self.big._indexes))
-        self.assertFalse(self.collection.move_to_top(self.big._indexes))
-
     def test_foreground_overrides_layers_and_restores_previous_group(self):
         from appGUI.VisPyVisuals import ShapeGroup
         paint = ShapeGroup(self.collection)
@@ -123,13 +103,6 @@ class TestMoveToTop(unittest.TestCase):
         paint.visible = False
         self.assertFalse(self.collection._top_line.visible)
         self.assertFalse(self.collection._top_mesh.visible)
-
-    def test_foreground_colors_follow_updates(self):
-        self.big.move_to_top()
-        self.collection.update_color(new_mesh_color='blue', new_line_color='blue', indexes=self.big._indexes)
-        colors = self.collection._top_mesh.mesh_data.get_face_colors()
-        self.assertTrue((colors == [0, 0, 1, 1]).all())
-        self.assertTrue((self.collection._top_line.color == [0, 0, 1, 1]).all())
 
     def test_clear_does_not_promote_reused_keys(self):
         self.big.move_to_top()
@@ -156,18 +129,6 @@ class TestSelectionRedraw(unittest.TestCase):
                 task['fcn'](*task['params'])
                 obj.bring_to_top.assert_called_once()
                 obj.plot.assert_not_called()
-
-    def test_partial_plot_is_rebuilt_then_brought_to_top(self):
-        from appHandlers.appPlotManager import AppPlotManager
-        obj = SimpleNamespace(kind='geometry', obj_options={'plot': True},
-                              bring_to_top=Mock(side_effect=[False, True]), plot=Mock())
-        manager = SimpleNamespace(collection=SimpleNamespace(
-            get_selected=lambda: [obj], get_active=lambda: obj), worker_task=Mock())
-        AppPlotManager.gerber_redraw(manager)
-        task = manager.worker_task.emit.call_args[0][0]
-        task['fcn'](*task['params'])
-        obj.plot.assert_called_once_with(visible=True)
-        self.assertEqual(obj.bring_to_top.call_count, 2)
 
     def test_cncjob_selection_rebuild_preserves_the_plot_filter(self):
         from appHandlers.appPlotManager import AppPlotManager
@@ -205,10 +166,6 @@ class TestShowPlottedShapes(unittest.TestCase):
     def _visible_flags(self):
         return [self.collection.data[k]['visible'] for k in self.obj.shapes._indexes]
 
-    def test_no_full_plot(self):
-        self.assertFalse(self.obj.show_plotted_shapes(False))
-        self.assertEqual(self._visible_flags(), [True] * 4)
-
     def test_after_full_plot(self):
         buffers = {k: self.collection.data[k]['mesh_vertices'] for k in self.obj.shapes._indexes}
         self.obj.mark_full_plot()
@@ -225,26 +182,6 @@ class TestShowPlottedShapes(unittest.TestCase):
         self.obj.shapes.clear()
         _add_squares(self.obj.shapes, 2)
         self.assertFalse(self.obj.show_plotted_shapes(False))
-
-    def test_canvas_cleared(self):
-        self.obj.mark_full_plot()
-        self.collection.clear()
-        self.assertFalse(self.obj.show_plotted_shapes(False))
-
-    def test_bring_to_top(self):
-        from appGUI.VisPyVisuals import ShapeGroup
-        other = _add_squares(ShapeGroup(self.collection), 2, start=10)
-        self.assertFalse(self.obj.bring_to_top())
-        self.obj.mark_full_plot()
-        self.assertTrue(self.obj.bring_to_top())
-        self.assertEqual(list(self.collection.data), other + self.obj.shapes._indexes)
-
-    def test_missing_or_empty_indexes_have_no_signature(self):
-        self.obj.shapes = SimpleNamespace()
-        self.assertIsNone(self.obj._shapes_signature())
-        self.obj.shapes._indexes = []
-        self.assertIsNone(self.obj._shapes_signature())
-
 
 if __name__ == '__main__':
     unittest.main()

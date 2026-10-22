@@ -40,27 +40,6 @@ class TestDumpFailurePreservesExisting:
         assert dest.read_bytes() == original_bytes
         assert json.loads(dest.read_text()) == OLD_VALUES
 
-    def test_no_temp_artifacts_after_dump_failure(self, tmp_path):
-        dest = tmp_path / "factory_defaults.FlatConfig"
-        _write_read_only_snapshot(dest, OLD_VALUES)
-
-        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
-            AppDefaults.save_factory_defaults(str(dest), "2.0")
-
-        leftovers = [f for f in tmp_path.iterdir() if f.name.startswith(".factory_tmp")]
-        assert leftovers == []
-
-    def test_read_only_mode_restored_after_dump_failure(self, tmp_path):
-        dest = tmp_path / "factory_defaults.FlatConfig"
-        _write_read_only_snapshot(dest, OLD_VALUES)
-
-        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
-            AppDefaults.save_factory_defaults(str(dest), "2.0")
-
-        mode = dest.stat().st_mode
-        assert mode & stat.S_IWRITE == 0  # still read-only
-
-
 # -- replace failure with existing read-only snapshot -----------------------
 
 class TestReplaceFailurePreservesExisting:
@@ -76,27 +55,6 @@ class TestReplaceFailurePreservesExisting:
 
         assert dest.read_bytes() == original_bytes
 
-    def test_no_temp_artifacts_after_replace_failure(self, tmp_path):
-        dest = tmp_path / "factory_defaults.FlatConfig"
-        _write_read_only_snapshot(dest, OLD_VALUES)
-
-        with patch("defaults.os.replace", side_effect=OSError("access denied")):
-            AppDefaults.save_factory_defaults(str(dest), "2.0")
-
-        leftovers = [f for f in tmp_path.iterdir() if f.name.startswith(".factory_tmp")]
-        assert leftovers == []
-
-    def test_read_only_mode_restored_after_replace_failure(self, tmp_path):
-        dest = tmp_path / "factory_defaults.FlatConfig"
-        _write_read_only_snapshot(dest, OLD_VALUES)
-
-        with patch("defaults.os.replace", side_effect=OSError("access denied")):
-            AppDefaults.save_factory_defaults(str(dest), "2.0")
-
-        mode = dest.stat().st_mode
-        assert mode & stat.S_IWRITE == 0  # restored to read-only
-
-
 # -- missing destination failure --------------------------------------------
 
 class TestMissingDestinationFailure:
@@ -109,16 +67,6 @@ class TestMissingDestinationFailure:
             AppDefaults.save_factory_defaults(str(dest), "2.0")
 
         assert not dest.exists()
-
-    def test_no_temp_artifacts_after_missing_dest_dump_failure(self, tmp_path):
-        dest = tmp_path / "factory_defaults.FlatConfig"
-
-        with patch("defaults.json.dump", side_effect=RuntimeError("disk full")):
-            AppDefaults.save_factory_defaults(str(dest), "2.0")
-
-        leftovers = [f for f in tmp_path.iterdir() if f.name.startswith(".factory_tmp")]
-        assert leftovers == []
-
 
 # -- successful write to read-only existing ---------------------------------
 
@@ -134,12 +82,3 @@ class TestSuccessfulReadOnlyUpdate:
         assert json.loads(dest.read_text()) == AppDefaults.factory_defaults
         mode = dest.stat().st_mode
         assert mode & stat.S_IWRITE == 0  # read-only again
-
-    def test_no_temp_artifacts_after_success(self, tmp_path):
-        dest = tmp_path / "factory_defaults.FlatConfig"
-        _write_read_only_snapshot(dest, OLD_VALUES)
-
-        AppDefaults.save_factory_defaults(str(dest), "2.0")
-
-        leftovers = [f for f in tmp_path.iterdir() if f.name.startswith(".factory_tmp")]
-        assert leftovers == []

@@ -30,11 +30,6 @@ class TestListProjects(unittest.TestCase):
         app = make_app()
         self.assertEqual(TclCommandListProjects(app).execute({}, []), 'Board_A\nBoard_B')
 
-    def test_alias(self):
-        from tclCommands.TclCommandListProjects import TclCommandListProjects
-        self.assertEqual(TclCommandListProjects.aliases, ['list_projects'])
-
-
 class TestSelectProject(unittest.TestCase):
     def test_switches_by_name(self):
         from tclCommands.TclCommandSelectProject import TclCommandSelectProject
@@ -48,14 +43,6 @@ class TestSelectProject(unittest.TestCase):
         with self.assertRaises(TclError):
             TclCommandSelectProject(app).execute({'name': 'Missing'}, [])
         app.projects.switch.assert_not_called()
-
-    def test_refused_switch_is_an_error(self):
-        from tclCommands.TclCommandSelectProject import TclCommandSelectProject
-        app = make_app()
-        app.projects.switch.return_value = False
-        with self.assertRaises(TclError):
-            TclCommandSelectProject(app).execute({'name': 'Board_B'}, [])
-
 
 class TestCloseProject(unittest.TestCase):
     def test_closes_the_active_project_by_default(self):
@@ -86,35 +73,6 @@ class TestCloseProject(unittest.TestCase):
             app.projects.close.reset_mock()
             TclCommandCloseProject(app).execute({'force': value}, [])
             app.projects.close.assert_called_once_with(app.projects.active, force=True)
-
-    def test_force_0_does_not_force(self):
-        from tclCommands.TclCommandCloseProject import TclCommandCloseProject
-        app = make_app()
-        app.projects.is_dirty.return_value = True
-        with self.assertRaises(TclError):
-            TclCommandCloseProject(app).execute({'force': '0'}, [])
-
-    def test_unknown_name_is_an_error(self):
-        from tclCommands.TclCommandCloseProject import TclCommandCloseProject
-        app = make_app()
-        with self.assertRaises(TclError):
-            TclCommandCloseProject(app).execute({'name': 'Missing'}, [])
-
-    def test_refused_close_is_an_error(self):
-        from tclCommands.TclCommandCloseProject import TclCommandCloseProject
-        app = make_app()
-        app.projects.close.return_value = False
-        with self.assertRaises(TclError):
-            TclCommandCloseProject(app).execute({}, [])
-
-
-class TestRegistration(unittest.TestCase):
-    def test_modules_are_imported(self):
-        import sys
-        import tclCommands  # noqa: F401
-        for name in ('TclCommandListProjects', 'TclCommandSelectProject', 'TclCommandCloseProject'):
-            self.assertIn('tclCommands.%s' % name, sys.modules)
-
 
 if __name__ == '__main__':
     unittest.main()

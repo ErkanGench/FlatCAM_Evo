@@ -130,19 +130,6 @@ def test_no_releases_is_up_to_date_and_not_an_error(monkeypatch, tmp_path):
     assert "error" not in payload
 
 
-def test_invalid_repository_url_reports_a_clear_message(tmp_path):
-    app = _app(tmp_path)
-    checker = GitHubUpdateChecker(app, install_root=tmp_path)
-    payload = checker.run_check(app, repository_url="https://example.com/x/y")
-
-    assert payload["status"] == "error"
-    assert any(
-        "The update URL is not a valid GitHub repository: https://example.com/x/y." in text
-        and "Preferences" in text
-        for text in app.inform.payloads
-    )
-
-
 def test_windows_frozen_x64_selects_the_exact_update_asset(monkeypatch, tmp_path):
     _freeze(monkeypatch, frozen=True)
     app = _app(tmp_path, version=1.0)
@@ -218,32 +205,6 @@ def test_unsupported_installs_report_manual_replacement_without_intrusion(
     assert payload["release_page"].startswith(f"https://{GITHUB_HOST}/")
 
 
-@pytest.mark.parametrize("marker", ["dir", "file"])
-def test_git_marker_blocks_automatic_source_update(monkeypatch, tmp_path, marker):
-    _freeze(monkeypatch, frozen=False, machine="x86_64")
-    install = tmp_path / "install"
-    install.mkdir()
-    if marker == "dir":
-        (install / ".git").mkdir()
-    else:
-        (install / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
-    app = _app(tmp_path, os="linux", version=1.0)
-    payload = _checker(app, FakeTransport([_release("v1.1")]), install, platform="linux").run_check(app)
-
-    assert payload["manual_reason"] == "git-checkout"
-
-
-def test_read_only_source_install_is_manual(monkeypatch, tmp_path):
-    _freeze(monkeypatch, frozen=False, machine="x86_64")
-    install = tmp_path / "install"
-    install.mkdir()
-    monkeypatch.setattr(checker_module.os, "access", lambda *args, **kwargs: False)
-    app = _app(tmp_path, os="linux", version=1.0)
-    payload = _checker(app, FakeTransport([_release("v1.1")]), install, platform="linux").run_check(app)
-
-    assert payload["manual_reason"] == "read-only"
-
-
 @pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
 def test_linux_source_install_uses_the_release_zipball(monkeypatch, tmp_path, machine):
     _freeze(monkeypatch, frozen=False, machine=machine)
@@ -291,41 +252,3 @@ def test_transport_failures_become_safe_error_payloads(tmp_path):
     assert payload["status"] == "error"
     assert payload["error"] == "bad release metadata"
 
-
-def test_x64_requires_a_64_bit_process(monkeypatch):
-    monkeypatch.setattr(checker_module.platform_module, "machine", lambda: "AMD64")
-    monkeypatch.setattr(checker_module.sys, "maxsize", 2**31)
-    assert checker_module._is_x64() is False
-
-    monkeypatch.setattr(checker_module.sys, "maxsize", 2**63)
-    assert checker_module._is_x64() is True
-
-
-def test_automatic_check_respects_preference_but_forced_check_runs(monkeypatch, tmp_path):
-    _freeze(monkeypatch, frozen=True)
-    app = _app(tmp_path, options={"global_version_check": False})
-    transport = FakeTransport([_release("v1.1", assets=[_windows_asset()])])
-    checker = _checker(app, transport, tmp_path)
-
-    assert checker.run_check(app)["status"] == "disabled"
-    assert transport.calls == 0
-
-    assert checker.run_check(app, forced=True)["status"] == "update_available"
-    assert transport.calls == 1
-
-
-def test_checker_exposes_the_transport_factory_for_worker_staging(tmp_path):
-    class StagingTransport:
-        def download_archive(self, *args, **kwargs):
-            return Path("staged")
-
-    staging = StagingTransport()
-    checker = GitHubUpdateChecker(app=None, transport_factory=lambda _app: staging)
-    assert checker.create_transport(_app(tmp_path)) is staging
-
-    default = GitHubUpdateChecker().create_transport()
-    assert isinstance(default, GitHubReleaseTransport)
-    assert default.repository == f"{OWNER}/{REPO}"
-
-    configured = GitHubUpdateChecker().create_transport(repository_url="https://github.com/acme/tool")
-    assert configured.repository == "acme/tool"

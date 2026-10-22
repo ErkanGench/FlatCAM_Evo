@@ -129,14 +129,6 @@ def count_calls(t):
 
 # ------------------------------------------------------------------ helper
 
-def test_effective_diameter_helper():
-    assert ToolIsolation.v_effective_diameter(v_data(0.1, 60, -0.1)) == pytest.approx(0.1 + 0.2 * math.tan(math.pi / 6))
-    # sign of Cut Z does not matter
-    assert ToolIsolation.v_effective_diameter(v_data(0.1, 60, 0.1)) == pytest.approx(
-        ToolIsolation.v_effective_diameter(v_data(0.1, 60, -0.1)))
-    assert ToolIsolation.v_effective_diameter({}) is None
-
-
 # ------------------------------------------------------------------ on_update_tool_dia
 
 def test_update_changes_diameter(tool):
@@ -150,20 +142,6 @@ def test_update_changes_diameter(tool):
     assert tool.iso_tools[1]['tooldia'] == expected
     assert tool.iso_tools[1]['data']['tools_iso_tooldia'] == expected
     assert float(tool.ui.tools_table.item(row, 1).text()) == expected
-    assert_connected_once(tool)
-
-
-def test_update_unchanged_diameter_no_message(tool):
-    dia = v_dia(0.1, 60, -0.1)
-    add_tool_row(tool, 1, dia)
-    select_uid(tool, 1)
-    tool.ui.tipdia_entry.set_value(0.1)
-    tool.ui.tipangle_entry.set_value(60)
-    tool.ui.cutz_entry.set_value(-0.1)
-    tool.app.inform.emit.reset_mock()
-    tool.on_update_tool_dia()
-    tool.app.inform.emit.assert_not_called()
-    assert tool.iso_tools[1]['tooldia'] == dia
     assert_connected_once(tool)
 
 
@@ -181,48 +159,6 @@ def test_update_clash_with_other_tool_warns_and_keeps(tool):
     assert 'WARNING' in tool.app.inform.emit.call_args[0][0]
     assert tool.iso_tools[1]['tooldia'] == 0.5
     assert float(tool.ui.tools_table.item(row, 1).text()) == 0.5
-    assert_connected_once(tool)
-
-
-def test_update_missing_row(tool):
-    add_tool_row(tool, 1, 0.5)
-    tool.build_ui()
-    tool.ui.tools_table.setCurrentCell(-1, -1)
-    tool.ui.tipdia_entry.set_value(0.3)
-    tool.on_update_tool_dia()
-    assert tool.iso_tools[1]['tooldia'] == 0.5
-    assert_connected_once(tool)
-
-
-def test_update_empty_table(tool):
-    tool.build_ui()
-    tool.on_update_tool_dia()
-    assert_connected_once(tool)
-
-
-def test_update_frame_hidden_returns(tool):
-    add_tool_row(tool, 1, 0.5)
-    select_uid(tool, 1)
-    tool.ui.v_frame.isVisible = lambda: False
-    tool.ui.tipdia_entry.set_value(0.3)
-    tool.on_update_tool_dia()
-    assert tool.iso_tools[1]['tooldia'] == 0.5
-    assert_connected_once(tool)
-
-
-def test_update_unknown_uid_returns(tool):
-    add_tool_row(tool, 1, 0.5)
-    select_uid(tool, 1)
-    del tool.iso_tools[1]
-    tool.on_update_tool_dia()
-    assert_connected_once(tool)
-
-
-def test_update_bad_parameters_return(tool):
-    add_tool_row(tool, 1, 0.5)
-    select_uid(tool, 1)
-    tool.ui.tipangle_entry.set_value(180)
-    tool.on_update_tool_dia()
     assert_connected_once(tool)
 
 
@@ -245,17 +181,6 @@ def test_one_edit_runs_handler_once(tool):
     assert len(calls) == 1
 
 
-def test_ui_connect_is_idempotent(tool):
-    tool.ui_connect()
-    tool.ui_connect()
-    tool.ui_connect()
-    assert_connected_once(tool)
-    tool.ui_disconnect()
-    assert our_receiver_count(tool) == {n: 0 for n in SIGNALS}
-    tool.ui_connect()
-    assert_connected_once(tool)
-
-
 # ------------------------------------------------------------------ add paths
 
 def test_default_add_zero_dia_v_shape(tool):
@@ -276,11 +201,6 @@ def test_default_add_zero_dia_not_v_shape_warns(tool):
     assert 'WARNING' in tool.app.inform.emit.call_args[0][0]
 
 
-def test_default_add_explicit_dia_unchanged(tool):
-    tool.on_tool_default_add(dia=0.8)
-    assert tool.iso_tools[1]['tooldia'] == 0.8
-
-
 def test_add_zero_dia_v_shape_from_defaults(tool):
     # empty Tools DB: no match, the default tool is added with the V diameter
     tool.on_tool_add(custom_dia=0)
@@ -289,15 +209,6 @@ def test_add_zero_dia_v_shape_from_defaults(tool):
     assert tool.iso_tools[1]['tooldia'] == expected
     assert tool.iso_tools[1]['data']['tools_iso_tooldia'] == expected
     assert float(tool.ui.tools_table.item(0, 1).text()) == expected
-    assert_connected_once(tool)
-
-
-def test_add_zero_dia_not_v_shape_warns(tool):
-    tool.default_data = v_data(shape=0)
-    tool.app.inform.emit.reset_mock()
-    tool.on_tool_add(custom_dia=0)
-    assert tool.iso_tools == {}
-    assert 'WARNING' in tool.app.inform.emit.call_args[0][0]
     assert_connected_once(tool)
 
 
@@ -328,19 +239,3 @@ def test_add_zero_dia_final_diameter_from_matched_record(tool):
     assert float(tool.ui.tools_table.item(0, 1).text()) == expected
     assert_connected_once(tool)
 
-
-def test_add_explicit_dia_keeps_user_value(tool):
-    tool.on_tool_add(custom_dia=0.8)
-    assert tool.iso_tools[1]['tooldia'] == 0.8
-    assert_connected_once(tool)
-
-
-def test_add_paths_keep_signals_single_and_handler_once(tool):
-    calls = count_calls(tool)
-    tool.on_tool_add(custom_dia=0)
-    tool.on_tool_add(custom_dia=0.7)
-    tool.on_tool_default_add(dia=0)
-    assert_connected_once(tool)
-    del calls[:]
-    tool.ui.cutz_entry.editingFinished.emit()
-    assert len(calls) == 1

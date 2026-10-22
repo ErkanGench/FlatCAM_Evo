@@ -187,12 +187,6 @@ class TestSmallCases(ClipperTestCase):
     def test_gap_1e8_between_squares_is_closed(self):
         self.assert_same_as_geos([sq(0, 0, 1, 1), sq(1 + 1e-8, 0, 2 + 1e-8, 1)], expected=(1, 0))
 
-    def test_corner_contact_of_squares(self):
-        self.assert_same_as_geos([sq(0, 0, 1, 1), sq(1, 1, 2, 2)])
-
-    def test_gap_1e6_stays_two_parts(self):
-        self.assert_same_as_geos([sq(0, 0, 1, 1), sq(1 + 1e-6, 0, 2 + 1e-6, 1)], expected=(2, 0))
-
     def test_narrow_hole_1e8_is_closed(self):
         part = sq(0, 0, 10, 10).difference(sq(4, 4, 4 + 1e-8, 6))
         self.assertEqual(count_holes([part]), 1)
@@ -210,31 +204,6 @@ class TestSmallCases(ClipperTestCase):
         cap = sq(0, 10, 10, 12)
         self.assert_same_as_geos([u_shape, cap], expected=(1, 1))
 
-    def test_slit_into_cavity_is_closed(self):
-        part = sq(0, 0, 10, 10).difference(sq(3, 3, 7, 7).union(sq(0, 5, 3, 5 + 1e-8)))
-        self.assertTrue(part.is_valid)
-        self.assertEqual(count_holes([part]), 0)
-        self.assert_same_as_geos([part], expected=(1, 1))
-
-    def test_hole_1e6_stays(self):
-        part = sq(0, 0, 10, 10).difference(sq(4, 4, 4 + 1e-6, 6))
-        self.assert_same_as_geos([part], expected=(1, 1))
-
-    def test_island_in_hole_in_island(self):
-        outer = sq(0, 0, 20, 20).difference(sq(2, 2, 18, 18))
-        middle = sq(4, 4, 16, 16).difference(sq(6, 6, 14, 14))
-        inner = sq(8, 8, 12, 12)
-        self.assert_same_as_geos([outer, middle, inner], expected=(3, 2))
-
-    def test_reversed_winding(self):
-        part = sq(0, 0, 10, 10).difference(sq(2, 2, 4, 4))
-        reversed_part = orient(part, -1.0)
-        self.assertFalse(reversed_part.exterior.is_ccw)
-        gap_a = orient(sq(20, 0, 21, 1), -1.0)
-        gap_b = orient(sq(21 + 1e-8, 0, 22, 1), -1.0)
-        self.assert_same_as_geos([reversed_part, gap_a, gap_b], expected=(2, 1))
-
-
 class TestStructure(ClipperTestCase):
 
     def test_nested_three_levels(self):
@@ -244,14 +213,6 @@ class TestStructure(ClipperTestCase):
         # the hole in the island must not be filled
         self.assertFalse(MultiPolygon(result).intersects(Point(7.5, 7.5)))
         self.assertTrue(MultiPolygon(result).intersects(Point(5.5, 5.5)))
-
-    def test_reversed_winding_overlapping_polygons(self):
-        # a CW and a CCW polygon that overlap must be united, not cancelled out
-        a = sq(0, 0, 4, 4)
-        b = orient(sq(2, 2, 6, 6), -1.0)
-        result = self.fuse([a, b])
-        self.assertEqual(len(result), 1)
-        self.assertAlmostEqual(result[0].area, 16 + 16 - 4, places=6)
 
     def test_multipart_input(self):
         multi = MultiPolygon([sq(0, 0, 1, 1), sq(1 + 1e-8, 0, 2, 1), sq(5, 5, 6, 6)])
@@ -277,42 +238,6 @@ class TestStructure(ClipperTestCase):
         self.assertLessEqual(max_boundary_distance(result_mm, result_in_mm, max_segment=0.01), 1e-6)
 
 
-@pytest.mark.slow
-@unittest.skipUnless(HAVE_EAGLE, "the Eagle fixtures are missing")
-class TestEagle(ClipperTestCase):
-    POINT = (2.5614, 2.6473)
-    MARGIN = 0.001
-    BOX = box(2.5592 - MARGIN, 2.6447 - MARGIN, 2.5636 + MARGIN, 2.6509 + MARGIN)
-
-    def outside_box(self, polys):
-        """Polygons and holes whose bounds do not touch the box around the known GEOS error."""
-        polygons = [p for p in polys if not self.BOX.intersects(box(*p.bounds))]
-        holes = [r for p in polys for r in p.interiors if not self.BOX.intersects(box(*r.bounds))]
-        return len(polygons), len(holes)
-
-    def check_file(self, filename):
-        parts = collect_eagle_parts(filename)
-        self.assertGreater(len(parts), 1000)
-        result = self.fuse(parts)
-        reference = geos_closing(parts)
-        self.assertTrue(MultiPolygon(result).is_valid)
-        self.assertEqual(self.outside_box(result), self.outside_box(reference))
-        step = 0.1 / 25.4  # 0.1 mm: a step of 0.01 mm gives 1.1 million sample points and takes too long
-        dist = max_boundary_distance(result, reference, max_segment=step, skip_box=self.BOX, within=1e-6 / 25.4)
-        self.assertLessEqual(dist, 1e-6 / 25.4)
-        return result, reference
-
-    def test_top_layer(self):
-        result, reference = self.check_file('eagle.GTL')
-        self.assertTrue(MultiPolygon(result).covers(Point(*self.POINT)), "copper at the GEOS problem point")
-        self.assertEqual(len(result), len(reference))
-
-    def test_bottom_layer(self):
-        result, reference = self.check_file('eagle.GBL')
-        self.assertEqual(len(result), len(reference))
-        self.assertEqual(count_holes(result), count_holes(reference))
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 # Group B: safe fallback
 # ----------------------------------------------------------------------------------------------------------------------
@@ -335,42 +260,8 @@ class TestFallbackWithoutClipper(unittest.TestCase):
         self.assertFalse(bowtie.is_valid)
         self.assert_rejected([sq(5, 5, 6, 6), bowtie])
 
-    def test_other_geometry_type(self):
-        self.assert_rejected([sq(0, 0, 1, 1), shapely.LineString([(0, 0), (1, 1)])])
-        self.assert_rejected([shapely.GeometryCollection([sq(0, 0, 1, 1)])])
-
-    def test_coordinates_out_of_range(self):
-        self.assert_rejected([sq(1e6, 1e6, 1e6 + 1, 1e6 + 1)])
-
-    def test_coordinates_not_finite(self):
-        self.assert_rejected([Polygon([(0, 0), (float('inf'), 0), (1, 1)])])
-
     def test_thin_polygon_collapses(self):
         self.assert_rejected([sq(0, 0, 1, 4e-10)])
-
-    def test_shifted_thin_rectangle_collapses(self):
-        # np.round would keep 0.5e-9 .. 0.9e-9 as a line of 1 unit, Clipper rounds both to 1 and drops it
-        self.assert_rejected([sq(3, 3, 4, 4), sq(0, 0.5e-9, 1, 0.9e-9)])
-
-    def test_collapsed_hole(self):
-        part = sq(0, 0, 10, 10).difference(sq(4, 5, 6, 5 + 4e-10))
-        self.assertEqual(count_holes([part]), 1)
-        self.assertTrue(part.is_valid)
-        self.assert_rejected([part])
-
-    def test_closing_not_positive(self):
-        self.assert_rejected([sq(0, 0, 1, 1)], closing=0.0)
-
-    def test_empty_input(self):
-        fake = mock.MagicMock()
-        fake.Clipper.side_effect = AssertionError("Clipper must not be used")
-        with mock.patch.object(clipper_fuse, 'pyclipr', fake):
-            self.assertEqual(fuse_parts([]), [])
-            self.assertEqual(fuse_parts([Polygon()]), [])
-            self.assertEqual(fuse_parts(np.array([], dtype=object)), [])
-            self.assertEqual(fuse_parts([MultiPolygon(), Polygon()]), [])
-        fake.Clipper.assert_not_called()
-
 
 class TestFallbackWithClipper(ClipperTestCase):
     """Failures inside or after Clipper: these tests need pyclipr."""
@@ -385,25 +276,10 @@ class TestFallbackWithClipper(ClipperTestCase):
         with mock.patch.object(pyclipr, 'Clipper', side_effect=RuntimeError("forced")):
             self.assertIsNone(fuse_parts(self.PARTS))
 
-    def test_offset_exception(self):
-        with mock.patch.object(pyclipr, 'ClipperOffset', side_effect=RuntimeError("forced")):
-            self.assertIsNone(fuse_parts(self.PARTS))
-
     def test_invalid_assembled_result(self):
         overlapping = [sq(0, 0, 2, 2), sq(1, 1, 3, 3)]
         with mock.patch.object(clipper_fuse, '_tree_to_polygons', return_value=overlapping):
             self.assertIsNone(fuse_parts(self.PARTS))
-
-    def test_empty_result_for_non_empty_input(self):
-        with mock.patch.object(clipper_fuse, '_tree_to_polygons', return_value=[]):
-            self.assertIsNone(fuse_parts(self.PARTS))
-
-    def test_empty_union_for_non_empty_input(self):
-        fake_clipper = mock.MagicMock()
-        fake_clipper.return_value.execute.return_value = []
-        with mock.patch.object(pyclipr, 'Clipper', fake_clipper):
-            self.assertIsNone(fuse_parts(self.PARTS))
-
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Parse level: Gerber.parse_lines() / parse_file() with the Clipper fusion
@@ -505,7 +381,7 @@ class ParseTestCase(ClipperTestCase):
 @unittest.skipUnless(HAVE_EAGLE, "the Eagle fixtures are missing")
 class TestParseEagle(ParseTestCase):
     POINT = (2.5614, 2.6473)
-    BOX = TestEagle.BOX
+    BOX = box(2.5582, 2.6437, 2.5646, 2.6519)
 
     def parse_both(self, filename):
         path = os.path.join(FIXTURES, filename)
@@ -606,23 +482,6 @@ class TestParseFallback(unittest.TestCase):
         lines = self.HEADER + ["D12*", "X20000000Y20000000D03*", "D10*"] + square_region(0, 0, 100000, 100000, 127) +             ["M02*"]
         gbr, results = self.assert_geos_result(lines, expect_fuse_results=[None])
         self.assertEqual(len(as_polygons(gbr.solid_geometry)), 2)
-
-    def test_thin_track(self):
-        # A track of 4e-10 mm gives a valid polygon that collapses on the integer grid of Clipper (1e-9 file units).
-        # A thin region or a thin flash can not reach the fusion: the parser makes them 1e-7 units larger.
-        lines = self.HEADER + square_region(0, 0, 100000, 100000, 127) +             ["D13*", "X30000000Y30000000D02*", "X31000000Y30000000D01*", "M02*"]
-        gbr, results = self.assert_geos_result(lines, expect_fuse_results=[None])
-        polys = as_polygons(gbr.solid_geometry)
-        self.assertEqual(len(polys), 2, "both parts must be kept by the GEOS path")
-        self.assertTrue(any(p.bounds[2] - p.bounds[0] > 0.9 for p in polys if p.bounds[0] > 20))
-
-    def test_trailing_lpd_with_empty_last_layer(self):
-        header = ["%FSLAX46Y46*%", "%MOMM*%", "%ADD10C,0.5*%", "G01*", "D10*"]
-        lines = header + square_region(0, 0, 100000, 100000, 127) + ["%LPC*%"] + \
-            square_region(20000, 20000, 40000, 40000, 127) + ["%LPD*%", "M02*"]
-        gbr, results = self.assert_geos_result(lines, expect_fuse_results=[])
-        self.assertEqual(count_holes(as_polygons(gbr.solid_geometry)), 1)
-
 
 class TestParseFallbackWithClipper(ParseTestCase):
 

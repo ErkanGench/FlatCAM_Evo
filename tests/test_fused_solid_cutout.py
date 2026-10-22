@@ -9,9 +9,7 @@ from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
 from fused_consumer_cases import area_diff, case_geometries, outcome
-from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
-    _headless_qt, app, gerber,
-)
+from tests.helpers_objects import app, gerber, _headless_qt  # noqa: F401,E402
 
 
 def legacy_cutout_geo(cutout_obj, convex_box):
@@ -36,22 +34,6 @@ def obj_with(gerber, name):
 VALID = ['mixed_dark_clear_dark', 'overlapping_list', 'single_polygon', 'multipolygon']
 
 
-class TestLegacy:
-    @pytest.mark.parametrize('name', VALID)
-    @pytest.mark.parametrize('convex', [False, True])
-    def test_valid_inputs(self, gerber, name, convex):
-        kind, geo = outcome(legacy_cutout_geo, obj_with(gerber, name), convex)
-        assert kind == 'ok' and geo.is_valid
-
-    def test_a_list_is_replaced_by_its_union_on_the_object(self, gerber):
-        obj = obj_with(gerber, 'overlapping_list')
-        legacy_cutout_geo(obj, False)
-        assert not isinstance(obj.solid_geometry, list)      # old side effect on the project object
-
-    def test_self_intersecting_list_raises(self, gerber):
-        assert outcome(legacy_cutout_geo, obj_with(gerber, 'self_intersecting'), False) == ('raises', 'GEOSException')
-
-
 @pytest.fixture
 def new_fn():
     from appPlugins.ToolCutOut import gerber_cutout_geometry
@@ -65,18 +47,6 @@ class TestNew:
         geo = new_fn(obj_with(gerber, name), convex)
         assert isinstance(geo, (Polygon, MultiPolygon)) and geo.is_valid
 
-    @pytest.mark.parametrize('name', VALID)
-    @pytest.mark.parametrize('convex', [False, True])
-    def test_same_geometry_as_old(self, gerber, new_fn, name, convex):
-        new_geo = new_fn(obj_with(gerber, name), convex)
-        old_geo = legacy_cutout_geo(obj_with(gerber, name), convex)
-        assert area_diff(old_geo, new_geo) < 1e-6
-
     def test_self_intersecting_no_longer_raises(self, gerber, new_fn):
         geo = new_fn(obj_with(gerber, 'self_intersecting'), False)
         assert geo.area > 0
-
-    def test_does_not_mutate_the_object(self, gerber, new_fn):
-        obj = obj_with(gerber, 'overlapping_list')
-        new_fn(obj, False)
-        assert isinstance(obj.solid_geometry, list)

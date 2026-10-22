@@ -62,22 +62,6 @@ def test_join_bent_records_preserves_copper_and_remains_vertex_editable(paths):
     assert editor.undo() and editor.storage_dict[10]['geometry'] == [a, b]
 
 
-def test_join_select_all_handles_old_duplicate_finish_and_unrelated_flash():
-    a, b = track([(0, 0), (5, 0)]), track([(5, 0), (5, 5)])
-    duplicate = DrawToolShape(dict(b.geo))
-    empty = DrawToolShape({'follow': LineString(), 'solid': LineString().buffer(1)})
-    pad = flash(30)
-    originals = [empty, a, b, duplicate, pad]
-    editor = editor_for(originals[:])
-    before = footprint(editor)
-    assert editor.apply_path_join(0) != 'fail'
-    paths = [s for s in editor.storage_dict[10]['geometry']
-             if isinstance(s.geo['follow'], LineString) and not s.geo['follow'].is_empty]
-    assert len(paths) == 1
-    assert list(paths[0].geo['follow'].coords) == [(0, 0), (5, 0), (5, 5)]
-    assert pad in editor.storage_dict[10]['geometry']
-    assert footprint(editor).symmetric_difference(before).area < 1e-10
-    assert editor.undo() and editor.storage_dict[10]['geometry'] == originals
 
 
 def test_join_does_not_ignore_a_selected_multiline_branch():
@@ -91,32 +75,3 @@ def test_join_does_not_ignore_a_selected_multiline_branch():
     assert not editor.history.undo_stack
 
 
-@pytest.mark.parametrize('theme', ['assets/resources', 'assets/resources/dark_resources'])
-def test_toolbar_join_actions_run_existing_selection_operations_after_repopulation(theme):
-    editor = editor_for([track([(0, 0), (5, 0)]), track([(5, 0), (5, 5)])])
-    editor.app.resource_location = theme
-    geo, originals = join_editor([[(0, 0), (5, 0)], [(5, 0), (5, 5)]])
-    ui = MagicMock()
-    ui.app = editor.app
-    ui.grb_edit_toolbar = QtWidgets.QToolBar()
-    ui.geo_edit_toolbar = QtWidgets.QToolBar()
-    editor.app.ui = ui
-    geo.app.ui = ui
-    geo.tools = {}
-    geo.make_callback = lambda name: lambda: None
-    geo.on_join_paths = lambda: AppGeoEditor.on_join_paths(geo)
-    for _ in range(2):
-        MainGUI.populate_toolbars(ui)
-        editor.connect_grb_toolbar_signals()
-        AppGeoEditor.connect_geo_toolbar_signals(geo)
-        for name, toolbar in [('grb_join_btn', ui.grb_edit_toolbar), ('geo_join_btn', ui.geo_edit_toolbar)]:
-            action = getattr(ui, name)
-            assert action in toolbar.actions()
-            assert not action.icon().isNull()
-            assert not action.icon().pixmap(32, 32).isNull()
-            assert not action.isCheckable()
-    ui.grb_join_btn.trigger()
-    assert len(editor.selected) == 1
-    ui.geo_join_btn.trigger()
-    assert len(geo.selected) == 1
-    assert len(editor.history.undo_stack) == len(geo._history_undo) == 1

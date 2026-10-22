@@ -16,7 +16,7 @@ from appPlugins.ToolIsolation import ToolIsolation
 from camlib import CNCjob, Geometry
 from defaults import AppDefaults
 from tclCommands.TclCommandInteriors import TclCommandInteriors
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 
 class TestLocalizedGeometryFixes(unittest.TestCase):
@@ -88,24 +88,6 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
         self.assertTrue(all(isinstance(ring, LinearRing) for ring in output.solid_geometry))
         self.assertEqual(len(output.solid_geometry), 2)
 
-    def test_delete_optional_geometry_handler(self):
-        app = SimpleNamespace(collection=Mock())
-        ops = SimpleNamespace(app=app, ui=SimpleNamespace(
-            notebook=Mock(currentWidget=Mock(return_value=Mock(objectName=Mock(return_value='properties_tab'))))))
-        for active in (None, SimpleNamespace(kind='geometry'),
-                       SimpleNamespace(kind='geometry', on_tool_delete=None)):
-            app.collection.get_active.return_value = active
-            AppObjectOps.on_delete_keypress(ops)
-        active = SimpleNamespace(kind='geometry', on_tool_delete=Mock())
-        app.collection.get_active.return_value = active
-        AppObjectOps.on_delete_keypress(ops)
-        active.on_tool_delete.assert_called_once_with()
-        ops.ui.notebook.currentWidget.return_value.objectName.return_value = 'plugin_tab'
-        ops.ui.plugin_scroll_area = Mock(widget=Mock(return_value=Mock(objectName=Mock(return_value='ncc'))))
-        app.ncclear_tool = SimpleNamespace(pluginName='ncc', on_tool_delete=Mock())
-        AppObjectOps.on_delete_keypress(ops)
-        app.ncclear_tool.on_tool_delete.assert_called_once_with()
-
     def make_job(self):
         app = make_app()
         app.regFK, app.ui = Mock(), Mock()
@@ -116,18 +98,6 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
         job.update_filters = Mock()
         job.read_form = Mock()
         return job
-
-    def test_export_suggestion_uses_exporting_job(self):
-        job = self.make_job()
-        job.app.get_last_save_folder = Mock(return_value='folder')
-        for active in (None, SimpleNamespace(obj_options={'name': 'other'})):
-            job.app.collection.get_active.return_value = active
-            with patch('appObjects.CNCJobObject.FCFileSaveDialog.get_saved_filename',
-                       return_value=('', '')) as dialog:
-                job.on_exportgcode_button_click()
-            self.assertEqual(dialog.call_args.kwargs['directory'], 'folder/own_job')
-            self.assertEqual(job.obj_options['name'], 'own_job')
-        job.app.file_saved.emit.assert_not_called()
 
     def test_export_rename_without_live_properties(self):
         for ui_state in ('absent', 'deleted', 'live'):
@@ -187,15 +157,6 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
             self.assertTrue(unary_union(result).equals(target.difference(mask)))
         multi = MultiLineString([target, LineString([(-2, 0.5), (2, 0.5)])])
         self.assertTrue(unary_union(self.cut(multi, mask.exterior)).equals(multi.difference(mask)))
-
-    def test_cut_open_and_nonoverlapping_masks(self):
-        target = LineString([(-2, 0), (2, 0)])
-        for cutter in (LineString([(0, -1), (0, 1)]), box(10, 10, 11, 11)):
-            self.assertTrue(unary_union(self.cut(target, cutter)).equals(target.difference(cutter)))
-        polygon = box(-2, -2, 2, 2)
-        self.assertTrue(unary_union(self.cut(polygon, box(10, 10, 11, 11))).equals(polygon.exterior))
-        self.assertEqual(self.cut(target, box(-3, -3, 3, 3)), [])
-
 
 if __name__ == '__main__':
     unittest.main()

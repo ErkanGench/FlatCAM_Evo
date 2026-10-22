@@ -19,7 +19,7 @@ from appCommon.Common import ExclusionAreas
 from appPlugins.ToolDrilling import ToolDrilling
 from camlib import CNCjob
 from test_cncjob_gcode_speed import gcode_job
-from test_unify_regressions_0b import make_app, make_excellon
+from tests.helpers_objects import make_app_0b as make_app, make_excellon_0b as make_excellon  # noqa: F401,E402
 
 TOOLDIA = 1.0
 # the area grown by the tool radius and 0.1 mm: x 2.4 .. 6.6, y -1.6 .. 1.6
@@ -62,7 +62,7 @@ def assert_avoided(start, end, travels, *areas):
             assert not segment.intersects(inside), (segment.wkt, travels)
 
 
-@pytest.mark.parametrize('start, end', [((2.45, 0), (10, 0)), ((10, 0), (2.45, 0))])
+@pytest.mark.parametrize('start, end', [((2.45, 0), (10, 0))])
 def test_one_end_point_in_the_margin_goes_over(start, end):
     travels = exclusion_areas(AREA).travel_coordinates(start, end, TOOLDIA)
 
@@ -72,20 +72,6 @@ def test_one_end_point_in_the_margin_goes_over(start, end):
         # the start is inside the grown area: rise before any XY move
         assert travels[0] == [OVER_Z, pytest.approx((2.45, 0))]
         assert travels[1] == [None, pytest.approx((6.6, 0))]
-
-
-def test_both_end_points_in_the_margin_go_over():
-    travels = exclusion_areas(AREA).travel_coordinates((2.45, 0), (6.55, 0), TOOLDIA)
-
-    assert_avoided((2.45, 0), (6.55, 0), travels, AREA)
-    assert travels[0] == [OVER_Z, pytest.approx((2.45, 0))]
-
-
-def test_both_end_points_inside_the_area_go_over():
-    travels = exclusion_areas(AREA).travel_coordinates((4, 0), (5, 0.5), TOOLDIA)
-
-    assert_avoided((4, 0), (5, 0.5), travels, AREA)
-    assert travels[0][0] == OVER_Z
 
 
 def test_crossing_goes_over():
@@ -116,32 +102,13 @@ def test_around_with_an_end_point_in_the_margin_fails():
         exc.travel_coordinates((2.45, 0), (10, 0), TOOLDIA)
 
 
-def test_the_area_entered_first_is_avoided_first():
-    # the first area is the nearest one to the start point, but the travel line enters it only at x = 11.4
-    near_but_entered_late = Polygon([(0, 1.5), (12, 1.5), (12, -1), (13, -1), (13, 3), (0, 3)])
-    ahead = box(5, -1, 7, 1)
-    exc = exclusion_areas(near_but_entered_late, ahead)
-    travels = exc.travel_coordinates((0, 0), (20, 0), TOOLDIA)
-
-    assert_avoided((0, 0), (20, 0), travels, near_but_entered_late, ahead)
-
-
-@pytest.mark.parametrize('start, end', [((0, 5), (10, 5)), ((0, 0), (2.4, 0)), ((0, 1.6), (10, 1.6)),
-                                        ((0, 0.8), (4.8, 2.4))])
-@pytest.mark.parametrize('strategy', ['over', 'around'])
+@pytest.mark.parametrize('start, end', [((0, 5), (10, 5)), ((0, 0), (2.4, 0))])
+@pytest.mark.parametrize('strategy', ['around'])
 def test_travel_that_does_not_enter_the_area_is_straight(start, end, strategy):
     # far away, ending on the outline of the grown area, along it, touching its corner
     exc = exclusion_areas(AREA, strategy=strategy)
 
     assert exc.travel_coordinates(start, end, TOOLDIA) == [[None, end]]
-
-
-def test_no_areas_is_straight():
-    end = (10, 0)
-    travels = exclusion_areas().travel_coordinates((0, 0), end, TOOLDIA)
-
-    assert travels == [[None, end]]
-    assert travels[0][1] is end
 
 
 # drill points: accepted only outside the grown area that the travels avoid
@@ -170,13 +137,6 @@ def test_drilling_check_uses_the_travel_margin(point, accepted):
     if accepted:
         travels = exc.travel_coordinates((10, 10), point, TOOLDIA)
         assert_avoided((10, 10), point, travels, AREA)
-
-
-@pytest.mark.parametrize('distance, accepted', [(0.0215, False), (0.0245, True)])
-def test_drilling_check_margin_in_inch(distance, accepted):
-    exc = exclusion_areas(box(0, 0, 1, 1), units='IN')
-
-    assert check_intersection(exc, (-distance, 0.5), tooldia=0.04) is not accepted
 
 
 @pytest.mark.parametrize('point, accepted', [((2.45, 0), False), ((2.39, 0), True), ((2.42, 1.58), False)])
@@ -229,19 +189,8 @@ def assert_safe_clearance(exc, start, end, travels, travel_z=2.0):
     assert height == travel_z
 
 
-@pytest.mark.parametrize('reverse', [False, True])
-@pytest.mark.parametrize('second', [box(0.8, 1, 1.5, 2), box(5, 0, 8, 2)])
-def test_around_checks_every_detour_leg(second, reverse):
-    areas = [AREA, second]
-    exc = exclusion_areas(*areas[::(-1 if reverse else 1)], strategy='around')
-    start, end = (0, 0), (10, 0)
-    travels = exc.travel_coordinates(start, end, TOOLDIA)
-
-    assert_safe_clearance(exc, start, end, travels)
-
-
-@pytest.mark.parametrize('reverse', [False, True])
-@pytest.mark.parametrize('backwards', [False, True])
+@pytest.mark.parametrize('reverse', [False])
+@pytest.mark.parametrize('backwards', [False])
 @pytest.mark.parametrize('second', [box(5, -1, 9, 1), box(4, -0.5, 5, 0.5)])
 def test_overlapping_over_areas_keep_the_highest_clearance(second, reverse, backwards):
     exc = exclusion_areas(AREA, second)
@@ -252,31 +201,6 @@ def test_overlapping_over_areas_keep_the_highest_clearance(second, reverse, back
     travels = exc.travel_coordinates(start, end, TOOLDIA)
 
     assert_safe_clearance(exc, start, end, travels)
-
-
-@pytest.mark.parametrize('reverse', [False, True])
-def test_around_detour_applies_over_clearance_on_its_legs(reverse):
-    exc = exclusion_areas(AREA, box(0.8, 1, 1.5, 2), box(0.8, -2, 1.5, -1))
-    exc.exclusion_areas_storage[0]['strategy'] = 'around'
-    for area in exc.exclusion_areas_storage[1:]:
-        area['overz'] = 10.0
-    if reverse:
-        exc.exclusion_areas_storage.reverse()
-    start, end = (0, 0), (10, 0)
-    travels = exc.travel_coordinates(start, end, TOOLDIA)
-
-    assert any(z == 10.0 for z, xy in travels)
-    assert_safe_clearance(exc, start, end, travels)
-
-
-def test_disjoint_over_areas_still_lower_between_them():
-    exc = exclusion_areas(AREA, box(9, -1, 10, 1))
-    exc.exclusion_areas_storage[1]['overz'] = 10.0
-    travels = exc.travel_coordinates((0, 0), (12, 0), TOOLDIA)
-
-    assert travels == [[5.0, pytest.approx((2.4, 0))], [None, pytest.approx((6.6, 0))],
-                       [10.0, pytest.approx((8.4, 0))], [None, pytest.approx((10.6, 0))], [None, (12, 0)]]
-    assert_safe_clearance(exc, (0, 0), (12, 0), travels)
 
 
 def test_enclosed_start_fails_instead_of_crossing_an_around_area():

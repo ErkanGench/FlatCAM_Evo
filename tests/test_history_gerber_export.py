@@ -7,8 +7,9 @@ import pytest
 from appHandlers.appHistory import HistoryManager, transform_metadata, apply_matrix_to_object, states_equal
 from camlib import affine_scale_matrix, affine_rotate_matrix, affine_skew_matrix
 from test_app_history import fake_app
-from test_unify_characterization import (app, _headless_qt, make_gerber, NATIVE_GBR, export_gerber_text,
-                                         reparse_gerber, assert_poly_equiv)
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_poly_equiv, export_gerber_text, _headless_qt, make_gerber, NATIVE_GBR, reparse_gerber,
+)
 
 
 @pytest.mark.parametrize('operation', ['scale', 'quarter_turn', 'nonuniform', 'skew', 'alignment'])

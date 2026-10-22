@@ -83,17 +83,6 @@ class TestUpdateView(unittest.TestCase):
         self.assertEqual((gerber[1], gerber[2]), (0, 2))
         self.assertEqual((excellon[1], excellon[2]), (0, 0))
 
-    def test_object_not_in_collection_is_noop(self):
-        self.col.update_view(SimpleNamespace(kind="gerber", obj_options={"name": "gone"}))
-        self.assertEqual(len(self.spy), 0)
-        self.assertEqual(len(self.layout_spy), 0)
-
-    def test_empty_collection_emits_nothing(self):
-        col = make_collection()
-        spy = QSignalSpy(col.dataChanged)
-        col.update_view()
-        self.assertEqual(len(spy), 0)
-
     def test_selection_and_persistent_index_survive(self):
         view = self.col.view
         gerber_group = self.col.group_items["gerber"]

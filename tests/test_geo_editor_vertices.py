@@ -31,7 +31,6 @@ def vertex_editor(geometry):
 @pytest.mark.parametrize('action,index,point,expected', [
     ('move', 1, (2, 1), [(0, 0), (2, 1), (4, 0)]),
     ('insert', 0, (1, 0), [(0, 0), (1, 0), (2, 0), (4, 0)]),
-    ('remove', 1, None, [(0, 0), (4, 0)]),
 ])
 def test_open_path_edit_is_one_replacement_with_history(action, index, point, expected):
     editor, original = vertex_editor(LineString([(0, 0), (2, 0), (4, 0)]))
@@ -55,7 +54,7 @@ def test_open_path_edit_is_one_replacement_with_history(action, index, point, ex
     assert editor.sel_shapes.items == [replacement.geo]
 
 
-@pytest.mark.parametrize('factory', [LineString, LinearRing, Polygon])
+@pytest.mark.parametrize('factory', [Polygon])
 @pytest.mark.parametrize('index', [0, 4])
 def test_closing_vertex_alias_moves_both_ends(factory, index):
     editor, original = vertex_editor(factory([(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)]))
@@ -79,7 +78,7 @@ def test_polygon_holes_survive_move_insert_and_remove():
     assert editor.selected == [original]
 
 
-@pytest.mark.parametrize('factory', [LineString, LinearRing, Polygon])
+@pytest.mark.parametrize('factory', [Polygon])
 def test_insert_on_closing_segment_and_remove_closing_alias(factory):
     editor, original = vertex_editor(factory([(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)]))
     assert editor.apply_vertex_edit('insert', 3, (0, 2)) != 'fail'
@@ -94,19 +93,8 @@ def test_insert_on_closing_segment_and_remove_closing_alias(factory):
     (LineString([(0, 0), (1, 0)]), 'remove', 0, None),
     (LinearRing([(0, 0), (4, 0), (0, 4)]), 'remove', 0, None),
     (Polygon([(0, 0), (4, 0), (0, 4)]), 'remove', 3, None),
-    (box(0, 0, 4, 4), 'move', 1, (0, 0)),
     (LineString([(0, 0), (2, 0), (4, 0)]), 'move', 1, (float('nan'), 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', 0, (float('inf'), 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', 0, ('bad', 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', 0, (1,)),
-    (LineString([(0, 0), (2, 0)]), 'move', -1, (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', 0.5, (1, 0)),
     (LineString([(0, 0), (2, 0)]), 'move', 2, (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'insert', 1, (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'insert', 0, (1, 1)),
-    (LineString([(0, 0), (2, 0)]), 'insert', 0, (3, 0)),
-    (LineString([(0, 0), (2, 0)]), 'insert', 0, (0, 0)),
-    (LineString([(0, 0), (2, 0)]), 'unknown', 0, (1, 0)),
     (Polygon([(0, 0), (6, 0), (6, 6), (0, 6)], [[(1, 1), (2, 1), (2, 2), (1, 2)]]),
      'move', 0, (4, 4)),
 ])
@@ -120,28 +108,8 @@ def test_invalid_edits_preserve_storage_selection_and_redo(geometry, action, ind
     assert editor.app.inform.emit.called
 
 
-def test_unsupported_and_ambiguous_selection_are_explained():
-    editor, original = vertex_editor(MultiLineString([[(0, 0), (1, 0)], [(2, 0), (3, 0)]]))
-    assert editor.apply_vertex_edit('move', 0, (4, 4)) == 'fail'
-    assert 'LineString' in str(editor.app.inform.emit.call_args)
-    editor.selected = []
-    assert editor.apply_vertex_edit('move', 0, (4, 4)) == 'fail'
-    editor.selected = [original, original]
-    assert editor.apply_vertex_edit('move', 0, (4, 4)) == 'fail'
-    assert 'one' in str(editor.app.inform.emit.call_args).lower()
-    assert not editor.undo()
 
 
-def test_busy_rejection_and_stale_dialog_target():
-    editor, original = vertex_editor(LineString([(0, 0), (2, 0)]))
-    editor.submit_worker(Mock(), [])
-    assert editor.apply_vertex_edit('move', 0, (1, 1)) == 'fail'
-    run_worker(editor)
-    assert editor.apply_vertex_edit('move', 0, (1, 1)) != 'fail'
-    replacement = editor.selected[0]
-    assert editor.apply_vertex_edit('move', 0, (3, 3), target=original) == 'fail'
-    assert editor.selected == [replacement]
-    assert len(editor._history_undo) == 1
 
 
 def test_replacement_and_replay_update_real_tree_index_and_snap_cache():

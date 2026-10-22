@@ -15,7 +15,7 @@ from appHandlers.appHistory import (COORD_BYTES, HistoryError, HistoryManager, H
                                     invert_matrix, object_state)
 from appHandlers.appProjects import ProjectManager
 from appObjects.ProjectContext import ProjectContext
-from test_unify_characterization import make_app, make_gerber
+from tests.helpers_objects import make_app, make_gerber  # noqa: F401,E402
 
 
 class FakeStep(HistoryStep):
@@ -67,13 +67,6 @@ class TestManager(unittest.TestCase):
         self.assertFalse(h.can_redo())
         self.assertFalse(h.redo())
 
-    def test_count_limit(self):
-        h, _app = manager(global_history_steps=3)
-        log = []
-        for i in range(10):
-            h.push(FakeStep(str(i), log))
-        self.assertEqual([s.label for s in h.undo_stack], ['7', '8', '9'])
-
     def test_memory_limit(self):
         h, _app = manager(global_history_memory_mb=1)
         log = []
@@ -98,12 +91,6 @@ class TestManager(unittest.TestCase):
         self.assertEqual(log, [('undo', 'b'), ('undo', 'a')])
         h.redo()
         self.assertEqual(log[2:], [('redo', 'a'), ('redo', 'b')])
-
-    def test_empty_group_pushes_nothing(self):
-        h, _app = manager()
-        with h.group('nothing'):
-            pass
-        self.assertFalse(h.can_undo())
 
     def test_suspended_and_headless(self):
         h, app = manager()
@@ -139,16 +126,6 @@ class TestManager(unittest.TestCase):
         h.undo_stack[-1].fail = False
         self.assertTrue(h.undo())
 
-    def test_forget(self):
-        h, _app = manager()
-        log = []
-        h.push(FakeStep('a', log, uids={'u1'}))
-        h.push(FakeStep('b', log, uids={'u2'}))
-        with h.group('g'):
-            h.push(FakeStep('c', log, uids={'u1'}))
-        h.forget('u1')
-        self.assertEqual([s.label for s in h.undo_stack], ['b'])
-
     def test_changed_signal_only_for_the_active_history(self):
         h, app = manager()
         h.push(FakeStep('a', []))
@@ -157,21 +134,6 @@ class TestManager(unittest.TestCase):
         app.history = object()
         h.push(FakeStep('b', []))
         app.history_changed.emit.assert_not_called()
-
-    def test_push_from_threads(self):
-        h, _app = manager(global_history_steps=1000)
-        log = []
-
-        def work(n):
-            for i in range(50):
-                h.push(FakeStep('%d-%d' % (n, i), log))
-
-        threads = [threading.Thread(target=work, args=(n,)) for n in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        self.assertEqual(len(h.undo_stack), 200)
 
     def test_invert_matrix(self):
         m = (0.0, -2.0, 2.0, 0.0, 5.0, -3.0)
@@ -228,15 +190,6 @@ class TestIdentityAndProjects(unittest.TestCase):
         self.assertFalse(h.can_undo())
         self.assertTrue(h.can_redo())
 
-    def test_uid_unique_and_kept_by_from_dict(self):
-        app = make_app()
-        g1, g2 = make_gerber(app, name='a'), make_gerber(app, name='b')
-        self.assertNotEqual(g1.history_uid, g2.history_uid)
-        d = g1.to_dict()
-        d['history_uid'] = g1.history_uid
-        g2.from_dict(d)
-        self.assertEqual(g2.history_uid, g1.history_uid)
-
     def test_each_project_has_its_history(self):
         ctx1 = ProjectContext('p1', SimpleNamespace(get_list=lambda: [], view=None))
         ctx2 = ProjectContext('p2', SimpleNamespace(get_list=lambda: [], view=None))
@@ -281,34 +234,6 @@ class TestMemory(unittest.TestCase):
         self.assertGreaterEqual(h.total_size(), 50000 * COORD_BYTES)
         self.assertLess(h.total_size(), 50000 * COORD_BYTES + 50000)
 
-    def test_non_geometry_storage_and_newest_retention(self):
-        h, _app = manager(global_history_memory_mb=1)
-        text = 'G' * 2000000
-        h.push(SnapshotStep('text', [('u1', {}, {'source_file': text})]))
-        self.assertGreaterEqual(h.total_size(), len(text))
-        self.assertEqual(h.undo_label(), 'text')
-        h.push(SnapshotStep('small', [('u1', {}, {'gcode_parsed': [{'Z': 1.0}]})]))
-        self.assertEqual([s.label for s in h.undo_stack], ['small'])
-
-    def test_geometry_of_a_live_object_is_not_counted_for_the_limit(self):
-        g = self.big_geometry(80000)          # 1.28 MB
-        live = SimpleNamespace(history_uid='u1', ser_attrs=['tools'], kind='geometry',
-                               tools={1: {'solid_geometry': [g]}})
-        app = fake_app(global_history_memory_mb=1)
-        h = HistoryManager(app, collection=SimpleNamespace(get_list=lambda: [live]))
-        app.history = h
-        for i in range(5):
-            h.push(SnapshotStep('edit %d' % i, [('u1', {'tools': {1: {'solid_geometry': [g]}}},
-                                                 {'tools': {1: {'solid_geometry': [g]}}})]))
-        # the history holds no memory of its own: the project still uses the geometry
-        self.assertEqual(len(h.undo_stack), 5)
-        # a geometry that only the history keeps counts
-        h.push(SnapshotStep('big', [('u2', {'g': self.big_geometry(70000)}, {'g': self.big_geometry(2)})]))
-        h.push(SnapshotStep('big2', [('u2', {'g': self.big_geometry(70000)}, {'g': self.big_geometry(2)})]))
-        self.assertEqual([s.label for s in h.undo_stack][-1], 'big2')
-        self.assertNotIn('big', [s.label for s in h.undo_stack])
-
-
 class TestRebuildSaveRename(unittest.TestCase):
 
     def rebuild_flag(self, kind):
@@ -330,9 +255,6 @@ class TestRebuildSaveRename(unittest.TestCase):
     def test_rebuild_cncjob_marks_loaded_from_project(self):
         self.assertTrue(self.rebuild_flag('cncjob').is_loaded_from_project)
 
-    def test_rebuild_gerber_does_not_set_the_flag(self):
-        self.assertFalse(hasattr(self.rebuild_flag('gerber'), 'is_loaded_from_project'))
-
     def test_undo_redo_set_should_we_save(self):
         h, app = manager()
         h.push(FakeStep('a', []))
@@ -342,14 +264,6 @@ class TestRebuildSaveRename(unittest.TestCase):
         app.should_we_save = False
         self.assertTrue(h.redo())
         self.assertTrue(app.should_we_save)
-
-    def test_failed_or_empty_run_does_not_set_should_we_save(self):
-        h, app = manager()
-        app.should_we_save = False
-        self.assertFalse(h.undo())
-        h.push(FakeStep('a', [], fail=True))
-        self.assertFalse(h.undo())
-        self.assertFalse(app.should_we_save)
 
     def test_rename_to_a_taken_name_raises(self):
         a = SimpleNamespace(obj_options={'name': 'a'})

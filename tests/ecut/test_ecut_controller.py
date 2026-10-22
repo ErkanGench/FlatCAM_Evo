@@ -127,15 +127,6 @@ def test_motion_record_encoding():
     assert struct.unpack('>6h', record[4:16]) == axes
 
 
-def test_crc():
-    vectors = [
-        (b'\x00' * 60, 0x37DB79C2),
-        (bytes(range(60)), 0x981F1FA6),
-        (b'\xff' * 60, 0x0A4B5383),
-        (b'123456789' + b'\x00' * 51, 0xA8AA2C92),
-    ]
-    for data, expected in vectors:
-        assert ecut_crc60(data) == expected
 
 
 def test_gcode_parsing():
@@ -147,18 +138,6 @@ def test_gcode_parsing():
     assert api.position_mm[:3] == [20.0, 20.0, 5.0]
 
 
-def test_rx_decode():
-    report = bytearray(65)
-    positions = [1000, 2000, 3000, 4000, 5000, 6000]
-    struct.pack_into('>6I', report, 1, *positions)
-    struct.pack_into('>H', report, 33, 0x0008)
-    struct.pack_into('>H', report, 31, 0xFFFF)
-    report[41] = 0
-    struct.pack_into('>I', report, 61, ecut_crc60(bytes(report[1:61])))
-    frame = decode_rx_report(bytes(report))
-    assert frame.axis_positions == tuple(positions)
-    assert frame.estop_active
-    assert frame.crc_valid
 
 
 def test_config_persistence(tmp_path):

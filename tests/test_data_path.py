@@ -17,27 +17,9 @@ def test_not_set_or_empty_gives_no_folder(environ):
     assert data_path_from_env(environ) is None
 
 
-def test_absolute_path_and_spaces_around_it(tmp_path):
-    folder = str(tmp_path / 'FlatCAM settings')
-    assert data_path_from_env({'FLATCAM_DATA_PATH': folder}) == folder
-    assert data_path_from_env({'FLATCAM_DATA_PATH': ' %s ' % folder}) == folder
-
-
 def test_relative_path_is_taken_from_the_working_folder(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert data_path_from_env({'FLATCAM_DATA_PATH': 'settings'}) == os.path.join(os.getcwd(), 'settings')
-
-
-def test_home_folder_is_expanded():
-    expected = os.path.abspath(os.path.join(os.path.expanduser('~'), 'flatcam-test'))
-    assert data_path_from_env({'FLATCAM_DATA_PATH': '~/flatcam-test'}) == expected
-
-
-def test_reads_the_process_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv('FLATCAM_DATA_PATH', str(tmp_path))
-    assert data_path_from_env() == str(tmp_path)
-    monkeypatch.delenv('FLATCAM_DATA_PATH')
-    assert data_path_from_env() is None
 
 
 class SetupStub:
@@ -111,38 +93,3 @@ def test_app_takes_a_relative_folder_from_the_working_folder_at_the_start(tmp_pa
 
     assert restarted.data_path == app.data_path
 
-
-@pytest.mark.parametrize('frozen', [False, True], ids=['source', 'frozen'])
-def test_startup_override_without_appdata(tmp_path, monkeypatch, frozen):
-    from appGUI import VisPyPatches
-
-    settings = tmp_path / 'settings'
-    monkeypatch.setenv('FLATCAM_DATA_PATH', str(settings))
-    monkeypatch.delenv('APPDATA', raising=False)
-    monkeypatch.setattr(sys, 'platform', 'win32')
-    monkeypatch.setattr(sys, 'frozen', frozen, raising=False)
-    monkeypatch.setattr('multiprocessing.freeze_support', lambda: None)
-    monkeypatch.setattr('builtins.open', mock_open(read_data='portable=False\n'))
-
-    def stop_after_paths():
-        raise RuntimeError('startup paths ready')
-
-    monkeypatch.setattr(VisPyPatches, 'apply_patches', stop_after_paths)
-    with pytest.raises(RuntimeError, match='startup paths ready'):
-        runpy.run_path(str(Path(appMain.__file__).with_name('flatcam.py')), run_name='__main__')
-    assert settings.is_dir()
-
-
-@pytest.mark.parametrize('value', [None, '', '  '], ids=['unset', 'empty', 'blank'])
-def test_app_without_the_variable_uses_the_default_folder(tmp_path, monkeypatch, setup_paths, value):
-    if value is not None:
-        monkeypatch.setenv('FLATCAM_DATA_PATH', value)
-
-    app = setup_paths()
-
-    if sys.platform == 'win32':
-        expected = os.path.join(str(tmp_path / 'appdata'), 'FlatCAM')
-    else:
-        expected = os.path.join(str(tmp_path / 'home'), '.FlatCAM')
-    assert app.data_path == expected
-    assert os.path.isfile(app.defaults_path())

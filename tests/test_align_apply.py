@@ -14,9 +14,7 @@ from appHandlers.appHistory import HistoryManager, apply_matrix_to_object, trans
 from appPlugins.ToolAlignObjects.AlignGen import apply_matrix, invert, solve_rigid, solve_similarity, solve_affine
 
 from test_app_history import fake_app
-from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
-    _headless_qt, app, make_excellon, make_gerber,
-)
+from tests.helpers_objects import app, _headless_qt, make_excellon, make_gerber  # noqa: F401,E402
 
 MATRICES = {
     'rigid': solve_rigid([(0, 0), (10, 0)], [(3, 4), (3, 14)]),                      # 90 deg + move
@@ -65,30 +63,3 @@ def test_excellon_rigid_moves_the_hole_shapes(app):
         for g0, g1 in zip(old, tool['solid_geometry']):
             assert g0.equals_exact(g1, 1e-6)
 
-
-@pytest.mark.parametrize('kind', ['geometry', 'excellon'])
-def test_alignment_aggregate_bounds_agree_with_tools_through_history(app, kind):
-    obj = _make(app, kind)
-    if kind == 'geometry':
-        obj.multigeo = True
-        obj.tools = {1: {'solid_geometry': list(obj.solid_geometry)}, 2: {'solid_geometry': []}}
-    h = HistoryManager(fake_app(), SimpleNamespace(get_list=lambda: [obj]))
-    h.app.history = h
-    h.app.app_obj = SimpleNamespace(object_changed=Mock())
-    obj.plot = Mock()
-    obj.plot_transformed = Mock()
-    before = transform_metadata(obj)
-    matrix = MATRICES['rigid']
-    apply_matrix_to_object(obj, matrix)
-    h.record_matrix('align', [(obj, matrix, before)])
-
-    def check():
-        aggregate = shapely.total_bounds(obj.solid_geometry)
-        pertool = shapely.total_bounds([g for tool in obj.tools.values() for g in tool['solid_geometry']])
-        assert aggregate == pytest.approx(pertool)
-        assert aggregate == pytest.approx(obj.bounds())
-    check()
-    assert h.undo()
-    check()
-    assert h.redo()
-    check()

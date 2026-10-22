@@ -4,8 +4,6 @@ from appPlugins.ToolGrblSender.SenderSimulation import VirtualGrbl, speed_multip
 
 
 class TestVirtualGrbl(unittest.TestCase):
-    def test_speed_range(self):
-        self.assertEqual([speed_multiplier(n) for n in (0, 25, 100)], [0.5, 1.0, 100.0])
 
     def test_speed_uses_integer_steps_then_a_linear_upper_range(self):
         self.assertEqual([speed_multiplier(n) for n in range(25, 35)], list(range(1, 11)))
@@ -318,28 +316,6 @@ class TestSimulationControls(unittest.TestCase):
         self.assertEqual(logged.count('G1 X0 F600'), 1000)
         self.assertEqual(logged.count('ok'), 1000)
 
-    def test_layout_and_busy_gate(self):
-        tool = self.make_tool()
-        grid = tool.ui.unlock_button.parentWidget().layout()
-        self.assertEqual(grid.getItemPosition(grid.indexOf(tool.ui.unlock_button)), (1, 0, 1, 1))
-        self.assertEqual(grid.getItemPosition(grid.indexOf(tool.ui.sim_button)), (1, 1, 1, 1))
-        tool._grbl_op = object()
-        tool._update_sim_button()
-        self.assertFalse(tool.ui.sim_button.isEnabled())
-        tool.on_simulation()
-        self.assertIsNone(tool._simulation)
-        tool._grbl_op = None
-        tool._program_paused = True
-        tool._update_sim_button()
-        self.assertFalse(tool.ui.sim_button.isEnabled())
-        tool._program_paused = False
-        tool._update_sim_button()
-        self.assertTrue(tool.ui.sim_button.isEnabled())
-        tool._controller_state = 'Hold'
-        tool._program_paused = True
-        tool._on_grbl_port_closed()
-        tool._update_sim_button()
-        self.assertTrue(tool.ui.sim_button.isEnabled())
 
     def test_offline_simulation_and_physical_isolation(self):
         from unittest.mock import MagicMock

@@ -36,11 +36,6 @@ def test_address_edits_one_part_of_a_multipolygon():
     assert (4.5, 3) in list(result.geoms[1].exterior.coords)
 
 
-def test_insert_off_segment_only_without_the_segment_rule():
-    editor, original = vertex_editor(Polygon([(0, 0), (4, 0), (4, 4), (0, 4)]))
-    assert editor.apply_vertex_edit('insert', (0, 0, 0), (2, -1)) == 'fail'
-    assert editor.apply_vertex_edit('insert', (0, 0, 0), (2, -1), on_segment=False) != 'fail'
-    assert (2, -1) in list(editor.selected[0].geo.exterior.coords)
 
 
 from appEditors.vertex_grips import VertexGrips
@@ -90,27 +85,8 @@ def test_invalid_drag_does_not_change_the_shape():
     assert editor.app.inform.emit.called
 
 
-def test_canvas_click_hook_gives_the_press_to_the_grips():
-    editor, original = drag_editor(box(0, 0, 4, 4))
-    editor.app.ui = SimpleNamespace(update_location_labels=Mock())
-    editor.app.plotcanvas.on_update_text_hud = Mock()
-    editor.vertex_grips = Mock(press=Mock(return_value=True))
-    event = SimpleNamespace(pos=(4, 0), button=1)
-    assert AppGeoEditor.on_canvas_click(editor, event) is None
-    editor.vertex_grips.press.assert_called_once()
-    assert editor.press_pos_raw == (4, 0)
-    editor.app.ui.update_location_labels.assert_called_once_with(0, 0, 4, 0)
-    editor.app.plotcanvas.on_update_text_hud.assert_called_once_with(0, 0, 4, 0)
 
 
-def test_canvas_click_release_hook_gives_the_release_to_the_grips():
-    editor, original = drag_editor(box(0, 0, 4, 4))
-    editor.vertex_grips = Mock(release=Mock(return_value=True))
-    editor.press_pos_raw, editor.press_pos_screen = (4, 0), (4, 0)
-    event = SimpleNamespace(pos=(5, 0), button=1)
-    assert AppGeoEditor.on_canvas_click_release(editor, event) is None
-    editor.vertex_grips.release.assert_called_once()
-    assert editor.press_pos_raw is None and editor.press_pos_screen is None
 
 
 def test_right_button_press_cancels_the_drag():
@@ -121,34 +97,6 @@ def test_right_button_press_cancels_the_drag():
     editor.vertex_grips.cancel.assert_called_once()
 
 
-def test_dialog_edits_a_hole_through_part_and_ring_fields(monkeypatch):
-    hole = [(1, 1), (2, 1), (2, 2), (1, 2), (1, 1)]
-    editor, original = vertex_editor(Polygon([(0, 0), (6, 0), (6, 6), (0, 6)], [hole]))
-    editor.decimals = 4
-    app = SimpleNamespace(decimals=4, app_units='mm', resource_location='', on_editing_finished=Mock())
-    editor.ui = AppGeoEditorUI(app)
-    editor.ui.vertex_edit_btn.clicked.connect(lambda: AppGeoEditor.on_edit_vertices(editor))
-
-    def exercise(dialog):
-        part = dialog.findChild(QtWidgets.QSpinBox, 'vertex_part')
-        ring = dialog.findChild(QtWidgets.QSpinBox, 'vertex_ring')
-        index = dialog.findChild(QtWidgets.QSpinBox, 'vertex_index')
-        x = dialog.findChild(QtWidgets.QLineEdit, 'vertex_x')
-        y = dialog.findChild(QtWidgets.QLineEdit, 'vertex_y')
-        assert part.maximum() == 0 and ring.maximum() == 1
-        ring.setValue(1)
-        assert float(x.text()) == 1 and float(y.text()) == 1
-        x.setText('1.5')
-        y.setText('0.5')
-        dialog.findChild(QtWidgets.QPushButton, 'vertex_apply').click()
-        assert list(editor.selected[0].geo.interiors[0].coords)[0] == (1.5, 0.5)
-        dialog.reject()
-        return 0
-
-    monkeypatch.setattr(QtWidgets.QDialog, 'exec', exercise)
-    editor.ui.vertex_edit_btn.click()
-    assert editor.undo()
-    assert editor.selected == [original]
 
 
 ROUNDED = box(1, 1, 9, 5).buffer(1, join_style=BufferJoinStyle.round)
@@ -164,18 +112,6 @@ def on_some_arc(ring, point):
     return False
 
 
-def test_arc_bend_is_one_undo_step_and_uses_the_circle_steps():
-    editor, original = vertex_editor(ROUNDED)
-    editor.app.options['geometry_circle_steps'] = 8
-    kind, address, middle = next(grip for grip in vertex_grips(ROUNDED) if grip[0] == 'arc_mid')
-    cursor = (middle[0] - 0.2, middle[1] - 0.2)
-    assert editor.apply_vertex_edit('arc_mid', address, cursor, on_segment=False) != 'fail'
-    result = editor.selected[0].geo
-    assert on_some_arc(result.exterior, cursor)
-    assert len(result.exterior.coords) < len(ROUNDED.exterior.coords)   # 8 steps: the bent arc has few segments
-    assert len(editor._history_undo) == 1
-    assert editor.undo()
-    assert editor.selected == [original]
 
 
 def test_arc_middle_drag_through_the_real_editor_is_one_undo_step():

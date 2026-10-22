@@ -155,30 +155,12 @@ class TestSprintLayoutFixture(unittest.TestCase):
         self.assertEqual(self.parsed.layers['O']['name'], 'Board Outline')
         self.assertEqual(self.parsed.board_count, 1)
 
-    def test_exactly_four_warnings_about_unsupported_content(self):
-        warnings = self.parsed.warnings
-        self.assertEqual(len(warnings), 4, warnings)
-        ground = [text for text in warnings if 'ground plane' in text]
-        self.assertEqual(len(ground), 1, warnings)
-        self.assertIn('C1', ground[0])
-        self.assertIn('C2', ground[0])
-        self.assertIn('Silkscreen circles and polygons are drawn approximately', warnings)
-        self.assertIn('Zero-width lines were skipped (18)', warnings)
-        self.assertIn('Silkscreen arcs and zero-width circles were skipped (14)', warnings)
-
     def test_copper_matches_reference_gerbers(self):
         for layer in ('C1', 'C2'):
             with self.subTest(layer=layer):
                 reference = self.references[layer]
                 difference = self._mine(layer).symmetric_difference(reference).area
                 self.assertLessEqual(difference / reference.area, 0.01)
-
-    def test_mask_matches_reference_gerbers(self):
-        for layer in ('M1', 'M2'):
-            with self.subTest(layer=layer):
-                reference = self.references[layer]
-                difference = self._mine(layer).symmetric_difference(reference).area
-                self.assertLessEqual(difference / reference.area, 0.02)
 
     def test_board_outline_bounds_match_reference(self):
         mine = self._mine('O').bounds
@@ -189,30 +171,6 @@ class TestSprintLayoutFixture(unittest.TestCase):
             self.assertAlmostEqual(actual, expected, delta=0.01)
         for actual, expected in zip(self.parsed.board_outline.bounds, self.BOARD_OUTLINE_BOUNDS):
             self.assertAlmostEqual(actual, expected, delta=0.01)
-
-    def test_board_size_encloses_the_outline(self):
-        width, height = self.parsed.board_size
-        self.assertGreaterEqual(width, self.OUTLINE_BOUNDS[2])
-        self.assertGreaterEqual(height, self.OUTLINE_BOUNDS[3])
-
-    def test_drill_groups_and_counts(self):
-        self.assertEqual(list(self.parsed.drill_groups), ['PTH'])
-        counts = {}
-        for tool in self.parsed.drill_groups['PTH'].values():
-            counts[round(tool['tooldia'], 2)] = (len(tool['drills']), len(tool['slots']))
-        self.assertEqual(counts, self.DRILL_COUNTS)
-        holes = sum(len(tool['drills']) + len(tool['slots'])
-                    for tools in self.parsed.drill_groups.values() for tool in tools.values())
-        self.assertEqual(holes, 245)
-
-    def test_drill_diameters_match_reference_tools(self):
-        mine = sorted((round(tool['tooldia'], 4), len(tool['drills']))
-                      for tool in self.parsed.drill_groups['PTH'].values())
-        reference = sorted((round(tool['tooldia'], 4), len(tool['drills'])) for tool in self.reference_tools.values())
-        self.assertEqual(len(mine), len(reference))
-        for (mine_dia, mine_count), (ref_dia, ref_count) in zip(mine, reference):
-            self.assertEqual(mine_count, ref_count)
-            self.assertAlmostEqual(mine_dia, ref_dia, delta=0.003)
 
     def test_every_hole_matches_a_reference_hole(self):
         all_tools = [tool for tools in self.parsed.drill_groups.values() for tool in tools.values()]

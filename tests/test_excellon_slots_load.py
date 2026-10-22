@@ -2,8 +2,7 @@
 from shapely.geometry import Point
 
 from appObjects.ExcellonObject import ExcellonObject
-from test_unify_characterization import (  # noqa: F401  (fixtures)
-    _headless_qt, app, make_excellon, save_and_load, slot_flat)
+from tests.helpers_objects import app, _headless_qt, make_excellon, save_and_load, slot_flat  # noqa: F401,E402
 
 
 def _tuple_slots(obj):

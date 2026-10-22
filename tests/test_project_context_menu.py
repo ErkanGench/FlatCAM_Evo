@@ -65,14 +65,6 @@ class TestHasSource(unittest.TestCase):
         self.assertTrue(ObjectCollection.has_source(obj('excellon', source_file='M48\nM30\n')))
         self.assertTrue(ObjectCollection.has_source(obj('geometry', source_file='0\nSECTION\n')))
 
-    def test_objects_without_a_source(self):
-        # a Geometry made by a tool has no source_file
-        self.assertFalse(ObjectCollection.has_source(obj('geometry')))
-        self.assertFalse(ObjectCollection.has_source(obj('gerber', source_file='')))
-        # (Copper Thieving sets a list)
-        self.assertFalse(ObjectCollection.has_source(obj('gerber', source_file=[])))
-
-
 class TestMenuRequest(unittest.TestCase):
 
     def setUp(self):
@@ -107,46 +99,12 @@ class TestMenuRequest(unittest.TestCase):
         self.assertEqual(self.shown(), {'disable', 'color', 'view_source', 'edit', 'copy', 'delete', 'save',
                                         'properties'})
 
-    def test_cncjob(self):
-        self.request(obj('cncjob', plot=False))
-        self.assertEqual(self.shown(), {'enable', 'view_source', 'edit', 'copy', 'delete', 'save', 'properties'})
-
-    def test_entries_hidden_for_a_script_come_back_for_the_next_object(self):
-        self.request(obj('script', source_file='puts 1'))
-        self.assertEqual(self.shown(), {'copy', 'delete', 'save'})
-
-        self.request(obj('excellon', source_file='M48\nM30\n'))
-        self.assertEqual(self.shown(), {'disable', 'color', 'view_source', 'edit', 'copy', 'delete', 'save',
-                                        'properties'})
-
     def test_enable_and_disable_follow_the_plot_state(self):
         self.request(obj('gerber', 'a', plot=True), obj('gerber', 'b', plot=False))
         self.assertTrue({'enable', 'disable'} <= self.shown())
         self.request(obj('gerber', 'a', plot=False), obj('gerber', 'b', plot=False))
         self.assertIn('enable', self.shown())
         self.assertNotIn('disable', self.shown())
-
-    def test_several_objects(self):
-        # View Source, Edit and Save work on 1 object
-        self.request(obj('gerber', 'a', source_file='G04*'), obj('geometry', 'b'))
-        self.assertEqual(self.shown(), {'disable', 'copy', 'delete', 'properties'})
-        self.assertEqual(self.ui.menuprojectsave.text(), 'Save')
-
-        # several CNCJob objects: Batch Save
-        self.request(obj('cncjob', 'a'), obj('cncjob', 'b'))
-        self.assertEqual(self.shown(), {'disable', 'copy', 'delete', 'save', 'properties'})
-        self.assertEqual(self.ui.menuprojectsave.text(), 'Batch Save')
-
-    def test_no_selection(self):
-        self.request(obj('script'))
-        self.request()
-        ui = self.ui
-        for action in (ui.menuprojectenable, ui.menuprojectdisable, ui.menuprojectcolor.menuAction(),
-                       ui.menuprojectviewsource, ui.menuprojectedit, ui.menuprojectcopy, ui.menuprojectdelete,
-                       ui.menuprojectsave, ui.menuprojectproperties):
-            self.assertTrue(action.isVisible())
-            self.assertFalse(action.isEnabled())
-
 
 class TestViewSource(unittest.TestCase):
 

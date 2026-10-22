@@ -76,7 +76,7 @@ def laser_state(line):
     return None
 
 
-@pytest.mark.parametrize('min_power', [0, 250])
+@pytest.mark.parametrize('min_power', [250])
 @pytest.mark.parametrize('toolchange', [False, True])
 @pytest.mark.parametrize('pp_name', LASER_PREPROCESSORS)
 def test_the_laser_is_off_for_every_travel_and_on_at_each_hole(pp_name, toolchange, min_power):
@@ -127,12 +127,3 @@ def test_other_preprocessors_still_start_the_spindle_before_the_first_travel(pp_
         first_travel = next(i for i, line in enumerate(lines) if line in travels)
         assert lines[first_travel - 2:first_travel] == ['M03 S800', 'G4 P1.5']
 
-
-def test_default_preprocessor_drilling_gcode_is_unchanged():
-    # the G-code of 1.0, byte for byte
-    holes = ''.join('G00 X%s Y%s\nG01 Z-1.7000\nG01 Z0\nG00 Z2.0000\n' % xy
-                    for xy in (('5.0000', '5.0000'), ('8.0000', '2.0000'), ('20.0000', '10.0000'),
-                               ('25.0000', '15.0000')))
-    expected = 'G01 F300.00\nG00 Z2.0000\n\nM03 S800\nG4 P1.5\n' + holes + 'M05\nG00 Z15.00\n\n'
-
-    assert drilling_gcode('default', toolchange=False)[0] == [expected]

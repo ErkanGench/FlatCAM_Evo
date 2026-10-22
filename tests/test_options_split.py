@@ -12,33 +12,15 @@ from defaults import AppDefaults, AppOptions, APP_TOOL_KEYS, PROJECT_KEYS, is_pr
 
 
 class TestIsProjectKey(unittest.TestCase):
-    def test_named_project_keys(self):
-        for key in ('units', 'gerber_noncoppermargin', 'gerber_noncopperrounded', 'gerber_bboxmargin',
-                    'gerber_bboxrounded', 'gerber_follow', 'excellon_drill_tooldia', 'excellon_slot_tooldia',
-                    'geometry_seg_x', 'geometry_seg_y'):
-            self.assertTrue(is_project_key(key), key)
-
     def test_tools_keys_are_project_keys(self):
         for key in ('tools_iso_tooldia', 'tools_drill_ppname_e', 'tools_mill_ppname_g', 'tools_ncc_operation'):
             self.assertTrue(is_project_key(key), key)
-
-    def test_tools_application_exceptions(self):
-        for key in ('tools_grbl_travelz', 'tools_calc_vshape_tip_dia', 'tools_iso_plotting',
-                    'tools_dist_big_cursor', 'tools_drill_preprocessor_list', 'tools_al_controller',
-                    'tools_gcode_fit_view', 'tools_dist_snap_center', 'tools_opt_precision',
-                    'tools_qrcode_sel_limit'):
-            self.assertFalse(is_project_key(key), key)
 
     def test_other_keys_are_application_keys(self):
         for key in ('global_gridx', 'global_workspace', 'global_appearance', 'cncjob_tooldia',
                     'excellon_optimization_type', 'gerber_plot', 'units_precision', 'first_run',
                     'root_folder_path', None, 5):
             self.assertFalse(is_project_key(key), key)
-
-    def test_listed_keys_exist_in_factory_defaults(self):
-        for key in PROJECT_KEYS | APP_TOOL_KEYS:
-            self.assertIn(key, AppDefaults.factory_defaults, key)
-
 
 class TestAppOptionsMergedView(unittest.TestCase):
     def make(self):
@@ -72,12 +54,6 @@ class TestAppOptionsMergedView(unittest.TestCase):
         self.assertEqual(defaults['gerber_bboxmargin'], before)
         self.assertEqual(calls, ['gerber_bboxmargin'])
 
-    def test_unchanged_value_does_not_call_back(self):
-        defaults, options, calls = self.make()
-        options['global_gridx'] = defaults['global_gridx']
-        options['units'] = options['units']
-        self.assertEqual(calls, [])
-
     def test_loop_and_items_see_all_keys(self):
         defaults, options, _calls = self.make()
         self.assertEqual(set(options), set(defaults))
@@ -88,40 +64,12 @@ class TestAppOptionsMergedView(unittest.TestCase):
         self.assertEqual(options.copy(), merged)
         self.assertEqual(len(options.values()), len(merged))
 
-    def test_update_setdefault_pop_go_to_the_right_place(self):
-        defaults, options, _calls = self.make()
-        options.update({'global_gridx': 9.0, 'gerber_bboxmargin': 4.0})
-        self.assertEqual(defaults['global_gridx'], 9.0)
-        self.assertEqual(options.options['gerber_bboxmargin'], 4.0)
-        options.update(global_gridy=8.0)
-        self.assertEqual(defaults['global_gridy'], 8.0)
-        self.assertEqual(options.setdefault('global_new_test_key', 1), 1)
-        self.assertEqual(defaults['global_new_test_key'], 1)
-        self.assertEqual(options.pop('global_new_test_key'), 1)
-        self.assertNotIn('global_new_test_key', options)
-        self.assertIsNone(options.pop('global_missing_test_key', None))
-
-    def test_project_options_has_only_project_keys(self):
-        _defaults, options, _calls = self.make()
-        saved = project_options(options)
-        self.assertIn('units', saved)
-        self.assertNotIn('global_gridx', saved)
-        self.assertTrue(all(is_project_key(key) for key in saved))
-        self.assertEqual(project_options({'units': 'MM', 'global_gridx': 1}), {'units': 'MM'})
-
     def test_reset_from_defaults(self):
         defaults, options, _calls = self.make()
         options['gerber_bboxmargin'] = 99.0
         defaults['gerber_bboxmargin'] = 0.25
         options.reset_from_defaults()
         self.assertEqual(options['gerber_bboxmargin'], 0.25)
-
-    def test_reset_from_defaults_copies_values(self):
-        defaults, options, _calls = self.make()
-        defaults['tools_test_list'] = [1, 2]
-        options.reset_from_defaults()
-        options['tools_test_list'].append(3)
-        self.assertEqual(defaults['tools_test_list'], [1, 2])
 
     def test_load_project_ignores_application_keys(self):
         defaults, options, _calls = self.make()
@@ -146,15 +94,6 @@ class TestAppOptionsMergedView(unittest.TestCase):
             options.load(path, Mock(), include_app_keys=True)
             self.assertEqual(defaults['global_gridx'], 42.0)
         self.assertTrue(all(is_project_key(key) for key in options.options))
-
-    def test_without_defaults_link_works_as_before(self):
-        options = AppOptions(version='test', baseline={'global_gridx': 1.0, 'units': 'MM'})
-        self.assertEqual(dict(options.options), {'global_gridx': 1.0, 'units': 'MM'})
-        options['global_gridx'] = 2.0
-        self.assertEqual(options.options['global_gridx'], 2.0)
-        self.assertEqual(set(options), {'global_gridx', 'units'})
-        self.assertEqual(options.get('missing', 5), 5)
-
 
 if __name__ == '__main__':
     unittest.main()

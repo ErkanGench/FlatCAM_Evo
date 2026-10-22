@@ -20,12 +20,6 @@ class TestLanguageNames(unittest.TestCase):
         self.assertEqual('Русский', fcTranslate.languages_dict['ru'])
         self.assertTrue(all('Ѐ' <= ch <= 'ӿ' for ch in fcTranslate.languages_dict['ru']))
 
-    def test_every_language_of_the_list_has_a_translation_folder(self):
-        available = fcTranslate.load_languages()
-        for code in fcTranslate.languages_dict:
-            self.assertIn(code, available, code)
-
-
 class TestApplyLanguage(unittest.TestCase):
     def setUp(self):
         self._saved = builtins.__dict__.get('_')
@@ -73,12 +67,6 @@ class TestApplyLanguage(unittest.TestCase):
         store = self._fake_settings('Deutsche')
         self.assertEqual('English', fcTranslate.apply_language('strings'))
         self.assertEqual('English', store['language'])
-
-    def test_a_known_name_in_the_settings_is_kept(self):
-        store = self._fake_settings('Deutsch')
-        self.assertEqual('Deutsch', fcTranslate.apply_language('strings'))
-        self.assertEqual('Deutsch', store['language'])
-
 
 if __name__ == '__main__':
     unittest.main()

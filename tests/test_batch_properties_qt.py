@@ -147,18 +147,6 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.assertIs(self.window.properties_scroll_area.widget(), obj.ui)
         self.assertEqual(obj.ui.text(), obj.obj_options['name'])
 
-    def test_bulk_selection_works_without_object_menu_entries(self):
-        self.app.inform = MagicMock()
-        collection = self.app.collection
-        collection.on_objects_selection(True)
-        collection.on_objects_selection(False)
-        first, second = self.layer('first'), self.layer('second')
-        collection.on_objects_selection(True)
-        self.assertEqual(collection.get_selected(), [first, second])
-        collection.on_objects_selection(False)
-        self.assertEqual(collection.get_selected(), [])
-        self.assertEqual(self.window.menuobjects.actions(), [])
-
     def test_select_then_click_properties_tab_populates_selected_ui(self):
         first, second = self.layer('first'), self.layer('second')
         self.select(first)
@@ -215,33 +203,6 @@ class TestBatchPropertiesQt(unittest.TestCase):
             obj.mark_shapes.clear.assert_called_once_with(update=False)
             self.assertFalse(obj.mark_shapes.enabled)
 
-    def test_bulk_delete_mixed_groups_preserves_remaining_selection(self):
-        collection = self.app.collection
-        survivor = self.layer('survivor')
-        deleted = []
-        for kind in ('gerber', 'geometry', 'cncjob'):
-            obj = Layer(kind, self.app)
-            obj.kind = kind
-            collection.append(obj)
-            obj.clear = Mock()
-            obj.delete = Mock(side_effect=lambda obj=obj: obj.obj_options.clear())
-            deleted.append(obj)
-        self.window.plot_tab_area = QtWidgets.QTabWidget()
-        self.app.plotcanvas = Mock()
-        self.select(survivor)
-        collection.set_active('geometry')
-        removed = QtTest.QSignalSpy(collection.rowsRemoved)
-
-        collection.delete_objects(deleted)
-
-        self.assertEqual(collection.get_list(), [survivor])
-        self.assertEqual(collection.get_selected(), [survivor])
-        self.assertEqual(len(removed), 3)
-        self.app.plotcanvas.redraw.assert_called_once_with()
-        for obj in deleted:
-            obj.clear.assert_called_once_with()
-            obj.delete.assert_called_once_with()
-
     def test_bulk_delete_vispy_cnc_cleanup_and_empty_autohide(self):
         objects = []
         for name in ('first', 'second'):
@@ -292,45 +253,6 @@ class TestBatchPropertiesQt(unittest.TestCase):
         message_box.return_value.exec.assert_called_once_with()
         self.assertEqual(self.app.collection.get_list(), [first, second])
         self.assertEqual(self.app.collection.get_selected(), [first, second])
-
-    def test_tree_arrow_navigation_uses_real_main_gui_handler(self):
-        first, second = self.layer('first'), self.layer('second')
-        self.select(first)
-        self.window.notebook.setCurrentWidget(self.window.properties_tab)
-        tree = self.app.collection.view
-        self.window.activateWindow()
-        tree.setFocus()
-        self.wait_for(lambda: tree.hasFocus())
-        QtTest.QTest.keyClick(tree, QtCore.Qt.Key.Key_Down)
-        self.assert_properties(second)
-        QtTest.QTest.keyClick(tree, QtCore.Qt.Key.Key_Up)
-        self.assert_properties(first)
-
-    def test_double_click_and_native_return_enter_populate_ui(self):
-        first, second = self.layer('first'), self.layer('second')
-        tree = self.app.collection.view
-        group = self.app.collection.index(0, 0, QtCore.QModelIndex())
-        index = self.app.collection.index(0, 0, group)
-        tree.expand(group)
-        self.select(first)
-        QtTest.QTest.qWait(1)
-        QtTest.QTest.mouseClick(tree.viewport(), QtCore.Qt.MouseButton.LeftButton,
-                              pos=tree.visualRect(index).center())
-        QtTest.QTest.mouseDClick(tree.viewport(), QtCore.Qt.MouseButton.LeftButton,
-                               pos=tree.visualRect(index).center())
-        self.wait_for(lambda: self.window.notebook.currentWidget() is self.window.properties_tab)
-        self.assert_properties(first)
-        for key in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
-            with self.subTest(key=key):
-                self.window.notebook.setCurrentWidget(self.window.project_tab)
-                self.select(second)
-                tree.setCurrentIndex(self.app.collection.index(1, 0, group))
-                self.window.activateWindow()
-                tree.setFocus()
-                self.wait_for(lambda: tree.hasFocus())
-                QtTest.QTest.keyClick(tree, key)
-                self.wait_for(lambda: self.window.notebook.currentWidget() is self.window.properties_tab)
-                self.assert_properties(second)
 
     def test_worker_to_timer_insertion_preserves_selection_and_both_builds(self):
         first, second = Layer('first', self.app), Layer('second', self.app)

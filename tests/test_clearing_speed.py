@@ -139,24 +139,6 @@ class TestSeedBands(unittest.TestCase):
             with self.subTest(min_coords=min_coords), band_limit(min_coords):
                 self.assertEqual([p.wkb for p in self.seed_paths(polygon, 0.5, 64)], [p.wkb for p in expected])
 
-    def test_a_small_area_gets_its_rings_in_1_call(self):
-        # 3 rings touch the margin of a 2 mm square: no band of SEED_BAND_RINGS rings is made for it
-        polygon = box(0, 0, 2, 2)
-        expected, rings = seed_rings_one_by_one(polygon, 0.4, 64)
-        original = shapely.buffer
-        ring_calls = []
-
-        def recorded(geometry, distance, *args, **kwargs):
-            if isinstance(geometry, Point):
-                ring_calls.append(np.size(distance))
-            return original(geometry, distance, *args, **kwargs)
-
-        with patch.object(shapely, 'buffer', recorded):
-            paths = self.seed_paths(polygon, 0.4, 64)
-        self.assertEqual([p.wkb for p in paths], [p.wkb for p in expected])
-        self.assertEqual(len(ring_calls), 1)
-        self.assertLessEqual(ring_calls[0], rings + 2)
-
     def test_a_large_margin_is_cut_without_the_holes_out_of_the_band(self):
         polygon = board()
         tooldia = 0.4
@@ -178,28 +160,6 @@ class TestSeedBands(unittest.TestCase):
         # each band holds a part of the margin
         self.assertLess(sum(cuts), len(cuts) * margin_coords / 2)
 
-    def test_band_margin_keeps_the_parts_in_the_band(self):
-        margin = margin_of(board(islands=True), 0.4)
-        center = Point(14, 10)
-        near, far = 4.0, 7.5
-        band = camlib.seed_band_margin(margin, center)(near, far)
-        # the same envelope; the kept polygons and holes keep their coordinates
-        self.assertEqual(band.bounds, margin.bounds)
-        margin_rings = {ring.wkb for p in margin.geoms for ring in [p.exterior, *p.interiors]}
-        band_rings = [ring for p in band.geoms for ring in [p.exterior, *p.interiors]]
-        self.assertTrue(all(ring.wkb in margin_rings for ring in band_rings))
-        # a hole or an island is kept when its area reaches the annulus between near and far
-        annulus = center.buffer(far, quad_segs=256).difference(center.buffer(near, quad_segs=256))
-        # (the board area holds the holes; the islands are the other polygons)
-        holes = [Polygon(ring) for p in margin.geoms for ring in p.interiors]
-        kept_holes = [Polygon(ring) for p in band.geoms for ring in p.interiors]
-        islands = [p for p in margin.geoms if not p.interiors]
-        kept_islands = [p for p in band.geoms if not p.interiors]
-        self.assertEqual([h.wkb for h in kept_holes], [h.wkb for h in holes if h.intersects(annulus)])
-        self.assertEqual([i.wkb for i in kept_islands], [i.wkb for i in islands if i.intersects(annulus)])
-        self.assertTrue(0 < len(kept_holes) < len(holes) and 0 < len(kept_islands) < len(islands))
-
-
 class TestConnectArrays(unittest.TestCase):
     def setUp(self):
         self.geometry = make_geometry()
@@ -213,22 +173,6 @@ class TestConnectArrays(unittest.TestCase):
                 joined = list(camlib.Geometry.paint_connect(storage_of(paths), polygon, 0.4, 64).get_objects())
                 self.assertLess(len(joined), len(paths))
                 self.assertEqual([p.wkb for p in joined], [p.wkb for p in expected])
-
-    def test_joined_paths_are_made_from_coordinate_arrays(self):
-        paths = [LineString([(i + 1, 1), (i + 1.2, 1.1), (i + 1.5, 1)]) for i in range(20)]
-        arguments = []
-
-        def recorded(coords):
-            arguments.append(coords)
-            return LineString(coords)
-
-        with patch.object(camlib, 'LineString', side_effect=recorded):
-            result = camlib.Geometry.paint_connect(storage_of(paths), box(0, 0, 22, 3), 0.2, 64)
-        self.assertEqual(len(list(result.get_objects())), 1)
-        # the walks are made from 2 points; the joined path from 1 array, not from coordinate tuples
-        joined = [coords for coords in arguments if len(coords) > 2]
-        self.assertEqual(len(joined), 1)
-        self.assertIsInstance(joined[0], np.ndarray)
 
     def test_closed_rings_are_joined_as_paths(self):
         rings = [box(1, 1, 2, 2).exterior, box(1, 2.5, 2, 3.5).exterior]

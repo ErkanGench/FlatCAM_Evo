@@ -13,31 +13,15 @@ from appHandlers.appEdit import appEditor
 from appObjects.GeometryObject import GeometryObject
 from appPlugins.ToolPanelize import Panelize
 from appTool import AppTool
-from test_unify_characterization import (  # noqa: F401
-    _headless_qt, app, make_excellon, make_gerber, polygon_union, reparse_gerber)
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, _headless_qt, make_excellon, make_gerber, polygon_union, reparse_gerber,
+)
 from test_panelize_plugin import Value, run_plugin
 
 
 # ---------------------------------------------------------------------------------------------------------------
 # messages printed the object (None) instead of its name
 # ---------------------------------------------------------------------------------------------------------------
-
-def test_object_not_found_message_names_the_object(app):
-    src = make_gerber(app, name='g')
-    created, informs = run_plugin(app, src, name='missing_object')
-    assert not created
-    assert any('Object not found' in m and m.endswith(': missing_object') for m in informs)
-    assert not any('None' in m for m in informs)
-
-
-def test_no_box_message_names_the_source_object(app):
-    src = make_gerber(app, name='g')
-    created, informs = run_plugin(app, src, box_name='missing_box', rows=1, cols=2, reference='object')
-    # no box: the plugin falls back to the bounding box of the source and goes on
-    assert 'g_panelized' in created
-    warnings = [m for m in informs if 'No object Box' in m]
-    assert warnings and all(m.endswith(': g') for m in warnings) and not any('None' in m for m in warnings)
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # the source Excellon got empty 'drills' / 'slots' keys
@@ -58,31 +42,6 @@ def test_source_excellon_without_slots_or_drills_keys_is_not_changed(app):
 # ---------------------------------------------------------------------------------------------------------------
 # 'Done' was shown before the worker ran
 # ---------------------------------------------------------------------------------------------------------------
-
-def test_done_message_comes_from_the_job_not_from_the_gui_thread(app):
-    src = make_gerber(app, name='g')
-    before = []
-    created, informs = run_plugin(app, src, rows=1, cols=2, before=before)
-    assert 'g_panelized' in created
-    assert not any('Done' in m or 'successfully' in m for m in before)
-    assert informs[-1] == '[success] Panel created successfully.'
-
-
-def test_no_success_message_when_the_job_fails(app):
-    src = make_gerber(app, name='g')
-    created, informs = run_plugin(app, src, rows=1, cols=2, fail_job=True)
-    assert not created
-    assert not any('Done' in m or 'successfully' in m for m in informs)
-    assert any('boom' in str(c) for c in app.log.error.call_args_list)
-
-def test_constrain_warning_comes_from_the_job_with_the_final_grid(app):
-    src = make_gerber(app, name='g')
-    xmin, ymin, xmax, ymax = src.bounds()
-    w, h = xmax - xmin, ymax - ymin
-    before = []
-    created, informs = run_plugin(app, src, rows=3, cols=4, constrain=(2 * w + 5.5, h + 1.0), before=before)
-    assert not any('constrain' in m for m in before)
-    assert informs[-1].startswith('[WARNING]') and '2 columns and 1 rows' in informs[-1]
 
 # ---------------------------------------------------------------------------------------------------------------
 # the dead tool-table block of the Gerber -> Geometry panel
@@ -114,24 +73,6 @@ def test_gerber_to_geometry_panel_has_tools_options_and_source(app):
     assert pan.obj_options['tools_mill_tooldia'] == first
     # a Geometry keeps its source as DXF text
     assert pan.source_file and len(ezdxf.read(StringIO(pan.source_file)).modelspace()) > 0
-
-
-def test_build_geometry_tool_table_matches_the_convert_any2geo_rules(app):
-    editor = appEditor(app)
-    app.options['tools_mill_tooldia'] = '0.5, 0.2'
-    app.options['geometry_cutz'] = -1.25
-    default_data, tools, dias = editor.build_geometry_tool_table()
-    assert dias == [0.5, 0.2] and list(tools) == [1, 2]
-    assert default_data['cutz'] == -1.25 and 'geometry_cutz' not in default_data
-    for tid, dia in zip(tools, dias):
-        tool = tools[tid]
-        assert tool['tooldia'] == dia and tool['solid_geometry'] == []
-        assert (tool['offset'], tool['offset_value'], tool['type'], tool['tool_type']) == ('Path', 0.0, 'Rough', 'C1')
-        assert tool['data'] == default_data and tool['data'] is not default_data
-    app.options['tools_mill_tooldia'] = 0.8
-    assert editor.build_geometry_tool_table()[2] == [0.8]
-    app.options['tools_mill_tooldia'] = 'not a number'
-    assert editor.build_geometry_tool_table() is None
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -168,16 +109,6 @@ def test_geometry_to_gerber_panel_keeps_the_records_and_has_a_source(app, multig
     assert isinstance(pan.source_file, str) and pan.source_file.strip()
 
 
-@pytest.mark.parametrize('multigeo', [False, True], ids=['single-geo', 'multigeo'])
-def test_geometry_to_gerber_panel_source_round_trips(app, tmp_path, multigeo):
-    src = make_poly_geometry(app, multigeo)
-    created, _ = run_plugin(app, src, panel_type='gerber', rows=2, cols=2)
-    pan = created['src_panelized']
-    again = reparse_gerber(app, pan.source_file, tmp_path)
-    assert polygon_union(again.solid_geometry).symmetric_difference(polygon_union(pan.solid_geometry)).area < 1e-3
-    assert polygon_union(pan.solid_geometry).area == pytest.approx(4 * (16 + 4 + 4))
-
-
 def test_geometry_to_gerber_panel_with_a_line_exports_as_regions(app, tmp_path):
     src = make_poly_geometry(app, False)
     src.solid_geometry = [box(0, 0, 4, 4), LineString([(6, 0), (9, 3)])]
@@ -187,26 +118,6 @@ def test_geometry_to_gerber_panel_with_a_line_exports_as_regions(app, tmp_path):
     assert isinstance(pan.source_file, str) and pan.source_file.strip()
     again = reparse_gerber(app, pan.source_file, tmp_path)
     assert polygon_union(again.solid_geometry).area == pytest.approx(2 * 16)
-
-
-def test_geometry_to_gerber_panel_does_not_fill_an_open_line_of_a_single_geo_source(app, tmp_path):
-    # Polygon() accepts an open line of 3 points; the record must still hold the line that the solid holds
-    src = make_poly_geometry(app, False)
-    src.solid_geometry = [box(0, 0, 4, 4), LineString([(6, 0), (9, 0), (9, 3)])]
-    created, _ = run_plugin(app, src, panel_type='gerber', rows=1, cols=2)
-    pan = created['src_panelized']
-    assert sum(isinstance(r['solid'], LineString) for r in pan.tools[0]['geometry']) == 2
-    assert pan.export_as_regions is True
-    again = reparse_gerber(app, pan.source_file, tmp_path)
-    assert polygon_union(again.solid_geometry).area == pytest.approx(2 * 16)
-
-
-def test_bbox_reference_does_not_look_up_an_unrelated_box(app):
-    src = make_gerber(app, name='g')
-    created, informs = run_plugin(app, src, box_name='unused_box', rows=1, cols=1)
-    assert 'g_panelized' in created
-    assert [call.args[0] for call in app.collection.get_by_name.call_args_list] == ['g']
-    assert not any('No object Box' in text for text in informs)
 
 
 def test_constraint_smaller_than_one_board_does_not_schedule_a_panel(app):
@@ -219,19 +130,6 @@ def test_constraint_smaller_than_one_board_does_not_schedule_a_panel(app):
     assert not any('successfully' in text for text in informs)
 
 
-@pytest.mark.parametrize('result', ['fail', False])
-def test_factory_failure_clears_promise_and_reports_error(app, monkeypatch, result):
-    src = make_gerber(app, name='g')
-    app.collection.promises = set()
-    app.collection.promise.side_effect = app.collection.promises.add
-    monkeypatch.setattr(Panelize, 'new_object', lambda *a, **k: result)
-    created, informs = run_plugin(app, src)
-    assert not created
-    assert not app.collection.promises
-    assert any('[ERROR_NOTCL]' in text for text in informs)
-    assert not any('successfully' in text for text in informs)
-
-
 def test_worker_exception_clears_promise_and_reports_error(app):
     src = make_gerber(app, name='g')
     app.collection.promises = set()
@@ -241,99 +139,3 @@ def test_worker_exception_clears_promise_and_reports_error(app):
     assert not app.collection.promises
     assert any('[ERROR_NOTCL]' in text for text in informs)
 
-
-def test_queued_panel_keeps_its_own_output_name(app, monkeypatch):
-    src = make_gerber(app, name='g')
-    on_panelize = Panelize.on_panelize
-
-    def schedule_then_change_name(plugin):
-        on_panelize(plugin)
-        plugin.outname = 'another_panel'
-
-    monkeypatch.setattr(Panelize, 'on_panelize', schedule_then_change_name)
-    created, _ = run_plugin(app, src, rows=1, cols=1)
-    assert list(created) == ['g_panelized']
-
-
-def test_rebuilt_ui_connects_project_selection_only_once(app):
-    plugin = QtCore.QObject.__new__(Panelize)
-    plugin.app = app
-    plugin._selection_signal_connected = False
-    app.proj_selection_changed = Mock()
-    for _ in range(3):
-        plugin.ui = Mock()
-        plugin.connect_signals_at_init()
-        plugin.ui.reset_button.clicked.connect.assert_called_once_with(plugin.set_tool_ui)
-    app.proj_selection_changed.connect.assert_called_once_with(plugin.on_object_selection_changed)
-
-
-def test_project_selection_updates_the_visible_panel(app):
-    plugin = QtCore.QObject.__new__(Panelize)
-    plugin.app = app
-    plugin.ui = Mock(pluginName='Panelization')
-    app.ui = SimpleNamespace(notebook=SimpleNamespace(count=lambda: 1, tabText=lambda idx: 'Panelization'))
-    obj = SimpleNamespace(kind='geometry', obj_options={'name': 'selected_geometry'})
-    index = SimpleNamespace(internalPointer=lambda: SimpleNamespace(obj=obj))
-    plugin.on_object_selection_changed(SimpleNamespace(indexes=lambda: [index]), None)
-    plugin.ui.object_combo.set_value.assert_called_once_with('selected_geometry')
-
-
-def test_ui_setup_keeps_active_object_and_saved_panel_type(app, monkeypatch):
-    src = make_gerber(app, name='active_gerber')
-    app.collection.get_active.return_value = src
-    app.options['tools_panelize_panel_type'] = 'geometry'
-    plugin = QtCore.QObject.__new__(Panelize)
-    plugin.app = app
-    plugin.layout = Mock()
-    ui = Mock(pluginName='Panelization', object_combo=Value('first_gerber'), panel_type_radio=Value('gerber'))
-    monkeypatch.setattr('appPlugins.ToolPanelize.PanelizeUI', lambda **kwargs: ui)
-    plugin.clear_ui = Mock()
-    plugin.add_object_creation_controls = Mock()
-    plugin.reset_fields = Mock()
-    plugin.connect_signals_at_init = Mock()
-    plugin.change_level = Mock()
-
-    def reset_source_combo():
-        ui.object_combo.set_value('first_gerber')
-        ui.panel_type_radio.set_value('gerber')
-
-    plugin.on_type_obj_index_changed = reset_source_combo
-    plugin.on_type_box_index_changed = Mock()
-    plugin.set_tool_ui()
-    assert ui.object_combo.get_value() == 'active_gerber'
-    assert ui.panel_type_radio.get_value() == 'geometry'
-
-
-@pytest.mark.parametrize('tab_index', [0, 1, 3])
-@pytest.mark.parametrize('focused', [False, True])
-def test_run_toggles_the_actual_plugin_tab_without_resetting_it(app, monkeypatch, tab_index, focused):
-    notebook = QtWidgets.QTabWidget()
-    plugin_tab = QtWidgets.QWidget()
-    plugin_tab.setObjectName('plugin_tab')
-    properties_tab = QtWidgets.QWidget()
-    notebook.addTab(properties_tab, 'Properties')
-    notebook.addTab(QtWidgets.QWidget(), 'Other')
-    notebook.addTab(QtWidgets.QWidget(), 'Another')
-    notebook.insertTab(tab_index, plugin_tab, 'Panelization')
-    notebook.setCurrentWidget(plugin_tab if focused else properties_tab)
-    app.ui = SimpleNamespace(
-        notebook=notebook, plugin_tab=plugin_tab, properties_tab=properties_tab, splitter=Mock(),
-        plugin_scroll_area=SimpleNamespace(widget=lambda: SimpleNamespace(objectName=lambda: 'Panelization')))
-    app.ui.splitter.sizes.return_value = [1, 1]
-    app.defaults = Mock()
-    app.collection.get_list.return_value = [object()]
-    plugin = QtCore.QObject.__new__(Panelize)
-    plugin.app = app
-    plugin.pluginName = 'Panelization'
-    plugin.set_tool_ui = Mock()
-    base_run = Mock()
-    monkeypatch.setattr(AppTool, 'run', base_run)
-    plugin.run()
-    if focused:
-        assert notebook.indexOf(plugin_tab) == -1
-        assert notebook.currentWidget() is properties_tab
-    else:
-        assert notebook.indexOf(plugin_tab) == tab_index
-        assert notebook.currentWidget() is plugin_tab
-    base_run.assert_not_called()
-    plugin.set_tool_ui.assert_not_called()

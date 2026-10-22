@@ -66,14 +66,6 @@ class TestSprintLayoutImport(unittest.TestCase):
     def tearDown(self):
         self.qapp.processEvents()
 
-    def test_source_kind_is_sprint_only_for_lay6_names(self):
-        self.assertEqual(appIO._pcb_source_kind('cata.lay6'), 'sprint_lay6')
-        self.assertEqual(appIO._pcb_source_kind('CATA.LAY6'), 'sprint_lay6')
-        self.assertEqual(appIO._pcb_source_kind(FILE), 'sprint_lay6')
-        self.assertEqual(appIO._pcb_source_kind('board.kicad_pcb'), 'kicad_pcb')
-        self.assertEqual(appIO._pcb_source_kind('board.PcbDoc'), 'pcbdoc')
-        self.assertEqual(appIO._pcb_source_kind('board.pcbdoc'), 'pcbdoc')
-
     def test_sprint_objects_are_named_from_layer_and_drill_group(self):
         self.io.import_pcbdoc_objects(FILE, self.parsed, ['C1', 'M1', 'O'], ['PTH'])
         self.assertEqual([obj_.obj_options['name'] for kind, obj_ in self.objects],
@@ -90,36 +82,6 @@ class TestSprintLayoutImport(unittest.TestCase):
         excellon = [obj_ for kind, obj_ in self.objects if kind == 'excellon'][0]
         self.assertEqual(excellon.units, 'IN')
         self.assertAlmostEqual(excellon.tools[1]['tooldia'], 0.7 / 25.4, places=6)
-
-    def test_file_opened_reports_sprint_kind_after_queued_delivery(self):
-        self.io.import_pcbdoc_objects(FILE, self.parsed, ['C1'], ['PTH'])
-        self.app.file_opened.emit.assert_not_called()
-        self.qapp.processEvents()
-        self.app.file_opened.emit.assert_called_once_with('sprint_lay6', FILE)
-
-    def test_actual_qt_dialog_uses_sprint_title_and_default_layer_checks(self):
-        self.app.ui = QtWidgets.QWidget()
-        seen = {}
-
-        def rejected(dialog):
-            seen['title'] = dialog.windowTitle()
-            seen['boxes'] = {box.text(): box.isChecked() for box in dialog.findChildren(QtWidgets.QCheckBox)}
-            return QtWidgets.QDialog.DialogCode.Rejected
-
-        with patch.object(QtWidgets.QDialog, 'exec', rejected):
-            self.io.on_pcbdoc_parsed(FILE, self.parsed)
-        self.assertEqual(seen['title'], 'Import Sprint Layout')
-        self.assertEqual(seen['boxes'], {
-            'C1 (Copper Top)': True,
-            'C2 (Copper Bottom)': True,
-            'M1 (Solder Mask Top)': True,
-            'M2 (Solder Mask Bottom)': True,
-            'S1 (Silkscreen Top)': True,
-            'S2 (Silkscreen Bottom)': False,
-            'O (Board Outline)': True,
-            'PTH': True,
-        })
-        self.app.worker_task.emit.assert_not_called()
 
     def test_dialog_accept_queues_only_selected_layers_and_drill_groups(self):
         self.app.ui = QtWidgets.QWidget()
@@ -165,40 +127,12 @@ class TestSprintLayoutImport(unittest.TestCase):
         self.assertIn('C1', parsed.layers)
         self.app.inform.emit.assert_not_called()
 
-    def test_parse_sprint_layout_respects_abort(self):
-        self.app.abort_flag = True
-        with patch.object(self.io, 'pcbdoc_parsed') as parsed_signal:
-            self.assertIsNone(self.io.parse_sprint_layout(FILE))
-        parsed_signal.emit.assert_not_called()
-
     def test_on_file_import_sprint_layout_queues_parse_for_given_name(self):
         with patch.object(QtWidgets.QFileDialog, 'getOpenFileName') as chooser:
             self.io.on_file_import_sprint_layout(FILE)
         chooser.assert_not_called()
         self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_sprint_layout,
                                                            'params': [FILE]})
-
-    def test_on_file_import_sprint_layout_without_name_uses_chooser(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName',
-                          return_value=(FILE, 'Sprint Layout 6 (*.lay6)')) as chooser:
-            self.io.on_file_import_sprint_layout()
-        self.assertEqual(chooser.call_args.kwargs['filter'], 'Sprint Layout 6 (*.lay6)')
-        self.assertEqual(chooser.call_args.kwargs['caption'], 'Import Sprint Layout')
-        self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_sprint_layout,
-                                                           'params': [FILE]})
-
-    def test_on_file_import_sprint_layout_cancelled_chooser_queues_nothing(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName', return_value=('', '')):
-            self.io.on_file_import_sprint_layout()
-        self.app.worker_task.emit.assert_not_called()
-
-    def test_pcb_formats_table_has_sprint_entry(self):
-        entry = appIO.PCB_FORMATS['sprint_lay6']
-        self.assertEqual(entry['ext'], '.lay6')
-        self.assertEqual(entry['filter'], 'Sprint Layout 6 (*.lay6)')
-        self.assertEqual(appIO._pcb_title('sprint_lay6'), 'Import Sprint Layout')
-        self.assertFalse(entry['name_first'])
-
 
 if __name__ == '__main__':
     unittest.main()

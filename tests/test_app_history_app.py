@@ -101,28 +101,6 @@ def test_create_undo_redo(fc, no_plot):
     assert fc.history.redo() and fc.history.find(uid) is not None
 
 
-def test_create_undo_of_an_object_that_is_not_active(fc, no_plot):
-    # a file import makes the object with autoselected=False: Undo deletes an object that is not the active one
-    def init(obj, _app):
-        obj.parse_file(os.path.join(FIX, 'unify_mixed.gbr'))
-    grb = fc.app_obj.new_object('gerber', 'g_not_active', init, plot=False, autoselected=False)
-    assert fc.collection.get_active() is not grb
-    uid = grb.history_uid
-    assert fc.history.undo()
-    assert fc.history.find(uid) is None
-    _settle(fc)
-    assert fc.history.redo() and fc.history.find(uid) is not None
-
-
-def test_snapshot_buffer(fc, no_plot):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_snap')
-    b0 = _bounds(grb)
-    with fc.history.snapshot('buffer', [grb]):
-        grb.buffer(0.5, 1, None)
-    assert not np.allclose(_bounds(grb), b0)
-    assert fc.history.undo() and np.allclose(_bounds(grb), b0)
-
-
 def test_rename(fc, no_plot):
     grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_old')
     fc.history.record_rename(grb, 'g_old', 'g_new')
@@ -164,18 +142,6 @@ def test_flipy_two_objects_one_step(fc, no_plot, monkeypatch):
     assert not np.allclose(_bounds(g1), b1)
 
 
-def test_flipx_undo(fc, no_plot, monkeypatch):
-    exc = _load(fc, 'excellon', 'unify_mixed.drl', 'e_flipx')
-    # the bounds of 1 object do not change in a flip around its own center: a second object moves the axis
-    other = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_flipx')
-    apply_matrix_to_object(other, (1.0, 0.0, 0.0, 1.0, 20.0, 0.0))
-    b0 = _bounds(exc)
-    _select(fc, monkeypatch, [exc, other])
-    fc.object_ops.on_flipx()
-    assert not np.allclose(_bounds(exc), b0)
-    assert fc.history.undo() and np.allclose(_bounds(exc), b0)
-
-
 @pytest.mark.parametrize('kind,filename', [('gerber', 'unify_mixed.gbr'), ('excellon', 'unify_mixed.drl')])
 def test_rotate_30_undo_restores_bounds(fc, no_plot, monkeypatch, kind, filename):
     obj = _load(fc, kind, filename, 'rot30_' + kind)
@@ -187,16 +153,6 @@ def test_rotate_30_undo_restores_bounds(fc, no_plot, monkeypatch, kind, filename
     # a hole polygon is rotated twice (not rebuilt), so its circle approximation differs by a tiny amount
     assert fc.history.undo() and np.allclose(_bounds(obj), b0, atol=1e-3)
     assert fc.history.redo() and np.allclose(_bounds(obj), b1, atol=1e-3)
-
-
-def test_rotate_geometry_30_undo(fc, no_plot, monkeypatch):
-    geo = fc.app_obj.new_object('geometry', 'geo_rot', lambda o, a: setattr(o, 'solid_geometry', [box(0, 0, 4, 1)]),
-                                plot=False)
-    b0 = _bounds(geo)
-    _select(fc, monkeypatch, [geo])
-    fc.object_ops.on_rotate(silent=True, preset=30)
-    assert not np.allclose(_bounds(geo), b0)
-    assert fc.history.undo() and np.allclose(_bounds(geo), b0, atol=1e-6)
 
 
 @pytest.mark.parametrize('handler,args', [('on_skewx', 20.0), ('on_skewy', 15.0)])
@@ -223,15 +179,6 @@ def test_transform_tool_group_undo(fc, no_plot, monkeypatch):
     assert not np.allclose(_bounds(g1), b1)
     assert fc.history.undo()
     assert np.allclose(_bounds(g1), b1, atol=1e-6) and np.allclose(_bounds(g2), b2, atol=1e-6)
-
-
-def test_transform_tool_buffer_snapshot(fc, no_plot, monkeypatch):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'tt_buf')
-    b0 = _bounds(grb)
-    _select(fc, monkeypatch, [grb])
-    fc.transform_tool.on_buffer_action(0.5, 1)
-    assert not np.allclose(_bounds(grb), b0)
-    assert fc.history.undo() and np.allclose(_bounds(grb), b0)
 
 
 def test_move2origin_undo(fc, no_plot, monkeypatch):
@@ -274,15 +221,3 @@ def test_align_records_one_step(fc, no_plot):
     assert hasattr(fc.align_objects_tool, 'on_apply') and not hasattr(fc.align_objects_tool, 'undo_stack')
     assert fc.history.undo() and np.allclose(_bounds(grb), b0)
 
-
-def test_forget_drops_the_steps_of_the_object(fc, no_plot):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_forget')
-    other = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_keep')
-    m = (1.0, 0.0, 0.0, 1.0, 1.0, 0.0)
-    for obj in (grb, other, grb):
-        apply_matrix_to_object(obj, m)
-        fc.history.record_matrix('move', [(obj, m)])
-    fc.history.forget(grb.history_uid)
-    for step in fc.history.undo_stack + fc.history.redo_stack:
-        assert grb.history_uid not in step.uids()
-    assert fc.history.undo_label() == 'move' and other.history_uid in fc.history.undo_stack[-1].uids()

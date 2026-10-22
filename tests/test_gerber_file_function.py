@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from test_unify_characterization import _headless_qt, app, make_gerber  # noqa: F401,E402
+from tests.helpers_objects import app, _headless_qt, make_gerber  # noqa: F401,E402
 
 FIX = Path(__file__).parent / 'fixtures' / 'cutout'
 

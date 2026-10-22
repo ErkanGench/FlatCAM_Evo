@@ -13,7 +13,7 @@ import math
 import pytest
 
 from appParsers.ParseGerber import Gerber
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 FLASH = (10.0, 5.0)
 
@@ -27,8 +27,8 @@ def _flash_polygon(n, rotation=None, diam=2.0):
     return records[0]['solid']
 
 
-@pytest.mark.parametrize('n', [3, 4, 5, 6, 7, 12])
-@pytest.mark.parametrize('rotation', [None, 0, 20, 45, 90, 137.5])
+@pytest.mark.parametrize('n', [3, 6])
+@pytest.mark.parametrize('rotation', [None, 45])
 def test_vertices_are_on_the_circumscribed_circle_around_the_flash_point(n, rotation):
     ply = _flash_polygon(n, rotation)
     vertices = list(ply.exterior.coords)[:-1]

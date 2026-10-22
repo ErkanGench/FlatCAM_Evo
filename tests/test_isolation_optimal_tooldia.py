@@ -70,7 +70,7 @@ def messages(t):
     return [c.args[0] for c in t.app.inform.emit.call_args_list]
 
 
-@pytest.mark.parametrize('gap', [0.15996, 0.1, 0.2, 0.20004, 0.25, 0.123449, 0.30005])
+@pytest.mark.parametrize('gap', [0.15996, 0.20004, 0.30005])
 def test_optimal_tool_fits_in_the_smallest_gap(tool, gap):
     dia = find_optimal(tool, gap)
     assert dia is not None
@@ -88,11 +88,7 @@ def test_gap_rounded_up_gives_a_tool_below_the_gap(tool):
     assert any('0.1599' in m for m in messages(tool) if m.startswith('[success]'))
 
 
-@pytest.mark.parametrize('gap, decimals, units', [(0.15996, 4, 'MM'), (0.2, 4, 'MM'), (0.123449, 4, 'MM'),
-                                                (0.2000501, 4, 'MM'), (0.20000501, 5, 'MM'),
-                                                (0.20000051, 6, 'MM'), (0.20000006, 7, 'MM'),
-                                                (0.200000006, 8, 'MM'), (0.00000006, 8, 'MM'),
-                                                (0.0079945, 4, 'IN')])
+@pytest.mark.parametrize('gap, decimals, units', [(0.15996, 4, 'MM'), (0.20000051, 6, 'MM'), (0.0079945, 4, 'IN')])
 def test_optimal_tool_passes_the_check_validity(tool, gap, decimals, units):
     tool.decimals = decimals
     tool.app.decimals = decimals

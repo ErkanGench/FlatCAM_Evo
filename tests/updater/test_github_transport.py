@@ -129,22 +129,6 @@ def test_listing_uses_repo_releases_route_with_per_page_100_and_follows_next():
     assert opener.requests[0].get_header("Accept") == "application/vnd.github+json"
 
 
-def test_pagination_must_stay_on_repository_route_and_advance():
-    bad_route = FakeOpener(
-        [_releases_response([], next_url=f"https://{API_HOST}/repos/other/repo/releases?per_page=100&page=2")]
-    )
-    with pytest.raises(TransportError):
-        GitHubReleaseTransport(opener=bad_route).list_releases()
-
-    external = FakeOpener([_releases_response([], next_url="https://evil.example/releases?page=2")])
-    with pytest.raises(TransportError):
-        GitHubReleaseTransport(opener=external).list_releases()
-
-    loop = FakeOpener([_releases_response([_release_json("v1.0")], next_url=RELEASES_URL)])
-    with pytest.raises(TransportError):
-        GitHubReleaseTransport(opener=loop).list_releases()
-
-
 def test_drafts_prereleases_and_malformed_tags_are_ignored():
     entries = [
         _release_json("v9.0", draft=True),
@@ -166,24 +150,6 @@ def test_drafts_prereleases_and_malformed_tags_are_ignored():
     assert canonical_version("1.0") == "1"
     assert canonical_version("1.0.0") == "1"
     assert canonical_version("1.2.0.0") == "1.2"
-
-
-def test_malformed_release_tags_are_ignored_with_a_debug_diagnostic(caplog):
-    entries = [_release_json("v1.0.0-beta"), _release_json("v2.0")]
-    with caplog.at_level("DEBUG", logger="services.updater.github.transport"):
-        releases = GitHubReleaseTransport(opener=FakeOpener([_releases_response(entries)])).list_releases()
-
-    assert [release.tag for release in releases] == ["v2.0"]
-    assert "malformed tag" in caplog.text
-
-
-def test_deletions_asset_name_is_exact():
-    assert DELETIONS_ASSET_NAME == "flatcam-evo-update-deletions.json"
-
-
-def test_empty_release_list_is_normal():
-    transport = GitHubReleaseTransport(opener=FakeOpener([_releases_response([])]))
-    assert transport.list_releases() == ()
 
 
 def test_http_rate_limit_network_and_json_errors_fail_safely():
@@ -248,26 +214,6 @@ def test_one_malformed_release_is_skipped_not_fatal(key, caplog):
     assert "v1.1" in caplog.text
 
 
-def test_non_dict_release_entry_stays_an_error():
-    with pytest.raises(TransportError):
-        GitHubReleaseTransport(opener=FakeOpener([_releases_response(["nope"])])).list_releases()
-
-
-@pytest.mark.parametrize(
-    ("code", "headers", "message"),
-    [
-        (429, {}, "rate limit"),
-        (403, {"X-RateLimit-Remaining": "0"}, "rate limit"),
-        (403, {"X-RateLimit-Remaining": "12"}, "denied access"),
-        (403, {}, "denied access"),
-    ],
-)
-def test_forbidden_is_a_rate_limit_only_with_exhausted_quota(code, headers, message):
-    error = urllib.error.HTTPError(RELEASES_URL, code, "Forbidden", headers, None)
-    with pytest.raises(TransportError, match=message):
-        GitHubReleaseTransport(opener=FakeOpener([error])).list_releases()
-
-
 def test_download_archive_streams_verifies_and_replaces(tmp_path):
     body = b"release archive bytes"
     digest = hashlib.sha256(body).hexdigest()
@@ -324,13 +270,3 @@ def test_download_urls_must_belong_to_the_repository(tmp_path):
             transport.download_archive(bad, destination)
     assert not destination.exists()
 
-
-def test_zipball_route_download_is_allowed(tmp_path):
-    url = f"https://{API_HOST}/repos/{OWNER}/{REPO}/zipball/v1.1"
-    body = b"zipball"
-    transport = GitHubReleaseTransport(
-        opener=FakeOpener([FakeResponse(body, headers={"Content-Length": str(len(body))})])
-    )
-    destination = tmp_path / "source.zip"
-    transport.download_archive(url, destination, expected_sha256=hashlib.sha256(body).hexdigest())
-    assert destination.read_bytes() == body

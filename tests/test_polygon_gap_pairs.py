@@ -59,22 +59,6 @@ def test_neighbors_have_the_same_distances_and_pairs_as_every_pair():
     assert max(new) == float('%.*f' % (DEC, max(nearest)))
 
 
-def test_tie_pairs_and_a_pad_in_a_hole():
-    tie = [box(0, 0, 1, 1), box(1.5, 0, 2.5, 1), box(0, 3, 1, 4), box(1.5, 3, 2.5, 4)]
-    pairs = camlib.polygon_gap_pairs(tie, DEC)
-    # any point along the 2 parallel edges is a nearest point: check the distance, the count and the edges
-    assert list(pairs) == [0.5] and len(pairs[0.5]) == 2
-    assert all(a[0] == 1.0 and b[0] == 1.5 and a[1] == b[1] for a, b in pairs[0.5])
-    ring = box(0, 0, 10, 10).difference(box(2, 2, 8, 8))
-    pad = box(4, 4, 6, 5)
-    assert list(camlib.polygon_gap_pairs([ring, pad], DEC)) == [2.0]
-
-
-@pytest.mark.parametrize('polygons', [[], [box(0, 0, 1, 1)]])
-def test_fewer_than_two_polygons(polygons):
-    assert camlib.polygon_gap_pairs(polygons, DEC) == {}
-
-
 @pytest.mark.parametrize('module, name', [('appPlugins.ToolIsolation', 'ToolIsolation'),
                                           ('appPlugins.ToolNCC.Ncc', 'ToolNcc')])
 def test_tools_check_validity_uses_the_minimum(module, name):

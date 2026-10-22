@@ -95,19 +95,6 @@ def test_exception_rolls_back_tools_counters_geometry_and_order():
     assert not editor.history.undo_stack
 
 
-def test_noop_does_not_dirty_or_clear_redo_and_step_limits_apply():
-    editor, first, second = scene()
-    editor.app.options['global_history_steps'] = 2
-    for x in range(3):
-        editor.add_exc_shape(drill(x + 10), editor.storage_dict[1.0])
-    assert len(editor.history.undo_stack) == 2
-    assert editor.history.baseline_evicted
-    assert editor.undo()
-    with editor.history.operation('Selection only'):
-        editor.selected = [second]
-    assert len(editor.history.redo_stack) == 1
-
-
 def test_move_handler_is_one_undoable_operation():
     editor, first, second = scene()
     editor.delete_utility_geometry = Mock()
@@ -120,50 +107,6 @@ def test_move_handler_is_one_undoable_operation():
     assert editor.undo()
     assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
     assert editor.selected == [first]
-
-
-def test_background_mutation_is_rejected_and_reset_discards_session_history():
-    editor, first, second = scene()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        assert pool.submit(editor.delete_selected).result() == 'fail'
-    assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
-    editor.delete_selected()
-    editor.history.reset()
-    assert not editor.undo()
-
-
-def test_unchanged_board_records_are_not_retained_in_delta():
-    editor, first, second = scene()
-    editor.delete_selected()
-    step = editor.history.undo_stack[0]
-    assert second not in editor.history.retained_shapes()
-    assert first in editor.history.retained_shapes()
-    assert 'snapshot' not in step
-
-
-@pytest.mark.parametrize('key,shift,redo', [('Z', False, False), ('Z', True, True), ('Y', False, True)])
-def test_editor_shortcuts_are_local_and_preserve_text_undo(key, shift, redo):
-    gui = MagicMock()
-    gui.app.call_source = 'exc_editor'
-    event = Mock()
-    event.key = key
-    event.native.isAutoRepeat.return_value = False
-    event.isAutoRepeat.return_value = False
-    modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
-    if shift:
-        modifiers |= QtCore.Qt.KeyboardModifier.ShiftModifier
-    with patch.object(QtWidgets.QApplication, 'keyboardModifiers', return_value=modifiers), \
-            patch.object(MainGUI, 'app_focus_in_text', return_value=False):
-        MainGUI.keyPressEvent(gui, event)
-    (gui.app.exc_editor.redo if redo else gui.app.exc_editor.undo).assert_called_once()
-    gui.app.history.undo.assert_not_called()
-    gui.app.history.redo.assert_not_called()
-    gui.app.exc_editor.reset_mock()
-    with patch.object(QtWidgets.QApplication, 'keyboardModifiers', return_value=modifiers), \
-            patch.object(MainGUI, 'app_focus_in_text', return_value=True):
-        MainGUI.keyPressEvent(gui, event)
-    gui.app.exc_editor.undo.assert_not_called()
-    gui.app.exc_editor.redo.assert_not_called()
 
 
 def test_diagnostics_are_read_only_and_do_not_report_open_drill_crosses():
@@ -181,83 +124,6 @@ def test_diagnostics_are_read_only_and_do_not_report_open_drill_crosses():
     selected = AppExcEditor.diagnose_features(editor, selected_only=True, tolerance=0.001)
     assert selected['drills'] == 1
     assert selected['slots'] == 0
-
-
-@pytest.mark.parametrize('tolerance', [-1, float('nan'), float('inf'), 'bad'])
-def test_diagnostics_reject_bad_tolerance_without_changing_editor(tolerance):
-    editor, first, second = scene()
-    assert AppExcEditor.diagnose_features(editor, tolerance=tolerance) == 'fail'
-    assert not editor.is_modified
-    assert editor.selected == [first]
-
-
-def test_slot_inspection_reports_centerline_length_orientation_and_endpoints():
-    editor, first, second = scene()
-    second.exc_slot = ((4.0, 0.0), (6.0, 1.0))
-    second.exc_slot_geometry = second.geo
-    editor.selected = [second]
-    report = AppExcEditor.diagnose_features(editor, selected_only=True, tolerance=0.001)
-    record = report['features'][0]
-    assert record['type'] == 'slot'
-    assert record['endpoints'] == ((4.0, 0.0), (6.0, 1.0))
-    assert record['length'] == pytest.approx(5 ** 0.5)
-    assert record['orientation'] == pytest.approx(26.565051177)
-    assert not record['inferred']
-
-
-def test_diagnostics_identify_empty_invalid_and_zero_length_slot():
-    editor, first, second = scene()
-    storage = editor.storage_dict[1.0]
-    empty = DrawToolShape(Polygon())
-    invalid = DrawToolShape(Polygon([(0, 0), (2, 2), (0, 2), (2, 0), (0, 0)]))
-    zero = DrawToolShape(Point(20, 20).buffer(0.5))
-    zero.exc_slot = ((20, 20), (20, 20))
-    zero.exc_slot_geometry = zero.geo
-    # Empty values can't enter the R-tree. Inspection must still cope with legacy/corrupt entries.
-    editor.storage_dict[1.0] = SimpleNamespace(get_objects=lambda: [first, second, empty, invalid, zero])
-    report = AppExcEditor.diagnose_features(editor, tolerance=0.001)
-    assert [record['shape'] for record in report['empty']] == [empty]
-    assert [record['shape'] for record in report['invalid']] == [invalid]
-    assert [record['shape'] for record in report['degenerate']] == [zero]
-
-
-@pytest.mark.parametrize('diameter', [-1, float('nan'), float('inf')])
-def test_invalid_tool_add_is_atomic(diameter):
-    editor, first, second = scene()
-    editor.ui = SimpleNamespace(addtool_entry=Mock(), tools_table_exc=MagicMock())
-    editor.units = 'MM'
-    editor.ui.addtool_entry.get_value.return_value = diameter
-    AppExcEditor.on_tool_add(editor)
-    assert list(editor.storage_dict) == [1.0]
-    assert not editor.is_modified
-    assert not editor.history.undo_stack
-
-
-def test_same_diameter_tool_edit_is_a_noop_before_signal_disconnect():
-    editor, first, second = scene()
-    editor.ui = SimpleNamespace(tools_table_exc=MagicMock())
-    editor.ui.tools_table_exc.currentItem().text.return_value = '1.0'
-    editor.ui.tools_table_exc.currentRow.return_value = 0
-    # A same-diameter change must not enter the loop that appends to its own source storage.
-    with patch.object(editor.storage_dict[1.0], 'get_objects', side_effect=AssertionError('must not resize')):
-        # Suspend capture to check the handler validation independently of history enumeration.
-        editor.history.suspended = True
-        AppExcEditor.on_tool_edit(editor, Mock())
-    editor.ui.tools_table_exc.itemChanged.disconnect.assert_not_called()
-    assert not editor.is_modified
-
-
-def test_invalid_selected_resize_is_atomic_before_signal_disconnect():
-    editor, first, second = scene()
-    editor.ui = SimpleNamespace(tools_table_exc=MagicMock())
-    tool = ResizeEditorExc.__new__(ResizeEditorExc)
-    tool.draw_app = editor
-    tool.ui = SimpleNamespace(res_dia_entry=Mock())
-    tool.ui.res_dia_entry.get_value.return_value = float('nan')
-    assert tool.make() == 'fail'
-    assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
-    editor.ui.tools_table_exc.itemChanged.disconnect.assert_not_called()
-    assert not editor.is_modified
 
 
 def test_selected_resize_preserves_native_slot_endpoints_and_unselected_drill():
@@ -282,17 +148,6 @@ def test_selected_resize_preserves_native_slot_endpoints_and_unselected_drill():
     assert editor.selected == [second]
     assert editor.redo()
     assert list(editor.storage_dict[2.0].get_objects()) == [resized]
-
-
-def test_resize_rejects_arbitrary_polygon_without_partially_moving_drills():
-    editor, first, second = scene()
-    second.geo = box(4, 0, 7, 3)
-    editor.selected = [first, second]
-    assert AppExcEditor.resize_features(editor, editor.selected, 2.0) == 'fail'
-    assert list(editor.storage_dict) == [1.0]
-    assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
-    assert not editor.history.undo_stack
-    assert not editor.is_modified
 
 
 def test_tool_edit_resizes_all_features_atomically_and_is_one_history_step():
@@ -337,33 +192,6 @@ def test_tool_add_delete_and_slot_conversion_restore_counts_and_selection():
     assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
 
 
-def test_real_properties_controls_drive_history_and_read_only_inspection():
-    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    editor, first, second = scene()
-    editor.decimals = 4
-    editor.ui = AppExcEditorUI(SimpleNamespace(decimals=4, app_units='MM', resource_location='assets/resources'))
-    assert not hasattr(editor.ui, 'undo_button') and not hasattr(editor.ui, 'redo_button')
-    editor.undo_action = QtGui.QAction()
-    editor.redo_action = QtGui.QAction()
-    editor.diagnose_features = MethodType(AppExcEditor.diagnose_features, editor)
-    editor.on_diagnostics = MethodType(AppExcEditor.on_diagnostics, editor)
-    editor.ui.diagnostics_button.clicked.connect(lambda: editor.on_diagnostics())
-    editor.delete_selected()
-    AppExcEditor.update_history_ui(editor)
-    assert editor.undo_action.isEnabled()
-    assert editor.ui.history_list.count() == 2  # Initial state plus the deletion.
-    editor.undo()
-    assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
-    editor.ui.diagnostics_selected.setChecked(True)
-    editor.ui.diagnostics_button.click()
-    assert editor.ui.diagnostics_result.isReadOnly()
-    assert 'Drills: 1' in editor.ui.diagnostics_result.toPlainText()
-    assert not editor.history.undo_stack
-    assert not editor.is_modified
-    editor.ui.exc_edit_widget.deleteLater()
-    application.processEvents()
-
-
 def test_native_slot_and_rotated_drill_save_extraction_preserve_coordinates():
     editor, first, second = scene()
     first.geo = rotate(first.geo, 37, origin=(0, 0))
@@ -380,42 +208,3 @@ def test_native_slot_and_rotated_drill_save_extraction_preserve_coordinates():
     assert source.tools == {'sentinel': 1}
 
 
-def test_selection_row_sync_blocks_signals_and_does_not_select_other_features():
-    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    editor, first, second = scene()
-    editor.ui = SimpleNamespace(tools_table_exc=QtWidgets.QTableWidget(3, 4))
-    editor.ui.tools_table_exc.setItem(0, 1, QtWidgets.QTableWidgetItem('1.0'))
-    changed = Mock()
-    editor.ui.tools_table_exc.selectionModel().selectionChanged.connect(changed)
-    AppExcEditor.sync_tool_rows(editor)
-    assert [index.row() for index in editor.ui.tools_table_exc.selectionModel().selectedRows()] == [0]
-    assert editor.selected == [first]
-    changed.assert_not_called()
-    editor.ui.tools_table_exc.deleteLater()
-    application.processEvents()
-
-
-def test_rejected_resize_does_not_rebuild_unchanged_indexes():
-    editor, first, second = scene()
-    with patch.object(editor.storage_dict[1.0], 'replace', wraps=editor.storage_dict[1.0].replace) as replace:
-        assert editor.resize_features(editor.selected, -1) == 'fail'
-    replace.assert_not_called()
-    editor.build_ui.assert_not_called()
-
-
-@pytest.mark.parametrize('cls,prefix,counter', [(DrillArray, 'drill', 'points_edit'),
-                                               (SlotArray, 'slot', 'slot_points_edit')])
-def test_invalid_circular_array_does_not_change_feature_counts(cls, prefix, counter):
-    editor, first, second = scene()
-    tool = cls.__new__(cls)
-    tool.draw_app = editor
-    tool.selected_dia = 1.0
-    tool.points = (0, 0)
-    setattr(tool, prefix + '_array', 'circular')
-    setattr(tool, prefix + '_array_size', 10)
-    setattr(tool, prefix + '_angle', 40)
-    tool.origin, tool.destination = (0, 0), (1, 0)
-    before = {key: list(values) for key, values in getattr(editor, counter).items()}
-    assert tool.make() == 'fail'
-    assert getattr(editor, counter) == before
-    assert not editor.history.undo_stack

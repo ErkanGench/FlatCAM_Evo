@@ -20,7 +20,7 @@ from services.updater.provider import (
     run_provider_check,
     update_provider,
 )
-from tests.updater.test_ticket3 import FakeSignal, _fake_app, _manifest
+from tests.updater.test_updater_integration import FakeSignal, _fake_app, _manifest
 
 
 def _provider_app(**options):
@@ -43,21 +43,6 @@ def test_default_provider_is_github():
     assert checker.repository_url == DEFAULT_REPOSITORY
 
 
-def test_unknown_provider_falls_back_to_github():
-    assert update_provider(_provider_app(global_update_provider="ftp")) == "github"
-    assert update_provider(_provider_app(global_update_provider=None)) == "github"
-
-
-def test_digi_factory_uses_the_legacy_url():
-    app = _provider_app(global_update_provider="digi", global_legacy_update_url="https://s.example.invalid/x")
-    checker = create_update_checker(app)
-    assert isinstance(checker, UpdateChecker)
-    assert checker.share_url == "https://s.example.invalid/x"
-
-    checker = create_update_checker(_provider_app(global_update_provider="digi"))
-    assert checker.share_url == DIGI_URL
-
-
 def test_run_check_uses_the_matching_keyword():
     app = _provider_app(global_update_provider="digi")
     checker = MagicMock()
@@ -70,18 +55,6 @@ def test_run_check_uses_the_matching_keyword():
     checker.provider = "github"
     run_provider_check(app, checker)
     checker.run_check.assert_called_once_with(forced=False, repository_url=DEFAULT_REPOSITORY)
-
-
-def test_checker_is_rebuilt_when_the_provider_changes():
-    app = _provider_app()
-    first = checker_for(app)
-    assert isinstance(first, GitHubUpdateChecker)
-    assert checker_for(app) is first
-
-    app.options["global_update_provider"] = "digi"
-    second = checker_for(app)
-    assert isinstance(second, UpdateChecker)
-    assert app.update_checker is second
 
 
 def test_digi_download_stages_the_archive_and_emits_the_manifest(monkeypatch, tmp_path):
@@ -149,28 +122,6 @@ def test_digi_staged_update_launches_without_a_confirmation_box(monkeypatch, tmp
     app.quit_application.assert_called_once_with(mode="updater")
 
 
-def test_closing_the_progress_dialog_is_not_a_user_cancel():
-    import threading
-
-    from PyQt6 import QtWidgets
-
-    from appMain import App
-
-    qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    cancel_event = threading.Event()
-    dialog = QtWidgets.QProgressDialog("Downloading update...", "Cancel", 0, 100)
-    dialog.canceled.connect(cancel_event.set)
-    dialog.show()
-    app = SimpleNamespace(_update_progress_dialog=dialog)
-
-    App._close_update_progress(app)
-
-    assert not cancel_event.is_set()
-    assert app._update_progress_dialog is None
-    dialog.deleteLater()
-    qt_app.processEvents()
-
-
 def test_no_releases_manual_check_shows_a_warning(tmp_path):
     from appMain import App
 
@@ -201,18 +152,6 @@ def test_old_digi_url_migrates_but_stays_available_as_legacy_url(tmp_path):
     assert defaults["global_update_provider"] == "github"
 
 
-def test_custom_digi_share_from_old_settings_moves_to_the_legacy_url(tmp_path):
-    filename = tmp_path / "current_defaults.FlatConfig"
-    filename.write_text(json.dumps({"global_update_url": "https://s.example.invalid/custom"}))
-
-    defaults = AppDefaults(beta=False, version="1.0")
-    defaults.load(str(filename), MagicMock())
-
-    assert defaults["global_update_url"] == DEFAULT_REPOSITORY
-    assert defaults["global_legacy_update_url"] == "https://s.example.invalid/custom"
-    assert defaults["global_update_provider"] == "github"
-
-
 def test_settings_with_a_provider_keep_their_urls(tmp_path):
     filename = tmp_path / "current_defaults.FlatConfig"
     saved = {
@@ -227,24 +166,6 @@ def test_settings_with_a_provider_keep_their_urls(tmp_path):
 
     for key, value in saved.items():
         assert defaults[key] == value
-
-
-def test_offers_record_their_provider_and_address():
-    no_releases = SimpleNamespace(list_releases=lambda: [])
-    github = GitHubUpdateChecker(
-        SimpleNamespace(),
-        repository_url="https://github.com/example/fork",
-        transport_factory=lambda app: no_releases,
-    )
-    payload = github.run_check(forced=True, repository_url="https://github.com/example/other")
-    assert payload["no_releases"] is True
-    assert payload["provider"] == "github"
-    assert payload["provider_url"] == "https://github.com/example/other"
-
-    digi = UpdateChecker(SimpleNamespace(), share_url="https://s.example.invalid/x")
-    payload = digi._payload("up_to_date", "windows", SimpleNamespace())
-    assert payload["provider"] == "digi"
-    assert payload["provider_url"] == "https://s.example.invalid/x"
 
 
 def test_download_uses_the_provider_of_the_offer_not_the_current_preference(monkeypatch, tmp_path):

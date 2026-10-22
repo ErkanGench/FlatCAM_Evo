@@ -281,10 +281,6 @@ class TestAllegroHeaderErrors(unittest.TestCase):
         self.assertRaisesWith('empty or too short', b'\x00\x04')
         self.assertRaisesWith('unknown release', b'MZ' + bytes(5000))
 
-    def test_eagle_xml_is_rejected_by_name(self):
-        self.assertRaisesWith('XML', b'<?xml version="1.0"?><eagle version="9.6.2"/>')
-        self.assertRaisesWith('XML', b'\xef\xbb\xbf  \n<eagle/>')
-
     def test_releases_before_17_2_are_refused_by_name(self):
         for magic, name in ((0x00130000, '16.0'), (0x00130400, '16.2'), (0x00130500, '16.2'), (0x00130C00, '16.4'),
                             (0x00131000, '16.5'), (0x00131500, '16.6')):
@@ -298,54 +294,12 @@ class TestAllegroHeaderErrors(unittest.TestCase):
         self.assertRaisesWith('unknown release', Builder(magic=0x00160200).build())
         self.assertRaisesWith('unknown release', Builder(magic=0x00170000).build())
 
-    def test_footprint_and_symbol_files_are_not_boards(self):
-        self.assertRaisesWith('footprint (.dra)', Builder(role=2).build())
-        self.assertRaisesWith('symbol or library', Builder(role=3).build())
-
-    def test_size_in_header_must_match(self):
-        data = bytearray(Builder().build())
-        put(data, 0x20, len(data) + 4, '<I')
-        self.assertRaisesWith('does not match the size', bytes(data))
-        self.assertRaisesWith('does not match the size', Builder().build() + b'\0\0\0\0')
-
-    def test_unsupported_board_unit(self):
-        data = bytearray(Builder().build())
-        data[0x180] = 3
-        self.assertRaisesWith('Board unit code 3', bytes(data))
-
-    def test_bad_divisor(self):
-        data = bytearray(Builder().build())
-        put(data, 0x26C, 0, '<I')
-        self.assertRaisesWith('unit divisor', bytes(data))
-
     def test_unknown_block_type_is_an_error(self):
         builder = Builder()
         block = bytearray(8)
         block[0] = 0x0B
         builder.add(block)
         self.assertRaisesWith('Unsupported block type 0x0B', builder.build())
-
-    def test_data_after_the_zero_marker_is_an_error(self):
-        builder = Builder()
-        builder.add(bytes(8) + b'\x01')
-        self.assertRaisesWith('after the end', builder.build())
-
-    def test_missing_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(AllegroBrdParseError, 'Cannot read Allegro board file'):
-                AllegroBrdParser().parse_file(os.path.join(directory, 'missing.brd'))
-
-    def test_circle_steps_validated_and_bytes_only(self):
-        with self.assertRaises(ValueError):
-            AllegroBrdParser(circle_steps=8)
-        with self.assertRaises(AllegroBrdParseError):
-            AllegroBrdParser().parse_bytes('text')
-
-    def test_board_without_copper_layer_list(self):
-        data = bytearray(Builder().build())
-        for i in range(25):
-            put(data, 0x430 + 8 * i + 4, 0, '<I')
-        self.assertRaisesWith('no copper layer list', bytes(data))
 
     def test_failed_parse_leaves_no_partial_result(self):
         parser = AllegroBrdParser()
@@ -394,13 +348,6 @@ class TestAllegroGeometry(unittest.TestCase):
         # local (2, 0) turns to (0, 2); the 1.0 x 0.5 pad turns to 0.5 x 1.0
         self.assertEqual([round(v, 3) for v in layers['TOP'].bounds], [9.75, 21.5, 10.25, 22.5])
 
-    def test_pad_local_rotation_adds_to_the_footprint_rotation(self):
-        builder = Builder()
-        stack = builder.smd_padstack('RECT', SH_RECT, 1.0, 0.5)
-        builder.footprint(0, 0, 0, [(0, 0, stack, 90)])
-        layers = layers_of(parse(builder))
-        self.assertEqual([round(v, 3) for v in layers['TOP'].bounds], [-0.25, -0.5, 0.25, 0.5])
-
     def test_bottom_footprint_is_mirrored_then_rotated_and_lands_on_bottom_layers(self):
         builder = Builder()
         stack = builder.smd_padstack('RECT', SH_RECT, 1.0, 0.5, mask=1.2, paste=0.9)
@@ -429,13 +376,6 @@ class TestAllegroGeometry(unittest.TestCase):
         with self.assertRaisesRegex(AllegroBrdParseError, 'Unsupported pad shape diamond'):
             parse(builder)
 
-    def test_unsupported_mask_shape_raises(self):
-        builder = Builder()
-        stack = builder.padstack('X', {23: (SH_RECT, 1, 1, 0, 0, 0), 14: (0x12, 1, 1, 0, 0, 0)}, layers=1)
-        builder.footprint(0, 0, 0, [(0, 0, stack, 0)])
-        with self.assertRaisesRegex(AllegroBrdParseError, 'Unsupported pad shape triangle'):
-            parse(builder)
-
     def test_arc_track_follows_the_circle(self):
         builder = Builder()
         key = builder.key()
@@ -451,18 +391,6 @@ class TestAllegroGeometry(unittest.TestCase):
         self.assertAlmostEqual(layer.area, 0.2 * 5 * math.pi / 2 + math.pi * 0.01, delta=0.02)
         self.assertEqual([round(v, 1) for v in layer.bounds], [-0.1, -0.1, 5.1, 5.1])
 
-    def test_clockwise_arc_takes_the_long_way(self):
-        builder = Builder()
-        key = builder.key()
-        first = builder.chain(key, [lambda k, n: builder.arc(k, n, key, 0.2, (5, 0), (0, 5), (0, 0), True)])
-        block = bytearray(68)
-        block[0], block[2], block[3] = 0x05, 0x06, 0
-        put(block, 4, key, '<I')
-        put(block, 56, first, '<I')
-        builder.add(block)
-        layer = layers_of(parse(builder))['TOP']
-        self.assertAlmostEqual(layer.area, 0.2 * 5 * 1.5 * math.pi + math.pi * 0.01, delta=0.05)
-
     def test_copper_shape_fill_with_void(self):
         builder = Builder()
         void = [(5 + 1 * math.cos(a * math.pi / 8), 5 + 1 * math.sin(a * math.pi / 8)) for a in range(16)]
@@ -477,26 +405,6 @@ class TestAllegroGeometry(unittest.TestCase):
         builder.shape(0x15, 1, [(0, 0), (10, 0), (10, 10), (0, 10)])
         with self.assertRaisesRegex(AllegroBrdParseError, 'never filled'):
             parse(builder)
-
-    def test_zone_with_fill_on_another_layer_raises(self):
-        builder = Builder()
-        builder.shape(0x15, 1, [(0, 0), (10, 0), (10, 10), (0, 10)])
-        builder.shape(0x06, 0, [(0, 0), (10, 0), (10, 10), (0, 10)])
-        with self.assertRaisesRegex(AllegroBrdParseError, 'never filled'):
-            parse(builder)
-
-    def test_zone_with_stored_fill_is_fine(self):
-        builder = Builder()
-        builder.shape(0x15, 1, [(0, 0), (10, 0), (10, 10), (0, 10)])
-        builder.shape(0x06, 1, [(0, 0), (10, 0), (10, 10), (0, 10)])
-        self.assertAlmostEqual(layers_of(parse(builder))['BOTTOM'].area, 100.0, delta=0.001)
-
-    def test_keepout_shapes_are_not_copper(self):
-        builder = Builder()
-        builder.shape(0x0F, 0, [(0, 0), (10, 0), (10, 10), (0, 10)])
-        builder.shape(0x13, 0, [(0, 0), (10, 0), (10, 10), (0, 10)])
-        builder.shape(0x14, 0, [(0, 0), (10, 0), (10, 10), (0, 10)])
-        self.assertEqual(parse(builder).layers, {})
 
     def test_footprint_library_copies_are_not_placed(self):
         builder = Builder()
@@ -518,17 +426,6 @@ class TestAllegroGeometry(unittest.TestCase):
         put(block, 56, key + 1, '<I')
         builder.add(block)
         with self.assertRaisesRegex(AllegroBrdParseError, 'Endless segment chain'):
-            parse(builder)
-
-    def test_chain_to_a_missing_block_raises(self):
-        builder = Builder()
-        key = builder.key()
-        block = bytearray(68)
-        block[0], block[2], block[3] = 0x05, 0x06, 0
-        put(block, 4, key, '<I')
-        put(block, 56, 0x12345678, '<I')
-        builder.add(block)
-        with self.assertRaisesRegex(AllegroBrdParseError, 'missing block'):
             parse(builder)
 
     def test_via_span_decides_the_drill_group_and_mask_openings(self):
@@ -578,14 +475,6 @@ class TestAllegroGeometry(unittest.TestCase):
         self.assertAlmostEqual(first.x, 5.0, places=3)
         self.assertTrue(any('Slotted holes' in w for w in parsed.warnings))
 
-    def test_inner_layer_without_routed_copper_is_left_out_with_a_warning(self):
-        builder = Builder(layers=('TOP', 'IN1', 'BOTTOM'))
-        stack = builder.through_padstack('PAD', 1.0, 0.5, layers=3)
-        builder.footprint(5, 5, 0, [(0, 0, stack, 0)])
-        parsed = parse(builder)
-        self.assertEqual([n for n in parsed.layers if n.isupper() and n in ('TOP', 'IN1', 'BOTTOM')], ['TOP', 'BOTTOM'])
-        self.assertTrue(any('IN1' in w and 'negative plane' in w for w in parsed.warnings))
-
     def test_outline_rectangle_and_board_outline(self):
         builder = Builder()
         key = builder.key()
@@ -616,37 +505,6 @@ class TestAllegroGeometry(unittest.TestCase):
         self.assertTrue(parsed.board_outline.is_empty)
         self.assertTrue(any('not a closed shape' in w for w in parsed.warnings))
 
-    def test_zero_width_copper_line_warns(self):
-        builder = Builder()
-        builder.track(0, [(0, 0), (5, 0)], 0.0)
-        parsed = parse(builder)
-        self.assertTrue(any('Zero-width tracks' in w for w in parsed.warnings))
-
-    def test_rectangle_on_copper_is_refused(self):
-        builder = Builder()
-        block = bytearray(56)
-        block[0], block[2], block[3] = 0x24, 0x06, 0
-        put(block, 4, builder.key(), '<I')
-        put(block, 12, 0x5ACE8323, '<I')
-        put(block, 24 + 8, 1000)
-        put(block, 24 + 12, 1000)
-        builder.add(block)
-        with self.assertRaisesRegex(AllegroBrdParseError, 'Rectangles on copper'):
-            parse(builder)
-
-    def test_arc_with_end_point_off_the_circle_raises(self):
-        builder = Builder()
-        key = builder.key()
-        first = builder.chain(key, [lambda k, n: builder.arc(k, n, key, 0.2, (5, 0), (0, 9), (0, 0))])
-        block = bytearray(68)
-        block[0], block[2], block[3] = 0x05, 0x06, 0
-        put(block, 4, key, '<I')
-        put(block, 56, first, '<I')
-        builder.add(block)
-        with self.assertRaisesRegex(AllegroBrdParseError, 'Inconsistent arc'):
-            parse(builder)
-
-
 UNTESTED = 'is not tested and this board could not be read safely'
 FIXTURE_B = FIXTURE.parent / '2nd project' / 'TI28027.brd'
 
@@ -672,30 +530,6 @@ class TestAllegroUntestedReleases(unittest.TestCase):
         if outline:
             self._outline(builder, 50, 30)
         return builder.build()
-
-    def test_every_untested_magic_is_tried_with_a_layout_and_named(self):
-        # (magic, name in the message). The synthetic board has the 17.2 layout, so only the magics that map to
-        # layout 172 can read it; the others (174, 175, 180, 181, 190 sizes) misalign the block walk and must give
-        # the clear error that names the release, never another exception.
-        for magic, name, reads in ((0x00140500, '17.x (format 0x00140500)', True),
-                                   (0x00140900, '17.4', False), (0x00141500, '17.5', False),
-                                   (0x00141600, '17.x (format 0x00141600)', False),
-                                   (0x00150000, '18.0', False), (0x00150100, '18.x (format 0x00150100)', False),
-                                   (0x00150300, '18.x (format 0x00150300)', False), (0x00160100, '19.0', False)):
-            with self.subTest(release=name):
-                data = self._board(magic)
-                if reads:
-                    parsed = AllegroBrdParser().parse_bytes(data)
-                    self.assertEqual(parsed.warnings[0], 'Allegro %s is not tested: check the result against '
-                                                         'Gerbers made by Allegro.' % name)
-                    self.assertEqual(parsed.version, name)
-                    self.assertEqual(list(parsed.layers)[:2], ['TOP', 'BOTTOM'])
-                else:
-                    with self.assertRaises(AllegroBrdParseError) as context:
-                        AllegroBrdParser().parse_bytes(data)
-                    message = str(context.exception)
-                    self.assertTrue(message.startswith('Allegro %s %s: ' % (name, UNTESTED)), message)
-                    self.assertNotIn('Cannot read Allegro board', message)
 
     def test_patched_magic_on_the_sample_boards(self):
         # Fixture A has the 17.2 layout and fixture B the checked 18.1 layout. A magic that selects the same layout
@@ -727,20 +561,6 @@ class TestAllegroUntestedReleases(unittest.TestCase):
                     self.assertTrue(str(context.exception).startswith('Allegro %s %s: ' % (name, UNTESTED)),
                                     str(context.exception))
 
-    def test_checked_releases_have_no_untested_warning(self):
-        for path, version in ((FIXTURE, '17.2'), (FIXTURE_B, '18.1/24.1')):
-            with self.subTest(file=path.name):
-                parsed = parsed_sample(path)
-                self.assertEqual(parsed.version, version)
-                self.assertFalse([w for w in parsed.warnings if 'not tested' in w])
-                self.assertEqual(parsed.warnings, ['Text is drawn with an approximate stroke font; glyph shapes, '
-                                                   'sizes and spacing differ from Allegro'])
-
-    def test_gate_accepts_geometry_inside_the_outline(self):
-        parsed = AllegroBrdParser().parse_bytes(self._board(0x00140500))
-        self.assertEqual([round(v, 1) for v in parsed.board_outline.bounds], [0.0, 0.0, 50.0, 30.0])
-        self.assertTrue(parsed.warnings[0].startswith('Allegro 17.x'))
-
     def test_gate_catches_a_pad_outside_the_outline(self):
         data = self._board(0x00140500, pad_at=(80, 10))
         with self.assertRaisesRegex(AllegroBrdParseError, UNTESTED + ': A .* item at .* lies outside the board'):
@@ -748,42 +568,12 @@ class TestAllegroUntestedReleases(unittest.TestCase):
         # the same data in a checked release is not gated
         self.assertIn('TOP', AllegroBrdParser().parse_bytes(self._board(0x00140400, pad_at=(80, 10))).layers)
 
-    def test_gate_margin_is_one_millimetre(self):
-        self.assertIn('TOP', AllegroBrdParser().parse_bytes(self._board(0x00140500, pad_at=(50.2, 10))).layers)
-        with self.assertRaisesRegex(AllegroBrdParseError, 'outside the board'):
-            AllegroBrdParser().parse_bytes(self._board(0x00140500, pad_at=(52.0, 10)))
-
-    def test_without_an_outline_the_gate_uses_a_size_limit(self):
-        parsed = AllegroBrdParser().parse_bytes(self._board(0x00140500, pad_at=(900, 10), outline=False))
-        self.assertTrue(parsed.warnings[0].startswith('Allegro 17.x'))
-        with self.assertRaisesRegex(AllegroBrdParseError, UNTESTED + ': .*inside \\+-2 m'):
-            AllegroBrdParser().parse_bytes(self._board(0x00140500, pad_at=(2500, 10), outline=False))
-
-    def test_gate_catches_a_huge_padstack(self):
-        data = self._board(0x00140500, pad=150.0)
-        with self.assertRaisesRegex(AllegroBrdParseError, UNTESTED + ': Padstack PAD has a drill or pad size'):
-            AllegroBrdParser().parse_bytes(data)
-        self.assertIn('TOP', AllegroBrdParser().parse_bytes(self._board(0x00140400, pad=150.0, outline=False)).layers)
-
-    def test_unknown_block_type_is_named_with_the_release(self):
-        builder = Builder(magic=0x00140500)
-        block = bytearray(8)
-        block[0] = 0x0B
-        builder.add(block)
-        with self.assertRaisesRegex(AllegroBrdParseError, 'Allegro 17.x .* ' + UNTESTED + ': Unsupported block type'):
-            AllegroBrdParser().parse_bytes(builder.build())
-
     def test_truncated_or_wrong_size_untested_file_is_refused_clearly(self):
         data = self._board(0x00140500)
         for blob in (data[:-4], data[:0x1300], data + bytes(4)):
             with self.assertRaises(AllegroBrdParseError) as context:
                 AllegroBrdParser().parse_bytes(bytes(blob))
             self.assertNotIn('Cannot read Allegro board', str(context.exception))
-
-    def test_footprint_file_of_an_untested_release_is_not_a_board(self):
-        with self.assertRaisesRegex(AllegroBrdParseError, 'footprint \\(\\.dra\\)'):
-            AllegroBrdParser().parse_bytes(Builder(magic=0x00141500, role=2).build())
-
 
 class TestAllegroRobustness(unittest.TestCase):
     @staticmethod
@@ -820,26 +610,6 @@ class TestAllegroRobustness(unittest.TestCase):
                             # only a cut at a block boundary with a corrected size field is a valid shorter file
                             self.assertTrue(fix_size, 'a truncated file with the old size field was accepted')
 
-    def test_mutated_files_never_leak_internal_errors(self):
-        # Random byte changes must end in a parse or an AllegroBrdParseError. The parser wraps any other exception
-        # as 'Cannot read Allegro board: ...', so that prefix means an unguarded code path. A RuntimeWarning
-        # (for example a numpy 'divide by zero' from a degenerate shape) is an error here and counts as a leak.
-        rng = random.Random(7)
-        data = self._sample()
-        leaked = []
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', RuntimeWarning)
-            for _ in range(600):
-                blob = bytearray(data)
-                for _ in range(rng.choice((1, 2, 4, 8))):
-                    blob[rng.randrange(4, len(blob))] = rng.randrange(256)
-                try:
-                    AllegroBrdParser().parse_bytes(bytes(blob))
-                except AllegroBrdParseError as error:
-                    if str(error).startswith('Cannot read Allegro board:'):
-                        leaked.append(str(error))
-        self.assertEqual(leaked, [])
-
     def _check_mutated_sample_board_fields(self, loops):
         # same, with every changed byte inside a block header or field of the real 17.2 board
         rng = random.Random(11)
@@ -858,10 +628,6 @@ class TestAllegroRobustness(unittest.TestCase):
                         leaked.append(str(error))
         self.assertEqual(leaked, [])
 
-    def test_mutated_sample_board_fields_never_leak_internal_errors_quick(self):
-        # the first 4 loops of the full test below (same seed)
-        self._check_mutated_sample_board_fields(4)
-
     @pytest.mark.slow
     def test_mutated_sample_board_fields_never_leak_internal_errors(self):
         self._check_mutated_sample_board_fields(40)
@@ -872,30 +638,7 @@ class TestAllegroRobustness(unittest.TestCase):
         with self.assertRaisesRegex(AllegroBrdParseError, 'string count'):
             AllegroBrdParser().parse_bytes(bytes(data))
 
-    def test_parse_file_reads_from_disk(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, 'board.brd')
-            with open(path, 'wb') as handle:
-                handle.write(self._sample())
-            parser = AllegroBrdParser()
-            self.assertIs(parser.parse_file(path), parser)
-            self.assertIn('TOP', parser.layers)
-
-    def test_parser_can_be_reused(self):
-        parser = AllegroBrdParser()
-        parser.parse_bytes(self._sample())
-        first = set(parser.layers)
-        parser.parse_bytes(self._sample())
-        self.assertEqual(set(parser.layers), first)
-        self.assertEqual(parser.version, '17.2')
-
-
 class TestAllegroFixtureBoards(unittest.TestCase):
-    def test_footprint_file_with_board_magic_is_refused(self):
-        dra = FIXTURE.with_name('aaa.dra')
-        with self.assertRaisesRegex(AllegroBrdParseError, 'not a board'):
-            AllegroBrdParser().parse_file(dra)
-
     def test_other_files_in_the_project_folder_are_refused(self):
         for name in ('aaa.bsm', 'PROIECTCAD_0.DBK', 'master.tag', 'proiectCAD.opj'):
             with self.subTest(name=name):

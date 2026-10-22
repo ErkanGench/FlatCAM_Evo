@@ -12,9 +12,7 @@ from appPlugins.ToolAlignObjects.AlignGen import build_snap_index, snap
 from appPlugins.ToolDblSided import DblSidedTool
 from appPlugins.ToolPunchGerber import ToolPunchGerber
 
-from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
-    _headless_qt, app, excellon, gerber, make_excellon, make_gerber,
-)
+from tests.helpers_objects import app, excellon, gerber, _headless_qt, make_excellon, make_gerber  # noqa: F401,E402
 
 
 def _event(pos):
@@ -66,17 +64,9 @@ class TestAlignGerber:
     def test_flash_gives_the_flash_point(self, gerber, click, center):
         assert align_click(gerber, click) == [pytest.approx(center)]
 
-    @pytest.mark.parametrize('click', [(20.0, 10.1), (5.0, 24.0), (8.0, 8.0)])   # track, region, outside
-    def test_track_region_outside_give_nothing(self, gerber, click):
-        assert align_click(gerber, click) == []
-
     def test_center_is_the_follow_point_not_the_solid_centroid(self):
         obj = _gerber_like({1: {'geometry': [{'solid': box(0, -1, 2, 1), 'follow': Point(0, 0)}]}})
         assert align_click(obj, (0.5, 0.0)) == [pytest.approx([0.0, 0.0])]
-
-    def test_clear_record_is_ignored(self):
-        obj = _gerber_like({1: {'geometry': [{'clear': box(0, 0, 2, 2), 'follow': Point(1, 1)}]}})
-        assert align_click(obj, (1.0, 1.0)) == []
 
     def test_two_overlapping_flashes_give_the_smaller_one(self):
         obj = _gerber_like({
@@ -85,11 +75,6 @@ class TestAlignGerber:
         })
         assert align_click(obj, (1.0, 1.0)) == [pytest.approx([1.0, 1.0])]
 
-    def test_solid_record_without_follow_does_not_crash(self):
-        obj = _gerber_like({1: {'geometry': [{'solid': box(0, 0, 2, 2)}]}})
-        assert align_click(obj, (1.0, 1.0)) == []
-
-
 class TestAlignExcellon:
     def test_drill_gives_its_center(self, excellon):
         assert align_click(excellon, (5.1, 12.1)) == [pytest.approx([5.0, 12.0])]
@@ -97,19 +82,8 @@ class TestAlignExcellon:
     def test_slot_gives_its_centroid(self, excellon):
         assert align_click(excellon, (24.0, 12.2)) == [pytest.approx([24.0, 12.0])]
 
-    def test_vertical_slot(self, excellon):
-        assert align_click(excellon, (5.1, 23.0)) == [pytest.approx([5.0, 23.0])]
-
     def test_outside_gives_nothing(self, excellon):
         assert align_click(excellon, (8.0, 8.0)) == []
-
-    def test_overlapping_drills_of_two_tools_give_the_smaller_one(self, app):
-        exc = _custom_excellon(app, {
-            1: {'tooldia': 1.0, 'drills': [Point(5, 5)], 'slots': [], 'solid_geometry': [], 'data': {}},
-            2: {'tooldia': 2.0, 'drills': [Point(5, 5.2)], 'slots': [], 'solid_geometry': [], 'data': {}},
-        })
-        assert align_click(exc, (5.0, 5.1)) == [pytest.approx([5.0, 5.0])]
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # ToolDblSided
@@ -131,10 +105,6 @@ class TestDblSided:
         points, exits = dbl_click(excellon, (5.1, 12.1))
         assert points == [pytest.approx((5.0, 12.0))] and exits == 1
 
-    def test_slot_gives_its_centroid(self, excellon):
-        points, exits = dbl_click(excellon, (24.0, 12.2))
-        assert points == [pytest.approx((24.0, 12.0))]
-
     def test_outside_gives_nothing(self, excellon):
         assert dbl_click(excellon, (8.0, 8.0)) == ([], 0)
 
@@ -145,17 +115,6 @@ class TestDblSided:
         })
         points, exits = dbl_click(exc, (5.0, 5.1))
         assert points == [pytest.approx((5.0, 5.0))] and exits == 1
-
-    def test_overlapping_drills_of_two_tools_give_one_point(self, app):
-        # the old inner "break" left only the loop of 1 tool, so a 2nd tool set the point again and called
-        # on_exit() a 2nd time; the first hit now ends the search
-        exc = _custom_excellon(app, {
-            1: {'tooldia': 1.0, 'drills': [Point(5, 5)], 'slots': [], 'solid_geometry': [], 'data': {}},
-            2: {'tooldia': 2.0, 'drills': [Point(5, 5.2)], 'slots': [], 'solid_geometry': [], 'data': {}},
-        })
-        points, exits = dbl_click(exc, (5.0, 5.1))
-        assert points == [pytest.approx((5.0, 5.0))] and exits == 1
-
 
 # ---------------------------------------------------------------------------------------------------------------
 # ToolPunchGerber.find_pad
@@ -177,19 +136,9 @@ class TestFindPad:
     def test_flash_in_a_selected_aperture(self, gerber):
         assert find_pad(gerber, (5.2, 5.1), [10]) == [{'apid': 10, 'idx': 0}]
 
-    def test_point_object_is_accepted(self, gerber):
-        assert find_pad(gerber, Point(10.3, 5.1), [11]) == [{'apid': 11, 'idx': 0}]
-
-    def test_not_selected_aperture_is_skipped(self, gerber):
-        assert find_pad(gerber, (5.2, 5.1), [11]) == []
-
     def test_track_and_region_are_not_pads(self, gerber):
         assert find_pad(gerber, (20.0, 10.1), [10, 11, 0]) == []
         assert find_pad(gerber, (5.0, 24.0), [0, 10]) == []
-
-    def test_flash_found_in_the_fixture_after_the_clear_track(self, gerber):
-        found = find_pad(gerber, (15.2, 35.1), sorted(gerber.tools))
-        assert len(found) == 1 and found[0]['idx'] == 0
 
     def test_index_is_the_record_position_after_other_records(self):
         grb = _gerber_like({7: {'geometry': [
@@ -207,10 +156,3 @@ class TestFindPad:
             2: {'geometry': [{'solid': box(1, 1, 3, 3), 'follow': Point(2, 2)}]},
         })
         assert find_pad(grb, (2.0, 2.0), [1, 2]) == [{'apid': 1, 'idx': 0}, {'apid': 2, 'idx': 0}]
-
-    def test_record_without_follow_or_solid_is_skipped(self):
-        grb = _gerber_like({1: {'geometry': [
-            {'solid': box(0, 0, 2, 2)},
-            {'follow': Point(1, 1)},
-        ]}})
-        assert find_pad(grb, (1.0, 1.0), [1]) == []

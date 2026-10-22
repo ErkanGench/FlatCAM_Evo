@@ -23,7 +23,7 @@ from appPlugins.ToolGrblSender.Sender import ToolGrblSender, _StartRequest
 from appPlugins.ToolGrblSender import SenderGen
 import appPlugins.ToolGrblSender.Sender  # noqa: F401
 from tests.test_levelling_audit import emitted
-from tests.test_grbl_check_mode import fast_timeouts
+from tests.test_grbl_job_control import fast_timeouts
 from tests.grbl_stream_helpers import (
     FRAME, JOB, make_storage, make_job_target, make_stream_tool, make_levelled_stream_tool, ended_how, CheckFake,
     HookFake, spy_reserve, import_map_b)
@@ -722,18 +722,6 @@ class TestInvalidationEvents(unittest.TestCase):
         self.assertGreater(tool._start_seq, before)
         return tool
 
-    def test_event_on_object_changed(self):
-        self.check(lambda tool: tool.on_object_changed())
-
-    def test_event_clear_probe_data(self):
-        self.check(lambda tool: tool._clear_probe_data())
-
-    def test_event_probe_start(self):
-        self.check(lambda tool: tool._al_capture_context(replacement=True))
-
-    def test_event_import_start(self):
-        with tempfile.TemporaryDirectory() as directory:
-            self.check(lambda tool: import_map_b(tool, directory))
 
     def test_event_import_start_without_publication(self):
         # the start of an import (not its result) is an event
@@ -742,24 +730,6 @@ class TestInvalidationEvents(unittest.TestCase):
         with patch.object(QtWidgets.QFileDialog, 'getOpenFileName', return_value=('map.txt', '')):
             self.check(lambda t: t.on_import_height_map(), tool)
 
-    def test_event_result_published(self):
-        # the increment is in the locked section of the publication, before the hook
-        tool = self.make()[0]
-        tool._al_on_height_map_ready = MagicMock()
-        ctx = tool._al_capture_context()
-        heights = {key: 0.1 for key in tool.al_voronoi_geo_storage}
-        self.check(lambda t: t._on_al_result_ready({'kind': 'probe', 'context': ctx, 'heights': heights,
-                                                    'frame': FRAME}), tool)
-
-    def test_event_height_map_ready_hook(self):
-        tool, _fake, target = self.make()
-        self.check(lambda t: t._al_on_height_map_ready(target, {'kind': 'probe', 'frame': FRAME}), tool)
-
-    def test_event_stop(self):
-        self.check(lambda tool: tool.on_grbl_stop())
-
-    def test_event_reset(self):
-        self.check(lambda tool: tool.on_grbl_reset())
 
     def test_event_connect(self):
         tool = self.make()[0]
@@ -772,14 +742,6 @@ class TestInvalidationEvents(unittest.TestCase):
                 patch.object(sender_module.QtCore.QTimer, 'singleShot'):
             self.check(lambda t: t.on_grbl_connect(), tool)
 
-    def test_event_port_close(self):
-        self.check(lambda tool: tool._grbl_close_port())
-
-    def test_event_disconnect(self):
-        self.check(lambda tool: tool._grbl_disconnect())
-
-    def test_event_force_close(self):
-        self.check(lambda tool: tool._grbl_force_close())
 
     def test_event_disconnect_during_an_operation(self):
         tool = self.make()[0]

@@ -69,8 +69,7 @@ def run_import(task):
     in_worker(lambda: task['fcn'](*task['params']))
 
 
-@pytest.mark.parametrize('old_kind', ['import', 'failed'])
-@pytest.mark.parametrize('complete_b', [False, True], ids=['b_started', 'b_completed'])
+@pytest.mark.parametrize('old_kind,complete_b', [('import', False), ('failed', True)], ids=['import-b_started', 'failed-b_completed'])
 def test_old_import_result_cannot_change_replacement(tmp_path, old_kind, complete_b):
     """Expected RED: same-point replacement must retire both success and failure A."""
     tool, _ = result_tool()

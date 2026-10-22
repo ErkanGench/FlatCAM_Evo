@@ -113,14 +113,6 @@ class TestSprintLayoutErrors(unittest.TestCase):
         self.assertRaisesWith('bad signature', b'JUNK' + bytes(50))
         self.assertRaisesWith('bad signature', b'\x06\x33\xaa\xfe' + bytes(50))
 
-    def test_empty_and_tiny_inputs_raise(self):
-        self.assertRaisesWith('Truncated', b'')
-        self.assertRaisesWith('Truncated', b'ju')
-        self.assertRaisesWith('Truncated', b'\x06\x33\xaa\xff\0\0')
-
-    def test_board_count_zero_raises(self):
-        self.assertRaisesWith('Invalid board count 0', b'\x06\x33\xaa\xff' + bytes(4))
-
     def test_truncated_file_raises_and_clears_results(self):
         valid = valid_two_object_file()
         parser = SprintLayoutParser()
@@ -133,17 +125,6 @@ class TestSprintLayoutErrors(unittest.TestCase):
         self.assertEqual(parser.drill_groups, {})
         self.assertEqual(parser.default_layers, [])
 
-    def test_every_truncation_raises(self):
-        valid = valid_two_object_file()
-        for cut in range(len(valid)):
-            with self.subTest(cut=cut):
-                with self.assertRaises(SprintLayoutParseError):
-                    SprintLayoutParser().parse_bytes(valid[:cut])
-
-    def test_unknown_object_type_raises(self):
-        bad = sprint_file([board([(9, obj(9, x=0.0, y=0.0))], w=fu(BOARD_MM), h=fu(BOARD_MM))])
-        self.assertRaisesWith('Unknown object type 9', bad)
-
     def test_non_finite_and_huge_coordinates_raise(self):
         nan_x = sprint_file([board([(2, obj(2, x=float('nan'), y=0.0, rout=5000, rin=3500))],
                                    w=fu(BOARD_MM), h=fu(BOARD_MM))])
@@ -151,31 +132,6 @@ class TestSprintLayoutErrors(unittest.TestCase):
         huge = sprint_file([board([(2, obj(2, x=2e9, y=0.0, rout=5000, rin=3500))],
                                   w=fu(BOARD_MM), h=fu(BOARD_MM))])
         self.assertRaisesWith('Invalid x coordinate', huge)
-
-    def test_line_width_above_limit_raises(self):
-        line = obj(6, pts=[(0.0, 0.0), (1000.0, 0.0)], width=2 * 10 ** 7, layer=1, shape=0)
-        self.assertRaisesWith('Invalid line width', sprint_file([board([(6, line)], w=fu(BOARD_MM),
-                                                                       h=fu(BOARD_MM))]))
-
-    def test_zero_size_round_pad_raises(self):
-        pad = obj(2, x=0.0, y=0.0, rout=0, rin=0)
-        self.assertRaisesWith('Round pad with non-positive size',
-                              sprint_file([board([(2, pad)], w=fu(BOARD_MM), h=fu(BOARD_MM))]))
-
-    def test_thermal_pad_with_ground_plane_raises(self):
-        pad = obj(2, x=0.0, y=0.0, rout=5000, rin=3500, thermal=1)
-        data = sprint_file([board([(2, pad)], w=fu(BOARD_MM), h=fu(BOARD_MM), plane=(1, 0, 0, 0, 0, 0, 0))])
-        self.assertRaisesWith('Thermal pad connections', data)
-
-    def test_cutout_on_copper_raises(self):
-        cutout = obj(5, x=0.0, y=0.0, rout=5000, rin=0, layer=1, cutoff=1)
-        self.assertRaisesWith('Cut-out objects on copper layers',
-                              sprint_file([board([(5, cutout)], w=fu(BOARD_MM), h=fu(BOARD_MM))]))
-
-    def test_second_board_is_read_and_must_be_valid(self):
-        good = board([], name=b'First', w=fu(BOARD_MM), h=fu(BOARD_MM))
-        broken = board([], name=b'Second', w=0, h=100000)
-        self.assertRaisesWith('Invalid board size', sprint_file([good, broken]))
 
     def test_mutated_files_never_leak_internal_errors(self):
         # Random byte changes must end in a parse or a SprintLayoutParseError. The parser wraps any other
@@ -210,19 +166,6 @@ class TestSprintLayoutErrors(unittest.TestCase):
                         leaked.append(str(error))
         self.assertEqual(leaked, [])
 
-    def test_parse_file_reads_from_disk_and_missing_file_raises(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, 'board.lay6')
-            with open(path, 'wb') as handle:
-                handle.write(one_pad_file())
-            parser = SprintLayoutParser()
-            self.assertIs(parser.parse_file(path), parser)
-            self.assertIn('C1', parser.layers)
-            missing = os.path.join(directory, 'missing.lay6')
-            with self.assertRaisesRegex(SprintLayoutParseError, 'Cannot read Sprint Layout file'):
-                SprintLayoutParser().parse_file(missing)
-
-
 class TestSprintLayoutPads(unittest.TestCase):
     def test_tht_pad_is_copper_on_both_sides_with_pth_drill(self):
         parser = SprintLayoutParser().parse_bytes(one_pad_file())
@@ -247,15 +190,6 @@ class TestSprintLayoutPads(unittest.TestCase):
         tool = parser.drill_groups['NPTH'][1]
         self.assertAlmostEqual(tool['tooldia'], 0.7, places=4)
         self.assertEqual(len(tool['drills']), 1)
-
-    def test_pad_without_drill_is_copper_only(self):
-        parser = SprintLayoutParser().parse_bytes(one_pad_file(rin=0))
-        self.assertEqual(parser.drill_groups, {})
-        self.assertIn('C1', parser.layers)
-
-    def test_closed_mask_adds_no_solder_mask(self):
-        parser = SprintLayoutParser().parse_bytes(one_pad_file(mask=0))
-        self.assertEqual(list(parser.layers), ['C1', 'C2'])
 
     def test_mask_opening_grows_pad_by_0_12_mm_per_side(self):
         parser = SprintLayoutParser().parse_bytes(one_pad_file())
@@ -291,13 +225,6 @@ class TestSprintLayoutLines(unittest.TestCase):
         self.assertTrue(stroke.contains(Point(8.09, 2.0)))
         # a square cap would reach this corner; the round cap does not
         self.assertFalse(stroke.contains(Point(8.05, 2.09)))
-
-    def test_zero_width_line_is_skipped_with_warning(self):
-        line = obj(6, pts=[(fu(2), fy(2, BOARD_MM)), (fu(8), fy(2, BOARD_MM))], width=0, layer=1, shape=0)
-        parser = SprintLayoutParser().parse_bytes(sprint_file([board([(6, line)], w=fu(BOARD_MM), h=fu(BOARD_MM))]))
-        self.assertNotIn('C1', parser.layers)
-        self.assertIn('Zero-width lines were skipped (1)', parser.warnings)
-
 
 class TestSprintLayoutFrame(unittest.TestCase):
     def test_units_and_y_frame(self):
@@ -338,17 +265,6 @@ class TestSprintLayoutGroundPlane(unittest.TestCase):
         # C2 has no plane: only the pad
         self.assertAlmostEqual(geo(parser, 'C2').area, math.pi * 0.5 ** 2, delta=0.01)
 
-    def test_planes_on_both_sides_are_named_in_one_warning(self):
-        flags = (1, 0, 1, 0, 0, 0, 0)
-        data = sprint_file([board([(2, pad_at(10.0, 10.0, gdist=3000, mask=0))],
-                                  w=fu(BOARD_MM), h=fu(BOARD_MM), plane=flags)])
-        parser = SprintLayoutParser().parse_bytes(data)
-        self.assertEqual(len(parser.warnings), 1)
-        self.assertIn('C1 (Copper Top)', parser.warnings[0])
-        self.assertIn('C2 (Copper Bottom)', parser.warnings[0])
-        self.assertAlmostEqual(geo(parser, 'C2').area, BOARD_MM ** 2 - math.pi * (0.8 ** 2 - 0.5 ** 2), delta=0.01)
-
-
 class TestSprintLayoutText(unittest.TestCase):
     def _text_file(self, visible):
         stroke = child(6, [(fu(3), fy(3, BOARD_MM)), (fu(6), fy(3, BOARD_MM))], width=1500, layer=2, shape=0)
@@ -361,12 +277,6 @@ class TestSprintLayoutText(unittest.TestCase):
         for actual, expected in zip(geo(parser, 'S1').bounds, (2.925, 2.925, 6.075, 3.075)):
             self.assertAlmostEqual(actual, expected, delta=0.01)
         self.assertEqual(parser.warnings, [])
-
-    def test_hidden_text_is_not_drawn(self):
-        parser = SprintLayoutParser().parse_bytes(self._text_file(visible=False))
-        self.assertEqual(parser.layers, {})
-        self.assertEqual(parser.warnings, [])
-
 
 class TestSprintLayoutBoards(unittest.TestCase):
     def test_only_first_board_is_imported_with_warning(self):

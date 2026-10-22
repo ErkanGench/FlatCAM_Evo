@@ -18,6 +18,8 @@ Full compare fails (exit 1) if:
   - a test that is not in the baseline does not pass;
   - a test is failed, error or collect_error, and it did not have the same outcome in the baseline;
   - a test is skipped or xfailed, it was not so in the baseline, and it is not in allowed_skips.txt.
+A full run prints a WARNING (no change of the exit code) when the number of test ids or test files is over
+tests/gates/test_budget.json.
 Targeted compare uses only the collected ids (a baseline id that was not collected is not treated as removed).
 
 removed_tests.txt and allowed_skips.txt: one line per test, ``<test id>  # <reason>``. Blank lines and lines that
@@ -41,6 +43,7 @@ GATES = Path(__file__).resolve().parent
 BASELINE = GATES / 'outcome_baseline.json'
 REMOVED = GATES / 'removed_tests.txt'
 ALLOWED_SKIPS = GATES / 'allowed_skips.txt'
+BUDGET = GATES / 'test_budget.json'
 
 OUTCOMES = ['passed', 'failed', 'error', 'skipped', 'xfailed', 'collect_error']
 # when a test has more than 1 report (setup, call, teardown) the worst outcome wins
@@ -221,6 +224,29 @@ def compare(current, baseline, removed, allowed, full):
     return failures
 
 
+def budget_warning(node_ids):
+    """Return a warning text when the number of test ids or test files is over tests/gates/test_budget.json.
+
+    It is a warning only: it never changes the exit code.
+    """
+    if not BUDGET.exists():
+        return None
+    budget = json.loads(BUDGET.read_text(encoding='utf-8'))
+    files = {i.split('::', 1)[0] for i in node_ids}
+    lines = []
+    for what, count, limit in (('tests', len(node_ids), budget.get('max_tests')),
+                               ('files', len(files), budget.get('max_files'))):
+        if limit is not None and count > limit:
+            lines.append('test budget exceeded: %d %s > %d' % (count, what, limit))
+    if not lines:
+        return None
+    lines.append('fold tests into topical files; the owner decides a raise of tests/gates/test_budget.json')
+    return '\n'.join(['*' * 78] + ['WARNING  ' + line for line in lines] + ['*' * 78])
+
+
+LAST_OUTCOMES = {}   # the outcome map of the last main() run (run_core.py reads it)
+
+
 def save_baseline(current):
     BASELINE.write_text(json.dumps({k: current[k] for k in sorted(current)}, indent=1) + '\n',
                         encoding='utf-8', newline='\n')
@@ -268,6 +294,12 @@ def main():
         counts[outcome] += 1
     print('\nrun_gate: %d ids in %.0f s: %s' % (len(current), elapsed,
                                                 ', '.join('%s %d' % (o, counts[o]) for o in OUTCOMES)))
+
+    LAST_OUTCOMES.update(current)
+    if not args.targeted:
+        warning = budget_warning(list(current))
+        if warning:
+            print(warning)
 
     if args.save_baseline:
         save_baseline(current)

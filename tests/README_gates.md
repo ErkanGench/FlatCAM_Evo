@@ -1,107 +1,97 @@
 # Test gates
 
 All commands run from the repository root with the project interpreter (`.venv/Scripts/python.exe` on Windows).
-Never start the GUI (`flatcam.py`) for a gate. No test needs a display.
+Never start the GUI (`flatcam.py`) for a gate. No test needs a display. The gates need `pytest-xdist`
+(`.venv/Scripts/python.exe -m pip install pytest-xdist`).
 
-## 1. Collection
+Current suite: **4393 tests in 314 files** (`pytest tests --collect-only -q`). Areas: tcl 307, plugins 38,
+objects 113, parsers 528, other 3407. Outcomes of the saved baseline: 4389 passed, 4 skipped (platform skips).
 
-```
-.venv/Scripts/python.exe -m pytest tests --collect-only -q -p no:cacheprovider
-```
+## 1. The 3 commands
 
-Baseline before the Stage 0A/0B test files: **1559 tests collected**. The count rises only when a commit adds tests
-(re-save the identity lists in the same commit, see section 3).
+| When | Command | Time (8 workers) |
+|---|---|---|
+| While you work on an area | `.venv/Scripts/python.exe -m pytest tests/test_<area>*.py -q -p no:cacheprovider` | seconds |
+| Every commit | `.venv/Scripts/python.exe tests/gates/run_core.py` | about 35 s on a quiet machine, 60 s on a busy one |
+| Before a push | `.venv/Scripts/python.exe tests/gates/run_gate.py` | about 1 to 2 minutes |
 
-## 2. Custom runners: nothing is hidden from pytest
+Also run `.venv/Scripts/python.exe tests/gates/check_gate.py` (identity gate, section 2) when a commit adds, renames or
+removes tests.
 
-48 existing test files under `tests/` (2 of them in `tests/updater/`) end with `if __name__ == '__main__': ...` (a `unittest.main()` or a hand-made runner).
-That block is a convenience only. I compared, per file, the `test*` functions found by `ast` (including methods)
-with the node ids pytest collects:
+- `run_core.py` runs every test file except the ones in `tests/gates/slow_files.txt` (section 5) with `run_gate.py
+  --targeted`, 8 xdist workers, `--dist loadfile`, and compares the outcomes with `outcome_baseline.json`. A new test file
+  is in the core by default.
+- `run_gate.py` runs the whole suite and compares it with the baseline (section 3).
+- `--workers 0` (both runners) runs 1 serial process. Use it to find a test that leaves a global state for the next
+  files (a monkeypatch that is not undone, a timer, a singleton): such a failure shows only in a serial run.
+- A test that measures time on the GUI thread fails on a busy machine. Wait for the state (a loop of `qWait(10)` with a
+  limit), not for a fixed time, or mark it `@pytest.mark.timing` (runs only with `FLATCAM_TEST_TIMING=1`). A test that
+  fails in a full run, passes alone and passes again in the next full run is such a case: fix the wait.
+- Hardware tests are opt-in (`@pytest.mark.hardware`, `FLATCAM_TEST_HARDWARE=1`).
 
-- every `test*` function is collected; the only differences are files where pytest collects MORE ids than there are
-  functions (`@pytest.mark.parametrize`): `test_defaults_audit_regressions.py`, `test_levelling_controller_regressions.py`,
-  `test_levelling_e2e.py`, `test_levelling_lifecycle_regressions.py`, `test_levelling_result_regressions.py`,
-  `test_levelling_safety_regressions.py`, `updater/test_ticket3.py`, `updater/test_ticket5.py`.
-- `tests/test_tools_database.py` has the classes `LifecycleChecks`, `EditorChecks`, `ConsumerChecks`. They do not start with
-  `Test`, but they derive from `unittest.TestCase` (via `DatabaseCase`), so pytest collects all 52 methods.
-- `tests/test_gerber_parser.py` (39 tests) uses plain `Test*` classes. `unittest discover` would miss them; pytest collects them.
-- Inside `tests/` every `.py` file except `conftest.py` is named `test_*.py`, so default pytest discovery finds all of them.
-- No existing test file imports `tclCommands`, so the `tcl` area is empty today.
+## 2. Identity gate (`check_gate.py`)
 
-So `pytest tests` is the complete gate; there is no file that needs a separate command. The `__main__` runners work as a
-shortcut for 1 file (`python tests/test_gerber_parser.py`), but they are NOT part of any gate, because they skip the
-conftest and the identity diff.
-
-## 3. Identity gate (a count alone is not enough)
-
-`tests/gates/check_gate.py` collects the node ids, sorts every id into exactly 1 area and compares it with
-`tests/gates/collected_<area>.txt`.
+Collects the node ids, sorts every id into exactly 1 area and compares it with `tests/gates/collected_<area>.txt`.
 
 | Area | Files |
 |---|---|
 | `tcl` | any test file that imports `tclCommands` (or patches a `tclCommands.` name); evaluated first |
-| `plugins` | `tests/plugins/`, `test_paint*`, `test_clearing*`, `test_clipper*` |
-| `objects` | `test_unify*`, `test_lifecycle*`, `test_appmain*`, `test_app_refactor*`, `test_app_handler*` |
+| `plugins` | `test_paint*`, `test_clearing*`, `test_clipper*` |
+| `objects` | `test_object_*`, `test_excellon_merge_contract*`, `test_project_file*`, `test_lifecycle*` |
 | `parsers` | `test_*parser*`, `test_*import*`, `test_*e2e*`, `test_gerber*`, `test_pdf*` |
 | `other` | everything else |
 
 ```
 .venv/Scripts/python.exe tests/gates/check_gate.py            # gate: exit 1 if a saved id is no longer collected
-.venv/Scripts/python.exe tests/gates/check_gate.py --update   # rewrite the saved lists (only in a commit that adds tests)
+.venv/Scripts/python.exe tests/gates/check_gate.py --update   # rewrite the saved lists
 ```
 
-Rules:
 - A **removed** id fails the gate (exit 1). It passes only if the commit message names the removed test and says why.
   Then run `--update` in that commit.
 - An **added** id is printed as information. Run `--update` in the commit that adds the test.
-- An id that **moved** to another area (the area rules above changed) is information, not a failure.
+- An id that **moved** to another area (the area rules changed) is information, not a failure.
 - Exit code 2 means pytest could not collect; fix that first.
 
-## 4. Gate run
+## 3. Outcome gate (`run_gate.py`)
 
-Install `pytest-xdist` (`.venv/Scripts/python.exe -m pip install pytest-xdist`). Then the full suite runs in 8
-processes in about 3 minutes (1 serial process: about 10 minutes):
+Builds a map `test id -> outcome` and compares it with `tests/gates/outcome_baseline.json`. A full compare fails when:
+a baseline `passed` test is missing (and not in `removed_tests.txt`), a test fails or errors and did not in the baseline,
+a new test does not pass, or a test skips/xfails and did not in the baseline (and is not in `allowed_skips.txt`).
+`--targeted <pattern...>` runs only the files that match and compares those ids.
 
-```
-.venv/Scripts/python.exe tests/gates/run_gate.py                 # outcome gate, 8 workers
-.venv/Scripts/python.exe -m pytest tests -q -p no:cacheprovider -n 8 --dist loadfile
-```
+Files in `tests/gates/`:
+- `removed_tests.txt`: `<test id>  # <reason>`, tests removed on purpose. Empty since the suite cut (the new baseline
+  replaced the old entries). Add a line when a commit deletes a baseline test on purpose.
+- `allowed_skips.txt`: `<test id>  # <reason>`, tests that may skip (platform or opt-in). Remove a line when its test
+  id no longer exists.
+- `selfcheck_run_gate.py`: run it after each change of `run_gate.py`.
 
-`--dist loadfile` gives each worker whole files, so the tests of 1 file keep their order and module state.
-`run_gate.py --workers 0` runs 1 serial process. Use it to find a test that changes a global state for the next
-files (a monkeypatch of a library class that is not undone, a timer, a singleton): such a failure shows only in a
-serial run.
+## 4. Test budget (warning only)
 
-A test that measures time on the GUI thread fails on a busy machine. Wait for the state (a loop of `qWait(10)` with a
-limit), not for a fixed time, or mark the test `@pytest.mark.timing` (it runs only with `FLATCAM_TEST_TIMING=1`).
+`tests/gates/test_budget.json` holds `max_tests` (4850) and `max_files` (350): the counts at the suite cut plus 10%.
+When the collected counts go over it, `run_gate.py` (full run), `run_core.py` and `check_gate.py` print a `WARNING`
+block (counts and limit). The exit code does not change. Fold new tests into topical files; the owner decides whether
+to raise `test_budget.json`.
 
-For each commit, run the identity gate (section 3) and the area gate below. It holds the tests of the Gerber /
-Excellon parsers, objects, transforms, export and the Tcl transform commands (about 1.5 minutes; without the 5
-`*_e2e.py` files about 15 seconds). Add the tests of any other area that the commit changes.
+## 5. Slow files and baselines
 
-```
-.venv/Scripts/python.exe -m pytest tests/test_unify_characterization.py tests/test_unify_regressions_0b.py tests/test_unify_stage0c.py tests/test_unify_stage0c_transforms.py tests/test_tcl_transform_and_export_format.py tests/test_gerber_polygon_aperture.py tests/test_gerber_parser.py tests/test_pcbdoc_e2e.py tests/test_kicad_pcb_e2e.py tests/test_eagle_brd_e2e.py tests/test_allegro_brd_e2e.py tests/test_sprint_layout_e2e.py -q -rA -p no:cacheprovider
-```
+`tests/gates/slow_files.txt` lists the 30 slowest test files (one path per line, measured seconds as a `# comment`).
+`run_core.py` skips them; `run_gate.py` runs them. To rebuild the list: run the full suite with `--junitxml`, sum the
+`time` of the test cases per file, and list the slowest files until the rest runs in about 30 to 35 s with 8 workers
+(the last measurement summed to about 225 s of test time for the core). `run_core.py --list` prints core and slow files.
 
-`-rA` prints the full outcome list: passed / failed / skipped / xfailed / xpassed. Read it like this:
-- `xfailed` for tests with `@pytest.mark.xfail(strict=True, reason="fixed in Stage <X>")` where `<X>` is a LATER stage: counts as passing.
-- `xpassed` (strict) shows up as a failure: the fix landed, so the commit must remove the marker.
-- Characterization tests (`tests/test_unify_characterization.py`) must pass in every stage unless the stage changes the behavior on purpose.
-- Regression tests: `tests/test_unify_regressions_0b.py` (Stage 0B) and the `TestRegression...` class in
-  `tests/test_unify_characterization.py` (Stage 0C).
-
-Quick subsets (same interpreter, same flags):
+Regenerate the baselines in the commit that changes tests, after a full run that passes with no failure:
 
 ```
-.venv/Scripts/python.exe -m pytest tests/test_unify_characterization.py tests/test_unify_regressions_0b.py -rA -p no:cacheprovider
-.venv/Scripts/python.exe -m pytest tests/test_gerber_parser.py tests/test_pdf_hole_detection.py -rA -p no:cacheprovider
+.venv/Scripts/python.exe tests/gates/check_gate.py --update          # identity lists
+.venv/Scripts/python.exe tests/gates/run_gate.py --save-on-pass      # outcome baseline (written only if the gate passed)
 ```
 
-## 5. Fixtures for the unification tests
+`--save-baseline` writes the baseline without a compare; use it only after the full run passed. If a test fails in the
+full run, run it alone; if it fails alone too, fix it first. Never save a baseline with failures.
 
-`tests/fixtures/unify/`:
-- `unify_mixed.gbr`: C, R, O, P (5 vertices, rotation 30), 2 macro apertures (`OUTL` outline, `RING` with parameters), tracks,
-  a G36/G37 region, and a dark -> clear -> dark sequence.
-- `unify_native.gbr`: the subset the native Gerber writer represents (C, R, O, tracks, region); used for the file round trip.
-- `unify_mixed.drl`: Excellon, METRIC, 3 tools, drills and G85 slots.
-- The "2 tools with the same diameter and different data" case lives in Python (`make_same_diameter_excellon`).
+## 6. Fixtures for the unification tests
+
+`tests/fixtures/unify/` holds the Gerber/Excellon files of the unification tests (`unify_mixed.gbr`, `unify_native.gbr`,
+`unify_mixed.drl` and single-feature files). The "2 tools with the same diameter and different data" case lives in Python
+(`make_same_diameter_excellon` in `tests/helpers_objects.py`).

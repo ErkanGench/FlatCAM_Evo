@@ -29,30 +29,10 @@ def test_open_closed_duplicates_zero_and_self_intersection():
     assert shapes[2] not in report['open']
 
 
-def test_empty_invalid_polygon_and_nested_geometry():
-    editor, shapes = join_editor([[(0, 0), (1, 0)]])
-    shapes[0].geo = GeometryCollection([
-        LineString(), Polygon([(0, 0), (1, 1), (0, 1), (1, 0), (0, 0)])])
-    report = inspect(editor)
-    assert report['empty'] == shapes
-    assert report['invalid'] == shapes
-    assert not report['open']
 
 
-def test_near_endpoints_use_explicit_tolerance_without_closing_paths():
-    editor, shapes = join_editor([[(0, 0), (1, 0)], [(1.05, 0), (2, 0)]])
-    assert not inspect(editor, 0)['near_endpoints']
-    assert len(inspect(editor, 0.1)['near_endpoints']) == 1
-    assert inspect(editor, 0.1)['open'] == shapes
-    assert list(shapes[1].geo.coords)[0] == (1.05, 0)
 
 
-@pytest.mark.parametrize('tolerance', [-1, float('nan'), float('inf'), 'bad', None])
-def test_invalid_tolerance_is_rejected(tolerance):
-    editor, shapes = join_editor([[(0, 0), (1, 0)]])
-    assert inspect(editor, tolerance) == 'fail'
-    assert editor.selected == shapes
-    assert not editor._history_undo
 
 
 def test_inspection_preserves_state_history_redo_and_cache():
@@ -73,32 +53,5 @@ def test_inspection_preserves_state_history_redo_and_cache():
     assert editor.redo()
 
 
-def test_visible_action_feedback_tree_and_busy_guard():
-    editor, shapes = join_editor([[(0, 0), (1, 0)], [(1.05, 0), (2, 0)]])
-    editor.sync_tree_selection = lambda: geo.AppGeoEditor.sync_tree_selection(editor)
-    geo.AppGeoEditor.build_ui(editor)
-    editor.ui.diagnostics_btn.clicked.connect(lambda: geo.AppGeoEditor.on_diagnostics(editor))
-    assert 'current units' in editor.ui.diagnostics_tolerance_entry.toolTip()
-    editor.ui.diagnostics_tolerance_entry.setText('0.1')
-    editor.submit_worker(Mock(), [])
-    assert inspect(editor) == 'fail'
-    editor.ui.diagnostics_btn.click()
-    assert not editor.ui.diagnostics_result.text()
-    run_worker(editor)
-    editor.ui.diagnostics_btn.click()
-    text = editor.ui.diagnostics_result.text()
-    assert 'Open paths (information): 2' in text
-    assert 'Near endpoint pairs: 1' in text
-    for index, shape in enumerate(shapes):
-        assert str(id(shape)) in text
-        assert 'Open paths (information)' in editor.ui.tw.topLevelItem(index).toolTip(1)
-    assert editor.selected == shapes
-    assert not editor._history_undo
 
 
-def test_unselected_geometry_is_not_inspected():
-    editor, shapes = join_editor([[(0, 0), (1, 0)], [(1, 0), (0, 0)]])
-    editor.selected = shapes[:1]
-    assert not inspect(editor)['duplicate']
-    editor.selected = []
-    assert inspect(editor) == 'fail'

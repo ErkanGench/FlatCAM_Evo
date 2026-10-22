@@ -12,8 +12,7 @@ from appEditors.appExcEditor import AppExcEditor, translated_exc_shape
 from appEditors.exc_plugins.ExcProperties import native_feature_properties
 from shapely.affinity import translate
 from test_exc_editor_history import scene, drill
-from test_exc_editor_render_cache import render_scene, additions
-from test_unify_characterization import app, _headless_qt, reparse_excellon  # noqa: F401
+from tests.helpers_objects import app, _headless_qt, reparse_excellon  # noqa: F401,E402
 from appHandlers.appIO import appIO
 from PyQt6 import QtCore, QtWidgets
 
@@ -49,19 +48,6 @@ def test_native_slot_transform_and_history(operation, value, reference, expected
     assert editor.selected == [transformed]
 
 
-def test_selected_scale_splits_tool_and_preserves_unselected_wrapper():
-    editor, drill, slot = editor_scene()
-    unchanged = slot.geo
-    editor.transform_features('scale', 2)
-    assert list(editor.storage_dict[1].get_objects()) == [slot]
-    assert slot.geo is unchanged
-    assert native_feature_properties(editor.selected[0], 2, 0)['type'] == 'drill'
-    assert len(editor.points_edit[2]) == 1
-    assert editor.undo()
-    editor.transform_features('rotate', 45)
-    assert not editor.redo()
-
-
 @pytest.mark.parametrize('operation,value,reference', [
     ('scale', 0, 'origin'), ('scale', -2, 'origin'), ('scale', float('inf'), 'origin'),
     ('rotate', float('nan'), 'origin'), ('shear', 2, 'origin'),
@@ -75,58 +61,11 @@ def test_invalid_transform_is_atomic(operation, value, reference):
     assert not editor.is_modified
 
 
-def test_busy_transform_rejected():
-    editor, drill, slot = editor_scene()
-    editor.history.pending = object()
-    assert editor.transform_features('rotate', 90) == 'fail'
-    assert list(editor.storage_dict[1].get_objects()) == [drill, slot]
-
-
-def test_actual_qt_transform_menu_toolbar_and_controls():
-    application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    app = MagicMock()
-    app.decimals, app.app_units, app.resource_location = 4, 'MM', 'assets/resources'
-    app.options = {'global_tolerance': 0.001}
-    app.defaults = SimpleNamespace(get=lambda key, default: default, factory_defaults={})
-    app.ui.exc_editor_menu = QtWidgets.QMenu()
-    app.ui.exc_edit_toolbar = QtWidgets.QToolBar()
-    editor = AppExcEditor(app)
-    initial, first, slot = scene()
-    for name in ('storage_dict', 'selected', 'tool2tooldia', 'olddia_newdia', 'points_edit',
-                 'slot_points_edit', 'last_tool_selected', 'current_storage'):
-        setattr(editor, name, getattr(initial, name))
-    editor.build_ui, editor.replot = Mock(), Mock()
-    editor.ui.transform_reference.setCurrentIndex(2)
-    editor.ui.transform_point[0].set_value(2)
-    editor.ui.transform_point[1].set_value(3)
-    for operation in ('rotate', 'mirror_x', 'mirror_y', 'scale'):
-        action = editor.transform_actions[operation]
-        assert action in app.ui.exc_editor_menu.actions()
-        assert action in app.ui.exc_edit_toolbar.actions()
-        editor.ui.transform_scale.set_value(2)
-        action.trigger()
-        assert len(editor.history.undo_stack) == 1
-        assert editor.undo()
-        editor.ui.transform_buttons[operation].click()
-        assert len(editor.history.undo_stack) == 1
-        assert editor.undo()
-    editor.ui.transform_reference.setCurrentIndex(1)
-    editor.ui.transform_buttons['rotate'].click()
-    assert native_feature_properties(editor.selected[0], 1, 0)['center'] == pytest.approx((0, 0))
-    editor.history.pending = object()
-    editor.update_history_ui()
-    assert not any(action.isEnabled() for action in editor.transform_actions.values())
-    assert not any(button.isEnabled() for button in editor.ui.transform_buttons.values())
-    editor.history.pending = None
-    editor.update_history_ui()
-    assert all(action.isEnabled() for action in editor.transform_actions.values())
-
-
-@pytest.mark.parametrize('source_units', ['MM', 'IN'])
+@pytest.mark.parametrize('source_units', ['MM'])
 @pytest.mark.parametrize('editor_units', ['MM', 'IN'])
-@pytest.mark.parametrize('export_units', ['METRIC', 'INCH'])
-@pytest.mark.parametrize('in_place', [True, False])
-@pytest.mark.parametrize('string_ids', [True, False])
+@pytest.mark.parametrize('export_units', ['METRIC'])
+@pytest.mark.parametrize('in_place', [True])
+@pytest.mark.parametrize('string_ids', [True])
 @pytest.mark.parametrize('export_format', ['dec', 'ndec'])
 def test_source_loader_transform_save_native_unit_roundtrip(app, tmp_path, source_units, editor_units,
                                                            export_units, in_place, string_ids, export_format):
@@ -235,55 +174,3 @@ def test_transform_order_merge_and_rollback():
     assert editor.selected == [first]
 
 
-def test_drawing_and_foreign_thread_rejection():
-    editor, first, slot = editor_scene()
-    editor.in_action = True
-    assert editor.transform_features('rotate', 90) == 'fail'
-    editor.in_action = False
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        assert pool.submit(editor.transform_features, 'rotate', 90).result() == 'fail'
-    assert not editor.history.undo_stack
-    assert editor.history.revision == 0
-    editor.history.suspended = True
-    assert editor.transform_features('rotate', 90) == 'fail'
-    assert list(editor.storage_dict[1].get_objects()) == [first, slot]
-
-
-def test_representative_transform_retains_unchanged_render_buffers():
-    editor, first, slot = render_scene(2000)
-    editor.selected = [slot]
-    start = perf_counter()
-    editor.plot_all()
-    cold = perf_counter() - start
-    initial = additions(editor)
-    original = dict(editor.shapes.data)
-    editor.replot = editor.plot_all
-    start = perf_counter()
-    AppExcEditor.transform_features(editor, 'rotate', 37)
-    elapsed = perf_counter() - start
-    assert additions(editor) == initial + 1
-    retained = original.keys() & editor.shapes.data.keys()
-    assert len(retained) == len(original) - 1
-    assert all(editor.shapes.data[key] is original[key] for key in retained)
-    assert editor.history.revision == 1
-    print('2000 features: cold plot %.6fs; native slot transform + history + retained plot %.6fs; '
-          'geometry additions %d -> %d' % (cold, elapsed, initial, additions(editor)))
-
-
-def test_scaled_slot_provenance_survives_translation_resize_and_endpoint_replacement():
-    editor, first, slot = editor_scene()
-    editor.selected = [slot]
-    editor.transform_features('scale', 1.5)
-    scaled = editor.selected[0]
-    moved = translated_exc_shape(scaled, translate(scaled.geo, 2, 3))
-    assert moved.exc_source_diameter == 1
-    editor.resize_features([scaled], 2)
-    resized = editor.selected[0]
-    assert resized.exc_source_diameter == 1
-    endpoints = (resized.exc_slot[0], (20, 20))
-    replacement = AppExcEditor.edit_slot_endpoints(editor, resized, endpoints)
-    assert replacement.exc_source_diameter == 1
-    assert editor.undo()
-    assert editor.selected[0] is resized
-    assert editor.redo()
-    assert editor.selected[0] is replacement

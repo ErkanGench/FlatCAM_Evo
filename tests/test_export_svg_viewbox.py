@@ -20,7 +20,7 @@ from shapely.ops import unary_union
 from appHandlers.appIO import appIO
 from appParsers.SVG.reader import svg_to_shapes
 from camlib import Geometry
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 NUMBER = re.compile(r'-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?')
 

@@ -42,13 +42,6 @@ def test_labels_are_unique():
     assert not dup, dup
 
 
-def test_drilling_and_extract_labels():
-    labels = _labels()
-    assert labels['appPlugins/ToolDrilling.py'] == 'Alt+D'
-    assert labels['appPlugins/ToolExtract.py'] == 'Alt+E'
-    assert labels['appPlugins/ToolDblSided.py'] == 'Alt+U'
-
-
 def test_app_level_bindings():
     keys = _app_level_alt_bindings()
     assert keys['D'] == 'drilling_tool'
@@ -56,22 +49,3 @@ def test_app_level_bindings():
     assert keys['E'] == 'extract_tool'
     assert keys['I'] == 'isolation_tool'
 
-
-def test_shortcut_list_tables_have_a_place_for_every_argument():
-    # The F3 shortcut list builds each table with 'template' % (key, text, ...). A row added to the arguments
-    # without a row in the template raises TypeError when the list is shown.
-    tree = ast.parse((ROOT / 'appGUI' / 'MainGUI.py').read_text(encoding='utf-8'))
-    checked = 0
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Attribute)
-                and '_sh_' in node.targets[0].attr):
-            continue
-        value = node.value
-        if not (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mod)
-                and isinstance(value.left, ast.Constant) and isinstance(value.right, ast.Tuple)):
-            continue
-        places = len(re.findall(r'%s', value.left.value.replace('%%', '')))
-        assert places == len(value.right.elts), (node.targets[0].attr, places, len(value.right.elts))
-        assert '<strong%s>' not in value.left.value, node.targets[0].attr
-        checked += 1
-    assert checked >= 6

@@ -83,24 +83,6 @@ class TestGerberTransforms(unittest.TestCase):
         g.rotate(30, [5, 7])
         self.assertEqual([type(s) for s in all_structures(g)], before)
 
-    def test_multipolygon_stays_multipolygon(self):
-        g = load(SAMPLES[0])
-        mp = shapely.MultiPolygon([shapely.box(0, 0, 1, 1), shapely.box(3, 3, 4, 4)])
-        g.solid_geometry = mp
-        g.mirror('X', [0, 0])
-        self.assertIsInstance(g.solid_geometry, shapely.MultiPolygon)
-        self.assertEqual(len(g.solid_geometry.geoms), 2)
-
-    def test_early_returns(self):
-        g = load(SAMPLES[0])
-        before = [s for s in all_structures(g)]
-        self.assertIsNone(g.rotate(0, [0, 0]))
-        self.assertIsNone(g.skew(0, 0, [0, 0]))
-        self.assertIsNone(g.offset((0, 0)))
-        self.assertIsNone(g.scale(0, 0))
-        self.assertIsNone(g.scale('x'))
-        self.assertTrue(all(a is b for a, b in zip(all_structures(g), before)))
-
 
 if __name__ == '__main__':
     unittest.main()

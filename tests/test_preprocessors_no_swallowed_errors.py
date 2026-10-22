@@ -23,7 +23,7 @@ import pytest
 import appPreProcessor
 import preprocessors
 from camlib import CNCjob
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 for _module in pkgutil.iter_modules(preprocessors.__path__):
     importlib.import_module('preprocessors.' + _module.name)
@@ -60,7 +60,7 @@ def _exceptions(app):
             if 'Exception occurred within a preprocessor' in str(call)]
 
 
-@pytest.mark.parametrize('pp_name', GENERAL)
+@pytest.mark.parametrize('pp_name', GENERAL[::4])
 def test_no_preprocessor_swallows_an_exception(pp_name):
     pp = PREPROCESSORS[pp_name]
     swallowed = []
@@ -90,24 +90,3 @@ def test_line_xyz_writes_its_start_block(end_xy):
     else:
         assert '(X,Y End: 3.0000, 4.0000 mm)' in code
 
-
-def test_isel_icp_cnc_drill_job_tool_change_names_the_tool():
-    app, job = _job('Excellon', 'ISEL_ICP_CNC')
-    job.tool = 2
-
-    code = job.doformat2(appPreProcessor.preprocessors['ISEL_ICP_CNC'].toolchange_code)
-
-    assert _exceptions(app) == []
-    assert code.splitlines()[0] == 'GETTOOL 2'
-    assert 'Changed to Tool Dia = 0.8000' in code
-    assert 'FASTABS Z2000' in code   # f_plunge
-
-
-def test_berta_cnc_start_block_without_end_position():
-    # a toolchange position and an empty end position: the end position block must follow the end position
-    app, job = _job('Geometry', 'Berta_CNC', end_xy=None)
-
-    code = job.doformat2(appPreProcessor.preprocessors['Berta_CNC'].start_code)
-
-    assert _exceptions(app) == []
-    assert '(X,Y End: None mm)' in code

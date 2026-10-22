@@ -67,21 +67,6 @@ class TestEagleBrdImport(unittest.TestCase):
     def tearDown(self):
         self.qapp.processEvents()
 
-    def test_source_kind_is_eagle_only_for_brd_names(self):
-        self.assertEqual(appIO._pcb_source_kind('board.brd'), 'eagle_brd')
-        self.assertEqual(appIO._pcb_source_kind('BOARD.BRD'), 'eagle_brd')
-        self.assertEqual(appIO._pcb_source_kind(BOARD), 'eagle_brd')
-        self.assertEqual(appIO._pcb_source_kind('board.PcbDoc'), 'pcbdoc')
-        self.assertEqual(appIO._pcb_source_kind('board.kicad_pcb'), 'kicad_pcb')
-        self.assertEqual(appIO._pcb_source_kind('board.lay6'), 'sprint_lay6')
-        self.assertEqual(appIO._pcb_source_kind('board.xyz'), 'pcbdoc')
-
-    def test_format_table_and_title(self):
-        self.assertEqual(appIO.PCB_FORMATS['eagle_brd']['filter'], 'Eagle Board (*.brd)')
-        self.assertEqual(appIO._pcb_title('eagle_brd'), 'Import Eagle Board')
-        self.assertEqual(appIO._pcb_title('kicad_pcb'), 'Import KiCad PCB')
-        self.assertEqual(appIO._pcb_title('sprint_lay6'), 'Import Sprint Layout')
-
     def test_objects_are_named_from_layer_and_drill_group(self):
         self.io.import_pcbdoc_objects(BOARD, self.parsed, ['Top', 'tStop'], ['PTH', 'NPTH'])
         self.assertEqual([obj.obj_options['name'] for kind, obj in self.objects],
@@ -97,56 +82,6 @@ class TestEagleBrdImport(unittest.TestCase):
         self.io.import_pcbdoc_objects(BOARD, self.parsed, ['Top'], ['PTH'])
         kind, obj = self.objects[0]
         self.assertEqual(obj.units, 'IN')
-
-    def test_file_opened_reports_eagle_kind_after_queued_delivery(self):
-        self.io.import_pcbdoc_objects(BOARD, self.parsed, ['Top'], ['PTH'])
-        self.app.file_opened.emit.assert_not_called()
-        self.qapp.processEvents()
-        self.app.file_opened.emit.assert_called_once_with('eagle_brd', BOARD)
-
-    def test_actual_qt_dialog_uses_eagle_title_and_default_layer_checks(self):
-        parsed = EagleBrdParser().parse_text(GOOD_BOARD)
-        seen = {}
-
-        def rejected(dialog):
-            seen['title'] = dialog.windowTitle()
-            seen['boxes'] = {box.text(): box.isChecked() for box in dialog.findChildren(QtWidgets.QCheckBox)}
-            return QtWidgets.QDialog.DialogCode.Rejected
-
-        with patch.object(QtWidgets.QDialog, 'exec', rejected):
-            self.io.on_pcbdoc_parsed(BOARD, parsed)
-        self.assertEqual(seen['title'], 'Import Eagle Board')
-        # the via and hole add stop-mask and Holes geometry; those layers are default only for stop masks
-        self.assertEqual(seen['boxes'], {
-            'Top (layer 1)': True,
-            'Bottom (layer 16)': True,
-            'tStop (layer 29)': True,
-            'bStop (layer 30)': True,
-            'Holes (layer 45)': False,
-            'tDocu (layer 51)': False,
-            'PTH': True,
-            'NPTH': True,
-        })
-        self.app.worker_task.emit.assert_not_called()
-
-    def test_actual_qt_dialog_checks_only_default_layers_for_stub_board(self):
-        seen = {}
-
-        def rejected(dialog):
-            seen['title'] = dialog.windowTitle()
-            seen['boxes'] = {box.text(): box.isChecked() for box in dialog.findChildren(QtWidgets.QCheckBox)}
-            return QtWidgets.QDialog.DialogCode.Rejected
-
-        with patch.object(QtWidgets.QDialog, 'exec', rejected):
-            self.io.on_pcbdoc_parsed(BOARD, self.parsed)
-        self.assertEqual(seen['title'], 'Import Eagle Board')
-        self.assertEqual(seen['boxes'], {
-            'Top (layer 1)': True,
-            'Bottom (layer 16)': True,
-            'tStop (layer 29)': True,
-            'PTH': True,
-            'NPTH': True,
-        })
 
     def test_dialog_accept_queues_only_selected_layers_and_drill_groups(self):
         def accepted(dialog):
@@ -175,16 +110,6 @@ class TestEagleBrdImport(unittest.TestCase):
         self.assertIn('[ERROR_NOTCL]', message)
         self.app.log.error.assert_called_once()
 
-    def test_parse_eagle_brd_binary_file_reports_and_returns_fail(self):
-        with tempfile.TemporaryDirectory() as directory:
-            old = os.path.join(directory, 'old.brd')
-            with open(old, 'wb') as handle:
-                handle.write(b'\x10\x80\x00binary')
-            with patch.object(self.io, 'pcbdoc_parsed') as parsed_signal:
-                self.assertEqual(self.io.parse_eagle_brd(old), 'fail')
-        parsed_signal.emit.assert_not_called()
-        self.assertIn('[ERROR_NOTCL]', self.app.inform.emit.call_args.args[0])
-
     def test_parse_eagle_brd_success_emits_parsed_board(self):
         with tempfile.TemporaryDirectory() as directory:
             good = os.path.join(directory, 'good.brd')
@@ -199,33 +124,12 @@ class TestEagleBrdImport(unittest.TestCase):
         self.assertIn('Top', parsed.layers)
         self.app.inform.emit.assert_not_called()
 
-    def test_parse_eagle_brd_respects_abort(self):
-        self.app.abort_flag = True
-        with patch.object(self.io, 'pcbdoc_parsed') as parsed_signal:
-            self.assertIsNone(self.io.parse_eagle_brd(BOARD))
-        parsed_signal.emit.assert_not_called()
-
     def test_on_file_import_eagle_brd_queues_parse_for_given_name(self):
         with patch.object(QtWidgets.QFileDialog, 'getOpenFileName') as chooser:
             self.io.on_file_import_eagle_brd(BOARD)
         chooser.assert_not_called()
         self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_eagle_brd,
                                                            'params': [BOARD]})
-
-    def test_on_file_import_eagle_brd_without_name_uses_chooser(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName',
-                          return_value=(BOARD, 'Eagle Board (*.brd)')) as chooser:
-            self.io.on_file_import_eagle_brd()
-        self.assertEqual(chooser.call_args.kwargs['filter'], 'Eagle Board (*.brd)')
-        self.assertEqual(chooser.call_args.kwargs['caption'], 'Import Eagle Board')
-        self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_eagle_brd,
-                                                           'params': [BOARD]})
-
-    def test_on_file_import_eagle_brd_cancelled_chooser_queues_nothing(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName', return_value=('', '')):
-            self.io.on_file_import_eagle_brd()
-        self.app.worker_task.emit.assert_not_called()
-
 
 if __name__ == '__main__':
     unittest.main()

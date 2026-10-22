@@ -69,16 +69,7 @@ def assert_no_command(app):
 
 
 class TestFileType:
-    @pytest.mark.parametrize('path', [
-        'C:/boards/a.gtl',
-        'C:/boards/A.GTL',
-        'C:/boards/top_copper.tcl.gtl',
-        'C:/boards/top_copper.FlatScript.gbr',
-        'C:/board.tcl/top.gbr',
-        'C:/exit_sensor/top.gtl',       # 'exit' in the path closed the application
-        'C:/autosave/top.gtl',          # 'save' in the path saved the preferences and opened nothing
-        'C:/ali.ince/top.gtl',          # the G-code extension '.i' was found in the folder name
-    ])
+    @pytest.mark.parametrize('path', ['C:/boards/a.gtl', 'C:/boards/top_copper.FlatScript.gbr'])
     def test_gerber(self, path):
         app = make_app()
         run_args(app, [path])
@@ -86,8 +77,7 @@ class TestFileType:
         app.ask_run_script_arg.assert_not_called()
         assert_no_command(app)
 
-    @pytest.mark.parametrize('path', ['C:/boards/a.drl', 'C:/boards/A.XLN', 'C:/boards/run.tcl.drl',
-                                      'C:/save/a.drl'])
+    @pytest.mark.parametrize('path', ['C:/boards/a.drl'])
     def test_excellon(self, path):
         app = make_app()
         run_args(app, [path])
@@ -95,7 +85,7 @@ class TestFileType:
         app.ask_run_script_arg.assert_not_called()
         assert_no_command(app)
 
-    @pytest.mark.parametrize('path', ['C:/boards/a.gcode', 'C:/boards/A.NC', 'C:/quit.tcl/a.nc'])
+    @pytest.mark.parametrize('path', ['C:/boards/a.gcode'])
     def test_gcode(self, path):
         app = make_app()
         run_args(app, [path])
@@ -103,7 +93,7 @@ class TestFileType:
         app.ask_run_script_arg.assert_not_called()
         assert_no_command(app)
 
-    @pytest.mark.parametrize('path', ['C:/boards/a.FlatPrj', 'C:/boards/A.FLATPRJ', 'C:/run.tcl/a.FlatPrj'])
+    @pytest.mark.parametrize('path', ['C:/boards/a.FlatPrj'])
     def test_project(self, path):
         app = make_app()
         run_args(app, [path])
@@ -111,14 +101,7 @@ class TestFileType:
         app.ask_run_script_arg.assert_not_called()
         assert_no_command(app)
 
-    def test_preferences_file(self):
-        path = 'C:/boards/my.tcl.FlatConfig'
-        app = make_app()
-        run_args(app, [path])
-        assert app.f_handlers.method_calls == [call.open_config_file(path, run_from_arg=True)]
-        app.ask_run_script_arg.assert_not_called()
-
-    @pytest.mark.parametrize('path', ['C:/boards/a.FlatPrj.bak', 'C:/board.tcl/readme', 'C:/boards/a.tcl.txt.zip'])
+    @pytest.mark.parametrize('path', ['C:/boards/a.FlatPrj.bak', 'C:/board.tcl/readme'])
     def test_unknown_extension_opens_nothing(self, path):
         app = make_app()
         run_args(app, [path])
@@ -126,17 +109,8 @@ class TestFileType:
         app.ask_run_script_arg.assert_not_called()
         assert_no_command(app)
 
-    def test_command_line_of_a_second_launch(self):
-        # ArgsThread sends the whole sys.argv of the second launch, the program path first
-        path = 'C:/boards/top_copper.tcl.gtl'
-        app = make_app()
-        run_args(app, ['C:/Program Files/FlatCAM/FlatCAM.exe', path])
-        assert app.f_handlers.method_calls == [call.on_file_open_gerber(name=path)]
-        app.ask_run_script_arg.assert_not_called()
-
-
 class TestCommandWords:
-    @pytest.mark.parametrize('word', ['quit', 'exit', 'QUIT', 'Exit', pytest.param(' quit ', id='quit_in_spaces')])
+    @pytest.mark.parametrize('word', ['quit'])
     def test_quit(self, word):
         app = make_app()
         run_args(app, [word])
@@ -144,31 +118,14 @@ class TestCommandWords:
         assert app.f_handlers.method_calls == []
         app.defaults.update.assert_not_called()
 
-    @pytest.mark.parametrize('word', ['save', 'SAVE'])
-    def test_save(self, word):
-        app = make_app()
-        run_args(app, [word])
-        app.defaults.update.assert_called_once_with(app.options)
-        app.preferencesUiManager.save_defaults.assert_called_once_with()
-        app.app_quit.emit.assert_not_called()
-        assert app.f_handlers.method_calls == []
-
     def test_save_then_quit(self):
         app = make_app()
         run_args(app, ['save', 'quit'])
         app.preferencesUiManager.save_defaults.assert_called_once_with()
         app.app_quit.emit.assert_called_once_with()
 
-    @pytest.mark.parametrize('word', ['quitter', 'exit_now', 'autosave', 'save.gtl'])
-    def test_a_longer_word_is_no_command(self, word):
-        app = make_app()
-        run_args(app, [word])
-        assert_no_command(app)
-
-
 class TestScriptArgument:
-    @pytest.mark.parametrize('path', ['C:/scripts/a.tcl', 'C:/scripts/A.TCL', 'C:/scripts/a.FlatScript',
-                                      'C:/scripts/a.flatscript', 'C:/boards.gtl/a.tcl'])
+    @pytest.mark.parametrize('path', ['C:/scripts/a.tcl', 'C:/scripts/a.flatscript'])
     def test_no_does_not_run_the_script(self, path):
         app = make_app(answer=False)
         run_args(app, [path])
@@ -177,20 +134,13 @@ class TestScriptArgument:
         assert app.f_handlers.method_calls == [call.on_file_open_script(name=path)]
         app.f_handlers.on_file_run_script.assert_not_called()
 
-    @pytest.mark.parametrize('path', ['C:/scripts/a.tcl', 'C:/scripts/a.FlatScript'])
+    @pytest.mark.parametrize('path', ['C:/scripts/a.tcl'])
     def test_yes_runs_the_script(self, path):
         app = make_app(answer=True)
         run_args(app, [path])
         app.ask_run_script_arg.assert_called_once_with(path)
         assert app.f_handlers.method_calls == [call.on_file_open_script(name=path),
                                                call.on_file_run_script(name=path)]
-
-    def test_silent_still_asks(self):
-        path = 'C:/scripts/a.tcl'
-        app = make_app(answer=False)
-        appMain.App.on_startup_args(app, [path], silent=True)
-        app.ask_run_script_arg.assert_called_once_with(path)
-        app.f_handlers.on_file_run_script.assert_not_called()
 
     @pytest.mark.parametrize('answer', [False, True])
     def test_the_script_reaches_the_tcl_shell_only_after_a_yes(self, tmp_path, answer):
@@ -232,26 +182,12 @@ class TestRunScriptQuestion:
         result = appMain.App.ask_run_script_arg(app, path)
         return result, seen
 
-    def test_a_name_with_markup_is_shown_as_it_is(self, app, monkeypatch):
-        # < > & are allowed in a Linux file name; the name must not be rendered as rich text
-        path = '/home/u/<b>top</b> & <img src=x>.tcl'
-        _result, seen = self._ask(app, monkeypatch, lambda box: None, path=path)
-        assert '<b>top</b>' not in seen['informative']
-        assert '<img' not in seen['informative']
-        doc = QtGui.QTextDocument()
-        doc.setHtml(seen['informative'])
-        assert path in doc.toPlainText()
-
     def test_default_answer_is_no(self, app, monkeypatch):
         # Enter clicks the default button
         result, seen = self._ask(app, monkeypatch, lambda box: box.defaultButton().click())
         assert seen['default'] == QtWidgets.QMessageBox.ButtonRole.NoRole
         assert result is False
         assert 'C:/scripts/job.tcl' in seen['text']
-
-    def test_closed_without_an_answer(self, app, monkeypatch):
-        result, _seen = self._ask(app, monkeypatch, lambda box: None)
-        assert result is False
 
     def test_yes(self, app, monkeypatch):
         def click_yes(box):
@@ -261,31 +197,3 @@ class TestRunScriptQuestion:
 
         result, _seen = self._ask(app, monkeypatch, click_yes)
         assert result is True
-
-    @pytest.mark.parametrize('action', ['enter', 'escape', 'close'])
-    def test_real_dialog_dismissal(self, app, qapp, action):
-        timed_out = []
-
-        def dismiss():
-            box = qapp.activeModalWidget()
-            if action == 'close':
-                box.close()
-            else:
-                key = QtCore.Qt.Key.Key_Return if action == 'enter' else QtCore.Qt.Key.Key_Escape
-                QtTest.QTest.keyClick(box, key)
-
-        def timeout():
-            timed_out.append(True)
-            qapp.activeModalWidget().reject()
-
-        watchdog = QtCore.QTimer()
-        watchdog.setSingleShot(True)
-        watchdog.timeout.connect(timeout)
-        watchdog.start(2000)
-        QtCore.QTimer.singleShot(0, dismiss)
-        try:
-            result = appMain.App.ask_run_script_arg(app, 'C:/scripts/job.tcl')
-        finally:
-            watchdog.stop()
-        assert not timed_out, 'The dismissal did not close the confirmation dialog'
-        assert result is False

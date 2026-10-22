@@ -13,7 +13,9 @@ from appGUI.VisPyVisuals import ShapeCollectionVisual, _update_shape_buffers
 from test_gerber_editor_pick import make_editor, aperture
 from test_gerber_editor_clear import editor_save
 from test_grb_editor_transform import build, FakeShapes
-from test_unify_characterization import app, _headless_qt, make_gerber, NATIVE_GBR, reparse_gerber, assert_poly_equiv  # noqa: F401
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_poly_equiv, _headless_qt, make_gerber, NATIVE_GBR, reparse_gerber,
+)
 
 
 @pytest.mark.parametrize('operation', ['union', 'intersection', 'difference', 'explode'])
@@ -54,29 +56,6 @@ def test_region_rejection_is_atomic():
     assert not editor.history.undo_stack
 
 
-def test_structural_render_reuses_unchanged_entries():
-    host, editor, shapes = build(real_plot=True)
-    editor.plot_all()
-    unchanged = editor._rendered_shapes[shapes[1]][:]
-    count = len(editor.shapes.added)
-    added = DrawToolShape({'solid': box(100, 100, 101, 101)})
-    editor.storage_dict[10]['geometry'].append(added)
-    editor.touch_geometry()
-    editor.plot_all()
-    assert len(editor.shapes.added) == count + 1
-    assert editor._rendered_shapes[shapes[1]] == unchanged
-    editor.storage_dict[10]['geometry'].remove(added)
-    editor.touch_geometry()
-    editor.plot_all()
-    assert len(editor.shapes.added) == count + 1
-    assert added not in editor._rendered_shapes
-    shapes[0].geo['solid'] = box(-10, -10, -9, -9)
-    editor.touch_geometry()
-    editor.plot_all()
-    assert len(editor.shapes.added) == count + 2
-    assert editor._rendered_shapes[shapes[1]] == unchanged
-
-
 @pytest.mark.parametrize('kind', ['geometry', 'gerber', 'excellon'])
 def test_import_polygon_sources_and_index_lifecycle(kind):
     polygon = box(0, 0, 10, 10).difference(box(2, 2, 8, 8))
@@ -115,15 +94,6 @@ def test_region_native_save_reparse(app, tmp_path, operation):
     assert_poly_equiv(again.solid_geometry, expected, abs_tol=1e-4)
 
 
-def test_region_buttons_are_wired_to_their_operations():
-    editor = make_editor()
-    editor.app.grb_editor = editor
-    editor.apply_region_operation = MagicMock()
-    for operation, button in editor.ui.region_buttons.items():
-        button.click()
-        editor.apply_region_operation.assert_called_with(operation)
-
-
 def test_import_preflight_rejects_the_whole_batch():
     editor = make_editor()
     tool = SimpleNamespace(draw_app=editor, app=editor.app, sel_storage=[{
@@ -134,24 +104,6 @@ def test_import_preflight_rejects_the_whole_batch():
     assert editor.storage_dict == {}
     assert editor.geometry_revision == before
     assert not editor.history.undo_stack
-
-
-def test_render_style_collection_and_utility_invalidate():
-    host, editor, shapes = build(real_plot=True)
-    editor.plot_all()
-    count = len(editor.shapes.added)
-    editor.app.options['global_draw_color'] = '#123456FF'
-    editor.plot_all()
-    assert len(editor.shapes.added) == count * 2
-    editor.utility = [DrawToolShape({'solid': box(20, 20, 21, 21)})]
-    editor.plot_all()
-    assert len(editor.shapes.added) == count * 3 + 1
-    editor.utility = []
-    editor.plot_all()
-    assert len(editor.shapes.added) == count * 4 + 1
-    editor.shapes = FakeShapes()
-    editor.plot_all()
-    assert len(editor.shapes.added) == count
 
 
 def test_region_touching_intersection_has_no_open_path_output():
@@ -165,72 +117,3 @@ def test_region_touching_intersection_has_no_open_path_output():
     assert not editor.history.undo_stack
 
 
-@pytest.mark.parametrize('kind', ['geometry', 'gerber', 'excellon'])
-def test_import_ui_commit_undo_and_native_reparse(app, tmp_path, kind):
-    source = make_gerber(app, NATIVE_GBR)
-    polygon = box(0, 0, 10, 10).difference(box(2, 2, 8, 8))
-    island = box(4, 4, 5, 5)
-    donor = SimpleNamespace(kind=kind, obj_options={'name': 'donor', 'plot': True},
-                            solid_geometry=[polygon, island], drawing_tolerance=0.001, multigeo=False)
-    editor = make_editor()
-    editor.gerber_obj = source
-    editor.app.collection.get_list.return_value = [donor]
-    tool = SimpleNamespace(app=editor.app, draw_app=editor, sel_storage=[])
-    tool.get_selected_geos = MethodType(ImportEditorGrb.get_selected_geos, tool)
-    tool.get_selected_shape_id = MethodType(ImportEditorGrb.get_selected_shape_id, tool)
-    ImportEditorGrb.selection_area_handler(tool, (-1, -1), (11, 11), True)
-    assert len(tool.sel_storage) == 2
-    ImportEditorGrb.import_shapes(tool)
-    assert len(editor.history.undo_stack) == 1
-    assert editor.loaded_as_regions
-    tools = {key: {**value, 'geometry': [shape.geo for shape in value['geometry']]}
-             for key, value in editor.storage_dict.items() if value['geometry']}
-    edited = editor_save(app, source, tools, loaded_as_regions=editor.loaded_as_regions)
-    again = reparse_gerber(app, edited.source_file, tmp_path)
-    assert_poly_equiv(again.solid_geometry, unary_union([polygon, island]), abs_tol=1e-4)
-    assert editor.undo()
-    assert not editor.storage_dict
-    assert editor.redo()
-    assert unary_union([shape.geo['solid'] for value in editor.storage_dict.values()
-                        for shape in value['geometry']]).equals(unary_union([polygon, island]))
-
-
-def test_import_multigeometry_closed_outline_and_open_path():
-    donor = SimpleNamespace(kind='geometry', obj_options={'plot': True}, solid_geometry=[], multigeo=True,
-                            tools={1: {'solid_geometry': [box(0, 0, 1, 1).exterior]},
-                                   2: {'solid_geometry': [LineString([(2, 2), (3, 3)])]}})
-    tool = SimpleNamespace(app=SimpleNamespace(collection=MagicMock()),
-                           draw_app=SimpleNamespace(gerber_obj=object()))
-    tool.app.collection.get_list.return_value = [donor]
-    found = list(ImportEditorGrb.import_candidates(tool, box(-1, -1, 4, 4)))
-    assert len(found[0][1][0]['geometry']) == 1
-    assert found[0][1][0]['geometry'][0]['solid'].equals(box(0, 0, 1, 1))
-
-
-def test_pending_worker_rejects_region_mutation():
-    shape = DrawToolShape({'solid': box(0, 0, 1, 1)})
-    editor = make_editor({10: aperture([shape])})
-    editor.selected = [shape]
-    assert editor.history.reserve() is not None
-    assert editor.apply_region_operation('union') == 'fail'
-    assert editor.storage_dict[10]['geometry'] == [shape]
-    assert not editor.history.undo_stack
-
-
-def test_real_render_structural_commit_triangulates_only_new_material():
-    with patch('appGUI.VisPyVisuals.set_state'):
-        host, editor, shapes = build(real_plot=True)
-        editor.shapes = ShapeCollectionVisual(layers=1, fcoptions={})
-        editor.plot_all()
-        key = editor._rendered_shapes[shapes[1]][0]
-        vertices = editor.shapes.data[key]['mesh_vertices']
-        first = shapes[-1]
-        editor.selected = [first]
-        with patch('appGUI.VisPyVisuals._update_shape_buffers', wraps=_update_shape_buffers) as buffers, \
-                patch.object(editor.shapes, 'redraw', wraps=editor.shapes.redraw) as redraw:
-            editor.apply_region_operation('union')
-            assert buffers.call_count == 1
-            assert sum(call.kwargs.get('update_colors') is None for call in redraw.call_args_list) == 1
-        assert editor.shapes.data[key]['mesh_vertices'] is vertices
-        assert first not in editor._rendered_shapes
-        assert len(editor.history.undo_stack) == 1

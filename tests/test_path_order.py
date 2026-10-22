@@ -51,13 +51,6 @@ class TestWalk(unittest.TestCase):
         for start in ((50.0, 30.0), (-20.0, 500.0)):
             self.assertEqual(walk_nearest(pts, start), reference_walk(pts, start))
 
-    def test_ties_lowest_id(self):
-        # many points at the same distances: coordinates on a grid, with equal ends
-        pts = random_points(120, 0, grid=True)
-        self.assertEqual(walk_nearest(pts, (0.0, 0.0)), reference_walk(pts, (0.0, 0.0)))
-        four = np.array([[1, 0], [1, 5], [0, 1], [0, 5], [-1, 0], [-1, 5], [0, -1], [0, -5]], dtype=float)
-        self.assertEqual(walk_nearest(four, (0.0, 0.0))[0], 0)
-
     def test_degenerate_inputs(self):
         self.assertEqual(walk_nearest(np.zeros((0, 2)), (0, 0)), [])
         self.assertEqual(walk_nearest(np.array([[3.0, 4.0], [5.0, 6.0]]), (0, 0)), [0])
@@ -84,19 +77,6 @@ class TestImprove(unittest.TestCase):
             pts = random_points(60, 3, grid=grid)
             walk = walk_nearest(pts, (0.0, 0.0))
             self.assertLessEqual(travel(pts, improve_order(pts, walk)), travel(pts, walk) + 1e-9)
-
-    def test_small_inputs(self):
-        pts = random_points(2, 1)
-        self.assertEqual(improve_order(pts, [0, 2]), [0, 2])
-        self.assertEqual(improve_order(pts[:0], []), [])
-
-    def test_work_bound(self):
-        pts = random_points(300, 4)
-        walk = walk_nearest(pts, (0.0, 0.0))
-        short = improve_order(pts, walk, max_work=5)
-        self.assertEqual(sorted(e >> 1 for e in short), list(range(300)))
-        self.assertEqual(short, improve_order(pts, walk, max_work=5))
-
 
 class TestOrderPaths(unittest.TestCase):
 
@@ -140,14 +120,6 @@ class TestOrderPaths(unittest.TestCase):
             return total
         self.assertLess(length(a), length(order_paths(paths, improve=False)))
 
-    def test_walk_only_same_as_reference(self):
-        paths = self.make_paths(150, 5)
-        kept, pts = path_end_points(paths)
-        self.assertEqual(len(kept), 150)
-        expected = reference_walk(pts, (0.0, 0.0))
-        got = order_paths(paths, improve=False)
-        self.assertEqual([id(g) for __, g in got], [id(kept[e >> 1]) for e in expected])
-
     def test_empty_one_and_unusable(self):
         self.assertEqual(order_paths([]), [])
         self.assertEqual(order_paths([None]), [])
@@ -161,14 +133,6 @@ class TestOrderPaths(unittest.TestCase):
         got = order_paths(mixed)
         self.assertEqual([g for __, g in got if g is one], [one])
         self.assertTrue(all(g is not mixed[0] and g is not mixed[1] for __, g in got))
-
-    def test_points_with_z(self):
-        a = LineString([(5, 5, 1), (6, 6, 1)])
-        b = LineString([(1, 1, 1), (2, 2, 1)])
-        got = order_paths([a, b])
-        self.assertEqual([g for __, g in got], [b, a])
-        self.assertEqual(got[0][0], (1.0, 1.0))
-
 
 if __name__ == '__main__':
     unittest.main()

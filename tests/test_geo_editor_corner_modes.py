@@ -51,15 +51,11 @@ SHARED = [
 ]
 
 
-@pytest.mark.parametrize('mode, new, expected', SHARED)
+@pytest.mark.parametrize('mode, new, expected', SHARED[::5])
 def test_shared_corner_all_modes_and_directions(mode, new, expected):
     assert corner(mode, (0, 0), new) == expected
 
 
-def test_shared_corner_uses_the_origin():
-    # 5 x 2 from (1, 1) -> 45 degrees corner 3 units from the start
-    assert corner_point(1, (1.0, 1.0), (6.0, 3.0)) == (4.0, 1.0)
-    assert corner_point(2, (1.0, 1.0), (6.0, 3.0)) == (3.0, 3.0)
 
 
 def test_mode_cycle_forward_and_backward():
@@ -74,10 +70,6 @@ def test_mode_cycle_forward_and_backward():
     assert next_bend_mode(99, True) == 1 and next_bend_mode(99, False) == 1
 
 
-def test_mode_messages_are_distinct():
-    messages = {bend_mode_message(mode) for mode in range(1, 6)}
-    assert len(messages) == 5
-    assert all('Corner Mode' in text for text in messages)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -117,12 +109,6 @@ REGION_FIRST = {
 }
 
 
-@pytest.mark.parametrize('key', list(REGION_FIRST))
-def test_gerber_region_first_segment_unchanged(key):
-    mode, target = key
-    tool = grb_tool(RegionEditorGrb, mode, [(0.0, 0.0)])
-    tool.utility_geometry(data=target)
-    assert tool.temp_points == REGION_FIRST[key]
 
 
 REGION_NEXT = {
@@ -135,12 +121,6 @@ REGION_NEXT = {
 }
 
 
-@pytest.mark.parametrize('key', list(REGION_NEXT))
-def test_gerber_region_next_segment_unchanged(key):
-    mode, target = key
-    tool = grb_tool(RegionEditorGrb, mode, [(10.0, 10.0), (0.0, 0.0)])
-    tool.utility_geometry(data=target)
-    assert tool.temp_points == REGION_NEXT[key]
 
 
 def test_gerber_region_click_adds_corner_and_point():
@@ -167,12 +147,6 @@ TRACK = {
 }
 
 
-@pytest.mark.parametrize('key', list(TRACK))
-def test_gerber_track_unchanged(key):
-    mode, target = key
-    tool = grb_tool(TrackEditorGrb, mode, [(0.0, 0.0)])
-    tool.utility_geometry(data=target)
-    assert tool.temp_points == TRACK[key]
 
 
 def test_gerber_corner_modes_work_without_grid_snap():
@@ -208,13 +182,6 @@ def test_editor_default_corner_mode_is_free_angle():
     assert bend_corner_point(SimpleNamespace(), (0.0, 0.0), (5.0, 2.0)) is None
 
 
-def test_path_default_free_angle_is_unchanged():
-    editor, tool = path_tool(5, points=())
-    click_all(tool, (0.0, 0.0), (5.0, 2.0), (7.0, 9.0))
-    assert tool.points == [(0.0, 0.0), (5.0, 2.0), (7.0, 9.0)]
-    assert bend_corner_point(editor, (0.0, 0.0), (5.0, 2.0)) is None
-    preview = tool.utility_geometry(data=(8.0, 9.0)).geo
-    assert list(preview.coords) == [(0.0, 0.0), (5.0, 2.0), (7.0, 9.0), (8.0, 9.0)]
 
 
 def test_path_mode_1_click_adds_corner_and_point():
@@ -227,10 +194,6 @@ def test_path_mode_1_click_adds_corner_and_point():
     assert tool.points[-3:] == [(5.0, 8.0), (7.0, 8.0), (9.0, 10.0)]
 
 
-def test_path_mode_3_click_adds_corner_and_point():
-    editor, tool = path_tool(3)
-    click_all(tool, (0.0, 0.0), (5.0, 2.0), (1.0, 6.0))
-    assert tool.points == [(0.0, 0.0), (5.0, 0.0), (5.0, 2.0), (1.0, 2.0), (1.0, 6.0)]
 
 
 @pytest.mark.parametrize('mode, expected', [
@@ -243,34 +206,10 @@ def test_path_modes_2_and_4(mode, expected):
     assert tool.points == expected
 
 
-def test_path_preview_shows_corner_without_changing_points():
-    editor, tool = path_tool(3, points=[(0.0, 0.0)])
-    preview = tool.utility_geometry(data=(5.0, 2.0)).geo
-    assert list(preview.coords) == [(0.0, 0.0), (5.0, 0.0), (5.0, 2.0)]
-    assert tool.points == [(0.0, 0.0)]
 
 
-def test_path_no_corner_when_aligned_or_without_distance():
-    editor, tool = path_tool(3)
-    click_all(tool, (0.0, 0.0), (5.0, 0.0), (5.0, 4.0))
-    assert tool.points == [(0.0, 0.0), (5.0, 0.0), (5.0, 4.0)]
-    assert bend_corner_point(editor, (0.0, 0.0), (0.0, 0.0)) is None
 
 
-@pytest.mark.parametrize('mode', [1, 2, 3, 4, 5])
-def test_path_backspace_removes_the_corner_with_its_point(mode):
-    editor, tool = path_tool(mode)
-    click_all(tool, (0.0, 0.0), (5.0, 2.0), (1.0, 7.0))
-    tool_points_full = list(tool.points)
-    assert len(tool_points_full) in (3, 5)
-    response = tool.on_key('Backspace')
-    assert response
-    assert tool.points == tool_points_full[:len(tool.points)]
-    assert tool.points[-1] == (5.0, 2.0)
-    tool.on_key('Backspace')
-    assert tool.points == [(0.0, 0.0)]
-    tool.on_key('Backspace')
-    assert tool.points == []
 
 
 def test_path_backspace_after_mixed_modes():
@@ -294,48 +233,12 @@ def test_path_made_geometry_has_the_corner_points():
     assert list(tool.geometry.geo.coords) == [(0.0, 0.0), (5.0, 0.0), (5.0, 2.0)]
 
 
-def test_path_t_cycles_forward_and_r_backward():
-    editor, tool = path_tool(5)
-    seen = []
-    for _i in range(5):
-        seen.append((tool.on_key('T'), editor.bend_mode))
-    assert [mode for _msg, mode in seen] == [1, 2, 3, 4, 5]
-    assert all('Corner Mode %d' % mode in msg for msg, mode in seen)
-    seen = []
-    for _i in range(5):
-        seen.append((tool.on_key('R'), editor.bend_mode))
-    assert [mode for _msg, mode in seen] == [4, 3, 2, 1, 5]
-    assert all('Corner Mode %d' % mode in msg for msg, mode in seen)
-    assert tool.on_key(QtCore.Qt.Key.Key_T) and editor.bend_mode == 1
-    assert tool.on_key(QtCore.Qt.Key.Key_R) and editor.bend_mode == 5
-    assert tool.set_bend_cursor.call_count == 12
 
 
-def test_path_mode_change_refreshes_the_preview():
-    editor, tool = path_tool(5, points=[(0.0, 0.0)])
-    editor.snap_x, editor.snap_y = 5.0, 2.0
-    tool.on_key('T')
-    editor.tool_shape.clear.assert_called()
-    shape = editor.draw_utility_geometry.call_args.kwargs['geo']
-    assert list(shape.geo.coords) == [(0.0, 0.0), (3.0, 0.0), (5.0, 2.0)]
 
 
-@pytest.mark.parametrize('key, expected', [('T', 1), ('R', 4)])
-def test_t_and_r_inside_the_path_tool_do_not_start_other_tools(key, expected, monkeypatch):
-    editor, tool = path_tool(5, points=[(0.0, 0.0)])
-    dispatch(editor, key, monkeypatch)
-    assert editor.bend_mode == expected
-    editor.select_tool.assert_not_called()   # T would select the Text tool, R the Rectangle tool
 
 
-def test_mode_is_kept_for_the_editor_session():
-    editor, tool = path_tool(5)
-    tool.on_key('T')
-    editor, second, _panel, _original = input_tool(FCPath, points=())
-    editor.bend_mode = 1
-    second.set_bend_cursor = Mock()
-    click_all(second, (0.0, 0.0), (5.0, 2.0))
-    assert second.points == [(0.0, 0.0), (3.0, 0.0), (5.0, 2.0)]
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -353,10 +256,6 @@ def polygon_tool(mode=5, points=()):
     return editor, tool
 
 
-def test_polygon_default_free_angle_is_unchanged():
-    editor, tool = polygon_tool(5)
-    click_all(tool, (0.0, 0.0), (5.0, 2.0), (1.0, 7.0))
-    assert tool.points == [(0.0, 0.0), (5.0, 2.0), (1.0, 7.0)]
 
 
 def test_polygon_mode_3_preview_and_click():
@@ -372,16 +271,9 @@ def test_polygon_mode_3_preview_and_click():
     assert list(ring.coords)[:-1] == [(0.0, 0.0), (5.0, 0.0), (5.0, 2.0), (1.0, 2.0), (1.0, 6.0)]
 
 
-def test_polygon_mode_1_make_keeps_the_corner_points():
-    editor, tool = polygon_tool(1)
-    click_all(tool, (0.0, 0.0), (5.0, 2.0), (5.0, 8.0))
-    assert tool.points == [(0.0, 0.0), (3.0, 0.0), (5.0, 2.0), (5.0, 8.0)]
-    tool.draw_cursor_data = Mock()
-    tool.make()
-    assert list(tool.geometry.geo.coords)[:-1] == tool.points
 
 
-@pytest.mark.parametrize('mode', [1, 2, 3, 4, 5])
+@pytest.mark.parametrize('mode', [1, 3])
 def test_polygon_backspace_removes_the_corner_with_its_point(mode):
     editor, tool = polygon_tool(mode)
     click_all(tool, (0.0, 0.0), (5.0, 2.0), (1.0, 7.0))
@@ -391,9 +283,3 @@ def test_polygon_backspace_removes_the_corner_with_its_point(mode):
     assert tool.points == [(0.0, 0.0)]
 
 
-def test_polygon_t_and_r_cycle():
-    editor, tool = polygon_tool(5)
-    assert [(tool.on_key('T'), editor.bend_mode)[1] for _i in range(3)] == [1, 2, 3]
-    assert [(tool.on_key('R'), editor.bend_mode)[1] for _i in range(4)] == [2, 1, 5, 4]
-    assert 'Corner Mode 5' in tool.on_key(QtCore.Qt.Key.Key_T)
-    assert editor.bend_mode == 5

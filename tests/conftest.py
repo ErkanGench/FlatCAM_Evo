@@ -88,6 +88,23 @@ def pytest_runtest_call(item):
     _install_window_filter()
 
 
+def pytest_runtest_teardown(item):
+    # QTest key events with Ctrl / Shift / Alt leave that state in QApplication.keyboardModifiers(); a later plain
+    # click in another test then extends a selection. Release the keys after each test.
+    try:
+        from PyQt6 import QtCore, QtTest, QtWidgets
+    except ImportError:
+        return
+    app = QtWidgets.QApplication.instance()
+    if app is None or QtWidgets.QApplication.keyboardModifiers() == QtCore.Qt.KeyboardModifier.NoModifier:
+        return
+    target = QtWidgets.QWidget()
+    try:
+        QtTest.QTest.keyRelease(target, QtCore.Qt.Key.Key_Control, QtCore.Qt.KeyboardModifier.NoModifier)
+    finally:
+        target.deleteLater()
+
+
 # Hardware tests (a connected E-Cut USB board or a GRBL serial board) do not run by default.
 # Mark such a test with @pytest.mark.hardware and set FLATCAM_TEST_HARDWARE=1 to run it.
 # All other tests cannot open a real HID device or serial port: a board that is connected stays untouched.

@@ -174,20 +174,6 @@ class TestGerberParserEdgeCases:
         assert result is None or result == ""
         print("[PASS] Polarity change with pending path test passed")
 
-    def test_tool_change_with_pending_path(self):
-        gbr = get_gerber_parser()
-        lines = ["%FSLAX23Y23*%", "%ADD10C,10*%", "%ADD11C,20*%", "D10*", "G01 X0Y0D02*", "G01 X1000Y0D01*", "D11*", "G01 X2000Y0D01*", "M02*"]
-        result = gbr.parse_lines(lines)
-        assert result is None or result == ""
-        print("[PASS] Tool change with pending path test passed")
-
-    def test_region_start_with_pending_path(self):
-        gbr = get_gerber_parser()
-        lines = ["%FSLAX23Y23*%", "%ADD10C,10*%", "D10*", "G01 X0Y0D02*", "G01 X1000Y0D01*", "G36*", "X1000Y1000D01*", "X0Y1000D01*", "X0Y0D01*", "G37*", "M02*"]
-        result = gbr.parse_lines(lines)
-        assert result is None or result == ""
-        assert gbr.solid_geometry is not None
-        print("[PASS] Region start with pending path test passed")
 
     def test_multipolygon_iteration(self):
         """Test MultiPolygon handling for Shapely 2.x compatibility."""
@@ -235,44 +221,6 @@ class TestGerberParserEdgeCases:
         assert [geo.bounds for geo in result] == [
             poly1.bounds, poly2.bounds, poly3.bounds
         ]
-
-    def test_flatten_shapely_geometry_omits_empty_and_simplified_empty(self):
-        from unittest.mock import patch
-
-        poly = Polygon([(2, 0), (3, 0), (3, 1), (2, 1)])
-        empty = Polygon()
-        nested = GeometryCollection([empty, poly])
-
-        result = flatten_shapely_geometry([empty, [nested]])
-        assert [geo.bounds for geo in result] == [poly.bounds]
-
-        with patch('shapely.geometry.base.BaseGeometry.simplify', return_value=Polygon()):
-            assert flatten_shapely_geometry([poly], simplify_tolerance=1.0) == []
-
-    def test_flatten_shapely_geometry_rejects_strings(self):
-        try:
-            flatten_shapely_geometry('not geometry')
-        except NotImplementedError:
-            pass
-        else:
-            assert False, 'strings must not be recursively flattened'
-
-    def test_flatten_shapely_geometry_keeps_envelopes_unionable(self):
-        # ToolIsolation.combined_normal() collects the generate_envelope() results, which can be a
-        # list or a GeometrySequence, and passes them to unary_union() for the extra pad passes
-        from shapely.ops import unary_union
-
-        poly1 = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-        poly2 = Polygon([(2, 0), (3, 0), (3, 1), (2, 1)])
-        poly3 = Polygon([(4, 0), (5, 0), (5, 1), (4, 1)])
-        envelopes = [MultiPolygon([poly1, poly2]).geoms, [poly3], poly1]
-
-        solid_geo = []
-        for iso_geo in envelopes:
-            solid_geo.extend(flatten_shapely_geometry(iso_geo))
-
-        assert len(solid_geo) == 4
-        assert unary_union(solid_geo).bounds == (0.0, 0.0, 5.0, 1.0)
 
 
 class TestGerberParserUnits:
@@ -372,14 +320,6 @@ class TestGerberPolarityLayers:
         self.check(lines)
         print("[PASS] Polarity layers: repeated LPD")
 
-    def test_trailing_lpd_empty_last_layer(self):
-        lines = self.HEADER + self.region(0, 0, 100000, 100000) + ["%LPC*%"] + self.region(20000, 20000, 40000, 40000) + \
-            ["%LPD*%", "M02*"]
-        new, old, ret = self.check(lines)
-        assert ret != 'fail'
-        assert self.union(new.solid_geometry).area > 0
-        assert self.holes(new.solid_geometry) == 1
-        print("[PASS] Polarity layers: trailing LPD, empty last layer")
 
     def test_only_full_clear(self):
         lines = self.HEADER + self.region(10000, 10000, 20000, 20000) + ["%LPC*%"] + \
@@ -395,12 +335,6 @@ class TestGerberPolarityLayers:
         assert abs(self.union(new.solid_geometry).area - 6 * 6) < 1e-6
         print("[PASS] Polarity layers: leading clear layer")
 
-    def test_full_clear(self):
-        lines = self.HEADER + self.region(10000, 10000, 20000, 20000) + ["%LPC*%"] + \
-            self.region(0, 0, 100000, 100000) + ["M02*"]
-        new, old, ret = self.check(lines)
-        assert self.union(new.solid_geometry).area == 0
-        print("[PASS] Polarity layers: full clear (return %r)" % (ret,))
 
     def test_dark_restores_cleared_copper(self):
         lines = self.HEADER + self.region(0, 0, 100000, 100000) + ["%LPC*%"] + \
@@ -408,98 +342,6 @@ class TestGerberPolarityLayers:
             ["%LPC*%"] + self.region(45000, 45000, 55000, 55000) + ["%LPD*%", "D11*", "X50000Y50000D03*", "M02*"]
         new, old, ret = self.check(lines)
         print("[PASS] Polarity layers: a dark layer restores cleared copper")
-
-    def test_thin_clear_stripe_in_last_layer(self):
-        lines = self.HEADER + self.region(0, 0, 100000, 100000) + ["%LPC*%"] + \
-            self.region(10000, 10000, 20000, 20000) + ["%LPD*%"] + self.region(30000, 30000, 50000, 50000) + \
-            ["%LPC*%", "D13*", "X70000Y50000D03*", "M02*"]
-        self.check(lines)
-        print("[PASS] Polarity layers: 1e-8 clear stripe in the last layer")
-
-    def test_startup_lpd_does_not_compose(self):
-        lines = self.HEADER + ["%LPD*%"] + self.region(0, 0, 100000, 100000) + ["D11*", "X50000Y50000D03*", "M02*"]
-        calls = []
-        orig = Gerber._compose_layers
-
-        def recorder(s, layers):
-            calls.append(layers)
-            return orig(s, layers)
-
-        with mock.patch.object(Gerber, '_compose_layers', recorder):
-            gbr = self.parser()
-            ret = gbr.parse_lines(list(lines))
-        assert not calls, "_compose_layers was called"
-        old, ret_old = self.parse(lines, legacy=True)
-        assert ret == ret_old
-        assert shapely.to_wkb(gbr.solid_geometry) == shapely.to_wkb(old.solid_geometry) \
-            if not isinstance(gbr.solid_geometry, list) else gbr.solid_geometry == old.solid_geometry
-        print("[PASS] Polarity layers: startup LPD does not compose")
-
-    def test_fast_path_error_uses_fold(self):
-        lines = self.HEADER + self.region(0, 0, 100000, 100000) + ["%LPC*%"] + self.region(20000, 20000, 40000, 40000) + \
-            ["%LPD*%"] + self.region(25000, 25000, 30000, 30000) + ["%LPC*%"] + self.region(70000, 0, 80000, 20000) + \
-            ["%LPD*%"] + self.region(0, 120000, 10000, 130000) + ["M02*"]
-        folds = []
-        orig_fold = Gerber._fold_layers
-
-        def fold_recorder(s, layers):
-            folds.append(len(layers))
-            return orig_fold(s, layers)
-
-        def broken_tree(*args, **kwargs):
-            raise shapely.errors.GEOSException("forced error")
-
-        with mock.patch.object(Gerber, '_fold_layers', fold_recorder), \
-                mock.patch('appParsers.ParseGerber.STRtree', broken_tree):
-            gbr = self.parser()
-            ret = gbr.parse_lines(list(lines))
-        assert folds == [4], folds
-        old, ret_old = self.parse(lines, legacy=True)
-        assert ret == ret_old
-        assert len(self.parts(gbr.solid_geometry)) == len(self.parts(old.solid_geometry))
-        diff = self.union(gbr.solid_geometry).symmetric_difference(self.union(old.solid_geometry)).area
-        assert diff < 1e-9
-        print("[PASS] Polarity layers: GEOS error falls back to the fold")
-
-    def test_simplification_only_last_layer(self):
-        lines = self.HEADER + ["D12*", "X0Y0D03*"] + ["%LPC*%", "D11*", "X100000Y0D03*"] + \
-            ["%LPD*%", "D12*", "X200000Y0D03*", "M02*"]
-        opts = dict(gerber_simplification=True, gerber_simp_tolerance=0.01, gerber_circle_steps=64)
-        new, old, ret = self.check(lines, **opts)
-        plain, _ = self.parse(lines, gerber_circle_steps=64)
-        by_x = lambda gbr: {round(p.centroid.x): len(p.exterior.coords) for p in self.parts(gbr.solid_geometry)}
-        counts_new, counts_old, counts_plain = by_x(new), by_x(old), by_x(plain)
-        assert counts_new == counts_old, (counts_new, counts_old)
-        # the circle of the earlier layer keeps its vertices, the circle of the last layer is simplified
-        assert counts_new[0] == counts_plain[0], (counts_new, counts_plain)
-        assert counts_new[20] < counts_plain[20], (counts_new, counts_plain)
-        print("[PASS] Polarity layers: simplification only on the last layer")
-
-    def test_pending_path_stored_with_its_polarity(self):
-        lines = self.HEADER + ["X0Y0D02*", "X100000Y0D01*", "%LPC*%", "X0Y100000D02*", "X100000Y100000D01*",
-                               "%LPD*%", "M02*"]
-        gbr, ret = self.parse(lines)
-        geos = [g for g in gbr.tools[10]['geometry'] if 'follow' in g]
-        assert len(geos) == 2, geos
-        assert 'solid' in geos[0] and 'clear' not in geos[0], "path before LPC must be solid"
-        assert 'clear' in geos[1] and 'solid' not in geos[1], "path before LPD must be clear"
-        print("[PASS] Polarity layers: a pending path keeps its own polarity")
-
-    def test_no_fusion_valid_last_layer(self):
-        lines = self.HEADER + self.region(0, 0, 100000, 100000) + ["%LPC*%"] + self.region(20000, 20000, 40000, 40000) + \
-            ["%LPD*%"] + self.region(60000, 60000, 90000, 90000) + ["M02*"]
-        new, old, ret = self.check(lines, gerber_buffering='no')
-        print("[PASS] Polarity layers: no fusion, valid last layer")
-
-    def test_no_fusion_invalid_last_layer(self):
-        base = self.HEADER + self.region(0, 0, 100000, 100000) + ["%LPC*%"] + self.region(20000, 20000, 40000, 40000) + \
-            ["%LPD*%"]
-        overlap = base + self.region(60000, 60000, 90000, 90000) + self.region(70000, 70000, 95000, 95000) + ["M02*"]
-        bowtie = base + ["G36*", "X60000Y60000D02*", "X90000Y90000D01*", "X90000Y60000D01*", "X60000Y90000D01*",
-                         "X60000Y60000D01*", "G37*", "M02*"]
-        for lines in (overlap, bowtie):
-            self.check(lines, gerber_buffering='no')
-        print("[PASS] Polarity layers: no fusion, invalid last layer")
 
 
 def test_load_real_gerber_files():

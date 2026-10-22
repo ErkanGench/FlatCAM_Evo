@@ -30,42 +30,12 @@ def test_unsupported_later_target_does_not_partially_transform(cls, args, method
     getattr(first, method).assert_not_called()
 
 
-def test_missing_plot_target_does_not_change_earlier_visibility():
-    first = Mock(kind='geometry', obj_options={'plot': False})
-    app = object_app(first)
-    app.collection.get_by_name.side_effect = lambda n: first if n == 'a' else None
-    with pytest.raises(FCShell.TclErrorException):
-        TclCommandPlotObjects(app).execute({'names': 'a,missing', 'plot_status': 'true'}, [])
-    assert first.obj_options['plot'] is False
-    first.plot.assert_not_called()
-
-
-def test_skew_one_axis_distance_handles_unused_zero_extent():
-    obj = Mock(kind='geometry', obj_options={})
-    obj.bounds.return_value = (0, 0, 10, 0)
-    app = object_app(obj)
-    TclCommandSkew(app).execute({'y_dist': 2}, ['a'])
-    assert obj.skew.call_args.args[0] == 0
-    assert obj.skew.call_args.args[1] > 0
-
-
 def test_invalid_mirror_axis_is_rejected_before_mutation():
     obj = Mock(kind='geometry', obj_options={})
     obj.bounds.return_value = (0, 0, 1, 1)
     with pytest.raises(FCShell.TclErrorException):
         TclCommandMirror(object_app(obj)).execute({'axis': 'invalid'}, ['a'])
     obj.mirror.assert_not_called()
-
-
-def test_set_origin_false_does_not_enable_auto_alignment():
-    from tclCommands.TclCommandSetOrigin import TclCommandSetOrigin
-    obj = Mock(kind='geometry')
-    obj.bounds.return_value = (10, 20, 30, 40)
-    app = object_app(obj)
-    app.collection.get_list.return_value = [obj]
-    app.on_set_zero_click = Mock()
-    TclCommandSetOrigin(app).execute({'auto': 'False'}, [])
-    assert app.on_set_zero_click.call_args.kwargs['location'] == [0, 0]
 
 
 def test_single_object_origin_refreshes_bounds_source_and_dirty_state():

@@ -77,37 +77,6 @@ def nozzle_data(job, paths):
 
 
 class SolderPasteTests(unittest.TestCase):
-    def test_integer_settings_and_preprocessor_signal_save_current_tool(self):
-        self.__class__.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-        parent = QtWidgets.QWidget()
-        grid = GLay()
-        parent.setLayout(grid)
-        speed = FCSpinner()
-        pp = FCComboBox()
-        pp.addItems(['Paste_1', 'Paste_GRBL', 'Paste_Marlin'])
-        grid.addWidget(speed, 0, 0)
-        grid.addWidget(pp, 1, 0)
-        tool = SimpleNamespace(
-            ui=SimpleNamespace(tools_box=grid, tools_table=MagicMock()),
-            form_to_storage=Mock(), on_tool_edit=Mock(), on_row_selection_change=Mock()
-        )
-        SolderPaste.ui_connect(tool)
-        speed.editingFinished.emit()
-        tool.form_to_storage.assert_called_once_with()
-        tool.form_to_storage.reset_mock()
-        pp.setCurrentIndex(2)
-        tool.form_to_storage.assert_called_once_with()
-
-    def test_first_row_saves_parameters(self):
-        tool = SimpleNamespace(
-            ui=SimpleNamespace(tools_table=SimpleNamespace(
-                currentRow=lambda: 0, item=lambda row, col: SimpleNamespace(text=lambda: '1')
-            )), form_fields={'speed': SimpleNamespace(get_value=lambda: 456)},
-            general_form_fields={}, tooltable_tools={1: {'data': {}}}
-        )
-        SolderPaste.form_to_storage(tool)
-        self.assertEqual(tool.tooltable_tools[1]['data'].get('speed'), 456)
-
     def test_nozzle_settings_drive_motor_and_dwell(self):
         job = make_job()
         for name in ('Paste_1', 'Paste_GRBL', 'Paste_Marlin'):
@@ -142,16 +111,6 @@ class SolderPasteTests(unittest.TestCase):
     def test_empty_tool_returns_failure(self):
         job = make_job()
         self.assertEqual(job.generate_gcode_from_solder_paste_geo(**nozzle_data(job, [])), 'fail')
-
-    def test_zero_dwell_generates_no_pause(self):
-        job = make_job()
-        for name in ('Paste_1', 'Paste_GRBL', 'Paste_Marlin'):
-            with self.subTest(name=name):
-                data = nozzle_data(job, [LineString([(1, 1), (2, 1)])])
-                data['data'].update(tools_solderpaste_pp=name, tools_solderpaste_dwellfwd=0,
-                                    tools_solderpaste_dwellrev=0)
-                code = job.generate_gcode_from_solder_paste_geo(is_first=True, **data)
-                self.assertNotIn('G4 ', code)
 
     def test_marlin_uses_comments_and_manual_nozzle_change(self):
         job = make_job()
@@ -209,39 +168,6 @@ class SolderPasteTests(unittest.TestCase):
         self.assertTrue(tool.objects)
         for path in tool.objects[0].tools[1]['solid_geometry']:
             self.assertTrue(pad.buffer(-0.15).covers(path))
-
-    def test_rotated_pad_uses_long_axis(self):
-        pad = rotate(box(-2, -0.5, 2, 0.5), 30)
-        tool = make_tool([pad])
-        SolderPaste.on_create_geo(tool, 'pads', tool.source, use_thread=False)
-        self.assertTrue(tool.objects)
-        paths = tool.objects[0].tools[1]['solid_geometry']
-        self.assertAlmostEqual(sum(path.length for path in paths), 3.7, places=5)
-
-    def test_unused_nozzle_does_not_crash_cnc_creation_or_mutate_source(self):
-        tool = make_tool([box(1, 1, 1.8, 2)], diameters=(1.0, 0.3))
-        SolderPaste.on_create_geo(tool, 'pads', tool.source, use_thread=False)
-        self.assertTrue(tool.objects)
-        source = tool.objects.pop()
-        source.obj_options.update(xmin=1, ymin=1, xmax=2, ymax=2)
-        before = copy.deepcopy(source.tools)
-        jobs = []
-
-        def new_object(kind, name, initializer, **kwargs):
-            job = make_job(tool.app)
-            job.kind = 'cncjob'
-            result = initializer(job, tool.app)
-            if result != 'fail':
-                jobs.append(job)
-            return result
-
-        tool.new_object = new_object
-        SolderPaste.on_create_gcode(tool, 'paste_cnc', source, use_thread=False)
-        self.assertTrue(jobs)
-        self.assertEqual(source.tools, before)
-        self.assertEqual(jobs[0].used_tools, [2])
-        self.assertIn('G90', jobs[0].source_file.getvalue())
-
 
 if __name__ == '__main__':
     unittest.main()

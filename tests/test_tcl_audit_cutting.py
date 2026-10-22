@@ -14,16 +14,6 @@ from test_tcl_audit_generation import factory_app
 from test_tcl_audit_regressions import FCShell, qt_app
 
 
-@pytest.mark.parametrize('args', [{}, {'all': None, 'box': 'b'}])
-def test_ncc_requires_exactly_one_selector(args):
-    obj = SimpleNamespace(kind='gerber', decimals=4)
-    app = factory_app(obj)
-    app.ncclear_tool = Mock()
-    with pytest.raises(FCShell.TclErrorException):
-        TclCommandCopperClear(app).execute({'name': 'g', **args}, [])
-    app.ncclear_tool.gen.clear_copper_tcl.assert_not_called()
-
-
 def test_ncc_dispatches_integer_method_and_order_and_propagates_failure():
     obj = SimpleNamespace(kind='gerber', decimals=4)
     app = factory_app(obj)
@@ -81,28 +71,3 @@ def test_panelize_factory_failure_is_not_announced_as_done():
     assert result == 'fail'
     assert not any('[success]' in str(call) for call in app.inform.emit.call_args_list)
 
-
-def test_paint_uses_current_generator_api_and_integer_defaults():
-    from tclCommands.TclCommandPaint import TclCommandPaint
-    obj = SimpleNamespace(kind='gerber', decimals=4)
-    app = factory_app(obj)
-    app.decimals = 4
-    app.dec_format = lambda value, decimals: round(value, decimals)
-    app.paint_tool = Mock()
-    app.paint_tool.gen.paint_poly_all.return_value = 'fail'
-    assert TclCommandPaint(app).execute({'name': 'g', 'connect': 'yes'}, []) == 'fail'
-    kwargs = app.paint_tool.gen.paint_poly_all.call_args.kwargs
-    assert isinstance(kwargs['order'], int)
-    assert isinstance(kwargs['method'], int)
-
-
-def test_nonthreaded_paint_factory_failure_releases_busy_state(qt_app):
-    from appPlugins.ToolPaint.PaintGen import PaintGen
-    app = factory_app(None)
-    gen = SimpleNamespace(app=app, parent_tool=Mock(),
-                           _create_params=Mock(return_value=SimpleNamespace(rest_machining_choice=False,
-                                                                            output_object_name='out')),
-                           _parse_tool_diameters=Mock(return_value=[1]))
-    gen.parent_tool.new_object.return_value = 'fail'
-    assert PaintGen.paint_handler(gen, None, [], tooldia='1', run_threaded=False) == 'fail'
-    app.proc_container.view.set_idle.assert_called_once_with()

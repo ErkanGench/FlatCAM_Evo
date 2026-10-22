@@ -51,14 +51,6 @@ class TestGeoEditorCopy(unittest.TestCase):
         # the source shapes are not changed
         self.assertEqual(self.square.geo.bounds, (0.0, 0.0, 1.0, 1.0))
 
-    def test_second_click_on_the_reference_copies_in_place(self):
-        # 2 clicks at the same point, slower than a double click (VisPy gives no 2nd mouse_press for a double click)
-        tool = copy_tool([self.square])
-        tool.click((0.5, 0.5))
-        tool.click((0.5, 0.5))
-        self.assertTrue(tool.complete)
-        self.assertEqual([shp.geo.bounds for shp in tool.geometry], [(0.0, 0.0, 1.0, 1.0)])
-        self.assertIsNot(tool.geometry[0].geo, self.square.geo)
 
     def test_linear_array_without_cursor_move(self):
         tool = copy_tool([self.square], mode='a')
@@ -66,12 +58,6 @@ class TestGeoEditorCopy(unittest.TestCase):
         tool.click((1.0, 0.0))
         self.assertEqual([shp.geo.bounds[0] for shp in tool.geometry], [1.0, 11.0, 21.0])
 
-    def test_copy_after_a_cursor_move_uses_the_moved_geometry(self):
-        tool = copy_tool([self.square])
-        tool.click((0.0, 0.0))
-        tool.utility_geometry(data=(2.0, 2.0))      # the mouse move before the click
-        tool.click((2.0, 2.0))
-        self.assertEqual([shp.geo.bounds for shp in tool.geometry], [(2.0, 2.0, 3.0, 3.0)])
 
 
 if __name__ == '__main__':

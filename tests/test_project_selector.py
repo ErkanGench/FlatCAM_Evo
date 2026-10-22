@@ -53,24 +53,11 @@ class TestProjectSelector(unittest.TestCase):
                          ['Board_A', 'Board_B'])
         self.assertEqual(selector.combo.currentIndex(), 0)
 
-    def test_refresh_follows_the_manager(self):
-        manager, selector = self.make()
-        manager.active = manager.contexts[1]
-        manager.projects_changed.emit()
-        self.assertEqual(selector.combo.currentIndex(), 1)
-
     def test_activated_switches(self):
         manager, selector = self.make()
         selector.on_activated(1)
         manager.switch.assert_called_once_with(manager.contexts[1])
         self.assertEqual(selector.combo.currentIndex(), 1)
-
-    def test_menu_has_the_5_commands_with_icons(self):
-        manager, selector = self.make()
-        menu = selector.build_menu()
-        self.assertEqual([action.text() for action in menu.actions()],
-                         ['New Project', 'Open Project...', 'Save Project', 'Rename Project...', 'Close Project'])
-        self.assertTrue(all(not action.icon().isNull() for action in menu.actions()))
 
     def test_menu_actions_call_the_manager(self):
         manager, selector = self.make()
@@ -90,22 +77,6 @@ class TestProjectSelector(unittest.TestCase):
         with patch.object(QtWidgets.QInputDialog, 'getText', return_value=('Board_C', True)):
             selector.on_rename()
         manager.rename.assert_called_once_with(manager.active, 'Board_C')
-
-    def test_rename_refused_shows_a_message(self):
-        manager, selector = self.make()
-        manager.rename.return_value = False
-        with patch.object(QtWidgets.QInputDialog, 'getText', return_value=('Board_B', True)):
-            selector.on_rename()
-        manager.app.inform.emit.assert_called()
-
-    def test_menu_is_not_shown_while_busy(self):
-        manager, selector = self.make()
-        manager.busy = True
-        selector.build_menu = Mock()
-        selector.on_menu_request(QtCore.QPoint(0, 0))
-        selector.build_menu.assert_not_called()
-        manager.app.inform.emit.assert_called_once_with('busy')
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -32,8 +32,3 @@ def test_headless_and_command(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().splitlines()[-1] == "(True, 'new_geometry g; puts ok', '1,2')"
 
-
-def test_the_help_names_the_new_options(tmp_path):
-    result = _parse(['-h', 'x'], tmp_path)
-    assert '--headless' in result.stdout
-    assert '--command' in result.stdout

@@ -89,22 +89,6 @@ class TestCNCJobPlotPreparation(unittest.TestCase):
                 else:
                     self.assertEqual(data['mesh_tris'].size, 0)
 
-    def test_tessellation_falls_back_to_glu(self):
-        import shapely
-        from shapely.errors import GEOSException
-        from appGUI.VisPyTesselators import GLUTess
-
-        polygon = Polygon([(0, 0), (4, 0), (4, 4), (0, 4)])
-        with patch.object(shapely, 'constrained_delaunay_triangles', None, create=True):
-            indices, vertices = GLUTess().triangulate(polygon)
-        self.assertEqual(len(indices), 6)
-        self.assertEqual(len(vertices), 4)
-        with patch.object(shapely, 'constrained_delaunay_triangles',
-                          side_effect=GEOSException('Native tessellation unavailable'), create=True):
-            indices, vertices = GLUTess().triangulate(polygon)
-        self.assertEqual(len(indices), 6)
-        self.assertEqual(len(vertices), 4)
-
     def test_native_tessellation_preserves_holes_and_counterclockwise_faces(self):
         import numpy as np
         import shapely
@@ -157,27 +141,6 @@ class TestCNCJobPlotPreparation(unittest.TestCase):
                                              [str(i + 1) for i in range(len(positions))])
                         else:
                             self.assertEqual(job.annotations_dict, {})
-
-    def test_annotations_keep_order_and_existing_same_diameter_entries(self):
-        paths = [{'geom': LineString([(0, 0), (1, 0)]), 'kind': ['T', 'F']},
-                 {'geom': LineString([(1, 0), (2, 0)]), 'kind': ['T', 'F']}]
-        job = make_job(paths)
-        plot(job)
-        job.gcode_parsed = [{'geom': LineString([(2, 0), (3, 0)]), 'kind': ['T', 'F']}]
-        plot(job)
-        self.assertEqual(job.annotations_dict[0.8],
-                         {'pos': [(0, 0), (1, 0), (2, 0), (3, 0)], 'text': ['1', '2', '3', '1']})
-
-    def test_filtered_paths_are_not_buffered(self):
-        class UnplottableCut:
-            def buffer(self, *args, **kwargs):
-                raise AssertionError('A hidden cut path must not be buffered')
-
-        job = make_job([{'geom': UnplottableCut(), 'kind': ['C', 'F']},
-                        {'geom': LineString([(0, 0), (1, 1)]), 'kind': ['T', 'F']}])
-        plot(job, kind='travel')
-        self.assertEqual(len(job.batch), 1)
-
 
 def benchmark(args):
     plot_method = CNCjob.plot2

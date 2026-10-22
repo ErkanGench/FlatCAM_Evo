@@ -53,11 +53,6 @@ def _export(job):
     return CNCJobObject.export_gcode(job, to_file=True).getvalue()
 
 
-def test_the_headerless_preprocessors_are_the_ones_this_test_is_about():
-    assert {name for name, pp in appPreProcessor.preprocessors.items() if pp.include_header is False} \
-        == set(HEADERLESS)
-
-
 @pytest.mark.parametrize('kind', ['Excellon', 'Geometry'])
 def test_every_preprocessor_keeps_the_code_of_every_tool(kind):
     dropped = []
@@ -79,11 +74,3 @@ def test_headerless_drill_job_has_start_code_tool_code_and_no_page_header(ppname
     # include_header = False: the gc_header block is not written
     assert 'HEADER' not in text
 
-
-@pytest.mark.parametrize('ppname', HEADERLESS)
-def test_headerless_geometry_job_is_written_as_before(ppname):
-    text = _export(_job('Geometry', ppname))
-
-    assert text.startswith('START_CODE')
-    assert 'BODY_TOOL_1' in text and 'BODY_TOOL_2' in text
-    assert 'HEADER' not in text

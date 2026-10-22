@@ -63,20 +63,6 @@ class TestShapeCollectionVisualBatch(unittest.TestCase):
             "global_backface_culling": True,
         }
     
-    def test_add_batch_empty_data(self):
-        """Test add_batch() with empty shapes_data returns empty list."""
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=self.default_fc_options
-        )
-        
-        result = collection.add_batch([])
-        
-        self.assertEqual(result, [])
-        self.assertEqual(len(collection.data), 0)
-    
     def test_add_batch_single_shape(self):
         """Test add_batch() with a single shape."""
         collection = self.ShapeCollectionVisual(
@@ -100,28 +86,6 @@ class TestShapeCollectionVisualBatch(unittest.TestCase):
         self.assertEqual(collection.data[result[0]]['color'], 'red')
         self.assertEqual(collection.data[result[0]]['face_color'], 'blue')
         self.assertTrue(collection.data[result[0]]['visible'])
-    
-    def test_add_batch_multiple_shapes(self):
-        """Test add_batch() with multiple shapes."""
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=self.default_fc_options
-        )
-        
-        shapes_data = [
-            {'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]), 'color': 'red'},
-            {'shape': Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]), 'color': 'green'},
-            {'shape': Polygon([(4, 0), (5, 0), (5, 1), (4, 1)]), 'color': 'blue'},
-        ]
-        
-        result = collection.add_batch(shapes_data, visible=True)
-        
-        self.assertEqual(len(result), 3)
-        self.assertEqual(len(collection.data), 3)
-        # Verify keys are unique and in order
-        self.assertEqual(len(set(result)), 3)
     
     def test_add_batch_with_pool(self):
         """Test add_batch() uses pool when available."""
@@ -148,88 +112,6 @@ class TestShapeCollectionVisualBatch(unittest.TestCase):
         # Verify batch_results stored the result
         self.assertEqual(len(collection._batch_results), 1)
     
-    def test_add_batch_synchronous_mode(self):
-        """Test add_batch() processes synchronously when no_mp option is True."""
-        fc_options = {"global_graphic_engine_3d_no_mp": True}
-        mock_pool = MockPool()
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=mock_pool,
-            fcoptions=fc_options
-        )
-        
-        shapes_data = [
-            {'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]), 'color': 'red'},
-        ]
-        
-        result = collection.add_batch(shapes_data, visible=True)
-        
-        # Verify pool was NOT called
-        self.assertEqual(len(mock_pool.call_args), 0)
-        # Verify _batch_results is empty (no async results)
-        self.assertEqual(len(collection._batch_results), 0)
-        # Verify data was processed (has mesh_vertices after _update_shape_buffers)
-        self.assertIn('mesh_vertices', collection.data[result[0]])
-    
-    def test_add_batch_missing_fc_option_key(self):
-        """Test add_batch() handles missing fc_options key gracefully (BUG 1 fix)."""
-        # fc_options without the key - should use .get() to avoid KeyError
-        fc_options = {"some_other_option": True}
-        mock_pool = MockPool()
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=mock_pool,
-            fcoptions=fc_options
-        )
-        
-        shapes_data = [
-            {'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]), 'color': 'red'},
-        ]
-        
-        # Should NOT raise KeyError
-        try:
-            result = collection.add_batch(shapes_data, visible=True)
-            self.assertEqual(len(result), 1)
-        except KeyError as e:
-            self.fail(f"add_batch() raised KeyError for missing option key: {e}")
-    
-    def test_add_batch_none_fc_options(self):
-        """Test add_batch() handles None fc_options gracefully."""
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=None
-        )
-        
-        shapes_data = [
-            {'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]), 'color': 'red'},
-        ]
-        
-        # Should NOT raise AttributeError
-        try:
-            result = collection.add_batch(shapes_data, visible=True)
-            self.assertEqual(len(result), 1)
-        except (AttributeError, TypeError) as e:
-            self.fail(f"add_batch() raised exception for None fc_options: {e}")
-    
-    def test_add_batch_default_layer(self):
-        """Test add_batch() uses default layer parameter."""
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=self.default_fc_options
-        )
-        
-        shapes_data = [{'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])}]
-        
-        result = collection.add_batch(shapes_data, layer=2)
-        
-        self.assertEqual(collection.data[result[0]]['layer'], 2)
-    
     def test_add_batch_per_shape_layer_override(self):
         """Test add_batch() allows per-shape layer override."""
         collection = self.ShapeCollectionVisual(
@@ -249,22 +131,6 @@ class TestShapeCollectionVisualBatch(unittest.TestCase):
         # Per-shape layer should override default
         self.assertEqual(collection.data[result[0]]['layer'], 1)
         self.assertEqual(collection.data[result[1]]['layer'], 2)
-    
-    def test_add_batch_dirty_flag(self):
-        """Test add_batch() sets dirty flag."""
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=self.default_fc_options
-        )
-        
-        collection._dirty = False
-        
-        shapes_data = [{'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])}]
-        collection.add_batch(shapes_data)
-        
-        self.assertTrue(collection._dirty)
     
     def test_redraw_collects_batch_results(self):
         """Test redraw() collects batch results from _batch_results."""
@@ -320,40 +186,6 @@ class TestBackfaceCulling(unittest.TestCase):
         """Set up test fixtures."""
         from appGUI.VisPyVisuals import ShapeCollectionVisual
         self.ShapeCollectionVisual = ShapeCollectionVisual
-    
-    @patch('appGUI.VisPyVisuals.MeshVisual')
-    def test_backface_culling_default_true(self, mock_mesh):
-        """Test backface culling is True by default."""
-        fc_options = {}  # No backface_culling option - should default to True
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=fc_options
-        )
-        
-        # Verify set_gl_state was called with cull_face=True (default)
-        for call in mock_mesh.return_value.set_gl_state.call_args_list:
-            kwargs = call[1]
-            self.assertTrue(kwargs.get('cull_face', False), 
-                "Expected cull_face=True by default")
-    
-    @patch('appGUI.VisPyVisuals.MeshVisual')
-    def test_backface_culling_explicit_true(self, mock_mesh):
-        """Test backface culling when explicitly set to True."""
-        fc_options = {"global_backface_culling": True}
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=fc_options
-        )
-        
-        # Verify cull_face=True
-        for call in mock_mesh.return_value.set_gl_state.call_args_list:
-            kwargs = call[1]
-            self.assertTrue(kwargs.get('cull_face', False),
-                "Expected cull_face=True when explicitly set")
     
     @patch('appGUI.VisPyVisuals.MeshVisual')
     def test_backface_culling_false(self, mock_mesh):
@@ -421,35 +253,6 @@ class TestCollectElements(unittest.TestCase):
         self.assertEqual(result[0]['color'], 'blue')
         self.assertEqual(result[1]['color'], 'blue')
     
-    def test_collect_elements_default_color(self):
-        """Test _collect_elements uses default color when not specified."""
-        from appObjects.GeometryObject import GeometryObject
-        
-        class MockGeo:
-            pass
-        
-        mock_geo = MockGeo()
-        mock_geo._collect_elements = GeometryObject._collect_elements.__get__(mock_geo, GeometryObject)
-        
-        poly = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-        result = mock_geo._collect_elements(poly)
-        
-        self.assertEqual(result[0]['color'], '#FF0000FF')
-
-
-class TestDefaultsConfiguration(unittest.TestCase):
-    """Tests for defaults.py configuration."""
-    
-    def test_global_backface_culling_default(self):
-        """Test global_backface_culling is True by default."""
-        from defaults import AppDefaults
-        
-        defaults = AppDefaults()
-        # Access the defaults dict directly
-        self.assertIn("global_backface_culling", defaults.defaults)
-        self.assertTrue(defaults.defaults["global_backface_culling"])
-
-
 class TestAddCopy(unittest.TestCase):
     """add_copy() reuses the position buffers of a shape and makes new color buffers."""
 
@@ -483,11 +286,6 @@ class TestAddCopy(unittest.TestCase):
         dst = self.target.data[copy_key]
         self.assertEqual(len(dst['mesh_colors']), 0)
         self.assertEqual(len(dst['line_colors']), len(dst['line_pts']))
-
-    def test_missing_key_gives_none(self):
-        self.assertIsNone(self.target.add_copy(self.source, 99, color='#FF0000FF'))
-        self.assertEqual(self.target.data, {})
-
 
 if __name__ == '__main__':
     unittest.main()

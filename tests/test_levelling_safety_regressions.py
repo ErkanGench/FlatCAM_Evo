@@ -90,8 +90,7 @@ def test_motion_retains_ownership_until_completion(entry):
     assert tool._grbl_recovery is not None
 
 
-@pytest.mark.parametrize('entry', ['typed', 'jog', 'home'])
-@pytest.mark.parametrize('failure', ['timeout', 'alarm', 'port_error'])
+@pytest.mark.parametrize('entry,failure', [('typed', 'timeout'), ('jog', 'alarm'), ('home', 'port_error')])
 def test_motion_failure_blocks_next_motion(entry, failure):
     prefix = {'typed': 'G0', 'jog': '$J=', 'home': '$H'}[entry]
     fake = SafetyGrbl(replies={prefix: [] if failure == 'timeout' else ['ALARM:9']})
@@ -155,7 +154,7 @@ def test_initial_alarm_blocks_subsequent_motion():
     assert tool._grbl_reserve('next motion', motion=True) is None
 
 
-@pytest.mark.parametrize('record', ['[PRB:bad,0,0:1]', '[PRB:nan,0,0:1]', '[PRB:0,0,inf:1]'])
+@pytest.mark.parametrize('record', ['[PRB:bad,0,0:1]', '[PRB:nan,0,0:1]'])
 def test_uncertain_probe_record_sends_hold(record):
     fake = SafetyGrbl(replies={'G38.2': [record, 'ok']})
     tool = probe_tool(fake)
@@ -945,8 +944,7 @@ def test_double_reset_is_confirmed_by_the_latest_banner():
     assert tool._grbl_recovery is None
 
 
-@pytest.mark.parametrize('error', [serial.SerialException, OSError])
-@pytest.mark.parametrize('fresh_banner', [False, True])
+@pytest.mark.parametrize('error,fresh_banner', [(serial.SerialException, False), (OSError, True)])
 def test_failed_receive_purge_sends_reset_but_blocks_home(error, fresh_banner):
     fake = ResetConfirmationGrbl(reset_lines=[ResetConfirmationGrbl.BANNER] if fresh_banner else [])
     tool = make_audit_tool()

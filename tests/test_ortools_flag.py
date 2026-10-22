@@ -10,10 +10,6 @@ import camlib
 builtins.__dict__.setdefault('_', lambda s: s)
 
 
-def test_32bit_python_never_uses_ortools():
-    assert camlib._ortools_available('32bit') is False
-
-
 def test_64bit_without_ortools_is_false(monkeypatch):
     # a None entry in sys.modules makes "import ortools..." raise ImportError
     monkeypatch.setitem(sys.modules, 'ortools', None)
@@ -26,7 +22,3 @@ def test_64bit_with_ortools_is_true():
     assert camlib._ortools_available('64bit') is True
     assert camlib.pywrapcp is not None
 
-
-def test_flag_follows_the_helper_on_this_python():
-    import platform
-    assert camlib.HAS_ORTOOLS == camlib._ortools_available(platform.architecture()[0])

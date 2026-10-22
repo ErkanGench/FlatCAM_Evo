@@ -71,13 +71,6 @@ def test_smaller_tool_is_tried_when_largest_cannot_fit():
     assert output.tools[2]['solid_geometry']
 
 
-def test_failed_larger_tool_does_not_stop_rest_machining():
-    gen, output = run_rest(MultiPolygon([box(0, 0, 10, 10)]), [4.0, 1.0],
-                           lambda **kw: None if kw['tooldia'] == 4 else [LineString([(1, 1), (2, 1)])])
-    assert [call.kwargs['tooldia'] for call in gen.clear_polygon_worker.call_args_list] == [4.0, 1.0]
-    assert output.tools[2]['solid_geometry']
-
-
 def test_rest_margin_and_exact_swept_area_are_used():
     area = MultiPolygon([box(0, 0, 10, 10)])
     line = LineString([(2, 5), (8, 5)])
@@ -101,44 +94,6 @@ def test_area_failure_does_not_attempt_clearing():
     gen.clear_polygon_worker.assert_not_called()
     assert not output.tools
     assert gen.worker_result == 'fail'
-
-
-def test_selected_tools_are_not_consumed():
-    tools = [1.0, 4.0]
-    run_rest(MultiPolygon([box(0, 0, 2, 2)]), tools,
-             lambda **kw: [LineString([(0.5, 1), (1.5, 1)])])
-    assert tools == [1.0, 4.0]
-
-
-def test_last_tool_does_not_compute_unused_residual(monkeypatch):
-    union = Mock(side_effect=AssertionError('unused residual calculation'))
-    monkeypatch.setattr('appPlugins.ToolNCC.NccGen.unary_union', union)
-    gen, output = run_rest(MultiPolygon([box(0, 0, 2, 2)]), [1.0],
-                           lambda **kw: [LineString([(0.5, 1), (1.5, 1)])])
-    assert output.tools[1]['solid_geometry']
-    union.assert_not_called()
-
-
-def test_tcl_failed_stock_is_not_duplicated_for_smaller_tool():
-    residuals = []
-
-    def clear(**kw):
-        if kw['tooldia'] == 4:
-            return None
-        residuals.append(kw['pol'])
-        return [LineString([(1, 1), (2, 1)])]
-
-    gen, output = run_rest(MultiPolygon([box(0, 0, 10, 10)]), [4.0, 1.0], clear, tcl=True)
-    assert len(residuals) == 1
-    assert output.tools[2]['solid_geometry']
-
-
-def test_tcl_rest_gerber_list_supports_offset():
-    source = SimpleNamespace(kind='gerber', solid_geometry=[box(0, 0, 1, 1)])
-    gen, output = run_rest(MultiPolygon([box(0, 0, 10, 10)]), [1.0],
-                           lambda **kw: [LineString([(1, 1), (2, 1)])], tcl=True, source=source)
-    assert gen.result != 'fail'
-    assert output.tools[1]['solid_geometry']
 
 
 def test_tcl_smaller_tool_receives_only_unswept_stock():

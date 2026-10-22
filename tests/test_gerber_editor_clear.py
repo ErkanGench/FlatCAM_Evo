@@ -16,8 +16,8 @@ from camlib import affine_translate_matrix
 from appEditors.grb_plugins.GrbCommon import DrawToolShape
 from appHandlers.appIO import appIO
 
-from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
-    MIXED_GBR, NATIVE_GBR, _headless_qt, app, assert_poly_equiv, export_gerber_text, make_gerber, polygon_union,
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_poly_equiv, export_gerber_text, _headless_qt, make_gerber, MIXED_GBR, NATIVE_GBR, polygon_union,
     reparse_gerber, sym_diff_area,
 )
 
@@ -71,19 +71,6 @@ class TestBuildEditTools:
             assert tools[ap]['type'] == tool['type']
             assert [rec['solid'].wkb for rec in tools[ap]['geometry']] == [rec['solid'].wkb for rec in tool['geometry']]
 
-    def test_empty_clear_record_does_not_convert(self, app):
-        source = make_gerber(app, NATIVE_GBR)
-        source.tools[10]['geometry'][0]['clear'] = None
-        tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry)
-        assert tools is source.tools
-
-    def test_source_tools_are_not_changed(self, app):
-        for path in (MIXED_GBR, NATIVE_GBR):
-            source = make_gerber(app, path)
-            before = snapshot(source.tools)
-            AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry)
-            assert snapshot(source.tools) == before
-
 
 class TestEditorSaveWithClear:
     def test_loaded_as_regions_keeps_the_composed_geometry(self, app, tmp_path):
@@ -99,20 +86,6 @@ class TestEditorSaveWithClear:
         exported = reparse_gerber(app, export_gerber_text(app, edited), tmp_path, name='exported')
         assert_poly_equiv(exported.solid_geometry, source.solid_geometry, rel=1e-4, abs_tol=1e-3, msg='export')
 
-    def test_without_the_flag_the_native_region_writer_is_still_right(self, app, tmp_path):
-        source = make_gerber(app, MIXED_GBR)
-        tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry)
-        edited = editor_save(app, source, tools)
-        assert edited.export_as_regions is False
-        again = reparse_gerber(app, edited.source_file, tmp_path)
-        assert_poly_equiv(again.solid_geometry, source.solid_geometry, rel=1e-4, abs_tol=1e-3, msg='native REG')
-
-    def test_pin_old_load_path_loses_the_clear_features(self, app):
-        """The load path before the fix: the source tools as they are. The slot is lost on a save."""
-        source = make_gerber(app, MIXED_GBR)
-        edited = editor_save(app, source, source.tools)
-        union = polygon_union(edited.solid_geometry)
-        assert union.contains(SLOT), 'the old path is expected to lose the slot'
 
     @pytest.mark.parametrize('has_follow', [True, False])
     @pytest.mark.parametrize('loaded_as_regions', [True, False])
@@ -153,11 +126,6 @@ def import_tool(app, source):
 
 
 class TestImportWithClear:
-    def test_clear_slot_is_not_selectable_copper(self, app):
-        source = make_gerber(app, MIXED_GBR)
-        tool = import_tool(app, source)
-        ImportEditorGrb.select_handler(tool, (SLOT.x, SLOT.y))
-        assert not tool.sel_storage
 
     @pytest.mark.parametrize('selection_type', [True, False])
     def test_box_import_preserves_clear_and_refilled_areas(self, app, tmp_path, selection_type):

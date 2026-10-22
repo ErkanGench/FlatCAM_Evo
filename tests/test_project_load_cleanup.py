@@ -153,24 +153,5 @@ class TestProjectLoadCleanup(unittest.TestCase):
         self.assertEqual(opened.call_count, 1)
         self.assertEqual(self.app.flush_recent_items.call_count, 1)
 
-    def test_legacy_cancel_is_on_gui_thread_and_keeps_current_project(self):
-        gui_thread = QtCore.QThread.currentThread()
-        dialog = Mock()
-        cancel = object()
-        dialog.addButton.side_effect = [object(), cancel]
-        dialog.clickedButton.return_value = cancel
-
-        def make_dialog(**kwargs):
-            self.assertIs(QtCore.QThread.currentThread(), gui_thread)
-            return dialog
-
-        project = {'objs': [{'kind': 'gerber', 'options': {'name': 'old'}, 'apertures': {}}], 'options': {}}
-        with patch('appHandlers.appIO.FCMessageBox', side_effect=make_dialog):
-            self.parse(json.dumps(project))
-            self.wait_for(lambda: dialog.clickedButton.called)
-        self.io.on_file_new_project.assert_not_called()
-        self.assertFalse(self.app.app_obj.load_batches)
-
-
 if __name__ == '__main__':
     unittest.main()

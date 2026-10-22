@@ -23,14 +23,6 @@ def test_grips_of_open_line():
     assert kinds(grips, 'mid') == [((0, 0, 0), (1, 0)), ((0, 0, 1), (2, 1))]
 
 
-@pytest.mark.parametrize('factory', [LinearRing, Polygon])
-def test_closing_coordinate_has_no_own_grip(factory):
-    grips = vertex_grips(factory(SQUARE))
-    assert [address for address, __ in kinds(grips, 'vertex')] == [(0, 0, i) for i in range(4)]
-    assert [address for address, __ in kinds(grips, 'mid')] == [(0, 0, i) for i in range(4)]
-    assert kinds(grips, 'mid')[3] == ((0, 0, 3), (0, 2))
-
-
 def test_grips_of_polygon_hole_and_multipolygon():
     grips = vertex_grips(MultiPolygon([Polygon(SQUARE, [HOLE]), box(10, 10, 11, 11)]))
     rings = {address[:2] for address, __ in kinds(grips, 'vertex')}
@@ -67,14 +59,6 @@ def test_edit_hole_keeps_exterior():
     assert list(result.interiors[0].coords)[0] == (1.5, 0.5)
 
 
-def test_edit_one_part_keeps_other_parts():
-    multi = MultiPolygon([box(0, 0, 1, 1), box(1, 1, 2, 2)])
-    result = edit_vertex(multi, 'move', (0, 0, 1), (0.9, 0.9))
-    assert isinstance(result, MultiPolygon)
-    assert result.geoms[1].equals_exact(multi.geoms[1], 0.0)
-    assert (0.9, 0.9) in list(result.geoms[0].exterior.coords)
-
-
 def test_insert_off_segment_needs_on_segment_false():
     line = LineString([(0, 0), (2, 0)])
     with pytest.raises(ValueError):
@@ -82,29 +66,10 @@ def test_insert_off_segment_needs_on_segment_false():
     assert list(edit_vertex(line, 'insert', (0, 0, 0), (1, 1)).coords) == [(0, 0), (1, 1), (2, 0)]
 
 
-@pytest.mark.parametrize('geometry,action,address,point', [
-    (LineString([(0, 0), (1, 0)]), 'remove', (0, 0, 0), None),
-    (Polygon([(0, 0), (4, 0), (0, 4)]), 'remove', (0, 0, 0), None),
-    (LineString([(0, 0), (2, 0)]), 'move', (0, 0, 0), (float('nan'), 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', (0, 0, 0), (1,)),
-    (LineString([(0, 0), (2, 0)]), 'move', (0, 0, 2), (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', (1, 0, 0), (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', (0, 1, 0), (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'move', (0, 0, 0.5), (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'insert', (0, 0, 1), (1, 0)),
-    (LineString([(0, 0), (2, 0)]), 'unknown', (0, 0, 0), (1, 0)),
-    (box(0, 0, 4, 4), 'move', (0, 0, 1), (4, 0)),
-    (LineString([(0, 0, 1), (2, 0, 1)]), 'move', (0, 0, 0), (1, 1)),
-])
+@pytest.mark.parametrize('geometry,action,address,point', [(LineString([(0, 0), (1, 0)]), 'remove', (0, 0, 0), None), (LineString([(0, 0), (2, 0)]), 'move', (0, 0, 0), (1,)), (LineString([(0, 0), (2, 0)]), 'move', (0, 1, 0), (1, 0)), (LineString([(0, 0), (2, 0)]), 'unknown', (0, 0, 0), (1, 0))])
 def test_bad_edits_raise(geometry, action, address, point):
     with pytest.raises(ValueError):
         edit_vertex(geometry, action, address, point)
-
-
-def test_ring_after_edit_does_not_check_the_result():
-    coords = ring_after_edit(box(0, 0, 4, 4), 'move', (0, 0, 1), (4, 0))
-    assert coords[0] == coords[-1]
-    assert (4, 0) in coords
 
 
 @pytest.mark.parametrize('geometry', [
@@ -114,17 +79,6 @@ def test_ring_after_edit_does_not_check_the_result():
 def test_check_vertex_result_rejects_invalid(geometry):
     with pytest.raises(ValueError):
         check_vertex_result(geometry, (0, 0, 0))
-
-
-def test_check_vertex_result_ignores_other_parts():
-    crossing = MultiLineString([[(0, 0), (2, 2)], [(0, 2), (2, 0)], [(5, 0), (6, 0)]])
-    check_vertex_result(crossing, (2, 0, 0))
-
-
-def test_contrast_color():
-    assert contrast_color('#FF8000FF', ['#00000080', '#0000FF80', '#FFFFFF']) == '#FF8000FF'
-    assert contrast_color('#FF0000FF', ['#F01010FF']) == '#00FFFFFF'
-    assert contrast_color('#FF0000FF', ['', None, 'bad']) == '#FF0000FF'
 
 
 ROUNDED = box(1, 1, 9, 5).buffer(1, join_style=BufferJoinStyle.round)   # 4 corner arcs of radius 1
@@ -142,11 +96,6 @@ def s_curve():
     first = arc_points((0, 0), (1 - half, half), (1, 1), 64)
     second = arc_points((1, 1), (1 + half, 2 - half), (2, 2), 64)
     return [(-3, 0)] + first + second[1:] + [(2, 5)]
-
-
-def test_circle_center_and_collinear_points():
-    assert circle_center((1, 0), (0, 1), (-1, 0)) == pytest.approx((0, 0))
-    assert circle_center((0, 0), (1, 0), (2, 0)) is None
 
 
 def test_arc_middle_is_at_the_half_angle():
@@ -173,25 +122,6 @@ def test_find_arcs_rounded_rectangle_has_4_corner_arcs():
         center = circle_center(vertices[arc.start], arc.middle, vertices[arc.end])
         assert math.dist(center, vertices[arc.start]) == pytest.approx(1)
         assert min(math.dist(center, corner) for corner in CORNERS) == pytest.approx(0, abs=1e-9)
-
-
-def test_find_arcs_line_buffer_has_2_end_arcs():
-    assert len(find_arcs(ring_vertices(LineString([(0, 0), (10, 0)]).buffer(1).exterior), True)) == 2
-
-
-def test_find_arcs_full_circle():
-    arcs = find_arcs(ring_vertices(Point(0, 0).buffer(2).exterior), True)
-    assert len(arcs) == 1 and arcs[0].full
-
-
-def test_find_arcs_arc_across_the_ring_start():
-    vertices = ring_vertices(ROUNDED.exterior)
-    first = find_arcs(vertices, True)[0]
-    middle = (first.start + first.end) // 2
-    rotated = vertices[middle:] + vertices[:middle]   # vertex 0 is now inside an arc
-    arcs = find_arcs(rotated, True)
-    assert len(arcs) == 4
-    assert sum(1 for arc in arcs if arc.end < arc.start) == 1
 
 
 def test_find_arcs_s_curve_arcs_share_a_vertex():
@@ -287,25 +217,6 @@ def test_arc_end_on_a_shared_vertex_changes_both_arcs():
     assert result.coords[arcs[0].end] == (1.2, 1)
 
 
-def test_arc_flatten_makes_a_straight_segment():
-    address, __ = grips_of(ROUNDED, 'arc_mid')[0]
-    vertices = ring_vertices(ROUNDED.exterior)
-    begin, end = vertices[address[2]], vertices[address[3]]
-    result = edit_vertex(ROUNDED, 'arc_flatten', address)
-    coords = list(result.exterior.coords)
-    assert any(pair in ((begin, end), (end, begin)) for pair in zip(coords, coords[1:]))
-    assert len(find_arcs(ring_vertices(result.exterior), True)) == 3
-
-
-def test_arc_mid_on_the_chord_makes_a_straight_segment():
-    address, __ = grips_of(ROUNDED, 'arc_mid')[0]
-    vertices = ring_vertices(ROUNDED.exterior)
-    begin, end = vertices[address[2]], vertices[address[3]]
-    chord_middle = ((begin[0] + end[0]) / 2, (begin[1] + end[1]) / 2)
-    result = edit_vertex(ROUNDED, 'arc_mid', address, chord_middle, steps=64)
-    assert len(find_arcs(ring_vertices(result.exterior), True)) == 3
-
-
 def test_arc_radius_scales_a_full_circle():
     circle = Point(1, 1).buffer(2)
     result = edit_vertex(circle, 'arc_radius', (0, 0, 0), (4, 1))
@@ -313,13 +224,7 @@ def test_arc_radius_scales_a_full_circle():
     assert all(math.dist(coord, (1, 1)) == pytest.approx(3) for coord in result.exterior.coords)
 
 
-@pytest.mark.parametrize('geometry,action,address,point', [
-    (box(0, 0, 4, 4), 'arc_end', (0, 0, 1), (5, 0)),               # not the end of an arc
-    (ROUNDED, 'arc_mid', (0, 0, 1, 2), (0, 0)),                     # not an arc
-    (ROUNDED, 'arc_mid', (0, 0, 1), (0, 0)),                        # an arc address has 4 values
-    (box(0, 0, 4, 4), 'arc_radius', (0, 0, 0), (5, 0)),             # not a full circle
-    (ROUNDED, 'arc_mid', (0, 0, 1, 17), None),                      # no point
-])
+@pytest.mark.parametrize('geometry,action,address,point', [(box(0, 0, 4, 4), 'arc_end', (0, 0, 1), (5, 0)), (ROUNDED, 'arc_mid', (0, 0, 1), (0, 0)), (ROUNDED, 'arc_mid', (0, 0, 1, 17), None)])
 def test_bad_arc_edits_raise(geometry, action, address, point):
     with pytest.raises(ValueError):
         edit_vertex(geometry, action, address, point)

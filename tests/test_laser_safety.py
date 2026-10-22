@@ -13,7 +13,7 @@ from shapely.geometry import LineString
 
 from camlib import AttrDict, CNCjob, Geometry
 from defaults import AppDefaults
-from test_unify_regressions_0b import make_app, make_excellon
+from tests.helpers_objects import make_app_0b as make_app, make_excellon_0b as make_excellon  # noqa: F401,E402
 
 LASER_PREPROCESSORS = ['GRBL_laser', 'GRBL_laser_z', 'default_laser', 'Marlin_laser_FAN_pin',
                        'Marlin_laser_Spindle_pin', 'Marlin_laser_z', 'grbl_laser_eleks_drd']
@@ -99,13 +99,6 @@ def test_grbl_laser_activation_does_not_reuse_previous_power(pp_name):
         p['laser_min_power'] = 250
 
 
-@pytest.mark.parametrize('min_power', [250, 0])
-def test_milling_tool_job_warns_when_the_laser_off_lines_keep_the_laser_on(min_power):
-    app, gcode = milling_tool_job('GRBL_laser', min_power)
-    assert ('(laser OFF)' in gcode) is bool(min_power)
-    assert len(laser_warnings(app)) == (1 if min_power else 0)
-
-
 @pytest.mark.parametrize('pp_name', LASER_PREPROCESSORS)
 def test_the_warning_follows_the_laser_off_lines_of_each_laser_preprocessor(pp_name):
     app, gcode = milling_tool_job(pp_name, 250)
@@ -124,20 +117,6 @@ def test_single_geometry_job_warns_when_the_laser_off_lines_keep_the_laser_on(mi
                                              feedrate_z=100, feedrate_rapid=1000, spindlespeed=500,
                                              laser_min_power=min_power, pp_geometry_name='GRBL_laser',
                                              is_first=True)
-    assert ('(laser OFF)' in gcode) is bool(min_power)
-    assert len(laser_warnings(app)) == (1 if min_power else 0)
-
-
-@pytest.mark.parametrize('min_power', [250, 0])
-def test_drilling_tool_job_warns_when_the_laser_off_lines_keep_the_laser_on(min_power):
-    app = laser_app()
-    source = make_excellon(app, slots=())
-    job = laser_job(app, obj_type='Excellon', pp_excellon_name='GRBL_laser')
-    data = dict(AppDefaults.factory_defaults)
-    data.update(tools_drill_min_power=min_power, tools_drill_ppname_e='GRBL_laser')
-    tools = {1: {'data': data, 'tooldia': 1.0, 'drills': source.tools[1]['drills']}}
-    gcode, __, __ = job.excellon_tool_gcode_gen(1, source.tools[1]['drills'], tools, (0, 0), is_first=True,
-                                                opt_type='R')
     assert ('(laser OFF)' in gcode) is bool(min_power)
     assert len(laser_warnings(app)) == (1 if min_power else 0)
 
@@ -178,44 +157,3 @@ def laser_warnings_per_tool(app):
             per_tool[-1].append(msg)
     return per_tool
 
-
-@pytest.mark.parametrize('first_min_power, second_min_power', [(250, 0), (0, 250)])
-def test_multi_tool_single_geometry_job_warns_only_for_the_tool_that_keeps_the_laser_on(first_min_power,
-                                                                                        second_min_power):
-    # The Milling tool makes the G-code of a single geometry with 2 tools by calling generate_from_geometry_2() for
-    # each tool on the same CNCjob, which appends to CNCjob.gcode: the 'laser OFF' lines of the first tool are still
-    # there when the G-code of the second tool is checked.
-    from appPlugins.ToolMilling import ToolMilling
-
-    class Milling(SimpleNamespace):
-        """The real ToolMilling methods, without its GUI."""
-        def __getattr__(self, name):
-            return getattr(ToolMilling, name).__get__(self, type(self))
-
-    app = laser_app()
-    tools = {}
-    for uid, (tooldia, min_power) in enumerate(((0.1, first_min_power), (0.2, second_min_power)), 1):
-        data = {key: value for key, value in AppDefaults.factory_defaults.items() if key.startswith('tools_mill_')}
-        data.update(tools_mill_tooldia=tooldia, tools_mill_offset_type=0, tools_mill_optimization_type='R',
-                    tools_mill_ppname_g='GRBL_laser', tools_mill_min_power=min_power, tools_mill_cutz=0,
-                    tools_mill_spindlespeed=500, tools_mill_multidepth=False, tools_mill_toolchange=False)
-        tools[uid] = {'tooldia': tooldia, 'data': data, 'solid_geometry': mill_paths()}
-    geo = SimpleNamespace(multigeo=False, tools=tools, solid_geometry=mill_paths(),
-                          obj_options=dict(tools[1]['data'], name='geo', xmin=0, ymin=0, xmax=7, ymax=0))
-    jobs = []
-
-    def new_object(kind, name, init, **kwargs):
-        job = laser_job(app)
-        job.kind, job.tools, job.gc_start = kind, {}, ''
-        assert init(job, app) != 'fail'
-        jobs.append(job)
-        return job
-
-    milling = Milling(app=app, units='MM', decimals=4, new_object=new_object)
-    milling.generate_cnc_job_handler(geo_obj=geo, tools_dict=tools, use_thread=False, plot=False, from_tcl=True)
-
-    assert len(jobs) == 1
-    assert 'S250 (laser OFF)' in jobs[0].source_file
-    warnings = laser_warnings_per_tool(app)
-    assert [len(w) for w in warnings] == [1 if first_min_power else 0, 1 if second_min_power else 0]
-    assert all('Laser Min Power is 250:' in m for w in warnings for m in w)

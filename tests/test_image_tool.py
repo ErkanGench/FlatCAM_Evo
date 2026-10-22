@@ -63,17 +63,6 @@ class TestImageLoading(unittest.TestCase):
         self.assertEqual(self.tool.ui.load_status.color, 'green')
         self.assertTrue(self.tool.ui.import_button.isEnabled())
 
-    def test_corrupt_image_clears_previous_selection(self):
-        filename = Path(self.folder.name) / 'image.png'
-        Image.new('RGB', (8, 8)).save(filename)
-        self.load(filename)
-        filename.write_bytes(b'not an image')
-        self.load(filename)
-        self.assertIsNone(self.tool.filename)
-        self.assertEqual(self.tool.ui.load_status.color, 'red')
-        self.assertFalse(self.tool.ui.import_button.isEnabled())
-        self.tool.app.worker_task.emit.assert_not_called()
-
     def test_import_uses_loaded_file_and_current_parameters_without_dialog(self):
         filename = Path(self.folder.name) / 'image.png'
         Image.new('RGB', (8, 8)).save(filename, dpi=(300, 300))
@@ -102,19 +91,6 @@ class TestImageLoading(unittest.TestCase):
         task = self.tool.app.worker_task.emit.call_args.args[0]
         self.assertEqual(task['params'][1], 'trace')
         self.assertEqual(task['params'][6], '<svg/>')
-
-    def test_tool_relaunch_resets_indicator_and_loaded_file(self):
-        filename = Path(self.folder.name) / 'image.png'
-        Image.new('RGB', (8, 8)).save(filename)
-        self.load(filename)
-        with patch.object(ToolImage, 'add_object_creation_controls'):
-            self.tool.set_tool_ui()
-        self.assertIsNone(self.tool.filename)
-        self.assertEqual(self.tool.ui.load_status.color, 'gray')
-        self.assertFalse(self.tool.ui.import_button.isEnabled())
-        self.tool.on_file_importimage()
-        self.tool.app.worker_task.emit.assert_not_called()
-
 
 if __name__ == '__main__':
     unittest.main()

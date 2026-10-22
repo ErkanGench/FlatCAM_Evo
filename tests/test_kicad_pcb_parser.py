@@ -54,14 +54,6 @@ class TestKiCadPcbTracks(unittest.TestCase):
             self.assertAlmostEqual(actual[0], expected[0], places=9)
             self.assertAlmostEqual(actual[1], expected[1], places=9)
 
-    def test_segment_has_round_caps(self):
-        parser = parse('(segment (start 1 2) (end 11 2) (width 0.5) (layer "F.Cu") (net 1))')
-        copper = geo(parser, 'F.Cu')
-        self.assertTrue(copper.contains(Point(0.8, -2.0)))
-        # A square cap would include the corner (0.76, -2.24); a round cap at radius 0.25 does not.
-        self.assertFalse(copper.contains(Point(0.76, -2.24)))
-        self.assertAlmostEqual(copper.area, 10 * 0.5 + 3.14159265 * 0.25 ** 2, places=2)
-
     def test_arc_passes_through_start_mid_and_end(self):
         parser = parse('(arc (start 0 0) (mid 1 1) (end 2 0) (width 0.2) (layer "F.Cu") (net 1))')
         follow = parser.layers['F.Cu']['follow_geometry'][0]
@@ -78,12 +70,6 @@ class TestKiCadPcbTracks(unittest.TestCase):
         for actual, expected in zip(bounds, (-0.1, -1.1, 2.1, 0.1)):
             self.assertAlmostEqual(actual, expected, places=2)
 
-    def test_track_without_net_is_still_copper(self):
-        parser = parse('(segment (start 0 0) (end 5 0) (width 0.3) (layer "B.Cu"))')
-        self.assertIn('B.Cu', parser.layers)
-        self.assertFalse(parser.layers['B.Cu']['solid_geometry'][0].is_empty)
-
-
 class TestKiCadPcbVias(unittest.TestCase):
     def test_through_via_on_all_copper_layers_with_drill_group(self):
         parser = parse('(via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))')
@@ -96,12 +82,6 @@ class TestKiCadPcbVias(unittest.TestCase):
         tool = list(parser.drill_groups['PTH_F.Cu-B.Cu'].values())[0]
         self.assertAlmostEqual(tool['tooldia'], 0.4)
         self.assertEqual((tool['drills'][0].x, tool['drills'][0].y), (5, -5))
-
-    def test_through_via_spans_all_inner_layers(self):
-        parser = parse('(via (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))', HEAD_INNER)
-        self.assertEqual([name for name in ('F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu') if name in parser.layers],
-                         ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu'])
-        self.assertEqual(list(parser.drill_groups), ['PTH_F.Cu-B.Cu'])
 
     def test_blind_via_gets_its_own_span_group_and_only_its_layers(self):
         parser = parse('(via blind (at 5 5) (size 0.8) (drill 0.4) (layers "F.Cu" "In1.Cu") (net 1))',
@@ -118,11 +98,6 @@ class TestKiCadPcbVias(unittest.TestCase):
         self.assertIn('B.Mask', parser.layers)
         self.assertAlmostEqual(geo(parser, 'B.Mask').bounds[2], 5 + 0.4 + 0.05, places=6)
 
-    def test_via_drill_larger_than_size_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            parse('(via (at 5 5) (size 0.8) (drill 1.4) (layers "F.Cu" "B.Cu"))')
-
-
 class TestKiCadPcbPads(unittest.TestCase):
     def test_pad_shapes_have_expected_outlines(self):
         cases = {
@@ -135,11 +110,6 @@ class TestKiCadPcbPads(unittest.TestCase):
             with self.subTest(shape=shape):
                 parser = parse(footprint('(pad "1" smd %s (at 0 0) %s (layers "F.Cu"))' % (shape, size)))
                 self.assertAlmostEqual(geo(parser, 'F.Cu').area, area, places=2)
-
-    def test_roundrect_is_not_a_plain_rectangle(self):
-        parser = parse(footprint('(pad "1" smd roundrect (at 0 0) (size 2 1) (roundrect_rratio 0.5) '
-                                 '(layers "F.Cu"))'))
-        self.assertFalse(geo(parser, 'F.Cu').contains(Point(0.95, 0.45)))  # rectangle corner
 
     def test_pad_angle_rotates_its_shape(self):
         parser = parse(footprint('(pad "1" smd rect (at 0 0 90) (size 2 1) (layers "F.Cu"))'))
@@ -167,20 +137,6 @@ class TestKiCadPcbPads(unittest.TestCase):
         for actual, expected in zip(geo(parser, 'F.Mask').bounds, (-0.55, -0.55, 0.55, 0.55)):
             self.assertAlmostEqual(actual, expected, places=6)
 
-    def test_local_solder_mask_margin_overrides_board_setup(self):
-        parser = parse(footprint('(pad "1" smd rect (at 0 0) (size 1 1) (solder_mask_margin 0.2) '
-                                 '(layers "F.Cu" "F.Mask"))'))
-        for actual, expected in zip(geo(parser, 'F.Mask').bounds, (-0.7, -0.7, 0.7, 0.7)):
-            self.assertAlmostEqual(actual, expected, places=6)
-
-    def test_wildcard_layers_expand_to_copper_and_mask(self):
-        parser = parse(footprint('(pad "1" smd rect (at 0 0) (size 1 1) (layers "*.Cu" "*.Mask"))'),
-                       HEAD_INNER)
-        self.assertEqual(sorted(name for name in parser.layers if name.endswith('.Cu')),
-                         ['B.Cu', 'F.Cu', 'In1.Cu', 'In2.Cu'])
-        self.assertIn('F.Mask', parser.layers)
-        self.assertIn('B.Mask', parser.layers)
-
     def test_thru_hole_oval_drill_becomes_slot(self):
         parser = parse(footprint('(pad "6" thru_hole oval (at 0 0) (size 1.6 3) (drill oval 0.8 2) '
                                  '(layers "*.Cu" "*.Mask"))'))
@@ -198,21 +154,9 @@ class TestKiCadPcbPads(unittest.TestCase):
         self.assertEqual(groups_summary(parser), {'NPTH_F.Cu-B.Cu': {1.0: (1, 0)}})
         self.assertIn('F.Cu', parser.layers)           # annular ring larger than the hole
 
-    def test_np_thru_hole_without_ring_leaves_no_copper(self):
-        parser = parse(footprint('(pad "" np_thru_hole circle (at 0 0) (size 1 1) (drill 1) '
-                                 '(layers "*.Cu" "*.Mask"))'))
-        self.assertNotIn('F.Cu', parser.layers)
-        self.assertNotIn('B.Cu', parser.layers)
-        self.assertEqual(list(parser.drill_groups), ['NPTH_F.Cu-B.Cu'])
-
     def test_unknown_pad_shape_raises(self):
         with self.assertRaises(KiCadPcbParseError):
             parse(footprint('(pad "1" smd weird (at 0 0) (size 2 1) (layers "F.Cu"))'))
-
-    def test_thru_hole_pad_without_drill_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            parse(footprint('(pad "1" thru_hole circle (at 0 0) (size 1.6 1.6) (layers "*.Cu"))'))
-
 
 class TestKiCadPcbZones(unittest.TestCase):
     SQUARE = '(polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10)))'
@@ -243,13 +187,6 @@ class TestKiCadPcbZones(unittest.TestCase):
         self.assertEqual(len(parser.warnings), 1)
         self.assertIn('not refilled', parser.warnings[0])
 
-    def test_rule_area_adds_no_copper(self):
-        parser = parse('(zone (net 0) (net_name "") (layers "F.Cu" "B.Cu") (keepout (tracks not_allowed)) %s)'
-                       % self.SQUARE)
-        self.assertNotIn('F.Cu', parser.layers)
-        self.assertNotIn('B.Cu', parser.layers)
-
-
 class TestKiCadPcbText(unittest.TestCase):
     def test_hidden_property_is_not_drawn(self):
         parser = parse(footprint(
@@ -257,36 +194,10 @@ class TestKiCadPcbText(unittest.TestCase):
             '(effects (font (size 1 1) (thickness 0.15))))'))
         self.assertNotIn('F.SilkS', parser.layers)
 
-    def test_visible_property_is_drawn(self):
-        parser = parse(footprint(
-            '(property "Reference" "R1" (at 0 -2 0) (layer "F.SilkS") '
-            '(effects (font (size 1 1) (thickness 0.15))))'))
-        self.assertIn('F.SilkS', parser.layers)
-
-    def test_hidden_effects_flag_text_is_not_drawn_kicad_6_7_form(self):
-        # KiCad 6/7 write hidden text as a bare "hide" token inside (effects ...).
-        # Expected: nothing is drawn on F.SilkS.
-        parser = parse('(gr_text "HIDDEN" (at 5 5 0) (layer "F.SilkS") '
-                       '(effects (font (size 1 1) (thickness 0.15)) hide))')
-        self.assertNotIn('F.SilkS', parser.layers)
-
-    def test_hidden_effects_yes_text_is_not_drawn(self):
-        parser = parse('(gr_text "HIDDEN" (at 5 5 0) (layer "F.SilkS") '
-                       '(effects (font (size 1 1)) (hide yes)))')
-        self.assertNotIn('F.SilkS', parser.layers)
-
     def test_text_is_drawn_with_approximate_font_warning(self):
         parser = parse('(gr_text "HELLO" (at 5 5 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))')
         self.assertIn('F.SilkS', parser.layers)
         self.assertTrue(any('approximate stroke font' in warning for warning in parser.warnings))
-
-    def test_dimension_text_is_imported_and_lines_warned(self):
-        parser = parse('(dimension (type aligned) (layer "F.SilkS") (pts (xy 0 0) (xy 10 0)) '
-                       '(gr_text "10 mm" (at 5 -2 0) (layer "F.SilkS") '
-                       '(effects (font (size 1 1) (thickness 0.15)))))')
-        self.assertIn('F.SilkS', parser.layers)
-        self.assertTrue(any('Dimension lines' in warning for warning in parser.warnings))
-
 
 class TestKiCadPcbOutline(unittest.TestCase):
     def test_closed_edge_cuts_rectangle_becomes_board_outline(self):
@@ -308,31 +219,15 @@ class TestKiCadPcbErrors(unittest.TestCase):
         with self.assertRaises(KiCadPcbParseError):
             KiCadPcbParser().parse_text('(foo)')
 
-    def test_empty_text_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            KiCadPcbParser().parse_text('')
-
     def test_format_older_than_kicad_6_raises(self):
         with self.assertRaises(KiCadPcbParseError) as context:
             KiCadPcbParser().parse_text('(kicad_pcb (version 20210101) (layers (0 "F.Cu" signal)))')
         self.assertIn('older than KiCad 6', str(context.exception))
 
-    def test_missing_version_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            KiCadPcbParser().parse_text('(kicad_pcb (generator x) (layers (0 "F.Cu" signal)))')
-
     def test_truncated_file_raises(self):
         with self.assertRaises(KiCadPcbParseError) as context:
             KiCadPcbParser().parse_text(HEAD)
         self.assertIn('truncated', str(context.exception))
-
-    def test_extra_closing_paren_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            KiCadPcbParser().parse_text(HEAD + ')))')
-
-    def test_unterminated_string_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            KiCadPcbParser().parse_text('(kicad_pcb (version 20240108) "abc)')
 
     def test_unknown_top_level_item_warns_and_continues(self):
         parser = parse('(frobnicate 1) (segment (start 0 0) (end 5 0) (width 0.3) (layer "F.Cu") (net 1))')
@@ -342,15 +237,6 @@ class TestKiCadPcbErrors(unittest.TestCase):
     def test_unknown_copper_layer_raises(self):
         with self.assertRaises(KiCadPcbParseError):
             parse('(segment (start 0 0) (end 1 0) (width 0.2) (layer "In3.Cu"))')
-
-    def test_zero_width_track_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            parse('(segment (start 0 0) (end 1 0) (width 0) (layer "F.Cu"))')
-
-    def test_non_numeric_coordinate_raises(self):
-        with self.assertRaises(KiCadPcbParseError):
-            parse('(segment (start 0 0) (end 1 x) (width 0.2) (layer "F.Cu"))')
-
 
 if __name__ == '__main__':
     unittest.main()

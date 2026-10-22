@@ -11,8 +11,9 @@ from shapely.geometry import Point
 from appParsers.feature_access import iter_features
 from appParsers.ParseGerber import Gerber
 from camlib import flatten_shapely_geometry
-from test_unify_characterization import (  # noqa: F401  (fixtures)
-    NATIVE_GBR, _headless_qt, app, export_gerber_text, make_gerber, reparse_gerber, assert_poly_equiv)
+from tests.helpers_objects import (  # noqa: F401,E402
+    app, assert_poly_equiv, export_gerber_text, _headless_qt, make_gerber, NATIVE_GBR, reparse_gerber,
+)
 
 
 def _with_placeholders(grb):

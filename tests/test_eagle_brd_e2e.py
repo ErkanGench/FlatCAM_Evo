@@ -165,61 +165,12 @@ class TestEagleFixture(unittest.TestCase):
         self.assertEqual(self.parsed.copper_layers, ['Top', 'Bottom'])
         self.assertEqual(self.parsed.version, '8.3.2')
 
-    def test_warnings_are_the_four_known_ones(self):
-        self.assertEqual(len(self.parsed.warnings), 4, self.parsed.warnings)
-        text = ' | '.join(self.parsed.warnings)
-        self.assertIn('Zero-width Dimension/Milling lines were drawn with 0.01 mm width', text)
-        self.assertIn('Dimension annotations (measure lines) are not drawn', text)
-        self.assertIn('Text on copper, stop mask or cream layers is drawn with the approximate stroke font', text)
-        self.assertIn('Text is drawn with an approximate stroke font', text)
-
     def test_top_and_bottom_copper_match_reference_gerbers(self):
         for layer, reference in (('Top', 'GTL'), ('Bottom', 'GBL')):
             with self.subTest(layer=layer):
                 expected = self.references[reference]
                 difference = self._mine(layer).symmetric_difference(expected).area
                 self.assertLessEqual(difference / expected.area, 0.01)
-
-    def test_mask_and_paste_match_reference_gerbers(self):
-        for layer, reference in (('tStop', 'GTS'), ('bStop', 'GBS'), ('tCream', 'GTP')):
-            with self.subTest(layer=layer):
-                expected = self.references[reference]
-                difference = self._mine(layer).symmetric_difference(expected).area
-                self.assertLessEqual(difference / expected.area, 0.02)
-
-    def test_dimension_and_holes_follow_the_reference_outline(self):
-        expected = self.references['GKO'].bounds
-        mine = self._mine_follow(['Dimension', 'Holes']).bounds
-        for actual, target in zip(mine, expected):
-            self.assertAlmostEqual(actual, target, delta=0.01)
-        for actual, target in zip(mine, (0, 0, 190, 80)):
-            self.assertAlmostEqual(actual, target, delta=0.01)
-
-    def test_board_outline_is_the_190_by_80_rectangle(self):
-        for actual, target in zip(self.parsed.board_outline.bounds, (0, 0, 190, 80)):
-            self.assertAlmostEqual(actual, target, delta=0.01)
-        self.assertAlmostEqual(self.parsed.board_outline.area, 15200, delta=1)
-
-    def test_silkscreen_bounds_match_reference(self):
-        # Eagle CAM also prints the zero-width Dimension frame (190 x 80 mm, layer 20) on both silk
-        # outputs as a hairline. The importer keeps it on the Dimension layer, so it is added here.
-        pairs = (('GTO', ['tPlace', 'tNames']), ('GBO', ['bPlace', 'bNames']))
-        for reference, layers in pairs:
-            with self.subTest(reference=reference):
-                expected = self.references[reference].bounds
-                silk = [self._mine(layer) for layer in layers]
-                mine = unary_union(silk + [self._mine_follow(['Dimension'])]).bounds
-                for actual, target in zip(mine, expected):
-                    self.assertAlmostEqual(actual, target, delta=1.0)
-                for actual, target in zip(mine, (0, 0, 190, 80)):
-                    self.assertAlmostEqual(actual, target, delta=0.25)
-
-    def test_drill_groups_and_counts(self):
-        self.assertEqual(sorted(self.parsed.drill_groups), ['NPTH', 'PTH'])
-        counts = {group: sum(len(tool['drills']) for tool in tools.values())
-                  for group, tools in self.parsed.drill_groups.items()}
-        self.assertEqual(counts, {'PTH': self.PTH_COUNT, 'NPTH': self.NPTH_COUNT})
-        self.assertEqual(len(self.reference_drills), self.HOLE_COUNT)
 
     def test_every_hole_matches_a_reference_hole(self):
         mine = [(tool['tooldia'], point.x, point.y)

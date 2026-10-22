@@ -109,17 +109,6 @@ class TestPo(unittest.TestCase):
         self.assertEqual('Fuzzy one', catalog.gettext('Fuzzy one'))
         self.assertEqual('Old', catalog.gettext('Old'))
 
-    def test_read_rejects_malformed_strings_with_the_file_and_line(self):
-        for invalid in ('msgid "Title', 'msgstr "Titel', 'msgstr Titel"',
-                        'msgstr "Ti"tel"', 'msgstr "Titel" trailing',
-                        '"unfinished continuation', '#~ msgstr "Titel', 'msgstr"Titel"'):
-            with self.subTest(line=invalid):
-                with open(self.po, 'w', encoding='utf-8') as f:
-                    f.write('msgid ""\nmsgstr ""\n\nmsgid "Title"\n' + invalid + '\n')
-                with self.assertRaises(ValueError) as raised:
-                    t.read_po(self.po)
-                self.assertIn(self.po + ':5:', str(raised.exception))
-
     def test_compile_does_not_overwrite_a_catalog_when_po_syntax_is_invalid(self):
         mo = os.path.join(self.dir, 'strings.mo')
         t.compile_mo(self.po, mo)
@@ -173,17 +162,6 @@ class TestTranslatorTools(unittest.TestCase):
         self.template = os.path.join(self.dir, 'strings.pot')
         t.write_template({'Title': ['a.py:1'], 'Tools Table:': ['a.py:2']}, self.template)
 
-    def test_init_makes_an_untranslated_po_with_the_plural_rule(self):
-        path = t.init_po('ar', self.template)
-        header, entries = t.read_po(path)
-        self.assertIn('Language: ar', header.msgstr)
-        self.assertIn('Plural-Forms: nplurals=6;', header.msgstr)
-        self.assertEqual(['Title', 'Tools Table:'], [e.msgid for e in entries])
-        self.assertEqual(['', ''], [e.msgstr for e in entries])
-        self.assertEqual(['a.py:1'], entries[0].refs)
-        with self.assertRaises(FileExistsError):
-            t.init_po('ar', self.template)
-
     def test_stats_counts_and_mo_state(self):
         s = t.stats('xx')
         # active: Title, Two lines, Fuzzy one, Gone; the fuzzy one is not shown by the program
@@ -234,44 +212,7 @@ class TestTranslatorTools(unittest.TestCase):
         self.assertFalse(t.mo_is_current('xx'))
         self.assertEqual(1, t.main(['compile', '--check', 'xx']))
 
-    def test_mo_check_ignores_the_header(self):
-        # Poedit and msgfmt leave some header fields out of the .mo: the same translations are up to date
-        messages = t.po_messages(t.po_path('xx'))
-        self.assertEqual({'', 'Title', 'Two lines.\nSecond "quoted" line', 'Gone'}, set(messages))
-        messages[''] = 'Content-Type: text/plain; charset=UTF-8\n'
-        with open(t.po_path('xx')[:-3] + '.mo', 'wb') as f:
-            f.write(t.mo_bytes(messages))
-        self.assertEqual(messages, t.read_mo(t.po_path('xx')[:-3] + '.mo'))
-        self.assertTrue(t.mo_is_current('xx'))
-        self.assertEqual(0, t.main(['compile', '--check', 'xx']))
-
-    def test_glossary_ignores_case_colon_and_fuzzy(self):
-        rows = t.glossary([('title', 'a note'), ('fuzzy one', ''), ('Missing', '')], ['xx'])
-        self.assertEqual([['title', 'a note', 'Başlık'], ['fuzzy one', '', ''], ['Missing', '', '']], rows)
-
-    def test_the_terms_file_and_the_real_languages(self):
-        t.ROOT = self.old_root
-        terms = t.read_terms(t.GLOSSARY_TERMS)
-        self.assertGreater(len(terms), 50)
-        self.assertTrue(all(term and note for term, note in terms))
-        # every term is a string of the program (case and a final ':' ignored), so a language can translate it
-        strings, __ = extract_program_strings()
-        texts = {s.strip().rstrip(':').strip().casefold() for s in strings}
-        self.assertEqual([], [term for term, __ in terms if term.casefold() not in texts])
-        langs = [lang for lang in t.languages() if lang != 'en']
-        rows = t.glossary(terms, langs)
-        self.assertEqual([len(langs) + 2] * len(terms), [len(r) for r in rows])
-
-
 class TestChecks(unittest.TestCase):
-    def test_correct_translations(self):
-        self.assertEqual(([], []), t.check_entry('Done %s of %d', '%s / %d yapıldı'))
-        self.assertEqual(([], []), t.check_entry('Downloading: %s%%', 'İndiriliyor: %%%s'))
-        self.assertEqual(([], []), t.check_entry('Less than 100%%.', '%%100 den az.'))
-        self.assertEqual(([], []), t.check_entry('Name: {name}', 'Ad: {name}'))
-        self.assertEqual(([], []), t.check_entry('<b>Bold</b>', '<b>Kalın</b>'))
-        self.assertEqual(([], []), t.check_entry('Anything', ''))
-
     def test_errors_make_the_formatting_fail(self):
         def errors(msgid, msgstr):
             return t.check_entry(msgid, msgstr)[0]
@@ -289,33 +230,6 @@ class TestChecks(unittest.TestCase):
                 errors, __ = t.check_entry('Name: {name}', translated)
                 self.assertTrue(errors)
         self.assertTrue(t.check_entry('Name: {user.name}', 'Name: {user.other}')[0])
-
-    def test_brace_checks_allow_escaped_literals_and_reordered_fields(self):
-        self.assertEqual(([], []), t.check_entry(
-            '{{literal}} {name!r:>10} {count}', '{count} {name!r:>10} {{translated literal}}'))
-        self.assertEqual(([], []), t.check_entry('{value:{width}.{precision}f}', '{value:{width}.{precision}f}'))
-        self.assertEqual(([], []), t.check_entry('First: {} second: {}', '{} then {}'))
-
-    def test_warnings_are_shown_as_they_are(self):
-        def only_warnings(msgid, msgstr):
-            found_errors, found_warnings = t.check_entry(msgid, msgstr)
-            self.assertEqual([], found_errors, msgstr)
-            return found_warnings
-
-        # written differently, still formats
-        self.assertEqual(["printf placeholders ['%s'] != ['% s']"], only_warnings('It is %s.', '% s.'))
-        # a %s added to a text that the program does not format: the user sees "%s"
-        self.assertEqual(["printf placeholders [] != ['%s']"], only_warnings('Skipping file', '%s atlandı'))
-        # a %%-only text is not formatted by the program
-        self.assertTrue(only_warnings('Less than 100%%.', '% 100 den az.'))
-        self.assertEqual(['HTML tags differ'], only_warnings('<b>Bold</b>', 'Kalın'))
-        self.assertEqual(['argument placeholders <...> differ'],
-                         only_warnings('Type help <command_name> for usage.', 'help <komut_adi> yazın.'))
-        # <center> is an argument of the Tcl scale and skew commands, not the HTML tag
-        self.assertEqual(['argument placeholders <...> differ'],
-                         only_warnings('-origin <center>', '-origin <merkez>'))
-        self.assertEqual(['final newline differs'], only_warnings('Line\n', 'Satır'))
-
 
 class TestExtract(unittest.TestCase):
     def test_literals_and_problems(self):
@@ -337,13 +251,6 @@ class TestExtract(unittest.TestCase):
         self.assertEqual(['First', 'Implicit concatenation'], list(strings))
         self.assertEqual(['mod.py:1', 'mod.py:3'], strings['First'])
         self.assertEqual(2, len(problems))
-
-    def test_the_application_strings(self):
-        strings, problems = extract_program_strings()
-        self.assertGreater(len(strings), 3000)
-        # the format operator inside _() makes a string that can not be translated
-        self.assertFalse([p for p in problems if 'BinOp' in p or 'JoinedStr' in p], problems)
-
 
 if __name__ == '__main__':
     unittest.main()

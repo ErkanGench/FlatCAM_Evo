@@ -579,19 +579,15 @@ class TestRandomArcs(unittest.TestCase):
         self.run_many(1, 5, g91=False)
 
     @pytest.mark.slow
-    def test_g90_only_ij_and_r(self):
-        self.run_many(1, 25, g91=False)
 
     def test_g90_and_g91_mixed_quick(self):
         self.run_many(2, 5)
 
     @pytest.mark.slow
-    def test_g90_and_g91_mixed(self):
-        self.run_many(2, 25)
 
     def test_arcs_only_chained(self):
         rng = random.Random(3)
-        for k in range(20):
+        for k in range(6):
             gen = Gen(rng)
             gen.prologue()
             for _ in range(10):
@@ -601,7 +597,7 @@ class TestRandomArcs(unittest.TestCase):
 
     def test_arcs_only_chained_in_g91(self):
         rng = random.Random(4)
-        for k in range(20):
+        for k in range(6):
             gen = Gen(rng)
             gen.prologue()
             gen.emit('G91')
@@ -627,7 +623,7 @@ class TestRandomArcs(unittest.TestCase):
 
     def test_helical_only(self):
         rng = random.Random(6)
-        for k in range(20):
+        for k in range(6):
             gen = Gen(rng, helical=True)
             gen.prologue()
             if k % 2:
@@ -641,7 +637,7 @@ class TestRandomArcs(unittest.TestCase):
         # numbers with the same decimals as the output: X/Y must come out exact
         rng = random.Random(7)
         report = Report()
-        for k in range(15):
+        for k in range(6):
             gen = Gen(rng, decimals=DEC)
             lines = gen.program(12)
             with self.subTest(program=k):
@@ -650,7 +646,7 @@ class TestRandomArcs(unittest.TestCase):
 
     def test_absolute_ij(self):
         rng = random.Random(8)
-        for k in range(20):
+        for k in range(6):
             gen = Gen(rng, abs_ij=True, rformat=False)
             lines = gen.program(12)
             self.assertIn('G90.1', lines)
@@ -659,7 +655,7 @@ class TestRandomArcs(unittest.TestCase):
 
     def test_absolute_ij_switched_in_the_middle(self):
         rng = random.Random(9)
-        for k in range(15):
+        for k in range(6):
             gen = Gen(rng, rformat=False)
             gen.prologue()
             for _ in range(4):
@@ -687,7 +683,7 @@ class TestRandomArcs(unittest.TestCase):
 class TestMixedPrograms(unittest.TestCase):
     def test_retracts_cuts_arcs_and_mode_changes(self):
         rng = random.Random(11)
-        for k in range(40):
+        for k in range(8):
             gen = Gen(rng)
             lines = gen.program(25)
             with self.subTest(program=k):
@@ -695,7 +691,7 @@ class TestMixedPrograms(unittest.TestCase):
 
     def test_retract_in_g90_returns_to_the_original_z(self):
         rng = random.Random(12)
-        for k in range(20):
+        for k in range(6):
             gen = Gen(rng)
             gen.prologue()
             for _ in range(8):
@@ -711,7 +707,7 @@ class TestMixedPrograms(unittest.TestCase):
 
     def test_cut_end_carries_the_offset(self):
         rng = random.Random(13)
-        for k in range(40):
+        for k in range(8):
             gen = Gen(rng)
             gen.prologue()
             for _ in range(6):

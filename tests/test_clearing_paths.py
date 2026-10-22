@@ -25,14 +25,6 @@ def make_geometry():
     return geometry
 
 
-class TestCircleQuadSegs(unittest.TestCase):
-    def test_circle_quad_segs(self):
-        self.assertEqual(camlib.circle_quad_segs(0), 1)
-        self.assertEqual(camlib.circle_quad_segs(4), 1)
-        self.assertEqual(camlib.circle_quad_segs(17), 5)
-        self.assertEqual(camlib.circle_quad_segs(64), 16)
-
-
 class TestNarrowChannel(unittest.TestCase):
     """
     A channel between 2 copper pads that is a little wider than the tool must get a tool path.
@@ -68,25 +60,6 @@ class TestNarrowChannel(unittest.TestCase):
     def test_lines(self):
         self.check(lambda area, steps: camlib.Geometry.clear_polygon_lines(
             self.geometry, area, self.tooldia, steps, connect=False))
-
-
-class TestFillWithLinesLastLine(unittest.TestCase):
-    def test_fill_with_lines_keeps_the_last_line(self):
-        # The last line is the 1 closest to the edge of the trace shape. The margin must not clip it away.
-        geometry = make_geometry()
-        line = LineString([(2, 5), (18, 5)])
-        aperture = 4.0
-        tooldia = 1.0
-        for steps in STEPS:
-            with self.subTest(steps=steps):
-                quad_segs = camlib.circle_quad_segs(steps)
-                paths = list(camlib.Geometry.fill_with_lines(
-                    geometry, line, aperture, tooldia, steps, connect=False, contour=False).get_objects())
-                shape = line.buffer(aperture / 2, quad_segs=quad_segs)
-                margin = shape.buffer(-tooldia / 2, quad_segs=quad_segs)
-                ys = [c[1] for path in paths for c in path.coords]
-                self.assertAlmostEqual(max(ys), margin.bounds[3], delta=1e-6)
-                self.assertAlmostEqual(min(ys), margin.bounds[1], delta=1e-6)
 
 
 class TestScanLinesCoverTheEdgeStrip(unittest.TestCase):

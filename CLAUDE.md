@@ -12,13 +12,29 @@ Requires Python 3.11+ and PyQt6. Dependencies managed via `requirements.txt` or 
 
 ## Running Tests
 
-Tests use `unittest` (no pytest configuration). Run individually:
+Tests run with pytest from the `.venv` (on Windows use PowerShell; Git Bash cannot start the venv Python):
 
 ```bash
-python tests/test_gerber_parser.py
-python tests/test_vispy_batch.py
-python tests/test_pdf_hole_detection.py
+.venv\Scripts\python.exe -m pytest tests/test_<area>.py -q -p no:cacheprovider   # the files of the changed area
+.venv\Scripts\python.exe tests/gates/run_core.py                                 # core gate: each commit
+.venv\Scripts\python.exe tests/gates/run_gate.py                                 # full gate: before a push
 ```
+
+## Test Policy
+
+TDD is the method, not the archive. Write the failing test first. When the task is done:
+
+- Fold the new test into the existing topical file of its area (`tests/test_<area>.py`). Do not leave a new file for
+  each ticket, stage, audit or regression.
+- Keep only tests that fail when user-visible behavior breaks: wrong output, wrong geometry, lost undo step, corrupt
+  file, unsafe machine move. Delete the tests that only drove the design: private attributes, call order, source
+  text or AST, exact log text, module-exists checks.
+- Parametrize only cases that take different branches.
+- Net growth is a cost. If the task adds tests, remove the tests that it made obsolete.
+- The gate has a test budget (`tests/gates/test_budget.json`). Above it, the gate prints a warning but does not
+  fail. Treat the warning as a cleanup task; do not raise the budget yourself, the owner decides a raise.
+- Features still in development (E-Cut, Levelling, G-code Sender) keep their distinct behavior tests; the rules
+  above still apply to duplicates and implementation pinning.
 
 ## Architecture
 

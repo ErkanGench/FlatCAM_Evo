@@ -11,7 +11,7 @@ from appObjects.GerberObject import GerberObject
 from tclCommands.TclCommandExportExcellon import TclCommandExportExcellon
 from tclCommands.TclCommandExportGerber import TclCommandExportGerber
 
-from test_unify_characterization import _headless_qt, app, make_excellon, make_gerber  # noqa: F401  (fixtures)
+from tests.helpers_objects import app, _headless_qt, make_excellon, make_gerber  # noqa: F401,E402
 
 
 def run_export(command_class, app, source, *argv):

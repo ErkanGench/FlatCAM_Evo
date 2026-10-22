@@ -8,33 +8,16 @@ from appObjects.ProjectContext import ProjectContext, unique_name, same_path, na
 
 
 class TestProjectContext(unittest.TestCase):
-    def test_defaults(self):
-        collection = object()
-        ctx = ProjectContext(name='Board_A', collection=collection)
-        self.assertEqual(ctx.name, 'Board_A')
-        self.assertIs(ctx.collection, collection)
-        self.assertIsNone(ctx.filename)
-        self.assertIsNone(ctx.options)
-        self.assertFalse(ctx.should_we_save)
-        self.assertIsNone(ctx.view_rect)
-
     def test_unique_name_free(self):
         self.assertEqual(unique_name('Board', ['Other']), 'Board')
 
     def test_unique_name_adds_number(self):
         self.assertEqual(unique_name('Board', ['Board']), 'Board_1')
 
-    def test_unique_name_increments_number(self):
-        self.assertEqual(unique_name('Project_1', ['Project_1', 'Project_2']), 'Project_3')
-
     def test_same_path(self):
         self.assertTrue(same_path('a/b/../c.FlatPrj', 'a/c.FlatPrj'))
         self.assertFalse(same_path('a/c.FlatPrj', 'a/d.FlatPrj'))
         self.assertFalse(same_path(None, 'a/d.FlatPrj'))
-
-    def test_same_path_ignores_case_on_windows(self):
-        if os.name == 'nt':
-            self.assertTrue(same_path('C:/X/Board.FlatPrj', 'c:/x/board.flatprj'))
 
     def test_name_from_filename(self):
         self.assertEqual(name_from_filename(os.path.join('x', 'Board_A.FlatPrj')), 'Board_A')

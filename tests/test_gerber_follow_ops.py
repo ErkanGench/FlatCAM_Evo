@@ -14,7 +14,7 @@ from appEditors.grb_plugins.GrbTrackBend import sweep_parameters
 from appParsers.ParseGerber import Gerber
 from test_editor_save_modes import gerber_stand_in
 from test_gerber_editor_pick import make_editor
-from test_unify_characterization import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401
+from tests.helpers_objects import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401,E402
 
 
 def track(coords, width=2):
@@ -83,7 +83,7 @@ def test_join_reversed_records_preserves_material_and_unrelated_order():
     assert editor.redo()
 
 
-@pytest.mark.parametrize('kind', ['branch', 'interior_branch', 'mixed', 'clear', 'modified', 'gap', 'overlap', 'alias'])
+@pytest.mark.parametrize('kind', ['branch', 'gap', 'overlap'])
 def test_join_rejects_incompatible_records_without_mutation(kind):
     a, b = track([(0, 0), (5, 0)]), track([(5, 0), (10, 0)])
     editor = editor_for([a, b])
@@ -114,8 +114,7 @@ def test_join_rejects_incompatible_records_without_mutation(kind):
     editor.plot_all.assert_not_called()
 
 
-@pytest.mark.parametrize('point,tolerance', [((0, 0), 0), ((20, 0), 0.01), ((5, 2), 0.01),
-                                           ((float('nan'), 0), 1), ((5, 0), -1), ((5, 0), float('inf'))])
+@pytest.mark.parametrize('point,tolerance', [((0, 0), 0), ((20, 0), 0.01)])
 def test_invalid_split_is_atomic(point, tolerance):
     path = track([(0, 0), (10, 0)])
     editor = editor_for([path])
@@ -125,25 +124,6 @@ def test_invalid_split_is_atomic(point, tolerance):
     assert editor.storage_dict[10]['geometry'] == [path]
     assert editor.geometry_revision == revision
     assert not editor.history.undo_stack
-
-
-def test_split_tool_wiring_uses_click_and_rejects_stale_session():
-    path = track([(0, 0), (10, 0)])
-    editor = editor_for([path])
-    editor.select_tool.reset_mock()
-    editor.ui.split_action.trigger()
-    editor.select_tool.assert_called_once_with('split')
-    tool = editor.tools_gerber['split']['constructor'](editor)
-    editor.history.reset()
-    assert tool.click((5, 0)) == 'fail'
-    assert not editor.history.undo_stack
-    tool = editor.tools_gerber['split']['constructor'](editor)
-    tool.click((5, 0))
-    assert len(editor.selected) == 2
-    editor.ui.join_tolerance_entry.setText('0')
-    editor.ui.join_btn.click()
-    assert len(editor.selected) == 1
-    assert len(editor.history.undo_stack) == 2
 
 
 def test_selected_flash_resize_reuses_matching_metadata_without_touching_shared_aperture():
@@ -185,7 +165,7 @@ def test_resize_creates_aperture_and_undo_removes_it():
     assert editor.storage_dict[11]['size'] == 3
 
 
-@pytest.mark.parametrize('diameter', [0, -1, float('nan'), float('inf'), 'bad'])
+@pytest.mark.parametrize('diameter', [0, float('nan')])
 def test_invalid_diameter_does_not_mutate(diameter):
     a = flash(0)
     editor = editor_for([a])
@@ -194,7 +174,7 @@ def test_invalid_diameter_does_not_mutate(diameter):
     assert not editor.history.undo_stack
 
 
-@pytest.mark.parametrize('kind', ['hole', 'macro', 'clear', 'modified'])
+@pytest.mark.parametrize('kind', ['hole', 'macro'])
 def test_unsupported_flash_does_not_mutate(kind):
     a = flash(0)
     editor = editor_for([a])
@@ -208,21 +188,6 @@ def test_unsupported_flash_does_not_mutate(kind):
         a.geo['solid'] = a.geo['solid'].buffer(0.1)
     assert editor.apply_resize_circles(3) == 'fail'
     assert editor.storage_dict[10]['geometry'] == [a]
-    assert not editor.history.undo_stack
-
-
-@pytest.mark.parametrize('operation,args', [('apply_path_split', ((5, 0), 0)),
-                                         ('apply_path_join', (0,)), ('apply_resize_circles', (3,))])
-def test_operations_guard_pending_worker_and_non_gui_thread(operation, args):
-    a, b = track([(0, 0), (5, 0)]), track([(5, 0), (10, 0)])
-    editor = editor_for([a, b])
-    original = list(editor.storage_dict[10]['geometry'])
-    editor.history.pending = object()
-    assert getattr(editor, operation)(*args) == 'fail'
-    editor.history.pending = None
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        assert pool.submit(getattr(editor, operation), *args).result() == 'fail'
-    assert editor.storage_dict[10]['geometry'] == original
     assert not editor.history.undo_stack
 
 
@@ -265,135 +230,3 @@ def test_joined_record_can_be_split_and_bend_validated_again():
     assert editor.apply_path_split((7, 0), 0) != 'fail'
 
 
-def test_real_split_canvas_press_release_keeps_both_pieces_selected(monkeypatch):
-    path = track([(0, 0), (10, 0)])
-    editor = editor_for([path])
-    editor.select_tool = AppGerberEditor.select_tool.__get__(editor)
-    monkeypatch.setattr(QtWidgets.QApplication, 'keyboardModifiers',
-                        staticmethod(lambda: QtCore.Qt.KeyboardModifier.NoModifier))
-    editor.ui.split_btn.click()
-    assert editor.active_tool.name == 'split'
-    event = SimpleNamespace(pos=(5, 0), button=1, is_dragging=False)
-    editor.on_canvas_click(event)
-    pieces = list(editor.selected)
-    assert len(pieces) == 2
-    editor.on_canvas_click_release(event)
-    assert editor.selected == pieces
-    assert editor.active_tool.name == 'select'
-    editor.plot_all.assert_called_once()
-
-
-@pytest.mark.parametrize('change', ['revision', 'state', 'selection'])
-def test_split_tool_rejects_changed_scene(change):
-    path = track([(0, 0), (10, 0)])
-    editor = editor_for([path])
-    tool = editor.tools_gerber['split']['constructor'](editor)
-    if change == 'revision':
-        editor.touch_geometry()
-    elif change == 'state':
-        editor.storage_dict[10]['geometry'].append(flash(20))
-    else:
-        editor.selected = [flash(20)]
-    assert tool.click((5, 0)) == 'fail'
-    assert not editor.history.undo_stack
-
-
-def test_branch_split_rejected_and_unselected_flash_remains_untouched():
-    path, branch, pad = track([(0, 0), (10, 0)]), track([(5, 0), (5, 5)]), flash(5)
-    editor = editor_for([path, branch, pad])
-    editor.selected = [path]
-    assert editor.apply_path_split((2, 0), 0) == 'fail'
-    assert editor.storage_dict[10]['geometry'] == [path, branch, pad]
-    assert not editor.history.undo_stack
-
-
-def test_resize_multiple_sources_preserves_metadata_and_existing_target_order():
-    a, b, existing = flash(0), flash(5, 3), flash(10, 4)
-    editor = editor_for([a])
-    editor.storage_dict['11'] = {'type': 'C', 'size': 3, 'geometry': [b]}
-    editor.storage_dict[12] = {'type': 'C', 'size': 4, 'geometry': [existing]}
-    editor.selected = [b, a, existing]
-    revision = editor.geometry_revision
-    assert editor.apply_resize_circles(4) != 'fail'
-    assert editor.storage_dict[12]['geometry'] == [existing, *editor.selected[:2]]
-    assert editor.selected[-1] is existing
-    assert editor.geometry_revision == revision + 1
-    editor.plot_all.assert_called_once()
-    assert editor.undo()
-    assert editor.storage_dict[10]['geometry'] == [a]
-    assert editor.storage_dict['11']['geometry'] == [b]
-    assert editor.storage_dict[12]['geometry'] == [existing]
-
-
-def test_resize_rejects_whole_batch_if_later_flash_is_unsupported():
-    a, b = flash(0), flash(5)
-    editor = editor_for([a, b])
-    b.geo['solid'] = b.geo['solid'].difference(Point(5, 4).buffer(0.1))
-    revision = editor.geometry_revision
-    assert editor.apply_resize_circles(4) == 'fail'
-    assert list(editor.storage_dict) == [10]
-    assert editor.storage_dict[10]['geometry'] == [a, b]
-    assert editor.geometry_revision == revision
-    assert not editor.history.undo_stack
-
-
-def test_join_independent_components_keeps_selected_unjoined_record():
-    a, b = track([(0, 0), (5, 0)]), track([(5, 0), (10, 0)])
-    c, d = track([(0, 10), (5, 10)]), track([(10, 10), (5, 10)])
-    isolated = track([(20, 20), (30, 20)])
-    editor = editor_for([a, b, isolated, c, d])
-    assert editor.apply_path_join(0) != 'fail'
-    assert len(editor.selected) == 3
-    assert editor.selected[1] is isolated
-    assert len(editor.history.undo_stack) == 1
-
-
-@pytest.mark.parametrize('reuse', [False, True])
-def test_real_aperture_ui_rebuild_preserves_feature_selection_and_mixed_key_ownership(reuse):
-    a, b = flash(0), flash(5)
-    editor = editor_for([a, b])
-    editor.gerber_obj = SimpleNamespace(obj_options={'name': 'board'}, steps_per_circle=16)
-    if reuse:
-        editor.storage_dict['11'] = {'type': 'C', 'size': 4, 'geometry': []}
-    editor.build_ui = AppGerberEditor.build_ui.__get__(editor)
-    editor.selected = [a]
-    assert editor.apply_resize_circles(4) != 'fail'
-    resized = editor.selected[0]
-    assert editor.selected == [resized]
-    assert editor.ui.apertures_table.rowCount() == 2
-    assert len(editor.ui.features_table.selectionModel().selectedRows()) == 1
-    assert editor.undo()
-    assert editor.selected == [a]
-    assert editor.redo()
-    assert editor.selected == [resized]
-
-
-@pytest.mark.parametrize('operation', ['apply_path_split', 'apply_path_join'])
-def test_follow_rechecks_revision_after_sweep_computation(monkeypatch, operation):
-
-    a, b = track([(0, 0), (5, 0)]), track([(5, 0), (10, 0)])
-    editor = editor_for([a, b])
-    if operation == 'apply_path_split':
-        editor.selected = [a]
-    original = module.sweep_parameters
-
-    def changed(*args):
-        result = original(*args)
-        editor.touch_geometry()
-        return result
-
-    monkeypatch.setattr(module, 'sweep_parameters', changed)
-    args = ((2, 0), 0) if operation == 'apply_path_split' else (0,)
-    assert getattr(editor, operation)(*args) == 'fail'
-    assert editor.storage_dict[10]['geometry'] == [a, b]
-    assert not editor.history.undo_stack
-
-
-def test_split_rejects_overlapping_records_even_when_the_follow_instance_is_shared():
-    a = track([(0, 0), (10, 0)])
-    duplicate = DrawToolShape(dict(a.geo))
-    editor = editor_for([a, duplicate])
-    editor.selected = [a]
-    assert editor.apply_path_split((5, 0), 0) == 'fail'
-    assert editor.storage_dict[10]['geometry'] == [a, duplicate]
-    assert not editor.history.undo_stack

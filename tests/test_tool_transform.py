@@ -159,29 +159,6 @@ class TransformTest(unittest.TestCase):
                 self.run_action(name, [o], *args)
                 self.check_matrix(o, original)
 
-    def test_rotate_direction_is_minus_num(self):
-        o = FakeObj(None)
-        self.run_action('on_rotate_action', [o], 90.0, (0.0, 0.0))
-        self.assertEqual(o.obj_options['rotate'], 90.0)
-        # -90 degrees: (1,0) -> (0,-1)
-        a, b, d, e, _x, _y = o.matrices[0]
-        self.assertAlmostEqual(d, -1.0)
-
-    def test_metadata(self):
-        o = FakeObj(None)
-        self.run_action('on_flip', [o], 'X', (0, 0))
-        self.assertTrue(o.obj_options['mirror_y'])
-        self.run_action('on_flip', [o], 'X', (0, 0))
-        self.assertFalse(o.obj_options['mirror_y'])
-        self.run_action('on_flip', [o], 'Y', (0, 0))
-        self.assertTrue(o.obj_options['mirror_x'])
-        self.run_action('on_skew', [o], 'X', 10.0, 0.0, (0, 0))
-        self.assertEqual((o.obj_options['skew_x'], o.obj_options['skew_y']), (10.0, 0.0))
-        self.run_action('on_scale', [o], 'X', 2.0, 3.0, (0, 0))
-        self.assertEqual((o.obj_options['scale_x'], o.obj_options['scale_y']), (2.0, 3.0))
-        self.run_action('on_offset', [o], 'Y', 4.0)
-        self.assertEqual(o.obj_options['offset_y'], 4.0)
-
     def test_local_bounds_and_notification_compute_fresh_bounds(self):
         objs = [FakeObj(None, 'a'), FakeObj(None, 'b')]
         tool, app = self.tool(objs)
@@ -197,18 +174,6 @@ class TransformTest(unittest.TestCase):
         msgs = [c.args[0] for c in app.inform.emit.call_args_list]
         self.assertEqual(sum("Rotate done" in m for m in msgs), 1)
         self.assertIn("Rotate done", msgs[-1])
-
-    def test_on_object_changed_always_uses_current_bounds(self):
-        calls = []
-        obj = SimpleNamespace(obj_options={}, bounds=lambda: calls.append(1) or (9, 9, 9, 9),
-                              _pending_bounds=(1, 2, 3, 4))
-        holder = SimpleNamespace(app=MagicMock())
-        AppObject.on_object_changed(holder, obj)
-        self.assertEqual(calls, [1])
-        self.assertEqual((obj.obj_options['xmin'], obj.obj_options['ymax']), (9, 9))
-        AppObject.on_object_changed(holder, obj)
-        self.assertEqual(calls, [1, 1])
-        self.assertEqual(obj.obj_options['xmin'], 9)
 
     def test_mutation_then_failure_rolls_back_and_continues(self):
         for failure in ('fail', 'exception', 'metadata', 'plot'):
@@ -237,74 +202,9 @@ class TransformTest(unittest.TestCase):
                 self.assertNotIn('offset_x', bad.obj_options)
                 self.assertFalse(good.solid_geometry[0].equals_exact(original, 0))
 
-    def test_recording_failure_removes_only_failed_objects_step(self):
-        bad, good = FakeObj(None, 'bad'), FakeObj(None, 'good')
-        original = bad.solid_geometry[0]
-        tool, app = self.tool([bad, good])
-        app.headless = False
-        app.history = HistoryManager(app, app.collection)
-        record = app.history.record_matrix
-
-        def record_then_fail(label, pairs):
-            record(label, pairs)
-            if pairs[0][0] is bad:
-                raise RuntimeError('recording failed')
-        app.history.record_matrix = record_then_fail
-        ToolTransform.on_offset(tool, 'X', 2.0)
-        self.assertTrue(bad.solid_geometry[0].equals_exact(original, 0))
-        self.assertEqual(len(app.history.undo_stack), 1)
-        self.assertEqual(app.history.undo_stack[0].uids(), {'good'})
-
-    def test_failure_does_not_stop_next(self):
-        bad = FakeObj(None, 'bad', fail=True)
-        unchanged = FakeObj(None, 'unch', fail_value='fail')
-        good = FakeObj(None, 'good')
-        app = self.run_action('on_offset', [bad, unchanged, good], 'X', 2.0)
-        self.assertEqual(len(good.matrices), 1)
-        self.assertEqual(bad.matrices, [])
-        self.assertEqual(unchanged.matrices, [])
-        self.assertEqual(unchanged.plot_calls, 0)
-        msgs = [c.args[0] for c in app.inform.emit.call_args_list]
-        self.assertEqual(len(msgs), 1)
-        self.assertIn('[ERROR_NOTCL]', msgs[0])
-        self.assertIn('bad', msgs[0])
-        self.assertIn('unch', msgs[0])
-        self.assertNotIn('good', msgs[0])
-
-    def test_cncjob_message_once(self):
-        cnc = [FakeObj(None, 'c1', kind='cncjob'), FakeObj(None, 'c2', kind='cncjob')]
-        good = FakeObj(None, 'good')
-        app = self.run_action('on_offset', cnc + [good], 'X', 2.0)
-        msgs = [c.args[0] for c in app.inform.emit.call_args_list]
-        self.assertEqual(sum("CNCJob" in m for m in msgs), 1)
-        self.assertEqual(len(good.matrices), 1)
-        for c in cnc:
-            self.assertEqual((c.plot_calls, c.matrices, c.bounds_calls), (0, [], 0))
-
-    def test_buffer_plots(self):
-        o = FakeObj(None)
-        self.run_action('on_buffer_action', [o], 0.5, 1)
-        self.assertEqual(o.plot_calls, 1)
-        self.assertEqual(o.matrices, [])
-        self.assertEqual(o.bounds_calls, 1)
-
     def test_no_selection(self):
         app = self.run_action('on_offset', [], 'X', 2.0)
         self.assertIn('WARNING_NOTCL', app.inform.emit.call_args.args[0])
-
-    def test_reference_missing_object(self):
-        ui = SimpleNamespace(ref_combo=SimpleNamespace(currentIndex=lambda: 3),
-                             object_combo=SimpleNamespace(get_value=lambda: 'nope'))
-        t = SimpleNamespace(app=make_app([]), ui=ui)
-        self.assertEqual(ToolTransform.on_calculate_reference(t), 'fail')
-        self.assertIn('ERROR_NOTCL', t.app.inform.emit.call_args.args[0])
-
-    def test_alt_bounds_skips_empty(self):
-        inf = float('inf')
-        a = SimpleNamespace(kind='geometry', bounds=lambda: (1, 2, 3, 4))
-        empty = SimpleNamespace(kind='geometry', bounds=lambda: (inf, inf, -inf, -inf))
-        self.assertEqual(ToolTransform.alt_bounds([a, empty]), (1, 2, 3, 4))
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -45,20 +45,6 @@ def test_invalid_filters_are_atomic(filters):
     assert not editor.history.undo_stack
 
 
-def test_timeline_navigation_and_busy_guard():
-    editor, drill, slot = editor_scene()
-    editor.delete_selected()
-    editor.selected = [slot]
-    editor.delete_selected()
-    assert editor.on_history_row(0)
-    assert len(editor.history.redo_stack) == 2
-    assert editor.on_history_row(1)
-    assert list(editor.storage_dict[1.0].get_objects()) == [slot]
-    editor.history.pending = (object(), 0, 0, Mock())
-    assert not editor.on_history_row(2)
-    assert list(editor.storage_dict[1.0].get_objects()) == [slot]
-
-
 def test_real_feature_controls_selection_filters_and_undo():
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     editor, drill, slot = editor_scene()

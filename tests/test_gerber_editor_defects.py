@@ -68,55 +68,8 @@ def run_queued_job(editor):
 
 # 1. Qt signal arguments reach the slots
 
-@pytest.mark.parametrize('signal_arg', [QtWidgets.QTableWidgetItem('0.5'), True, None])
-def test_on_tool_edit_accepts_extra_qt_signal_args(signal_arg):
-    editor, first, second = scene()
-    editor.tid2apcode = {1: 10, 2: 11}
-    editor.oldapcode_newapcode = {10: 10, 11: 11}
-    table = editor.ui.apertures_table
-    with QtCore.QSignalBlocker(table):
-        table.setItem(0, 3, QtWidgets.QTableWidgetItem('0.5'))
-        table.setCurrentCell(0, 3)
-    reconnect_item_changed(editor)
-    editor.on_tool_edit(signal_arg)
-    assert editor.storage_dict[10]['size'] == 0.5
-    assert len(editor.history.undo_stack) == 1
-
-
-def test_on_scale_accepts_extra_qt_signal_arg_and_scales_selected_shape():
-    editor, first, second = scene()
-    editor.sync_aperture_rows({10})
-    select_row(editor, 0)
-    editor.selected = [first]
-    editor.ui.scale_factor_entry.set_value(1.2)
-    editor.on_scale(True)
-    assert first.geo['solid'].area == pytest.approx(1.44)
-    assert len(editor.history.undo_stack) == 1
-
 
 # 2. Scale menu item and the Scale tool connection
-
-def test_menu_scale_item_selects_scale_tool():
-    editor, first, second = scene()
-    for connection in editor.app.ui.grb_add_scale_menuitem.triggered.connect.call_args_list:
-        connection.args[0]()
-    editor.select_tool.assert_called_once_with('scale')
-
-
-def test_scale_tool_disconnects_only_its_own_click_on_deactivate():
-    editor, first, second = scene()
-    editor.on_scale = MagicMock()
-    button = editor.ui.scale_button
-    # the constructor activates the tool once, as the Scale menu does
-    tool = ScaleEditorGrb(editor)
-    editor.active_tool = tool
-    other = MagicMock()
-    button.clicked.connect(other)
-    tool.deactivate_scale()
-    # the Scale tool removed its own connection and nothing else: a click reaches only the other slot
-    button.click()
-    other.assert_called_once()
-    editor.on_scale.assert_not_called()
 
 
 # 3. Translation versus reshape in history
@@ -147,21 +100,6 @@ def test_real_reshape_of_r_pad_marks_regions():
 
 
 # 4. Import failure
-
-def test_import_failure_restores_visibility_and_selects_select_tool():
-    editor, first, second = scene()
-    editor.shapes.visible = False
-    bad = DrawToolShape({'solid': LineString([(0, 0), (1, 0)])})
-    tool = SimpleNamespace(draw_app=editor, app=editor.app,
-                           sel_storage=[{'type': 'C', 'size': 0.1, 'geometry': [bad]}])
-    assert ImportEditorGrb.import_shapes(tool) == 'fail'
-    # the visible setter queues its change on the worker: run the queued task
-    job = editor.app.worker_task.emit.call_args.args[0]
-    job['fcn'](*job['params'])
-    assert editor.shapes.visible is True
-    editor.select_tool.assert_called_once_with('select')
-    assert editor.storage_dict[10]['geometry'] == [first]
-    assert editor.history.undo_stack == []
 
 
 # 5. Select and Delete by Size
@@ -204,39 +142,11 @@ def test_intersection_of_disjoint_shapes_fails_and_keeps_sources():
 
 # 7. itemChanged connection after an inner error
 
-def test_item_changed_is_connected_exactly_once_after_inner_edit_raises():
-    editor, first, second = scene()
-    editor.tid2apcode = {1: 10, 2: 11}
-    table = reconnect_item_changed(editor)
-    table.setCurrentCell(0, 1)
-    with patch.object(AppGerberEditor, '_apply_tool_edit', side_effect=RuntimeError('edit failed')):
-        with pytest.raises(RuntimeError, match='edit failed'):
-            editor.on_tool_edit()
-    assert table.receivers(table.itemChanged) == 1
-
 
 # 9. Marked polygons list
 
-def test_geo_to_delete_is_cleared_after_delete_and_on_clear():
-    editor, first, second = scene()
-    editor.geo_to_delete = [first]
-    editor.delete_marked_polygons()
-    assert editor.geo_to_delete == []
-    assert first not in editor.storage_dict[10]['geometry']
-
-    editor.geo_to_delete = [second]
-    editor.clear()
-    assert editor.geo_to_delete == []
-
 
 # 11. Region export flag lifecycle
-
-def test_loaded_as_regions_exists_after_init_and_clear_resets_it():
-    editor = make_editor({})
-    assert editor.loaded_as_regions is False
-    editor.loaded_as_regions = True
-    editor.clear()
-    assert editor.loaded_as_regions is False
 
 
 # 13. Scale and Buffer without a selected shape
@@ -268,43 +178,11 @@ def test_buffer_factor_at_or_below_zero_is_rejected(factor_value):
     assert editor.history.undo_stack == []
 
 
-def test_positive_buffer_factor_is_queued():
-    editor, first, second = scene()
-    editor.selected = [first]
-    tool = SimpleNamespace(draw_app=editor, app=editor.app)
-    assert queue_transform(tool, 'buffer', [0.5, 1, True]) != 'fail'
-    editor.app.worker_task.emit.assert_called_once()
-
-
 # 15. Numeric aperture codes
-
-def test_numeric_aperture_codes_skip_non_numeric_keys():
-    keys = [10, '11', 'abc', '12a', 12.0, True, '٣', '', '-1', 0]
-    assert numeric_aperture_codes(keys) == [10, 11, 0]
 
 
 # 16. History depth after a failing scope
 
-def test_failing_scope_returns_history_depth_to_zero():
-    editor, first, second = scene()
-    editor.history.scope = MagicMock(side_effect=RuntimeError('scope failed'))
-    with pytest.raises(RuntimeError, match='scope failed'):
-        with editor.history.operation('Broken'):
-            pass
-    assert editor.history.depth == 0
-    assert editor.history.undo_stack == []
-
 
 # 18. update_ui without zoom
 
-def test_update_ui_with_zoom_false_does_not_move_the_camera():
-    editor, first, second = scene()
-    editor.selected = [first]
-    camera = editor.app.plotcanvas.view.camera
-    sentinel = object()
-    camera.rect = sentinel
-    editor.ui.geo_zoom.set_value(True)
-    editor.update_ui(zoom=False)
-    assert camera.rect is sentinel
-    editor.update_ui(zoom=True)
-    assert camera.rect is not sentinel

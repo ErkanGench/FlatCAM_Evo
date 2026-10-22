@@ -47,40 +47,6 @@ def run_rest(worker, params, polygons, diameters):
 class TestPaintPerformance(unittest.TestCase):
     setUp = paint_cases.TestPaintGeometry.setUp
 
-    def test_seed_contour_reuses_initial_margin_buffer(self):
-        original = Polygon.buffer
-        margins = []
-
-        def measured(polygon, distance, *args, **kwargs):
-            if polygon is self.polygon and distance == -0.5:
-                margins.append(distance)
-            return original(polygon, distance, *args, **kwargs)
-
-        for tolerance in (0, 0.01):
-            with self.subTest(tolerance=tolerance):
-                margins.clear()
-                with patch.object(Polygon, 'buffer', measured):
-                    paths = list(self.geometry.clear_polygon_seed(
-                        self.polygon, 1, 64, connect=False, contour=True,
-                        simplify_tol=tolerance).get_objects())
-                margin = original(self.polygon, -0.5, quad_segs=16).simplify(tolerance)
-                expected = [margin.exterior, *margin.interiors]
-                self.assertTrue(all(a.equals_exact(b, 1e-12)
-                                    for a, b in zip(paths[-len(expected):], expected)))
-                self.assertEqual(len(margins), 1)
-
-    def test_final_rest_tool_does_not_compute_unused_swept_area(self):
-        worker, params = rest_worker(self.geometry, [1])
-        import importlib
-        module = importlib.import_module('appPlugins.ToolPaint.PaintGen')
-        with patch.object(module, 'unary_union', wraps=module.unary_union) as union:
-            paths = run_rest(worker, params, [self.polygon], [1])
-        expected = list(self.geometry.clear_polygon_lines(
-            self.polygon, 1, 64, overlap=0.15, connect=False).get_objects())
-        self.assertEqual([p.wkb for p in paths], [p.wkb for p in expected])
-        # Initial polygon normalization and final output union only.
-        self.assertEqual(union.call_count, 2)
-
     def test_two_rest_tools_keep_legacy_residual_coverage_and_paths(self):
         # Preserve both legacy residual calculations for intermediate tools.
         for method in (0, 1, 2):
@@ -107,11 +73,6 @@ class TestPaintPerformance(unittest.TestCase):
                 actual = run_rest(worker, params, [self.polygon], [1, 0.4])
                 self.assertEqual([p.wkb for p in actual], [p.wkb for p in expected])
                 self.assertTrue(camlib.unary_union(actual).equals(camlib.unary_union(expected)))
-
-    def test_seed_cancellation_is_preserved(self):
-        self.geometry.app.abort_flag = True
-        with self.assertRaises(camlib.grace):
-            self.geometry.clear_polygon_seed(self.polygon, 1, 64)
 
     def test_rest_rejects_narrow_residuals_without_buffering(self):
         polygons = [self.polygon, box(10, 0, 10.1, 4), box(12, 0, 16, 0.1)]

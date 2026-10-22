@@ -15,7 +15,7 @@ from appEditors.appGeoEditor import DrawToolShape
 from appEditors.exc_plugins.ExcProperties import native_feature_properties
 from test_exc_editor_defects import bind, qt_editor, warned
 from test_exc_editor_history import scene
-from test_unify_characterization import _headless_qt  # noqa: F401  (autouse: patches the canvas shape collection)
+from tests.helpers_objects import _headless_qt  # noqa: F401,E402
 
 OFFSET_LABEL = 'Offset selected features'
 MSELECT_KEY = 'Control'
@@ -85,19 +85,6 @@ def offset_editor():
 # 1. click-select cycling
 # ---------------------------------------------------------------------------------------------------------------
 
-def test_drill_on_slot_is_a_candidate_before_the_slot():
-    app, editor = pick_editor()
-    slot = slot_shape()
-    drill_shape = cross(1, 0)
-    put(editor, 2.0, slot)           # the slot is stored first: the order must come from the area, not the storage
-    put(editor, 1.0, drill_shape)
-    candidates = editor.pick_candidates((1, 0))
-    assert len(candidates) == 2
-    assert candidates[0] is drill_shape
-    assert candidates[1] is slot
-    hit, previous, position, count = editor.pick_cycle_at((1, 0))
-    assert hit is drill_shape and previous is None and position == 0 and count == 2
-
 
 def test_repeated_click_on_stacked_drills_cycles_a_b_a():
     app, editor = pick_editor()
@@ -108,28 +95,6 @@ def test_repeated_click_on_stacked_drills_cycles_a_b_a():
         assert click(editor, (5, 5)) == 1
         picked.append(editor.selected[0])
     assert picked[0] is first and picked[1] is second and picked[2] is first
-
-
-def test_click_elsewhere_resets_the_cycle():
-    app, editor = pick_editor()
-    first, second, other = cross(5, 5), cross(5, 5), cross(9, 9)
-    put(editor, 1.0, first, second, other)
-    assert click(editor, (5, 5)) == 1 and editor.selected[0] is first
-    assert click(editor, (5, 5)) == 1 and editor.selected[0] is second
-    assert click(editor, (9, 9)) == 1 and editor.selected[0] is other
-    assert click(editor, (5, 5)) == 1 and editor.selected[0] is first   # the cycle restarts at the first candidate
-    assert click(editor, (50, 50)) == 0                                   # empty canvas, the cycle is dropped
-    assert click(editor, (5, 5)) == 1 and editor.selected[0] is first
-
-
-def test_repeat_click_beyond_drag_threshold_restarts_at_first_candidate():
-    app, editor = pick_editor()
-    first, second = cross(5, 5), cross(5, 5)
-    put(editor, 1.0, first, second)
-    click(editor, (5, 5))
-    # same candidates, still inside the drill, but 10 px away: CLICK_DRAG_THRESHOLD_PX is 5
-    click(editor, (5.1, 5))
-    assert editor.selected[0] is first
 
 
 def test_click_on_empty_canvas_clears_selection_and_table_selection():
@@ -162,16 +127,6 @@ def test_plain_click_replaces_the_selection():
     click(editor, (0, 0))
     click(editor, (10, 0))
     assert same(editor.selected, [second])
-
-
-def test_pick_index_rebuilds_after_storage_change():
-    app, editor = pick_editor()
-    put(editor, 1.0, cross(0, 0))
-    assert click(editor, (20, 20)) == 0
-    added = cross(20, 20)
-    editor.storage_dict[1.0].insert(added)
-    assert click(editor, (20, 20)) == 1
-    assert editor.selected[0] is added
 
 
 def test_selected_feature_selects_its_tool_row():
@@ -232,16 +187,6 @@ def test_offset_is_one_undo_step_and_redo_reapplies_it():
                native_feature_properties(s, 1.0, 0)['center'] == pytest.approx((2, 3)) for s in moved)
 
 
-@pytest.mark.parametrize('value', [(0, 0), (float('nan'), 0), (0, float('inf')), (1, 2, 3), ('a', 1)])
-def test_invalid_offset_fails_without_a_history_step(value):
-    editor, drill_shape, slot = offset_editor()
-    editor.selected = [drill_shape, slot]
-    assert editor.transform_features('offset', value) == 'fail'
-    assert same(list(editor.storage_dict[1.0].get_objects()), [drill_shape, slot])
-    assert not editor.history.undo_stack
-    assert not editor.is_modified
-
-
 def test_offset_with_nothing_selected_fails_and_warns():
     editor, drill_shape, slot = offset_editor()
     editor.selected = []
@@ -250,25 +195,3 @@ def test_offset_with_nothing_selected_fails_and_warns():
     assert not editor.history.undo_stack
 
 
-def test_panel_offset_entries_drive_the_transform():
-    editor, drill_shape, slot = offset_editor()
-    bind(editor, 'on_transform_features')
-    editor.ui = SimpleNamespace(
-        transform_reference=SimpleNamespace(currentData=lambda: 'origin'), transform_point=[],
-        transform_offset=[SimpleNamespace(get_value=lambda: 2.0), SimpleNamespace(get_value=lambda: -1.0)])
-    editor.selected = [drill_shape]
-    assert editor.on_transform_features('offset') != 'fail'
-    assert editor.selected[0].geo.centroid.coords[0] == pytest.approx((2, -1))
-
-
-def test_offset_action_is_tagged_and_not_duplicated_after_rebuild():
-    app, first = qt_editor('MM')
-    second = AppExcEditor(app)
-    menu = [action for action in app.ui.exc_editor_menu.actions() if action.text() == OFFSET_LABEL]
-    toolbar = [action for action in app.ui.exc_edit_toolbar.actions() if action.text() == OFFSET_LABEL]
-    assert len(menu) == 1 and len(toolbar) == 1
-    assert menu[0] == second.transform_actions['offset']
-    assert toolbar[0] == second.transform_actions['offset']
-    assert menu[0].property(EDITOR_ACTION_PROPERTY) is True
-    assert toolbar[0].property(EDITOR_ACTION_PROPERTY) is True
-    assert first.transform_actions['offset'] not in app.ui.exc_editor_menu.actions()

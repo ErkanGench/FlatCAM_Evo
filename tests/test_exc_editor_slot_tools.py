@@ -19,7 +19,7 @@ from appObjects.ExcellonObject import ExcellonObject
 from appParsers.ParseExcellon import Excellon
 from camlib import CNCjob
 from tclCommands.TclCommandDrillcncjob import TclCommandDrillcncjob
-from test_unify_regressions_0b import make_app, no_shape_collection  # noqa: F401  (fixture)
+from tests.helpers_objects import make_app_0b as make_app, no_shape_collection  # noqa: F401,E402
 
 
 def drill_shape(dia, x, y):
@@ -119,34 +119,9 @@ def test_several_new_slot_diameters_after_a_match_get_new_numbers():
     assert_geometry_matches(tools)
 
 
-@pytest.mark.parametrize('drills, slots, expected', [
-    # drills only
-    ({0.8: [(0, 0)], 1.0: [(0, 5)]}, {},
-     {1: (0.8, [(0, 0)], []), 2: (1.0, [(0, 5)], [])}),
-    # slots only
-    ({}, {1.0: [SLOT_10], 1.5: [SLOT_15]},
-     {1: (1.0, [], [SLOT_10]), 2: (1.5, [], [SLOT_15])}),
-    # a slot diameter that no drill has
-    ({0.8: [(0, 0)], 3.2: [(30, 30)]}, {1.5: [SLOT_15]},
-     {1: (0.8, [(0, 0)], []), 2: (3.2, [(30, 30)], []), 3: (1.5, [], [SLOT_15])}),
-    # a slot diameter equal to the largest drill, then a new one
-    ({0.8: [(0, 0)], 1.0: [(0, 5)]}, {1.0: [SLOT_10], 1.5: [SLOT_15]},
-     {1: (0.8, [(0, 0)], []), 2: (1.0, [(0, 5)], [SLOT_10]), 3: (1.5, [], [SLOT_15])}),
-], ids=['drills-only', 'slots-only', 'slot-without-drill', 'slot-matches-last-drill'])
-def test_numbering_of_the_cases_without_the_defect_is_kept(drills, slots, expected):
-    tools = save(drills=drills, slots=slots)
-    assert summary(tools) == expected
-    assert_geometry_matches(tools)
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # the saved tools have the 'drills' and the 'slots' keys
 # ---------------------------------------------------------------------------------------------------------------------
-
-@pytest.mark.parametrize('case', [BOARD, SLOT_ONLY_TOOL], ids=['board', 'slot-only-tool'])
-def test_every_saved_tool_has_the_drills_and_the_slots_lists(case):
-    for tid, tool in save(**case).items():
-        assert isinstance(tool.get('drills'), list) and isinstance(tool.get('slots'), list), tid
 
 
 def exported_holes(code):

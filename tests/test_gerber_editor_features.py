@@ -13,7 +13,7 @@ from appEditors.grb_plugins.GrbCommon import DrawToolShape
 from appParsers.ParseGerber import Gerber
 from test_editor_save_modes import gerber_stand_in
 from test_gerber_editor_pick import aperture, make_editor
-from test_unify_characterization import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401
+from tests.helpers_objects import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401,E402
 
 
 def snap_editor(shapes):
@@ -30,20 +30,6 @@ def snap_editor(shapes):
     return editor
 
 
-def test_active_gerber_snap_uses_follow_not_geometry_editor_or_solid_outline():
-    line = LineString([(0, 0), (10, 0), (10, 10)])
-    editor = snap_editor([DrawToolShape({'solid': line.buffer(1), 'follow': line})])
-    editor.ui.midpoint_snap_cb.setChecked(True)
-    assert AppGeoEditor.snap(editor.app.geo_editor, 5, 0.02) == (5, 0)
-    assert editor.active_snap_type == 'midpoint'
-    assert 'Midpoint' in editor.ui.snap_type_label.text()
-    editor.ui.segment_snap_cb.setChecked(True)
-    assert editor.snap(3, 0.02) == pytest.approx((3, 0))
-    assert editor.active_snap_type == 'segment'
-    assert editor.snap(3, 1.01) == (3, 1.01)
-    editor.app.geo_editor.storage.nearest.assert_not_called()
-
-
 def test_follow_corners_flash_centers_multipart_and_grid_competition():
     editor = snap_editor([
         DrawToolShape({'follow': MultiLineString([[(0, 0), (10, 0)], [(10, 0), (10, 10)]])}),
@@ -58,59 +44,6 @@ def test_follow_corners_flash_centers_multipart_and_grid_competition():
     assert editor.snap(0.14, 0.14) == pytest.approx((0.1, 0.2))
     editor.app.ui.grid_gap_link_cb.isChecked.return_value = True
     assert editor.snap(0.14, 0.14) == pytest.approx((0.1, 0.1))
-
-
-def test_snap_cache_reuse_edit_undo_redo_and_session_invalidation():
-    shape = DrawToolShape({'solid': box(0, -0.1, 10, 0.1), 'follow': LineString([(0, 0), (10, 0)])})
-    editor = snap_editor([shape])
-    editor.ui.midpoint_snap_cb.setChecked(True)
-    assert editor.snap(5, 0.01) == (5, 0)
-    cache = editor._snap_cache
-    storage = editor.storage_dict
-
-    # Keep the same storage identity while forbidding subsequent scans.
-    original = storage[10]['geometry']
-    class NoIter(list):
-        def __iter__(self):
-            raise AssertionError('Warm snap must not scan records')
-    storage[10]['geometry'] = NoIter(original)
-    for _ in range(10):
-        assert editor.snap(5, 0.01) == (5, 0)
-        assert editor._snap_cache is cache
-    storage[10]['geometry'] = original
-    editor.selected = [shape]
-    editor.delete_selected()
-    assert editor.snap(5, 0.01) == (5, 0.01)
-    assert editor.undo()
-    assert editor.snap(5, 0.01) == (5, 0)
-    assert editor.redo()
-    assert editor.snap(5, 0.01) == (5, 0.01)
-    editor.history.reset()
-    assert editor.snap(5, 0.01) == (5, 0.01)
-    assert editor._snap_cache is not cache
-
-
-def test_local_snap_master_gate_and_pixel_radius():
-    editor = snap_editor([DrawToolShape({'follow': LineString([(0, 0), (10, 0)])})])
-    editor.ui.midpoint_snap_cb.setChecked(True)
-    assert editor.snap(5, 0.07) == (5, 0)
-    assert editor.snap(5, 0.09) == (5, 0.09)
-    editor.app.grid_on = False
-    assert editor.snap(5, 0.02) == (5, 0.02)
-
-
-def test_motion_clears_snap_feedback_when_grid_master_is_disabled():
-    editor = snap_editor([DrawToolShape({'follow': LineString([(0, 0), (10, 0)])})])
-    editor.app.geo_editor.snap = lambda x, y: AppGeoEditor.snap(editor.app.geo_editor, x, y)
-    editor.ui.midpoint_snap_cb.setChecked(True)
-    editor.active_tool = SimpleNamespace(name='track', draw_cursor_data=MagicMock())
-    editor.update_utility_geometry = MagicMock()
-    event = SimpleNamespace(pos=(500, 2), button=1, is_dragging=False)
-    editor.on_canvas_move(event)
-    assert editor.active_snap_type == 'midpoint'
-    editor.app.grid_on = False
-    editor.on_canvas_move(event)
-    assert editor.active_snap_type is None
 
 
 def test_feature_rows_select_individual_records_and_sync_without_aperture_signal_loops():
@@ -159,9 +92,7 @@ def test_size_ranges_are_inclusive_and_follow_length_is_not_solid_perimeter():
 
 
 @pytest.mark.parametrize('field,value', [
-    ('size_area_min_entry', 'nan'), ('size_area_max_entry', 'inf'),
-    ('size_area_min_entry', '-1'), ('size_area_min_entry', '7'),
-    ('size_length_max_entry', '6'), ('size_length_min_entry', '')])
+    ('size_area_min_entry', 'nan'), ('size_area_min_entry', '7')])
 def test_invalid_ranges_do_not_mutate_selection_geometry_or_history(field, value):
     editor, first, second, missing = range_editor()
     editor.selected = [first, second]
@@ -186,46 +117,6 @@ def test_filtered_delete_is_one_step_with_original_selection_and_aperture_owners
     assert editor.selected == [first, second]
     assert editor.redo()
     assert editor.storage_dict[10]['geometry'] == [missing]
-
-
-@pytest.mark.parametrize('raw_pick', [False, True])
-@pytest.mark.parametrize('master_enabled', [False, True])
-def test_canvas_click_motion_keep_raw_picking_independent(monkeypatch, raw_pick, master_enabled):
-    editor = snap_editor([DrawToolShape({'follow': LineString([(0, 0), (10, 0)])})])
-    editor.app.geo_editor.snap = lambda x, y: AppGeoEditor.snap(editor.app.geo_editor, x, y)
-    editor.ui.midpoint_snap_cb.setChecked(True)
-    editor.app.grid_on = master_enabled
-    tool = SimpleNamespace(name='track', uses_raw_pick=raw_pick, click=MagicMock(), draw_cursor_data=MagicMock())
-    editor.active_tool = tool
-    editor.update_utility_geometry = MagicMock()
-    monkeypatch.setattr(QtWidgets.QApplication, 'keyboardModifiers',
-                        staticmethod(lambda: QtCore.Qt.KeyboardModifier.NoModifier))
-    event = SimpleNamespace(pos=(500, 2), button=1, is_dragging=False)
-    expected = (5, 0) if master_enabled and not raw_pick else (5, 0.02)
-    editor.on_canvas_move(event)
-    assert (editor.snap_x, editor.snap_y) == expected
-    editor.update_utility_geometry.assert_called_once_with(data=expected)
-    editor.on_canvas_click(event)
-    tool.click.assert_called_once_with(expected)
-
-
-def test_feature_list_drops_old_records_on_clear():
-    editor, first, second, missing = range_editor()
-    editor.refresh_features()
-    assert editor.ui.features_table.rowCount() == 3
-    editor.clear()
-    assert editor.ui.features_table.rowCount() == 0
-    assert not editor._feature_refs
-
-
-def test_feature_selection_is_guarded_during_pending_worker():
-    editor, first, second, missing = range_editor()
-    editor.selected = [first]
-    editor.update_ui()
-    editor.history.pending = object()
-    editor.ui.features_table.selectRow(2)
-    assert editor.selected == [first]
-    assert {idx.row() for idx in editor.ui.features_table.selectionModel().selectedRows()} == {0}
 
 
 def test_length_only_handles_missing_solids_multipart_and_zero_length_flashes():

@@ -21,7 +21,7 @@ from shapely.geometry import LineString, Polygon
 
 from appObjects.CNCJobObject import CNCJobObject
 from appPlugins.ToolMilling import ToolMilling
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import make_app_0b as make_app  # noqa: F401,E402
 
 # 3 paths with 9 X-Y cut moves in all (4 + 4 + 1)
 PATHS = [Polygon([(0, 0), (10, 0), (10, 5), (0, 5)]).exterior,
@@ -130,31 +130,6 @@ def test_the_exported_file_has_every_path_once(n_tools, pp):
         assert text.count(body) == 1
         assert text.index(job.gc_start) < text.index(body)
     assert job.source_file == job.gc_start + body
-
-
-@pytest.mark.parametrize('n_tools', [2, 3])
-def test_each_tool_plots_only_its_own_paths(n_tools):
-    __, job = milling_job(n_tools)
-    for k, tool in job.tools.items():
-        assert cut_items(tool['gcode_parsed']) == N_PATHS, k
-
-
-@pytest.mark.parametrize('n_tools', [1, 2, 3])
-def test_the_job_keeps_the_gcode_of_all_the_tools(n_tools):
-    # Tcl export_gcode (get_gcode()), the project file and the levelling probe points use the job's own G-code
-    __, job = milling_job(n_tools)
-    assert job.gcode == ''.join(tool['gcode'] for tool in job.tools.values())
-    assert tool_marks(job.get_gcode()) == expected_marks(range(1, n_tools + 1))
-    assert cut_items(job.gcode_parsed) == N_PATHS * n_tools
-
-
-def test_single_tool_job_is_unchanged():
-    __, job = milling_job(1)
-    gcode = job.tools[1]['gcode']
-    assert tool_marks(gcode) == expected_marks([1])
-    assert job.gcode == gcode
-    assert job.source_file == job.gc_start + gcode
-    assert exported(job).count(gcode) == 1
 
 
 @pytest.mark.parametrize('n_tools', [2, 3])

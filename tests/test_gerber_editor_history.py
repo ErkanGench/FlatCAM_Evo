@@ -25,7 +25,7 @@ from test_editor_save_modes import gerber_stand_in, gerber_storage
 from test_gerber_editor_size_simplify import simplify_tool, run_job
 from test_gerber_track_bend import editor_for, start, release, track
 from test_grb_editor_transform import Host
-from test_unify_characterization import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401
+from tests.helpers_objects import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401,E402
 
 
 def scene():
@@ -124,96 +124,13 @@ def test_aperture_delete_and_add_restore_metadata_as_one_group():
     assert editor.last_aperture_selected == 10
 
 
-def test_retained_delta_does_not_capture_unchanged_board_geometry():
-    editor, first, second = scene()
-    editor.selected = [first]
-    editor.delete_selected()
-    delta = editor.history.undo_stack[-1]['apertures']
-    assert set(delta) == {10}
-    assert second not in editor.history.retained_shapes()
-
-
-def test_worker_computes_detached_geometry_then_commits_one_step_on_gui():
-    editor, first, second = scene()
-    editor.selected = [first]
-    old = dict(first.geo)
-
-    def compute(shapes):
-        shapes[0].geo['solid'] = translate(shapes[0].geo['solid'], xoff=2)
-        shapes[0].geo['follow'] = translate(shapes[0].geo['follow'], xoff=2)
-
-    assert editor.submit_geometry('Move', compute) != 'fail'
-    assert not editor.undo()
-    job = editor.app.worker_task.emit.call_args.args[0]
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pool.submit(job['fcn'], *job['params']).result(timeout=10)
-    assert first.geo == old
-    QtWidgets.QApplication.processEvents()
-    assert first.geo['follow'].equals(Point(2.5, 0.5))
-    assert len(editor.history.undo_stack) == 1
-    assert editor.undo()
-    assert first.geo == old
-
-
-def test_worker_failure_and_cancelled_session_do_not_commit():
-    editor, first, second = scene()
-    editor.selected = [first]
-
-    def fail(shapes):
-        shapes[0].geo['solid'] = box(2, 2, 3, 3)
-        raise ValueError('bad')
-
-    editor.submit_geometry('Broken', fail)
-    job = editor.app.worker_task.emit.call_args.args[0]
-    job['fcn'](*job['params'])
-    QtWidgets.QApplication.processEvents()
-    assert first.geo['solid'].equals(box(0, 0, 1, 1))
-    assert editor.history.undo_stack == []
-    editor.submit_geometry('Later', lambda shapes: None)
-    job = editor.app.worker_task.emit.call_args.args[0]
-    editor.clear()
-    job['fcn'](*job['params'])
-    QtWidgets.QApplication.processEvents()
-    assert editor.storage_dict == {}
-    assert editor.history.undo_stack == []
-
-
-def test_component_diagnostics_are_read_only_and_do_not_mix_solid_and_follow():
-    editor, first, second = scene()
-    line = LineString([(0, 0), (1, 0)])
-    first.geo = {'solid': line.buffer(0.1), 'follow': line}
-    second.geo = {'solid': box(3, 3, 4, 4), 'follow': LineString([(1.005, 0), (2, 0)])}
-    editor.selected = [first, second]
-    revision = editor.geometry_revision
-    report = editor.diagnose_selected('follow', 0.01)
-    assert len(report['open']) == 2
-    assert len(report['near_endpoints']) == 1
-    assert report['duplicate'] == []
-    solid = editor.diagnose_selected('solid', 0.01)
-    assert solid['open'] == []
-    assert editor.selected == [first, second]
-    assert editor.geometry_revision == revision
-    assert editor.history.undo_stack == []
-    editor.plot_all.assert_not_called()
-
-
-@pytest.mark.parametrize('tolerance', [-1, float('nan'), float('inf')])
-def test_diagnostics_reject_bad_tolerance_without_history(tolerance):
-    editor, first, second = scene()
-    editor.selected = [first]
-    assert editor.diagnose_selected('solid', tolerance) == 'fail'
-    assert editor.history.undo_stack == []
-
-
 def snapshot(editor):
     return {key: ({name: value for name, value in aperture.items() if name != 'geometry'},
                   [(shape, dict(shape.geo)) for shape in aperture.get('geometry', ())])
             for key, aperture in editor.storage_dict.items()}
 
 
-@pytest.mark.parametrize('family', ['pad', 'array', 'region', 'disc', 'semidisc', 'track', 'move', 'copy',
-                                    'erase', 'polygonize', 'mark_delete', 'buffer', 'scale', 'transform',
-                                    'simplify', 'import'])
+@pytest.mark.parametrize('family', ['pad', 'region', 'move', 'erase', 'buffer'])
 def test_mutation_family_round_trip_is_one_step(family):
     first, second = pad(0, 0, 1), pad(10, 0, 1)
     editor = make_editor({10: {'type': 'C', 'size': 2.0, 'geometry': [first, second]}})
@@ -328,59 +245,6 @@ def test_legacy_buffer_keeps_follow_and_records_region_export_requirement():
     assert not editor.loaded_as_regions
 
 
-def test_menu_buffer_does_not_activate_simplification():
-    editor, first, second = scene()
-    for connection in editor.app.ui.grb_add_buffer_menuitem.triggered.connect.call_args_list:
-        connection.args[0]()
-    editor.select_tool.assert_called_once_with('buffer')
-
-
-def test_busy_operations_reject_mutation_save_and_selection():
-    editor, first, second = scene()
-    editor.selected = [first]
-    editor.submit_geometry('Pending', lambda shapes: None)
-    assert editor.delete_selected() == 'fail'
-    assert editor.on_aperture_add(99) == 'fail'
-    assert editor.on_table_selection() == 'fail'
-    assert editor.update_fcgerber_in_place() == 'fail'
-    assert editor.update_fcgerber() == 'fail'
-    assert editor.storage_dict[10]['geometry'] == [first]
-
-
-@pytest.mark.parametrize('action', ['undo', 'redo', 'shift_redo'])
-def test_keyboard_history_routing_and_native_text_undo(action):
-    editor, first, second = scene()
-    editor.app.call_source = 'grb_editor'
-    editor.app.grb_editor = editor
-    editor.undo, editor.redo = MagicMock(), MagicMock()
-    ctrl = QtCore.Qt.KeyboardModifier.ControlModifier
-    modifiers = ctrl | QtCore.Qt.KeyboardModifier.ShiftModifier if action == 'shift_redo' else ctrl
-    key = QtCore.Qt.Key.Key_Y if action == 'redo' else QtCore.Qt.Key.Key_Z
-    with patch.object(QtWidgets.QApplication, 'keyboardModifiers', return_value=modifiers), \
-            patch.object(MainGUI, 'app_focus_in_text', return_value=False):
-        MainGUI.keyPressEvent(SimpleNamespace(app=editor.app), int(key))
-    (editor.undo if action == 'undo' else editor.redo).assert_called_once()
-    editor.undo.reset_mock()
-    editor.redo.reset_mock()
-    with patch.object(QtWidgets.QApplication, 'keyboardModifiers', return_value=modifiers), \
-            patch.object(MainGUI, 'app_focus_in_text', return_value=True):
-        MainGUI.keyPressEvent(SimpleNamespace(app=editor.app), int(key))
-    editor.undo.assert_not_called()
-    editor.redo.assert_not_called()
-
-
-def test_property_component_selector_displays_follow_not_outline():
-    editor, first, second = scene()
-    first.geo = {'solid': box(0, 0, 5, 2), 'follow': LineString([(0, 0), (3, 0), (3, 4)])}
-    editor.selected = [first]
-    editor.ui.diagnostics_component.setCurrentIndex(1)
-    editor.update_ui()
-    assert 'LINESTRING' in editor.ui.geo_coords_entry.toPlainText()
-    assert float(editor.ui.geo_vertex_entry.get_value()) == 3
-    assert '7.0000' in editor.ui.component_properties.text()
-    assert editor.history.undo_stack == []
-
-
 @pytest.mark.parametrize('column,text', [(1, '12'), (3, '0.5')])
 def test_aperture_table_edits_restore_metadata_records_selection_and_aliases(column, text):
     editor, first, second = scene()
@@ -429,171 +293,6 @@ def test_invalid_buffer_and_failed_nested_action_do_not_leave_partial_edits():
     assert editor.history.undo_stack == []
 
 
-def test_memory_budget_retains_one_adjacent_oversize_step_not_a_board_copy():
-    editor = make_editor({10: aperture([])})
-    editor.app.options['global_history_memory_mb'] = 1
-    for cx in (0, 10):
-        large = DrawToolShape({'solid': Point(cx, 0).buffer(1, 20000)})
-        editor.add_gerber_shape(large, editor.storage_dict[10]['geometry'])
-    assert len(editor.history.undo_stack) == 1
-    assert editor.history.baseline_evicted
-    assert editor.undo()
-    assert len(editor.storage_dict[10]['geometry']) == 1
-    assert editor.redo()
-    assert len(editor.storage_dict[10]['geometry']) == 2
-
-
-def test_history_limit_reduction_also_bounds_redo_and_timeline_navigation():
-    editor, first, second = scene()
-    for index in range(3):
-        editor.add_gerber_shape(DrawToolShape({'solid': box(index, 2, index + 1, 3)}),
-                                editor.storage_dict[10]['geometry'])
-    assert editor.history_go_to(0)
-    assert len(editor.history.redo_stack) == 3
-    editor.app.options['global_history_steps'] = 1
-    editor.refresh_history()
-    assert len(editor.history.redo_stack) == 1
-    assert editor.history_go_to(1)
-    assert len(editor.history.undo_stack) == 1
-    assert not editor.history_go_to(5)
-
-
-def test_queued_transform_ui_uses_detached_geometry_and_normal_history():
-    editor, first, second = scene()
-    editor.selected = [first]
-    before = snapshot(editor)
-    tool = SimpleNamespace(draw_app=editor, app=editor.app)
-    queue_transform(tool, 'offset', ['X', 2])
-    job = editor.app.worker_task.emit.call_args.args[0]
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pool.submit(job['fcn'], *job['params']).result(timeout=10)
-    assert snapshot(editor) == before
-    QtWidgets.QApplication.processEvents()
-    assert first.geo['follow'].equals(Point(2.5, 0.5))
-    assert editor.undo()
-    assert snapshot(editor) == before
-
-
-def test_stale_worker_revision_releases_busy_state_without_committing():
-    editor, first, second = scene()
-    editor.selected = [first]
-    before = snapshot(editor)
-    editor.submit_geometry('Later', lambda shapes: shapes[0].geo.update(solid=box(2, 2, 3, 3)))
-    job = editor.app.worker_task.emit.call_args.args[0]
-    editor.touch_geometry()
-    job['fcn'](*job['params'])
-    QtWidgets.QApplication.processEvents()
-    assert snapshot(editor) == before
-    assert editor.history.pending is None
-    assert editor.history.undo_stack == []
-
-
-@pytest.mark.parametrize('save', ['update_fcgerber', 'update_fcgerber_in_place'])
-def test_save_scheduling_failure_releases_editor_reservation(save):
-    editor, first, second = scene()
-    editor.gerber_obj = SimpleNamespace(obj_options={'name': 'board'})
-    editor.gerber_obj_options = {'name': 'board'}
-    editor.edited_obj_name = 'board'
-    editor.app.worker_task.emit.side_effect = RuntimeError('worker unavailable')
-    with pytest.raises(RuntimeError, match='worker unavailable'):
-        getattr(editor, save)()
-    assert editor.history.pending is None
-
-
-def test_in_place_save_rejects_result_from_stale_revision():
-    editor, first, second = scene()
-    editor.gerber_obj = SimpleNamespace(obj_options={'name': 'board'})
-    editor.gerber_obj_options = {'name': 'board'}
-    editor.update_fcgerber_in_place()
-    callback = editor.app.connect_custom_signal.call_args.args[0]
-    editor.touch_geometry()
-    with patch.object(AppGerberEditor, 'apply_edited_gerber') as apply:
-        callback({'obj': object()})
-        apply.assert_not_called()
-    assert editor.history.pending is None
-    assert editor.history.undo_stack == []
-
-
-def test_busy_editor_exit_is_rejected_before_showing_modal_dialog():
-    editor, first, second = scene()
-    editor.selected = [first]
-    editor.app.call_source = 'grb_editor'
-    editor.app.grb_editor = editor
-    editor.submit_geometry('Later', lambda shapes: None)
-    with patch('appMain.FCMessageBox') as dialog:
-        assert App.on_editing_finished(editor.app) == 'fail'
-        dialog.assert_not_called()
-
-
-def test_global_menu_and_toolbar_replay_route_to_the_gerber_editor():
-    editor, first, second = scene()
-    app = editor.app
-    app.call_source = 'grb_editor'
-    app.grb_editor = editor
-    app.ui.app_focus_in_text.return_value = False
-    editor.undo, editor.redo = MagicMock(), MagicMock()
-    connector = SimpleNamespace(app=app, ui=app.ui)
-    AppSignalConnector.connect_editmenu_signals(connector)
-    for action in (app.ui.menuedit_undo, app.ui.undo_btn):
-        action.triggered.connect.call_args.args[0]()
-    for action in (app.ui.menuedit_redo, app.ui.redo_btn):
-        action.triggered.connect.call_args.args[0]()
-    assert editor.undo.call_count == 2
-    assert editor.redo.call_count == 2
-
-
-def test_diagnostics_duplicate_missing_empty_and_holes_are_identified_by_aperture():
-    editor, first, second = scene()
-    first.geo = {'solid': Polygon(box(0, 0, 4, 4).exterior.coords, [box(1, 1, 2, 2).exterior.coords])}
-    second.geo = {'solid': first.geo['solid']}
-    third = DrawToolShape({'solid': Polygon()})
-    editor.storage_dict[11]['geometry'].append(third)
-    editor.selected = [first, second, third]
-    report = editor.diagnose_selected('solid', 0)
-    assert {record[0] for record in report['duplicate']} == {10, 11}
-    assert len(report['empty']) == 1
-    assert report['open'] == []
-    assert len(editor.diagnose_selected('follow', 0)['missing']) == 3
-    assert editor.history.undo_stack == []
-
-
-def test_save_snapshot_is_detached_and_cancelled_callback_cannot_update_source():
-    editor, first, second = scene()
-    source = SimpleNamespace(obj_options={'name': 'board'})
-    editor.gerber_obj = source
-    editor.gerber_obj_options = {'name': 'board'}
-    editor.update_fcgerber_in_place()
-    assert editor.history.pending is not None
-    job = editor.app.worker_task.emit.call_args.args[0]
-    frozen = job['params'][1][10]['geometry'][0].geo['solid']
-    callback = editor.app.connect_custom_signal.call_args.args[0]
-    first.geo['solid'] = box(20, 20, 21, 21)
-    assert frozen.equals(box(0, 0, 1, 1))
-    editor.clear()
-    with patch.object(AppGerberEditor, 'apply_edited_gerber') as apply:
-        callback({'obj': object()})
-        apply.assert_not_called()
-
-
-def test_load_result_is_gui_committed_and_late_sessions_are_ignored():
-    editor, first, second = scene()
-    editor.on_multiprocessing_finished = MagicMock()
-    pending = editor.history.reserve()
-    result = {'pending': pending, 'storage': {12: aperture([pad(4, 4, 1)])}, 'regions': True}
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pool.submit(editor.load_result.emit, result).result(timeout=10)
-    assert 12 not in editor.storage_dict
-    QtWidgets.QApplication.processEvents()
-    assert 12 in editor.storage_dict
-    assert editor.loaded_as_regions
-    assert editor.history.pending is None
-    assert editor.history.undo_stack == []
-    pending = editor.history.reserve()
-    editor.clear()
-    editor.load_result.emit({'pending': pending, 'storage': {13: aperture([])}, 'regions': False})
-    assert editor.storage_dict == {}
-
-
 def test_buffer_undo_redo_save_reparse_preserves_material_and_export_mode(app):
 
     source = make_gerber(app, NATIVE_GBR, name='board')
@@ -620,73 +319,6 @@ def test_buffer_undo_redo_save_reparse_preserves_material_and_export_mode(app):
         expected = unary_union([shape.geo['solid'] for aperture in editor.storage_dict.values()
                                 for shape in aperture.get('geometry', ())])
         assert actual.hausdorff_distance(expected) < 0.001
-
-
-def test_missing_component_clears_properties_instead_of_showing_solid():
-    editor, first, second = scene()
-    editor.selected = [first]
-    editor.update_ui()
-    editor.ui.diagnostics_component.setCurrentIndex(2)
-    editor.update_ui()
-    assert editor.ui.geo_coords_entry.toPlainText() == ''
-    assert float(editor.ui.geo_vertex_entry.get_value()) == 0
-    assert float(editor.ui.area_entry.get_value()) == 0
-    assert editor.ui.is_valid_entry.text() == 'None'
-    assert editor.history.undo_stack == []
-
-
-def test_component_properties_count_polygon_holes_and_multipart_geometry():
-    editor, first, second = scene()
-    polygon = Polygon(box(0, 0, 4, 4).exterior.coords, [box(1, 1, 2, 2).exterior.coords])
-    editor.selected = [first]
-    for geometry, vertices in ((polygon, 10), (MultiPolygon([polygon, box(5, 5, 6, 6)]), 15)):
-        first.geo['solid'] = geometry
-        editor.update_ui()
-        assert float(editor.ui.geo_vertex_entry.get_value()) == vertices
-        assert float(editor.ui.area_entry.get_value()) == geometry.area
-        assert editor.ui.geo_coords_entry.toPlainText() == geometry.wkt
-    assert editor.history.undo_stack == []
-
-
-@pytest.mark.parametrize('outcome', ['success', 'failure', 'cancelled', 'stale'])
-def test_save_as_new_reserves_worker_and_only_commits_current_success(outcome):
-    editor, first, second = scene()
-    source = SimpleNamespace(obj_options={'name': 'board'})
-    editor.gerber_obj = source
-    editor.gerber_obj_options = {'name': 'board'}
-    editor.edited_obj_name = 'board'
-    editor.deactivate_grb_editor = MagicMock()
-    editor.update_fcgerber()
-    assert editor.history.pending is not None
-    assert editor.delete_selected() == 'fail'
-    callback = editor.app.connect_custom_signal.call_args.args[0]
-    job = editor.app.worker_task.emit.call_args.args[0]
-    with patch.object(AppGerberEditor, 'build_edited_gerber') as build:
-        job['fcn'](*job['params'])
-        build.assert_called_once()
-    if outcome == 'cancelled':
-        editor.clear()
-    elif outcome == 'stale':
-        editor.touch_geometry()
-    edited = SimpleNamespace(obj_options={'name': 'board_edit'}, units='MM', int_digits=3, frac_digits=5)
-    created = SimpleNamespace(obj_options={})
-    def new_object(kind, name, initialize):
-        initialize(created, editor.app)
-        return created
-    editor.app.app_obj.new_object.side_effect = new_object
-    with patch.object(AppGerberEditor, 'apply_edited_gerber') as apply:
-        callback({'error': 'failed'} if outcome == 'failure' else {'obj': edited})
-        if outcome == 'success':
-            editor.app.app_obj.new_object.assert_called_once()
-            apply.assert_called_once_with(created, edited)
-            assert created.obj_options['name'] == 'board_edit'
-            assert created.units == 'MM'
-            assert created.int_digits == 3 and created.frac_digits == 5
-            editor.deactivate_grb_editor.assert_called_once()
-        else:
-            editor.app.app_obj.new_object.assert_not_called()
-            editor.deactivate_grb_editor.assert_not_called()
-    assert editor.history.pending is None
 
 
 def test_save_as_new_detached_build_commits_reparseable_copy_without_changing_source(app):

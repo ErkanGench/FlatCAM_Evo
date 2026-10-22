@@ -74,34 +74,6 @@ class TestAllegroBrdImport(unittest.TestCase):
             self.assertEqual(appIO._pcb_source_kind(empty), 'eagle_brd')
             self.assertEqual(appIO._pcb_source_kind(blanks), 'eagle_brd')
 
-    def test_unreadable_brd_keeps_the_eagle_behaviour(self):
-        with tempfile.TemporaryDirectory() as directory:
-            self.assertEqual(appIO._pcb_source_kind(os.path.join(directory, 'missing.brd')), 'eagle_brd')
-            self.assertEqual(appIO._pcb_source_kind(directory + os.sep + 'sub.brd'), 'eagle_brd')
-            folder = os.path.join(directory, 'folder.brd')
-            os.mkdir(folder)
-            self.assertEqual(appIO._pcb_source_kind(folder), 'eagle_brd')
-        self.assertEqual(appIO._pcb_source_kind(os.path.join('D:' + os.sep, 'boards', 'Pcb39.brd')), 'eagle_brd')
-
-    def test_other_extensions_are_not_sniffed(self):
-        self.assertEqual(appIO._pcb_source_kind('board.PcbDoc'), 'pcbdoc')
-        self.assertEqual(appIO._pcb_source_kind('board.kicad_pcb'), 'kicad_pcb')
-        self.assertEqual(appIO._pcb_source_kind('board.lay6'), 'sprint_lay6')
-        self.assertEqual(appIO._pcb_source_kind('board.xyz'), 'pcbdoc')
-
-    def test_source_kind_stays_a_staticmethod(self):
-        self.assertIsInstance(appIO.__dict__['_pcb_source_kind'], staticmethod)
-        self.assertIsInstance(appIO.__dict__['_pcb_title'], staticmethod)
-        self.assertEqual(self.io._pcb_source_kind(BOARD), 'allegro_brd')
-
-    def test_format_table_and_title(self):
-        self.assertEqual(appIO.PCB_FORMATS['allegro_brd'],
-                         {'ext': '.brd', 'filter': 'OrCAD / Allegro Board (*.brd)', 'log': 'Allegro Board',
-                          'name_first': False})
-        self.assertEqual(appIO._pcb_title('allegro_brd'), 'Import OrCAD/Allegro Board')
-        self.assertEqual(appIO._pcb_title('eagle_brd'), 'Import Eagle Board')
-        self.assertEqual(appIO.PCB_FORMATS['eagle_brd']['filter'], 'Eagle Board (*.brd)')
-
     # ------------------------------------------------------------------ objects
 
     def test_objects_are_named_from_layer_and_drill_group(self):
@@ -125,37 +97,7 @@ class TestAllegroBrdImport(unittest.TestCase):
         self.assertEqual(obj.units, 'IN')
         self.assertAlmostEqual(max(polygon.bounds[2] for polygon in obj.solid_geometry), 70.005 / 25.4, places=3)
 
-    def test_file_opened_reports_allegro_kind_after_queued_delivery(self):
-        self.io.import_pcbdoc_objects(BOARD, self.parsed, ['TOP'], ['PTH'])
-        self.app.file_opened.emit.assert_not_called()
-        self.qapp.processEvents()
-        self.app.file_opened.emit.assert_called_once_with('allegro_brd', BOARD)
-
     # ------------------------------------------------------------------ dialog
-
-    def test_actual_qt_dialog_uses_allegro_title_and_default_layer_checks(self):
-        seen = {}
-
-        def rejected(dialog):
-            seen['title'] = dialog.windowTitle()
-            seen['boxes'] = {box.text(): box.isChecked() for box in dialog.findChildren(QtWidgets.QCheckBox)}
-            return QtWidgets.QDialog.DialogCode.Rejected
-
-        with patch.object(QtWidgets.QDialog, 'exec', rejected):
-            self.io.on_pcbdoc_parsed(BOARD, self.parsed)
-        self.assertEqual(seen['title'], 'Import OrCAD/Allegro Board')
-        self.assertEqual(seen['boxes'], {
-            'TOP (ETCH/TOP)': True,
-            'BOTTOM (ETCH/BOTTOM)': True,
-            'SOLDERMASK_TOP': True,
-            'SOLDERMASK_BOTTOM': True,
-            'SILKSCREEN_TOP': True,
-            'ASSEMBLY_TOP': False,
-            'OUTLINE': True,
-            'PTH': True,
-            'NPTH': True,
-        })
-        self.app.worker_task.emit.assert_not_called()
 
     def test_dialog_accept_queues_only_selected_layers_and_drill_groups(self):
         def accepted(dialog):
@@ -185,14 +127,6 @@ class TestAllegroBrdImport(unittest.TestCase):
         self.app.log.error.assert_called_once()
         self.assertEqual(self.app.log.error.call_args.args[1], 'Allegro Board')
 
-    def test_parse_allegro_brd_on_an_eagle_file_reports_xml(self):
-        with tempfile.TemporaryDirectory() as directory:
-            eagle = self._file(directory, 'eagle.brd', EAGLE.encode('utf-8'))
-            with patch.object(self.io, 'pcbdoc_parsed') as parsed_signal:
-                self.assertEqual(self.io.parse_allegro_brd(eagle), 'fail')
-        parsed_signal.emit.assert_not_called()
-        self.assertIn('XML', self.app.inform.emit.call_args.args[0])
-
     def test_parse_allegro_brd_success_emits_parsed_board(self):
         with patch.object(self.io, 'pcbdoc_parsed') as parsed_signal:
             self.assertIsNone(self.io.parse_allegro_brd(BOARD))
@@ -204,37 +138,11 @@ class TestAllegroBrdImport(unittest.TestCase):
         self.assertIs(parsed.app, self.app)
         self.app.inform.emit.assert_not_called()
 
-    def test_parse_allegro_brd_respects_abort(self):
-        self.app.abort_flag = True
-        with patch.object(self.io, 'pcbdoc_parsed') as parsed_signal:
-            self.assertIsNone(self.io.parse_allegro_brd(BOARD))
-        parsed_signal.emit.assert_not_called()
-
     def test_on_file_import_allegro_brd_queues_parse_for_given_name(self):
         with patch.object(QtWidgets.QFileDialog, 'getOpenFileName') as chooser:
             self.io.on_file_import_allegro_brd(BOARD)
         chooser.assert_not_called()
         self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_allegro_brd, 'params': [BOARD]})
-
-    def test_on_file_import_allegro_brd_without_name_uses_chooser(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName',
-                          return_value=(BOARD, 'OrCAD / Allegro Board (*.brd)')) as chooser:
-            self.io.on_file_import_allegro_brd()
-        self.assertEqual(chooser.call_args.kwargs['filter'], 'OrCAD / Allegro Board (*.brd)')
-        self.assertEqual(chooser.call_args.kwargs['caption'], 'Import OrCAD/Allegro Board')
-        self.app.worker_task.emit.assert_called_once_with({'fcn': self.io.parse_allegro_brd, 'params': [BOARD]})
-
-    def test_on_file_import_allegro_brd_cancelled_chooser_queues_nothing(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName', return_value=('', '')):
-            self.io.on_file_import_allegro_brd()
-        self.app.worker_task.emit.assert_not_called()
-
-    def test_eagle_import_still_uses_its_own_parser_and_filter(self):
-        with patch.object(QtWidgets.QFileDialog, 'getOpenFileName', return_value=('', '')) as chooser:
-            self.io.on_file_import_eagle_brd()
-        self.assertEqual(chooser.call_args.kwargs['filter'], 'Eagle Board (*.brd)')
-        self.assertEqual(chooser.call_args.kwargs['caption'], 'Import Eagle Board')
-
 
 if __name__ == '__main__':
     unittest.main()

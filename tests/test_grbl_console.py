@@ -79,31 +79,6 @@ class TestGrblConsole(unittest.TestCase):
         self.assertEqual(console.program_view.textCursor().selectedText(), 'G1 X799')
         self.assertGreater(console.program_view.verticalScrollBar().value(), scroll)
 
-    def test_lazy_highlighting_preserves_program_and_progress_without_text_changes(self):
-        console = self.make_console()
-        console.resize(600, 250)
-        console.show()
-        lines = ['G1 X%d Y%d' % (i, -i) for i in range(5000)]
-        console.set_program(lines)
-        _qapp.processEvents()
-        view = console.program_view
-        changes = []
-        view.textChanged.connect(lambda: changes.append(1))
-
-        console.update_progress(4001, [3999])
-        _qapp.processEvents()
-        self.assertEqual(set(self.selected_lines(console)), {3999, 4000})
-        self.assertEqual(view.textCursor().selectedText(), lines[3999])
-        self.assertTrue(view.document().findBlockByNumber(3999).layout().formats())
-        view.verticalScrollBar().setValue(3000)
-        console.resize(600, 600)
-        _qapp.processEvents()
-
-        self.assertTrue(view.isReadOnly())
-        self.assertEqual(view.toPlainText().splitlines(), lines)
-        self.assertEqual(set(self.selected_lines(console)), {3999, 4000})
-        self.assertEqual(view.extraSelections()[-1].format.background().color(), QtGui.QColor('#c62828'))
-        self.assertEqual(changes, [])
 
     def test_click_selects_whole_line_and_progress_advances_selection(self):
         from PyQt6 import QtCore, QtTest

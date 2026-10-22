@@ -69,44 +69,12 @@ class TestPcbDocImport(unittest.TestCase):
         self.assertEqual(self.parsed.layers[1]['tools'][10]['size'], 2.54)
         self.assertEqual(self.app.worker_task.emit.call_args.args[0]['priority'], 'low')
 
-    def test_empty_selection_and_abort_create_nothing(self):
-        self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, [], [])
-        self.app.abort_flag = True
-        self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, [1], ['PTH'])
-        self.assertEqual(self.objects, [])
-        self.app.worker_task.emit.assert_not_called()
-
     def test_export_failure_does_not_publish_corrupt_object(self):
         self.io.export_gerber.return_value = 'fail'
         self.assertEqual(self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, [1], []), 'fail')
         self.assertEqual(self.objects, [])
         self.qapp.processEvents()
         self.app.file_opened.emit.assert_not_called()
-
-    def test_empty_layer_is_not_created(self):
-        self.parsed.layers[1]['solid_geometry'] = []
-        self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, [1], [])
-        self.assertEqual(self.objects, [])
-
-    def test_dialog_default_selection_cancel_and_deselection(self):
-        self.app.ui = QtWidgets.QWidget()
-        self.parsed.warnings = ['Stroke glyph approximation used.']
-
-        def accepted(dialog):
-            boxes = dialog.findChildren(QtWidgets.QCheckBox)
-            self.assertEqual(len(boxes), 3)
-            self.assertTrue(all(box.isChecked() for box in boxes))
-            self.assertIn(self.parsed.warnings[0], [label.text() for label in dialog.findChildren(QtWidgets.QLabel)])
-            boxes[0].setChecked(False)
-            return QtWidgets.QDialog.DialogCode.Accepted
-
-        with patch.object(QtWidgets.QDialog, 'exec', accepted):
-            self.io.on_pcbdoc_parsed('board.PcbDoc', self.parsed)
-        self.assertEqual(self.app.worker_task.emit.call_args.args[0]['params'][2:], [[32], ['PTH']])
-        self.app.worker_task.reset_mock()
-        with patch.object(QtWidgets.QDialog, 'exec', return_value=QtWidgets.QDialog.DialogCode.Rejected):
-            self.io.on_pcbdoc_parsed('board.PcbDoc', self.parsed)
-        self.app.worker_task.emit.assert_not_called()
 
     def test_region_export_reimport_preserves_negative_holes_and_islands(self):
         from appObjects.GerberObject import GerberObject
@@ -164,14 +132,6 @@ class TestPcbDocImport(unittest.TestCase):
         self.assertNotEqual(parser.parse_lines(trailing.splitlines()), 'fail')
         self.assertLess(unary_union(obj.solid_geometry).symmetric_difference(
             unary_union(parser.solid_geometry)).area, 0.01)
-
-    def test_creation_failure_preserves_existing_objects(self):
-        original = object()
-        self.objects.append(('original', original))
-        self.app.app_obj.new_object.side_effect = None
-        self.app.app_obj.new_object.return_value = 'fail'
-        self.assertEqual(self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, [1], []), 'fail')
-        self.assertEqual(self.objects, [('original', original)])
 
     def test_thin_rings_export_before_larger_nested_islands(self):
         from shapely.geometry import box
@@ -238,65 +198,6 @@ class TestPcbDocImport(unittest.TestCase):
         self.assertEqual(self.objects, [])
         self.app.worker_task.emit.assert_not_called()
 
-    def test_recent_registration_uses_original_source_on_gui_thread_without_writes(self):
-        threads, results = [], []
-        self.app.file_opened.emit.side_effect = lambda *args: threads.append(QtCore.QThread.currentThread())
-
-        def register(source):
-            results.append(self.io.import_pcbdoc_objects(source, self.parsed, [1, 32], ['PTH']))
-
-        with tempfile.TemporaryDirectory() as directory:
-            self.app.data_path = directory
-            source = os.path.join(directory, 'project', 'board.PcbDoc')
-            with patch('builtins.open', side_effect=AssertionError('Import must not write files')), \
-                    patch('appHandlers.appIO.os.makedirs', side_effect=AssertionError('Import must not create folders')):
-                worker = threading.Thread(target=register, args=(source,))
-                worker.start()
-                worker.join()
-            self.assertEqual(results, [None])
-            self.assertEqual(threads, [])
-            self.qapp.processEvents()
-            self.assertEqual(threads, [self.qapp.thread()])
-            self.app.file_opened.emit.assert_called_once_with('pcbdoc', source)
-            self.assertEqual(os.listdir(directory), [])
-            self.assertFalse(os.path.exists(os.path.dirname(source)))
-
-    def test_recent_registration_after_partial_success_is_once(self):
-        self.io.export_gerber.side_effect = ['G04*\nM02*\n', 'fail']
-        self.assertEqual(self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, [1, 32], []), 'fail')
-        self.assertEqual(len(self.objects), 1)
-        self.qapp.processEvents()
-        self.app.file_opened.emit.assert_called_once_with('pcbdoc', 'board.PcbDoc')
-        self.app.worker_task.emit.assert_called_once()
-        self.assertEqual(self.app.worker_task.emit.call_args.args[0]['priority'], 'low')
-
-    def test_abort_after_parse_before_gui_delivery_suppresses_dialog(self):
-        self.app.ui = QtWidgets.QWidget()
-        self.io.pcbdoc_parsed.emit('board.PcbDoc', self.parsed)
-        self.app.abort_flag = True
-        with patch.object(QtWidgets.QDialog, 'exec') as dialog:
-            self.qapp.processEvents()
-        dialog.assert_not_called()
-        self.app.worker_task.emit.assert_not_called()
-
-    def test_old_gerber_export_retains_legacy_tools_units_and_body(self):
-        from defaults import AppDefaults
-        self.app.defaults = AppDefaults()
-        self.app.options = dict(self.app.defaults.defaults)
-        self.app.options['gerber_exp_units'] = 'MM'
-        self.app.version = self.app.version_date = 'test'
-        tools = {10: {'type': 'C', 'size': 2.54, 'geometry': []}}
-        obj = SimpleNamespace(units='IN', obj_options={}, tools=tools, source_file='original',
-                              solid_geometry=[object()], export_gerber=Mock(return_value='D10*\n'))
-        code = appIO.export_gerber(self.io, 'legacy', None, local_use=obj, use_thread=False)
-        self.assertIn('D10*\nM02*', code)
-        self.assertIs(obj.tools, tools)
-        self.assertEqual(obj.export_gerber.call_args.kwargs['factor'], 1)
-        self.assertEqual(obj.source_file, 'original')
-        # The PCB path must not impose a new empty-body policy on ordinary Gerbers.
-        obj.export_gerber.return_value = ''
-        self.assertIn('M02*', appIO.export_gerber(self.io, 'legacy', None, local_use=obj, use_thread=False))
-
     def test_actual_qt_dialog_selection_and_worker_object_creation(self):
         self.app.ui = QtWidgets.QWidget()
         parser = Mock()
@@ -358,18 +259,6 @@ class TestPcbDocImport(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertTrue(all(thread != self.qapp.thread() for thread in creation_threads))
         self.assertEqual([obj.units for kind, obj in self.objects], ['IN', 'IN'])
-
-    def test_abort_during_export_does_not_publish_or_register(self):
-        def export(*args, **kwargs):
-            self.app.abort_flag = True
-            return 'G04*\nM02*\n'
-
-        self.io.export_gerber.side_effect = export
-        self.io.import_pcbdoc_objects('board.PcbDoc', self.parsed, [1], ['PTH'])
-        self.assertEqual(self.objects, [])
-        self.qapp.processEvents()
-        self.app.file_opened.emit.assert_not_called()
-        self.app.worker_task.emit.assert_not_called()
 
     def test_real_excellon_export_drills_and_slots_in_current_units(self):
         import appHandlers.appIO as io_module

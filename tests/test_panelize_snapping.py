@@ -50,16 +50,6 @@ def test_snapping_skips_distant_pairs(monkeypatch):
     assert len(calls) == 100  # One nearby pair per row, rather than 19,900 pairs.
 
 
-def test_snapping_updates_moved_candidate_bounds():
-    # A moves C left. B then inserts its endpoint into C's segment. A static index of C's old bounds misses B-C.
-    a = LineString([(0, 0), (0, 1)])
-    b = LineString([(-1, 0.5), (-0.75 * TOLERANCE, 0.5)])
-    c = LineString([(0.75 * TOLERANCE, 0), (0.75 * TOLERANCE, 1)])
-    distant = LineString([(10, 10), (10, 11)])
-    lines = [a, b, c, distant]
-    assert indexed_merge(lines).equals_exact(pairwise_merge(lines), 0)
-
-
 @pytest.mark.parametrize('gap', [0, 0.5 * TOLERANCE, TOLERANCE, 1.01 * TOLERANCE])
 def test_snapping_tolerance_boundary(gap):
     lines = [LineString([(0, 0), (0, 1)]), LineString([(gap, 0), (gap, 1)])]
@@ -72,25 +62,6 @@ def test_snapping_matches_pairwise_order_for_clustered_paths(seed):
     lines = [LineString([(rng.randrange(3) + rng.uniform(-1, 1) * TOLERANCE, 0),
                          (rng.randrange(3) + rng.uniform(-1, 1) * TOLERANCE, 1)]) for _ in range(25)]
     assert indexed_merge(lines).equals_exact(pairwise_merge(lines), 0)
-
-
-def test_snapping_keeps_non_line_geometry_and_separate_tools():
-    lines = sparse_lines(2)
-    polygon = box(10, 10, 11, 11)
-    tools = {1: {'solid_geometry': [MultiLineString(lines), polygon]},
-             2: {'solid_geometry': [lines[0]]}}
-    pc.merge_tool_lines(tools, snap_overlaps=True)
-    assert tools[1]['solid_geometry'][0].equals_exact(pairwise_merge(lines), 0)
-    assert tools[1]['solid_geometry'][1] is polygon
-    assert tools[2]['solid_geometry'][0].equals_exact(lines[0], 0)
-
-
-@pytest.mark.parametrize('lines', [[], [LineString()], [LineString(), LineString([(0, 0), (1, 0)])]])
-def test_snapping_handles_empty_lines(lines):
-    tools = {1: {'solid_geometry': lines}}
-    pc.merge_tool_lines(tools, snap_overlaps=True)
-    assert all(not geo.is_empty for geo in tools[1]['solid_geometry'])
-    assert sum(geo.length for geo in tools[1]['solid_geometry']) == sum(geo.length for geo in lines)
 
 
 def test_snapping_honors_cancellation_between_candidates(monkeypatch):

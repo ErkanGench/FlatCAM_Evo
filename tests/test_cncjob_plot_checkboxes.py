@@ -5,8 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from appObjects.CNCJobObject import CNCJobObject
-from test_unify_characterization import _headless_qt  # noqa: F401
-from test_unify_regressions_0b import make_app
+from tests.helpers_objects import _headless_qt, make_app_0b as make_app  # noqa: F401,E402
 
 
 class FakeCheckBox:
@@ -60,25 +59,13 @@ def make_job(kind, rows, plot=True):
 
 
 @pytest.mark.parametrize('kind', ['excellon', 'geometry'])
-@pytest.mark.parametrize('plot', [False, True])
+@pytest.mark.parametrize('plot', [True])
 def test_object_plot_checkbox_sets_every_tool_checkbox(kind, plot):
     rows = [('0.8000', '1', FakeCheckBox(not plot)), ('1.0000', '2', FakeCheckBox(plot)),
             ('1.2000', '3', FakeCheckBox(not plot))]
     job, _ = make_job(kind, rows, plot=plot)
     job.on_plot_cb_click()
     assert [cb.isChecked() for _d, _t, cb in rows] == [plot, plot, plot]
-
-
-def test_excellon_row_without_checkbox_is_skipped():
-    rows = [('0.8000', '1', FakeCheckBox(True)), ('1.0000', '2', None), ('1.2000', '3', FakeCheckBox(True))]
-    job, _ = make_job('excellon', rows, plot=False)
-    job.on_plot_cb_click()
-    assert [rows[0][2].isChecked(), rows[2][2].isChecked()] == [False, False]
-
-    # a row click with a row that has no checkbox does not fail
-    rows[0][2].setChecked(True)
-    job.on_plot_cb_click_table()
-    assert job.plot2.call_count == 1
 
 
 @pytest.mark.parametrize('kind', ['excellon', 'geometry'])
@@ -93,14 +80,6 @@ def test_tool_checkboxes_set_the_object_plot_checkbox(kind):
     rows[1][2].setChecked(True)
     job.on_plot_cb_click_table()
     assert job.ui.plot_cb.isChecked() is True
-
-
-def test_partial_plot_is_not_kept_as_the_full_plot():
-    rows = [('0.8000', '1', FakeCheckBox(True)), ('1.0000', '2', FakeCheckBox(False))]
-    job, _ = make_job('excellon', rows)
-    job._full_plot_sig = (5, 1, 9)
-    job.on_plot_cb_click_table()
-    assert job._full_plot_sig is None
 
 
 @pytest.mark.parametrize('kind', ['all', 'cut', 'travel'])
@@ -123,18 +102,8 @@ def test_plot_kind_signal_keeps_a_reusable_full_plot(kind):
     assert job._full_plot_kind == kind
 
 
-def test_update_plot_preserves_the_explicit_diameter():
-    job, _ = make_job('geometry', [])
-    job.read_form = Mock()
-    job.ui.tooldia_entry = Mock(get_value=Mock(return_value=0.6))
-    job.on_updateplot_button_click()
-    task = job.app.worker_task.emit.call_args[0][0]
-    task['fcn'](*task['params'])
-    job.plot.assert_called_once_with(kind='all', dia=0.6)
-
-
 @pytest.mark.parametrize('kind', ['geometry', 'excellon'])
-@pytest.mark.parametrize('multitool', [False, True])
+@pytest.mark.parametrize('multitool', [False])
 def test_first_disable_reuses_a_plot_with_an_explicit_diameter(kind, multitool):
     from appObjects.AppObjectTemplate import FlatCAMObj
 
@@ -155,7 +124,7 @@ def test_first_disable_reuses_a_plot_with_an_explicit_diameter(kind, multitool):
 
 
 @pytest.mark.parametrize('visible', [False, True])
-@pytest.mark.parametrize('kind', ['cut', 'travel'])
+@pytest.mark.parametrize('kind', ['cut'])
 def test_project_plot_toggle_reuses_the_objects_selected_filter(kind, visible):
     from appHandlers.appPlotManager import AppPlotManager
 

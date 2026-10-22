@@ -15,7 +15,7 @@ from appHandlers.appHistory import HistoryManager, HistoryStep
 from appMain import App
 from appObjects.GeometryObject import GeometryObject
 
-from test_unify_characterization import _headless_qt, app  # noqa: F401  (the fixtures must be visible here)
+from tests.helpers_objects import app, _headless_qt  # noqa: F401,E402
 
 
 class FakeObj:
@@ -111,33 +111,6 @@ class TestEditorHistory(unittest.TestCase):
         app._history_edit = None
         saved(app, obj)
         self.assertEqual(app.history.undo_stack, [])
-
-    def test_other_kind_records_nothing(self):
-        obj = FakeObj('s1', 'script', box(0, 0, 1, 1))
-        app = make_app([obj])
-        begin(app, obj)
-        self.assertIsNone(app._history_edit)
-        saved(app, obj)
-        self.assertEqual(app.history.undo_stack, [])
-
-    def test_other_object_records_nothing(self):
-        a = FakeObj('a', 'geometry', box(0, 0, 1, 1))
-        b = FakeObj('b', 'geometry', box(0, 0, 1, 1))
-        app = make_app([a, b])
-        begin(app, a)
-        saved(app, b)
-        self.assertEqual(app.history.undo_stack, [])
-
-    def test_earlier_steps_stay(self):
-        obj = FakeObj('g1', 'geometry', box(0, 0, 1, 1))
-        app = make_app([obj])
-        app.history.push(OtherStep('g1'))
-        begin(app, obj)
-        obj.solid_geometry = box(0, 0, 2, 2)
-        saved(app, obj)
-        self.assertEqual([s.label for s in app.history.undo_stack], ['other', 'Edit'])
-
-
 
 def test_real_multigeo_geometry_edit_is_one_step_and_undo_gives_the_old_tool_geometry(app):
     # what App.on_editing_finished and update_editor_geometry() do for a Save in place, with a real GeometryObject

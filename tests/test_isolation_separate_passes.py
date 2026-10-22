@@ -2,7 +2,7 @@
 
 With 'Combine' off and the selection 'All' or 'Area Selection', ToolIsolation.isolate() gets geometry=None. It called
 flatten_shapely_geometry(None), which raises NotImplementedError, so no Geometry object was made. The tests build the
-real ToolIsolation headless and isolate a parsed Gerber object (fixtures of test_unify_characterization).
+real ToolIsolation headless and isolate a parsed Gerber object (fixtures of tests.helpers_objects).
 """
 
 from copy import deepcopy
@@ -17,7 +17,7 @@ from appObjects.GeometryObject import GeometryObject
 from appPlugins.ToolIsolation import ToolIsolation
 
 from test_plugin_geometry_bases import make_tool_app
-from test_unify_characterization import _headless_qt, app, make_gerber  # noqa: F401  (fixtures)
+from tests.helpers_objects import app, _headless_qt, make_gerber  # noqa: F401,E402
 
 DIA = 0.2
 
@@ -66,16 +66,6 @@ def test_whole_object_makes_one_geometry_per_pass(tool, app, passes):
         assert len(obj.solid_geometry) > 0
         assert obj.tools[1]['tooldia'] == DIA
         assert obj.tools[1]['solid_geometry'] == obj.solid_geometry
-
-
-def test_no_geometry_isolates_the_geometry_of_the_object(tool, app):
-    gerber = make_gerber(app, name='g')
-    whole = run_isolate(tool, app, gerber, 2)
-    explicit = run_isolate(tool, app, gerber, 2, geometry=gerber.solid_geometry)
-
-    assert sorted(whole) == sorted(explicit)
-    for name in whole:
-        assert wkb_set(whole[name].solid_geometry) == wkb_set(explicit[name].solid_geometry)
 
 
 def test_area_selection_with_separate_passes(tool, app):

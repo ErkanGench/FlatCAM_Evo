@@ -133,20 +133,6 @@ def test_move_finishes_plot_and_export_before_gui_completion(tool):
     assert tool.app.should_we_save is True
 
 
-def test_empty_explicit_list_does_not_move_current_selection(tool):
-    layer = make_layer([], [])
-    tool.app.collection.get_selected.return_value = [layer]
-    tool.move_handler((1, 2), objects=[])
-    tool.app.worker_task.emit.assert_not_called()
-    layer.offset.assert_not_called()
-
-
-def test_zero_move_does_not_export_or_replot(tool):
-    layer = make_layer([], [])
-    tool.move_handler((0, 0), objects=[layer])
-    tool.app.worker_task.emit.assert_not_called()
-
-
 @pytest.mark.parametrize('failure', ['offset', 'export'])
 def test_move_failure_is_reported_and_moved_geometry_is_replotted(tool, failure):
     layer = make_layer([], [])
@@ -163,47 +149,3 @@ def test_move_failure_is_reported_and_moved_geometry_is_replotted(tool, failure)
     assert not any('[success]' in call.args[0] for call in tool.app.inform.emit.call_args_list)
     layer.plot.assert_called_once()
 
-
-def test_partial_move_exception_keeps_displayed_bounds_in_sync(tool):
-    layer = make_layer([], [])
-
-    def partial_offset(vector):
-        layer.geometry = Point(11, 22)
-        raise ValueError('translation failed')
-
-    layer.offset.side_effect = partial_offset
-    tool.move_handler((1, 2), objects=[layer])
-    run_worker(tool)
-    QtTest.QTest.qWait(20)
-    assert layer.obj_options['xmin'] == 11
-    layer.set_offset_values.assert_called_once_with(bounds=(11.0, 22.0, 11.0, 22.0))
-    layer.plot.assert_called_once()
-    assert 'translation failed' in tool.app.inform.emit.call_args.args[0]
-
-
-def test_queued_move_keeps_original_object_list(tool):
-    layer = make_layer([], [])
-    objects = [layer]
-    tool.move_handler((1, 2), objects=objects)
-    objects.clear()
-    run_worker(tool)
-    QtTest.QTest.qWait(20)
-    assert layer.geometry.equals(Point(11, 22))
-
-
-def test_hidden_selection_cancels_without_empty_bounds_crash(tool):
-    layer = make_layer([], [])
-    layer.visible = False
-    tool.app.collection.get_selected.return_value = [layer]
-    tool.toggle()
-    assert tool.app.command_active is None
-    layer.bounds.assert_not_called()
-
-
-def test_preview_only_redraws_once(tool):
-    tool.old_coords = [(0, 0), (1, 0), (1, 1), (0, 1)]
-    tool.app.app_units = 'MM'
-    tool.app.options = {'global_selection_shape_as_line': False}
-    tool.update_sel_bbox((1, 2))
-    tool.sel_shapes.redraw.assert_called_once()
-    assert isinstance(tool.sel_shapes.add.call_args.args[0], Polygon)

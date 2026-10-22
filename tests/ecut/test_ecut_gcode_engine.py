@@ -8,8 +8,6 @@ def engine_api():
     api = pwm_api()
     return module.EcutGcodeEngine(api), api
 
-def test_engine_module_is_available():
-    assert importlib.util.find_spec('appPlugins.Common.ecut.ecut_gcode_engine') is not None
 
 def test_modal_units_distance_and_feed_survive_separate_blocks():
     engine, api = engine_api()

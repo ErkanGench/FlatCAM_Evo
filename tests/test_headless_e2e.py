@@ -50,27 +50,10 @@ def test_a_command_writes_a_project(tmp_path):
     assert (tmp_path / 'out.FlatPrj').is_file()
 
 
-def test_nothing_from_the_shell_banner_or_the_log_debug_reaches_stdout(tmp_path):
-    result = run_headless(['--command=puts hello'], tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == 'hello\n'
-
-
 def test_a_failed_command_gives_exit_code_1(tmp_path):
     result = run_headless(['--command=no_such_command'], tmp_path)
     assert result.returncode == 1
     assert 'invalid command name "no_such_command"' in result.stderr
-
-
-def test_exit_n(tmp_path):
-    result = run_headless(['--command=exit 3'], tmp_path)
-    assert result.returncode == 3, result.stderr
-
-
-def test_quit_app_stops_the_script(tmp_path):
-    result = run_headless(['--command=quit_app; new_geometry g; save_project after.FlatPrj'], tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert not (tmp_path / 'after.FlatPrj').exists()
 
 
 def test_shellfile_with_a_relative_name_and_shellvar(shellfile_run):

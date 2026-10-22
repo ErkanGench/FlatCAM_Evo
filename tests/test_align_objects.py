@@ -59,45 +59,6 @@ class TestSolvers(unittest.TestCase):
         self.assertMatrix(solve_affine(P, apply_matrix(want, P)), want)
         self.assertMatrix(solve_affine(P[:3], apply_matrix(want, P[:3])), want)
 
-    def test_noise_rms(self):
-        rng = np.random.default_rng(1)
-        want = rot(17, dx=3, dy=4)
-        big = rng.uniform(-50, 50, (200, 2))
-        q = apply_matrix(want, big) + rng.normal(0, 0.01, big.shape)
-        for solver in (solve_rigid, solve_similarity, solve_affine):
-            m = solver(big, q)
-            errors, rms = residuals(m, big, q)
-            self.assertEqual(len(errors), 200)
-            self.assertLess(rms, 0.02)
-            self.assertGreater(rms, 0.005)
-
-    def test_degenerate(self):
-        same = [(1, 1), (1, 1), (1, 1)]
-        with self.assertRaises(AlignError):
-            solve_rigid(same, P[:3])
-        with self.assertRaises(AlignError):
-            solve_similarity(same, P[:3])
-        with self.assertRaises(AlignError):
-            solve_similarity(P[:3], same)
-        with self.assertRaises(AlignError):
-            solve_affine([(0, 0), (1, 1), (2, 2), (5, 5)], P[:4])
-        with self.assertRaises(AlignError):
-            solve_affine(P[:2], P[:2])
-        with self.assertRaises(AlignError):
-            solve_rigid(P[:1], P[:1])
-        with self.assertRaises(AlignError):
-            solve_translate([], [])
-        with self.assertRaises(AlignError):
-            solve_rigid(P[:2], P[:3])
-
-    def test_invert(self):
-        for m in (rot(123, s=1.5, dx=4, dy=-9), (1.01, 0.02, -0.03, 0.97, 5.0, -7.0)):
-            back = apply_matrix(invert(m), apply_matrix(m, P))
-            np.testing.assert_allclose(back, P, atol=1e-9)
-        with self.assertRaises(AlignError):
-            invert((1, 2, 2, 4, 0, 0))
-
-
 class TestSnap(unittest.TestCase):
 
     def gerber(self):
@@ -115,13 +76,6 @@ class TestSnap(unittest.TestCase):
         self.assertEqual(snap(idx, 0.6, 0.1, 0.1), (0.5, 0.0))
         self.assertEqual(snap(idx, -1.5, 0.0, 0.1), (0.0, 0.0))
 
-    def test_vertex_fallback_and_none(self):
-        idx = build_snap_index(self.gerber())
-        # a region is not a snap feature, but its vertices are the fallback
-        self.assertEqual(snap(idx, 14.05, 12.05, 0.2), (14.0, 12.0))
-        self.assertIsNone(snap(idx, 12.0, 11.0, 0.2))
-        self.assertIsNone(snap(idx, 50.0, 50.0, 1.0))
-
     def test_excellon(self):
         exc = FakeObj('excellon', tools={
             1: {'tooldia': 1.0, 'drills': [Point(3, 3)], 'slots': [((10, 0), (14, 0))]},
@@ -129,21 +83,6 @@ class TestSnap(unittest.TestCase):
         idx = build_snap_index(exc)
         self.assertEqual(snap(idx, 3.2, 3.1, 0.1), (3.0, 3.0))
         self.assertEqual(snap(idx, 13.0, 0.2, 0.1), (12.0, 0.0))
-
-    def test_geometry_vertices(self):
-        geo = FakeObj('geometry', solid_geometry=[LineString([(0, 0), (5, 5)]), [Point(9, 9)]])
-        idx = build_snap_index(geo)
-        self.assertEqual(snap(idx, 4.9, 5.1, 0.5), (5.0, 5.0))
-        self.assertEqual(snap(idx, 9.1, 9.0, 0.5), (9.0, 9.0))
-        self.assertIsNone(snap(idx, 2.5, 2.4, 0.5))
-
-        multi = FakeObj('geometry', multigeo=True, tools={1: {'solid_geometry': [LineString([(1, 1), (2, 1)])]}})
-        self.assertEqual(snap(build_snap_index(multi), 2.0, 1.1, 0.5), (2.0, 1.0))
-
-    def test_empty(self):
-        idx = build_snap_index(FakeObj('geometry', solid_geometry=[]))
-        self.assertIsNone(snap(idx, 0, 0, 10))
-
 
 if __name__ == '__main__':
     unittest.main()

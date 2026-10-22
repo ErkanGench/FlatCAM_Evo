@@ -8,7 +8,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from test_unify_characterization import make_app, make_excellon, _headless_qt  # noqa: E402,F401
+from tests.helpers_objects import (  # noqa: F401,E402
+    _headless_qt, make_app, make_app_0b, make_excellon, no_shape_collection,
+)
+from appObjects.ExcellonObject import ExcellonObject
+from shapely.geometry import Point
 
 
 class FakeShapes:
@@ -66,18 +70,6 @@ def test_visibility_is_set_per_tool_with_its_indexes():
     obj.ui_connect.assert_called_once()
 
 
-def test_tool_without_plotted_shapes_is_skipped_without_error():
-    obj = make_excellon(make_app())
-    keys = list(obj.tools)
-    obj, keys = _prepare({k: True for k in keys})
-    obj.shape_indexes_dict = {keys[0]: [7]}     # the other tools have no shapes
-
-    obj.on_plot_cb_click_table()
-
-    assert obj.shapes.visibility_calls == [(True, [7])]
-    assert obj.shapes.redraws == 1
-
-
 def test_tool_without_a_table_row_keeps_its_visibility_and_reads_no_other_row():
     keys = list(make_excellon(make_app()).tools)
     assert len(keys) >= 3
@@ -94,12 +86,25 @@ def test_tool_without_a_table_row_keeps_its_visibility_and_reads_no_other_row():
     obj.ui_connect.assert_called_once()
 
 
-def test_other_errors_are_not_hidden():
-    obj = make_excellon(make_app())
-    keys = list(obj.tools)
-    obj, keys = _prepare({k: True for k in keys})
-    obj.shape_indexes_dict = {k: [1] for k in keys}
-    obj.shapes.update_visibility = Mock(side_effect=RuntimeError('boom'))
+def _plot_ready_excellon_object():
+    app = make_app_0b()
+    obj = ExcellonObject('exc', app)
+    ui = Mock()
+    ui.multicolored_cb.get_value.return_value = False
+    ui.solid_cb.get_value.return_value = True
+    ui.plot_cb.get_value.return_value = True
+    obj.ui = ui
+    obj.obj_options.update({'multicolored': False, 'solid': True, 'plot': True})
+    obj.tools = {1: {'tooldia': 1.0, 'solid_geometry': [Point(0, 0).buffer(0.5)]}}
+    obj.solid_geometry = [Point(0, 0).buffer(0.5)]
+    obj.add_shapes_batch = Mock(return_value=[11])
+    obj.shapes = Mock(_indexes=[])
+    return obj
 
-    with pytest.raises(RuntimeError):
-        obj.on_plot_cb_click_table()
+
+class TestSmallBugs_0B6:
+    def test_excellon_plot_respects_explicit_visible_false(self, no_shape_collection):
+        obj = _plot_ready_excellon_object()
+        obj.plot(visible=False)
+        assert obj.add_shapes_batch.called
+        assert obj.add_shapes_batch.call_args.kwargs['visible'] is False

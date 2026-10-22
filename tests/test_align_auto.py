@@ -76,12 +76,6 @@ class TestAutoAlign(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.check(holes, pads, mirrored, allow_mirror=False)
 
-    def test_scale_similarity(self):
-        pads = board()
-        m = rot(12, 4.0, 9.0, s=1.01)
-        holes = apply_matrix(invert(m), pads)
-        self.check(holes, pads, m, model='similarity')
-
     def test_outliers_and_missing_pads(self):
         rng = np.random.default_rng(5)
         pads = board(vias=80)
@@ -94,32 +88,11 @@ class TestAutoAlign(unittest.TestCase):
         self.assertGreaterEqual(best.matched, len(holes) - 2)
         self.assertLess(best.rms, 0.06)
 
-    def test_large_board_speed(self):
-        rng = np.random.default_rng(9)
-        pads = np.vstack([board(vias=200)] + [board(seed=s, vias=0) + rng.uniform(0, 300, 2) for s in range(40)])
-        m = rot(200, 3.0, 4.0)
-        holes = apply_matrix(invert(m), pads)
-        self.check(holes, pads, m)
-
-    def test_symmetric_is_ambiguous(self):
-        pads = np.array([(0, 0), (50, 0), (50, 30), (0, 30)], dtype=float)
-        res = auto_align(hole_index(pads), pad_index(pads))
-        self.assertTrue(is_ambiguous(res))
-        self.assertGreaterEqual(len(res), 2)
-
     def test_errors(self):
         with self.assertRaises(AlignError):
             auto_align(hole_index(np.array([(0.0, 0.0)])), pad_index(board()))
         with self.assertRaises(AlignError):
             auto_align(hole_index(board()), SnapIndex([], [], np.empty((0, 2))))
-
-    def test_progress(self):
-        seen = []
-        pads = board()
-        auto_align(hole_index(pads), pad_index(pads), progress=seen.append)
-        self.assertEqual(seen[-1], 100)
-        self.assertEqual(seen, sorted(seen))
-
 
 if __name__ == '__main__':
     unittest.main()

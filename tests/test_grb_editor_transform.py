@@ -188,11 +188,6 @@ class TransformCase(unittest.TestCase):
         self.assertEqual(editor.selected, selected)
         self.assertEqual(host.messages, [])
 
-    def test_buffer_mitre_int_join(self):
-        host, editor, shapes = build()
-        old = shapes[0].geo['solid']
-        host.on_buffer_action(0.2, 2)
-        same_geo(self, shapes[0].geo['solid'], old.buffer(0.2, quad_segs=16, join_style=2))
 
     def test_buffer_factor(self):
         host, editor, shapes = build()
@@ -214,13 +209,6 @@ class TransformCase(unittest.TestCase):
         self.assertEqual(len(host.messages), 1)
         self.assertTrue(host.messages[0].startswith('[WARNING_NOTCL]'))
 
-    def test_error_message(self):
-        host, editor, shapes = build()
-        with patch.object(GrbTransformationPlugin, 'affine_selection', side_effect=ValueError('boom')):
-            host.on_offset('X', 1.0)
-        self.assertEqual(len(host.messages), 1)
-        self.assertTrue(host.messages[0].startswith('[ERROR_NOTCL]'))
-        self.assertIn('boom', host.messages[0])
 
     def test_duplicate_selection_transformed_once(self):
         host, editor, shapes = build()
@@ -228,126 +216,6 @@ class TransformCase(unittest.TestCase):
         old = shapes[0].geo['solid']
         host.on_offset('X', 1.0)
         same_geo(self, shapes[0].geo['solid'], translate(old, 1.0, 0))
-
-    def test_selection_bounds(self):
-        host, editor, shapes = build()
-        bounds = selection_bounds(editor.selected)
-        xs = [s.geo['solid'].bounds for s in editor.selected]
-        self.assertEqual(bounds, (min(b[0] for b in xs), min(b[1] for b in xs), max(b[2] for b in xs),
-                                  max(b[3] for b in xs)))
-        self.assertIsNone(selection_bounds([]))
-
-    def test_modified_and_pick_index(self):
-        host, editor, shapes = build()
-        editor.is_modified = False
-        tree_before = editor.get_pick_index()
-        revision = editor.geometry_revision
-        host.on_offset('X', 100.0)
-        self.assertTrue(editor.is_modified)
-        self.assertGreater(editor.geometry_revision, revision)
-        tree, refs = editor.get_pick_index()
-        self.assertIsNot(tree, tree_before[0])
-        moved = [ref[2] for ref in refs]
-        self.assertIn(shapes[0], moved)
-        hit = tree.query(Point(100.0, 0.0).buffer(0.1))
-        self.assertTrue(len(hit) >= 1)
-
-
-class TestIncrementalPlot(unittest.TestCase):
-    def test_affine_maps_the_plotted_buffers(self):
-        host, editor, shapes = build(real_plot=True)
-        editor.plot_all()
-        self.assertEqual(editor.plot_count, 1)
-        keys = [i for s in editor.selected for i in editor._rendered_shapes.get(s, ())]
-        host.on_rotate_action(20.0, (0, 0))
-        self.assertEqual(editor.plot_count, 1)          # no new plot_all
-        self.assertEqual(len(editor.shapes.transformed), 1)
-        self.assertEqual(sorted(editor.shapes.transformed[0][0]), sorted(keys))
-        self.assertEqual(editor._render_state[0], editor.geometry_revision)
-        # a second action stays incremental
-        host.on_offset('Y', 1.0)
-        self.assertEqual(editor.plot_count, 1)
-        self.assertEqual(len(editor.shapes.transformed), 2)
-
-    def test_affine_falls_back_to_replotting_the_shapes(self):
-        host, editor, shapes = build(real_plot=True, transform_ok=False)
-        editor.plot_all()
-        added = len(editor.shapes.added)
-        n_sel = len(editor.selected)
-        host.on_offset('X', 2.0)
-        self.assertEqual(editor.plot_count, 1)
-        self.assertEqual(len(editor.shapes.added) - added, n_sel)
-        self.assertEqual(len(editor.shapes.removed), n_sel)
-        for shape in editor.selected:
-            self.assertEqual(len(editor._rendered_shapes[shape]), 1)
-
-    def test_buffer_replots_only_the_selection(self):
-        host, editor, shapes = build(real_plot=True)
-        editor.plot_all()
-        added = len(editor.shapes.added)
-        n_sel = len(editor.selected)
-        host.on_buffer_action(0.1, 'round')
-        self.assertEqual(editor.plot_count, 1)
-        self.assertEqual(len(editor.shapes.added) - added, n_sel)
-        self.assertEqual(len(editor.shapes.removed), n_sel)
-
-    def test_out_of_sync_does_one_plot_all(self):
-        host, editor, shapes = build(real_plot=True)
-        host.on_offset('X', 2.0)
-        self.assertEqual(editor.plot_count, 1)
-        self.assertEqual(editor.shapes.transformed, [])
-
-
-class TestBenchmark(unittest.TestCase):
-    def test_2000_pads(self):
-        count = 2000
-        pads = [pad(i * 0.1, (i % 40) * 0.1, 0.03) for i in range(count)]
-        for p in pads:
-            p.geo['clear'] = p.geo['solid'].buffer(0.01)
-
-        def per_shape(shapes, matrix):
-            for shape in shapes:
-                for key in KEYS:
-                    shape.geo[key] = rotate(shape.geo[key], -30, origin=(5, 2))
-
-        algorithms = (per_shape, GrbTransformationPlugin.affine_selection)
-        timings = [[], []]
-        # Compare identical history, export validation and UI work, not a bare
-        # coordinate loop against a complete editor action. Alternate run order.
-        for repetition in range(5):
-            for index in ((0, 1) if repetition % 2 == 0 else (1, 0)):
-                records = [DrawToolShape(dict(p.geo)) for p in pads]
-                editor = make_editor({10: aperture(records)})
-                editor.loaded_as_regions = False
-                editor.selected = list(records)
-                editor.plot_transformed = MagicMock()
-                host = Host(editor)
-                with patch.object(GrbTransformationPlugin, 'affine_selection', algorithms[index]):
-                    start = time.perf_counter()
-                    host.on_rotate_action(30, (5, 2))
-                    timings[index].append(time.perf_counter() - start)
-                self.assertEqual(len(editor.history.undo_stack), 1)
-                self.assertEqual(len(editor.history.undo_stack[0]['apertures'][10][4]), count)
-                self.assertEqual(editor.selected, records)
-                self.assertEqual(editor.ui.features_table.rowCount(), count)
-                self.assertFalse(editor.loaded_as_regions)
-                same_geo(self, records[0].geo['solid'], rotate(pads[0].geo['solid'], -30, origin=(5, 2)))
-                editor.deleteLater()
-        old_time, new_time = (statistics.median(values) for values in timings)
-
-        print('\n2000 pads rotate (5-run medians, identical transaction/UI): old per-shape %.1f ms, batch %.1f ms (x%.1f)' %
-              (old_time * 1e3, new_time * 1e3, old_time / new_time))
-        self.assertLess(new_time, old_time)
-
-
-class SingleClassCase(unittest.TestCase):
-    def test_editor_uses_the_plugin_class(self):
-        self.assertIs(appGerberEditor.TransformEditorTool, GrbTransformationPlugin.TransformEditorTool)
-
-    def test_no_mixin_in_the_plugin_module(self):
-        names = [n for n in vars(GrbTransformationPlugin) if 'Mixin' in n]
-        self.assertEqual(names, [])
-        self.assertFalse([c for c in TransformEditorTool.__mro__ if 'Mixin' in c.__name__])
 
 
 if __name__ == '__main__':

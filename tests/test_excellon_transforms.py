@@ -13,7 +13,14 @@ from shapely import Point, LineString, affinity  # noqa: E402
 
 from appHandlers.appHistory import apply_matrix_to_object  # noqa: E402
 from appObjects.ExcellonObject import ExcellonObject  # noqa: E402
-from test_unify_characterization import make_app  # noqa: E402
+from tests.helpers_objects import (  # noqa: F401,E402
+    AFFINE_TRANSFORMS, app, apply_to, assert_poly_equiv, assert_xy_close, drill_xy, excellon, export_excellon_text,
+    GERBER_C_FLASH, GERBER_P_FLASH, _headless_qt, make_app, make_app_0b, make_excellon, make_excellon_0b,
+    make_gerber_0b, make_same_diameter_excellon, polygon_union, pts, reparse_excellon, slot_coords, slot_flat,
+    slot_xy, snapshot_excellon, TRANSFORM_NAMES,
+)
+import pytest
+from tclCommands.TclCommandBuffer import TclCommandBuffer
 
 _QAPP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
@@ -73,20 +80,12 @@ class ExcellonTransformsTest(unittest.TestCase):
         for got, want in zip(self.obj.solid_geometry, total):
             self.assertTrue(got.equals_exact(want, 1e-9))
 
-    def test_create_geometry_matches_per_element_buffer(self):
-        self.check(_reference(self.obj, lambda p: p))
 
     def test_rotate(self):
         ref = _reference(self.obj, lambda p: affinity.rotate(p, 30, origin=(5, 7)))
         self.obj.rotate(30, (5, 7))
         self.check(ref)
 
-    def test_rotate_default_origin_is_bounds_center(self):
-        minx, miny, maxx, maxy = self.obj.bounds()
-        orig = ((minx + maxx) / 2.0, (miny + maxy) / 2.0)
-        ref = _reference(self.obj, lambda p: affinity.rotate(p, 45, origin=orig))
-        self.obj.rotate(45)
-        self.check(ref)
 
     def test_scale_moves_holes_keeps_diameters(self):
         ref = _reference(self.obj, lambda p: affinity.scale(p, 1.5, 0.5, origin=(1, 2)))
@@ -94,10 +93,6 @@ class ExcellonTransformsTest(unittest.TestCase):
         self.check(ref)
         self.assertEqual([t['tooldia'] for t in self.obj.tools.values()], [0.8, 1.2, 2.0])
 
-    def test_scale_single_factor(self):
-        ref = _reference(self.obj, lambda p: affinity.scale(p, 2, 2, origin=(0, 0)))
-        self.obj.scale(2)
-        self.check(ref)
 
     def test_skew(self):
         ref = _reference(self.obj, lambda p: affinity.skew(p, 10, 20, origin=(3, 4)))
@@ -117,10 +112,6 @@ class ExcellonTransformsTest(unittest.TestCase):
         self.obj.offset((1.5, -2))
         self.check(ref)
 
-    def test_offset_zero_is_noop(self):
-        before = [g.wkb for g in self.obj.solid_geometry]
-        self.obj.offset((0, 0))
-        self.assertEqual([g.wkb for g in self.obj.solid_geometry], before)
 
     def test_rigid_matrix_replay_keeps_aggregate_and_tools_in_sync(self):
         before = list(self.obj.solid_geometry)
@@ -144,18 +135,200 @@ class ExcellonTransformsTest(unittest.TestCase):
         obj.buffer(1.5, 'round', True)
         self.check(ref)
 
-    def test_data_kept(self):
-        self.obj.rotate(10, (0, 0))
-        self.assertEqual(self.obj.tools[1]['data'], {'cutz': -1.7})
-        self.assertEqual(self.obj.tools[2]['data'], {'cutz': -2.0})
-
-    def test_empty_tools(self):
-        self.obj.tools = {}
-        self.obj.offset((1, 1))
-        self.obj.scale(2)
-        self.obj.mirror('X', (0, 0))
-        self.assertEqual(self.obj.solid_geometry, [])
-
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestExcellonParse:
+    def test_units_and_tools(self, excellon):
+        assert excellon.units == 'MM'
+        assert sorted(excellon.tools) == [1, 2, 3]
+        assert [excellon.tools[t]['tooldia'] for t in (1, 2, 3)] == [0.8, 1.0, 1.5]
+
+
+    def test_coordinates(self, excellon):
+        tools = excellon.tools
+        assert pts(tools[1]['drills']) == [(5, 5), (10, 5), (15, 5)]
+        assert pts(tools[2]['drills']) == [(5, 12), (10, 12)]
+        assert slot_coords(tools[2]['slots']) == [((20, 12), (28, 12))]
+        assert pts(tools[3]['drills']) == [(25, 22)]
+        assert slot_coords(tools[3]['slots']) == [((5, 20), (5, 26)), ((12, 20), (18, 20))]
+
+
+@pytest.mark.parametrize('name', TRANSFORM_NAMES)
+class TestExcellonTransforms:
+    def test_drill_and_slot_coordinates(self, app, name):
+        obj = make_excellon(app)
+        before = snapshot_excellon(obj)
+        AFFINE_TRANSFORMS[name][0](obj)
+        fn = AFFINE_TRANSFORMS[name][1]
+        assert sorted(obj.tools) == sorted(before)
+        for t, tool in before.items():
+            now = obj.tools[t]
+            assert len(now['drills']) == len(tool['drills'])
+            assert len(now['slots']) == len(tool['slots'])
+            for p_before, p_now in zip(tool['drills'], now['drills']):
+                expected = fn(p_before)
+                assert (p_now.x, p_now.y) == pytest.approx((expected.x, expected.y), abs=1e-9), (name, t)
+            for s_before, s_now in zip(tool['slots'], now['slots']):
+                for end_before, end_now in zip(s_before, s_now):
+                    expected = fn(end_before)
+                    assert (end_now.x, end_now.y) == pytest.approx((expected.x, expected.y), abs=1e-9), (name, t)
+
+
+def test_excellon_skew_rebuilds_round_holes_at_skewed_centres(app):
+    """Characterization: skew moves the hole centres, it does not shear the hole shape."""
+    obj = make_excellon(app)
+    before = polygon_union(obj.solid_geometry)
+    AFFINE_TRANSFORMS['skew'][0](obj)
+    sheared = polygon_union(apply_to(AFFINE_TRANSFORMS['skew'][1], before))
+    # the rebuilt geometry keeps round holes of the same size: its area is unchanged, the sheared copy differs
+    assert abs(polygon_union(obj.solid_geometry).area - before.area) < 1e-6 * before.area + 0.5
+    assert abs(sheared.area - before.area) > 0.1   # the sheared copy has another area, the rebuilt holes do not
+
+
+class TestExcellonFileRoundTrip:
+    def test_excellon_round_trip(self, app, tmp_path):
+        exc = make_excellon(app)
+        again = reparse_excellon(app, export_excellon_text(app, exc), tmp_path)
+        assert again.units == 'MM'
+        assert sorted(again.tools) == [1, 2, 3]
+        for t, tool in exc.tools.items():
+            assert again.tools[t]['tooldia'] == pytest.approx(tool['tooldia'], abs=1e-9)
+            assert pts(again.tools[t]['drills']) == pytest.approx(pts(tool['drills']), abs=1e-9)
+            assert slot_flat(again.tools[t]['slots']) == pytest.approx(slot_flat(tool['slots']), abs=1e-9)
+        assert_poly_equiv(again.solid_geometry, exc.solid_geometry, rel=1e-6, abs_tol=1e-6, msg='excellon file')
+
+
+    def test_excellon_equal_diameter_tools_stay_separate_in_the_file(self, app, tmp_path):
+        exc = make_same_diameter_excellon(app)
+        again = reparse_excellon(app, export_excellon_text(app, exc), tmp_path)
+        assert sorted(again.tools) == [1, 2]
+        assert [again.tools[t]['tooldia'] for t in (1, 2)] == [1.0, 1.0]
+        assert pts(again.tools[1]['drills']) == [(5, 5), (9, 9)]
+        assert pts(again.tools[2]['drills']) == [(15, 5)]
+        assert slot_coords(again.tools[2]['slots']) == [((20, 5), (26, 5))]
+
+
+class TestExcellonScaleUnits_0B3:
+    # A drill is a physical tool: scale() moves the holes and keeps the diameters (the behavior before the
+    # unification). A user corrects a file read with a wrong number format with a scale of the positions.
+    @pytest.mark.parametrize('factor', [2.0, -2.0, 0.1])
+    def test_uniform_scale_moves_the_holes_and_keeps_tooldia(self, factor):
+        ex = make_excellon_0b(default_data={})
+        before = [(d.x, d.y) for d in ex.tools[1]['drills']]
+        ex.scale(factor, factor, point=(0, 0))
+        assert ex.tools[1]['tooldia'] == pytest.approx(1.0)
+        assert [(d.x, d.y) for d in ex.tools[1]['drills']] == pytest.approx(
+            [(x * factor, y * factor) for x, y in before])
+        minx, _, maxx, _ = ex.tools[1]['solid_geometry'][0].bounds
+        assert maxx - minx == pytest.approx(1.0, abs=1e-3)
+
+    def test_unit_conversion_then_scale_keeps_the_converted_diameters(self):
+        # an inch file (M72) read with the wrong format, converted to MM by the app, then scaled by 1/10
+        ex = make_excellon_0b(default_data={})
+        ex.units = 'IN'
+        ex.convert_units('MM')
+        assert ex.tools[1]['tooldia'] == pytest.approx(25.4)
+        ex.scale(0.1, 0.1, point=(0, 0))
+        assert ex.tools[1]['tooldia'] == pytest.approx(25.4)
+
+    def test_gerber_scale_keeps_p_aperture_nvertices(self):
+        g = make_gerber_0b(GERBER_P_FLASH)
+        assert g.tools[11]['nVertices'] == 6
+        g.scale(2.0)
+        assert g.tools[11]['nVertices'] == 6
+        assert g.tools[11]['diam'] == pytest.approx(2.0)
+
+
+def _tcl_buffer(ex, *argv):
+    app = make_app_0b()
+    app.collection.get_by_name.return_value = ex
+    cmd = TclCommandBuffer(app)
+    args, unnamed = cmd.check_args(('ex',) + argv)
+    cmd.execute(args, unnamed)
+
+
+class TestTransformBugs_0B4:
+    def test_excellon_rotate_without_point_uses_bounds_center(self):
+        ex = make_excellon_0b(default_data={})
+        minx, miny, maxx, maxy = ex.bounds()
+        cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
+        old_drills = drill_xy(ex)
+        old_slots = slot_xy(ex)
+
+        def rot90(p):
+            # 90 degrees counter-clockwise about (cx, cy)
+            return cx - (p[1] - cy), cy + (p[0] - cx)
+
+        ex.rotate(90)
+        assert_xy_close(drill_xy(ex), [rot90(p) for p in old_drills], tol=1e-6)
+        assert_xy_close([s[0] for s in slot_xy(ex)], [rot90(s[0]) for s in old_slots], tol=1e-6)
+        assert_xy_close([s[1] for s in slot_xy(ex)], [rot90(s[1]) for s in old_slots], tol=1e-6)
+
+    def test_excellon_buffer_factor_false_is_distance_mode(self):
+        ex = make_excellon_0b(default_data={}, tooldia=1.0)
+        ex.buffer(0.25, 'round', False)
+        assert ex.tools[1]['tooldia'] == pytest.approx(1.5)
+
+    def test_excellon_multiplicative_buffer_multiplies_diameter(self):
+        ex = make_excellon_0b(default_data={}, tooldia=1.0)
+        ex.buffer(2, 'round', True)
+        assert ex.tools[1]['tooldia'] == pytest.approx(2.0)
+
+    def test_gerber_buffer_factor_false_is_distance_mode(self):
+        g = make_gerber_0b(GERBER_C_FLASH)
+        g.buffer(0.1, 'round', False)
+        assert g.tools[10]['size'] == pytest.approx(1.2)
+
+    def test_gerber_distance_buffer_keeps_p_aperture_nvertices(self):
+        g = make_gerber_0b(GERBER_P_FLASH)
+        g.buffer(0.1, 'round', None)
+        assert g.tools[11]['nVertices'] == 6
+
+    def test_excellon_create_geometry_keeps_existing_tool_data(self):
+        ex = make_excellon_0b(default_data={'from_default': 1})
+        ex.tools[1]['data'] = {'kept': 5}
+        ex.create_geometry()
+        assert ex.tools[1]['data'] == {'kept': 5}
+
+
+    def test_tcl_buffer_factor_true_multiplies_diameter(self):
+        ex = make_excellon_0b(default_data={}, tooldia=1.0)
+        _tcl_buffer(ex, '-dist', '2', '-factor', 'True')
+        assert ex.tools[1]['tooldia'] == pytest.approx(2.0)
+
+
+class TestGuardsAlreadyPassing_0B:
+    def test_excellon_scale_negative_x_uses_signed_factor(self):
+        ex = make_excellon_0b(default_data={}, drills=((2.0, 1.0), (4.0, 3.0)), slots=(((2.0, 5.0), (6.0, 5.0)),))
+        ex.scale(-1, 1, point=(1, 1))
+        assert_xy_close(drill_xy(ex), [(0.0, 1.0), (-2.0, 3.0)])
+        assert_xy_close([s[0] for s in slot_xy(ex)], [(0.0, 5.0)])
+        assert_xy_close([s[1] for s in slot_xy(ex)], [(-4.0, 5.0)])
+
+
+    def test_excellon_nonuniform_scale_keeps_tooldia(self):
+        ex = make_excellon_0b(default_data={})
+        ex.scale(2.0, 1.0, point=(0, 0))
+        assert ex.tools[1]['tooldia'] == pytest.approx(1.0)
+        assert_xy_close(drill_xy(ex), [(0.0, 0.0), (8.0, 0.0)])
+
+    def test_excellon_convert_units_round_trip_scales_once(self):
+        ex = make_excellon_0b(default_data={}, units='IN', tooldia=1.0, drills=((1.0, 2.0),),
+                           slots=(((0.0, 0.0), (1.0, 0.0)),))
+        ex.convert_units('MM')
+        assert ex.tools[1]['tooldia'] == pytest.approx(25.4, abs=1e-9)
+        assert_xy_close(drill_xy(ex), [(25.4, 50.8)], tol=1e-9)
+        assert_xy_close([s[1] for s in slot_xy(ex)], [(25.4, 0.0)], tol=1e-9)
+        ex.convert_units('IN')
+        assert ex.tools[1]['tooldia'] == pytest.approx(1.0, abs=1e-9)
+        assert_xy_close(drill_xy(ex), [(1.0, 2.0)], tol=1e-9)
+        assert_xy_close([s[1] for s in slot_xy(ex)], [(1.0, 0.0)], tol=1e-9)
+
+
+    def test_gerber_buffer_factor_true_is_multiplicative_mode(self):
+        g = make_gerber_0b(GERBER_C_FLASH)
+        g.buffer(2, 'round', True)
+        assert g.tools[10]['size'] == pytest.approx(2.0)

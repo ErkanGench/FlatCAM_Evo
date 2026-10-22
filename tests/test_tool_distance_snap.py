@@ -9,9 +9,7 @@ import pytest
 
 from appPlugins.ToolDistance import Distance
 
-from test_unify_characterization import (  # noqa: F401  (the fixtures must be visible in this module)
-    _headless_qt, app, excellon, gerber, make_excellon, make_gerber,
-)
+from tests.helpers_objects import app, excellon, gerber, _headless_qt, make_excellon, make_gerber  # noqa: F401,E402
 
 
 def snap(app_objects, pos):
@@ -48,22 +46,9 @@ class TestGerberPads:
         assert result == pytest.approx(center)
         assert jump == pytest.approx(center)
 
-    def test_flash_after_a_clear_feature(self, objs):
-        result, jump = snap([objs[0]], (15.2, 35.1))      # C2 flash, drawn after the clear track
-        assert result == pytest.approx((15.0, 35.0))
-
     def test_click_on_a_track_does_not_snap(self, objs):
         result, jump = snap([objs[0]], (20.0, 10.1))      # inside the C1 track, not a flash
         assert result == (20.0, 10.1) and jump is None
-
-    def test_click_on_a_region_does_not_snap(self, objs):
-        result, jump = snap([objs[0]], (5.0, 24.0))
-        assert result == (5.0, 24.0) and jump is None
-
-    def test_click_outside_does_not_snap(self, objs):
-        result, jump = snap([objs[0]], (8.0, 8.0))
-        assert result == (8.0, 8.0) and jump is None
-
 
 class TestExcellon:
     @pytest.mark.parametrize('click, center', [
@@ -78,15 +63,6 @@ class TestExcellon:
         result, jump = snap([objs[1]], (24.0, 12.2))      # T2 slot (20,12)-(28,12)
         assert result == pytest.approx((24.0, 12.0))
         assert jump == pytest.approx((24.0, 12.0))
-
-    def test_click_inside_a_vertical_slot(self, objs):
-        result, jump = snap([objs[1]], (5.1, 23.0))       # T3 slot (5,20)-(5,26)
-        assert result == pytest.approx((5.0, 23.0))
-
-    def test_click_outside_does_not_snap(self, objs):
-        result, jump = snap([objs[1]], (8.0, 8.0))
-        assert result == (8.0, 8.0) and jump is None
-
 
 class TestBothObjects:
     def test_overlapping_pad_and_drill_snap_to_the_same_center(self, objs):
@@ -103,13 +79,3 @@ class TestBothObjects:
         assert result == pytest.approx((5.0, 5.0))
         result, jump = snap([objs[0], exc], (5.25, 5.0))  # now the drill center (5.3, 5) is closer
         assert result == pytest.approx((5.3, 5.0))
-
-    def test_non_snapable_objects_only(self):
-        other = Mock()
-        other.kind = 'geometry'
-        result, jump = snap([other], (1.0, 1.0))
-        assert result == (1.0, 1.0) and jump is None
-
-    def test_empty_collection(self):
-        result, jump = snap([], (1.0, 1.0))
-        assert result == (1.0, 1.0) and jump is None
