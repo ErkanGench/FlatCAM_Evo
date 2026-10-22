@@ -1,5 +1,6 @@
 """Headless regressions for Tcl validation and command completion contracts."""
 import collections
+import time
 import tkinter
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -29,12 +30,24 @@ class Signals(QtCore.QObject):
     worker_task = QtCore.pyqtSignal(object)
 
 
+def new_tcl(attempts=5):
+    """tkinter.Tcl(), tried again: under the load of the parallel workers Windows can fail the read of init.tcl
+    ("couldn't read file ... init.tcl: No error"); the next try reads it."""
+    for attempt in range(attempts):
+        try:
+            return tkinter.Tcl()
+        except tkinter.TclError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.2)
+
+
 def make_app():
     app = Signals()
     app.log = Mock()
     # a long default: a busy machine (parallel test workers) delays the queued work; the timeout tests pass -timeout
     app.options = {'global_background_timeout': 5000, 'global_verbose_error_level': 0}
-    shell = SimpleNamespace(app=app, tcl=tkinter.Tcl(), TclErrorException=FCShell.TclErrorException,
+    shell = SimpleNamespace(app=app, tcl=new_tcl(), TclErrorException=FCShell.TclErrorException,
                             open_processing=Mock())
     shell.raise_tcl_error = lambda text: FCShell.raise_tcl_error(shell, text)
     shell.display_tcl_error = lambda error, info: FCShell.display_tcl_error(shell, error, info)

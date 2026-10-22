@@ -54,7 +54,26 @@ def _install_window_filter():
             # Polish comes before the first show of a widget, so the attribute is set in time
             if event.type() == QtCore.QEvent.Type.Polish and isinstance(obj, QtWidgets.QWidget) and obj.isWindow():
                 obj.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            elif event.type() == QtCore.QEvent.Type.Show and isinstance(obj, QtWidgets.QMessageBox):
+                self.mute_message_box(obj)
             return False
+
+        @staticmethod
+        def mute_message_box(box):
+            # The Windows platform plugin plays a system sound when a message box with the Information, Warning or
+            # Critical icon is shown, also when it is not on the screen. Show it without the icon, then put it back.
+            icon = box.icon()
+            if icon in (QtWidgets.QMessageBox.Icon.NoIcon, QtWidgets.QMessageBox.Icon.Question):
+                return
+            box.setIcon(QtWidgets.QMessageBox.Icon.NoIcon)
+
+            def restore():
+                try:
+                    box.setIcon(icon)
+                except RuntimeError:
+                    pass    # the box was deleted
+
+            QtCore.QTimer.singleShot(0, restore)
 
     _window_filter = HideWindows()
     app.installEventFilter(_window_filter)

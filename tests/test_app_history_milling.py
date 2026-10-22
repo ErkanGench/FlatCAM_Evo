@@ -6,7 +6,7 @@ import time
 from copy import deepcopy
 
 import pytest
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtWidgets
 from shapely.geometry import box
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -52,6 +52,15 @@ def _settle(fc, timeout=5.0):
 def _pump(n=10):
     for _ in range(n):
         QtWidgets.QApplication.processEvents()
+
+
+def _select_row(table, row):
+    """Select only this row. selectRow() reads the keyboard modifiers of the application: a Shift or Ctrl state
+    that an earlier test left behind extends the selection, and a later delete removes more than 1 tool."""
+    table.clearSelection()
+    table.selectionModel().select(
+        table.model().index(row, 0),
+        QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect | QtCore.QItemSelectionModel.SelectionFlag.Rows)
 
 
 def _load_exc(fc, name):
@@ -139,7 +148,7 @@ def test_geo_tool_actions_undo_redo(fc, no_plot):
     assert len(s2) == len(s1) + 1
 
     # copy
-    mt.ui.tools_table_mill_geo.selectRow(0)
+    _select_row(mt.ui.tools_table_mill_geo, 0)
     n = _steps(fc)
     mt.on_tool_copy()
     _pump()
@@ -161,7 +170,7 @@ def test_geo_tool_actions_undo_redo(fc, no_plot):
     assert fc.history.redo() and _tools(geo) == s4
 
     # apply to all
-    mt.ui.tools_table_mill_geo.selectRow(0)
+    _select_row(mt.ui.tools_table_mill_geo, 0)
     first_uid = int(mt.ui.tools_table_mill_geo.item(0, 3).text())
     geo.tools[first_uid]['data']['tools_mill_cutz'] = -0.77
     s4 = _tools(geo)
@@ -175,7 +184,7 @@ def test_geo_tool_actions_undo_redo(fc, no_plot):
     assert fc.history.redo() and _tools(geo) == s5
 
     # delete one, then all
-    mt.ui.tools_table_mill_geo.selectRow(0)
+    _select_row(mt.ui.tools_table_mill_geo, 0)
     n = _steps(fc)
     mt.on_tool_delete()
     _pump()
@@ -199,7 +208,7 @@ def test_geo_field_edits_add_no_step(fc, no_plot):
     mt = _open(fc, 'geo', geo)
     mt.on_tool_default_add(dia=0.5)
     _pump()
-    mt.ui.tools_table_mill_geo.selectRow(0)
+    _select_row(mt.ui.tools_table_mill_geo, 0)
     _pump()
     uid = int(mt.ui.tools_table_mill_geo.item(0, 3).text())
     n = _steps(fc)
@@ -216,7 +225,7 @@ def test_exc_field_edits_and_order(fc, no_plot):
     _settle(fc)
     mt = _open(fc, 'exc', exc)
     assert mt.target_obj is exc and len(exc.tools) >= 2
-    mt.ui.tools_table_mill_exc.selectRow(0)
+    _select_row(mt.ui.tools_table_mill_exc, 0)
     _pump()
     uid = int(mt.ui.tools_table_mill_exc.item(0, 3).text())
     n = _steps(fc)
