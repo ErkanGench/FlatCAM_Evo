@@ -8,6 +8,40 @@ CHANGELOG for FlatCAM Evo
 
 22.10.2026
 
+Tools Database:
+
+- the tool library is now an SQLite file (tools.sqlite3) in the data folder; it stays the same across application upgrades. At the first start, the tools of the old tools_db_<version>.FlatDB are copied into it; the old file is not changed
+- a save is 1 transaction: a failed save keeps the library as it was; a save from an editor that is older than the file on disk is refused, so a change from another instance is not lost
+- new library view: search by name, diameter or shape, filter by operation, numeric sort of the diameter column; the properties show only the sections of the operation of the tool, with "Show advanced settings" for the rest
+- when a plugin (Milling, Drilling, Isolation, Paint, NCC, Cutout) opens the library, it shows only the compatible tools; "Add selected tools" adds the selection; "General" tools are available in all plugins
+- the lookup of a tool by diameter takes the exact diameter first, then a tool whose tolerance contains the diameter
+- Add, Duplicate, Delete, Import, Export, Save buttons; Import adds the tools of a file, "Replace library from file…" replaces the library; the JSON export keeps the units, and an import in the wrong units is refused
+- a tool with no name or with a diameter of 0 or NaN is refused at save
+
+Calculators:
+
+- the Calculators plugin is split in Calculator (controller), CalculatorUI (view) and CalculatorGen (model) in appPlugins/ToolCalculators/
+
+GUI:
+
+- Windows: the title bar keeps the native resize frame and caption actions behind the custom title bar: drag, edge snap, double-click and the Windows 11 Snap Layouts on the maximize button work; the title bar is 30 px high; the restore after a maximized start goes back to the saved size
+- Shift+G, Shift+A, Shift+H and Shift+W (grid lines, axis, HUD, workspace) work in the editors and plugins too, but not in a text input; Shift+G and View -> Grid lines toggle the grid of the active plot (2D or 3D)
+- the plot cursor shows only when the mouse is over the canvas
+- the plot shapes stay visible when the plot tab is detached into a window and attached again
+- grid lines off now hide the grid (before, the grid was painted white); in the dark theme the grid is light gray, not almost the color of the background; the grid is drawn below the axes
+- the dark theme has no borders around the items of the status bar; the status bar has no size grip
+- the spin boxes accept a value typed with its prefix or suffix (units, %); a text that is not a number keeps the old value instead of 0
+
+Performance:
+
+- the coordinate readouts and the HUD update at most 30 times a second
+- the selection rectangle, the hover shape and the mouse previews of the tools and editors change only the vertices; they do not rebuild the shape collections at each mouse move
+- the hover test uses the bounds of the objects, not a Shapely polygon
+
+Measurement:
+
+- in multi-point mode, the mouse move replaces only the preview segment; the committed segments stay
+
 Editors (Geometry, Gerber, Excellon) - left panel:
 
 - removed the Undo / Redo buttons from the panel; the Undo / Redo of the title bar, the Edit menu and the keys work in the editors. The history of the editor is a combo box in its own "History" section (in the Excellon Editor it was a small list)
