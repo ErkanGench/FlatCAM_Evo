@@ -163,7 +163,7 @@ class AppSignalConnector(QtCore.QObject):
         self.ui.menuview_toggle_grid.triggered.connect(self.ui.on_toggle_grid)
         self.ui.menuview_toggle_workspace.triggered.connect(self.app.on_workspace_toggle)
 
-        self.ui.menuview_toggle_grid_lines.triggered.connect(self.app.plotcanvas.on_toggle_grid_lines)
+        self.ui.menuview_toggle_grid_lines.triggered.connect(self.ui.on_toggle_grid_lines)
         self.ui.menuview_toggle_axis.triggered.connect(self.app.plotcanvas.on_toggle_axis)
         self.ui.menuview_toggle_hud.triggered.connect(self.app.plotcanvas.on_toggle_hud)
         self.ui.menuview_show_log.triggered.connect(self.app.on_show_log)

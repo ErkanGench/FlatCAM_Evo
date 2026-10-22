@@ -1380,11 +1380,11 @@ class FCSpinner(QtWidgets.QSpinBox):
         line_edit.insert(txt)
 
     def valueFromText(self, text):
-        txt = text.strip('%%')
+        txt = text.removeprefix(self.prefix()).removesuffix(self.suffix()).strip().strip('%')
         try:
             ret_val = int(txt)
         except ValueError:
-            ret_val = 0
+            ret_val = self.value()
         return ret_val
 
     def get_value(self):
@@ -1399,16 +1399,16 @@ class FCSpinner(QtWidgets.QSpinBox):
         self.setValue(k)
 
     def validate(self, p_str, p_int):
-        text = p_str
+        text = p_str.removeprefix(self.prefix()).removesuffix(self.suffix()).strip().strip('%')
 
         min_val = self.minimum()
         max_val = self.maximum()
         try:
             if int(text) < min_val or int(text) > max_val:
                 self.confirmation_signal.emit(False, min_val, max_val)
-                return QtGui.QValidator.State.Intermediate, text, p_int
+                return QtGui.QValidator.State.Intermediate, p_str, p_int
         except ValueError:
-            pass
+            return QtGui.QValidator.State.Intermediate, p_str, p_int
 
         self.confirmation_signal.emit(True, min_val, max_val)
         return QtGui.QValidator.State.Acceptable, p_str, p_int
@@ -1625,25 +1625,24 @@ class FCDoubleSpinner(QtWidgets.QDoubleSpinBox):
         line_edit.insert(txt)
 
     def valueFromText(self, p_str):
-        text = p_str.replace(',', '.')
-        text = text.strip('%%')
+        text = p_str.removeprefix(self.prefix()).removesuffix(self.suffix()).strip().strip('%').replace(',', '.')
         try:
             ret_val = float(text)
         except ValueError:
-            ret_val = 0.0
+            ret_val = self.value()
         return ret_val
 
     def validate(self, p_str, p_int):
-        text = p_str.replace(',', '.')
+        text = p_str.removeprefix(self.prefix()).removesuffix(self.suffix()).strip().strip('%').replace(',', '.')
 
         min_val = self.minimum()
         max_val = self.maximum()
         try:
-            if float(text) < min_val or float(text) > max_val:
+            if not min_val <= float(text) <= max_val:
                 self.confirmation_signal.emit(False, min_val, max_val)
-                return QtGui.QValidator.State.Intermediate, text, p_int
+                return QtGui.QValidator.State.Intermediate, p_str, p_int
         except ValueError:
-            pass
+            return QtGui.QValidator.State.Intermediate, p_str, p_int
 
         self.confirmation_signal.emit(True, min_val, max_val)
         return QtGui.QValidator.State.Acceptable, p_str, p_int

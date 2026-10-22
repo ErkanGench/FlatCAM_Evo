@@ -1577,9 +1577,11 @@ class MainGUI(QtWidgets.QMainWindow):
         self.shell_dock.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app24.png'))
         self.shell_dock.setObjectName('Shell_DockWidget')
         self.shell_dock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.shell_dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable |
-                                    QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-                                    QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.shell_dock.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
         self.addDockWidget(QtCore.Qt.DockWidgetArea.BottomDockWidgetArea, self.shell_dock)
 
         # ####################### GRBL Console DOCK ##############################
@@ -1587,9 +1589,11 @@ class MainGUI(QtWidgets.QMainWindow):
         self.grbl_console_dock.setWindowIcon(QtGui.QIcon(self.app.resource_location + '/app24.png'))
         self.grbl_console_dock.setObjectName('GrblConsole_DockWidget')
         self.grbl_console_dock.setAllowedAreas(QtCore.Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.grbl_console_dock.setFeatures(QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable |
-                                           QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable |
-                                           QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.grbl_console_dock.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetFloatable |
+            QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.grbl_console_dock)
         self.grbl_console_dock.hide()
 
@@ -2085,6 +2089,7 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################## INFO BAR # ##################################
         # ########################################################################
         self.infobar = self.statusBar()
+        self.infobar.setSizeGripEnabled(False)
         self.fcinfo = AppInfoBar(app=self.app)
 
         self.infobar.addWidget(self.fcinfo, stretch=1)
@@ -2109,9 +2114,11 @@ class MainGUI(QtWidgets.QMainWindow):
         self.infobar.addWidget(self.units_label)
 
         # this used to be done in the APP.__init__()
-        self.activity_view = FlatCAMActivityView(icon_location=self.app.resource_location,
-                                                 icon_kind=_database_option(self.app, "global_activity_icon"),
-                                                 replot_callback=self.app.on_toolbar_replot)
+        self.activity_view = FlatCAMActivityView(
+            icon_location=self.app.resource_location,
+            icon_kind=_database_option(self.app, "global_activity_icon"),
+            replot_callback=self.app.on_toolbar_replot
+        )
         self.infobar.addWidget(self.activity_view)
         self.compact_infobar()
 
@@ -2317,6 +2324,22 @@ class MainGUI(QtWidgets.QMainWindow):
         :rtype:     None
         """
 
+        self._location_values = (dx, dy, x, y)
+        if not hasattr(self, '_location_update_timer'):
+            self._location_update_timer = QtCore.QTimer(self)
+            self._location_update_timer.setSingleShot(True)
+            self._location_update_timer.setInterval(33)
+            self._location_update_timer.timeout.connect(self._update_location_labels)
+        if dx is None and dy is None and x is None and y is None:
+            self._location_update_timer.stop()
+            self._update_location_labels()
+            return
+        if not self._location_update_timer.isActive():
+            self._location_update_timer.start()
+
+    def _update_location_labels(self):
+        dx, dy, x, y = self._location_values
+
         # Set the position label
         if x is None or y is None:
             self.position_label.setText("")
@@ -2426,13 +2449,16 @@ class MainGUI(QtWidgets.QMainWindow):
         self.infobar.ensurePolished()
         QtCore.QCoreApplication.sendEvent(self.infobar, QtCore.QEvent(QtCore.QEvent.Type.LayoutRequest))
         target_height = round(self.infobar.sizeHint().height() * 0.75)
-        self.infobar.setStyleSheet("""
+        status_style = """
             QStatusBar QLineEdit {
                 padding-top: 0px; padding-bottom: 0px;
                 margin-top: 0px; margin-bottom: 0px;
                 min-height: 0px;
             }
-        """)
+        """
+        if _database_option(self.app, 'global_theme') == 'dark':
+            status_style += 'QStatusBar::item { border: none; }'
+        self.infobar.setStyleSheet(status_style)
         for toolbar in (self.delta_coords_toolbar, self.coords_toolbar,
                         self.grid_toolbar, self.status_toolbar):
             toolbar.setStyleSheet("""
@@ -2476,7 +2502,9 @@ class MainGUI(QtWidgets.QMainWindow):
 
     def toggle_delta_coords(self, checked):
         self.app.options["global_delta_coords_bar_show"] = checked
-        self.delta_coords_toolbar.setVisible(checked and self.plot_tab_area.currentWidget() is self.plot_tab)
+        self.delta_coords_toolbar.setVisible(
+            checked and self.plot_tab_area.currentWidget() is self.plot_tab
+        )
 
     def toggle_gridbar(self, checked):
         self.app.options["global_grid_bar_show"] = checked
@@ -3103,6 +3131,14 @@ class MainGUI(QtWidgets.QMainWindow):
         """
         self.grid_snap_btn.trigger()
 
+    def on_toggle_grid_lines(self):
+        canvas3d = self.app.plotcanvas3d
+        if canvas3d is not None and (self.plot_tab_area.currentWidget() is self.app.area_3d_tab or
+                                     canvas3d.native.hasFocus()):
+            canvas3d.toggle_grid()
+        else:
+            self.app.plotcanvas.on_toggle_grid_lines()
+
     def on_grbl_console_closed(self):
         """The user closed the GRBL console dock with its own button."""
         self.grbl_console_dock.hide()
@@ -3314,7 +3350,7 @@ class MainGUI(QtWidgets.QMainWindow):
 
                 # Toggle Grid lines
                 if key == QtCore.Qt.Key.Key_G:
-                    self.app.plotcanvas.on_toggle_grid_lines()
+                    self.on_toggle_grid_lines()
                     return
 
                 # Toggle HUD (Heads-Up Display)
@@ -4782,14 +4818,51 @@ class MainGUI(QtWidgets.QMainWindow):
             # set cursor of the code editor with the cursor at the searched line
             c_editor.setTextCursor(cursor)
 
+    def normalGeometry(self):
+        title_bar = getattr(self, 'title_bar', None)
+        if (title_bar is not None and title_bar.native_filter is not None and
+                (self.isMaximized() or self.isMinimized() or self.isFullScreen())):
+            geometry = title_bar.native_filter.normal_geometry
+            if geometry is not None:
+                # Qt otherwise subtracts the maximized native top border from the restored caption.
+                return QtCore.QRect(geometry)
+        return QtWidgets.QMainWindow.normalGeometry(self)
+
+    def nativeEvent(self, event_type, message):
+        title_bar = getattr(self, 'title_bar', None)
+        if title_bar is not None and title_bar.native_filter is not None:
+            # Qt bypasses application-wide native filters for mouse input.
+            handled, result = title_bar.native_filter.nativeEventFilter(event_type, message)
+            if handled:
+                return handled, result
+        return False, 0
+
     def eventFilter(self, obj, event):
         """
-        Filter the ToolTips display based on a Preferences setting
+        Handle shared view shortcuts and filter ToolTips based on Preferences.
 
         :param obj:
         :param event: QT event to filter
         :return:
         """
+        if (event.type() == QtCore.QEvent.Type.KeyPress and
+                isinstance(obj, QtWidgets.QWidget) and (obj is self or self.isAncestorOf(obj)) and
+                event.modifiers() == QtCore.Qt.KeyboardModifier.ShiftModifier and
+                not self.app_focus_in_text()):
+            # Catch these before canvas, editor or plugin handlers can consume them.
+            actions = {
+                QtCore.Qt.Key.Key_G: self.menuview_toggle_grid_lines,
+                QtCore.Qt.Key.Key_A: self.menuview_toggle_axis,
+                QtCore.Qt.Key.Key_H: self.menuview_toggle_hud,
+                QtCore.Qt.Key.Key_W: self.menuview_toggle_workspace,
+            }
+            action = actions.get(event.key())
+            if action is not None:
+                if not event.isAutoRepeat():
+                    action.trigger()
+                event.accept()
+                return True
+
         if _database_option(self.app, "global_toggle_tooltips") is False:
             if event.type() == QtCore.QEvent.Type.ToolTip:
                 return True

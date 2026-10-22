@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 
 from appGUI.MainGUI import MainGUI
 
@@ -47,6 +47,67 @@ class TestAppHistoryKeys(unittest.TestCase):
         gui = press(QtCore.Qt.Key.Key_Z, CTRL, in_text=True)
         gui.app.history.undo.assert_not_called()
         gui.app.history.redo.assert_not_called()
+
+
+class TestViewKeys(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def setUp(self):
+        class Window(QtWidgets.QMainWindow):
+            eventFilter = MainGUI.eventFilter
+            app_focus_in_text = staticmethod(MainGUI.app_focus_in_text)
+
+        self.window = Window()
+        self.window.app = MagicMock()
+        self.window.app.options = {'global_toggle_tooltips': True}
+        self.target = QtWidgets.QPushButton('Canvas / editor / plugin')
+        self.window.setCentralWidget(self.target)
+        self.actions = {}
+        for key, name in (('G', 'grid_lines'), ('A', 'axis'), ('H', 'hud'), ('W', 'workspace')):
+            action = QtGui.QAction(name, self.window)
+            action.setCheckable(True)
+            setattr(self.window, 'menuview_toggle_' + name, action)
+            self.actions[key] = action
+        self.qapp.installEventFilter(self.window)
+        self.addCleanup(self.window.deleteLater)
+        self.addCleanup(self.window.close)
+        self.addCleanup(self.qapp.removeEventFilter, self.window)
+        self.window.show()
+        self.window.activateWindow()
+        self.target.setFocus()
+        self.qapp.processEvents()
+
+    def test_view_toggles_work_once_outside_text_inputs(self):
+        self.window.app.call_source = 'geo_editor'
+        for key, action in self.actions.items():
+            with self.subTest(key=key):
+                before = action.isChecked()
+                QtTest.QTest.keyClick(self.target, getattr(QtCore.Qt.Key, 'Key_' + key), SHIFT)
+                self.assertEqual(action.isChecked(), not before)
+                event = QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress,
+                                       getattr(QtCore.Qt.Key, 'Key_' + key), SHIFT, key, True)
+                self.qapp.sendEvent(self.target, event)
+                self.assertEqual(action.isChecked(), not before)
+
+    def test_view_keys_preserve_text_and_other_windows(self):
+        entry = QtWidgets.QLineEdit(self.window)
+        self.window.setCentralWidget(entry)
+        entry.setFocus()
+        self.qapp.processEvents()
+        QtTest.QTest.keyClicks(entry, 'GAHW', SHIFT)
+        self.assertEqual(entry.text(), 'GAHW')
+        other = QtWidgets.QPushButton('Other window')
+        self.addCleanup(other.deleteLater)
+        other.show()
+        other.activateWindow()
+        other.setFocus()
+        self.qapp.processEvents()
+        for key in self.actions:
+            QtTest.QTest.keyClick(other, getattr(QtCore.Qt.Key, 'Key_' + key), SHIFT)
+        self.assertFalse(any(action.isChecked() for action in self.actions.values()))
+
 
 if __name__ == '__main__':
     unittest.main()

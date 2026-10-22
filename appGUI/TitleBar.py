@@ -11,6 +11,122 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
+class WindowsTitleBarFilter(QtCore.QAbstractNativeEventFilter):
+    """Keep Windows' resize frame and caption actions behind the custom titlebar."""
+
+    def __init__(self, title_bar):
+        super().__init__()
+        import ctypes
+        from ctypes import wintypes
+
+        self.title_bar = title_bar
+        self.handle = 0
+        self.maximize_pressed = False
+        self.normal_geometry = None
+        self.user32 = ctypes.windll.user32
+        self.user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        self.user32.DefWindowProcW.restype = wintypes.LPARAM
+        self.user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+        self.user32.IsZoomed.argtypes = [wintypes.HWND]
+        self.user32.IsIconic.argtypes = [wintypes.HWND]
+        self.user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        self.user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                            ctypes.c_int, ctypes.c_int, wintypes.UINT]
+
+    def set_handle(self, handle):
+        if self.handle == handle:
+            return
+        self.handle = handle
+        if handle:
+            if self.normal_geometry is None:
+                self.normal_geometry = QtCore.QRect(self.title_bar.window().geometry())
+            # Recalculate the caption once per HWND, including OpenGL surface recreation.
+            self.user32.SetWindowPos(handle, None, 0, 0, 0, 0, 0x0037)  # FRAMECHANGED, no move/size/activate/z-order
+
+    def remember_normal_geometry(self):
+        window = self.title_bar.window()
+        if window.isMaximized() or window.isMinimized() or window.isFullScreen():
+            return
+        if self.handle and (self.user32.IsZoomed(self.handle) or self.user32.IsIconic(self.handle)):
+            return
+        self.normal_geometry = QtCore.QRect(window.geometry())
+
+    def nativeEventFilter(self, event_type, message):
+        import ctypes
+        from ctypes import wintypes
+
+        msg = wintypes.MSG.from_address(int(message))
+        if not self.handle or msg.hWnd != self.handle or msg.message not in (
+                0x0083, 0x0084, 0x00a0, 0x00a1, 0x00a2, 0x00a3,
+                0x0200, 0x0202, 0x0215, 0x001f, 0x02a2):
+            return False, 0
+        window = self.title_bar.window()
+        if window.isFullScreen():
+            return False, 0
+        if msg.message == 0x0083 and msg.wParam:  # WM_NCCALCSIZE
+            # Paint the whole restored frame; native side/bottom gutters flash white on the first GL resize.
+            if self.user32.IsZoomed(msg.hWnd):
+                rect = wintypes.RECT.from_address(msg.lParam)
+                top = rect.top
+                self.user32.DefWindowProcW(msg.hWnd, msg.message, msg.wParam, msg.lParam)
+                dpi = self.user32.GetDpiForWindow(msg.hWnd)
+                border = self.user32.GetSystemMetricsForDpi(33, dpi) + self.user32.GetSystemMetricsForDpi(92, dpi)
+                # Keep the maximized resize border outside the work area.
+                rect.top = top + border
+            return True, 0
+        button = self.title_bar.maximize_button
+        if msg.message in (0x0215, 0x001f):  # WM_CAPTURECHANGED / WM_CANCELMODE
+            self.maximize_pressed = False
+            button.setDown(False)
+            return False, 0
+        if msg.message == 0x02a2:  # WM_NCMOUSELEAVE
+            self.maximize_pressed = False
+            button.setDown(False)
+            button.setAttribute(QtCore.Qt.WidgetAttribute.WA_UnderMouse, False)
+            button.update()
+            return False, 0
+        if msg.message == 0x0083:
+            return False, 0
+        point = wintypes.POINT(ctypes.c_short(msg.lParam & 0xffff).value,
+                               ctypes.c_short((msg.lParam >> 16) & 0xffff).value)
+        if msg.message not in (0x0200, 0x0202):
+            self.user32.ScreenToClient(msg.hWnd, ctypes.byref(point))
+        scale = window.devicePixelRatioF()
+        position = QtCore.QPoint(round(point.x / scale), round(point.y / scale))
+        over_button = button.isEnabled() and button.rect().contains(button.mapFrom(window, position))
+        if msg.message == 0x0084:  # WM_NCHITTEST
+            if point.y < 0 and not window.isMaximized():
+                if position.x() < 10:
+                    return True, 13  # HTTOPLEFT
+                if position.x() >= window.size().width() - 10:
+                    return True, 14  # HTTOPRIGHT
+                return True, 12  # HTTOP, never a native caption button behind the custom controls.
+            widget = window.childAt(position)
+            if widget is button and over_button:
+                return True, 9  # HTMAXBUTTON: native maximize/restore and Windows 11 Snap Layouts.
+            if widget in (self.title_bar, self.title_bar.title_label):
+                return True, 2  # HTCAPTION: native dragging, edge snap and double-click.
+        elif msg.message in (0x00a0, 0x0200):  # Native/client mouse move; preserve the Qt hover style.
+            if over_button != button.underMouse():
+                button.setAttribute(QtCore.Qt.WidgetAttribute.WA_UnderMouse, over_button)
+                button.update()
+            if self.maximize_pressed:
+                button.setDown(over_button)
+                # Native hover must reach Windows so its Snap flyout stays open while held.
+                return msg.message == 0x0200, 0
+        elif msg.message in (0x00a1, 0x00a3) and msg.wParam == 9:  # Native press/double-click.
+            self.maximize_pressed = True
+            button.setDown(True)
+            return True, 0
+        elif msg.message in (0x00a2, 0x0202) and self.maximize_pressed:  # Native/client release.
+            self.maximize_pressed = False
+            button.setDown(False)
+            if over_button:
+                button.click()
+            return True, 0
+        return False, 0
+
+
 class WindowResizeHandle(QtWidgets.QWidget):
     """Let Qt's window manager resize first; support platforms without that API."""
 
@@ -133,12 +249,15 @@ class TitleBar(QtWidgets.QWidget):
         self.move_position = None
         self.move_geometry = None
         self.setObjectName('title_bar')
-        window.setWindowFlags(window.windowFlags() | QtCore.Qt.WindowType.FramelessWindowHint)
+        self.native_filter = None
+        native_frame = sys.platform == 'win32' and QtWidgets.QApplication.platformName() == 'windows'
+        if not native_frame:
+            window.setWindowFlags(window.windowFlags() | QtCore.Qt.WindowType.FramelessWindowHint)
 
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(6, 5, 6, 0)
+        layout.setContentsMargins(6, 0, 0, 0)
         layout.setSpacing(2)
-        self.setMinimumHeight(34)
+        self.setMinimumHeight(30)
         self.setStyleSheet("""
             QWidget#title_bar QToolButton {
                 padding: 0px; margin: 0px; border: 0px; min-height: 0px; min-width: 0px;
@@ -146,11 +265,13 @@ class TitleBar(QtWidgets.QWidget):
             QWidget#title_bar > QToolButton { min-width: 32px; max-width: 32px; }
             QWidget#title_bar WindowControlButton { min-width: 46px; max-width: 46px; }
             QWidget#title_bar QToolButton:hover { background-color: rgba(127, 127, 127, 0.2); }
-            QWidget#title_bar QToolButton#title_close:hover { background-color: #c42b1c; }
+            QWidget#title_bar QToolButton#title_close:hover {
+                background-color: #c42b1c; border-top-right-radius: 8px;
+            }
             QMenuBar#title_menu { padding: 0px; margin: 0px; border: 0px; background: transparent; }
             QMenuBar#title_menu::item { padding: 0px 6px; }
             QToolBar#title_toolbar { padding: 0px; margin: 0px; border: 0px; spacing: 4px; }
-            QToolBar#title_toolbar QToolButton { padding: 4px; }
+            QToolBar#title_toolbar QToolButton { padding: 2px 4px; }
         """)
 
         self.icon_button = QtWidgets.QToolButton(self)
@@ -254,6 +375,12 @@ class TitleBar(QtWidgets.QWidget):
         self.resize_timer.timeout.connect(self.update_title)
         self.update_menu_font()
         QtWidgets.QApplication.instance().installEventFilter(self)
+        if native_frame:
+            self.native_filter = WindowsTitleBarFilter(self)
+            qapp = QtWidgets.QApplication.instance()
+            qapp.installNativeEventFilter(self.native_filter)
+            native_filter = self.native_filter
+            self.destroyed.connect(lambda: qapp.removeNativeEventFilter(native_filter))
         self.update_title()
         self.update_window_state()
 
@@ -291,18 +418,38 @@ class TitleBar(QtWidgets.QWidget):
             widget.setStyleSheet(
                 '%s { font-family: "%s"; font-size: %.2f%s; font-weight: %d; icon-size: 16px; }' %
                 (selector, font.family(), size, unit, font.weight()))
-        self.setMinimumHeight(max(34, self.title_label.sizeHint().height() + 5))
+        self.setMinimumHeight(max(30, self.title_label.sizeHint().height()))
         self.update_title()
 
     def update_native_corners(self):
-        if sys.platform != 'win32' or not self.window().effectiveWinId():
+        window_id = self.window().effectiveWinId()
+        if self.native_filter is not None:
+            self.native_filter.set_handle(int(window_id) if window_id else 0)
+        if sys.platform != 'win32' or not window_id:
             return
         import ctypes
         from ctypes import wintypes
 
+        class WindowCompositionAttributeData(ctypes.Structure):
+            _fields_ = [('attribute', ctypes.c_int), ('data', ctypes.c_void_p), ('size', ctypes.c_size_t)]
+
         # Older Windows versions ignore the Windows 11 rounded-corner preference.
         flat = self.window().isMaximized() or self.window().isFullScreen()
-        handle = wintypes.HWND(int(self.window().effectiveWinId()))
+        handle = wintypes.HWND(int(window_id))
+        # Keep live-resize gaps opaque while GL repaints, without shrinking the native client area.
+        margins = (ctypes.c_int * 4)(1, 1, 1, 1)  # MARGINS: extend DWM's frame inside the painted client.
+        ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(handle, ctypes.byref(margins))
+        color = self.palette().color(QtGui.QPalette.ColorRole.Window)
+        # ACCENT_ENABLE_GRADIENT with opaque ABGR replaces the translucent glass behind unpainted pixels.
+        accent = (ctypes.c_uint32 * 4)(1, 0, 0xff000000 | color.red() | color.green() << 8 | color.blue() << 16, 0)
+        attribute = WindowCompositionAttributeData(19, ctypes.addressof(accent), ctypes.sizeof(accent))
+        ctypes.windll.user32.SetWindowCompositionAttribute(handle, ctypes.byref(attribute))  # WCA_ACCENT_POLICY
+        dark = ctypes.c_int(color.lightness() < 128)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            handle, 20, ctypes.byref(dark), ctypes.sizeof(dark))  # DWMWA_USE_IMMERSIVE_DARK_MODE
+        transitions = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            handle, 3, ctypes.byref(transitions), ctypes.sizeof(transitions))  # DWMWA_TRANSITIONS_FORCEDISABLED
         preference = ctypes.c_int(1 if flat else 2)
         ctypes.windll.dwmapi.DwmSetWindowAttribute(
             handle, 33,
@@ -388,6 +535,8 @@ class TitleBar(QtWidgets.QWidget):
     def eventFilter(self, obj, event):
         event_type = event.type()
         if obj is self.window():
+            if self.native_filter is not None and event_type in (QtCore.QEvent.Type.Move, QtCore.QEvent.Type.Resize):
+                self.native_filter.remember_normal_geometry()
             if event_type in (QtCore.QEvent.Type.WindowStateChange, QtCore.QEvent.Type.Show,
                               QtCore.QEvent.Type.StyleChange):
                 self.update_window_state()
@@ -427,7 +576,7 @@ class TitleBar(QtWidgets.QWidget):
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             window = self.window()
             self.move_position = event.globalPosition().toPoint()
-            self.move_geometry = window.geometry()
+            self.move_geometry = QtCore.QRect(window.pos(), window.size())
             if not window.isMaximized() and window.windowHandle().startSystemMove():
                 self.move_position = None
                 self.move_geometry = None
@@ -450,7 +599,7 @@ class TitleBar(QtWidgets.QWidget):
             window.resize(restore_size)
             window.move(position.x() - round(restore_size.width() * ratio), position.y() - offset_y)
             self.move_position = position
-            self.move_geometry = window.geometry()
+            self.move_geometry = QtCore.QRect(window.pos(), window.size())
             if window.windowHandle().startSystemMove():
                 self.move_position = None
                 self.move_geometry = None

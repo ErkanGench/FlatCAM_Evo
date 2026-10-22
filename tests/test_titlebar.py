@@ -43,6 +43,12 @@ class TitleWindow(QtWidgets.QMainWindow):
         self.close_requests += 1
         event.ignore()
 
+    def nativeEvent(self, event_type, message):
+        return MainGUI.nativeEvent(self, event_type, message)
+
+    def normalGeometry(self):
+        return MainGUI.normalGeometry(self)
+
 
 class TestTitleBar(unittest.TestCase):
     @classmethod
@@ -62,7 +68,29 @@ class TestTitleBar(unittest.TestCase):
         self.qapp.processEvents()
 
     def test_existing_actions_and_project_title_are_reused(self):
-        self.assertTrue(self.window.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint)
+        if self.bar.native_filter is not None:
+            self.window.hide()
+            self.window.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+            self.window.show()
+            self.qapp.processEvents()
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+            handle = wintypes.HWND(int(self.window.winId()))
+            frame, client, origin = wintypes.RECT(), wintypes.RECT(), wintypes.POINT()
+            user32.GetWindowRect(handle, ctypes.byref(frame))
+            user32.GetClientRect(handle, ctypes.byref(client))
+            user32.ClientToScreen(handle, ctypes.byref(origin))
+            # No unpainted native gutters may flash around the old bounds on first maximize.
+            self.assertEqual((origin.x, origin.y, client.right, client.bottom),
+                             (frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top))
+        top_border = self.window.geometry().top() - self.window.frameGeometry().top()
+        self.assertEqual(top_border, 0)
+        self.assertEqual(self.bar.height() + top_border, 30)
         self.assertIs(self.bar.menu, self.window.menu)
         self.assertNotIn(self.window.notebook_action, self.bar.menu.actions())
         self.assertIs(self.bar.notebook_button.defaultAction(), self.window.notebook_action)
@@ -135,7 +163,12 @@ class TestTitleBar(unittest.TestCase):
             self.assertEqual(following.geometry().center().x() - previous.geometry().center().x(), 46)
         self.assertFalse(self.bar.restore_action.isEnabled())
         self.assertTrue(self.bar.maximize_action.isEnabled())
-        QtTest.QTest.mouseClick(self.bar.maximize_button, QtCore.Qt.MouseButton.LeftButton)
+        original = self.window.geometry()
+        QtTest.QTest.mousePress(self.bar.maximize_button, QtCore.Qt.MouseButton.LeftButton)
+        QtTest.QTest.qWait(100)
+        self.assertEqual(self.window.geometry(), original)
+        self.assertFalse(self.window.isMaximized())
+        QtTest.QTest.mouseRelease(self.bar.maximize_button, QtCore.Qt.MouseButton.LeftButton)
         self.qapp.processEvents()
         self.assertTrue(self.window.isMaximized())
         self.assertTrue(self.bar.restore_action.isEnabled())
@@ -238,6 +271,89 @@ class TestTitleBar(unittest.TestCase):
         self.assertTrue(self.bar.menu_button.isVisible())
         self.assertTrue(all(handle.isVisible() for handle in self.bar.resize_handles.values()))
 
+    def test_windows_caption_and_maximize_are_native_snap_targets(self):
+        if sys.platform != 'win32' or self.qapp.platformName() != 'windows':
+            self.skipTest('Windows native snapping')
+        import ctypes
+        from ctypes import wintypes
+        from PyQt6 import sip
+
+        user32 = ctypes.windll.user32
+        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.SendMessageW.restype = wintypes.LPARAM
+        user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+        user32.GetCapture.restype = wintypes.HWND
+        handle = wintypes.HWND(int(self.window.winId()))
+        positions = {}
+        client_positions = {}
+        for widget, expected in ((self.bar.title_label, 2), (self.bar.maximize_button, 9),
+                                 (self.bar.menu_button, 1), (self.bar.notebook_button, 1)):
+            with self.subTest(widget=widget.objectName(), expected=expected):
+                position = widget.mapTo(self.window, widget.rect().center())
+                scale = self.window.devicePixelRatioF()
+                point = wintypes.POINT(round(position.x() * scale), round(position.y() * scale))
+                client_positions[expected] = (point.x & 0xffff) | ((point.y & 0xffff) << 16)
+                user32.ClientToScreen(handle, ctypes.byref(point))
+                packed = (point.x & 0xffff) | ((point.y & 0xffff) << 16)
+                positions[expected] = packed
+                self.assertEqual(user32.SendMessageW(handle, 0x0084, 0, packed), expected)
+                user32.SendMessageW(handle, 0x00a0, expected, packed)  # WM_NCMOUSEMOVE
+                self.assertEqual(self.bar.maximize_button.underMouse(), expected == 9)
+        point = wintypes.POINT(round(self.bar.close_button.geometry().center().x() * scale), -1)
+        user32.ClientToScreen(handle, ctypes.byref(point))
+        packed = (point.x & 0xffff) | ((point.y & 0xffff) << 16)
+        self.assertEqual(user32.SendMessageW(handle, 0x0084, 0, packed), 12)  # HTTOP, not a native caption button.
+        message = wintypes.MSG(hWnd=handle, message=0x0084, lParam=packed)
+        self.assertEqual(self.window.nativeEvent(b'windows_generic_MSG',
+                                                 sip.voidptr(ctypes.addressof(message))), (True, 12))
+        original = self.window.geometry()
+        clicks = QtTest.QSignalSpy(self.bar.maximize_button.clicked)
+        for release_inside in (False, True):
+            user32.SendMessageW(handle, 0x00a1, 9, positions[9])  # WM_NCLBUTTONDOWN
+            self.assertNotEqual(user32.GetCapture(), handle.value)
+            message = wintypes.MSG(hWnd=handle, message=0x00a0, wParam=9, lParam=positions[9])
+            handled, _ = self.window.nativeEvent(b'windows_generic_MSG', sip.voidptr(ctypes.addressof(message)))
+            self.assertFalse(handled)  # Windows must keep receiving hover messages for its Snap flyout.
+            QtTest.QTest.qWait(1100)
+            self.assertNotEqual(user32.GetCapture(), handle.value)
+            self.assertEqual(self.window.geometry(), original)
+            if release_inside:
+                user32.SendMessageW(handle, 0x00a2, 9, positions[9])  # WM_NCLBUTTONUP on maximize
+            else:
+                user32.SendMessageW(handle, 0x0202, 0, client_positions[1])  # WM_LBUTTONUP outside the button
+            self.qapp.processEvents()
+            self.assertEqual(self.window.isMaximized(), release_inside)
+        self.assertEqual(len(clicks), 1)
+
+    def test_maximized_startup_preserves_restore_geometry(self):
+        from appMain import App
+
+        window = TitleWindow()
+        self.addCleanup(window.deleteLater)
+        self.addCleanup(window.hide)
+        # Native maximize/restore must run on screen, not Qt's simulated window state.
+        window.ensurePolished()
+        window.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+        window.setGeometry(115, 23, 900, 400)
+        original = window.geometry()
+        app = MagicMock()
+        app.ui = window
+        app.headless = False
+        app.splash = None
+        app.options = {'global_systray_icon': False, 'global_version_check': False}
+        app.cmd_line_shellvar = app.cmd_line_shellfile = app.cmd_line_command = None
+        app.defaults.old_defaults_found = False
+        with tempfile.TemporaryDirectory() as path:
+            settings = QtCore.QSettings(os.path.join(path, 'startup.ini'), QtCore.QSettings.Format.IniFormat)
+            settings.setValue('maximized_gui', True)
+            with patch('appMain.QSettings', return_value=settings), patch.object(App, 'args', []):
+                App._setup_startup(app)
+            self.qapp.processEvents()
+            self.assertTrue(window.isMaximized())
+            window.showNormal()
+            self.qapp.processEvents()
+            self.assertEqual(window.geometry(), original)
+
     def test_main_window_fullscreen_preserves_geometry_and_maximized_state(self):
         for custom_titlebar in (True, False):
             window = self.window if custom_titlebar else QtWidgets.QMainWindow()
@@ -254,6 +370,13 @@ class TestTitleBar(unittest.TestCase):
                 MainGUI.build_titlebar(window)
                 window.resize(900, 400)
                 window.show()
+            if sys.platform == 'win32' and self.qapp.platformName() == 'windows':
+                from PyQt6 import QtOpenGLWidgets
+                window.hide()
+                window.setCentralWidget(QtOpenGLWidgets.QOpenGLWidget(window))
+                window.ensurePolished()
+                window.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+                window.show()
             window.hidden_toolbars = []
             window.original_window_flags = window.windowFlags()
             for name in ('coords_toolbar', 'delta_coords_toolbar', 'grid_toolbar', 'status_toolbar'):
@@ -267,6 +390,21 @@ class TestTitleBar(unittest.TestCase):
                     if maximized:
                         window.showMaximized()
                         self.qapp.processEvents()
+                        if custom_titlebar and self.bar.native_filter is not None:
+                            self.assertEqual(window.geometry(), window.screen().availableGeometry())
+                            self.assertEqual(self.bar.height(), 30)
+                        self.assertEqual(window.normalGeometry(), original)
+                        window.showNormal()
+                        self.qapp.processEvents()
+                        self.assertFalse(window.isMaximized())
+                        self.assertEqual(window.geometry(), original)
+                        window.showMaximized()
+                        self.qapp.processEvents()
+                        window.showMinimized()
+                        self.qapp.processEvents()
+                        window.showMaximized()
+                        self.qapp.processEvents()
+                        self.assertEqual(window.normalGeometry(), original)
                     MainGUI.on_full_screen_toggled(window)
                     self.qapp.processEvents()
                     self.assertTrue(window.isFullScreen())
@@ -275,8 +413,7 @@ class TestTitleBar(unittest.TestCase):
                     MainGUI.on_full_screen_toggled(window)
                     self.qapp.processEvents()
                     self.assertFalse(window.isFullScreen())
-                    self.assertEqual(bool(window.windowFlags() & QtCore.Qt.WindowType.FramelessWindowHint),
-                                     custom_titlebar)
+                    self.assertEqual(window.windowFlags(), window.original_window_flags)
                     self.assertEqual(window.isMaximized(), maximized)
                     if not maximized:
                         self.assertEqual(window.geometry(), original)
