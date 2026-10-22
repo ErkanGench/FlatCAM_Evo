@@ -1,2 +1,3 @@
 # Format: <test id>  # <reason>   (one per line; blank and # lines are ignored)
 # Tests removed on purpose.
+tests/test_tools_database.py::EditorChecks::test_atomic_writer_cancels_failed_write_and_commit  # Replaced QSaveFile call-order mocks with JSON export byte preservation and SQLite transaction rollback checks in test_tools_database.py.

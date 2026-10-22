@@ -2326,7 +2326,9 @@ class ToolMilling(Geometry, AppTool):
         truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
 
         try:
-            tools_db_dict = load_tools_database(filename, self.app.options)
+            tools_db_dict = load_tools_database(filename, self.app.options, target=1,
+                                               diameter=truncated_tooldia,
+                                               units=getattr(self.app, 'app_units', None))
         except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
             self.app.log.error(str(error))
@@ -2335,41 +2337,15 @@ class ToolMilling(Geometry, AppTool):
             self.on_tool_default_add(dia=tool_dia)
             return
 
-        tool_found = 0
+        tool_found = len(tools_db_dict)
 
         # look in database tools
         for db_tool, db_tool_val in tools_db_dict.items():
             db_tooldia = db_tool_val['tooldia']
-            low_limit = float(db_tool_val['data']['tol_min'])
-            high_limit = float(db_tool_val['data']['tol_max'])
-
-            # we need only tool marked for Milling Tool (Geometry Object)
-            if db_tool_val['data']['tool_target'] != 1:     # _('Milling')
-                continue
-
-            # if we find a tool with the same diameter in the Tools DB just update its data
-            if truncated_tooldia == db_tooldia:
-                tool_found += 1
-                for d in db_tool_val['data']:
-                    if d.find('tools_mill_') == 0:
-                        new_tools_dict[d] = db_tool_val['data'][d]
-                    elif d.find('tools_') == 0:
-                        # don't need data for other App Tools; this tests after 'tools_mill_'
-                        continue
-                    else:
-                        new_tools_dict[d] = db_tool_val['data'][d]
-            # search for a tool that has a tolerance that the tool fits in
-            elif high_limit >= truncated_tooldia >= low_limit:
-                tool_found += 1
-                updated_tooldia = db_tooldia
-                for d in db_tool_val['data']:
-                    if d.find('tools_mill_') == 0:
-                        new_tools_dict[d] = db_tool_val['data'][d]
-                    elif d.find('tools_') == 0:
-                        # don't need data for other App Tools; this tests after 'tools_mill_'
-                        continue
-                    else:
-                        new_tools_dict[d] = db_tool_val['data'][d]
+            updated_tooldia = db_tooldia if db_tooldia != truncated_tooldia else None
+            for d in db_tool_val['data']:
+                if not d.startswith('tools_') or d.startswith('tools_mill_'):
+                    new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
 
         # test we found a suitable tool in Tools Database or if multiple ones
         if tool_found == 0:
@@ -2496,7 +2472,7 @@ class ToolMilling(Geometry, AppTool):
             if self.app.ui.plot_tab_area.tabText(idx) == _("Tools Database"):
                 self.app.ui.plot_tab_area.setCurrentWidget(self.app.tools_db_tab)
                 break
-        ret_val = self.app.on_tools_database()
+        ret_val = self.app.on_tools_database(source='milling')
         if ret_val == 'fail':
             return
         self.app.tools_db_tab.ok_to_add = True

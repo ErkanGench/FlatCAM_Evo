@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from contextlib import closing
 from copy import deepcopy
 from types import SimpleNamespace
 import unittest
@@ -178,6 +179,174 @@ class LifecycleChecks(DatabaseCase):
 
 
 class EditorChecks(DatabaseCase):
+    def test_typed_cutting_parameters_with_units_are_saved_without_changing_values(self):
+        import appDatabase
+        from PyQt6.QtTest import QTest
+        db = self.database({'7': record()})
+        db.resize(1100, 800)
+        db.show()
+        cases = (
+            (1, 'tools_mill_cutz', '-0.6', -0.6),
+            (1, 'tools_mill_travelz', '3.2', 3.2),
+            (1, 'tools_mill_feedrate', '150', 150.0),
+            (1, 'tools_mill_spindlespeed', '12000', 12000.0),
+            (2, 'tools_drill_spindlespeed', '14000', 14000),
+            (4, 'tools_paint_overlap', '32.5', 32.5))
+        for target, key, text, expected in cases:
+            with self.subTest(parameter=key):
+                db.ui.properties_combo.setCurrentIndex(db.ui.properties_combo.findData(target))
+                self.qapp.processEvents()
+                widget = db.form_fields[key]
+                widget.setFocus()
+                widget.selectAll()
+                QTest.keyClicks(widget, text)
+                QTest.keyClick(widget, QtCore.Qt.Key.Key_Tab)
+                self.assertEqual(expected, db.db_tool_dict['7']['data'][key])
+        for target, key, expected in ((1, 'tools_mill_feedrate', 150.0),
+                                      (2, 'tools_drill_spindlespeed', 14000)):
+            with self.subTest(invalid_parameter=key):
+                db.ui.properties_combo.setCurrentIndex(db.ui.properties_combo.findData(target))
+                widget = db.form_fields[key]
+                widget.setFocus()
+                widget.selectAll()
+                QTest.keyClicks(widget, 'invalid')
+                QTest.keyClick(widget, QtCore.Qt.Key.Key_Tab)
+                self.assertEqual(expected, db.db_tool_dict['7']['data'][key])
+        self.assertTrue(db.on_save_tools_db())
+        saved = appDatabase.load_tools_database(self.path, self.app.options)
+        for target, key, text, expected in cases:
+            self.assertEqual(expected, saved['7']['data'][key])
+        self.assertEqual([], self.slot_errors)
+
+    def test_library_search_operation_filter_and_numeric_sort(self):
+        tools = {'7': record(1, 10.0), '8': record(4, 2.0), '9': record(0, 0.8)}
+        tools['8']['name'] = 'Paint cutter'
+        db = self.database(tools)
+        db.ui.search_entry.setText('paint')
+        db.apply_filters()
+        self.assertEqual(1, db.ui.tree_widget.model().rowCount())
+        self.assertEqual('Paint cutter', db.ui.tree_widget.model().index(0, 1).data())
+        db.ui.search_entry.clear()
+        db.ui.filter_combo.setCurrentIndex(db.ui.filter_combo.findData(1))
+        db.apply_filters()
+        self.assertEqual(2, db.ui.tree_widget.model().rowCount())
+        db.ui.filter_combo.setCurrentIndex(0)
+        db.apply_filters()
+        db.ui.tree_widget.sortByColumn(3, QtCore.Qt.SortOrder.AscendingOrder)
+        self.assertEqual([0.8, 2.0, 10.0], [db.ui.tree_widget.model().index(row, 3).data(
+            QtCore.Qt.ItemDataRole.UserRole) for row in range(3)])
+        self.assertFalse(self.app.tools_db_changed_flag)
+
+    def test_picker_shows_only_compatible_tools_and_operation_properties(self):
+        db = self.database({'7': record(4), '8': record(2), '9': record(0)})
+        db.set_context('paint')
+        self.assertEqual(2, db.ui.tree_widget.model().rowCount())
+        db.select_tool('9')
+        self.assertFalse(db.ui.paint_box.isHidden())
+        self.assertTrue(db.ui.drill_box.isHidden())
+        self.assertTrue(db.ui.iso_box.isHidden())
+        db.on_tool_request = MagicMock(return_value=True)
+        db._close_database_container = MagicMock(return_value=True)
+        self.assertTrue(db.on_tool_requested_from_app())
+        imported = db.on_tool_request.call_args.kwargs['tool']
+        self.assertIn('tools_paint_overlap', imported['data'])
+        self.assertNotIn('tools_drill_cutz', imported['data'])
+        self.assertEqual(0, db.db_tool_dict['9']['data']['tool_target'])
+        db.set_context('app')
+        self.assertEqual(3, db.ui.tree_widget.model().rowCount())
+
+    def test_add_uses_current_operation_and_invalid_edit_preserves_saved_library(self):
+        db = self.database()
+        db.ui.filter_combo.setCurrentIndex(db.ui.filter_combo.findData(2))
+        db.on_tool_add()
+        self.assertEqual(2, db.db_tool_dict['1']['data']['tool_target'])
+        db.ui.name_entry.set_value('New drill')
+        db.ui.dia_entry.set_value(0.8)
+        self.assertTrue(db.on_save_tools_db())
+        before = self.path.read_bytes()
+        db.ui.tol_min_entry.set_value(1.0)
+        db.ui.tol_max_entry.set_value(0.5)
+        self.assertFalse(db.on_save_tools_db())
+        self.assertEqual(before, self.path.read_bytes())
+        self.assertTrue(self.app.tools_db_changed_flag)
+        self.assertTrue(db.ui.status_label.text())
+
+    def test_sqlite_migration_preserves_legacy_and_unknown_fields(self):
+        import appDatabase
+        source = {'7': record(4), '42': record(2)}
+        source['7']['vendor_note'] = {'keep': True}
+        self.path.write_text(json.dumps(source), encoding='utf-8')
+        original = self.path.read_bytes()
+        destination = self.path.with_suffix('.sqlite3')
+        appDatabase.initialize_tools_database(destination, self.path, self.app.options)
+        self.assertEqual(original, self.path.read_bytes())
+        self.assertEqual(b'SQLite format 3\x00', destination.read_bytes()[:16])
+        loaded = appDatabase.load_tools_database(destination, self.app.options, units='MM')
+        self.assertEqual(source, loaded)
+        # Reopening must never re-import the legacy file over subsequent edits.
+        loaded['7']['name'] = 'saved'
+        appDatabase.write_tools_database(destination, loaded, units='MM')
+        appDatabase.initialize_tools_database(destination, self.path, self.app.options)
+        self.assertEqual('saved', appDatabase.load_tools_database(destination, self.app.options)['7']['name'])
+        self.path = destination
+        db = self.database()
+        db.select_tool('7')
+        db.ui.name_entry.set_value('edited in library')
+        self.assertTrue(db.on_save_tools_db())
+        saved = appDatabase.load_tools_database(destination, self.app.options)
+        self.assertEqual(source['42'], saved['42'])
+        self.assertEqual('edited in library', saved['7']['name'])
+
+    def test_sqlite_rolls_back_failed_save_and_rejects_stale_editor(self):
+        import sqlite3
+        import appDatabase
+        destination = self.path.with_suffix('.sqlite3')
+        source = {'7': record(4)}
+        appDatabase.write_tools_database(destination, source, units='MM')
+        with closing(sqlite3.connect(destination)) as connection, connection:
+            connection.execute("CREATE TRIGGER reject_update BEFORE UPDATE ON tools "
+                               "BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+        changed = deepcopy(source)
+        changed['7']['name'] = 'changed'
+        with self.assertRaises(OSError):
+            appDatabase.write_tools_database(destination, changed, units='MM')
+        self.assertEqual(source, appDatabase.load_tools_database(destination, self.app.options))
+        with closing(sqlite3.connect(destination)) as connection, connection:
+            connection.execute('DROP TRIGGER reject_update')
+        appDatabase.write_tools_database(destination, changed, units='MM', expected_revision=1)
+        with self.assertRaises(ValueError):
+            appDatabase.write_tools_database(destination, source, units='MM', expected_revision=1)
+        with self.assertRaises(ValueError):
+            appDatabase.load_tools_database(destination, self.app.options, units='IN')
+        self.assertEqual('changed', appDatabase.load_tools_database(destination, self.app.options)['7']['name'])
+
+        self.path = destination
+        db = self.database()
+        changed['7']['name'] = 'external edit'
+        appDatabase.write_tools_database(destination, changed, units='MM')
+        db.ui.name_entry.set_value('local edit')
+        self.assertFalse(db.on_save_tools_db())
+        self.assertTrue(self.app.tools_db_changed_flag)
+        self.assertEqual('external edit', appDatabase.load_tools_database(destination, self.app.options)['7']['name'])
+
+    def test_lookup_exact_precedes_tolerance_and_supports_general_tools(self):
+        import appDatabase
+        source = {'7': record(4), '8': record(4, 2.5), '9': record(2)}
+        source['8']['data'].update(tol_min=2.0, tol_max=3.0)
+        self.path.write_text(json.dumps(source), encoding='utf-8')
+        for path in (self.path, self.path.with_suffix('.sqlite3')):
+            with self.subTest(path=path.suffix):
+                if path.suffix == '.sqlite3':
+                    appDatabase.write_tools_database(path, source, units='MM')
+                found = appDatabase.load_tools_database(path, self.app.options, target=4, diameter=2.4)
+                self.assertEqual(['7'], list(found))
+                found = appDatabase.load_tools_database(path, self.app.options, target=4, diameter=2.6)
+                self.assertEqual(['8'], list(found))
+        source = {'7': record(0), '8': record(2)}
+        self.path.write_text(json.dumps(source), encoding='utf-8')
+        self.assertEqual(['7'], list(appDatabase.load_tools_database(
+            self.path, self.app.options, target=4, diameter=2.4)))
+
     def test_normalization_preserves_input_and_repairs_aliases(self):
         import appDatabase
         normalize = getattr(appDatabase, 'normalize_tools_database', None)
@@ -223,6 +392,13 @@ class EditorChecks(DatabaseCase):
             normalize(invalid, self.app.options)
         self.assertEqual(before, invalid)
 
+        for field, value in (('name', ''), ('tooldia', 0), ('tooldia', float('nan'))):
+            with self.subTest(field=field, value=value):
+                invalid = {'7': record()}
+                invalid['7'][field] = value
+                with self.assertRaises(ValueError):
+                    normalize(invalid, self.app.options)
+
     def test_load_accepts_utf8_bom_and_rejects_import_transactionally(self):
         import appDatabase
 
@@ -243,6 +419,21 @@ class EditorChecks(DatabaseCase):
         self.assertEqual(before_state, db.db_tool_dict)
         self.assertTrue(self.app.tools_db_changed_flag)
         self.assertEqual(before_bytes, self.path.read_bytes())
+
+        incoming = record(2)
+        incoming['name'] = 'Imported drill'
+        invalid_path.write_text(json.dumps({'1': incoming}), encoding='utf-8')
+        with patch('appDatabase.QtWidgets.QFileDialog.getOpenFileName',
+                   return_value=(str(invalid_path), '')):
+            self.assertTrue(db.on_import_tools_db_file())
+        self.assertEqual({'1', '2'}, set(db.db_tool_dict))
+        self.assertEqual('Imported drill', db.db_tool_dict['2']['name'])
+        self.assertEqual(before_bytes, self.path.read_bytes())
+        before_state = deepcopy(db.db_tool_dict)
+        with patch('appDatabase.QtWidgets.QFileDialog.getOpenFileName',
+                   return_value=(str(invalid_path), '')), patch.object(db, 'confirm_close', return_value=False):
+            self.assertFalse(db.on_import_tools_db_file(replace=True))
+        self.assertEqual(before_state, db.db_tool_dict)
 
     def test_cutout_gap_type_roundtrip(self):
         db = self.database()
@@ -285,7 +476,7 @@ class EditorChecks(DatabaseCase):
                 stub = SimpleNamespace(
                     current_toolid=1, sender=lambda: widget, app=self.app,
                     db_tool_dict={'1': target}, name2option=db.name2option,
-                    ui=SimpleNamespace(tree_widget=SimpleNamespace(selectedItems=lambda: [item])),
+                    selected_tool_ids=lambda: ['1'], model=MagicMock(),
                     on_tools_db_edited=MagicMock())
                 ToolsDB2.update_storage(stub)
                 self.assertEqual(value, target['data'][key])
@@ -294,8 +485,7 @@ class EditorChecks(DatabaseCase):
 
     def test_sparse_ids_survive_copy_sort_delete_and_request(self):
         db = self.database({'7': record(), '42': record(3, 0.8)})
-        db.ui.tree_widget.clearSelection()
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
+        db.select_tool('7')
         db.on_tool_copy()
         self.assertEqual({'7', '42', '43'}, set(db.db_tool_dict))
 
@@ -303,21 +493,11 @@ class EditorChecks(DatabaseCase):
         db.on_sort_target()
         self.assertEqual({'7', '42', '43'}, set(db.db_tool_dict))
 
-        db.ui.tree_widget.clearSelection()
-        for row in range(db.ui.tree_widget.topLevelItemCount()):
-            item = db.ui.tree_widget.topLevelItem(row)
-            if item.text(0) == '42':
-                item.setSelected(True)
-                break
+        db.select_tool('42')
         db.on_tool_delete()
         self.assertEqual({'7', '43'}, set(db.db_tool_dict))
 
-        db.ui.tree_widget.clearSelection()
-        for row in range(db.ui.tree_widget.topLevelItemCount()):
-            item = db.ui.tree_widget.topLevelItem(row)
-            if item.text(0) == '43':
-                item.setSelected(True)
-                break
+        db.select_tool('43')
         db.confirm_close = MagicMock(return_value=True)
         db.on_tool_requested_from_app()
         self.assertEqual('fixture', db.on_tool_request.call_args.kwargs['tool']['name'])
@@ -326,7 +506,7 @@ class EditorChecks(DatabaseCase):
         db = self.database()
         db.on_tool_add()
         self.assertEqual({'1'}, set(db.db_tool_dict))
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
+        db.select_tool('1')
         db.on_tool_delete()
         self.assertEqual({}, db.db_tool_dict)
         db.on_tool_add()
@@ -338,7 +518,7 @@ class EditorChecks(DatabaseCase):
 
     def test_database_request_delivers_an_independent_copy(self):
         db = self.database({'1': record()})
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
+        db.select_tool('1')
         original = deepcopy(db.db_tool_dict['1'])
 
         def mutate(tool):
@@ -369,45 +549,25 @@ class EditorChecks(DatabaseCase):
         self.assertEqual('saved after tab removal', json.loads(self.path.read_text())['1']['name'])
         self.assertEqual(db.ui.save_db_btn.default_stylesheet, db.ui.save_db_btn.styleSheet())
 
-    def test_atomic_writer_cancels_failed_write_and_commit(self):
+    def test_json_export_preserves_units_and_failed_export_preserves_file(self):
         import appDatabase
-
-        class FakeSaveFile:
-            mode = 'write'
-            cancelled = False
-
-            def __init__(self, filename):
-                self.filename = filename
-
-            def setDirectWriteFallback(self, value):
-                pass
-
-            def open(self, mode):
-                return True
-
-            def write(self, payload):
-                return 0 if self.mode == 'write' else len(payload)
-
-            def commit(self):
-                return self.mode != 'commit'
-
-            def errorString(self):
-                return 'injected failure'
-
-            def cancelWriting(self):
-                self.cancelled = True
-
-        for mode in ('write', 'commit'):
-            with self.subTest(mode=mode), patch.object(appDatabase.QtCore, 'QSaveFile', FakeSaveFile):
-                FakeSaveFile.mode = mode
-                with self.assertRaises(OSError):
-                    appDatabase.write_tools_database(self.path, {'1': {}})
-
-        with (patch.object(appDatabase.json, 'dumps', side_effect=TypeError('serialize')),
-              patch.object(appDatabase.QtCore, 'QSaveFile') as save_file):
-            with self.assertRaises(TypeError):
-                appDatabase.write_tools_database(self.path, {'1': {}})
-            save_file.assert_not_called()
+        path = self.path.with_suffix('.json')
+        source = {'7': record(4)}
+        appDatabase.write_tools_database(path, source, units='MM')
+        self.assertEqual(source, appDatabase.load_tools_database(path, self.app.options, units='MM'))
+        with self.assertRaises(ValueError):
+            appDatabase.load_tools_database(path, self.app.options, units='IN')
+        before = path.read_bytes()
+        source['7']['vendor_note'] = float('nan')
+        with self.assertRaises(ValueError):
+            appDatabase.write_tools_database(path, source, units='MM')
+        self.assertEqual(before, path.read_bytes())
+        db = self.database({'7': record(4)})
+        self.app.app_units = 'IN'
+        self.app.get_last_save_folder = lambda: str(self.path.parent)
+        with patch('appDatabase.FCFileSaveDialog.get_saved_filename', return_value=(str(path), '')):
+            self.assertTrue(db.on_export_tools_db_file())
+        self.assertEqual({'7': record(4)}, appDatabase.load_tools_database(path, self.app.options, units='MM'))
 
     def test_save_preserves_unknown_fields_and_clears_dirty_after_commit(self):
         db_record = record(4)
@@ -428,7 +588,7 @@ class EditorChecks(DatabaseCase):
         import appDatabase
 
         db = self.database({'1': record()})
-        db.ui.tree_widget.topLevelItem(0).setSelected(True)
+        db.select_tool('1')
         db.on_tool_request = MagicMock(return_value=True)
         self.app.tools_db_changed_flag = True
         self.tabs.closeTab = MagicMock(

@@ -12,6 +12,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     FCComboBox2, RadioSet, FCDoubleSpinner, FCSpinner, NumericalEvalTupleEntry, NumericalEvalEntry, FCTable, \
     OptionalInputSection, OptionalHideInputSection
 from appDatabase import load_tools_database
+from appCommon.ToolDatabase import matching_tools
 from camlib import Geometry, flatten_shapely_geometry
 from appCommon.SafeEval import safe_eval
 
@@ -1236,7 +1237,8 @@ class ToolDrilling(Geometry, AppTool):
         filename = self.app.tools_database_path()
 
         try:
-            self.tools_db_dict = load_tools_database(filename, self.app.options)
+            self.tools_db_dict = load_tools_database(filename, self.app.options, target=2,
+                                                    units=getattr(self.app, 'app_units', None))
         except (OSError, TypeError, ValueError) as error:
             self.app.log.error("Could not load tools DB file.")
             self.app.log.error(str(error))
@@ -1261,14 +1263,15 @@ class ToolDrilling(Geometry, AppTool):
                 tool_found = 0
 
                 # look in database tools
-                for db_tool, db_tool_val in self.tools_db_dict.items():
+                matches = matching_tools(self.tools_db_dict, target=2, diameter=orig_tooldia)
+                for db_tool, db_tool_val in matches.items():
                     db_tooldia = db_tool_val['tooldia']
                     low_limit = float(db_tool_val['data']['tol_min'])
                     high_limit = float(db_tool_val['data']['tol_max'])
 
                     # test if the targeted tool is Drilling Tool, if not, skip to next tool
                     targeted_tool = db_tool_val['data']['tool_target']
-                    if targeted_tool != 2:
+                    if targeted_tool not in (0, 2):
                         continue
 
                     # if we find a tool with the same diameter in the Tools DB just update it's data

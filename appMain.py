@@ -822,21 +822,21 @@ class App(QtCore.QObject):
             os.makedirs(self.preprocessorpaths)
             self.log.debug('Created preprocessors folder: ' + self.preprocessorpaths)
 
-        # create tools_db.FlatDB file if there is none
+        # A stable library survives application upgrades; the legacy JSON stays untouched.
         db_path = self.tools_database_path()
-
         try:
-            with open(db_path):
-                pass
-        except FileNotFoundError:
-            self.log.debug('Creating empty tools_db.FlatDB')
-            try:
-                with open(db_path, 'x') as f:
-                    json.dump({}, f)
-            except FileExistsError:
-                pass
-        except OSError as error:
-            self.log.error('Could not access tools_db.FlatDB: %s' % str(error))
+            from appDatabase import initialize_tools_database
+            migration_defaults = dict(AppDefaults().defaults)
+            if not os.path.exists(db_path) and os.path.isfile(self.defaults_path()):
+                with open(self.defaults_path(), encoding='utf-8') as stream:
+                    saved_defaults = json.load(stream)
+                if isinstance(saved_defaults, dict):
+                    migration_defaults['units'] = saved_defaults.get('units', 'MM')
+            initialize_tools_database(
+                db_path, os.path.join(self.data_path, 'tools_db_%s.FlatDB' % self.version),
+                migration_defaults)
+        except (OSError, TypeError, ValueError) as error:
+            self.log.error('Could not initialize tools database: %s' % str(error))
 
         # create current_defaults.FlatConfig file if there is none
         def_path = self.defaults_path()
@@ -1845,7 +1845,7 @@ class App(QtCore.QObject):
         return msgbox.clickedButton() == bt_yes
 
     def tools_database_path(self):
-        return os.path.join(self.data_path, 'tools_db_%s.FlatDB' % str(self.version))
+        return os.path.join(self.data_path, 'tools.sqlite3')
 
     def defaults_path(self):
         return os.path.join(self.data_path, 'current_defaults.FlatConfig')

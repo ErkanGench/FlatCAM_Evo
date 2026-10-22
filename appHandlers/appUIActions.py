@@ -917,7 +917,7 @@ class AppUIActions(QtCore.QObject):
 
         :return:
         """
-        if source == 'app':
+        if source in ('app', 'milling'):
             callback = self.on_geometry_tool_add_from_db_executed
         elif source == 'ncc':
             callback = self.app.ncclear_tool.on_ncc_tool_add_from_db_executed
@@ -942,11 +942,7 @@ class AppUIActions(QtCore.QObject):
                     detached_window.show()
                     detached_window.raise_()
                     detached_window.activateWindow()
-                if source == 'app':
-                    database.ok_to_add = False
-                    database.ui.buttons_frame.show()
-                    database.ui.add_tool_from_db.hide()
-                    database.ui.cancel_tool_from_db.hide()
+                database.set_context(source)
                 if not getattr(database, '_db_load_valid', False):
                     return 'fail'
                 return 'success'
@@ -984,6 +980,7 @@ class AppUIActions(QtCore.QObject):
 
         # detect changes in the Tools in Tools DB, connect signals from table widget in tab
         self.app.tools_db_tab.ui_connect()
+        self.app.tools_db_tab.set_context(source)
         if not self.app.tools_db_tab._db_load_valid:
             return 'fail'
         return 'success'
