@@ -6,7 +6,7 @@ except ImportError as err:
     logging.getLogger('base').warning("ToolImage plugin could not be loaded: %s", err)
     # ToolImage will be unavailable but app continues
 
-from appPlugins.ToolCalculators import ToolCalculator
+from appPlugins.ToolCalculators.Calculator import ToolCalculator
 
 from appPlugins.ToolDblSided import DblSidedTool
 from appPlugins.ToolExtract import ToolExtract
