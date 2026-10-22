@@ -7,6 +7,7 @@ from unittest.mock import Mock, MagicMock
 import pytest
 from PyQt6 import QtCore, QtGui, QtWidgets
 from shapely.geometry import LineString, box
+from shapely.ops import unary_union
 
 from appEditors.appGeoEditor import AppGeoEditor, DrawToolShape, DrawToolUtilityShape, FCMove, FCExplode, FCEraser, FCShapeTool
 from appGUI.MainGUI import MainGUI
@@ -57,7 +58,9 @@ def interactive_move_editor():
     editor.select_tool = Mock()
     editor.delete_utility_geometry = lambda: AppGeoEditor.delete_utility_geometry(editor)
     editor.app.grid_status = lambda: False
-    editor.app.ui = SimpleNamespace(rel_position_label=Mock(), popMenu=SimpleNamespace(mouse_is_panning=False))
+    editor.app.ui = SimpleNamespace(rel_position_label=Mock(), update_location_labels=Mock(),
+                                    popMenu=SimpleNamespace(mouse_is_panning=False))
+    editor.app.plotcanvas = SimpleNamespace(on_update_text_hud=Mock())
     editor.app.jump_signal = Mock()
     editor.app.mouse_pos, editor.app.on_jump_to = (3, 2), Mock()
     editor.app.geo_editor = editor
@@ -350,8 +353,6 @@ def test_history_widgets_show_chronological_states_and_next_actions():
     editor.app.ui = SimpleNamespace(on_history_changed=Mock())
     editor.ui = SimpleNamespace()
     editor.ui.history_positions = QtWidgets.QComboBox()
-    editor.ui.history_undo = QtWidgets.QPushButton()
-    editor.ui.history_redo = QtWidgets.QPushButton()
     for label in ('Circle', 'Buffer'):
         with editor.history_operation(label=label):
             editor.add_shape(DrawToolShape(box(0, 0, 1, 1)))
@@ -360,8 +361,6 @@ def test_history_widgets_show_chronological_states_and_next_actions():
     combo = editor.ui.history_positions
     assert [combo.itemText(i) for i in range(combo.count())] == ['Initial state', 'Circle', 'Buffer']
     assert combo.currentIndex() == 1
-    assert editor.ui.history_undo.text() == 'Undo Circle'
-    assert editor.ui.history_redo.text() == 'Redo Buffer'
     editor.app.ui.on_history_changed.assert_called_with('Circle', 'Buffer')
 
 
@@ -448,8 +447,7 @@ def test_history_widgets_label_evicted_baseline_and_reset_new_session(lower_afte
     editor = editor_with_history()
     editor.app.call_source = 'geo_editor'
     editor.app.ui = SimpleNamespace(on_history_changed=Mock())
-    editor.ui = SimpleNamespace(history_positions=QtWidgets.QComboBox(),
-                                history_undo=QtWidgets.QPushButton(), history_redo=QtWidgets.QPushButton())
+    editor.ui = SimpleNamespace(history_positions=QtWidgets.QComboBox())
     if not lower_after:
         editor.app.options['global_history_steps'] = 3
     for index in range(5):
@@ -517,6 +515,31 @@ def test_boolean_variants_undo_and_redo_as_one_operation(operation):
     assert editor.redo()
     assert list(editor.storage.get_objects()) == result
     assert editor.selected == result_selection
+
+
+@pytest.mark.parametrize('operation', ['subtract', 'subtract_2', 'cutpath'])
+@pytest.mark.parametrize('target_kind', ['ring', 'closed_path', 'polygon', 'open_path'])
+@pytest.mark.parametrize('cutter', [box(1, 1, 3, 3), box(0.5, 0.5, 1.5, 1.5)])
+def test_subtraction_uses_areas_while_cutpath_uses_outlines(operation, target_kind, cutter):
+    polygon = box(0, 0, 2, 2)
+    geometry = {
+        'ring': polygon.exterior,
+        'closed_path': LineString(polygon.exterior.coords),
+        'polygon': polygon,
+        'open_path': LineString([(0, 1), (2, 1)])
+    }[target_kind]
+    target, tool = DrawToolShape(geometry), DrawToolShape(cutter.exterior)
+    editor = editor_with_history([target, tool], [target, tool])
+    editor.flatten = lambda geo: AppGeoEditor.flatten(editor, geo)
+    getattr(AppGeoEditor, operation)(editor)
+    run_worker(editor)
+    shapes = list(editor.storage.get_objects())
+    assert (tool in shapes) == (operation != 'subtract')
+    results = [shape.geo for shape in shapes if shape is not tool]
+    assert results
+    expected_target = geometry if target_kind == 'open_path' else \
+        polygon.exterior if operation == 'cutpath' else polygon
+    assert unary_union(results).equals(expected_target.difference(cutter))
 
 
 def test_queued_worker_rejects_edits_until_reset_and_load_has_no_entry():

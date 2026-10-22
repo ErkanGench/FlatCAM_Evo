@@ -90,6 +90,14 @@ def sweep_parameters(editor, aperture, shape):
             if (solid.equals_exact(candidate, max(1e-10, width * 1e-8), normalize=True) or
                     solid.equals(candidate)):
                 return radius, steps
+            # A join can mix continuous corners and separately tessellated end caps.
+            # Allow only the envelope between those two native sweeps, never a wider track or a gap.
+            segmented = unary_union([LineString([a, b]).buffer(radius, steps)
+                                     for a, b in zip(coords, coords[1:])])
+            epsilon = max(1e-10, width * 1e-8)
+            if (candidate.union(segmented).buffer(epsilon).covers(solid) and
+                    solid.buffer(epsilon).covers(candidate.intersection(segmented))):
+                return radius, steps
     raise ValueError(_("The solid no longer matches the circular aperture and FOLLOW. Bend editing was cancelled."))
 
 

@@ -2237,6 +2237,9 @@ class App(QtCore.QObject):
             self.ui.menuobjects.setDisabled(False)
             return
 
+        if self.call_source == 'app':
+            self._editor_gui_state = self.ui.saveState(0)
+
         self._history_edit_begin(edited_object)
 
         self.ui.notebook.setCurrentWidget(self.ui.properties_tab)

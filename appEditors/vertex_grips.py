@@ -3,9 +3,14 @@ Grips on the vertices of 1 selected shape: drag a vertex grip to move the vertex
 vertex, Ctrl+click a vertex grip to remove the vertex. An arc has 3 grips: drag its middle grip to bend it, drag an
 end grip to move that end, Ctrl+click the middle grip to make it a straight segment. A full circle has 4 radius grips.
 
-The editor keeps 1 instance as `vertex_grips` and calls sync(), press(), move(), release() and cancel(). Each commit
-goes through editor.apply_vertex_edit(), so 1 drag is 1 Undo step. Only x and y of each point are used: VisPy
-translate_coords() returns (x, y, z, w).
+Away from the grips, the Selection Tool delegates to SegmentDrag: drag the object body to move it, Ctrl+Shift+click or
+Ctrl+Alt+click to add or remove a straight segment, Ctrl+Shift+drag to stretch the segments, or Ctrl+Alt+drag to pull
+them with endpoint cords. These 2 gestures win over the grips. Ctrl+click and Shift+click stay with the editor
+(multiple selection, copy coordinates). The modifiers can be released during a drag; Escape or a right click cancels.
+
+The editor keeps 1 instance as `vertex_grips` and calls sync(), press(), move(), release() and cancel(). Commits go
+through apply_vertex_edit() or apply_selection_drag(), so 1 drag is 1 Undo step. Only x and y of each point are used:
+VisPy translate_coords() returns (x, y, z, w).
 """
 import math
 import gettext
@@ -18,6 +23,7 @@ from shapely.errors import GEOSException
 
 from appEditors.vertex_ops import SUPPORTED_TYPES, DEFAULT_CIRCLE_STEPS, vertex_grips, ring_after_edit, \
     edit_vertex, check_vertex_result, contrast_color
+from appEditors.segment_drag import SegmentDrag, CLICK_DRAG_THRESHOLD_PX
 import appTranslation as fcTranslate
 
 fcTranslate.apply_language('strings')
@@ -27,7 +33,6 @@ if '_' not in builtins.__dict__:
 GRIP_HIT_PX = 6             # hit radius of a grip, in screen pixels
 GRIP_SIZE_PX = 4            # half the side of a vertex grip square, in screen pixels
 GRIP_LIMIT = 5000           # shapes with more vertices get no grips
-CLICK_DRAG_THRESHOLD_PX = 5
 GRIP_COLOR = '#FF8000FF'
 INVALID_COLOR = '#FF0000FF'
 # the edit action of a drag and of a Ctrl+click, for each grip kind (no entry: the Ctrl+click does nothing)
@@ -64,6 +69,7 @@ class VertexGrips:
         self._key = None        # (id(shape), id(shape.geo)) of the last sync()
         self._pixel = None      # pixel size of the last draw()
         self._collection = None
+        self.segment_drag = SegmentDrag(self)
 
     def collection(self):
         if self._collection is None:
@@ -100,6 +106,7 @@ class VertexGrips:
 
     def sync(self):
         """Grips on the only selected shape while the Select tool is active; none in any other case."""
+        self.segment_drag.sync()
         editor = self.editor
         selected = list(editor.selected)
         shape = selected[0] if len(selected) == 1 and getattr(editor.active_tool, 'name', None) == 'select' else None
@@ -190,15 +197,20 @@ class VertexGrips:
     def press(self, screen_pos, canvas_pos, modifiers):
         """True if a grip took the press."""
         self.cancel()
-        if self.shape is None or self.editor.reject_busy():
+        if getattr(self.editor.active_tool, 'name', None) != 'select' or self.editor.reject_busy():
             return False
-        if self.stale():
+        if self.shape is not None and self.stale():
             self.resync()
             return False
-        found = self.hit(xy(canvas_pos))
-        if found is None:
-            return False
         ctrl = bool(modifiers & QtCore.Qt.KeyboardModifier.ControlModifier)
+        if ctrl and modifiers & (QtCore.Qt.KeyboardModifier.ShiftModifier | QtCore.Qt.KeyboardModifier.AltModifier):
+            # A segment gesture wins over the grips: with the grid on, a grip catches 1 grid step around a vertex.
+            return self.segment_drag.press(screen_pos, canvas_pos, modifiers)
+        found = self.hit(xy(canvas_pos)) if self.shape is not None else None
+        if found is None:
+            return self.segment_drag.press(screen_pos, canvas_pos, modifiers)
+        if ctrl and found[0] == 'mid':
+            return False  # a midpoint grip has no Ctrl+click action: the editor toggles the shape selection
         self.pressed = (*found, xy(screen_pos), ctrl)
         return True
 
@@ -219,6 +231,8 @@ class VertexGrips:
         """True while a grip is pressed: the editor must not run its own move code."""
         if self.shape is not None and self._pixel is not None and self.pixel() != self._pixel:
             self.draw()  # the zoom changed: keep the grips at their size in pixels
+        if self.segment_drag.move(screen_pos, canvas_pos):
+            return True
         if self.pressed is None:
             return False
         kind, address, __, press_screen, __ = self.pressed
@@ -253,6 +267,8 @@ class VertexGrips:
 
     def release(self, screen_pos, canvas_pos):
         """True if a grip took the release. A drag commits; a Ctrl+click removes a vertex or flattens an arc."""
+        if self.segment_drag.release(screen_pos, canvas_pos):
+            return True
         if self.pressed is None:
             return False
         if self.dragging:
@@ -275,6 +291,7 @@ class VertexGrips:
         return True
 
     def cancel(self):
+        self.segment_drag.cancel()
         if self.dragging:
             self.editor.tool_shape.clear(update=True)
         self.pressed, self.dragging, self.candidate = None, False, None

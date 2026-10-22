@@ -122,6 +122,55 @@ def apply_vertex_edit(editor, action, index, point=None, target=None, on_segment
     commit(editor, {apid: {position: [result]}}, [result])
 
 
+@gerber_operation(_('Drag selection'))
+def apply_selection_drag(editor, geometries, offset=None):
+    """Rebuild every edited trace before changing storage; one drag is one history step."""
+    try:
+        before = edit_state(editor)
+        if offset is not None and offset == (0, 0):
+            return
+        owners = {shape: [] for shape in geometries}
+        for apid, aperture in editor.storage_dict.items():
+            for position, shape in enumerate(aperture.get('geometry', ())):
+                if shape in owners:
+                    owners[shape].append((apid, position))
+        if any(len(entries) != 1 for entries in owners.values()):
+            raise ValueError(_("Geometry changed during the drag. Select the shapes again."))
+        replacements, results, native = {}, {}, []
+        translated = None
+        if offset is not None:
+            from appEditors.appGerberEditor import MoveEditorGrb
+            translated = dict(zip(geometries, MoveEditorGrb.translated_elements(list(geometries), *offset)))
+        for shape, geometry in geometries.items():
+            if translated is not None:
+                result_geo = dict(shape.geo, **translated[shape])
+            else:
+                plan = vertex_plan(editor, shape)
+                if plan is None:
+                    raise ValueError(_("A flashed pad has no editable segments."))
+                kind, original, parameters = plan
+                if geometry.equals_exact(original, 0.0):
+                    continue
+                result_geo = rebuild(kind, shape, geometry, parameters)
+            result = DrawToolShape(result_geo)
+            if translated is None and kind == 'track':
+                native.append(result)
+            apid, position = owners[shape][0]
+            replacements.setdefault(apid, {})[position] = [result]
+            results[shape] = result
+        if edit_state(editor) != before:
+            raise ValueError(_("Geometry changed during the drag. Select the shapes again."))
+    except (ValueError, TypeError, OverflowError, GEOSException) as err:
+        editor.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
+        return 'fail'
+    if not results:
+        return
+    editor.history.native_shapes.update(native)
+    if translated is not None:
+        editor.history.translated_shapes.update(results.values())
+    commit(editor, replacements, [results.get(shape, shape) for shape in editor.selected])
+
+
 def edit_vertices_dialog(editor):
     """The numeric Edit vertices dialog of the selected shape."""
     if not editor.history.ready():

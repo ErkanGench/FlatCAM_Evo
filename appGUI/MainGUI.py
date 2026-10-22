@@ -778,6 +778,8 @@ class MainGUI(QtWidgets.QMainWindow):
         self.geo_union_menuitem = self.geo_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/union16.png'),
             '%s\t%s' % (_('Union'), _('U')))
+        self.geo_polygonize_menuitem = self.geo_editor_menu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/poligonize32.png'), _('Polygonize'))
         self.geo_intersection_menuitem = self.geo_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/intersection16.png'),
             '%s\t%s' % (_('Intersection'), _('E')))
@@ -877,13 +879,13 @@ class MainGUI(QtWidgets.QMainWindow):
         self.menu.addMenu(self.grb_editor_menu)
 
         self.grb_add_rectangle_menuitem = self.grb_editor_menu.addAction(
-            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rectangle Region"))
+            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rect. Reg"))
         self.grb_add_text_menuitem = self.grb_editor_menu.addAction(
-            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Regions"))
+            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Reg"))
         self.grb_add_arc_menuitem = self.grb_editor_menu.addAction(
-            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc (Circular FOLLOW)"))
+            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc Follow"))
         self.grb_difference_keep_menuitem = self.grb_editor_menu.addAction(
-            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Difference (Keep Cutters)"))
+            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Diff. Keep"))
 
         self.grb_add_pad_menuitem = self.grb_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/aperture16.png'),
@@ -1077,21 +1079,42 @@ class MainGUI(QtWidgets.QMainWindow):
         self.toolbarplugins.setStyleSheet(toolbar_style)
         self.addToolBar(self.toolbarplugins)
 
+        # Editor Toolbars
+        if _database_option(self.app, 'global_theme') == 'dark':
+            checked_edit_bg = '#1F4E79'  # deep blue for dark theme
+        else:
+            checked_edit_bg = '#4169E1'  # royal blue for light/default
+
         self.exc_edit_toolbar = QtWidgets.QToolBar(_('Excellon Editor Toolbar'))
         self.exc_edit_toolbar.setObjectName('ExcEditor_TB')
-        self.exc_edit_toolbar.setStyleSheet(toolbar_style)
+        self.exc_edit_toolbar.setStyleSheet(
+            toolbar_style + """
+                    QToolBar > QToolButton:checked {
+                        background-color: %s;
+                    }
+                    """ % checked_edit_bg)
         self.addToolBar(self.exc_edit_toolbar)
 
         self.addToolBarBreak()
 
         self.geo_edit_toolbar = QtWidgets.QToolBar(_('Geometry Editor Toolbar'))
         self.geo_edit_toolbar.setObjectName('GeoEditor_TB')
-        self.geo_edit_toolbar.setStyleSheet(toolbar_style)
+        self.geo_edit_toolbar.setStyleSheet(
+            toolbar_style + """
+                    QToolBar > QToolButton:checked {
+                        background-color: %s;
+                    }
+                    """ % checked_edit_bg)
         self.addToolBar(self.geo_edit_toolbar)
 
         self.grb_edit_toolbar = QtWidgets.QToolBar(_('Gerber Editor Toolbar'))
         self.grb_edit_toolbar.setObjectName('GrbEditor_TB')
-        self.grb_edit_toolbar.setStyleSheet(toolbar_style)
+        self.grb_edit_toolbar.setStyleSheet(
+            toolbar_style + """
+                    QToolBar > QToolButton:checked {
+                        background-color: %s;
+                    }
+                    """ % checked_edit_bg)
         self.addToolBar(self.grb_edit_toolbar)
 
         # ### INFOBAR TOOLBARS ###################################################
@@ -1138,16 +1161,25 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################################################################
         self.editor_start_btn = self.toolbaredit.addAction(
             QtGui.QIcon(self.app.resource_location + '/edit_file32.png'), _("Editor"))
-        self.editor_exit_btn = QtWidgets.QToolButton()
 
+        self.editor_exit_btn = QtWidgets.QToolButton()
+        self.editor_exit_btn.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.editor_exit_btn.setText(_("Exit Edit"))
+        # expand vertically to fill the toolbar height
+        self.editor_exit_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Expanding)
         # https://www.w3.org/TR/SVG11/types.html#ColorKeywords
         self.editor_exit_btn.setStyleSheet("""
                                           QToolButton
                                           {
-                                              color: black;
-                                              background-color: blue;
+                                              background-color: %s;
+                                              border: none;
+                                              border-radius: 4px;
+                                              padding: 2px;
                                           }
-                                          """)
+                                          """ % checked_edit_bg)
         self.editor_exit_btn.setIcon(QtGui.QIcon(self.app.resource_location + '/power16.png'))
         self.editor_exit_btn.setToolTip(_("Exit from Editor."))
         # in order to hide it we hide the returned action
@@ -1342,6 +1374,14 @@ class MainGUI(QtWidgets.QMainWindow):
         self.geo_edit_toolbar.addSeparator()
         self.geo_union_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/union32.png'), _('Union'))
+        self.geo_join_btn = self.geo_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/join32.svg'), _('Join'))
+        self.geo_join_btn.setToolTip(_('Join selected lines into polylines. Uses the Join tolerance in Properties.'))
+        self.geo_polygonize_btn = self.geo_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/poligonize32.png'), _('Polygonize'))
+        self.geo_polygonize_btn.setToolTip(
+            _('Create polygons from selected closed paths or enclosing segments.\n'
+              'Unused open segments are kept. Endpoints must meet exactly.'))
         self.geo_explode_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/explode32.png'), _('Explode'))
 
@@ -1387,6 +1427,9 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/padarray32.png'), _('Pad Array'))
         self.grb_add_track_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/track32.png'), _("Track"))
+        self.grb_join_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/join32.svg'), _('Join'))
+        self.grb_join_btn.setToolTip(_('Join selected connected track sections into one track.'))
         self.grb_add_region_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/polygon32.png'), _("Region"))
         self.grb_convert_poly_btn = self.grb_edit_toolbar.addAction(
@@ -1397,13 +1440,20 @@ class MainGUI(QtWidgets.QMainWindow):
         self.grb_add_disc_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/disc32.png'), _("Disc"))
         self.grb_add_rectangle_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rectangle Region"))
+            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rect. Reg"))
+        self.grb_add_rectangle_btn.setToolTip(_("Rectangular Region"))
+
         self.grb_add_text_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Regions"))
+            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Reg"))
+        self.grb_add_text_btn.setToolTip(_("Text Region"))
+
         self.grb_add_arc_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc (Circular FOLLOW)"))
+            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc Follow"))
+        self.grb_add_arc_btn.setToolTip(_("Arc: Circular Follow"))
+
         self.grb_difference_keep_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Difference (Keep Cutters)"))
+            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Diff. Keep"))
+        self.grb_difference_keep_btn.setToolTip(_("Difference: Keep Cutters"))
         self.grb_edit_toolbar.addSeparator()
 
         self.aperture_buffer_btn = self.grb_edit_toolbar.addAction(
@@ -1946,6 +1996,8 @@ class MainGUI(QtWidgets.QMainWindow):
 
         self.draw_union = self.g_editor_cmenu.addAction(
             QtGui.QIcon(self.app.resource_location + '/union32.png'), _("Union"))
+        self.draw_polygonize = self.g_editor_cmenu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/poligonize32.png'), _('Polygonize'))
         self.draw_intersect = self.g_editor_cmenu.addAction(
             QtGui.QIcon(self.app.resource_location + '/intersection32.png'), _("Intersection"))
         self.draw_substract = self.g_editor_cmenu.addAction(
@@ -2510,14 +2562,25 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################################################################
         self.editor_start_btn = self.toolbaredit.addAction(
             QtGui.QIcon(self.app.resource_location + '/edit_file32.png'), _("Editor"))
+
         self.editor_exit_btn = QtWidgets.QToolButton()
+        self.editor_exit_btn.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.editor_exit_btn.setText(_("Exit Edit"))
+        # expand vertically to fill the toolbar height
+        self.editor_exit_btn.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Expanding)
 
         # https://www.w3.org/TR/SVG11/types.html#ColorKeywords
         self.editor_exit_btn.setStyleSheet("""
                                           QToolButton
                                           {
-                                              color: black;
-                                              background-color: blue;
+                                              color: white;
+                                              background-color: #4169E1;
+                                              border: none;
+                                              border-radius: 4px;
+                                              padding: 2px;
                                           }
                                           """)
         self.editor_exit_btn.setIcon(QtGui.QIcon(self.app.resource_location + '/power16.png'))
@@ -2710,6 +2773,14 @@ class MainGUI(QtWidgets.QMainWindow):
         self.geo_edit_toolbar.addSeparator()
         self.geo_union_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/union32.png'), _('Union'))
+        self.geo_join_btn = self.geo_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/join32.svg'), _('Join'))
+        self.geo_join_btn.setToolTip(_('Join selected lines into polylines. Uses the Join tolerance in Properties.'))
+        self.geo_polygonize_btn = self.geo_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/poligonize32.png'), _('Polygonize'))
+        self.geo_polygonize_btn.setToolTip(
+            _('Create polygons from selected closed paths or enclosing segments.\n'
+              'Unused open segments are kept. Endpoints must meet exactly.'))
         self.geo_explode_btn = self.geo_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/explode32.png'), _('Explode'))
 
@@ -2747,6 +2818,9 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/padarray32.png'), _('Pad Array'))
         self.grb_add_track_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/track32.png'), _("Track"))
+        self.grb_join_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/join32.svg'), _('Join'))
+        self.grb_join_btn.setToolTip(_('Join selected connected track sections into one track.'))
         self.grb_add_region_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/polygon32.png'), _("Region"))
         self.grb_convert_poly_btn = self.grb_edit_toolbar.addAction(
@@ -2757,13 +2831,20 @@ class MainGUI(QtWidgets.QMainWindow):
         self.grb_add_disc_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/disc32.png'), _("Disc"))
         self.grb_add_rectangle_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rectangle Region"))
+            QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rect. Reg"))
+        self.grb_add_rectangle_btn.setToolTip(_("Rectangular Region"))
+
         self.grb_add_text_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Regions"))
+            QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Reg"))
+        self.grb_add_text_btn.setToolTip(_("Text Region"))
+
         self.grb_add_arc_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc (Circular FOLLOW)"))
+            QtGui.QIcon(self.app.resource_location + '/arc32.png'), _("Arc Follow"))
+        self.grb_add_arc_btn.setToolTip(_("Arc: Circular Follow"))
+
         self.grb_difference_keep_btn = self.grb_edit_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Difference (Keep Cutters)"))
+            QtGui.QIcon(self.app.resource_location + '/subtract_alt32.png'), _("Diff. Keep"))
+        self.grb_difference_keep_btn.setToolTip(_("Difference: Keep Cutters"))
         self.grb_edit_toolbar.addSeparator()
 
         self.aperture_buffer_btn = self.grb_edit_toolbar.addAction(
@@ -3117,6 +3198,15 @@ class MainGUI(QtWidgets.QMainWindow):
                 return
         except AttributeError:
             pass
+
+        # A Selection Tool drag must be cancellable while its Shift/Alt modifier is still held.
+        if key in (QtCore.Qt.Key.Key_Escape, 'Escape') and self.app.call_source in ('geo_editor', 'grb_editor'):
+            editor = getattr(self.app, self.app.call_source)
+            grips = getattr(editor, 'vertex_grips', None)
+            if grips is not None and grips.segment_drag.pressed is not None:
+                grips.cancel()
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+                return
 
         if self.app.call_source == 'app':
             ctrl = QtCore.Qt.KeyboardModifier.ControlModifier
@@ -4795,9 +4885,12 @@ class MainGUI(QtWidgets.QMainWindow):
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Saving the project. FlatCAM closes when the save ends."))
         else:
             g_rect = self.geometry()
+            gui_state = getattr(self.app, '_editor_gui_state', None)
+            if getattr(self.app, 'call_source', 'app') == 'app' or not isinstance(gui_state, QtCore.QByteArray):
+                gui_state = self.saveState(0)
 
             q_settings = QSettings("Open Source", "FlatCAM_EVO")
-            q_settings.setValue('saved_gui_state', self.saveState(0))
+            q_settings.setValue('saved_gui_state', gui_state)
             q_settings.setValue('toolbar_lock', self.lock_action.isChecked())
             q_settings.setValue('menu_show_text', self.show_text_action.isChecked())
             if not self.isMaximized():

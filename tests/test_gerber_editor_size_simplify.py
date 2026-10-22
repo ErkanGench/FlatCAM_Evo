@@ -10,6 +10,7 @@ from shapely.geometry import LineString, Point, Polygon, box
 
 from appEditors.appGerberEditor import SimplifyEditorGrb
 from appEditors.grb_plugins.GrbCommon import DrawToolShape
+from appEditors.grb_plugins.GrbSimplificationPlugin import SimplificationTool
 from test_gerber_editor_pick import aperture, make_editor
 
 
@@ -98,6 +99,32 @@ def run_job(editor):
     job = editor.app.worker_task.emit.call_args.args[0]
     job['fcn'](*job['params'])
     QtWidgets.QApplication.processEvents()
+
+
+def test_simplification_refreshes_coordinates_after_worker_finishes():
+    solid = Polygon([(0, 0), (1, 0.01), (2, 0), (2, 2), (0, 2)])
+    first = DrawToolShape({'solid': solid})
+    editor = make_editor({10: aperture([first])})
+    editor.selected = [first]
+    tool = simplify_tool(editor)
+    panel = SimpleNamespace(draw_app=editor, ui=tool.ui, update_ui=MagicMock())
+    panel.update_ui.emit.side_effect = lambda coords, count: SimplificationTool.on_update_ui(panel, coords, count)
+    panel.calculate_coords_vertex = lambda: SimplificationTool.calculate_coords_vertex(panel)
+    tool.simp_tool = panel
+    editor.active_tool = tool
+    panel.calculate_coords_vertex()
+    tool.ui.geo_coords_entry.set_value.reset_mock()
+    tool.ui.geo_vertex_entry.set_value.reset_mock()
+
+    tool.on_simplify_click()
+    tool.ui.geo_coords_entry.set_value.assert_not_called()
+    tool.ui.geo_vertex_entry.set_value.assert_not_called()
+    run_job(editor)
+
+    coords = list(editor.selected[0].geo['solid'].exterior.coords)
+    assert len(coords) < len(solid.exterior.coords)
+    tool.ui.geo_coords_entry.set_value.assert_called_once_with(str(coords))
+    tool.ui.geo_vertex_entry.set_value.assert_called_with(len(coords))
 
 
 class CountingStorage(list):

@@ -308,8 +308,6 @@ class AppGeoEditor(QtCore.QObject):
         # #############################################################################################################
         self.ui = AppGeoEditorUI(app=self.app)
         self.history_changed.connect(self.refresh_history, Qt.ConnectionType.QueuedConnection)
-        self.ui.history_undo.clicked.connect(self.undo)
-        self.ui.history_redo.clicked.connect(self.redo)
         self.ui.history_positions.activated.connect(self.history_go_to)
         self.refresh_history()
         if disabled:
@@ -457,6 +455,7 @@ class AppGeoEditor(QtCore.QObject):
 
         self.app.ui.geo_delete_menuitem.triggered.connect(self.on_delete_btn)
         self.app.ui.geo_union_menuitem.triggered.connect(self.union)
+        self.app.ui.geo_polygonize_menuitem.triggered.connect(self.polygonize)
         self.app.ui.geo_intersection_menuitem.triggered.connect(self.intersection)
         self.app.ui.geo_subtract_menuitem.triggered.connect(self.subtract)
         self.app.ui.geo_subtract_alt_menuitem.triggered.connect(self.subtract_2)
@@ -499,6 +498,8 @@ class AppGeoEditor(QtCore.QObject):
         return f
 
     def connect_geo_toolbar_signals(self):
+        self.app.ui.geo_join_btn.triggered.connect(self.on_join_paths)
+        self.app.ui.geo_polygonize_btn.triggered.connect(lambda: self.polygonize())
         self.tools.update({
             "select": {"button": self.app.ui.geo_select_btn, "constructor": FCSelect},
             "arc": {"button": self.app.ui.geo_add_arc_btn, "constructor": FCArc},
@@ -1013,6 +1014,38 @@ class AppGeoEditor(QtCore.QObject):
         self.build_ui_sig.emit()
         self.plot_changes()
 
+    @geometry_operation
+    def apply_selection_drag(self, geometries, offset=None):
+        """Commit all segment groups (or a whole-object translation) as one validated replacement."""
+        try:
+            if any(id(shape) not in self.storage.indexes for shape in geometries):
+                raise ValueError(_("Geometry changed during the drag. Select the shapes again."))
+            if offset is not None and offset == (0, 0):
+                return
+            shapes = list(geometries)
+            values = translate_geometry([shape.geo for shape in shapes], *offset) if offset is not None else \
+                list(geometries.values())
+            replacements = {}
+            for shape, geometry in zip(shapes, values):
+                if geometry.equals_exact(shape.geo, 0.0):
+                    continue
+                if geometry.is_empty or not geometry.is_valid:
+                    raise ValueError(_("The drag would create invalid geometry."))
+                result = DrawToolShape(geometry)
+                result.data = deepcopy(shape.data)
+                result.data['bounds'] = result.bounds()
+                replacements[shape] = result
+        except (ValueError, TypeError, OverflowError, shapely.errors.GEOSException) as err:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
+            return 'fail'
+        if not replacements:
+            return
+        selected = [replacements.get(shape, shape) for shape in self.selected]
+        if self.replace_shapes(removed=replacements, inserted=replacements.values(), selected=selected) == 'fail':
+            return 'fail'
+        self.build_ui_sig.emit()
+        self.plot_changes()
+
     def on_edit_vertices(self):
         if AppGeoEditor.reject_busy(self):
             return 'fail'
@@ -1324,6 +1357,7 @@ class AppGeoEditor(QtCore.QObject):
         for (first, a), (second, b) in report['near_endpoints']:
             lines.append('%s %s — %s %s' % (id(first), a, id(second), b))
         self.ui.diagnostics_result.setText('\n'.join(lines))
+        self.ui.diagnostics_result.show()
         iterator = QtWidgets.QTreeWidgetItemIterator(self.ui.tw)
         while iterator.value():
             item = iterator.value()
@@ -1577,6 +1611,7 @@ class AppGeoEditor(QtCore.QObject):
         grips = getattr(self, 'vertex_grips', None)
         if grips is not None:
             grips.hide()
+            grips.segment_drag.clear()
         self.clear()
         self.app.ui.geo_edit_toolbar.setDisabled(True)
 
@@ -1697,6 +1732,7 @@ class AppGeoEditor(QtCore.QObject):
         self.app.ui.draw_eraser.triggered.connect(lambda: self.select_tool('eraser'))
 
         self.app.ui.draw_union.triggered.connect(self.union)
+        self.app.ui.draw_polygonize.triggered.connect(self.polygonize)
         self.app.ui.draw_intersect.triggered.connect(self.intersection)
         self.app.ui.draw_substract.triggered.connect(self.subtract)
         self.app.ui.draw_substract_alt.triggered.connect(self.subtract_2)
@@ -1800,6 +1836,11 @@ class AppGeoEditor(QtCore.QObject):
 
         try:
             self.app.ui.draw_union.triggered.disconnect(self.union)
+        except (TypeError, AttributeError):
+            pass
+
+        try:
+            self.app.ui.draw_polygonize.triggered.disconnect(self.polygonize)
         except (TypeError, AttributeError):
             pass
 
@@ -1952,10 +1993,6 @@ class AppGeoEditor(QtCore.QObject):
             combo.setCurrentIndex(position)
             undo_label = self._history_undo[-1][3] if self._history_undo else ''
             redo_label = self._history_redo[-1][3] if self._history_redo else ''
-            self.ui.history_undo.setText('%s %s' % (_('Undo'), undo_label))
-            self.ui.history_redo.setText('%s %s' % (_('Redo'), redo_label))
-            self.ui.history_undo.setEnabled(bool(undo_label))
-            self.ui.history_redo.setEnabled(bool(redo_label))
             if self.app.call_source == 'geo_editor':
                 self.app.ui.on_history_changed(undo_label, redo_label)
             elif self.app.call_source == 'app':
@@ -2298,6 +2335,15 @@ class AppGeoEditor(QtCore.QObject):
         if event.button == 1:
             self.press_pos_raw = (self.pos[0], self.pos[1])
             self.press_pos_screen = (event_pos[0], event_pos[1])
+            origin = self.snap(*self.press_pos_raw) if self.app.grid_status() else self.press_pos_raw
+            if self.active_tool is not None and self.active_tool.name == 'path' and \
+                    QtWidgets.QApplication.keyboardModifiers() == Qt.KeyboardModifier.ShiftModifier:
+                origin = self.active_tool.close_x, self.active_tool.close_y
+            self._delta_origin = tuple(origin)
+            self.app.dx = self.app.dy = 0
+            self.app.mouse_pos = list(origin)
+            self.app.ui.update_location_labels(0, 0, *origin)
+            self.app.plotcanvas.on_update_text_hud(0, 0, *origin)
             if grips is not None and grips.press(event_pos, self.pos, QtWidgets.QApplication.keyboardModifiers()):
                 return
         elif grips is not None:
@@ -2309,9 +2355,6 @@ class AppGeoEditor(QtCore.QObject):
             self.pos = (self.pos[0], self.pos[1])
 
         if event.button == 1:
-            self.app.ui.rel_position_label.setText("<b>Dx</b>: %.4f&nbsp;&nbsp;  <b>Dy</b>: "
-                                                   "%.4f&nbsp;&nbsp;&nbsp;&nbsp;" % (0, 0))
-
             # update mouse position with the clicked position
             self.snap_x = self.pos[0]
             self.snap_y = self.pos[1]
@@ -2515,35 +2558,6 @@ class AppGeoEditor(QtCore.QObject):
 
         if self.pos is None:
             self.pos = (0, 0)
-        self.app.dx = x - self.pos[0]
-        self.app.dy = y - self.pos[1]
-
-        # # update the position label in the infobar since the APP mouse event handlers are disconnected
-        # self.app.ui.position_label.setText("&nbsp;<b>X</b>: %.4f&nbsp;&nbsp;   "
-        #                                    "<b>Y</b>: %.4f&nbsp;" % (x, y))
-        # #
-        # # # update the reference position label in the infobar since the APP mouse event handlers are disconnected
-        # self.app.ui.rel_position_label.setText("<b>Dx</b>: %.4f&nbsp;&nbsp;  <b>Dy</b>: "
-        #                                        "%.4f&nbsp;&nbsp;&nbsp;&nbsp;" % (self.app.dx, self.app.dy))
-
-        if self.active_tool.name == 'path':
-            modifier = QtWidgets.QApplication.keyboardModifiers()
-            if modifier == Qt.KeyboardModifier.ShiftModifier:
-                cl_x = self.active_tool.close_x
-                cl_y = self.active_tool.close_y
-                shift_dx = cl_x - self.pos[0]
-                shift_dy = cl_y - self.pos[1]
-                self.app.ui.update_location_labels(shift_dx, shift_dy, cl_x, cl_y)
-            else:
-                self.app.ui.update_location_labels(self.app.dx, self.app.dy, x, y)
-        else:
-            self.app.ui.update_location_labels(self.app.dx, self.app.dy, x, y)
-
-        # units = self.app.app_units.lower()
-        # self.app.plotcanvas.text_hud.text = \
-        #     'Dx:\t{:<.4f} [{:s}]\nDy:\t{:<.4f} [{:s}]\n\nX:  \t{:<.4f} [{:s}]\nY:  \t{:<.4f} [{:s}]'.format(
-        #         self.app.dx, units, self.app.dy, units, x, units, y, units)
-        self.app.plotcanvas.on_update_text_hud(self.app.dx, self.app.dy, x, y)
 
         if event.button == 1 and event_is_dragging and isinstance(self.active_tool, FCEraser):
             pass
@@ -2555,6 +2569,16 @@ class AppGeoEditor(QtCore.QObject):
                 except AttributeError:
                     # this can happen if the method is not implemented yet for the active_tool
                     pass
+
+        display_x, display_y = x, y
+        if self.active_tool.name == 'path' and \
+                QtWidgets.QApplication.keyboardModifiers() == Qt.KeyboardModifier.ShiftModifier:
+            display_x, display_y = self.active_tool.close_x, self.active_tool.close_y
+        origin = getattr(self, '_delta_origin', (0, 0))
+        self.app.dx = display_x - origin[0]
+        self.app.dy = display_y - origin[1]
+        self.app.ui.update_location_labels(self.app.dx, self.app.dy, display_x, display_y)
+        self.app.plotcanvas.on_update_text_hud(self.app.dx, self.app.dy, display_x, display_y)
 
         grips = getattr(self, 'vertex_grips', None)
         if grips is not None and grips.move(event_pos, pos):
@@ -3650,6 +3674,58 @@ class AppGeoEditor(QtCore.QObject):
         else:
             return False
 
+    def polygonize(self):
+        """Replace enclosing linework with polygon faces, retaining unused geometry."""
+        def work_task(editor_self):
+            with editor_self.app.proc_container.new(_("Working...")):
+                selected = list(editor_self.get_selected())
+                try:
+                    parts = {shape: flatten_shapely_geometry(shape.geo) for shape in selected}
+                    lines = [geo for geometries in parts.values() for geo in geometries
+                             if isinstance(geo, (LineString, LinearRing))]
+                    if any(not geo.is_valid for geo in lines):
+                        raise ValueError(_("Select valid paths to polygonize."))
+                    polygons = list(shapely.polygonize(shapely.get_parts(unary_union(lines))).geoms)
+                    if not polygons:
+                        editor_self.app.inform.emit('[WARNING_NOTCL] %s' %
+                                                    _("Select paths that enclose an area. Nothing was changed."))
+                        return
+
+                    boundaries = unary_union([polygon.boundary for polygon in polygons])
+                    inserted, removed = [], set()
+                    for polygon in polygons:
+                        shape = DrawToolShape(polygon)
+                        shape.data['type'] = _('Polygon')
+                        inserted.append(shape)
+                    for shape, geometries in parts.items():
+                        remaining = [geo.difference(boundaries) if isinstance(geo, (LineString, LinearRing)) else geo
+                                     for geo in geometries]
+                        if all(before.equals(after) for before, after in zip(geometries, remaining)):
+                            continue
+                        removed.add(shape)
+                        for geo in remaining:
+                            if not geo.is_empty:
+                                replacement = DrawToolShape(geo)
+                                replacement.data = deepcopy(shape.data)
+                                replacement.data['bounds'] = replacement.bounds()
+                                inserted.append(replacement)
+                    if any(not shape.geo.is_valid for shape in inserted):
+                        raise ValueError(_("Polygonize produced invalid geometry. Nothing was changed."))
+                except (ValueError, TypeError, NotImplementedError, shapely.errors.GEOSException) as err:
+                    editor_self.app.log.error("AppGeoEditor.polygonize() --> %s" % str(err))
+                    editor_self.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
+                    return 'fail'
+
+                if AppGeoEditor.replace_shapes(editor_self, removed=removed, inserted=inserted,
+                                               selected=[shape for shape in selected if shape not in removed] +
+                                               inserted) == 'fail':
+                    return 'fail'
+                editor_self.plot_changes()
+                editor_self.build_ui_sig.emit()
+                editor_self.app.inform.emit('[success] %s' % _("Done."))
+
+        return AppGeoEditor.submit_worker(self, work_task, [self])
+
     def union(self):
         """
         Makes union of selected polygons. Original polygons
@@ -3797,6 +3873,8 @@ class AppGeoEditor(QtCore.QObject):
 
                 try:
                     target = selected[0].geo
+                    if target.is_ring:
+                        target = Polygon(target)
                     tools = selected[1:]
                     # toolgeo = unary_union([deepcopy(shp.geo) for shp in tools]).buffer(0.0000001)
                     # result = DrawToolShape(target.difference(toolgeo))
@@ -3825,6 +3903,8 @@ class AppGeoEditor(QtCore.QObject):
 
                 try:
                     target = selected[0].geo
+                    if target.is_ring:
+                        target = Polygon(target)
                     tools = selected[1:]
                     # toolgeo = unary_union([shp.geo for shp in tools]).buffer(0.0000001)
                     toolgeo = unary_union([Polygon(tool.geo) if tool.geo.is_ring else tool.geo for tool in tools])
@@ -3976,15 +4056,27 @@ class AppGeoEditorUI:
         self.level.setCheckable(True)
         self.title_box.addWidget(self.level)
 
-        history_box = QtWidgets.QHBoxLayout()
-        self.tools_box.addLayout(history_box)
-        self.history_undo = QtWidgets.QPushButton(_('Undo'))
-        self.history_redo = QtWidgets.QPushButton(_('Redo'))
-        history_box.addWidget(self.history_undo)
-        history_box.addWidget(self.history_redo)
+        def add_section(title, color, tooltip, parent_layout):
+            # bold colored title followed by a frame with its own grid; returns the grid
+            title_lbl = FCLabel('%s' % title, bold=True, color=color)
+            title_lbl.setToolTip(tooltip)
+            parent_layout.addWidget(title_lbl)
+            frame = FCFrame()
+            parent_layout.addWidget(frame)
+            section_grid = GLay(v_spacing=5, h_spacing=3)
+            frame.setLayout(section_grid)
+            return section_grid
+
+        # #############################################################################################################
+        # History Frame
+        # #############################################################################################################
+        history_grid = add_section(_("History"), 'purple',
+                                   _("The state timeline of the geometry operations."), self.tools_box)
         self.history_positions = QtWidgets.QComboBox()
         self.history_positions.setToolTip(_('History: select a state to undo or redo geometry operations.'))
-        self.tools_box.addWidget(self.history_positions)
+        history_grid.addWidget(self.history_positions, 0, 0, 1, 3)
+
+        units = self.app.app_units
 
         dia_grid = GLay(v_spacing=5, h_spacing=3)
         self.tools_box.addLayout(dia_grid)
@@ -4001,19 +4093,21 @@ class AppGeoEditorUI:
 
         dia_grid.addWidget(tooldia_lbl, 0, 0)
         dia_grid.addWidget(self.tooldia_entry, 0, 1)
+        dia_grid.addWidget(FCLabel(units), 0, 2)
 
-        snap_frame = FCFrame()
-        self.tools_box.addWidget(snap_frame)
-        snap_grid = GLay(v_spacing=5, h_spacing=3)
-        snap_frame.setLayout(snap_grid)
+        # #############################################################################################################
+        # Snapping Frame
+        # #############################################################################################################
+        snap_grid = add_section(_("Snapping"), 'orange',
+                                _("Extra snap candidates, used when grid snapping is enabled."), self.tools_box)
         self.midpoint_snap_cb = FCCheckBox(_("Midpoint snap"))
         self.segment_snap_cb = FCCheckBox(_("Nearest segment snap"))
         self.midpoint_snap_cb.setToolTip(_("Snap to the midpoint of each straight line/polyline segment."))
         self.segment_snap_cb.setToolTip(_("Snap to the closest point on a straight segment, not its extension.\n"
                                           "Polygonized curves remain straight segments, not analytic circles or tangents."))
-        snap_grid.addWidget(self.midpoint_snap_cb, 0, 0, 1, 2)
-        snap_grid.addWidget(self.segment_snap_cb, 1, 0, 1, 2)
-        snap_grid.addWidget(FCLabel(_("Acquisition (px)")), 2, 0)
+        snap_grid.addWidget(self.midpoint_snap_cb, 0, 0, 1, 3)
+        snap_grid.addWidget(self.segment_snap_cb, 1, 0, 1, 3)
+        snap_grid.addWidget(FCLabel('%s:' % _("Acquisition")), 2, 0)
         self.snap_radius_entry = FCDoubleSpinner()
         self.snap_radius_entry.set_precision(1)
         self.snap_radius_entry.set_range(0.0, 100.0)
@@ -4022,10 +4116,11 @@ class AppGeoEditorUI:
                                            "Without a live canvas, uses global_snap_max in model units.\n"
                                            "Corner snapping keeps its existing model-unit distance preference."))
         snap_grid.addWidget(self.snap_radius_entry, 2, 1)
+        snap_grid.addWidget(FCLabel("px"), 2, 2)
         self.snap_type_label = FCLabel('%s: %s' % (_("Snap"), _("None")))
         self.snap_type_label.setToolTip(_("Closest candidate wins. Equal distances: corner, midpoint, segment, grid.\n"
                                          "Equal segment candidates use coordinate order."))
-        snap_grid.addWidget(self.snap_type_label, 3, 0, 1, 2)
+        snap_grid.addWidget(self.snap_type_label, 3, 0, 1, 3)
 
         # #############################################################################################################
         # Tree Widget Frame
@@ -4051,7 +4146,7 @@ class AppGeoEditorUI:
         self.tw.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.tw.header().setStretchLastSection(True)
         self.tw.header().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        tw_grid.addWidget(self.tw, 0, 0, 1, 2)
+        tw_grid.addWidget(self.tw, 0, 0, 1, 3)
 
         self.geo_font = QtGui.QFont()
         self.geo_font.setBold(True)
@@ -4070,7 +4165,7 @@ class AppGeoEditorUI:
 
         # Zoom Selection
         self.geo_zoom = FCCheckBox(_("Zoom on selection"))
-        grid0.addWidget(self.geo_zoom, 0, 0, 1, 2)
+        grid0.addWidget(self.geo_zoom, 0, 0, 1, 3)
 
         # Parameters Title
         self.param_button = FCButton('%s' % _("Parameters"), checkable=True, color='blue', bold=True,
@@ -4078,40 +4173,40 @@ class AppGeoEditorUI:
         self.param_button.setToolTip(
             _("Geometry parameters.")
         )
-        grid0.addWidget(self.param_button, 2, 0, 1, 2)
+        grid0.addWidget(self.param_button, 1, 0, 1, 3)
 
         # #############################################################################################################
         # ############################################ Parameter Frame ################################################
         # #############################################################################################################
         self.par_frame = FCFrame()
-        grid0.addWidget(self.par_frame, 6, 0, 1, 2)
+        grid0.addWidget(self.par_frame, 2, 0, 1, 3)
 
         par_grid = GLay(v_spacing=5, h_spacing=3)
         self.par_frame.setLayout(par_grid)
 
         # Is Valid
-        is_valid_lbl = FCLabel('%s' % _("Is Valid"), bold=True)
+        is_valid_lbl = FCLabel('%s:' % _("Is Valid"), bold=True)
         self.is_valid_entry = FCLabel('None')
 
         par_grid.addWidget(is_valid_lbl, 0, 0)
-        par_grid.addWidget(self.is_valid_entry, 0, 1, 1, 2)
+        par_grid.addWidget(self.is_valid_entry, 0, 1)
 
         # Is Empty
-        is_empty_lbl = FCLabel('%s' % _("Is Empty"), bold=True)
+        is_empty_lbl = FCLabel('%s:' % _("Is Empty"), bold=True)
         self.is_empty_entry = FCLabel('None')
 
-        par_grid.addWidget(is_empty_lbl, 2, 0)
-        par_grid.addWidget(self.is_empty_entry, 2, 1, 1, 2)
+        par_grid.addWidget(is_empty_lbl, 1, 0)
+        par_grid.addWidget(self.is_empty_entry, 1, 1)
 
         # Is Ring
-        is_ring_lbl = FCLabel('%s' % _("Is Ring"), bold=True)
+        is_ring_lbl = FCLabel('%s:' % _("Is Ring"), bold=True)
         self.is_ring_entry = FCLabel('None')
 
-        par_grid.addWidget(is_ring_lbl, 4, 0)
-        par_grid.addWidget(self.is_ring_entry, 4, 1, 1, 2)
+        par_grid.addWidget(is_ring_lbl, 2, 0)
+        par_grid.addWidget(self.is_ring_entry, 2, 1)
 
         # Is CCW
-        is_ccw_lbl = FCLabel('%s' % _("Is CCW"), bold=True)
+        is_ccw_lbl = FCLabel('%s:' % _("Is CCW"), bold=True)
         self.is_ccw_entry = FCLabel('None')
         self.change_orientation_btn = FCButton(_("Change"))
         self.change_orientation_btn.setIcon(QtGui.QIcon(self.app.resource_location + '/orientation32.png'))
@@ -4119,99 +4214,132 @@ class AppGeoEditorUI:
             _("Change the orientation of the geometric element.\n"
               "Works for LinearRing and Polygons.")
         )
-        par_grid.addWidget(is_ccw_lbl, 6, 0)
-        par_grid.addWidget(self.is_ccw_entry, 6, 1)
-        par_grid.addWidget(self.change_orientation_btn, 6, 2)
+        par_grid.addWidget(is_ccw_lbl, 3, 0)
+        par_grid.addWidget(self.is_ccw_entry, 3, 1)
+        par_grid.addWidget(self.change_orientation_btn, 3, 2)
 
         # Is Simple
-        is_simple_lbl = FCLabel('%s' % _("Is Simple"), bold=True)
+        is_simple_lbl = FCLabel('%s:' % _("Is Simple"), bold=True)
         self.is_simple_entry = FCLabel('None')
 
-        par_grid.addWidget(is_simple_lbl, 8, 0)
-        par_grid.addWidget(self.is_simple_entry, 8, 1, 1, 2)
+        par_grid.addWidget(is_simple_lbl, 4, 0)
+        par_grid.addWidget(self.is_simple_entry, 4, 1)
 
         # Length
-        len_lbl = FCLabel('%s' % _("Length"), bold=True)
+        len_lbl = FCLabel('%s:' % _("Length"), bold=True)
         len_lbl.setToolTip(
             _("The length of the geometry element.")
         )
         self.geo_len_entry = FCEntry(decimals=self.decimals)
         self.geo_len_entry.setReadOnly(True)
 
-        par_grid.addWidget(len_lbl, 10, 0)
-        par_grid.addWidget(self.geo_len_entry, 10, 1, 1, 2)
+        par_grid.addWidget(len_lbl, 5, 0)
+        par_grid.addWidget(self.geo_len_entry, 5, 1)
+        par_grid.addWidget(FCLabel(units), 5, 2)
 
         # #############################################################################################################
         # Coordinates Frame
         # #############################################################################################################
-        # Coordinates
-        coords_lbl = FCLabel('%s' % _("Coordinates"), bold=True, color='red')
-        coords_lbl.setToolTip(
-            _("The coordinates of the selected geometry element.")
-        )
-        self.tools_box.addWidget(coords_lbl)
-
-        c_frame = FCFrame()
-        self.tools_box.addWidget(c_frame)
-
-        # Grid Layout
-        coords_grid = GLay(v_spacing=5, h_spacing=3)
-        c_frame.setLayout(coords_grid)
+        coords_grid = add_section(_("Coordinates"), 'red',
+                                  _("The coordinates of the selected geometry element."), self.tools_box)
 
         self.geo_coords_entry = FCTextEdit()
         self.geo_coords_entry.setPlaceholderText(
             _("The coordinates of the selected geometry element.")
         )
-        coords_grid.addWidget(self.geo_coords_entry, 0, 0, 1, 2)
+        coords_grid.addWidget(self.geo_coords_entry, 0, 0, 1, 3)
+
+        # Vertex Points Number
+        vertex_lbl = FCLabel('%s:' % _("Last Vertexes"), bold=True)
+        vertex_lbl.setToolTip(
+            _("The number of vertex points in the last selected geometry element.")
+        )
+        self.geo_vertex_entry = FCEntry(decimals=self.decimals)
+        self.geo_vertex_entry.setReadOnly(True)
+
+        coords_grid.addWidget(vertex_lbl, 1, 0)
+        coords_grid.addWidget(self.geo_vertex_entry, 1, 1)
+
+        # All selected Vertex Points Number
+        vertex_all_lbl = FCLabel('%s:' % _("Selected Vertexes"), bold=True)
+        vertex_all_lbl.setToolTip(
+            _("The number of vertex points in all selected geometry elements.")
+        )
+        self.geo_all_vertex_entry = FCEntry(decimals=self.decimals)
+        self.geo_all_vertex_entry.setReadOnly(True)
+
+        coords_grid.addWidget(vertex_all_lbl, 2, 0)
+        coords_grid.addWidget(self.geo_all_vertex_entry, 2, 1)
 
         self.vertex_edit_btn = FCButton(_("Edit vertices"))
         self.vertex_edit_btn.setToolTip(_("Numerically move, insert or remove a vertex of one selected contour."))
-        coords_grid.addWidget(self.vertex_edit_btn, 1, 0, 1, 2)
+        coords_grid.addWidget(self.vertex_edit_btn, 3, 0, 1, 3)
+
+        # #############################################################################################################
+        # Advanced sections: hidden in Beginner mode
+        # #############################################################################################################
+        self.adv_sections = QtWidgets.QWidget()
+        adv_box = QtWidgets.QVBoxLayout()
+        adv_box.setContentsMargins(0, 0, 0, 0)
+        self.adv_sections.setLayout(adv_box)
+        self.tools_box.addWidget(self.adv_sections)
+
+        # Paths
+        paths_grid = add_section(_("Paths"), 'green', _("Split and join open paths."), adv_box)
 
         self.split_action = QtGui.QAction(_("Split path"), self.geo_edit_widget)
         self.split_action.setToolTip(_("Select one open LineString, then click its interior to split it."))
         self.split_btn = QtWidgets.QToolButton()
         self.split_btn.setDefaultAction(self.split_action)
-        coords_grid.addWidget(self.split_btn, 2, 0, 1, 2)
+        self.split_btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
         self.split_tolerance_entry = FCEntry()
         self.split_tolerance_entry.setText('0.01')
         self.split_tolerance_entry.setToolTip(
             _("Maximum click distance from the path, and excluded distance along the path from each endpoint.\n"
               "In current units, independent of grid and pixel snap radius. Zero requires an exact interior click."))
-        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Split tolerance"), self.app.app_units)), 3, 0)
-        coords_grid.addWidget(self.split_tolerance_entry, 3, 1)
+        paths_grid.addWidget(FCLabel('%s:' % _("Split tolerance")), 0, 0)
+        paths_grid.addWidget(self.split_tolerance_entry, 0, 1)
+        paths_grid.addWidget(FCLabel(units), 0, 2)
+        paths_grid.addWidget(self.split_btn, 1, 0, 1, 3)
 
         self.join_btn = FCButton(_("Join paths"))
         self.join_btn.setToolTip(_("Join selected open LineStrings. Ambiguous branches are rejected."))
-        coords_grid.addWidget(self.join_btn, 4, 0, 1, 2)
         self.join_tolerance_entry = FCEntry()
         self.join_tolerance_entry.setText('0.01')
         self.join_tolerance_entry.setToolTip(
             _("Maximum endpoint gap in current units. Zero joins exact endpoints only.\n"
               "Near endpoints get a straight bridge: no vertices move; length increases by the gap.\n"
               "Each endpoint must have only one candidate. Disjoint components stay separate."))
-        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Join tolerance"), self.app.app_units)), 5, 0)
-        coords_grid.addWidget(self.join_tolerance_entry, 5, 1)
+        paths_grid.addWidget(FCLabel('%s:' % _("Join tolerance")), 2, 0)
+        paths_grid.addWidget(self.join_tolerance_entry, 2, 1)
+        paths_grid.addWidget(FCLabel(units), 2, 2)
+        paths_grid.addWidget(self.join_btn, 3, 0, 1, 3)
+
+        # Inspect
+        inspect_grid = add_section(_("Inspect"), 'blue', _("Read-only diagnostics of the selected geometry."), adv_box)
 
         self.diagnostics_btn = FCButton(_("Inspect selected geometry"))
         self.diagnostics_btn.setToolTip(_("Read-only snapshot. Open paths are informational; no repair is performed."))
-        coords_grid.addWidget(self.diagnostics_btn, 6, 0, 1, 2)
         self.diagnostics_tolerance_entry = FCEntry()
         self.diagnostics_tolerance_entry.setText('0.01')
         self.diagnostics_tolerance_entry.setToolTip(
             _("Near endpoint distance in current units, independent of grid and snapping.\n"
               "Zero reports exactly coincident endpoints only. Paths remain open and unchanged."))
-        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Endpoint tolerance"), self.app.app_units)), 7, 0)
-        coords_grid.addWidget(self.diagnostics_tolerance_entry, 7, 1)
+        inspect_grid.addWidget(FCLabel('%s:' % _("Endpoint tolerance")), 0, 0)
+        inspect_grid.addWidget(self.diagnostics_tolerance_entry, 0, 1)
+        inspect_grid.addWidget(FCLabel(units), 0, 2)
+        inspect_grid.addWidget(self.diagnostics_btn, 1, 0, 1, 3)
         self.diagnostics_result = FCLabel('')
         self.diagnostics_result.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.diagnostics_result.setWordWrap(True)
         self.diagnostics_result.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        coords_grid.addWidget(self.diagnostics_result, 8, 0, 1, 2)
+        inspect_grid.addWidget(self.diagnostics_result, 2, 0, 1, 3)
+        # empty until the first inspection; hidden so it does not leave a blank row
+        self.diagnostics_result.hide()
 
         # Select by Size
-        coords_grid.addWidget(FCLabel('%s' % _("Select by Size"), bold=True), 9, 0, 1, 2)
-        units = self.app.app_units
+        size_grid = add_section(_("Select by Size"), 'teal',
+                                _("Select or delete shapes by area or length."), adv_box)
         self.size_area_chk = FCCheckBox(_("Filter polygons by area"))
         self.size_area_chk.setToolTip(
             _("Applies to Polygon and MultiPolygon shapes (text counts as polygons), area in current units squared.\n"
@@ -4220,11 +4348,13 @@ class AppGeoEditorUI:
         self.size_min_area_entry.setText('0')
         self.size_max_area_entry = FCEntry()
         self.size_max_area_entry.setText('1')
-        coords_grid.addWidget(self.size_area_chk, 10, 0, 1, 2)
-        coords_grid.addWidget(FCLabel('%s (%s²)' % (_("Min area"), units)), 11, 0)
-        coords_grid.addWidget(self.size_min_area_entry, 11, 1)
-        coords_grid.addWidget(FCLabel('%s (%s²)' % (_("Max area"), units)), 12, 0)
-        coords_grid.addWidget(self.size_max_area_entry, 12, 1)
+        size_grid.addWidget(self.size_area_chk, 0, 0, 1, 3)
+        size_grid.addWidget(FCLabel('%s:' % _("Min area")), 1, 0)
+        size_grid.addWidget(self.size_min_area_entry, 1, 1)
+        size_grid.addWidget(FCLabel('%s²' % units), 1, 2)
+        size_grid.addWidget(FCLabel('%s:' % _("Max area")), 2, 0)
+        size_grid.addWidget(self.size_max_area_entry, 2, 1)
+        size_grid.addWidget(FCLabel('%s²' % units), 2, 2)
 
         self.size_length_chk = FCCheckBox(_("Filter paths by length"))
         self.size_length_chk.setToolTip(
@@ -4234,11 +4364,13 @@ class AppGeoEditorUI:
         self.size_min_length_entry.setText('0')
         self.size_max_length_entry = FCEntry()
         self.size_max_length_entry.setText('1')
-        coords_grid.addWidget(self.size_length_chk, 13, 0, 1, 2)
-        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Min length"), units)), 14, 0)
-        coords_grid.addWidget(self.size_min_length_entry, 14, 1)
-        coords_grid.addWidget(FCLabel('%s (%s)' % (_("Max length"), units)), 15, 0)
-        coords_grid.addWidget(self.size_max_length_entry, 15, 1)
+        size_grid.addWidget(self.size_length_chk, 3, 0, 1, 3)
+        size_grid.addWidget(FCLabel('%s:' % _("Min length")), 4, 0)
+        size_grid.addWidget(self.size_min_length_entry, 4, 1)
+        size_grid.addWidget(FCLabel(units), 4, 2)
+        size_grid.addWidget(FCLabel('%s:' % _("Max length")), 5, 0)
+        size_grid.addWidget(self.size_max_length_entry, 5, 1)
+        size_grid.addWidget(FCLabel(units), 5, 2)
 
         self.size_select_btn = FCButton(_("Select"))
         self.size_select_btn.setToolTip(
@@ -4248,11 +4380,15 @@ class AppGeoEditorUI:
         self.size_delete_btn.setToolTip(
             _("Delete the shapes matching the enabled filters, as one Undo/Redo step.\n"
               "Searches the selected shapes if any, else all the shapes."))
-        coords_grid.addWidget(self.size_select_btn, 16, 0)
-        coords_grid.addWidget(self.size_delete_btn, 16, 1)
+        size_btn_box = QtWidgets.QHBoxLayout()
+        size_btn_box.setContentsMargins(0, 0, 0, 0)
+        size_btn_box.addWidget(self.size_select_btn)
+        size_btn_box.addWidget(self.size_delete_btn)
+        size_grid.addLayout(size_btn_box, 6, 0, 1, 3)
 
         # Resize Circles
-        coords_grid.addWidget(FCLabel('%s' % _("Resize Circles"), bold=True), 17, 0, 1, 2)
+        resize_grid = add_section(_("Resize Circles"), 'brown',
+                                  _("Resize the selected circles to a new diameter."), adv_box)
         self.resize_circles_entry = FCDoubleSpinner(policy=False)
         self.resize_circles_entry.set_precision(self.decimals)
         self.resize_circles_entry.set_range(0.0000, 10000.0000)
@@ -4261,40 +4397,16 @@ class AppGeoEditorUI:
             _("Diameter to resize the selected circles to. Each circle keeps its own center.\n"
               "Circles are recognized by their shape (polygon or outline with at least 8 vertices,\n"
               "all at the same distance from the center). Other shapes are skipped."))
-        coords_grid.addWidget(FCLabel('%s (%s)' % (_("New Diameter"), units)), 18, 0)
-        coords_grid.addWidget(self.resize_circles_entry, 18, 1)
+        resize_grid.addWidget(FCLabel('%s:' % _("New Diameter")), 0, 0)
+        resize_grid.addWidget(self.resize_circles_entry, 0, 1)
+        resize_grid.addWidget(FCLabel(units), 0, 2)
         self.resize_circles_btn = FCButton(_("Resize"))
         self.resize_circles_btn.setToolTip(
             _("Resize the selected circles to the new diameter, as one Undo/Redo step."))
-        coords_grid.addWidget(self.resize_circles_btn, 19, 0, 1, 2)
+        resize_grid.addWidget(self.resize_circles_btn, 1, 0, 1, 3)
 
-        # Grid Layout
-        v_grid = GLay(v_spacing=5, h_spacing=3)
-        self.tools_box.addLayout(v_grid)
-
-        # Vertex Points Number
-        vertex_lbl = FCLabel('%s' % _("Last Vertexes"), bold=True)
-        vertex_lbl.setToolTip(
-            _("The number of vertex points in the last selected geometry element.")
-        )
-        self.geo_vertex_entry = FCEntry(decimals=self.decimals)
-        self.geo_vertex_entry.setReadOnly(True)
-
-        v_grid.addWidget(vertex_lbl, 0, 0)
-        v_grid.addWidget(self.geo_vertex_entry, 0, 1)
-
-        # All selected Vertex Points Number
-        vertex_all_lbl = FCLabel('%s' % _("Selected Vertexes"), bold=True)
-        vertex_all_lbl.setToolTip(
-            _("The number of vertex points in all selected geometry elements.")
-        )
-        self.geo_all_vertex_entry = FCEntry(decimals=self.decimals)
-        self.geo_all_vertex_entry.setReadOnly(True)
-
-        v_grid.addWidget(vertex_all_lbl, 2, 0)
-        v_grid.addWidget(self.geo_all_vertex_entry, 2, 1)
-
-        GLay.set_common_column_size([grid0, v_grid, tw_grid, coords_grid, dia_grid, par_grid], 0)
+        GLay.set_common_column_size([grid0, tw_grid, coords_grid, dia_grid, par_grid, history_grid, snap_grid,
+                                     paths_grid, inspect_grid, size_grid, resize_grid], 0)
 
         layout.addStretch(1)
 
@@ -4340,6 +4452,7 @@ class AppGeoEditorUI:
                                     """)
 
             self.adv_frame.hide()
+            self.adv_sections.hide()
 
             # Context Menu section
             # self.tw.removeContextMenu()
@@ -4353,6 +4466,7 @@ class AppGeoEditorUI:
                                     """)
 
             self.adv_frame.show()
+            self.adv_sections.show()
 
             # Context Menu section
             # self.tw.setupContextMenu()

@@ -14,7 +14,7 @@ from appEditors.appExcEditor import (AppExcEditor, AppExcEditorUI, MoveEditorExc
 from appEditors.appGeoEditor import AppGeoEditor, DrawToolShape
 from appEditors.exc_plugins.ExcHistory import ExcellonHistory
 from appGUI.MainGUI import MainGUI
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 def drill(x=0):
@@ -342,18 +342,17 @@ def test_real_properties_controls_drive_history_and_read_only_inspection():
     editor, first, second = scene()
     editor.decimals = 4
     editor.ui = AppExcEditorUI(SimpleNamespace(decimals=4, app_units='MM', resource_location='assets/resources'))
-    editor.undo_action = editor.ui.undo_button
-    editor.redo_action = editor.ui.redo_button
-    editor.ui.undo_button.clicked.connect(lambda: editor.undo())
-    editor.ui.redo_button.clicked.connect(lambda: editor.redo())
+    assert not hasattr(editor.ui, 'undo_button') and not hasattr(editor.ui, 'redo_button')
+    editor.undo_action = QtGui.QAction()
+    editor.redo_action = QtGui.QAction()
     editor.diagnose_features = MethodType(AppExcEditor.diagnose_features, editor)
     editor.on_diagnostics = MethodType(AppExcEditor.on_diagnostics, editor)
     editor.ui.diagnostics_button.clicked.connect(lambda: editor.on_diagnostics())
     editor.delete_selected()
     AppExcEditor.update_history_ui(editor)
-    assert editor.ui.undo_button.isEnabled()
+    assert editor.undo_action.isEnabled()
     assert editor.ui.history_list.count() == 2  # Initial state plus the deletion.
-    editor.ui.undo_button.click()
+    editor.undo()
     assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
     editor.ui.diagnostics_selected.setChecked(True)
     editor.ui.diagnostics_button.click()

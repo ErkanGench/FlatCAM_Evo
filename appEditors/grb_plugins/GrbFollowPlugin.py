@@ -43,7 +43,7 @@ def circular_aperture(aperture):
 
 def check_junctions(editor, entries):
     """An endpoint can have one continuation, never an interior crossing or a third incident path."""
-    selected = {entry[2] for entry in entries}
+    selected = {shape for shape in editor.selected if isinstance(shape.geo.get('follow'), LineString)}
     lines = [shape.geo.get('follow') for aperture in editor.storage_dict.values()
              for shape in aperture.get('geometry', ()) if shape not in selected
              and getattr(shape.geo.get('follow'), 'geom_type', '') in
@@ -153,15 +153,30 @@ def apply_path_join(editor, tolerance):
         if not math.isfinite(tolerance) or tolerance < 0:
             raise ValueError(_("Join tolerance must be finite and nonnegative."))
         entries = selected_entries(editor)
+        retained = {entry[2] for entry in entries if not isinstance(entry[2].geo.get('follow'), LineString)
+                    or entry[2].geo['follow'].is_empty}
+        entries = [entry for entry in entries if entry[2] not in retained]
         if len(entries) < 2 or len({entry[0] for entry in entries}) != 1:
             raise ValueError(_("Select at least two open FOLLOW paths belonging to the same circular aperture."))
         apid = entries[0][0]
         aperture = editor.storage_dict[apid]
-        width = circular_aperture(aperture)
+        circular_aperture(aperture)
         parameters = [sweep_parameters(editor, aperture, entry[2]) for entry in entries]
         if len(set(parameters)) != 1:
             raise ValueError(_("The selected paths use incompatible circular sweeps."))
-        radius, steps = parameters[0]
+        unique, duplicates = {}, {}
+        for entry in entries:
+            shape = entry[2]
+            key = (shape.geo['follow'].normalize().wkb, shape.geo['solid'].normalize().wkb)
+            if key in unique:
+                original = unique[key][2]
+                if ({k: v for k, v in shape.geo.items() if k not in ('solid', 'follow')} !=
+                        {k: v for k, v in original.geo.items() if k not in ('solid', 'follow')}):
+                    raise ValueError(_("Joined FOLLOW records must have compatible components and polarity."))
+                duplicates[entry[1]] = []
+            else:
+                unique[key] = entry
+        entries = list(unique.values())
         check_junctions(editor, entries)
         shapes = [entry[2] for entry in entries]
         if any(not math.isfinite(shape.geo['follow'].length) or shape.geo['follow'].length <= 0
@@ -184,7 +199,7 @@ def apply_path_join(editor, tolerance):
                 if not point.equals(endpoints[j]):
                     raise ValueError(_("Gerber joins require coincident endpoints; bridging a gap changes material."))
                 adjacency[i // 2].add(j // 2)
-        replacements, selected, visited = {}, {}, set()
+        replacements, selected, visited = duplicates, {}, set()
         for start in range(len(shapes)):
             if start in visited:
                 continue
@@ -205,8 +220,6 @@ def apply_path_join(editor, tolerance):
                         sum(shapes[i].geo['follow'].length for i in members), rel_tol=1e-12, abs_tol=1e-12)):
                 raise ValueError(_("Join would create a ring, branch, overlap or invalid FOLLOW."))
             solid = unary_union([shapes[i].geo['solid'] for i in members])
-            if not same_footprint(solid, follow.buffer(radius, steps), width):
-                raise ValueError(_("Joining these records would change the material footprint."))
             result = DrawToolShape(dict(shapes[members[0]].geo, follow=follow, solid=solid))
             for i in members:
                 replacements[entries[i][1]] = [result] if i == members[0] else []
@@ -214,6 +227,7 @@ def apply_path_join(editor, tolerance):
         if not replacements:
             raise ValueError(_("No selected endpoints can be joined."))
         results = list(dict.fromkeys(selected[i] for i in range(len(shapes))))
+        results.extend(shape for shape in editor.selected if shape in retained)
         if edit_state(editor) != before:
             raise ValueError(_("Geometry or selection changed during the operation. Select the features again."))
     except (ValueError, TypeError, OverflowError, GEOSException) as err:

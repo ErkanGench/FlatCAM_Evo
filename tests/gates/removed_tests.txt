@@ -40,3 +40,4 @@ tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centro
 tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click2-center2]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
 tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click3-center3]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
 tests/test_pick_consumers.py::TestAlignGerber::test_flash_gives_the_solid_centroid[click4-center4]  # Align Objects upgrade: a flash snaps to its flash point, not the solid centroid
+tests/test_gerber_editor_pick.py::TestClickOrDrag::test_six_pixel_move_is_drag  # Segment drag: a drag that starts on a shape moves it; renamed to test_six_pixel_move_on_empty_canvas_is_area_drag

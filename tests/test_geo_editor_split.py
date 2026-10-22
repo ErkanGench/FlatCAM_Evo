@@ -132,7 +132,8 @@ def interactive_editor():
     editor.select_tool = Mock()
     editor.canvas = SimpleNamespace(translate_coords=lambda pos: pos)
     editor.app.grid_status = lambda: False
-    editor.app.ui = SimpleNamespace(rel_position_label=Mock())
+    editor.app.ui = SimpleNamespace(rel_position_label=Mock(), update_location_labels=Mock())
+    editor.app.plotcanvas = SimpleNamespace(on_update_text_hud=Mock())
     editor.snap = Mock(return_value=(2, 0.05))
     editor.active_tool = geo.FCSplit(editor)
     return editor, original
@@ -145,6 +146,8 @@ def test_canvas_uses_snapped_click_and_explicit_units_tolerance():
     assert len(editor.selected) == 2
     assert editor.selected[0].geo.coords[-1] == (2, 0)
     editor.snap.assert_called_once_with(9, 9)
+    editor.app.ui.update_location_labels.assert_called_once_with(0, 0, 9, 9)
+    editor.app.plotcanvas.on_update_text_hud.assert_called_once_with(0, 0, 9, 9)
     editor.select_tool.assert_called_once_with('select')
 
 
@@ -212,6 +215,7 @@ def test_discoverable_button_activates_registered_split_tool():
     editor, original = interactive_editor()
     editor.app.ui = Mock()
     editor.tools = {}
+    editor.on_join_paths = Mock()
     editor.make_callback = geo.AppGeoEditor.make_callback.__get__(editor)
     editor.on_tool_select = geo.AppGeoEditor.on_tool_select.__get__(editor)
     editor.select_tool = geo.AppGeoEditor.select_tool.__get__(editor)

@@ -383,6 +383,11 @@ class AppLifecycle(QtCore.QObject):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
             return False
 
+        # Keep the application layout before hiding the window or deactivating editors changes its toolbars.
+        gui_state = getattr(self.app, '_editor_gui_state', None)
+        if getattr(self.app, 'call_source', 'app') == 'app' or not isinstance(gui_state, QtCore.QByteArray):
+            gui_state = self.app.ui.saveState(0)
+
         # make sure that any change we made while working in the app is saved to the defaults
         # WARNING !!! Do not hide UI before saving the state of the UI in the defaults file !!!
         # TODO in the future we need to make a difference between settings that need to be persistent all the time
@@ -437,8 +442,10 @@ class AppLifecycle(QtCore.QObject):
             pass
 
         # save app state to file
+        if self.app.ui.saveState(0) != gui_state:
+            self.app.ui.restoreState(gui_state, 0)
         stgs = QSettings("Open Source", "FlatCAM_EVO")
-        stgs.setValue('saved_gui_state', self.app.ui.saveState())
+        stgs.setValue('saved_gui_state', gui_state)
         stgs.setValue('maximized_gui', self.app.ui.isMaximized())
         stgs.setValue(
             'language',

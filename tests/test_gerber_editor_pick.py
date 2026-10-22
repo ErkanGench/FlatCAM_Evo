@@ -744,22 +744,23 @@ class TestClickOrDrag(PickCase):
         self.ed.app.draw_moving_selection_shape.assert_not_called()
         self.ed.draw_selection_area_handler.assert_not_called()
 
-    def test_six_pixel_move_is_drag(self):
-        press(self.ed, 0, 0)
-        move(self.ed, 0.3, 0)
-        release(self.ed, 0.3, 0)
+    def test_six_pixel_move_on_empty_canvas_is_area_drag(self):
+        # Starting on a shape now moves it; an area selection starts on empty canvas.
+        press(self.ed, 2, 0)
+        move(self.ed, 2.3, 0)
+        release(self.ed, 2.3, 0)
         self.ed.draw_selection_area_handler.assert_called_once()
         self.release_spy.assert_not_called()
 
     def test_move_out_and_back_is_click(self):
-        press(self.ed, 0, 0)
-        move(self.ed, 1.0, 0)
+        press(self.ed, 2, 0)
+        move(self.ed, 3.0, 0)
         self.assertIsNotNone(self.ed.app.selection_type)
-        move(self.ed, 0.1, 0)
-        release(self.ed, 0.1, 0)
+        move(self.ed, 2.1, 0)
+        release(self.ed, 2.1, 0)
         self.ed.draw_selection_area_handler.assert_not_called()
         self.release_spy.assert_called_once()
-        self.assertEqual(self.ed.selected, [self.shape])
+        self.assertEqual(self.ed.selected, [])
 
 
 class TestTableSync(PickCase):

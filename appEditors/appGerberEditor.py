@@ -24,7 +24,8 @@ from appEditors.grb_plugins.GrbFollowPlugin import (FollowSplitEditorGrb, apply_
 from appEditors.grb_plugins.GrbHistory import GerberHistory, gerber_operation, metadata
 from appEditors.grb_plugins.GrbSimplificationPlugin import SimplificationTool
 from appEditors.grb_plugins.GrberRegionPlugin import GrbRegionEditorTool
-from appEditors.grb_plugins.GrbVertices import grip_geometry, grip_state, apply_vertex_edit, edit_vertices_dialog
+from appEditors.grb_plugins.GrbVertices import (grip_geometry, grip_state, apply_vertex_edit, edit_vertices_dialog,
+                                              apply_selection_drag)
 from appEditors.vertex_grips import VertexGrips
 from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message
 from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingDialog
@@ -1615,13 +1616,20 @@ class TrackEditorGrb(ShapeToolEditorGrb):
             return DrawToolUtilityShape(new_geo_el)
 
     def make(self):
-        if len(self.temp_points) == 1:
-            follow_geo = Point(self.temp_points[0])
-            solid_geo = follow_geo.buffer(self.buf_val, int(self.steps_per_circle))
-        else:
-            follow_geo = LineString(self.temp_points)
-            solid_geo = follow_geo.buffer(self.buf_val, int(self.steps_per_circle))
-            solid_geo = solid_geo.buffer(0)  # try to clean the geometry
+        # Click records are provisional: finish the whole route, not another copy of its last segment.
+        coords = []
+        for shape, storage in self.click_shapes:
+            follow = shape.geo['follow']
+            if not follow.is_empty:
+                points = list(follow.coords)
+                coords.extend(points[1:] if coords and coords[-1] == points[0] else points)
+        if self.temp_points and (not coords or coords[-1] != tuple(self.temp_points[-1])):
+            points = [tuple(point) for point in self.temp_points]
+            coords.extend(points[1:] if coords and coords[-1] == points[0] else points)
+        if not coords:
+            coords = list(self.points[:1])
+        follow_geo = Point(coords[0]) if len(coords) == 1 else LineString(coords)
+        solid_geo = follow_geo.buffer(self.buf_val, int(self.steps_per_circle))
 
         new_geo_el = {
             'solid': solid_geo,
@@ -2537,10 +2545,6 @@ class SimplifyEditorGrb(ShapeToolEditorGrb):
         pending = self.draw_app.history.reserve()
         if pending is None:
             return 'fail'
-
-        # init the coordinates text field and vertex points field
-        self.ui.geo_coords_entry.set_value('')
-        self.ui.geo_vertex_entry.set_value(0)
 
         def task_job():
             with self.app.proc_container.new('%s...' % _("Simplify")):
@@ -4011,8 +4015,6 @@ class AppGerberEditor(QtCore.QObject):
         self.vertex_edit_action = self.app.ui.grb_editor_menu.addAction(_('Edit vertices'), self.on_edit_vertices)
         self.vertex_edit_action.setProperty(EDITOR_ACTION_PROPERTY, True)
         self.ui.features_table.itemSelectionChanged.connect(self.on_feature_selection)
-        self.ui.history_undo.clicked.connect(self.undo)
-        self.ui.history_redo.clicked.connect(self.redo)
         self.ui.history_positions.activated.connect(self.history_go_to)
         self.ui.diagnostics_btn.clicked.connect(self.on_diagnostics)
         self.ui.diagnostics_component.currentIndexChanged.connect(self.update_component_properties)
@@ -4093,6 +4095,7 @@ class AppGerberEditor(QtCore.QObject):
                 lambda checked=False, tool=kind: self.on_region_drawing(tool))
         self.app.ui.grb_difference_keep_btn.triggered.connect(
             lambda checked=False: self.apply_region_operation('difference_keep'))
+        self.app.ui.grb_join_btn.triggered.connect(self.on_join_paths)
 
     @QtCore.pyqtSlot()
     def refresh_history(self):
@@ -4101,10 +4104,6 @@ class AppGerberEditor(QtCore.QObject):
         undo_label = history.undo_stack[-1]['label'] if history.undo_stack else ''
         redo_label = history.redo_stack[-1]['label'] if history.redo_stack else ''
         busy = history.pending is not None
-        self.ui.history_undo.setEnabled(bool(undo_label) and not busy)
-        self.ui.history_redo.setEnabled(bool(redo_label) and not busy)
-        self.ui.history_undo.setText('%s %s' % (_('Undo'), undo_label))
-        self.ui.history_redo.setText('%s %s' % (_('Redo'), redo_label))
         with QtCore.QSignalBlocker(self.ui.history_positions):
             self.ui.history_positions.clear()
             self.ui.history_positions.addItems(
@@ -5323,6 +5322,7 @@ class AppGerberEditor(QtCore.QObject):
         if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb)):
             self.active_tool.clean_up()
         self.vertex_grips.hide()
+        self.vertex_grips.segment_drag.clear()
         self.app.plotcanvas.text_cursor.parent = None
         self.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
         self.active_tool = None
@@ -6075,6 +6075,15 @@ class AppGerberEditor(QtCore.QObject):
             if geo is None:
                 return
 
+        if isinstance(self.active_tool, TrackEditorGrb) and specific_shape is None:
+            provisional = {shape for shape, store in self.active_tool.click_shapes}
+            owners = [apid for apid, aperture in self.storage_dict.items()
+                      if any(shape in provisional for shape in aperture.get('geometry', ()))]
+            self.history.capture(owners)
+            for apid in owners:
+                shapes = self.storage_dict[apid]['geometry']
+                shapes[:] = [shape for shape in shapes if shape not in provisional]
+
         if storage is not None:
             # Add shape
             self.add_gerber_shape(geo, storage)
@@ -6534,6 +6543,8 @@ class AppGerberEditor(QtCore.QObject):
         self.sync_aperture_rows(apid for apid, aperture in self.storage_dict.items()
                                 if any(shape in selected for shape in aperture.get('geometry', ())))
         self.plot_all()
+        if isinstance(self.active_tool, SimplifyEditorGrb):
+            self.active_tool.simp_tool.calculate_coords_vertex()
 
     def _tool_wants_raw_pick(self):
         """
@@ -6595,6 +6606,9 @@ class AppGerberEditor(QtCore.QObject):
             storage.append(shape_element)
             self.touch_geometry()
 
+    def apply_selection_drag(self, geometries, offset=None):
+        return apply_selection_drag(self, geometries, offset=offset)
+
     def on_canvas_click(self, event):
         """
         event.pos has canvas coordinates, translated below to plot coordinates.
@@ -6607,25 +6621,27 @@ class AppGerberEditor(QtCore.QObject):
         event_pos = event.pos
         self.pos = self.canvas.translate_coords(event_pos)
         self.press_pos_raw = (self.pos[0], self.pos[1])
-        # a press on a vertex grip starts a vertex drag and never reaches the tool (the Select tool would deselect)
-        if event.button == 1:
-            if self.vertex_grips.press(event_pos, self.pos, QtWidgets.QApplication.keyboardModifiers()):
-                return
-        else:
-            self.vertex_grips.cancel()
         raw_pick = self._tool_wants_raw_pick()
-
         if self.app.grid_status():
             snapped_pos = self.app.geo_editor.snap(self.pos[0], self.pos[1])
         else:
             snapped_pos = (self.pos[0], self.pos[1])
+        # a press on a vertex grip starts a vertex drag and never reaches the tool (the Select tool would deselect)
+        if event.button == 1:
+            origin = self.press_pos_raw if raw_pick else snapped_pos
+            self._delta_origin = tuple(origin)
+            self.app.dx = self.app.dy = 0
+            self.app.mouse_pos = list(origin)
+            self.app.ui.update_location_labels(0, 0, *origin)
+            self.app.plotcanvas.on_update_text_hud(0, 0, *origin)
+            if self.vertex_grips.press(event_pos, self.pos, QtWidgets.QApplication.keyboardModifiers()):
+                return
+        else:
+            self.vertex_grips.cancel()
         # a click that picks a shape uses the raw position, all the others the snapped one
         self.pos = self.press_pos_raw if raw_pick else snapped_pos
 
         if event.button == 1:
-            self.app.ui.rel_position_label.setText("<b>Dx</b>: %.4f&nbsp;&nbsp;  <b>Dy</b>: "
-                                                   "%.4f&nbsp;&nbsp;&nbsp;&nbsp;" % (0, 0))
-
             # Selection with left mouse button
             if self.active_tool is not None:
                 modifiers = QtWidgets.QApplication.keyboardModifiers()
@@ -6946,8 +6962,9 @@ class AppGerberEditor(QtCore.QObject):
 
         if self.pos is None:
             self.pos = (0, 0)
-        self.app.dx = x - self.pos[0]
-        self.app.dy = y - self.pos[1]
+        origin = getattr(self, '_delta_origin', (0, 0))
+        self.app.dx = x - origin[0]
+        self.app.dy = y - origin[1]
 
         # # update the position label in the infobar since the APP mouse event handlers are disconnected
         # self.app.ui.position_label.setText("&nbsp;<b>X</b>: %.4f&nbsp;&nbsp;   "
@@ -6975,7 +6992,7 @@ class AppGerberEditor(QtCore.QObject):
                 pass
 
         # a vertex grip drag: no rubber band selection
-        if self.vertex_grips.move(event_pos, (x, y)):
+        if self.vertex_grips.move(event_pos, pos_canvas):
             self.app.selection_type = None
             return
 
@@ -7761,18 +7778,17 @@ class AppGerberEditorUI:
         self.name_entry.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.name_box.addWidget(self.name_entry)
 
+        history_title = FCLabel(_("History"), bold=True, color='tomato')
+        history_title.setToolTip(_("Jump to any retained state of this editing session."))
+        layout.addWidget(history_title)
+
+        history_frame = FCFrame()
+        layout.addWidget(history_frame)
+
         history_grid = GLay(v_spacing=5, h_spacing=3)
-        layout.addLayout(history_grid)
-        self.history_undo = FCButton(_("Undo"))
-        self.history_redo = FCButton(_("Redo"))
-        self.history_undo.setIcon(QtGui.QIcon(self.app.resource_location + '/undo64.png'))
-        self.history_redo.setIcon(QtGui.QIcon(self.app.resource_location + '/redo64.png'))
+        history_frame.setLayout(history_grid)
         self.history_positions = QtWidgets.QComboBox()
-        self.history_undo.setEnabled(False)
-        self.history_redo.setEnabled(False)
-        history_grid.addWidget(self.history_undo, 0, 0)
-        history_grid.addWidget(self.history_redo, 0, 1)
-        history_grid.addWidget(self.history_positions, 1, 0, 1, 2)
+        history_grid.addWidget(self.history_positions, 0, 0)
 
         # Box for custom widgets
         # This gets populated in offspring implementations.
@@ -7924,60 +7940,52 @@ class AppGerberEditorUI:
         ap_grid.addWidget(self.geo_zoom, 4, 0, 1, 2)
 
         # #############################################################################################################
-        # ############################################ Shape Properties ###############################################
+        # ################################ Advanced sections (hidden in Beginner mode) ################################
         # #############################################################################################################
-        self.shape_frame = FCFrame()
+        self.shape_frame = QtWidgets.QFrame()
+        self.shape_frame.setContentsMargins(0, 0, 0, 0)
         self.custom_box.addWidget(self.shape_frame)
 
-        self.shape_grid = GLay(v_spacing=5, h_spacing=3)
-        self.shape_frame.setLayout(self.shape_grid)
+        shape_box = QtWidgets.QVBoxLayout()
+        shape_box.setContentsMargins(0, 0, 0, 0)
+        self.shape_frame.setLayout(shape_box)
 
-        # Parameters Title
+        # #############################################################################################################
+        # ############################################ Shape Properties ###############################################
+        # #############################################################################################################
         param_title = FCLabel('%s' % _("Parameters"), bold=True, color='blue')
         param_title.setToolTip(
             _("Geometry parameters.")
         )
-        self.shape_grid.addWidget(param_title, 0, 0, 1, 3)
+        shape_box.addWidget(param_title)
 
-        p_grid = GLay(v_spacing=5, h_spacing=3, c_stretch=[0, 0, 0, 1, 0])
+        param_frame = FCFrame()
+        shape_box.addWidget(param_frame)
+
+        self.shape_grid = GLay(v_spacing=5, h_spacing=3)
+        param_frame.setLayout(self.shape_grid)
 
         # Is Valid
-        valid_lbl = FCLabel('%s' % _("Valid"), bold=True)
+        valid_lbl = FCLabel('%s:' % _("Valid"))
         valid_lbl.setToolTip(
             _("Show if the selected polygon is valid.")
         )
         self.is_valid_entry = FCLabel("False")
-        p_grid.addWidget(valid_lbl, 0, 0)
-        p_grid.addWidget(self.is_valid_entry, 0, 1)
+        self.shape_grid.addWidget(valid_lbl, 0, 0)
+        self.shape_grid.addWidget(self.is_valid_entry, 0, 1)
 
         # Area
-        area_lbl = FCLabel('%s' % _("Area"), bold=True)
+        area_lbl = FCLabel('%s:' % _("Area"))
         area_lbl.setToolTip(
             _("Show the area of the selected polygon.")
         )
         self.area_entry = FCEntry(decimals=self.decimals)
         self.area_entry.set_value(0.0)
-        a_units = _("mm") if self.units == 'MM' else _("in")
-        area_units_lbl = FCLabel('%s<sup>2</sup>' % a_units)
+        area_units_lbl = FCLabel(self.units + '²')
 
-        p_grid.addWidget(area_lbl, 0, 2)
-        p_grid.addWidget(self.area_entry, 0, 3)
-        p_grid.addWidget(area_units_lbl, 0, 4)
-
-        self.shape_grid.addLayout(p_grid, 2, 0, 1, 3)
-
-        # Coordinates
-        coords_lbl = FCLabel('%s:' % _("Coordinates"))
-        coords_lbl.setToolTip(
-            _("The coordinates of the selected geometry element.")
-        )
-        self.shape_grid.addWidget(coords_lbl, 4, 0, 1, 3)
-
-        self.geo_coords_entry = FCTextEdit()
-        self.geo_coords_entry.setPlaceholderText(
-            _("The coordinates of the selected geometry element.")
-        )
-        self.shape_grid.addWidget(self.geo_coords_entry, 6, 0, 1, 3)
+        self.shape_grid.addWidget(area_lbl, 1, 0)
+        self.shape_grid.addWidget(self.area_entry, 1, 1)
+        self.shape_grid.addWidget(area_units_lbl, 1, 2)
 
         # Vertex Points Number
         vertex_lbl = FCLabel('%s:' % _("Vertex Points"))
@@ -7987,11 +7995,39 @@ class AppGerberEditorUI:
         self.geo_vertex_entry = FCEntry(decimals=self.decimals)
         self.geo_vertex_entry.setReadOnly(True)
 
-        self.shape_grid.addWidget(vertex_lbl, 8, 0)
-        self.shape_grid.addWidget(self.geo_vertex_entry, 8, 1, 1, 2)
+        self.shape_grid.addWidget(vertex_lbl, 4, 0)
+        self.shape_grid.addWidget(self.geo_vertex_entry, 4, 1)
 
-        # Select by Size
-        self.shape_grid.addWidget(FCLabel(_("Select by Size"), bold=True), 9, 0, 1, 3)
+        # Coordinates
+        coords_lbl = FCLabel('%s:' % _("Coordinates"))
+        coords_lbl.setToolTip(
+            _("The coordinates of the selected geometry element.")
+        )
+        self.shape_grid.addWidget(coords_lbl, 2, 0, 1, 3)
+
+        self.geo_coords_entry = FCTextEdit()
+        self.geo_coords_entry.setPlaceholderText(
+            _("The coordinates of the selected geometry element.")
+        )
+        self.shape_grid.addWidget(self.geo_coords_entry, 3, 0, 1, 3)
+
+        self.vertex_edit_btn = FCButton(_("Edit vertices"))
+        self.vertex_edit_btn.setToolTip(_("Numerically move, insert or remove a vertex of one selected region or track.\n"
+                                          "A region edits its solid, a track its FOLLOW line. Pads have no vertices."))
+        self.shape_grid.addWidget(self.vertex_edit_btn, 5, 0, 1, 3)
+
+        # #############################################################################################################
+        # ############################################## Select by Size ###############################################
+        # #############################################################################################################
+        size_title = FCLabel(_("Select by Size"), bold=True, color='green')
+        shape_box.addWidget(size_title)
+
+        size_frame = FCFrame()
+        shape_box.addWidget(size_frame)
+
+        size_grid = GLay(v_spacing=5, h_spacing=3)
+        size_frame.setLayout(size_grid)
+
         self.size_width_chk = FCCheckBox(_("Width"))
         self.size_width_entry = FCEntry()
         self.size_width_entry.setText('1')
@@ -8000,26 +8036,190 @@ class AppGerberEditorUI:
         self.size_height_entry.setText('1')
         self.size_tolerance_entry = FCEntry()
         self.size_tolerance_entry.setText('0')
-        for row, check, entry in ((10, self.size_width_chk, self.size_width_entry),
-                                  (11, self.size_height_chk, self.size_height_entry)):
-            self.shape_grid.addWidget(check, row, 0)
-            self.shape_grid.addWidget(entry, row, 1)
-            self.shape_grid.addWidget(FCLabel(self.units), row, 2)
-        self.shape_grid.addWidget(FCLabel(_("Tolerance")), 12, 0)
-        self.shape_grid.addWidget(self.size_tolerance_entry, 12, 1)
-        self.shape_grid.addWidget(FCLabel(self.units), 12, 2)
+        for row, check, entry in ((0, self.size_width_chk, self.size_width_entry),
+                                  (1, self.size_height_chk, self.size_height_entry)):
+            size_grid.addWidget(check, row, 0)
+            size_grid.addWidget(entry, row, 1)
+            size_grid.addWidget(FCLabel(self.units), row, 2)
+        size_grid.addWidget(FCLabel('%s:' % _("Tolerance")), 2, 0)
+        size_grid.addWidget(self.size_tolerance_entry, 2, 1)
+        size_grid.addWidget(FCLabel(self.units), 2, 2)
+
+        self.size_area_chk = FCCheckBox(_("Solid area"))
+        self.size_length_chk = FCCheckBox(_("FOLLOW length"))
+        self.size_area_min_entry, self.size_area_max_entry = FCEntry(), FCEntry()
+        self.size_length_min_entry, self.size_length_max_entry = FCEntry(), FCEntry()
+        for row, check, low, high, units in (
+                (3, self.size_area_chk, self.size_area_min_entry, self.size_area_max_entry, self.units + '²'),
+                (6, self.size_length_chk, self.size_length_min_entry, self.size_length_max_entry, self.units)):
+            low.setText('0')
+            high.setText('10000')
+            low.setPlaceholderText(_("Minimum"))
+            high.setPlaceholderText(_("Maximum"))
+            low.setToolTip(_("Minimum (inclusive)") + ' (' + units + ')')
+            high.setToolTip(_("Maximum (inclusive)") + ' (' + units + ')')
+            check.setToolTip(_("Inclusive range. All enabled filters must match. Missing or empty components don't match.")
+                             + ' (' + units + ')')
+            size_grid.addWidget(check, row, 0, 1, 3)
+            size_grid.addWidget(FCLabel('%s:' % _("Min")), row + 1, 0)
+            size_grid.addWidget(low, row + 1, 1)
+            size_grid.addWidget(FCLabel(units), row + 1, 2)
+            size_grid.addWidget(FCLabel('%s:' % _("Max")), row + 2, 0)
+            size_grid.addWidget(high, row + 2, 1)
+            size_grid.addWidget(FCLabel(units), row + 2, 2)
+
         self.size_select_btn = FCButton(_("Select"))
         self.size_select_btn.setToolTip(
             _("Select shapes by their solid bounding-box width and height in current units.\n"
               "All enabled dimensions must match within the tolerance (inclusive).\n"
-              "Searches the selected shapes if any, else all shapes. Replaces the current selection."))
-        self.shape_grid.addWidget(self.size_select_btn, 15, 0, 1, 3)
+              "Searches the selected shapes if any, else all shapes. Replaces the current selection.") + '\n' +
+            _("Solid area and FOLLOW length use inclusive ranges, without dimension tolerance."))
+        self.size_delete_btn = FCButton(_("Delete by Size"))
+        self.size_delete_btn.setToolTip(_("Delete matching records from the selected subset, or all records if none are selected. Undo as one operation."))
+        size_grid.addWidget(self.size_select_btn, 9, 0, 1, 3)
+        size_grid.addWidget(self.size_delete_btn, 10, 0, 1, 3)
+
+        # #############################################################################################################
+        # ################################################### Snapping ################################################
+        # #############################################################################################################
+        snap_title = FCLabel(_("Snapping"), bold=True, color='teal')
+        shape_box.addWidget(snap_title)
+
+        snap_frame = FCFrame()
+        shape_box.addWidget(snap_frame)
+
+        snap_grid = GLay(v_spacing=5, h_spacing=3)
+        snap_frame.setLayout(snap_grid)
+
+        self.midpoint_snap_cb = FCCheckBox(_("FOLLOW midpoint snap"))
+        self.segment_snap_cb = FCCheckBox(_("Nearest FOLLOW segment snap"))
+        self.snap_radius_entry = FCDoubleSpinner()
+        self.snap_radius_entry.set_range(1, 100)
+        self.snap_radius_entry.set_precision(1)
+        self.snap_radius_entry.set_value(8)
+        self.snap_radius_entry.setToolTip(_("Acquisition radius in pixels. Falls back to global_snap_max model units if canvas conversion is unavailable."))
+        self.snap_type_label = FCLabel(_("Snap: None"))
+        self.snap_type_label.setWordWrap(True)
+        self.snap_type_label.setToolTip(_("Nearest target wins. Ties prefer endpoint/bend, midpoint, segment, then grid. Corner snapping uses FOLLOW vertices and flash centers, never solid outlines."))
+        snap_grid.addWidget(self.midpoint_snap_cb, 0, 0, 1, 3)
+        snap_grid.addWidget(self.segment_snap_cb, 1, 0, 1, 3)
+        snap_grid.addWidget(FCLabel('%s:' % _("Snap radius")), 2, 0)
+        snap_grid.addWidget(self.snap_radius_entry, 2, 1)
+        snap_grid.addWidget(FCLabel(_("px")), 2, 2)
+        snap_grid.addWidget(self.snap_type_label, 3, 0, 1, 3)
+
+        # #############################################################################################################
+        # ################################################### Tracks ##################################################
+        # #############################################################################################################
+        tracks_title = FCLabel(_("Tracks"), bold=True, color='brown')
+        shape_box.addWidget(tracks_title)
+
+        tracks_frame = FCFrame()
+        shape_box.addWidget(tracks_frame)
+
+        tracks_grid = GLay(v_spacing=5, h_spacing=3)
+        tracks_frame.setLayout(tracks_grid)
 
         self.bend_move_btn = FCButton(_("Move Track Bend"))
         self.bend_move_btn.setToolTip(
             _("Drag a FOLLOW bend of a circular-aperture track. Neighboring bends stay fixed.\n"
               "Supports one path or a two-record same-aperture join. Arc samples are polyline vertices."))
-        self.shape_grid.addWidget(self.bend_move_btn, 17, 0, 1, 3)
+        tracks_grid.addWidget(self.bend_move_btn, 0, 0, 1, 3)
+
+        self.split_tolerance_entry = FCEntry()
+        self.split_tolerance_entry.setText('0.01')
+        self.split_tolerance_entry.setToolTip(_("Maximum click distance and excluded endpoint distance in current units. Zero requires an exact interior click."))
+        tracks_grid.addWidget(FCLabel('%s:' % _("Split tolerance")), 1, 0)
+        tracks_grid.addWidget(self.split_tolerance_entry, 1, 1)
+        tracks_grid.addWidget(FCLabel(self.units), 1, 2)
+
+        self.split_action = QtGui.QAction(_("Split path"), self.grb_edit_widget)
+        self.split_action.setToolTip(_("Select one open circular-aperture FOLLOW path, then click its interior."))
+        self.split_btn = QtWidgets.QToolButton()
+        self.split_btn.setDefaultAction(self.split_action)
+        self.split_btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        tracks_grid.addWidget(self.split_btn, 2, 0, 1, 3)
+
+        self.join_tolerance_entry = FCEntry()
+        self.join_tolerance_entry.setText('0.01')
+        self.join_tolerance_entry.setToolTip(_("Endpoint ambiguity search radius in current units. Unlike Geometry, Gerber does not bridge gaps or move endpoints."))
+        tracks_grid.addWidget(FCLabel('%s:' % _("Join tolerance")), 3, 0)
+        tracks_grid.addWidget(self.join_tolerance_entry, 3, 1)
+        tracks_grid.addWidget(FCLabel(self.units), 3, 2)
+
+        self.join_btn = FCButton(_("Join paths"))
+        self.join_btn.setToolTip(_("Join compatible same-aperture circular FOLLOW records. Endpoints must coincide; branches, gaps and material changes are rejected."))
+        tracks_grid.addWidget(self.join_btn, 4, 0, 1, 3)
+
+        # #############################################################################################################
+        # ################################################### Regions #################################################
+        # #############################################################################################################
+        regions_title = FCLabel(_("Regions"), bold=True, color='indigo')
+        shape_box.addWidget(regions_title)
+
+        regions_frame = FCFrame()
+        shape_box.addWidget(regions_frame)
+
+        regions_grid = GLay(v_spacing=5, h_spacing=3)
+        regions_frame.setLayout(regions_grid)
+
+        self.region_buttons = {}
+        for index, (operation, label) in enumerate((('union', _("Material Union")),
+                                                    ('intersection', _("Material Intersection")),
+                                                    ('difference', _("Material Difference")),
+                                                    ('difference_keep', _("Diff. Keep")),
+                                                    ('explode', _("Explode Regions")))):
+            button = FCButton(label)
+            button.setToolTip(_("Replace selected polygon material with explicit regions. Holes are retained. "
+                                "Difference subtracts the other selections from the first. Keep Cutters retains them. "
+                                "Clear records are rejected."))
+            button.clicked.connect(lambda checked=False, op=operation: self.app.grb_editor.apply_region_operation(op))
+            regions_grid.addWidget(button, index // 2, index % 2)
+            self.region_buttons[operation] = button
+
+        self.rectangle_region_btn = FCButton(_("Rectangle Region"))
+        self.text_region_btn = FCButton(_("Text Regions"))
+        for column, (kind, button) in enumerate((('rectangle', self.rectangle_region_btn),
+                                                 ('text', self.text_region_btn))):
+            button.setToolTip(_("Draw numeric material as explicit regions, retaining text holes and islands."))
+            button.clicked.connect(lambda checked=False, tool=kind: self.app.grb_editor.on_region_drawing(tool))
+            regions_grid.addWidget(button, 3, column)
+
+        # #############################################################################################################
+        # ############################################### Resize Circles ##############################################
+        # #############################################################################################################
+        resize_title = FCLabel(_("Resize Circles"), bold=True, color='magenta')
+        shape_box.addWidget(resize_title)
+
+        resize_frame = FCFrame()
+        shape_box.addWidget(resize_frame)
+
+        resize_grid = GLay(v_spacing=5, h_spacing=3)
+        resize_frame.setLayout(resize_grid)
+
+        self.resize_circles_entry = FCDoubleSpinner(policy=False)
+        self.resize_circles_entry.set_precision(self.decimals)
+        self.resize_circles_entry.set_range(0.0000, 10000.0000)
+        self.resize_circles_entry.setSingleStep(10 ** -self.decimals)
+        self.resize_circles_entry.setToolTip(_("New diameter of selected plain circular flashes. Tracks and noncircular features are skipped; shared apertures are not resized."))
+        resize_grid.addWidget(FCLabel('%s:' % _("Diameter")), 0, 0)
+        resize_grid.addWidget(self.resize_circles_entry, 0, 1)
+        resize_grid.addWidget(FCLabel(self.units), 0, 2)
+        self.resize_circles_btn = FCButton(_("Resize"))
+        self.resize_circles_btn.setToolTip(_("Resize selected circular flashes about their own centers, as one undo step."))
+        resize_grid.addWidget(self.resize_circles_btn, 1, 0, 1, 3)
+
+        # #############################################################################################################
+        # ################################################### Inspect #################################################
+        # #############################################################################################################
+        inspect_title = FCLabel(_("Inspect"), bold=True, color='purple')
+        shape_box.addWidget(inspect_title)
+
+        inspect_frame = FCFrame()
+        shape_box.addWidget(inspect_frame)
+
+        inspect_grid = GLay(v_spacing=5, h_spacing=3)
+        inspect_frame.setLayout(inspect_grid)
 
         self.diagnostics_component = FCComboBox()
         for label, value in ((_('Solid'), 'solid'), (_('Follow'), 'follow'), (_('Clear'), 'clear')):
@@ -8034,52 +8234,14 @@ class AppGerberEditorUI:
         self.component_properties = FCLabel('')
         self.component_properties.setWordWrap(True)
         self.component_properties.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        self.shape_grid.addWidget(self.diagnostics_component, 19, 0, 1, 3)
-        self.shape_grid.addWidget(FCLabel(_("Endpoint tolerance")), 20, 0)
-        self.shape_grid.addWidget(self.diagnostics_tolerance_entry, 20, 1, 1, 2)
-        self.shape_grid.addWidget(self.diagnostics_btn, 21, 0, 1, 3)
-        self.shape_grid.addWidget(self.component_properties, 22, 0, 1, 3)
-        self.shape_grid.addWidget(self.diagnostics_result, 23, 0, 1, 3)
-
-        self.size_area_chk = FCCheckBox(_("Solid area"))
-        self.size_length_chk = FCCheckBox(_("FOLLOW length"))
-        self.size_area_min_entry, self.size_area_max_entry = FCEntry(), FCEntry()
-        self.size_length_min_entry, self.size_length_max_entry = FCEntry(), FCEntry()
-        for row, check, low, high, units in (
-                (13, self.size_area_chk, self.size_area_min_entry, self.size_area_max_entry, self.units + '²'),
-                (14, self.size_length_chk, self.size_length_min_entry, self.size_length_max_entry, self.units)):
-            low.setText('0')
-            high.setText('10000')
-            low.setPlaceholderText(_("Minimum"))
-            high.setPlaceholderText(_("Maximum"))
-            low.setToolTip(_("Minimum (inclusive)") + ' (' + units + ')')
-            high.setToolTip(_("Maximum (inclusive)") + ' (' + units + ')')
-            check.setToolTip(_("Inclusive range. All enabled filters must match. Missing or empty components don't match.")
-                             + ' (' + units + ')')
-            self.shape_grid.addWidget(check, row, 0)
-            self.shape_grid.addWidget(low, row, 1)
-            self.shape_grid.addWidget(high, row, 2)
-        self.size_delete_btn = FCButton(_("Delete by Size"))
-        self.size_delete_btn.setToolTip(_("Delete matching records from the selected subset, or all records if none are selected. Undo as one operation."))
-        self.shape_grid.addWidget(self.size_delete_btn, 16, 0, 1, 3)
-        self.size_select_btn.setToolTip(self.size_select_btn.toolTip() + '\n' +
-                                       _("Solid area and FOLLOW length use inclusive ranges, without dimension tolerance."))
-
-        self.midpoint_snap_cb = FCCheckBox(_("FOLLOW midpoint snap"))
-        self.segment_snap_cb = FCCheckBox(_("Nearest FOLLOW segment snap"))
-        self.snap_radius_entry = FCDoubleSpinner()
-        self.snap_radius_entry.set_range(1, 100)
-        self.snap_radius_entry.set_precision(1)
-        self.snap_radius_entry.set_value(8)
-        self.snap_radius_entry.setToolTip(_("Acquisition radius in pixels. Falls back to global_snap_max model units if canvas conversion is unavailable."))
-        self.snap_type_label = FCLabel(_("Snap: None"))
-        self.snap_type_label.setWordWrap(True)
-        self.snap_type_label.setToolTip(_("Nearest target wins. Ties prefer endpoint/bend, midpoint, segment, then grid. Corner snapping uses FOLLOW vertices and flash centers, never solid outlines."))
-        self.shape_grid.addWidget(self.midpoint_snap_cb, 24, 0, 1, 3)
-        self.shape_grid.addWidget(self.segment_snap_cb, 25, 0, 1, 3)
-        self.shape_grid.addWidget(FCLabel(_("Snap radius (px)")), 26, 0)
-        self.shape_grid.addWidget(self.snap_radius_entry, 26, 1, 1, 2)
-        self.shape_grid.addWidget(self.snap_type_label, 27, 0, 1, 3)
+        inspect_grid.addWidget(FCLabel('%s:' % _("Component")), 0, 0)
+        inspect_grid.addWidget(self.diagnostics_component, 0, 1)
+        inspect_grid.addWidget(FCLabel('%s:' % _("Endpoint tolerance")), 1, 0)
+        inspect_grid.addWidget(self.diagnostics_tolerance_entry, 1, 1)
+        inspect_grid.addWidget(FCLabel(self.units), 1, 2)
+        inspect_grid.addWidget(self.diagnostics_btn, 2, 0, 1, 3)
+        inspect_grid.addWidget(self.component_properties, 3, 0, 1, 3)
+        inspect_grid.addWidget(self.diagnostics_result, 4, 0, 1, 3)
 
         self.features_table = FCTable()
         self.features_table.setColumnCount(5)
@@ -8090,64 +8252,11 @@ class AppGerberEditorUI:
         self.features_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self.features_table.setSortingEnabled(False)
         self.features_table.setToolTip(_("Select individual records for component inspection. Shared records select all of their aperture owners. Values use current units; area uses squared units."))
-        self.shape_grid.addWidget(FCLabel(_("Features"), bold=True), 28, 0, 1, 3)
-        self.shape_grid.addWidget(self.features_table, 29, 0, 1, 3)
+        inspect_grid.addWidget(FCLabel(_("Features"), bold=True), 5, 0, 1, 3)
+        inspect_grid.addWidget(self.features_table, 6, 0, 1, 3)
 
-        self.split_action = QtGui.QAction(_("Split path"), self.grb_edit_widget)
-        self.split_action.setToolTip(_("Select one open circular-aperture FOLLOW path, then click its interior."))
-        self.split_btn = QtWidgets.QToolButton()
-        self.split_btn.setDefaultAction(self.split_action)
-        self.shape_grid.addWidget(self.split_btn, 30, 0, 1, 3)
-        self.split_tolerance_entry = FCEntry()
-        self.split_tolerance_entry.setText('0.01')
-        self.split_tolerance_entry.setToolTip(_("Maximum click distance and excluded endpoint distance in current units. Zero requires an exact interior click."))
-        self.shape_grid.addWidget(FCLabel('%s (%s)' % (_("Split tolerance"), self.app.app_units)), 31, 0)
-        self.shape_grid.addWidget(self.split_tolerance_entry, 31, 1, 1, 2)
-        self.join_btn = FCButton(_("Join paths"))
-        self.join_btn.setToolTip(_("Join compatible same-aperture circular FOLLOW records. Endpoints must coincide; branches, gaps and material changes are rejected."))
-        self.shape_grid.addWidget(self.join_btn, 32, 0, 1, 3)
-        self.join_tolerance_entry = FCEntry()
-        self.join_tolerance_entry.setText('0.01')
-        self.join_tolerance_entry.setToolTip(_("Endpoint ambiguity search radius in current units. Unlike Geometry, Gerber does not bridge gaps or move endpoints."))
-        self.shape_grid.addWidget(FCLabel('%s (%s)' % (_("Join tolerance"), self.app.app_units)), 33, 0)
-        self.shape_grid.addWidget(self.join_tolerance_entry, 33, 1, 1, 2)
-        self.resize_circles_entry = FCDoubleSpinner(policy=False)
-        self.resize_circles_entry.set_precision(self.decimals)
-        self.resize_circles_entry.set_range(0.0000, 10000.0000)
-        self.resize_circles_entry.setSingleStep(10 ** -self.decimals)
-        self.resize_circles_entry.setToolTip(_("New diameter of selected plain circular flashes. Tracks and noncircular features are skipped; shared apertures are not resized."))
-        self.shape_grid.addWidget(FCLabel('%s (%s)' % (_("Diameter"), self.app.app_units)), 34, 0)
-        self.shape_grid.addWidget(self.resize_circles_entry, 34, 1, 1, 2)
-        self.resize_circles_btn = FCButton(_("Resize"))
-        self.resize_circles_btn.setToolTip(_("Resize selected circular flashes about their own centers, as one undo step."))
-        self.shape_grid.addWidget(self.resize_circles_btn, 35, 0, 1, 3)
-
-        self.region_buttons = {}
-        for row, (operation, label) in enumerate((('union', _("Material Union")),
-                                                 ('intersection', _("Material Intersection")),
-                                                 ('difference', _("Material Difference")),
-                                                 ('difference_keep', _("Difference (Keep Cutters)")),
-                                                 ('explode', _("Explode Regions"))), 36):
-            button = FCButton(label)
-            button.setToolTip(_("Replace selected polygon material with explicit regions. Holes are retained. "
-                                "Difference subtracts the other selections from the first. Keep Cutters retains them. "
-                                "Clear records are rejected."))
-            button.clicked.connect(lambda checked=False, op=operation: self.app.grb_editor.apply_region_operation(op))
-            self.shape_grid.addWidget(button, row, 0, 1, 3)
-            self.region_buttons[operation] = button
-
-        self.rectangle_region_btn = FCButton(_("Rectangle Region"))
-        self.text_region_btn = FCButton(_("Text Regions"))
-        for row, (kind, button) in enumerate((('rectangle', self.rectangle_region_btn),
-                                               ('text', self.text_region_btn)), 41):
-            button.setToolTip(_("Draw numeric material as explicit regions, retaining text holes and islands."))
-            button.clicked.connect(lambda checked=False, tool=kind: self.app.grb_editor.on_region_drawing(tool))
-            self.shape_grid.addWidget(button, row, 0, 1, 3)
-
-        self.vertex_edit_btn = FCButton(_("Edit vertices"))
-        self.vertex_edit_btn.setToolTip(_("Numerically move, insert or remove a vertex of one selected region or track.\n"
-                                          "A region edits its solid, a track its FOLLOW line. Pads have no vertices."))
-        self.shape_grid.addWidget(self.vertex_edit_btn, 43, 0, 1, 3)
+        # Same width for the label column in the sections with a label/entry layout
+        GLay.set_common_column_size([self.shape_grid, size_grid, snap_grid, tracks_grid, regions_grid, resize_grid, inspect_grid], 0)
 
         # #############################################################################################################
         # ########################################### SCALE TOOL ######################################################

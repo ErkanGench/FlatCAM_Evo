@@ -526,6 +526,9 @@ class TestControlledAppStartup(unittest.TestCase):
             app.parent_w = QtWidgets.QWidget()
             app.trayIcon = TrayStub()
 
+        # PyQt builds the meta-object of App once, at its first use; build it now, with the real
+        # slots, or the patched App.info leaves App without the info() slot for the later tests
+        App.staticMetaObject.indexOfSlot('info(QString)')
         with tempfile.TemporaryDirectory() as temp_dir:
             temporary_directory = SimpleNamespace(name=temp_dir)
             with ExitStack() as stack:

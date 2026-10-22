@@ -35,13 +35,13 @@ def test_vispy_only_geo_editor_lifecycle():
     ui_names = ('popmenu_copy', 'popmenu_delete', 'popmenu_move', 'draw_line', 'draw_rect', 'draw_circle',
                 'draw_poly', 'draw_arc', 'draw_text', 'draw_simplification', 'draw_buffer', 'draw_paint',
                 'draw_eraser', 'draw_union', 'draw_intersect', 'draw_substract', 'draw_substract_alt',
-                'draw_cut', 'draw_transform', 'draw_move')
+                'draw_cut', 'draw_transform', 'draw_move', 'draw_polygonize')
     app = SimpleNamespace(plotcanvas=canvas, ui=SimpleNamespace(**{name: Mock() for name in ui_names}),
                           jump_signal=Mock(), on_copy_command=Mock(), on_delete=Mock(), obj_move=Mock())
     editor = SimpleNamespace(app=app, canvas=canvas)
     for name in ('on_canvas_click', 'on_canvas_move', 'on_canvas_click_release', 'select_tool', 'on_delete_btn',
                  'draw_tool_path', 'draw_tool_rectangle', 'union', 'intersection', 'subtract', 'subtract_2',
-                 'cutpath', 'on_move'):
+                 'cutpath', 'on_move', 'polygonize'):
         setattr(editor, name, Mock())
     app_handlers = {}
     editor_handlers = dict(zip(('mouse_press', 'mouse_move', 'mouse_release'),

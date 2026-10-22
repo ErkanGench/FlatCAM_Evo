@@ -92,11 +92,15 @@ def test_invalid_drag_does_not_change_the_shape():
 
 def test_canvas_click_hook_gives_the_press_to_the_grips():
     editor, original = drag_editor(box(0, 0, 4, 4))
+    editor.app.ui = SimpleNamespace(update_location_labels=Mock())
+    editor.app.plotcanvas.on_update_text_hud = Mock()
     editor.vertex_grips = Mock(press=Mock(return_value=True))
     event = SimpleNamespace(pos=(4, 0), button=1)
     assert AppGeoEditor.on_canvas_click(editor, event) is None
     editor.vertex_grips.press.assert_called_once()
     assert editor.press_pos_raw == (4, 0)
+    editor.app.ui.update_location_labels.assert_called_once_with(0, 0, 4, 0)
+    editor.app.plotcanvas.on_update_text_hud.assert_called_once_with(0, 0, 4, 0)
 
 
 def test_canvas_click_release_hook_gives_the_release_to_the_grips():

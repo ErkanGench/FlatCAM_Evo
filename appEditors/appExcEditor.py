@@ -20,7 +20,7 @@ from appEditors.exc_plugins.ExcHistory import ExcellonHistory, excellon_operatio
 from appEditors.exc_plugins.ExcProperties import (diagnose_features, feature_properties, filter_features,
                                                 native_feature_properties)
 
-from appGUI.GUIElements import FCEntry, FCTable, FCDoubleSpinner, FCButton, FCLabel, GLay
+from appGUI.GUIElements import FCEntry, FCTable, FCDoubleSpinner, FCButton, FCLabel, FCFrame, GLay
 from appEditors.appGeoEditor import (FCShapeTool, DrawTool, DrawToolShape, DrawToolUtilityShape, AppGeoEditor,
                                      PICK_TOLERANCE_PX, CLICK_DRAG_THRESHOLD_PX)
 from appEditors.appGerberEditor import edit_copy_name, get_finite_bounds
@@ -2986,10 +2986,8 @@ class AppExcEditor(QtCore.QObject):
         # #############################################################################################################
 
         self.ui.level.toggled.connect(self.on_level_changed)
-        self.ui.undo_button.clicked.connect(self.undo)
-        self.ui.redo_button.clicked.connect(self.redo)
         self.ui.diagnostics_button.clicked.connect(self.on_diagnostics)
-        self.ui.history_list.itemClicked.connect(lambda item: self.on_history_row(self.ui.history_list.row(item)))
+        self.ui.history_list.activated.connect(self.on_history_row)
         self.ui.feature_apply.clicked.connect(self.refresh_feature_table)
         self.ui.feature_select.clicked.connect(lambda: self.on_feature_filter_action())
         self.ui.feature_delete.clicked.connect(lambda: self.on_feature_filter_action(delete=True))
@@ -2998,8 +2996,8 @@ class AppExcEditor(QtCore.QObject):
         self.remove_editor_actions()
         self.undo_action = self.app.ui.exc_editor_menu.addAction(_('Undo'), self.undo)
         self.redo_action = self.app.ui.exc_editor_menu.addAction(_('Redo'), self.redo)
-        self.undo_action.setIcon(self.ui.undo_button.icon())
-        self.redo_action.setIcon(self.ui.redo_button.icon())
+        self.undo_action.setIcon(QtGui.QIcon(self.app.resource_location + '/undo64.png'))
+        self.redo_action.setIcon(QtGui.QIcon(self.app.resource_location + '/redo64.png'))
         self.undo_action.setProperty(EDITOR_ACTION_PROPERTY, True)
         self.redo_action.setProperty(EDITOR_ACTION_PROPERTY, True)
         self.app.ui.exc_edit_toolbar.addAction(self.undo_action)
@@ -4849,10 +4847,13 @@ class AppExcEditor(QtCore.QObject):
 
     @excellon_operation(_('Draw features'), generic=True)
     def on_canvas_click_left_handler(self, custom_pos=None):
-        self.app.ui.rel_position_label.setText("<b>Dx</b>: %.4f&nbsp;&nbsp;  <b>Dy</b>: "
-                                               "%.4f&nbsp;&nbsp;&nbsp;&nbsp;" % (0, 0))
-
         click_position = custom_pos if custom_pos is not None else self.clicked_pos
+        origin = self.snap(*click_position) if self.app.grid_status() else click_position
+        self._delta_origin = tuple(origin)
+        self.app.dx = self.app.dy = 0
+        self.app.mouse_pos = list(origin)
+        self.app.ui.update_location_labels(0, 0, *origin)
+        self.app.plotcanvas.on_update_text_hud(0, 0, *origin)
         if self.active_tool is not None:
             # Dispatch event to active_tool
             self.active_tool.click(click_position)
@@ -5043,8 +5044,9 @@ class AppExcEditor(QtCore.QObject):
 
         if self.clicked_pos is None:
             self.clicked_pos = (0, 0)
-        self.app.dx = x - self.clicked_pos[0]
-        self.app.dy = y - self.clicked_pos[1]
+        origin = getattr(self, '_delta_origin', (0, 0))
+        self.app.dx = x - origin[0]
+        self.app.dy = y - origin[1]
 
         # # update the position label in the infobar since the APP mouse event handlers are disconnected
         # self.app.ui.position_label.setText("&nbsp;<b>X</b>: %.4f&nbsp;&nbsp;   "
@@ -5469,16 +5471,16 @@ class AppExcEditor(QtCore.QObject):
             action.setEnabled(not history.suspended and history.pending is None)
         for button in getattr(self.ui, 'transform_buttons', {}).values():
             button.setEnabled(not history.suspended and history.pending is None)
-        self.ui.undo_button.setEnabled(bool(history.undo_stack) and not history.suspended and history.pending is None)
-        self.ui.redo_button.setEnabled(bool(history.redo_stack) and not history.suspended and history.pending is None)
-        self.undo_action.setEnabled(self.ui.undo_button.isEnabled())
-        self.redo_action.setEnabled(self.ui.redo_button.isEnabled())
-        self.ui.history_list.clear()
+        idle = not history.suspended and history.pending is None
+        self.undo_action.setEnabled(bool(history.undo_stack) and idle)
+        self.redo_action.setEnabled(bool(history.redo_stack) and idle)
         labels = [_('Oldest retained state') if history.baseline_evicted else _('Initial state')]
         labels.extend(step['label'] for step in history.undo_stack)
         labels.extend('↪ ' + step['label'] for step in reversed(history.redo_stack))
-        self.ui.history_list.addItems(labels)
-        self.ui.history_list.setCurrentRow(len(history.undo_stack))
+        with QtCore.QSignalBlocker(self.ui.history_list):
+            self.ui.history_list.clear()
+            self.ui.history_list.addItems(labels)
+            self.ui.history_list.setCurrentIndex(len(history.undo_stack))
         self.ui.history_list.setEnabled(not history.suspended and history.pending is None)
         self.refresh_feature_table()
 
@@ -6050,22 +6052,21 @@ class AppExcEditorUI:
         self.name_box.addWidget(name_label)
         self.name_box.addWidget(self.name_entry)
 
-        history_layout = QtWidgets.QHBoxLayout()
-        self.undo_button = FCButton(_('Undo'))
-        self.redo_button = FCButton(_('Redo'))
-        self.undo_button.setIcon(QtGui.QIcon(self.app.resource_location + '/undo64.png'))
-        self.redo_button.setIcon(QtGui.QIcon(self.app.resource_location + '/redo64.png'))
-        self.undo_button.setToolTip(_('Undo the last editor operation (Ctrl+Z).'))
-        self.redo_button.setToolTip(_('Redo the last editor operation (Ctrl+Shift+Z / Ctrl+Y).'))
-        self.undo_button.setEnabled(False)
-        self.redo_button.setEnabled(False)
-        history_layout.addWidget(self.undo_button)
-        history_layout.addWidget(self.redo_button)
-        self.ui_vertical_lay.addLayout(history_layout)
-        self.history_list = QtWidgets.QListWidget()
-        self.history_list.setMaximumHeight(80)
+        # #############################################################################################################
+        # ########################################## History ##########################################################
+        # #############################################################################################################
+        self.history_label = FCLabel(_('History'), color='blue', bold=True)
+        self.ui_vertical_lay.addWidget(self.history_label)
+
+        self.history_frame = FCFrame()
+        self.ui_vertical_lay.addWidget(self.history_frame)
+
+        history_grid = GLay(v_spacing=5, h_spacing=3)
+        self.history_frame.setLayout(history_grid)
+
+        self.history_list = QtWidgets.QComboBox()
         self.history_list.setToolTip(_('Editor-local operation history. Saving uses project history.'))
-        self.ui_vertical_lay.addWidget(self.history_list)
+        history_grid.addWidget(self.history_list, 0, 0, 1, 2)
 
         # Tools Drills Table Title
         self.tools_table_label = FCLabel('%s' % _('Tools Table'), bold=True)
@@ -6124,13 +6125,14 @@ class AppExcEditorUI:
             _("Diameter for the new tool")
         )
 
-        hlay = QtWidgets.QHBoxLayout()
         # Tool Diameter Entry
         self.addtool_entry = FCDoubleSpinner(policy=False)
         self.addtool_entry.set_precision(self.decimals)
         self.addtool_entry.set_range(0.0000, 10000.0000)
 
-        hlay.addWidget(self.addtool_entry)
+        grid1.addWidget(addtool_entry_lbl, 0, 0)
+        grid1.addWidget(self.addtool_entry, 0, 1)
+        grid1.addWidget(FCLabel(self.units), 0, 2)
 
         # Tool Diameter Button
         self.addtool_btn = FCButton(_('Add'))
@@ -6139,10 +6141,6 @@ class AppExcEditorUI:
             _("Add a new tool to the tool list\n"
               "with the diameter specified above.")
         )
-        hlay.addWidget(self.addtool_btn)
-
-        grid1.addWidget(addtool_entry_lbl, 0, 0)
-        grid1.addLayout(hlay, 0, 1)
 
         # Delete Tool
         self.deltool_btn = FCButton(_('Delete Tool'))
@@ -6151,50 +6149,89 @@ class AppExcEditorUI:
             _("Delete a tool in the tool list\n"
               "by selecting a row in the tool table.")
         )
-        grid1.addWidget(self.deltool_btn, 2, 0, 1, 2)
+        addtool_buttons = QtWidgets.QHBoxLayout()
+        addtool_buttons.addWidget(self.addtool_btn)
+        addtool_buttons.addWidget(self.deltool_btn)
+        grid1.addLayout(addtool_buttons, 1, 0, 1, 3)
 
-        self.ui_vertical_lay.addWidget(FCLabel(_('Feature diagnostics / inspection'), bold=True))
+        # #############################################################################################################
+        # ################################ Feature diagnostics / inspection ###########################################
+        # #############################################################################################################
+        self.diagnostics_label = FCLabel(_('Feature diagnostics / inspection'), color='teal', bold=True)
+        self.ui_vertical_lay.addWidget(self.diagnostics_label)
+
+        self.diagnostics_frame = FCFrame()
+        self.ui_vertical_lay.addWidget(self.diagnostics_frame)
+
+        diagnostics_grid = GLay(v_spacing=5, h_spacing=3)
+        self.diagnostics_frame.setLayout(diagnostics_grid)
+
         self.diagnostics_selected = QtWidgets.QCheckBox(_('Selected features only'))
-        self.ui_vertical_lay.addWidget(self.diagnostics_selected)
-        diagnostics_layout = QtWidgets.QHBoxLayout()
-        diagnostics_layout.addWidget(FCLabel(_('Tolerance')))
+        diagnostics_grid.addWidget(self.diagnostics_selected, 0, 0, 1, 3)
+
+        diagnostics_tol_lbl = FCLabel('%s:' % _('Tolerance'))
         self.diagnostics_tolerance = FCDoubleSpinner(policy=False)
         self.diagnostics_tolerance.set_precision(max(self.decimals, 6))
         self.diagnostics_tolerance.set_range(0.0, 10000.0)
         self.diagnostics_tolerance.set_value(0.001 if self.units == 'MM' else 0.00004)
-        diagnostics_layout.addWidget(self.diagnostics_tolerance)
+        diagnostics_grid.addWidget(diagnostics_tol_lbl, 1, 0)
+        diagnostics_grid.addWidget(self.diagnostics_tolerance, 1, 1)
+        diagnostics_grid.addWidget(FCLabel(self.units), 1, 2)
+
         self.diagnostics_button = FCButton(_('Inspect'))
-        diagnostics_layout.addWidget(self.diagnostics_button)
-        self.ui_vertical_lay.addLayout(diagnostics_layout)
+        diagnostics_grid.addWidget(self.diagnostics_button, 2, 0, 1, 3)
+
         self.diagnostics_result = QtWidgets.QPlainTextEdit()
         self.diagnostics_result.setReadOnly(True)
         self.diagnostics_result.setMaximumHeight(180)
-        self.ui_vertical_lay.addWidget(self.diagnostics_result)
+        diagnostics_grid.addWidget(self.diagnostics_result, 3, 0, 1, 3)
 
-        self.ui_vertical_lay.addWidget(FCLabel(_('Feature selection / filters'), bold=True))
+        # #############################################################################################################
+        # ################################ Feature selection / filters ################################################
+        # #############################################################################################################
+        self.feature_label = FCLabel(_('Feature selection / filters'), color='tomato', bold=True)
+        self.ui_vertical_lay.addWidget(self.feature_label)
+
+        self.feature_frame = FCFrame()
+        self.ui_vertical_lay.addWidget(self.feature_frame)
+
+        feature_grid = GLay(v_spacing=5, h_spacing=3)
+        self.feature_frame.setLayout(feature_grid)
+
+        feature_kind_lbl = FCLabel('%s:' % _('Type'))
         self.feature_kind = QtWidgets.QComboBox()
         for label, value in ((_('All features'), 'all'), (_('Drills'), 'drill'), (_('Slots'), 'slot')):
             self.feature_kind.addItem(label, value)
-        self.ui_vertical_lay.addWidget(self.feature_kind)
+        feature_grid.addWidget(feature_kind_lbl, 0, 0)
+        feature_grid.addWidget(self.feature_kind, 0, 1)
+
         self.feature_selected = QtWidgets.QCheckBox(_('Search selected features only'))
-        self.ui_vertical_lay.addWidget(self.feature_selected)
+        feature_grid.addWidget(self.feature_selected, 1, 0, 1, 3)
+
         self.feature_ranges = {}
-        for name, label, hint in (('diameter', _('Diameter range'), 'min, max'),
-                                  ('length', _('Slot centerline length range'), 'min, max'),
-                                  ('bounds', _('Fully contained in bounds'), 'xmin, ymin, xmax, ymax')):
-            self.ui_vertical_lay.addWidget(FCLabel(label))
+        row = 2
+        for name, label, hint in (('diameter', _('Dia range'), 'min, max'),
+                                  ('length', _('Slot range'), 'min, max'),
+                                  ('bounds', _('Within'), 'xmin, ymin, xmax, ymax')):
             entry = QtWidgets.QLineEdit()
             entry.setPlaceholderText(hint)
             entry.setToolTip(_('Optional finite values, comma-separated. Blank disables this filter.'))
             self.feature_ranges[name] = entry
-            self.ui_vertical_lay.addWidget(entry)
+            feature_grid.addWidget(FCLabel('%s:' % label), row, 0)
+            feature_grid.addWidget(entry, row, 1)
+            feature_grid.addWidget(FCLabel(self.units), row, 2)
+            row += 1
+
         feature_buttons = QtWidgets.QHBoxLayout()
-        self.feature_apply = FCButton(_('Refresh'))
+        self.feature_apply = QtWidgets.QToolButton()
+        self.feature_apply.setIcon(QtGui.QIcon(self.app.resource_location + '/recycle16.png'))
+        self.feature_apply.setToolTip(_('Refresh'))
         self.feature_select = FCButton(_('Select matches'))
         self.feature_delete = FCButton(_('Delete matches'))
         for button in (self.feature_apply, self.feature_select, self.feature_delete):
             feature_buttons.addWidget(button)
-        self.ui_vertical_lay.addLayout(feature_buttons)
+        feature_grid.addLayout(feature_buttons, row, 0, 1, 3)
+
         self.feature_table = QtWidgets.QTableWidget(0, 6)
         self.feature_table.setHorizontalHeaderLabels([_('Feature'), _('Type'), _('Diameter'), _('Center'),
                                                       _('Slot length'), _('Bounds')])
@@ -6202,23 +6239,37 @@ class AppExcEditorUI:
         self.feature_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
         self.feature_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.feature_table.setMaximumHeight(200)
-        self.ui_vertical_lay.addWidget(self.feature_table)
+        feature_grid.addWidget(self.feature_table, row + 1, 0, 1, 3)
 
-        self.ui_vertical_lay.addWidget(FCLabel(_('Transform selected features'), bold=True))
+        # #############################################################################################################
+        # ################################ Transform selected features ################################################
+        # #############################################################################################################
+        self.transform_label = FCLabel(_('Transform selected features'), color='green', bold=True)
+        self.ui_vertical_lay.addWidget(self.transform_label)
+
+        self.transform_frame = FCFrame()
+        self.ui_vertical_lay.addWidget(self.transform_frame)
+
+        transform_grid = GLay(v_spacing=5, h_spacing=3)
+        self.transform_frame.setLayout(transform_grid)
+
+        transform_ref_lbl = FCLabel('%s:' % _('Reference'))
         self.transform_reference = QtWidgets.QComboBox()
         for label, reference in ((_('Origin'), 'origin'), (_('Selection center'), 'selection'),
                                   (_('Point'), 'point')):
             self.transform_reference.addItem(label, reference)
-        self.ui_vertical_lay.addWidget(self.transform_reference)
-        transform_grid = GLay(v_spacing=5, h_spacing=3)
+        transform_grid.addWidget(transform_ref_lbl, 0, 0)
+        transform_grid.addWidget(self.transform_reference, 0, 1)
+
         self.transform_point = []
-        for row, label in enumerate((_('Reference X'), _('Reference Y'))):
+        for row, label in enumerate((_('Reference X'), _('Reference Y')), start=1):
             entry = FCDoubleSpinner(policy=False)
             entry.set_precision(max(self.decimals, 6))
             entry.set_range(-1e9, 1e9)
             self.transform_point.append(entry)
-            transform_grid.addWidget(FCLabel(label), row, 0)
+            transform_grid.addWidget(FCLabel('%s:' % label), row, 0)
             transform_grid.addWidget(entry, row, 1)
+            transform_grid.addWidget(FCLabel(self.units), row, 2)
         self.transform_angle = FCDoubleSpinner(policy=False)
         self.transform_angle.set_precision(max(self.decimals, 6))
         self.transform_angle.set_range(-360000, 360000)
@@ -6227,6 +6278,7 @@ class AppExcEditorUI:
         self.transform_scale.set_precision(max(self.decimals, 6))
         self.transform_scale.set_range(0.000001, 1e6)
         self.transform_scale.set_value(1)
+        self.transform_scale.setToolTip(_('Scales positions and circular tool diameters.'))
         # the offset (in editor units) is a translation of the selected features
         self.transform_offset = []
         for label in (_('Offset X'), _('Offset Y')):
@@ -6234,13 +6286,6 @@ class AppExcEditorUI:
             entry.set_precision(max(self.decimals, 6))
             entry.set_range(-1e9, 1e9)
             self.transform_offset.append(entry)
-        for row, label, entry in ((2, _('Angle (CCW)'), self.transform_angle),
-                                   (3, _('Uniform scale (positions and diameters)'), self.transform_scale),
-                                   (4, _('Offset X'), self.transform_offset[0]),
-                                   (5, _('Offset Y'), self.transform_offset[1])):
-            transform_grid.addWidget(FCLabel(label), row, 0)
-            transform_grid.addWidget(entry, row, 1)
-        self.ui_vertical_lay.addLayout(transform_grid)
         self.transform_buttons = {}
         for kind, label in (('rotate', _('Rotate')), ('mirror_x', _('Mirror X')),
                             ('mirror_y', _('Mirror Y')), ('scale', _('Uniform scale')),
@@ -6249,41 +6294,95 @@ class AppExcEditorUI:
             button.setToolTip(_('Transform selected features only. Mirror X reflects across the horizontal axis; '
                                 'Mirror Y across the vertical axis. Scaling changes circular tool diameters too.'))
             self.transform_buttons[kind] = button
-            self.ui_vertical_lay.addWidget(button)
 
-        self.ui_vertical_lay.addWidget(FCLabel(_('Native slot endpoints'), bold=True))
-        self.slot_endpoint_entries = []
+        # each action button follows its own inputs
+        transform_grid.addWidget(FCLabel('%s:' % _('Angle (CCW)')), 3, 0)
+        transform_grid.addWidget(self.transform_angle, 3, 1)
+        transform_grid.addWidget(FCLabel('°'), 3, 2)
+        transform_grid.addWidget(self.transform_buttons['rotate'], 4, 0, 1, 3)
+
+        transform_grid.addWidget(FCLabel('%s:' % _('Uniform scale')), 5, 0)
+        transform_grid.addWidget(self.transform_scale, 5, 1)
+        transform_grid.addWidget(self.transform_buttons['scale'], 6, 0, 1, 3)
+
+        for row, label, entry in ((7, _('Offset X'), self.transform_offset[0]),
+                                  (8, _('Offset Y'), self.transform_offset[1])):
+            transform_grid.addWidget(FCLabel('%s:' % label), row, 0)
+            transform_grid.addWidget(entry, row, 1)
+            transform_grid.addWidget(FCLabel(self.units), row, 2)
+        transform_grid.addWidget(self.transform_buttons['offset'], 9, 0, 1, 3)
+
+        mirror_buttons = QtWidgets.QHBoxLayout()
+        mirror_buttons.addWidget(self.transform_buttons['mirror_x'])
+        mirror_buttons.addWidget(self.transform_buttons['mirror_y'])
+        transform_grid.addLayout(mirror_buttons, 10, 0, 1, 3)
+
+        # #############################################################################################################
+        # ################################ Native slot endpoints ######################################################
+        # #############################################################################################################
+        self.slot_endpoint_label = FCLabel(_('Native slot endpoints'), color='indigo', bold=True)
+        self.ui_vertical_lay.addWidget(self.slot_endpoint_label)
+
+        self.slot_endpoint_frame = FCFrame()
+        self.ui_vertical_lay.addWidget(self.slot_endpoint_frame)
+
         endpoint_grid = GLay(v_spacing=5, h_spacing=3)
+        self.slot_endpoint_frame.setLayout(endpoint_grid)
+
+        self.slot_endpoint_entries = []
         for row, label in enumerate((_('Start X'), _('Start Y'), _('Stop X'), _('Stop Y'))):
-            endpoint_grid.addWidget(FCLabel(label), row, 0)
+            endpoint_grid.addWidget(FCLabel('%s:' % label), row, 0)
             entry = FCDoubleSpinner(policy=False)
             entry.set_precision(max(self.decimals, 6))
             entry.set_range(-1e9, 1e9)
             self.slot_endpoint_entries.append(entry)
             endpoint_grid.addWidget(entry, row, 1)
-        self.ui_vertical_lay.addLayout(endpoint_grid)
+            endpoint_grid.addWidget(FCLabel(self.units), row, 2)
         endpoint_buttons = QtWidgets.QHBoxLayout()
-        self.slot_endpoint_load = FCButton(_('Load selected slot'))
+        self.slot_endpoint_load = FCButton(_('Load slot'))
+        self.slot_endpoint_load.setToolTip(
+            _('Load a selected slot centerline endpoints.'))
         self.slot_endpoint_apply = FCButton(_('Apply endpoints'))
+        self.slot_endpoint_apply.setToolTip(
+            _('Apply loaded slot centerline endpoints.'))
         self.slot_endpoint_drag = FCButton(_('Drag endpoint'))
         self.slot_endpoint_drag.setIcon(QtGui.QIcon(self.app.resource_location + '/move32.png'))
-        self.slot_endpoint_drag.setToolTip(_('Drag a selected slot centerline endpoint. Width and opposite endpoint stay fixed.'))
+        self.slot_endpoint_drag.setToolTip(
+            _('Drag a selected slot centerline endpoint. Width and opposite endpoint stay fixed.'))
         for button in (self.slot_endpoint_load, self.slot_endpoint_apply, self.slot_endpoint_drag):
             endpoint_buttons.addWidget(button)
-        self.ui_vertical_lay.addLayout(endpoint_buttons)
-        self.ui_vertical_lay.addWidget(FCLabel(_('Overall slot length = endpoint distance + tool diameter.')))
+        endpoint_grid.addLayout(endpoint_buttons, 4, 0, 1, 3)
+        endpoint_note = FCLabel(_('Overall slot length = endpoint distance + tool dia.'))
+        endpoint_note.setWordWrap(True)
+        endpoint_grid.addWidget(endpoint_note, 5, 0, 1, 3)
 
-        self.ui_vertical_lay.addWidget(FCLabel(_('Excellon snapping'), bold=True))
+        # #############################################################################################################
+        # ################################ Excellon snapping ##########################################################
+        # #############################################################################################################
+        self.snap_label = FCLabel(_('Excellon snapping'), color='brown', bold=True)
+        self.ui_vertical_lay.addWidget(self.snap_label)
+
+        self.snap_frame = FCFrame()
+        self.ui_vertical_lay.addWidget(self.snap_frame)
+
+        snap_grid = GLay(v_spacing=5, h_spacing=3)
+        self.snap_frame.setLayout(snap_grid)
+
         self.snap_modes = {}
-        for kind, label in (('center', _('Centers')), ('endpoint', _('Native slot endpoints')),
-                             ('midpoint', _('Native slot midpoints')), ('nearest', _('Nearest slot centerline'))):
+        for row, (kind, label) in enumerate((('center', _('Centers')), ('endpoint', _('Native slot endpoints')),
+                                              ('midpoint', _('Native slot midpoints')),
+                                              ('nearest', _('Nearest slot centerline')))):
             control = QtWidgets.QCheckBox(label)
             control.setChecked(kind in ('center', 'endpoint'))
             self.snap_modes[kind] = control
-            self.ui_vertical_lay.addWidget(control)
+            snap_grid.addWidget(control, row, 0, 1, 3)
         self.snap_result = FCLabel('')
         self.snap_result.setToolTip(_('Feature snap uses the configured maximum snap distance in project units.'))
-        self.ui_vertical_lay.addWidget(self.snap_result)
+        snap_grid.addWidget(self.snap_result, 4, 0, 1, 3)
+
+        # align the label column across the sections
+        GLay.set_common_column_size([grid1, diagnostics_grid, feature_grid, transform_grid, endpoint_grid,
+                                     snap_grid], 0)
 
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)

@@ -6,6 +6,45 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+22.10.2026
+
+Editors (Geometry, Gerber, Excellon) - left panel:
+
+- removed the Undo / Redo buttons from the panel; the Undo / Redo of the title bar, the Edit menu and the keys work in the editors. The history of the editor is a combo box in its own "History" section (in the Excellon Editor it was a small list)
+- each group of controls has its own section with a title and a frame: Geometry Editor - Snapping, Coordinates, Paths, Inspect, Select by Size, Resize Circles; Gerber Editor - Parameters, Select by Size, Snapping, Tracks, Regions, Resize Circles, Inspect; Excellon Editor - diagnostics, filters, transform, native slot endpoints, snapping. The Parameters frame keeps only the parameters of the selection
+- in each section: the label (with ':') is on the left, the value in the middle and the units on the right; the inputs come first, then the button that uses them, then the result. The label columns align across the sections
+- Gerber Editor: the 5 material operations of Regions are in a grid of 2 columns; "Delete by Size" is below "Select"
+- Excellon Editor: the Refresh button of the filters is a tool button with an icon; the Undo / Redo of the menu and toolbar are on only when there is a step
+- Geometry Editor: the result of "Inspect selected geometry" is hidden until the first inspection (it left an empty row)
+- Beginner mode hides the advanced sections, as before
+
+Editors (Geometry, Gerber) - Selection Tool:
+
+- drag the body of a selected object to move it (1 Undo step); away from the vertex grips, Ctrl+Shift+click adds a straight segment, Ctrl+Alt+click removes one, Ctrl+Shift+drag stretches the segments and Ctrl+Alt+drag pulls them with endpoint cords. Escape or a right click cancels the drag
+- Gerber Editor: a drag of tracks rebuilds each trace before the storage changes; 1 drag is 1 Undo step
+
+Geometry Editor:
+
+- new Join in the toolbar: joins the selected lines into polylines with the Join tolerance of the panel
+- new Polygonize in the toolbar and the menu: makes polygons from the selected closed paths or the segments that enclose an area; the unused open segments stay, and the endpoints must meet exactly
+
+Gerber Editor:
+
+- new Join in the toolbar: joins the selected connected track sections into 1 track
+- Join accepts tracks with mixed continuous corners and end caps, skips duplicate records and keeps the selected shapes that are not tracks
+- shorter toolbar and menu texts for Rectangle Region, Text Regions, Arc and Difference (Keep Cutters); the full name is in the tooltip
+
+GUI:
+
+- the checked tool of an editor toolbar has a blue background; the Exit Editor button of the toolbar shows "Exit Edit" under the icon; new power icon
+- the editors use the displayed click position for the coordinate deltas and update both readouts
+- a quit from an editor keeps the toolbar layout of the application, not the layout of the editor
+- fixed a stray ')' in the "Diff. Keep" menu item of the Gerber Editor; "Exit Edit" is translated
+
+Tests:
+
+- test_app_refactor_integration patched App.info before PyQt built the meta-object of App, so the later tests on the same worker could not connect App.inform to info(); the meta-object is now built first
+
 21.10.2026
 
 Security:

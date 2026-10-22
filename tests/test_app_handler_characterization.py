@@ -628,7 +628,7 @@ class TestLifecycle(AppTestCase):
 
         app.preferencesUiManager = Recorder(("save_defaults",))
         # quit_application saves the GUI state, so the ui needs these members (QSettings is patched below)
-        app.ui = SimpleNamespace(hide=Recorder(("call",)).call, saveState=lambda: b"",
+        app.ui = SimpleNamespace(hide=Recorder(("call",)).call, saveState=lambda *args: QtCore.QByteArray(),
                                  isMaximized=lambda: False, general_pref_form=MagicMock())
         editors = {kind: QtCore.QObject() for kind in ("geometry", "excellon", "gerber", "cncjob")}
         destroyed = []
