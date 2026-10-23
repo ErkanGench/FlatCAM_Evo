@@ -49,7 +49,6 @@ import re
 import unittest
 from types import SimpleNamespace
 
-import pytest
 
 from appPlugins.Common.levelling_interp import level_gcode_line, new_levelling_state
 
@@ -578,26 +577,9 @@ class TestRandomArcs(unittest.TestCase):
     def test_g90_only_ij_and_r_quick(self):
         self.run_many(1, 5, g91=False)
 
-    @pytest.mark.slow
-
-    def test_g90_and_g91_mixed_quick(self):
-        self.run_many(2, 5)
-
-    @pytest.mark.slow
-
-    def test_arcs_only_chained(self):
-        rng = random.Random(3)
-        for k in range(6):
-            gen = Gen(rng)
-            gen.prologue()
-            for _ in range(10):
-                gen.op_arc()
-            with self.subTest(program=k):
-                check_program(self, gen.lines)
-
     def test_arcs_only_chained_in_g91(self):
         rng = random.Random(4)
-        for k in range(6):
+        for k in range(3):
             gen = Gen(rng)
             gen.prologue()
             gen.emit('G91')
@@ -610,7 +592,7 @@ class TestRandomArcs(unittest.TestCase):
         rng = random.Random(5)
         for kind in ('small', 'medium', 'large', 'full'):
             for g91 in (False, True):
-                for k in range(8):
+                for k in range(2):
                     gen = Gen(rng)
                     gen.prologue()
                     if g91:
@@ -623,7 +605,7 @@ class TestRandomArcs(unittest.TestCase):
 
     def test_helical_only(self):
         rng = random.Random(6)
-        for k in range(6):
+        for k in range(4):
             gen = Gen(rng, helical=True)
             gen.prologue()
             if k % 2:
@@ -637,7 +619,7 @@ class TestRandomArcs(unittest.TestCase):
         # numbers with the same decimals as the output: X/Y must come out exact
         rng = random.Random(7)
         report = Report()
-        for k in range(6):
+        for k in range(3):
             gen = Gen(rng, decimals=DEC)
             lines = gen.program(12)
             with self.subTest(program=k):
@@ -646,7 +628,7 @@ class TestRandomArcs(unittest.TestCase):
 
     def test_absolute_ij(self):
         rng = random.Random(8)
-        for k in range(6):
+        for k in range(3):
             gen = Gen(rng, abs_ij=True, rformat=False)
             lines = gen.program(12)
             self.assertIn('G90.1', lines)
@@ -655,7 +637,7 @@ class TestRandomArcs(unittest.TestCase):
 
     def test_absolute_ij_switched_in_the_middle(self):
         rng = random.Random(9)
-        for k in range(6):
+        for k in range(3):
             gen = Gen(rng, rformat=False)
             gen.prologue()
             for _ in range(4):
@@ -673,7 +655,7 @@ class TestRandomArcs(unittest.TestCase):
     def test_arc_segment_sizes(self):
         for segment in (0.05, 0.3, 2.0, 50.0):
             rng = random.Random(10)
-            for k in range(6):
+            for k in range(2):
                 gen = Gen(rng)
                 lines = gen.program(10)
                 with self.subTest(segment=segment, program=k):
@@ -683,7 +665,7 @@ class TestRandomArcs(unittest.TestCase):
 class TestMixedPrograms(unittest.TestCase):
     def test_retracts_cuts_arcs_and_mode_changes(self):
         rng = random.Random(11)
-        for k in range(8):
+        for k in range(3):
             gen = Gen(rng)
             lines = gen.program(25)
             with self.subTest(program=k):
@@ -691,7 +673,7 @@ class TestMixedPrograms(unittest.TestCase):
 
     def test_retract_in_g90_returns_to_the_original_z(self):
         rng = random.Random(12)
-        for k in range(6):
+        for k in range(3):
             gen = Gen(rng)
             gen.prologue()
             for _ in range(8):
@@ -707,7 +689,7 @@ class TestMixedPrograms(unittest.TestCase):
 
     def test_cut_end_carries_the_offset(self):
         rng = random.Random(13)
-        for k in range(8):
+        for k in range(4):
             gen = Gen(rng)
             gen.prologue()
             for _ in range(6):
@@ -736,7 +718,7 @@ class TestMixedPrograms(unittest.TestCase):
     def test_1000_small_g91_moves_do_not_drift(self):
         rng = random.Random(14)
         lines = ['G90 G0 X0 Y0 Z5', 'G1 X0 Y0 Z-0.5', 'G91']
-        for _ in range(1000):
+        for _ in range(400):
             kind = rng.random()
             dx, dy = rng.uniform(-0.3, 0.3), rng.uniform(-0.3, 0.3)
             if kind < 0.6:

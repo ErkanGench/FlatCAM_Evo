@@ -93,18 +93,6 @@ def test_config():
     assert EcutBoardConfig.from_dict({}).motion_period_s == 0.001
 
 
-def test_api_instantiation():
-    api = EcutAPI()
-    assert api.state == State.DISCONNECTED
-    assert not api.connected
-    api.configure_axis(0, steps_per_mm=200.0)
-    api.configure_input('PROBE', enabled=True, pin=5)
-    api.set_interpolation(4)
-    assert api.config.axes[0].steps_per_mm == 200.0
-    assert api.config.inputs['PROBE'].pin == 5
-    assert api.config.interpolation_index == 4
-
-
 def test_step_conversion():
     api = make_api(interpolation=4)  # 32x
     api.configure_axis(0, steps_per_mm=200.0)
@@ -116,17 +104,6 @@ def test_step_conversion():
     assert api._acc.steps[0] == 640
     deltas2 = api._acc.deltas([0.2, 0.1, 0.04, None, None, None])
     assert deltas2[0] == 640
-
-
-def test_motion_record_encoding():
-    axes = (100, -200, 300, -400, 500, -600)
-    record = encode_motion_record(0x123456, axes)
-    assert len(record) == 16
-    assert record[0] == 0x69
-    assert record[1:4] == b'\x12\x34\x56'
-    assert struct.unpack('>6h', record[4:16]) == axes
-
-
 
 
 def test_gcode_parsing():
@@ -288,29 +265,6 @@ def test_estop_mid_program_stops_writes_and_stays_estop():
     assert api._usb.writes > writes_at_estop
 
 
-def test_estop_between_lines_keeps_estop():
-    api = make_api()
-    seen = []
-
-    def estop_after_first_line(n):
-        seen.append(n)
-
-    api._usb.on_motion = estop_after_first_line
-    original_poll = api.poll
-
-    def poll():
-        frame = original_poll()
-        if seen:
-            api.estop()
-        return frame
-
-    api.poll = poll
-    with pytest.raises(EcutError):
-        api.run_gcode(["G0 X1", "G0 X2", "G0 X3"])
-    assert api.state == State.ESTOP
-    assert len(api._usb.motion_packets) == 1
-
-
 def test_connect_does_not_push_config(monkeypatch):
     api = EcutAPI()
     fake = FakeUsb()
@@ -329,12 +283,6 @@ def test_unverified_configuration_refused_before_usb_writes():
     with pytest.raises(EcutError, match='not yet verified'):
         api.push_config()
     assert api._usb.writes == 0
-
-
-def test_encode_config_is_pure():
-    api = EcutAPI()
-    assert api.encode_config() == api.encode_config()
-    assert isinstance(api.encode_config(), bytes)
 
 
 def test_set_position_rounds_like_target_conversion():

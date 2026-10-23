@@ -85,6 +85,29 @@ class TestPaintGeometry(unittest.TestCase):
                                      [list(path.coords) for path in cleared])
         self.geometry.app.log.error.assert_not_called()
 
+    def test_unpaintable_polygon_is_skipped_and_the_job_goes_on(self):
+        from appPlugins.ToolPaint import PaintModel
+        bad, good = box(0, 0, 4, 4), box(10, 0, 14, 4)
+        tools = {1: {'tooldia': 1.0, 'data': {}, 'solid_geometry': []},
+                 2: {'tooldia': 0.5, 'data': {}, 'solid_geometry': []}}
+        line = LineString([(11, 2), (13, 2)])
+
+        def process(polygon, diameter, settings):
+            if polygon.bounds[0] < 5:
+                return 'fail'
+            return SimpleNamespace(get_objects=lambda: [line])
+
+        kwargs = dict(find_uid=lambda dia, storage: 1 if dia == 1.0 else 2,
+                      get_params=lambda uid, storage: {'offset': 0.0},
+                      buffer=lambda geo, off: list(geo), simplify=lambda geo, tol: list(geo))
+        for rest in (False, True):
+            with self.subTest(rest=rest):
+                generate = PaintModel.generate_rest_paint if rest else PaintModel.generate_paint
+                result = generate([bad, good], tools, [1.0, 0.5], 0, 0.0, 4, process, **kwargs)
+                self.assertNotEqual(result, 'fail')
+                self.assertTrue(result['paths'])
+                self.assertTrue(any(kind == 'skipped' for kind, _detail in result['warnings']))
+
 
 if __name__ == '__main__':
     unittest.main()

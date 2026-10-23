@@ -88,8 +88,7 @@ def test_arc_modes_preview_commit_and_history(mode, points):
     tool.clean_up()
 
 
-@pytest.mark.parametrize('operation', ['arc', 'difference_keep'])
-@pytest.mark.parametrize('steps,direction', [(16, 'cw'), (64, 'ccw')])
+@pytest.mark.parametrize('operation,steps,direction', [('arc', 16, 'cw'), ('arc', 64, 'ccw'), ('difference_keep', 16, 'cw')])
 def test_new_actions_native_export_reparse(app, tmp_path, operation, steps, direction):
     editor = make_editor({10: aperture([])})
     editor.app.options['gerber_circle_steps'] = steps

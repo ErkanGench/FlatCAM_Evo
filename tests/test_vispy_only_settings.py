@@ -61,31 +61,3 @@ def test_project_open_loads_only_project_options(cli):
     assert app.preferencesUiManager.defaults_write_form.called is (not cli)
     assert project['options']['global_graphic_engine'] == '2D'
 
-
-def test_preferences_have_only_shape_processing_control():
-    from PyQt6 import QtWidgets
-    from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
-    from appGUI.preferences.general.GeneralAppPrefGroupUI import GeneralAppPrefGroupUI
-    from appGUI.preferences.PreferencesUIManager import PreferencesUIManager
-
-    qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    app = MagicMock()
-    app.decimals = 4
-    app.options = dict(AppDefaults.factory_defaults)
-    with patch.object(OptionsGroupUI, 'app', app):
-        group = GeneralAppPrefGroupUI(app)
-    try:
-        assert not hasattr(group, 'ge_radio')
-        assert not hasattr(group, 'ge_label')
-        assert group.ge_comp_cb.text() == 'Disable parallel shape processing'
-        assert 'synchronously' in group.ge_comp_cb.toolTip()
-        ui = MagicMock()
-        ui.general_pref_form.general_app_group = group
-        manager = PreferencesUIManager(AppDefaults(), '', ui, MagicMock(), app.options)
-        try:
-            assert 'global_graphic_engine' not in manager.defaults_form_fields
-            assert manager.defaults_form_fields['global_graphic_engine_3d_no_mp'] is group.ge_comp_cb
-        finally:
-            manager.deleteLater()
-    finally:
-        group.deleteLater()

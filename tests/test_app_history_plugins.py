@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from PyQt6 import QtWidgets
-from shapely import LineString, MultiPolygon, Polygon, box
+from shapely import LineString, Point, box
 from shapely.ops import unary_union
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -21,7 +21,6 @@ from appObjects.ExcellonObject import ExcellonObject
 from appPlugins.ToolCutOut import CutOut
 from appPlugins.ToolDblSided import DblSidedTool
 from appPlugins.ToolIsolation import ToolIsolation
-from appPlugins.ToolQRCode import QRCode
 
 FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'unify')
 
@@ -95,8 +94,119 @@ def _stack(fc):
 # ---------------------------------------------------------------------------------------------------------------------
 # 1. Double-Sided: Mirror
 # ---------------------------------------------------------------------------------------------------------------------
-def test_dblsided_mirror_is_a_matrix_step(fc, no_plot):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_dbl')
+def _hole_xy(points):
+    return np.asarray([p.coords[0] for p in points])
+
+
+def _nearest(points, others):
+    return np.linalg.norm(points[:, None] - others[None, :], axis=2).min(axis=1)
+
+
+def _canonical(holes, turn):
+    """Holes of a T-B board seen as an L-R board (x and y exchanged)."""
+    return holes[:, ::-1] if turn == 'T-B' else holes
+
+
+@pytest.mark.parametrize('turn', ['L-R', 'T-B'])
+def test_dblsided_failsafe_holes_fit_only_the_turn_direction(turn):
+    from appPlugins.ToolDblSided import DblSidedGen as gen
+    bounds = (0, 0, 100, 60) if turn == 'L-R' else (0, 0, 60, 100)
+    holes = _hole_xy(gen.bounds_drills(bounds, 1.0, 2, turn))
+    assert len(holes) == 3
+    cx, cy = (bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2
+    along, across = ((-1, 1), (1, -1)) if turn == 'L-R' else ((1, -1), (-1, 1))
+    assert _nearest(holes * along + (2 * cx * (along[0] < 0), 2 * cy * (along[1] < 0)), holes) == \
+        pytest.approx(0, abs=1e-9)
+    assert _nearest(holes * across + (2 * cx * (across[0] < 0), 2 * cy * (across[1] < 0)), holes).max() > 1
+    plain = _hole_xy(gen.bounds_drills(bounds, 1.0, 2, turn, failsafe=False))
+    assert len(plain) == 2
+    assert _nearest(plain * along + (2 * cx * (along[0] < 0), 2 * cy * (along[1] < 0)), plain) == \
+        pytest.approx(0, abs=1e-9)
+
+
+@pytest.mark.parametrize('turn', ['L-R', 'T-B'])
+def test_dblsided_failsafe_holes_stay_keyed_for_a_near_equilateral_board(turn):
+    from appPlugins.ToolDblSided import DblSidedGen as gen
+    o, dia = 2, 1.0
+    bounds = (0, 0, 40, 72.2) if turn == 'L-R' else (0, 0, 72.2, 40)
+    holes = _canonical(_hole_xy(gen.bounds_drills(bounds, dia, o, turn)), turn)
+    a, b, c = holes
+    assert c == pytest.approx((20, 72.2 + o))
+    assert a[1] == pytest.approx(b[1]) and a[1] < 36.1
+    assert holes[:, 0].min() >= -o - 1e-9 and holes[:, 0].max() <= 40 + o + 1e-9
+    assert holes[:, 1].min() >= 0 and holes[:, 1].max() <= 72.2 + o + 1e-9
+    assert abs(np.linalg.norm(c - a) - np.linalg.norm(b - a)) >= 2 * dia - 1e-9
+    assert _nearest(holes * (1, -1) + (0, 72.2), holes).max() >= 2 * dia
+    with pytest.raises(ValueError, match='room'):
+        gen.bounds_drills((0, 0, 2, 2), dia, o, turn)
+    assert len(gen.bounds_drills((0, 0, 2, 2), dia, o, turn, failsafe=False)) == 2
+
+
+@pytest.mark.parametrize('bounds,diameter,offset', [
+    ((0, 0, 10, 10), 1.0, 0.4), ((0, 0, 10, 10), 0, 2), ((0, 0, 10, 10), 1.0, -1),
+    ((0, 0, float('inf'), 10), 1.0, 2)])
+def test_dblsided_keyed_holes_refuse_bad_input(bounds, diameter, offset):
+    from appPlugins.ToolDblSided import DblSidedGen as gen
+    with pytest.raises(ValueError):
+        gen.bounds_drills(bounds, diameter, offset)
+
+
+def test_dblsided_generated_holes_preserve_coincident_user_drills(fc, no_plot):
+    from appPlugins.ToolDblSided import DblSidedGen as gen
+
+    def init(obj, app):
+        obj.add_tool(1, drills=[Point(-2, 5), Point(4, 4)], slots=[(Point(1, 1), Point(2, 1))])
+        obj.create_geometry()
+    exc = fc.app_obj.new_object('excellon', 'dbl_append', init, plot=False)
+    original = _bounds(exc)
+    with fc.history.snapshot('Alignment Drills', [exc]):
+        gen.replace_generated(exc, 1.00001, [Point(-2, 5), Point(22, 5)], fc.decimals)
+    assert len(exc.tools) == 1
+    assert len(exc.tools[1]['drills']) == 4
+    assert len(exc.tools[1]['slots']) == 1
+    assert gen.source_view(exc).bounds() == pytest.approx(original)
+    matrix = (-1, 0, 0, 1, 20, 0)
+    with fc.history.snapshot('Mirror', [exc]):
+        appHistory.apply_matrix_to_object(exc, matrix)
+        gen.replace_generated(exc, 1, [Point(-3, 5), Point(23, 5)], fc.decimals)
+    assert len(exc.tools[1]['drills']) == 4
+    assert exc.tools[1]['drills'][0].equals(Point(22, 5))
+    assert fc.history.undo()
+    assert exc.tools[1]['drills'][0].equals(Point(-2, 5))
+    assert fc.history.redo()
+    assert exc.tools[1]['drills'][0].equals(Point(22, 5))
+    # Project/history round-trip retains ownership independently of coordinates.
+    state = appHistory.object_state(exc)
+    appHistory.restore_object_state(exc, state)
+    gen.replace_generated(exc, 2, [Point(50, 50)], fc.decimals)
+    assert len(exc.tools[1]['drills']) == 2
+    assert len(exc.tools[1]['slots']) == 1
+    assert sum(len(t['drills']) for t in exc.tools.values()) == 3
+    assert exc.source_file
+
+
+@pytest.mark.parametrize('diameter,holes', [(0, '(1,2)'), (1, '(1,2,3)'), (1, 'bad(')])
+def test_dblsided_invalid_holes_do_not_create(diameter, holes):
+    from unittest.mock import Mock
+    tool = Mock()
+    tool.ui.align_type_radio.get_value.return_value = 'manual'
+    tool.ui.drill_dia.get_value.return_value = diameter
+    tool.ui.alignment_holes.text.return_value = holes
+    DblSidedTool.on_create_alignment_holes(tool)
+    tool.new_object.assert_not_called()
+
+
+@pytest.mark.parametrize('kind', ['gerber', 'excellon'])
+def test_dblsided_advanced_mirror_preserves_source_and_undo(fc, no_plot, monkeypatch, kind):
+    if kind == 'gerber':
+        grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_dbl')
+    else:
+        def init(obj, app):
+            obj.add_tool(1, drills=[Point(1, 2)])
+            obj.create_geometry()
+        grb = fc.app_obj.new_object('excellon', 'exc_dbl', init, plot=False)
+    grb.regenerate_source()
+    source0 = grb.source_file
     b0 = _bounds(grb)
     app = SimpleNamespace(
         history=fc.history,
@@ -114,8 +224,612 @@ def test_dblsided_mirror_is_a_matrix_step(fc, no_plot):
     _one_step(fc, n, 'Mirror')
     b1 = _bounds(grb)
     assert not np.allclose(b1, b0)
+    source1 = grb.source_file
+    assert source1 != source0
+    assert source1 == grb.regenerate_source(store=False)
     assert fc.history.undo() and np.allclose(_bounds(grb), b0)
+    assert grb.source_file == source0
     assert fc.history.redo() and np.allclose(_bounds(grb), b1)
+    assert grb.source_file == source1
+    before = appHistory.object_state(grb)
+    monkeypatch.setattr(grb, 'regenerate_source', lambda: False)
+    n = _stack(fc)
+    DblSidedTool.on_mirror(stub)
+    after = appHistory.object_state(grb)
+    # ApertureMacro has identity equality. Compare its project representation, not copied instance identities.
+    import json
+    from camlib import to_dict
+    assert json.loads(json.dumps(before, default=to_dict)) == json.loads(json.dumps(after, default=to_dict))
+    assert _stack(fc) == n
+
+
+def test_dblsided_alignment_stages_all_sources_and_rejects_ambiguity():
+    from appPlugins.ToolDblSided import DblSidedGen as gen
+    from appPlugins.ToolAlignObjects.AlignGen import SnapIndex, AlignError, apply_matrix
+    rng = np.random.default_rng(42)
+    pads = rng.uniform((0, 0), (50, 30), (40, 2))
+
+    def index(points):
+        return SnapIndex([Point(p).buffer(0.8) for p in points], points, [])
+
+    angle = 0.3
+    matrix = (np.cos(angle), -np.sin(angle), np.sin(angle), np.cos(angle), 7, -3)
+    holes = apply_matrix(matrix, pads)
+    bottom = pads + (12, 5)
+    plans = gen.alignment_matrices([index(pads), index(bottom), index(holes)], [0, 1], 2)
+    assert apply_matrix(plans[2], holes) == pytest.approx(pads, abs=0.01)
+    assert apply_matrix(plans[1], bottom) == pytest.approx(pads, abs=0.01)
+    assert 0 not in plans
+    with pytest.raises(AlignError):
+        gen.alignment_matrices([index(pads), index([(0, 0)])], [0], 1)
+    square = index([(0, 0), (10, 0), (10, 10), (0, 10)])
+    with pytest.raises(AlignError, match='ambiguous'):
+        gen.alignment_matrices([square, square], [0], 1)
+
+
+def _dbl_sources(fc, name, reflected=False):
+    pads = np.random.default_rng(42).uniform((0, 0), (50, 30), (40, 2))
+
+    def gerber(points, suffix):
+        def init(obj, app):
+            records = [{'solid': Point(p).buffer(0.8), 'follow': Point(p)} for p in points]
+            obj.tools = {10: {'type': 'C', 'size': 1.6, 'geometry': records}}
+            obj.solid_geometry = [r['solid'] for r in records]
+            obj.follow_geometry = [r['follow'] for r in records]
+        return fc.app_obj.new_object('gerber', name + suffix, init, plot=False)
+
+    top = gerber(pads, '_top')
+    if reflected:
+        from appPlugins.ToolAlignObjects.AlignGen import apply_matrix
+        angle = 0.3
+        bottom_points = apply_matrix((np.cos(angle), -np.sin(angle), np.sin(angle), np.cos(angle), 60, 8),
+                                     pads * (-1, 1))
+    else:
+        bottom_points = pads + (12, 5)
+    bottom = gerber(bottom_points, '_bottom')
+
+    def init_drills(obj, app):
+        obj.add_tool(0.8, drills=[Point(p) for p in pads + (7, -3)])
+        obj.create_geometry()
+    drills = fc.app_obj.new_object('excellon', name + '_drills', init_drills, plot=False)
+    tool = DblSidedTool(fc)
+    tool.set_tool_ui()
+    tool.change_level('b')
+    for combo, obj in zip(tool.ui.basic_combos, (top, bottom, drills)):
+        combo.set_value(obj.obj_options['name'])
+    return tool, top, bottom, drills, pads
+
+
+def _wait_dbl(tool):
+    end = time.monotonic() + 10
+    while tool.pending_alignment is not None and time.monotonic() < end:
+        QtWidgets.QApplication.processEvents()
+        time.sleep(0.01)
+    assert tool.pending_alignment is None
+
+
+@pytest.mark.parametrize('auto', [False, True])
+def test_dblsided_kicad_flip_preserves_registered_flash_centers(fc, no_plot, auto):
+    from appPlugins.ToolAlignObjects.AlignGen import build_snap_index
+    fc.history.clear()
+    objects = []
+    for filename in ['usb_isolator-F_Cu.gtl', 'usb_isolator-B_Cu.gbl']:
+        def init(obj, app, filename=filename):
+            obj.parse_file(os.path.join(os.path.dirname(__file__), 'fixtures', 'kicad', 'Gerbers_2', filename))
+        objects.append(fc.app_obj.new_object('gerber', 'kicad_flip_' + filename, init, plot=False))
+    original = [build_snap_index(obj).centers.copy() for obj in objects]
+    # These asymmetric layers share exact features, not copper bounding boxes.
+    distances = np.linalg.norm(original[1][:, None] - original[0][None, :], axis=2).min(axis=1)
+    assert np.count_nonzero(distances < 1e-8) == 38
+    xmin = min(obj.bounds()[0] for obj in objects)
+    xmax = max(obj.bounds()[2] for obj in objects)
+    expected = original[1].copy()
+    expected[:, 0] = xmin + xmax - expected[:, 0]
+    tool = DblSidedTool(fc)
+    tool.set_tool_ui()
+    tool.change_level('b')
+    for combo, obj in zip(tool.ui.basic_combos, objects):
+        combo.set_value(obj.obj_options['name'])
+    tool.ui.generate_cb.set_value(False)
+    tool.ui.auto_align_cb.set_value(auto)
+    before = _stack(fc)
+    tool.on_process()
+    _wait_dbl(tool)
+    _one_step(fc, before, '2-Sided')
+    np.testing.assert_allclose(build_snap_index(objects[0]).centers, original[0], atol=1e-8, rtol=0)
+    np.testing.assert_allclose(build_snap_index(objects[1]).centers, expected, atol=1e-8, rtol=0)
+    sources = [obj.source_file for obj in objects]
+    tool.on_process()
+    _wait_dbl(tool)
+    assert [obj.source_file for obj in objects] == sources
+    assert _stack(fc) == before + 1
+    assert fc.history.undo()
+    np.testing.assert_allclose(build_snap_index(objects[1]).centers, original[1], atol=1e-8, rtol=0)
+    tool.deleteLater()
+
+
+@pytest.mark.parametrize('composed', [False, True])
+def test_dblsided_registered_bounds_ignore_cleared_copper(fc, no_plot, composed):
+    from appPlugins.ToolDblSided.DblSidedGen import bounds_drills
+    from appPlugins.ToolAlignObjects.AlignGen import apply_matrix
+    fc.history.clear()
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_clear_' + str(composed))
+    removed = box(100, 5, 110, 15)
+    records = bottom.tools[10]['geometry']
+    records.extend([{'solid': removed, 'follow': removed.centroid}, {'clear': removed}])
+    copper = unary_union([r['solid'] for r in records if 'solid' in r]).difference(removed)
+    bottom.solid_geometry = copper if composed else list(copper.geoms)
+    bounds = top.bounds()
+    flip = (-1, 0, 0, 1, bounds[0] + bounds[2], 0)
+    mirrored = apply_matrix(flip, pads)
+    holes = _hole_xy(bounds_drills(bounds, 0.8, 2))
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    for _ in range(2):
+        tool.on_process()
+        _wait_dbl(tool)
+        for obj, expected in ((top, pads), (bottom, mirrored)):
+            assert np.asarray([r['follow'].coords[0] for r in obj.tools[10]['geometry'][:40]]) == \
+                pytest.approx(expected)
+            assert obj.bounds() == pytest.approx(bounds)
+        actual = np.asarray([p.coords[0] for t in drills.tools.values() for p in t['drills']])
+        assert actual.shape == (43, 2)
+        assert actual[:40] == pytest.approx(pads)
+        assert actual[40:] == pytest.approx(holes)
+    tool.deleteLater()
+
+
+def test_dblsided_process_is_one_undo_and_survives_reload(fc, no_plot):
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_flip', reflected=True)
+    xmin, ymin, xmax, ymax = drills.bounds()
+    appHistory.apply_matrix_to_object(drills, (-1, 0, 0, 1, xmin + xmax, 0))
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    originals = [_bounds(obj) for obj in (top, bottom, drills)]
+    expected = pads.copy()
+    expected[:, 0] = _bounds(top)[0] + _bounds(top)[2] - expected[:, 0]
+    n = _stack(fc)
+    tool.on_process()
+    _wait_dbl(tool)
+    _one_step(fc, n, '2-Sided')
+    assert np.asarray([rec['follow'].coords[0] for rec in top.tools[10]['geometry']]) == pytest.approx(pads)
+    assert np.asarray([p.coords[0] for p in drills.tools[1]['drills'][:40]]) == pytest.approx(pads)
+    assert np.asarray([rec['follow'].coords[0] for rec in bottom.tools[10]['geometry']]) == pytest.approx(expected)
+    assert len(drills.tools[1]['drills']) == 43
+    assert fc.history.undo()
+    assert len(drills.tools[1]['drills']) == 40
+    for obj, original in zip((top, bottom, drills), originals):
+        assert _bounds(obj) == pytest.approx(original)
+    assert fc.history.redo()
+    assert np.asarray([rec['follow'].coords[0] for rec in bottom.tools[10]['geometry']]) == pytest.approx(expected)
+    holes = np.asarray([p.coords[0] for p in drills.tools[1]['drills'][40:]])
+    sources = [obj.source_file for obj in (top, bottom, drills)]
+    import json
+    from camlib import to_dict, dict2obj
+    for obj in (top, bottom, drills):
+        state = json.loads(json.dumps(appHistory.object_state(obj), default=to_dict), object_hook=dict2obj)
+        appHistory.restore_object_state(obj, state)
+    tool.set_tool_ui()
+    for combo, obj in zip(tool.ui.basic_combos, (top, bottom, drills)):
+        combo.set_value(obj.obj_options['name'])
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    tool.on_process()
+    _wait_dbl(tool)
+    assert np.asarray([rec['follow'].coords[0] for t in bottom.tools.values() for rec in t['geometry']]) == \
+        pytest.approx(expected)
+    restored_drills = [p.coords[0] for t in drills.tools.values() for p in t['drills']]
+    assert len(restored_drills) == 43
+    assert np.asarray(restored_drills[40:]) == pytest.approx(holes)
+    assert [obj.source_file for obj in (top, bottom, drills)] == sources
+    bottom.offset((4, -7))
+    tool.on_process()
+    _wait_dbl(tool)
+    # External edits invalidate the manufacturing marker: re-register the actual input, then mirror it once.
+    assert np.asarray([rec['follow'].coords[0] for t in bottom.tools.values() for rec in t['geometry']]) == \
+        pytest.approx(expected)
+    tool.deleteLater()
+
+
+def test_dblsided_failed_append_export_rolls_back(fc, no_plot, monkeypatch):
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_export')
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.auto_align_cb.set_value(False)
+    before = [appHistory.object_state(obj) for obj in (top, bottom, drills)]
+    n = _stack(fc)
+    monkeypatch.setattr(drills, 'regenerate_source', lambda: False)
+    tool.on_process()
+    assert all(appHistory.states_equal(state, appHistory.object_state(obj))
+               for obj, state in zip((top, bottom, drills), before))
+    assert _stack(fc) == n
+    assert tool.ui.process_button.isEnabled()
+    tool.deleteLater()
+
+
+def test_dblsided_failed_source_export_does_not_publish_drills(fc, no_plot, monkeypatch):
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_export_separate')
+    tool.ui.generate_cb.set_value(True)
+    before = [appHistory.object_state(obj) for obj in (top, bottom, drills)]
+    collection = list(fc.collection.get_list())
+    n = _stack(fc)
+    monkeypatch.setattr(bottom, 'regenerate_source', lambda: False)
+    tool.on_process()
+    _wait_dbl(tool)
+    assert fc.collection.get_list() == collection
+    assert _stack(fc) == n
+    assert all(appHistory.states_equal(state, appHistory.object_state(obj))
+               for obj, state in zip((top, bottom, drills), before))
+    tool.deleteLater()
+
+
+@pytest.mark.parametrize('auto,append', [(False, False), (True, True)])
+def test_dblsided_holes_use_registered_frozen_frame(fc, no_plot, append, auto):
+    from appPlugins.ToolDblSided.DblSidedGen import combined_bounds, bounds_drills
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_frozen')
+    bounds = top.bounds() if auto else combined_bounds([top, bottom, drills])
+    points = np.asarray([p.coords[0] for p in bounds_drills(bounds, 0.8, 2)])
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.auto_align_cb.set_value(auto)
+    tool.ui.append_drills_cb.set_value(append)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    collection = list(fc.collection.get_list())
+    tool.on_process()
+    _wait_dbl(tool)
+    output = drills if append else next(o for o in fc.collection.get_list() if o not in collection)
+    actual = np.asarray([p.coords[0] for t in output.tools.values() for p in t['drills']])[-3:]
+    assert actual == pytest.approx(points)
+    assert np.asarray([p.coords[0] for p in drills.tools[1]['drills'][:40]]) == \
+        pytest.approx(pads if auto else pads + (7, -3))
+    tool.on_process()
+    _wait_dbl(tool)
+    assert np.asarray([p.coords[0] for t in output.tools.values() for p in t['drills']])[-3:] == pytest.approx(actual)
+    assert len(drills.tools[1]['drills']) == (43 if append else 40)
+    tool.deleteLater()
+
+
+def test_dblsided_failed_alignment_does_not_mutate(fc, no_plot, monkeypatch):
+    import appPlugins.ToolDblSided.DblSided as controller
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_reject')
+    before = [appHistory.object_state(obj) for obj in (top, bottom, drills)]
+
+    def reject(*args):
+        raise ValueError('Ambiguous alignment; inspect in Align Objects.')
+    monkeypatch.setattr(controller, 'alignment_matrices', reject)
+    n = _stack(fc)
+    tool.ui.generate_cb.set_value(True)
+    objects = list(fc.collection.get_list())
+    tool.on_process()
+    _wait_dbl(tool)
+    assert fc.collection.get_list() == objects
+    assert all(appHistory.states_equal(state, appHistory.object_state(obj))
+               for obj, state in zip((top, bottom, drills), before))
+    assert _stack(fc) == n
+    assert tool.ui.process_button.isEnabled()
+    tool.deleteLater()
+
+
+@pytest.mark.parametrize('change', ['reset', 'selection', 'geometry'])
+def test_dblsided_stale_worker_does_not_move_or_generate(fc, no_plot, monkeypatch, change):
+    import threading
+    import appPlugins.ToolDblSided.DblSided as controller
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_stale_' + change)
+    tool.ui.generate_cb.set_value(True)
+    entered, release = threading.Event(), threading.Event()
+    finished = []
+    tool.alignment_finished.connect(lambda *args: finished.append(True))
+
+    def delayed(*args):
+        entered.set()
+        assert release.wait(5)
+        return {1: (1, 0, 0, 1, 500, 500)}
+    monkeypatch.setattr(controller, 'alignment_matrices', delayed)
+    before = _bounds(bottom)
+    objects = list(fc.collection.get_list())
+    tool.on_process()
+    try:
+        assert entered.wait(5)
+        assert _bounds(bottom) == pytest.approx(before)
+        if change == 'reset':
+            tool.set_tool_ui()
+        elif change == 'selection':
+            tool.ui.top_combo.setCurrentIndex(0)
+        else:
+            appHistory.apply_matrix_to_object(top, (1, 0, 0, 1, 1, 0))
+    finally:
+        release.set()
+    end = time.monotonic() + 5
+    while not finished and time.monotonic() < end:
+        QtWidgets.QApplication.processEvents()
+        time.sleep(0.01)
+    assert finished
+    assert _bounds(bottom) == pytest.approx(before)
+    assert fc.collection.get_list() == objects
+    tool.deleteLater()
+
+
+def test_dblsided_alignment_drills_use_box_reference_group(fc):
+    from unittest.mock import Mock
+    from appParsers.ParseExcellon import Excellon
+    output = Excellon(fc)
+    output.regenerate_source = Mock()
+    box_obj = SimpleNamespace(bounds=lambda: (0, 10, 20, 30))
+    wrong_obj = SimpleNamespace(bounds=lambda: (100, 100, 110, 110))
+    tool = Mock()
+    tool.ui.align_type_radio.get_value.return_value = 'X'
+    tool.ui.axis_location.get_value.return_value = 'box'
+    tool.ui.box_combo.rootModelIndex.return_value = 'box'
+    tool.ui.drill_dia.get_value.return_value = 1
+    tool.ui.alignment_holes.text.return_value = '(1,2)'
+    tool.app.collection.index.side_effect = lambda row, col, root: SimpleNamespace(
+        internalPointer=lambda: SimpleNamespace(obj=box_obj if root == 'box' else wrong_obj))
+
+    def create(kind, name, init, **kwargs):
+        init(output, fc)
+        return output
+    tool.new_object.side_effect = create
+    DblSidedTool.on_create_alignment_holes(tool)
+    assert [p.coords[0] for p in output.tools[1]['drills']] == [(1, 2), (1, 38)]
+
+
+@pytest.mark.parametrize('failure', ['geometry', 'export'])
+def test_dblsided_advanced_failed_generation_not_published(fc, no_plot, monkeypatch, failure):
+    from unittest.mock import Mock
+    tool = SimpleNamespace(app=fc, ui=Mock(), new_object=fc.app_obj.new_object)
+    tool.ui.align_type_radio.get_value.return_value = 'manual'
+    tool.ui.drill_dia.get_value.return_value = 1
+    tool.ui.alignment_holes.text.return_value = '(1,2)'
+    if failure == 'geometry':
+        # Even if geometry exists, an explicit failure must prevent publication.
+        original = ExcellonObject.create_geometry
+        def fail(obj):
+            original(obj)
+            return 'fail'
+        monkeypatch.setattr(ExcellonObject, 'create_geometry', fail)
+    else:
+        monkeypatch.setattr(ExcellonObject, 'regenerate_source', lambda obj: False)
+    objects = list(fc.collection.get_list())
+    n = _stack(fc)
+    DblSidedTool.on_create_alignment_holes(tool)
+    assert fc.collection.get_list() == objects
+    assert _stack(fc) == n
+
+
+@pytest.mark.parametrize('turn', ['L-R', 'T-B'])
+def test_dblsided_bottom_is_mirrored_about_the_whole_bbox_with_keyed_holes(fc, no_plot, turn):
+    from appPlugins.ToolDblSided.DblSidedGen import combined_bounds, bounds_drills
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_pivot')
+    tool.ui.auto_align_cb.set_value(False)
+    tool.ui.type_combo.setCurrentIndex(['L-R', 'T-B'].index(turn))
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    originals = {obj: _bounds(obj) for obj in (top, bottom, drills)}
+    bounds = combined_bounds([top, bottom, drills])
+    before = list(fc.collection.get_list())
+    n = _stack(fc)
+    tool.on_process()
+    _settle(fc)
+    _one_step(fc, n, '2-Sided')
+    assert _bounds(top) == pytest.approx(originals[top])
+    assert _bounds(drills) == pytest.approx(originals[drills])
+    old = originals[bottom]
+    if turn == 'L-R':
+        mirrored_bounds = (bounds[0] + bounds[2] - old[2], old[1], bounds[0] + bounds[2] - old[0], old[3])
+    else:
+        mirrored_bounds = (old[0], bounds[1] + bounds[3] - old[3], old[2], bounds[1] + bounds[3] - old[1])
+    assert _bounds(bottom) == pytest.approx(mirrored_bounds)
+    output = next(o for o in fc.collection.get_list() if o not in before)
+    expected = _hole_xy(bounds_drills(bounds, 0.8, 2, turn))
+    assert _hole_xy([p for t in output.tools.values() for p in t['drills']]) == pytest.approx(expected)
+    uid = output.history_uid
+    assert fc.history.undo()
+    for obj, original in originals.items():
+        assert _bounds(obj) == pytest.approx(original)
+    assert output not in fc.collection.get_list()
+    assert fc.history.redo()
+    _settle(fc)
+    output = next(o for o in fc.collection.get_list() if o.history_uid == uid)
+    mirrored = _bounds(bottom)
+    state = [appHistory.object_state(obj) for obj in (top, bottom, drills, output)]
+    tool.on_process()
+    _settle(fc)
+    assert _bounds(bottom) == pytest.approx(mirrored)
+    assert all(appHistory.states_equal(s, appHistory.object_state(obj))
+               for obj, s in zip((top, bottom, drills), state))
+    assert _hole_xy([p for t in output.tools.values() for p in t['drills']]) == pytest.approx(expected)
+    tool.deleteLater()
+
+
+def test_dblsided_same_object_as_top_and_bottom_is_refused(fc, no_plot):
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_same')
+    tool.ui.bottom_combo.set_value(top.obj_options['name'])
+    tool.ui.generate_cb.set_value(True)
+    before = [appHistory.object_state(obj) for obj in (top, bottom, drills)]
+    objects, n = list(fc.collection.get_list()), _stack(fc)
+    tool.on_process()
+    assert fc.collection.get_list() == objects
+    assert _stack(fc) == n
+    assert all(appHistory.states_equal(state, appHistory.object_state(obj))
+               for obj, state in zip((top, bottom, drills), before))
+    tool.deleteLater()
+
+
+def test_dblsided_macro_source_worker_is_not_falsely_stale(fc, no_plot, monkeypatch):
+    import appPlugins.ToolDblSided.DblSided as controller
+    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'dbl_macro')
+    def init(obj, app):
+        obj.add_tool(1, drills=[Point(1, 2), Point(3, 4)])
+        obj.create_geometry()
+    exc = fc.app_obj.new_object('excellon', 'dbl_macro_exc', init, plot=False)
+    tool = DblSidedTool(fc)
+    tool.set_tool_ui()
+    tool.ui.top_combo.set_value(grb.obj_options['name'])
+    tool.ui.drills_combo.set_value(exc.obj_options['name'])
+    tool.ui.generate_cb.set_value(True)
+    monkeypatch.setattr(controller, 'alignment_matrices', lambda *args: {1: (1, 0, 0, 1, 0, 0)})
+    before = list(fc.collection.get_list())
+    tool.on_process()
+    _wait_dbl(tool)
+    assert len(fc.collection.get_list()) == len(before) + 1
+    tool.deleteLater()
+
+
+def test_dblsided_frame_detects_lossless_geometry_and_macro_edits_after_reload():
+    import json
+    from camlib import ApertureMacro, dict2obj, to_dict
+    macro = ApertureMacro('frame_macro')
+    macro.raw = '1,1,1,0,0'
+    obj = SimpleNamespace(tools={10: {'macro': macro, 'geometry': [{'solid': box(0, 0, 2, 3)}]}},
+                          solid_geometry=[Point(0, 0)], obj_options={}, kind='gerber',
+                          history_uid='signature-test', ser_attrs=['tools', 'solid_geometry'])
+    tool = SimpleNamespace(_geometry_signature=lambda obj: DblSidedTool._geometry_signature(None, obj))
+    matrix = [1, 0, 0, -1, 0, 3]
+    signature = tool._geometry_signature(obj)
+    obj.obj_options['_2sided_frame'] = {'signature': signature, 'matrix': matrix}
+    source_signature = DblSidedTool._source_signature(None, obj)
+    state = json.loads(json.dumps({'tools': obj.tools, 'solid_geometry': obj.solid_geometry,
+                                  'obj_options': obj.obj_options}, default=to_dict), object_hook=dict2obj)
+    obj.__dict__.update(state)
+    assert DblSidedTool._presentation(tool, obj) == matrix
+    assert DblSidedTool._source_signature(None, obj) == source_signature
+    obj.tools['10']['macro'].raw += '*1,1,2,0,0'
+    assert DblSidedTool._presentation(tool, obj) is None
+    assert DblSidedTool._source_signature(None, obj) != source_signature
+    obj.tools['10']['macro'].raw = macro.raw
+    obj.solid_geometry = [Point(1e-20, 0)]
+    obj.obj_options['_2sided_frame']['signature'] = tool._geometry_signature(obj)
+    obj.solid_geometry = [Point(2e-20, 0)]
+    assert DblSidedTool._presentation(tool, obj) is None
+
+
+def _smd_sources(fc, name):
+    from test_align_auto import partial_smd_board
+    through, pads, holes, matrix = partial_smd_board()
+    def init_pads(obj, app):
+        records = [{'solid': solid, 'follow': Point(center)}
+                   for solid, center in zip(pads.tree.geometries, pads.centers)]
+        obj.tools = {10: {'type': 'C', 'size': 1.6, 'geometry': records[:len(through)]},
+                     11: {'type': 'R', 'width': 0.2, 'height': 0.3, 'size': float(np.hypot(0.2, 0.3)),
+                          'geometry': records[len(through):]}}
+        obj.solid_geometry = [r['solid'] for r in records]
+        obj.follow_geometry = [r['follow'] for r in records]
+    def init_drills(obj, app):
+        obj.add_tool(0.8, drills=[Point(p) for p in holes.centers])
+        obj.create_geometry()
+    grb = fc.app_obj.new_object('gerber', name + '_pads', init_pads, plot=False)
+    exc = fc.app_obj.new_object('excellon', name + '_holes', init_drills, plot=False)
+    return grb, exc, through, holes.centers.copy(), matrix
+
+
+@pytest.mark.parametrize('reverse,limited', [(False, False), (True, True)])
+def test_auto_align_smd_ui_preview_and_apply_follow_requested_motion(fc, no_plot, monkeypatch, reverse, limited):
+    from appPlugins.ToolAlignObjects.Align import AlignObjects
+    from appPlugins.ToolAlignObjects.AlignGen import apply_matrix
+    grb, exc, through, holes, matrix = _smd_sources(fc, 'auto_smd_' + str(reverse))
+    if limited:
+        # Most spread landmarks are unmatched mounting holes. A nearby seed must still fit six
+        # actual correspondences, not spend the solver budget on those unmatched landmarks.
+        from appHandlers.appHistory import apply_matrix_to_object
+        apply_matrix_to_object(exc, matrix)
+        holes = apply_matrix(matrix, holes)
+    tool = AlignObjects(fc)
+    tool.set_tool_ui()
+    tool.change_level('a')
+    assert tool.ui.limit_pairs_entry.get_value() == 6
+    assert not tool.ui.limit_pairs_cb.isChecked()
+    assert not tool.ui.limit_pairs_entry.isEnabled()
+    tool.ui.limit_pairs_cb.set_value(limited)
+    assert tool.ui.limit_pairs_entry.isEnabled() == limited
+    monkeypatch.setattr(tool, 'draw_markers', lambda *args, **kwargs: None)
+    tool.ui.a_type_radio.set_value('auto')
+    tool.ui.set_fit_model('rigid')
+    tool.ui.allow_mirror_cb.set_value(False)
+    tool.on_type_obj_changed('grb' if reverse else 'exc')
+    tool.on_type_aligner_changed('exc' if reverse else 'grb')
+    tool.ui.object_combo.set_value((grb if reverse else exc).obj_options['name'])
+    tool.ui.aligner_object_combo.set_value((exc if reverse else grb).obj_options['name'])
+    tool.on_find()
+    end = time.monotonic() + 10
+    while not tool.ui.find_button.isEnabled() and time.monotonic() < end:
+        QtWidgets.QApplication.processEvents()
+        time.sleep(0.01)
+    assert tool.auto_results
+    result = tool.auto_results[0]
+    assert (result.matched, result.total) == (12, 44)
+    np.testing.assert_allclose(apply_matrix(result.matrix, result.P), result.Q, atol=0.02)
+    assert '12 / 44' in tool.ui.result_label.text()
+    assert tool.ui.points_table.rowCount() == (6 if limited else 12)
+    n = _stack(fc)
+    tool.apply_auto()
+    _one_step(fc, n, 'Align')
+    if reverse:
+        np.testing.assert_allclose([r['follow'].coords[0] for r in grb.tools[10]['geometry']], holes[:12], atol=0.02)
+    else:
+        np.testing.assert_allclose([p.coords[0] for p in exc.tools[1]['drills'][:12]], through, atol=0.02)
+    assert fc.history.undo()
+    np.testing.assert_allclose([r['follow'].coords[0] for r in grb.tools[10]['geometry']], through, atol=0.02)
+    np.testing.assert_allclose([p.coords[0] for p in exc.tools[1]['drills']], holes, atol=0.02)
+    tool.set_tool_ui()
+    assert not tool.ui.limit_pairs_cb.isChecked()
+    assert tool.ui.limit_pairs_entry.get_value() == 6
+    tool.deleteLater()
+
+
+@pytest.mark.parametrize('level,checked,value,expected', [
+    ('a', False, 1, 0), ('a', True, 0, 0), ('b', True, 1, 0), ('a', True, 6, 6)
+])
+def test_auto_pair_limit_worker_uses_snapshot(fc, no_plot, monkeypatch, level, checked, value, expected):
+    import appPlugins.ToolAlignObjects.Align as module
+    tool = module.AlignObjects(fc)
+    tool.set_tool_ui()
+    tool.change_level(level)
+    assert tool.ui.advanced_frame.isHidden() == (level == 'b')
+    tool.ui.limit_pairs_cb.set_value(checked)
+    tool.ui.limit_pairs_entry.set_value(value)
+    tool.ui.set_fit_model('similarity')
+    tool.ui.allow_mirror_cb.set_value(True)
+    tool.aligned_obj = tool.aligner_obj = object()
+    monkeypatch.setattr(tool, '_read_objects', lambda: True)
+    monkeypatch.setattr(module, 'build_snap_index', lambda obj: object())
+    calls, jobs = [], []
+    monkeypatch.setattr(module, 'auto_align', lambda *args, **kwargs: calls.append(kwargs) or [])
+    monkeypatch.setattr(fc, 'worker_task', SimpleNamespace(emit=jobs.append))
+    tool.on_find()
+    tool.ui.limit_pairs_entry.set_value(1)
+    tool.ui.limit_pairs_cb.set_value(not checked)
+    tool.ui.set_fit_model('affine')
+    tool.ui.allow_mirror_cb.set_value(False)
+    jobs[0]['fcn']()
+    assert calls[0]['pair_limit'] == expected
+    assert calls[0]['model'] == 'similarity'
+    assert calls[0]['allow_mirror'] is True
+    tool.deleteLater()
+
+
+def test_dblsided_smd_process_registers_drills_and_holes_idempotent(fc, no_plot):
+    grb, exc, through, holes, matrix = _smd_sources(fc, 'dbl_smd')
+    tool = DblSidedTool(fc)
+    tool.set_tool_ui()
+    tool.ui.top_combo.set_value(grb.obj_options['name'])
+    tool.ui.drills_combo.set_value(exc.obj_options['name'])
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    n = _stack(fc)
+    tool.on_process()
+    _wait_dbl(tool)
+    _one_step(fc, n, '2-Sided')
+    expected = [r['follow'].coords[0] for r in grb.tools[10]['geometry']]
+    np.testing.assert_allclose([p.coords[0] for p in exc.tools[1]['drills'][:12]], expected, atol=0.02)
+    assert len(exc.tools[1]['drills']) == len(holes) + 3
+    tool.on_process()
+    _wait_dbl(tool)
+    assert len(exc.tools[1]['drills']) == len(holes) + 3
+    np.testing.assert_allclose([p.coords[0] for p in exc.tools[1]['drills'][:12]], expected, atol=0.02)
+    tool.deleteLater()
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -155,6 +869,79 @@ def test_manual_cutout_click_is_a_snapshot_step(fc, no_plot):
     assert fc.history.redo()
     assert geo.multigeo is True and 99 in geo.tools
     assert geo.tools[1]['solid_geometry'].equals(solid1) if hasattr(solid1, 'equals') else True
+
+
+def test_manual_cutout_session_cancel_and_finish_preserve_history(fc, no_plot):
+    from unittest.mock import Mock
+    from test_cutout_inner_contours import make_tool
+
+    geo = _geometry(fc, 'geo_cut_session')
+    tool = make_tool()
+    app = tool.test_app
+    app.history = fc.history
+    app.collection.objs[geo.obj_options['name']] = geo
+    app.ui.keyPressEvent = Mock()
+    app.ui.notebook = Mock()
+    app.geo_editor = SimpleNamespace(snap=lambda x, y: (x, y), tool_shape=Mock())
+    app.on_mouse_click_over_plot = Mock()
+    app.on_mouse_click_release_over_plot = Mock()
+    app.on_mouse_move_over_plot = Mock()
+    app.plotcanvas.translate_coords = lambda pos: pos
+    app.plotcanvas.pixel_size = lambda: 0.1
+    app.grid_status = lambda: False
+    tool.ui.man_object_combo = SimpleNamespace(currentText=lambda: geo.obj_options['name'])
+    tool.ui.big_cursor_cb.set_value(False)
+    tool.ui.dia.set_value(2.0)
+    tool.ui.gapsize.set_value(1.0)
+    tool.ui.cutz_entry.set_value(-1.0)
+    tool.ui.thin_depth_entry.set_value(-0.5)
+    tool.ui.gaptype_combo.set_value(1)
+    original = appHistory.object_state(geo)
+    n = _stack(fc)
+    tool.on_manual_gap_click()
+    tool.on_manual_cutout((10, 0))
+    tool.on_manual_cutout((20, 5))
+    tool.on_mouse_click_release(SimpleNamespace(pos=(10, 0), button=1))
+    tool.on_mouse_click_press(SimpleNamespace(pos=(10, 0), button=1))
+    tool.on_mouse_move(SimpleNamespace(pos=(5, 10), button=1, is_dragging=True))
+    tool.on_mouse_click_release(SimpleNamespace(pos=(5, 10), button=1))
+    tool.on_mouse_click_release(SimpleNamespace(pos=(20, 5), button=1))
+    tool.on_key_press(SimpleNamespace(key='Delete'))
+    tool.on_key_press(SimpleNamespace(key='Escape'))
+    assert appHistory.states_equal(original, appHistory.object_state(geo))
+    assert _stack(fc) == n
+    # Cancelling must leave the preceding action undoable, not redo cancelled gaps.
+    assert fc.history.undo()
+    assert fc.collection.get_by_name('geo_cut_session') is None
+    assert fc.history.redo()
+    _settle(fc)
+    geo = fc.collection.get_by_name('geo_cut_session')
+    app.collection.objs[geo.obj_options['name']] = geo
+    tool.on_manual_gap_click()
+    tool.on_manual_cutout((10, 0))
+    tool.on_manual_cutout((20, 5))
+    tool.on_mouse_click_release(SimpleNamespace(pos=(10, 0), button=1))
+    tool.on_mouse_click_press(SimpleNamespace(pos=(10, 0), button=1))
+    tool.on_mouse_move(SimpleNamespace(pos=(5, 10), button=1, is_dragging=True))
+    tool.on_mouse_click_release(SimpleNamespace(pos=(5, 10), button=1))
+    tool.on_mouse_click_release(SimpleNamespace(pos=(20, 5), button=1))
+    tool.on_key_press(SimpleNamespace(key='Delete'))
+    geo.obj_options['session_note'] = 'keep'
+    tool.on_mouse_click_release(SimpleNamespace(pos=(0, 0), button=2))
+    _one_step(fc, n, 'Manual Cutout')
+    finished = unary_union(geo.solid_geometry)
+    assert 99 in geo.tools
+    assert finished.distance(Point(10, 0)) < 1e-7
+    assert finished.distance(Point(5, 10)) > 1.0
+    thin = unary_union(geo.tools[99]['solid_geometry'])
+    assert thin.length == pytest.approx(3.0)
+    assert fc.history.undo(), fc.history.blocked_reason()
+    assert 99 not in geo.tools and not geo.multigeo
+    assert unary_union(geo.solid_geometry).length == pytest.approx(60)
+    assert geo.obj_options['session_note'] == 'keep'
+    assert fc.history.redo()
+    assert unary_union(geo.solid_geometry).equals(finished) and 99 in geo.tools
+    assert unary_union(geo.tools[99]['solid_geometry']).equals(thin)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -238,4 +1025,3 @@ def test_cncjob_update_source_file_is_a_snapshot_step(fc, cncjob):
     assert src1 != src0 and '(SNIPPET-START)' in src1
     assert fc.history.undo() and cncjob.source_file == src0
     assert fc.history.redo() and cncjob.source_file == src1
-

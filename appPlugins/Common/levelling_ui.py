@@ -20,7 +20,7 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
-def build_probe_points_ui(ui, app, parent_box):
+def build_probe_points_ui(ui, app, parent_box, connect_preferences=True):
     """
     Make the probe-point widgets as attributes of `ui` and add them to
     `parent_box` (a QVBoxLayout). After the call `ui` has: al_frame, al_box,
@@ -34,6 +34,7 @@ def build_probe_points_ui(ui, app, parent_box):
     :param ui:         the UI object (LevelUI or GrblSenderUI); it needs ui.decimals.
     :param app:        the App.
     :param parent_box: the layout that gets al_frame.
+    :param connect_preferences: keep the legacy preference hookups unless the controller owns them.
     """
     # Autolevelling
     ui.al_frame = QtWidgets.QFrame()
@@ -258,5 +259,6 @@ def build_probe_points_ui(ui, app, parent_box):
     def on_avoid_exc_holes_changed(state):
         app.options["tools_al_avoid_exc_holes"] = False if not state else True
 
-    ui.plot_probing_pts_cb.stateChanged.connect(on_plot_points_changed)
-    ui.avoid_exc_holes_cb.stateChanged.connect(on_avoid_exc_holes_changed)
+    if connect_preferences:
+        ui.plot_probing_pts_cb.stateChanged.connect(on_plot_points_changed)
+        ui.avoid_exc_holes_cb.stateChanged.connect(on_avoid_exc_holes_changed)

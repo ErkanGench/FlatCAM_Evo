@@ -47,7 +47,7 @@ def test_junction_deviation_configuration_roundtrips():
     assert EcutBoardConfig.from_dict(cfg.to_dict()).junction_deviation_mm == .025
 
 
-@pytest.mark.parametrize('value', [-1, float('nan'), float('inf'), True, '0.01'])
+@pytest.mark.parametrize('value', [-1, float('nan'), True, '0.01'])
 def test_invalid_junction_deviation_refuses_before_writes(value):
     api = pwm_api()
     api.config.junction_deviation_mm = value

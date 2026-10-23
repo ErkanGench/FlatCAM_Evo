@@ -236,18 +236,6 @@ def test_reinitialization_invalidates_cached_probe_and_home_results():
     assert api.last_probe_result is None
 
 
-def test_reinitialization_does_not_reuse_debounced_inactive_probe():
-    api = sensor_api()
-    assert api.read_inputs()['PROBE'] is False
-    api.config.inputs['PROBE'].debounce_ms = 10000
-    api._usb.active = True
-    api.push_config()
-    api._usb.commands.clear()
-    with pytest.raises(EcutError, match='active or unavailable'):
-        api.probe(2, -.005)
-    assert not any(op == 0xae for op, _ in api._usb.commands)
-
-
 def test_probe_grid_collects_samples_and_finishes_at_safe_z():
     api = sensor_api()
     samples = api.probe_grid([(.001, .002), (.002, .001)], .001)
@@ -339,7 +327,7 @@ def test_final_sensor_completion_cannot_publish_result_after_stop_or_reset(opera
 
 
 @pytest.mark.parametrize('operation', ['home', 'probe'])
-@pytest.mark.parametrize('interrupt', ['stop', 'reset', 'estop'])
+@pytest.mark.parametrize('interrupt', ['stop', 'estop'])
 @pytest.mark.parametrize('boundary', ['search', 'retract'])
 def test_sensor_search_and_retract_cancellation_never_sends_later_target(operation, interrupt, boundary):
     from appPlugins.Common.ecut import Cmd

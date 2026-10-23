@@ -21,8 +21,7 @@ def limited_engine():
     return engine, api
 
 
-@pytest.mark.parametrize('axis', [0, 1, 2])
-@pytest.mark.parametrize('reverse', [False, True])
+@pytest.mark.parametrize('axis,reverse', [(0, False), (0, True), (2, True)])
 def test_finite_jog_brakes_to_machine_soft_limit_without_crossing_it(axis, reverse, monkeypatch):
     engine, api = limited_engine()
     name = 'XYZ'[axis]

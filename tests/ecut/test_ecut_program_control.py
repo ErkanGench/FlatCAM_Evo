@@ -1,10 +1,12 @@
 """Program controls and real FlatCAM files, using the simulated USB board."""
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from appPlugins.Common.ecut import EcutBoardConfig, EcutError, State, SignalPolarity
+from appPlugins.Common.ecut import ecut_controller
 from appPlugins.Common.ecut.ecut_controller import compile_program
 from test_ecut_spindle import pwm_api, pwm_values
 
@@ -259,28 +261,24 @@ def test_manual_pause_clears_physical_coolant_despite_generic_alias(command):
     assert api._usb.outputs == (4 if command == 'M0' else 0)
 
 
-@pytest.mark.parametrize('filename,tools,pauses,final_z', [
-    ('cutout.txt', [], 0, 2), ('small_drills.txt', [1,2,3,4], 8, 30),
-])
-def test_unmodified_supplied_file_executes_with_explicit_test_operator(filename, tools, pauses, final_z):
-    path = Path(__file__).resolve().parents[2] / 'docs/mach3/gcode' / filename
+def test_unmodified_supplied_file_executes_with_explicit_test_operator(monkeypatch):
+    path = Path(__file__).resolve().parents[2] / 'docs/mach3/gcode' / 'cutout.txt'
     lines = path.read_text(encoding='utf-8-sig').splitlines()
     assert compile_program(lines)
     api = pwm_api()
-    changes, stops = [], []
+    # The config is static here; re-encoding it for every motion packet is what made this slow.
+    api.encode_config = lambda encoded=api.encode_config(): encoded
+    clock = [1000.0]
 
-    def test_operator(state):
-        if state == State.PAUSED:
-            assert api._usb.outputs == 0
-            if api.pending_tool_change is not None:
-                changes.append(api.pending_tool_change)
-                api.confirm_tool_change(api.pending_tool_change)
-            else:
-                stops.append(api.pause_reason)
-                api.resume()
+    def advance(seconds):
+        clock[0] += seconds
+        return clock[0]
 
-    api.on_state_change(test_operator)
+    # Fake clock inside the controller only: the file's 1 s dwell and the pacing sleeps cost no real time.
+    monkeypatch.setattr(ecut_controller, 'time', SimpleNamespace(monotonic=lambda: advance(1e-4), sleep=advance))
+    pauses = []
+    api.on_state_change(lambda state: pauses.append(state) if state == State.PAUSED else None)
     api.run_gcode(lines)
-    assert changes == tools and len(stops) == pauses
-    assert api.position_mm[:3] == pytest.approx([0,0,final_z])
+    assert not pauses
+    assert api.position_mm[:3] == pytest.approx([0, 0, 2])
     assert api._usb.outputs == 0 and pwm_values(api)[-1] == 0

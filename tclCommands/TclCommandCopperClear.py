@@ -1,4 +1,5 @@
 from tclCommands.TclCommand import TclCommand
+from appPlugins.ToolNCC.NccGen import NccGen
 
 import collections
 import math
@@ -237,7 +238,6 @@ class TclCommandCopperClear(TclCommand):
             ncc_tools[int(tool_uid)]['data']['tooldia'] = self.app.dec_format(tool, obj.decimals)
 
         if self.app.ncclear_tool.gen is None:
-            from appPlugins.ToolNCC.NccGen import NccGen
             self.app.ncclear_tool.gen = NccGen(self.app.ncclear_tool)
 
         # Non-Copper clear all polygons in the non-copper clear object

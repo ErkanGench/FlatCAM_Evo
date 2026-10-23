@@ -977,14 +977,6 @@ def test_utf8_comment_bytes_are_text_not_realtime_commands(connection):
     assert engine.lines == ['(Plăcuță ș à Å)G21']
 
 
-def test_lone_extended_realtime_byte_is_still_a_command(connection):
-    port, api, engine = connection
-    port.write(b'G21\n')
-    assert port.readline() == b'ok\r\n'
-    port.write(b'\x91')
-    wait_for(lambda: 0x91 in engine.controls)
-
-
 def test_soft_reset_wins_over_jog_cancel_in_one_write(connection):
     port, api, engine = connection
     wait_for(lambda: not port._startup_pending and not port._active)

@@ -44,16 +44,11 @@ def shellfile_run(tmp_path_factory):
     return folder, result
 
 
-def test_a_command_writes_a_project(tmp_path):
-    result = run_headless(['--command=new_geometry g; save_project out.FlatPrj'], tmp_path)
-    assert result.returncode == 0, result.stderr
-    assert (tmp_path / 'out.FlatPrj').is_file()
-
-
-def test_a_failed_command_gives_exit_code_1(tmp_path):
-    result = run_headless(['--command=no_such_command'], tmp_path)
+def test_a_failed_command_gives_exit_code_1_after_the_earlier_commands_ran(tmp_path):
+    result = run_headless(['--command=new_geometry g; save_project out.FlatPrj; no_such_command'], tmp_path)
     assert result.returncode == 1
     assert 'invalid command name "no_such_command"' in result.stderr
+    assert (tmp_path / 'out.FlatPrj').is_file()
 
 
 def test_shellfile_with_a_relative_name_and_shellvar(shellfile_run):

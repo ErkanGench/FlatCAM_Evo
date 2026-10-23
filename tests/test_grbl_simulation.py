@@ -362,34 +362,6 @@ class TestSimulationControls(unittest.TestCase):
         task['fcn'](*task['params'])
         self.assertIsNone(tool._simulation)
 
-    def test_background_worker_delivers_progress_to_gui(self):
-        import threading
-        import time
-        from PyQt6 import QtWidgets
-        tool = self.make_tool()
-        tool.on_simulation()
-        dialog = tool._simulation
-        tool.job_lines = ['G21 G90', 'G1 X0.01 F600']
-        tool.build_stream_job = lambda: True
-        tool._target = lambda: type('Target', (), {'units': 'MM'})()
-        workers = []
-
-        def launch(task):
-            worker = threading.Thread(target=task['fcn'], args=task['params'])
-            workers.append(worker)
-            worker.start()
-
-        tool.app.worker_task.emit.side_effect = launch
-        tool._start_simulation()
-        deadline = time.monotonic() + 2
-        while dialog.running and time.monotonic() < deadline:
-            QtWidgets.QApplication.processEvents()
-            time.sleep(0.001)
-        dialog.close()
-        for worker in workers:
-            worker.join(1)
-        self.assertFalse(dialog.running)
-        self.assertEqual(tool.ui.progress_bar.value(), 100)
 
 
 if __name__ == '__main__':

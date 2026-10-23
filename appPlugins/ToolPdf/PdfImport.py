@@ -11,14 +11,15 @@ from appGUI.GUIElements import add_case_variants
 
 import logging
 from copy import deepcopy
-import math
 import os
 import time
 import re
 import traceback
 
-from shapely import Point, Polygon
-from shapely.ops import unary_union
+from shapely import Point
+from appPlugins.ToolPdf.PdfGen import (
+    _normalize_ap_dict, _paint_elements, _replay_paint_order, _region_tools, _circular_opening, drill_points
+)
 
 import gettext
 import appTranslation as fcTranslate
@@ -36,104 +37,6 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 log = logging.getLogger('base')
-
-
-def _normalize_ap_dict(ap_dict):
-    """PDF parser keys are strings; Gerber tools and Excellon layers use integers."""
-    return {int(key): value for key, value in ap_dict.items()}
-
-
-def _paint_elements(ap_dict):
-    """Return all geometry elements in painter order.
-
-    The parser writes an ``order`` sequence number on every element. When the caller
-    supplies a hand-built dictionary without those numbers, insertion order is used.
-    """
-    elements = []
-    for aperture in ap_dict:
-        elements.extend(ap_dict[aperture].get('geometry', []))
-
-    if any('order' in element for element in elements):
-        elements.sort(key=lambda element: element.get('order', 0))
-    return elements
-
-
-def _replay_paint_order(ap_dict):
-    """Replay solid/clear paint operations instead of subtracting a global clear union.
-
-    The result is the composed geometry: cross-aperture paint order is applied here and
-    the initializer stores it as region-aperture records, so the Gerber export does not
-    need to regroup the original paint operations by aperture.
-    """
-    solid = None
-    follow = []
-    pending_solids = []
-
-    def flush_solids():
-        nonlocal solid, pending_solids
-        if pending_solids:
-            batch = unary_union(pending_solids)
-            solid = batch if solid is None else solid.union(batch)
-            pending_solids = []
-
-    for element in _paint_elements(ap_dict):
-        if 'solid' in element:
-            pending_solids.append(element['solid'])
-        if 'follow' in element:
-            follow.append(element['follow'])
-        if 'clear' in element:
-            flush_solids()
-            if solid is not None:
-                # A clear cuts whatever is below it. Edge-crossing clears are valid and a
-                # fully erased solid stays erased; there is no restore-original fallback.
-                solid = solid.difference(element['clear'])
-
-    flush_solids()
-
-    if solid is None:
-        solid = Polygon()
-    follow_buf = unary_union(follow) if follow else Polygon()
-    return solid, follow_buf
-
-
-def _region_tools(geometry):
-    """Return the composed geometry as region-aperture records.
-
-    A PDF has no Gerber apertures: every paint operation was already composed in painter
-    order by :func:`_replay_paint_order`. Writing that composed geometry as regions keeps
-    holes, islands and stroke widths in the exported source. Polygons are sorted largest
-    first so a later island inside an earlier hole is not erased by the clear interior.
-    """
-    from appParsers.feature_access import normalize_polygonal
-
-    solid = normalize_polygonal(geometry)
-    polygons = [solid] if isinstance(solid, Polygon) else list(solid.geoms)
-    polygons = [polygon for polygon in polygons if not polygon.is_empty]
-    polygons.sort(key=lambda polygon: Polygon(polygon.exterior).area, reverse=True)
-    return {0: {'type': 'REG', 'size': 0,
-                'geometry': [{'solid': polygon} for polygon in polygons]}}
-
-
-def _circular_opening(geometry):
-    """Return ``((x, y), diameter)`` when the geometry is a true circular opening."""
-    if not isinstance(geometry, Polygon) or geometry.is_empty or geometry.interiors:
-        return None
-
-    xmin, ymin, xmax, ymax = geometry.bounds
-    width = xmax - xmin
-    height = ymax - ymin
-    if width <= 0 or height <= 0:
-        return None
-
-    diameter = (width + height) / 2.0
-    if abs(width - height) > diameter * 0.05:
-        return None
-
-    circle_area = math.pi * (diameter / 2.0) ** 2
-    if circle_area <= 0 or abs(geometry.area - circle_area) > circle_area * 0.05:
-        return None
-
-    return ((xmin + xmax) / 2.0, (ymin + ymax) / 2.0), diameter
 
 
 class ToolPDF(AppTool):
@@ -294,63 +197,10 @@ class ToolPDF(AppTool):
         outname = filename.split('/')[-1].split('\\')[-1] + "_%s" % str(layer_nr)
         ap_dict = _normalize_ap_dict(ap_dict)
 
-        # store the points here until reconstitution:
-        # keys are diameters and values are list of (x,y) coords
-        points = {}
-
         def obj_init(new_obj, app_obj):
-            clear_geo = [geo_el['clear'] for geo_el in ap_dict.get(0, {}).get('geometry', [])
-                         if 'clear' in geo_el]
-
             new_obj.tools = {}
-
-            # First pass: collect true circular openings. White rectangles, lines and
-            # other negative artwork stay clears in their Gerber layer and are not drills.
-            all_holes = []
             units = getattr(self.app, 'app_units', 'MM')
-            tolerance = 0.001 if str(units).upper() == 'MM' else 0.0001
-
-            for geo in clear_geo:
-                opening = _circular_opening(geo)
-                if opening is None:
-                    continue
-
-                center, dia = opening
-                dia = round(dia, 3)
-
-                # Deduplicate by center distance, not by a rounded bucket: equal
-                # PDF coordinates can land on either side of a bucket boundary.
-                for idx, (other_center, other_dia) in enumerate(all_holes):
-                    if math.hypot(center[0] - other_center[0],
-                                  center[1] - other_center[1]) <= tolerance:
-                        if dia < other_dia:
-                            all_holes[idx] = (center, dia)
-                        break
-                else:
-                    all_holes.append((center, dia))
-
-            # An opening that encloses a smaller opening is clearance/antipad
-            # artwork around the real bore, not a drill. Standalone large holes
-            # and adjacent holes are kept.
-            holes = []
-            for center, dia in all_holes:
-                for other_center, other_dia in all_holes:
-                    if other_dia >= dia:
-                        continue
-                    distance = math.hypot(center[0] - other_center[0],
-                                          center[1] - other_center[1])
-                    if distance + other_dia / 2.0 <= dia / 2.0 + tolerance:
-                        break
-                else:
-                    holes.append((center, dia))
-
-            # Group by diameter
-            for center, dia in holes:
-                if dia in points:
-                    points[dia].append(center)
-                else:
-                    points[dia] = [center]
-
+            points = drill_points(ap_dict, units)
             sorted_dia = sorted(points.keys())
 
             name_tool = 0

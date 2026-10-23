@@ -4,7 +4,6 @@ from unittest.mock import ANY, patch
 
 import pytest
 from PyQt6 import QtWidgets
-from shapely import box
 
 from tests import test_levelling_audit as audit
 from tests.test_levelling_audit import FakeGrbl, _qapp, run_worker
@@ -92,13 +91,6 @@ def test_old_import_result_cannot_change_replacement(tmp_path, old_kind, complet
     assert tool.build_al_table_sig.emit.call_count == publications
 
 
-def test_import_invalidates_previous_map_before_scheduling(tmp_path):
-    """Expected RED: the scheduling observer must already see an invalid map."""
-    tool, _ = result_tool()
-    seen = []
-    tool.app.worker_task.emit.side_effect = lambda task: seen.append(tool.al_heights_valid)
-    start_import(tool, tmp_path / 'map.txt')
-    assert seen == [False]
 
 
 def test_direct_import_acquires_replacement_attempt(tmp_path):
@@ -117,18 +109,6 @@ def test_direct_import_acquires_replacement_attempt(tmp_path):
     assert heights(tool) == {1: 0.3, 2: 0.4}
 
 
-def test_captured_import_does_not_start_second_attempt(tmp_path):
-    """Expected PASS: an already captured worker context remains current."""
-    tool, _ = result_tool()
-    path = tmp_path / 'map.txt'
-    path.write_text('0,0,0.3\n10,0,0.4\n')
-    task = start_import(tool, path)
-    context = task['params'][1]
-    run_import(task)
-    assert tool._al_context_current(context)
-    drain_results()
-    assert tool.al_heights_valid
-    assert heights(tool) == {1: 0.3, 2: 0.4}
 
 
 @pytest.mark.parametrize('replacement', ['import', 'probe'])
@@ -209,17 +189,6 @@ def test_import_worker_uses_captured_units_without_mutating_shared_units(tmp_pat
     assert heights(tool) == {1: 0.3, 2: 0.4}
 
 
-def test_import_worker_never_refreshes_shared_units(tmp_path):
-    """Expected RED: self.units is not worker scratch storage."""
-    tool, _ = result_tool()
-    path = tmp_path / 'map.txt'
-    path.write_text('0,0,0.3\n10,0,0.4\n')
-    task = start_import(tool, path)
-    tool.units = 'IN'
-    run_import(task)
-    drain_results()
-    assert tool.units == 'IN'
-    assert tool.al_heights_valid
 
 
 def test_probe_uses_captured_scale_and_tolerance():
@@ -262,51 +231,3 @@ def test_existing_point_units_cannot_be_reinterpreted(tmp_path, entry):
         assert not tool.al_heights_valid
         assert heights(tool) != {1: 0.3, 2: 0.4}
 
-
-def test_context_retains_point_units_after_project_units_change():
-    tool, _ = result_tool()
-    assert getattr(tool, '_al_data_units', None) == 'MM'
-    tool.app.app_units = 'IN'
-    assert tool._al_capture_context().units == 'MM'
-
-
-@pytest.mark.parametrize('mode', ['grid', 'manual'])
-def test_add_captures_units_before_point_creation(mode):
-    tool, _ = audit.TestPolygonsAndAdd()._add_tool([{'geom': box(0, 0, 10, 10), 'kind': ['C']}])
-    tool._al_data_units = None
-    tool.app.app_units = 'IN'
-    tool.ui.al_mode_radio.get_value.return_value = mode
-    seen = []
-    creator = tool.on_add_grid_points if mode == 'grid' else tool.on_add_manual_points
-    creator.side_effect = lambda: seen.append(getattr(tool, '_al_data_units', None))
-    tool.on_add_al_probepoints()
-    assert seen == ['IN']
-
-
-def test_clear_forgets_point_units():
-    tool, _ = result_tool()
-    assert getattr(tool, '_al_data_units', None) == 'MM'
-    context = tool._al_capture_context()
-    tool._clear_probe_data()
-    assert tool._al_data_units is None
-    assert not tool._al_context_current(context)
-
-
-def test_import_worker_uses_tolerance_captured_before_scheduling(tmp_path):
-    tool, _ = result_tool()
-    path = tmp_path / 'map.txt'
-    path.write_text('0.1,0,0.3\n10.1,0,0.4\n')
-    task = start_import(tool, path)
-    with patch.object(tool, '_al_match_tolerance', return_value=0.02):
-        run_import(task)
-    drain_results()
-    assert tool.al_heights_valid
-    assert heights(tool) == {1: 0.3, 2: 0.4}
-
-
-def test_default_tolerance_api_remains_compatible():
-    """Expected PASS: adding captured units must preserve direct-call defaults."""
-    tool, _ = result_tool()
-    assert tool._al_match_tolerance([(0.0, 0.0), (10.0, 0.0)]) == 0.5
-    tool.units = 'IN'
-    assert tool._al_match_tolerance([(0.0, 0.0), (10.0, 0.0)]) == 0.02

@@ -1,4 +1,5 @@
 from tclCommands.TclCommand import TclCommand
+from appPlugins.ToolPaint.PaintGen import PaintGen
 
 import collections
 import math
@@ -227,7 +228,6 @@ class TclCommandPaint(TclCommand):
 
         # Paint all polygons in the painted object
         if self.app.paint_tool.gen is None:
-            from appPlugins.ToolPaint.PaintGen import PaintGen
             self.app.paint_tool.gen = PaintGen(self.app.paint_tool)
         if select == 0:     # 'all' in args
             return self.app.paint_tool.gen.paint_poly_all(obj=obj,

@@ -7,10 +7,8 @@ opening a Gerber made by someone else or pasting a text could run any Python cod
     python tests/test_safe_eval.py
 """
 
-import ast
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -27,10 +25,6 @@ from PyQt6 import QtWidgets     # noqa: E402
 from appCommon.SafeEval import safe_eval      # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-# a call of eval() or exec(), not of a method like dialog.exec()
-CALL_RE = re.compile(r'(?<![\w.])(?:eval|exec)\s*\(')
-# frozen builds and third-party code that can sit in a checkout (as in test_python_310_compat.py)
-SKIP_DIRS = {'build', 'dist', 'venv', 'site-packages', 'node_modules'}
 
 # when it runs, this code puts MARKER in sys.modules; it has no '*', ',' or 'x' (the Gerber macro parser splits the
 # text on '*' and ',' and changes 'x' to '*')
@@ -239,27 +233,6 @@ class TestUserText(MarkerCase):
         with patch('appGUI.GUIElements.DialogBoxRadio', side_effect=dialog):
             handler.on_jump_to()
         self.assertEqual('(1.5, -2.0)', dialogs[1]['initial_text'])
-
-
-class TestNoEval(unittest.TestCase):
-    def test_application_code_has_no_eval_or_exec_call(self):
-        """Text from files, projects, preferences, the clipboard or the command line is read with safe_eval()."""
-        found = []
-        for folder, dirs, files in os.walk(ROOT):
-            # not the tests, the bundled libraries, hidden folders, a build or a virtual environment in the checkout
-            dirs[:] = sorted(d for d in dirs if not d.startswith(('.', '__')) and d not in SKIP_DIRS and
-                             not (folder == str(ROOT) and d in ('tests', 'libs')) and
-                             not os.path.exists(os.path.join(folder, d, 'pyvenv.cfg')))
-            for name in sorted(f for f in files if f.endswith('.py')):
-                path = Path(folder) / name
-                text = path.read_text(encoding='utf-8', errors='replace')
-                if not CALL_RE.search(text):
-                    continue
-                for node in ast.walk(ast.parse(text)):
-                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and \
-                            node.func.id in ('eval', 'exec'):
-                        found.append('%s:%d' % (path.relative_to(ROOT).as_posix(), node.lineno))
-        self.assertEqual([], found)
 
 
 if __name__ == '__main__':

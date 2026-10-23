@@ -1,8 +1,8 @@
+import logging
 
 try:
     from appPlugins.ToolImage import ToolImage
 except ImportError as err:
-    import logging
     logging.getLogger('base').warning("ToolImage plugin could not be loaded: %s", err)
     # ToolImage will be unavailable but app continues
 

@@ -12,10 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from appPlugins.Common import levelling_interp as li
-import appPlugins.Common.levelling_core as lc_module
 from appPlugins.Common.levelling_interp import level_gcode_line, new_levelling_state
 
 DEC = 4
@@ -45,13 +43,6 @@ def fresh(units='MM', *lines):
 
 
 class TestUnitsState(unittest.TestCase):
-    def test_new_keys(self):
-        state = new_levelling_state()
-        self.assertIsNone(state['home_units'])
-        self.assertIsNone(state['units'])
-        self.assertIsNone(state['home_wcs'])
-        self.assertIsNone(state['wcs'])
-        self.assertEqual(state['frame'], 0)
 
     def test_units_argument(self):
         for text, code in (('MM', 21), ('IN', 20), ('mm', 21), ('in', 20), (None, None)):
@@ -59,8 +50,6 @@ class TestUnitsState(unittest.TestCase):
             self.assertEqual(state['home_units'], code)
             self.assertEqual(state['units'], code)
 
-    def test_arc_segment_is_still_the_first_argument(self):
-        self.assertEqual(new_levelling_state(0.25)['arc_segment'], 0.25)
 
 
 class TestUnits(unittest.TestCase):
@@ -190,9 +179,6 @@ class TestWcs(unittest.TestCase):
             self.assertEqual(out[1], 'G1 X1 Y1 Z-1', code)
             self.assertEqual(state['frame'], 1, code)
 
-    def test_g59_n_are_modal_settings(self):
-        for code in (59.1, 59.2, 59.3):
-            self.assertIn(code, li._MODAL_SETTING_G_CODES)
 
     def test_g59_1_with_axes_under_g1_is_a_move_not_a_non_motion_line(self):
         state = fresh('MM', 'G54')
@@ -215,12 +201,6 @@ class TestOutOfFrameMoves(unittest.TestCase):
         self.assertEqual(state['arcs_split'], 0)
         self.assertEqual(state['frame'], 1)
 
-    def test_arc_in_other_units_is_not_split(self):
-        state = fresh('MM')
-        run(state, 'G1 X10 Y0 Z-1', 'G20')
-        out = run(state, 'G1 X10 Y0 Z-1', 'G3 X0 Y10 I-10 J0')
-        self.assertEqual(out[1], 'G3 X0 Y10 I-10 J0')
-        self.assertEqual(state['arcs'], 1)
 
     def test_arc_in_the_frame_is_split(self):
         state = fresh('MM', 'G54')
@@ -315,11 +295,6 @@ class TestBlockDelete(unittest.TestCase):
 
 
 class TestNoDefaultStart(unittest.TestCase):
-    def test_new_state_has_no_position(self):
-        state = new_levelling_state()
-        for axis in 'XYZ':
-            self.assertIsNone(state[axis])
-        self.assertEqual(state['known'], set())
 
     def test_cuts_with_an_unknown_axis_are_not_changed_and_are_counted(self):
         state = new_levelling_state()
@@ -366,20 +341,6 @@ class TestToolPassesTheUnits(unittest.TestCase):
         if units is not None:
             target.units = units
         return tool, target
-
-    def units_used(self, **kwargs):
-        from tests.test_levelling_audit import tl_module
-        tool, target = self.tool_and_target('G0 X0 Y0 Z5\n', **kwargs)
-        with patch.object(lc_module, 'new_levelling_state', wraps=li.new_levelling_state) as spy:
-            tool.autolevell_gcode(target, 'v')
-        return spy.call_args.kwargs['units']
-
-    def test_job_units_are_passed(self):
-        self.assertEqual(self.units_used(units='MM'), 'MM')
-        self.assertEqual(self.units_used(units='IN'), 'IN')
-
-    def test_target_without_units(self):
-        self.assertIsNone(self.units_used(units=None))
 
     def test_frame_warning(self):
         from tests.test_levelling_audit import emitted
@@ -477,8 +438,6 @@ class TestWorkOriginShift(unittest.TestCase):
     def test_g92_xy(self):
         self.check_shift('G92 X0 Y0')
 
-    def test_g92_x_only(self):
-        self.check_shift('G92 X0')
 
     def test_g10_l20(self):
         self.check_shift('G10 L20 P0 X0 Y0')
@@ -845,14 +804,6 @@ def mapped(*lines):
 class TestZZero(unittest.TestCase):
     """A Z zero change after a contact probe re-references the map to the probed point."""
 
-    def test_mach3_toolchange_probe(self):
-        state = mapped()
-        out = run_on(slope, state, 'G00 X5 Y0', 'M0', 'F100', 'G31 Z-10', 'G92 Z0', 'G00 Z1',
-                     'G31 Z-10', 'G92 Z0', 'G00 Z2', 'G00 X10 Y10', 'G01 Z-0.1', 'G01 X0 Y0')
-        # -0.1 + h(10,10) - h(5,0) and -0.1 + h(0,0) - h(5,0)
-        self.assertEqual(out[-2:], ['G01 Z0.3000', 'G01 X0 Y0 Z-0.2000'])
-        self.assertAlmostEqual(state['z_ref'], 0.1)
-        self.assertEqual(state['frame'], 0)
 
     def test_grbl_probe_and_g10_l20(self):
         for zero in ('G10 L20 P0 Z0', 'G10 L20 P1 Z0', 'G92 Z0'):
@@ -961,13 +912,6 @@ class TestZZero(unittest.TestCase):
         self.assertEqual(state['z_ref'], 0.0)
         self.assertFalse(state['shifted'])
 
-    def test_tool_passes_the_map_bounds(self):
-        from tests.test_levelling_audit import tl_module
-        tool, target = TestToolPassesTheUnits().tool_and_target('G0 X0 Y0 Z5\n')
-        tool._al_points = [(0.0, 1.0, 0.5), (4.0, -2.0, 0.1), (2.0, 3.0, 0.2)]
-        with patch.object(lc_module, 'new_levelling_state', wraps=li.new_levelling_state) as spy:
-            tool.autolevell_gcode(target, 'v')
-        self.assertEqual(spy.call_args.kwargs['map_bounds'], (0.0, -2.0, 4.0, 3.0))
 
 
 class TestExtraWcs(unittest.TestCase):

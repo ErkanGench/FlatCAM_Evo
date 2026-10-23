@@ -1,16 +1,10 @@
-"""NccGen: the Gerber normalization (4 places) now goes through fused_solid(); old versus new on the unify fixtures.
-
-TestLegacy pins what the old expressions did (it passes on the code before the change too). TestNew checks the
-new helper ``ncc_gerber_copper`` against them.
-"""
+"""NccGen: the Gerber normalization goes through fused_solid()."""
 
 import pytest
 import shapely
 from shapely.geometry import MultiPolygon, Polygon
 
-from fused_consumer_cases import (
-    area_diff, case_geometries, legacy_ncc_clip, legacy_ncc_iso, legacy_ncc_rest_clip, legacy_ncc_rest_iso, outcome,
-)
+from fused_consumer_cases import area_diff, case_geometries
 from tests.helpers_objects import app, gerber, _headless_qt  # noqa: F401,E402
 
 CASES = ['mixed_dark_clear_dark', 'overlapping_list', 'self_intersecting', 'single_polygon', 'multipolygon']

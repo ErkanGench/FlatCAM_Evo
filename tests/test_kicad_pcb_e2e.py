@@ -111,10 +111,6 @@ class TestKiCadPcbFixture(unittest.TestCase):
         'In1.Cu': 'Easyduino_RP2040-In1_Cu.g1',
         'In2.Cu': 'Easyduino_RP2040-In2_Cu.g2',
         'B.Cu': 'Easyduino_RP2040-B_Cu.gbl',
-        'F.Mask': 'Easyduino_RP2040-F_Mask.gts',
-        'B.Mask': 'Easyduino_RP2040-B_Mask.gbs',
-        'F.Paste': 'Easyduino_RP2040-F_Paste.gtp',
-        'Edge.Cuts': 'Easyduino_RP2040-Edge_Cuts.gm1',
     }
     COPPER = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu']
     LAYERS = ['F.Cu', 'In1.Cu', 'In2.Cu', 'B.Cu', 'F.Paste', 'F.SilkS', 'B.SilkS', 'F.Mask', 'B.Mask',

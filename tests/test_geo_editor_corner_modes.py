@@ -1,5 +1,4 @@
 """Corner (bend) modes of the Geometry Editor Path/Polygon tools and the function shared with the Gerber Editor."""
-import inspect
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -7,10 +6,10 @@ import pytest
 from PyQt6 import QtCore, QtWidgets
 from shapely.geometry import LineString, LinearRing
 
-from appEditors.appGeoEditor import AppGeoEditor, FCPath, FCPolygon, bend_corner_point
+from appEditors.appGeoEditor import FCPath, FCPolygon, bend_corner_point
 from appEditors.appGerberEditor import RegionEditorGrb, TrackEditorGrb
-from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message, BEND_MODE_FREE
-from tests.test_geo_editor_input import input_tool, dispatch
+from appEditors.editor_corner import corner_point, next_bend_mode
+from tests.test_geo_editor_input import input_tool
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -174,16 +173,6 @@ def click_all(tool, *clicks):
         tool.click(point)
 
 
-def test_editor_default_corner_mode_is_free_angle():
-    # the attribute is created by AppGeoEditor.__init__; check the default without building the whole editor
-    assert 'self.bend_mode = BEND_MODE_FREE' in inspect.getsource(AppGeoEditor.__init__)
-    assert BEND_MODE_FREE == 5
-    # a tool on an editor without the attribute behaves as the free angle mode
-    assert bend_corner_point(SimpleNamespace(), (0.0, 0.0), (5.0, 2.0)) is None
-
-
-
-
 def test_path_mode_1_click_adds_corner_and_point():
     editor, tool = path_tool(1)
     click_all(tool, (0.0, 0.0), (5.0, 2.0))
@@ -283,3 +272,5 @@ def test_polygon_backspace_removes_the_corner_with_its_point(mode):
     assert tool.points == [(0.0, 0.0)]
 
 
+def test_a_tool_on_an_editor_without_a_corner_mode_bends_as_the_free_angle():
+    assert bend_corner_point(SimpleNamespace(), (0.0, 0.0), (5.0, 2.0)) is None

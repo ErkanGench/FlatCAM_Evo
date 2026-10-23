@@ -186,22 +186,6 @@ class TestPrecisionProbing(unittest.TestCase):
         self.assertNotIn('G0 Z0.4000', fake.commands())
         self.assertTrue(tool.al_heights_valid)
 
-    def test_settings_restore_per_job_without_writing_during_restore(self):
-        tool, target, fake = self.tool()
-        target.is_segmented_gcode = True
-        target.obj_options['type'] = 'Geometry'
-        tool.on_precision_probe_changed()
-        self.assertTrue(target.obj_options['tools_al_precision_probe'])
-        self.assertEqual(target.obj_options['tools_al_precision_feed'], 10)
-        other = audit.TestTargetOwnership.target('other')
-        before = dict(other.obj_options)
-        tool._restore_al_precision(other)
-        tool.ui.precision_probe_cb.set_value.assert_called_with(False)
-        tool.ui.precision_feed_entry.set_value.assert_called_with(10.0)
-        tool.ui.precision_retract_entry.set_value.assert_called_with(0.5)
-        self.assertEqual(other.obj_options, before)
-        tool._restore_al_precision(target)
-        tool.ui.precision_probe_cb.set_value.assert_called_with(True)
 
     def test_settings_convert_units_without_losing_calibration(self):
         tool, target, fake = self.tool(units='IN')

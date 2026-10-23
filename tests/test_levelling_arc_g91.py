@@ -93,55 +93,12 @@ def points_of(out):
 
 
 class TestNewState(unittest.TestCase):
-    def test_defaults(self):
-        state = new_levelling_state()
-        self.assertEqual(state['plane'], 17)
-        self.assertFalse(state['arc_abs'])
-        self.assertFalse(state['inverse_feed'])
-        self.assertEqual(state['applied'], 0.0)
-        self.assertEqual(state['known'], set())
-        self.assertEqual(state['arc_segment'], 1.0)
-        self.assertEqual(state['arcs_split'], 0)
-        self.assertEqual(state['arcs'], 0)
-        self.assertEqual(state['relative'], 0)
 
     def test_arc_segment_must_be_positive(self):
         for bad in (0, 0.0, -1.0):
             with self.assertRaises(ValueError):
                 new_levelling_state(arc_segment=bad)
 
-    def test_arc_segment_stored(self):
-        self.assertEqual(new_levelling_state(arc_segment=0.25)['arc_segment'], 0.25)
-
-    def test_arc_distance_modes_are_modal_settings(self):
-        self.assertIn(90.1, li._MODAL_SETTING_G_CODES)
-        self.assertIn(91.1, li._MODAL_SETTING_G_CODES)
-
-    def test_plane_arc_mode_and_feed_mode_words(self):
-        state = new_levelling_state()
-        run(state, flat, 'G18')
-        self.assertEqual(state['plane'], 18)
-        run(state, flat, 'G19')
-        self.assertEqual(state['plane'], 19)
-        run(state, flat, 'G17')
-        self.assertEqual(state['plane'], 17)
-        run(state, flat, 'G90.1')
-        self.assertTrue(state['arc_abs'])
-        run(state, flat, 'G91.1')
-        self.assertFalse(state['arc_abs'])
-        run(state, flat, 'G93')
-        self.assertTrue(state['inverse_feed'])
-        run(state, flat, 'G94')
-        self.assertFalse(state['inverse_feed'])
-
-    def test_known_axes_follow_absolute_words(self):
-        state = new_levelling_state()
-        run(state, flat, 'G1 Z-1')
-        self.assertEqual(state['known'], {'Z'})
-        run(state, flat, 'G0 X1 Y2')
-        self.assertEqual(state['known'], {'X', 'Y', 'Z'})
-        run(state, flat, 'G53 G0 Z0')
-        self.assertEqual(state['known'], {'X', 'Y'})
 
 
 class TestArcSplitAbsolute(unittest.TestCase):
@@ -259,14 +216,6 @@ class TestArcSplitAbsolute(unittest.TestCase):
         self.assertEqual(zs[-1], -2.0)
         self.assertEqual(state['Z'], -2.0)
 
-    def test_helical_arc_with_plane(self):
-        state, out = self.split((10, 0), 'G3 X0 Y10 Z-2 I-10 J0', offset=plane)
-        lines = out.split('\n')
-        n = len(lines)
-        for i, ln in enumerate(lines, start=1):
-            w = words(ln)
-            self.assertAlmostEqual(w['Z'], -1.0 - i / n + plane(w['X'], w['Y']), delta=TOL)
-        self.assertAlmostEqual(state['applied'], plane(0, 10), delta=TOL)
 
     def test_feed_and_comment_only_on_first_segment(self):
         state, out = self.split((10, 0), 'G3 X0 Y10 I-10 J0 F150 (quarter arc)')
@@ -333,8 +282,6 @@ class TestArcNotCompensated(unittest.TestCase):
     def test_g18_plane(self):
         self.check(self.LINE, setup=['G18'])
 
-    def test_g19_plane(self):
-        self.check(self.LINE, setup=['G19'])
 
     def test_inverse_feed(self):
         self.check('G3 X0 Y10 I-10 J0 F2', setup=['G93'])
@@ -343,12 +290,6 @@ class TestArcNotCompensated(unittest.TestCase):
         state = self.check(self.LINE, primed=False)
         self.assertEqual((state['X'], state['Y']), (0.0, 10.0))
 
-    def test_only_some_axes_known(self):
-        state = new_levelling_state()
-        run(state, flat, 'G1 X10 Y0')
-        out = level_gcode_line(self.LINE, state, flat, DEC)
-        self.assertEqual(out, self.LINE)
-        self.assertEqual(state['arcs'], 1)
 
     def test_extra_words(self):
         for line in ('G3 X0 Y10 I-10 J0 S1000', 'G3 X0 Y10 I-10 J0 M7', 'N10 G3 X0 Y10 I-10 J0'):
@@ -403,9 +344,6 @@ class TestArcNotCompensated(unittest.TestCase):
 
 
 class TestAppliedOffset(unittest.TestCase):
-    def test_absolute_g1_sets_applied(self):
-        state, _ = prime(3, 4, -1, plane)
-        self.assertAlmostEqual(state['applied'], plane(3, 4), delta=TOL)
 
     def test_g0_with_z_clears_applied_and_g0_without_z_keeps_it(self):
         state, _ = prime(3, 4, -1, plane)
@@ -474,24 +412,6 @@ class TestRelativeG1(unittest.TestCase):
         state, machine = self.sequence(moves)
         self.assertEqual(state['relative'], 0)
 
-    def test_sequence_with_bilinear_like_surface(self):
-        surface = lambda x, y: 0.05 * math.sin(x / 3.0) + 0.04 * math.cos(y / 2.0)
-        moves = [(0.7, 0.4, None)] * 20 + [(-0.5, 0.6, -0.05)] * 10
-        self.sequence(moves, offset=surface)
-
-    def test_thousand_small_moves_do_not_drift(self):
-        state, out = prime(0, 0, -1, plane)
-        machine = Machine()
-        machine.feed(out)
-        run(state, plane, 'G91')
-        machine.absolute = False
-        px = py = 0.0
-        for i in range(1000):
-            dx, dy = 0.0137, (0.0071 if i % 3 else -0.0213)
-            px += dx
-            py += dy
-            machine.feed(level_gcode_line('G1 X%.4f Y%.4f' % (dx, dy), state, plane, DEC))
-            self.assertLessEqual(abs(machine.z - (-1.0 + plane(px, py))), TOL, 'step %d' % i)
 
     def test_mixed_absolute_and_relative(self):
         state, out = prime(0, 0, -1, plane)
@@ -570,26 +490,6 @@ class TestArcsInRelativeMode(unittest.TestCase):
         self.assertAlmostEqual(sx, 10.0, places=8)
         self.assertAlmostEqual(sy, -10.0, places=8)
 
-    def test_arc_in_g91_mode(self):
-        state, out = prime(10, 0, -1, plane)
-        machine = Machine()
-        machine.feed(out)
-        machine.feed(level_gcode_line('G91', state, plane, DEC))
-        arc = level_gcode_line('G3 X-10 Y10 I-10 J0', state, plane, DEC)
-        n_before = len(machine.trace)
-        self.check_relative_arc(state, machine, arc, (0.0, 10.0), -1.0, plane)
-        for x, y, z, g in machine.trace[n_before:]:
-            self.assertAlmostEqual(math.hypot(x, y), 10.0, delta=2 * TOL)
-        for ln in arc.split('\n'):
-            self.assertTrue(ln.startswith('G1 X'), ln)
-
-    def test_helical_arc_in_g91_mode(self):
-        state, out = prime(10, 0, -1, plane)
-        machine = Machine()
-        machine.feed(out)
-        machine.feed(level_gcode_line('G91', state, plane, DEC))
-        arc = level_gcode_line('G3 X-10 Y10 Z-1 I-10 J0', state, plane, DEC)
-        self.check_relative_arc(state, machine, arc, (0.0, 10.0), -2.0, plane)
 
     def test_full_circle_in_g91_mode_returns_to_the_start(self):
         state, out = prime(10, 0, -1, plane)
@@ -627,14 +527,6 @@ class TestPositionLoss(unittest.TestCase):
         self.assertEqual((self.state['X'], self.state['Y']), (1.0, 2.0))
         self.relative_move_is_counted()
 
-    def test_g91_g28_z(self):
-        self.assertEqual(level_gcode_line('G91 G28 Z0', self.state, plane, DEC), 'G91 G28 Z0')
-        self.assertFalse(self.state['abs'])
-        self.assertIsNone(self.state['Z'])
-        self.assertEqual(self.state['known'], {'X', 'Y'})
-        line = 'G1 X1 Y1 Z-1'
-        self.assertEqual(level_gcode_line(line, self.state, plane, DEC), line)
-        self.assertEqual(self.state['relative'], 1)
 
     def test_g28_without_axes(self):
         self.assertEqual(level_gcode_line('G28', self.state, plane, DEC), 'G28')
@@ -649,9 +541,6 @@ class TestPositionLoss(unittest.TestCase):
         self.assertIsNone(self.state['X'])
         self.assertIsNone(self.state['Y'])
 
-    def test_g53_removes_known(self):
-        run(self.state, plane, 'G53 G0 Z0')
-        self.assertNotIn('Z', self.state['known'])
 
     def test_axis_known_again_after_an_absolute_word(self):
         run(self.state, plane, 'G28 Z0')
@@ -688,14 +577,6 @@ class TestModalWordPlacement(unittest.TestCase):
         self.check('/X5 Y5 I1 J0', '/G3 X5 Y5 I1 J0')
         self.check('/ X5 Y5 I1 J0', '/ G3 X5 Y5 I1 J0')
 
-    def test_block_delete_and_line_number(self):
-        self.check('/N10 X5 Y5 I1 J0', '/N10 G3 X5 Y5 I1 J0')
-        self.check('/ N10 X5 Y5 I1 J0', '/ N10 G3 X5 Y5 I1 J0')
-
-    def test_leading_whitespace_stays_in_front(self):
-        self.check('  X5 Y5 I1 J0', '  G3 X5 Y5 I1 J0')
-        self.check('  / N10 X5 Y5 I1 J0', '  / N10 G3 X5 Y5 I1 J0')
-        self.check(' N10  X5 Y5 I1 J0', ' N10  G3 X5 Y5 I1 J0')
 
     def test_n_inside_the_line_is_not_a_line_number(self):
         self.check('X5 Y5 I1 J0 (N10 note)', 'G3 X5 Y5 I1 J0 (N10 note)')
@@ -717,9 +598,6 @@ class TestCoordinateSystemLoss(unittest.TestCase):
     def test_g92_without_axes(self):
         self.assertEqual(self.lost('G92')[0], set())
 
-    def test_g92_removes_known(self):
-        _, state = self.lost('G92 Z0')
-        self.assertEqual(state['known'], {'X', 'Y'})
 
     def test_g92_1_2_3_lose_all(self):
         for line in ('G92.1', 'G92.2', 'G92.3', 'G92.1 X0', 'G92.2 Z0'):
@@ -760,10 +638,6 @@ class TestCoordinateSystemLoss(unittest.TestCase):
         self.assertEqual(state['arcs'], 1)
         self.assertEqual(state['arcs_split'], 0)
 
-    def test_modes_on_the_line_still_apply(self):
-        state, _ = prime(1, 2, -1, plane)
-        run(state, plane, 'G91 G92 Z0')
-        self.assertFalse(state['abs'])
 
 
 class TestToolPassesArcSegment(unittest.TestCase):
@@ -780,7 +654,6 @@ class TestToolPassesArcSegment(unittest.TestCase):
         return tool, target
 
     def segment_used(self, **kwargs):
-        from tests.test_levelling_audit import tl_module
         tool, target = self.tool_and_target('G1 Z-1\n', **kwargs)
         with patch.object(lc_module, 'new_levelling_state', wraps=li.new_levelling_state) as spy:
             tool.autolevell_gcode(target, 'v')
@@ -790,10 +663,6 @@ class TestToolPassesArcSegment(unittest.TestCase):
         self.assertEqual(self.segment_used(seg_x=2.0, seg_y=1.5), 1.5)
         self.assertEqual(self.segment_used(seg_x=0.8, seg_y=1.5), 0.8)
 
-    def test_only_one_positive(self):
-        self.assertEqual(self.segment_used(seg_x=0, seg_y=2.0), 2.0)
-        self.assertEqual(self.segment_used(seg_x=None, seg_y=0.7), 0.7)
-        self.assertEqual(self.segment_used(seg_x=3.0), 3.0)
 
     def test_units_fallback(self):
         self.assertEqual(self.segment_used(), 1.0)

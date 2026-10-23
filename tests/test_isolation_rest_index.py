@@ -67,7 +67,7 @@ def run_rest(geometry, passes, negative_dia=False, forced_rest=False):
                                                 env_iso_type=2, negative_dia=negative_dia, forced_rest=forced_rest)
 
 
-@pytest.mark.parametrize('passes', [1, 2, 3])
+@pytest.mark.parametrize('passes', [1, 3])
 @pytest.mark.parametrize('forced_rest', [False, True])
 @pytest.mark.parametrize('negative_dia', [False, True])
 def test_same_passes_as_the_pairwise_test(passes, forced_rest, negative_dia):

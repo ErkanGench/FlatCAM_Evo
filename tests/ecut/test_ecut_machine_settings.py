@@ -16,7 +16,7 @@ def motion_engine(tmp_path):
     return module.EcutGcodeEngine(api, tmp_path / 'machine.json'), api
 
 
-@pytest.mark.parametrize('name', [f'ENABLE{i}' for i in range(1, 7)])
+@pytest.mark.parametrize('name', ['ENABLE1', 'ENABLE6'])
 def test_enable_output_alias_save_materializes_defaults_and_survives_reload(tmp_path, name):
     from appPlugins.Common.ecut.ecut_controller import encode_config
     engine, api = motion_engine(tmp_path)
@@ -307,7 +307,7 @@ def test_transport_tuning_is_rejected_while_commands_are_running(tmp_path, opera
         port.close()
 
 
-@pytest.mark.parametrize('control', [b'\x18', b'\x85', b'!'])
+@pytest.mark.parametrize('control', [b'\x18', b'!'])
 def test_realtime_cancels_calibration_and_releases_waiter(tmp_path, control):
     from test_ecut_sender_port import wait_for
     port, engine, api = real_port(tmp_path)

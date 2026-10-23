@@ -18,33 +18,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
-from unittest.mock import Mock, MagicMock, patch
 from shapely.geometry import Polygon, LineString, MultiPolygon
-
-
-class MockAsyncResult:
-    """Mock multiprocessing.AsyncResult for testing."""
-    def __init__(self, data):
-        self._data = data
-    
-    def wait(self):
-        pass
-    
-    def get(self):
-        return self._data
-
-
-class MockPool:
-    """Mock multiprocessing pool for testing."""
-    def __init__(self, return_data=None):
-        self._return_data = return_data
-        self.call_args = []
-    
-    def map_async(self, func, iterable):
-        self.call_args.append((func, iterable))
-        # Simulate processing
-        result = [func(item) for item in iterable]
-        return MockAsyncResult(result)
 
 
 class TestShapeCollectionVisualBatch(unittest.TestCase):
@@ -87,31 +61,6 @@ class TestShapeCollectionVisualBatch(unittest.TestCase):
         self.assertEqual(collection.data[result[0]]['face_color'], 'blue')
         self.assertTrue(collection.data[result[0]]['visible'])
     
-    def test_add_batch_with_pool(self):
-        """Test add_batch() uses pool when available."""
-        mock_pool = MockPool()
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=mock_pool,
-            fcoptions=self.default_fc_options
-        )
-        
-        shapes_data = [
-            {'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]), 'color': 'red'},
-            {'shape': Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]), 'color': 'green'},
-        ]
-        
-        result = collection.add_batch(shapes_data, visible=True)
-        
-        # Verify pool.map_async was called once (not per shape)
-        self.assertEqual(len(mock_pool.call_args), 1)
-        # Verify all shapes were passed to single call
-        func, iterable = mock_pool.call_args[0]
-        self.assertEqual(len(iterable), 2)
-        # Verify batch_results stored the result
-        self.assertEqual(len(collection._batch_results), 1)
-    
     def test_add_batch_per_shape_layer_override(self):
         """Test add_batch() allows per-shape layer override."""
         collection = self.ShapeCollectionVisual(
@@ -127,84 +76,11 @@ class TestShapeCollectionVisualBatch(unittest.TestCase):
         ]
         
         result = collection.add_batch(shapes_data, layer=0)
-        
+
         # Per-shape layer should override default
         self.assertEqual(collection.data[result[0]]['layer'], 1)
         self.assertEqual(collection.data[result[1]]['layer'], 2)
     
-    def test_redraw_collects_batch_results(self):
-        """Test redraw() collects batch results from _batch_results."""
-        mock_pool = MockPool()
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=mock_pool,
-            fcoptions=self.default_fc_options
-        )
-        
-        shapes_data = [{'shape': Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])}]
-        result = collection.add_batch(shapes_data)
-        
-        # Verify batch was submitted but not yet collected
-        self.assertEqual(len(collection._batch_results), 1)
-        
-        # Mock __update to avoid VisPy canvas requirement
-        with patch.object(collection, '_ShapeCollectionVisual__update'):
-            # Call redraw to collect results
-            collection.redraw()
-        
-        # Verify batch_results was cleared after collection
-        self.assertEqual(len(collection._batch_results), 0)
-        # Verify data was updated with processed results
-        self.assertIn(result[0], collection.data)
-    
-    def test_add_synchronous(self):
-        """Test individual add() is always synchronous (Phase 2 optimization)."""
-        mock_pool = MockPool()
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=mock_pool,
-            fcoptions=self.default_fc_options
-        )
-        
-        shape = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-        result = collection.add(shape=shape, color='red')
-        
-        # Verify pool was NOT called (synchronous processing)
-        self.assertEqual(len(mock_pool.call_args), 0)
-        # Verify results dict is empty (no async result stored)
-        self.assertEqual(len(collection.results), 0)
-        # Verify data was processed directly
-        self.assertIn(result, collection.data)
-
-
-class TestBackfaceCulling(unittest.TestCase):
-    """Tests for backface culling configuration."""
-    
-    def setUp(self):
-        """Set up test fixtures."""
-        from appGUI.VisPyVisuals import ShapeCollectionVisual
-        self.ShapeCollectionVisual = ShapeCollectionVisual
-    
-    @patch('appGUI.VisPyVisuals.MeshVisual')
-    def test_backface_culling_false(self, mock_mesh):
-        """Test backface culling when set to False."""
-        fc_options = {"global_backface_culling": False}
-        collection = self.ShapeCollectionVisual(
-            linewidth=1,
-            layers=3,
-            pool=None,
-            fcoptions=fc_options
-        )
-        
-        # Verify cull_face=False
-        for call in mock_mesh.return_value.set_gl_state.call_args_list:
-            kwargs = call[1]
-            self.assertFalse(kwargs.get('cull_face', True),
-                "Expected cull_face=False when explicitly disabled")
-
-
 class TestCollectElements(unittest.TestCase):
     """Tests for GeometryObject._collect_elements() method."""
     

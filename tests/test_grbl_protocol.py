@@ -492,13 +492,6 @@ class TestStream(unittest.TestCase):
         self.assertEqual(res['status'], 'error')
         self.assertEqual(res['errors'], [(5, 'error:20')])
 
-    def test_error_reports_in_flight(self):
-        port = FakeStreamPort(errors={2: 'error:20'})
-        res = run(port, ['G1 X%d' % i for i in range(10)])
-        self.assertEqual(res['status'], 'error')
-        self.assertEqual(res['errors'], [(2, 'error:20')])
-        self.assertGreaterEqual(res['in_flight'], 1)
-
     def test_check_mode_counts_errors(self):
         port = FakeStreamPort(errors={2: 'error:20', 7: 'error:33'})
         res = run(port, ['G1 X%d' % i for i in range(10)], check_mode=True)

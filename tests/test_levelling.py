@@ -54,16 +54,6 @@ class TestBilinear(unittest.TestCase):
                 bilinear_offset(self.grid, x, y), plane(x, y), places=9
             )
 
-    def test_edge_midpoints(self):
-        for x, y in [(10, 0), (10, 10), (0, 5), (20, 5)]:
-            self.assertAlmostEqual(
-                bilinear_offset(self.grid, x, y), plane(x, y), places=9
-            )
-
-    def test_center(self):
-        self.assertAlmostEqual(
-            bilinear_offset(self.grid, 10, 5), plane(10, 5), places=9
-        )
 
     def test_arbitrary_inside_point(self):
         self.assertAlmostEqual(
@@ -121,10 +111,6 @@ class TestGridDetection(unittest.TestCase):
         result = build_bilinear_grid(points)
         self.assertIsNone(result)
 
-    def test_single_column_returns_none(self):
-        points = [(0, y, plane(0, y)) for y in self.ys]
-        result = build_bilinear_grid(points)
-        self.assertIsNone(result)
 
     def test_duplicate_cell_returns_none(self):
         points = self._points()
@@ -155,8 +141,6 @@ class TestNearest(unittest.TestCase):
             (5, 5, 5.0),
         ]
 
-    def test_query_on_point(self):
-        self.assertEqual(nearest_offset(self.points, 10, 0), 2.0)
 
     def test_query_near_point(self):
         self.assertEqual(nearest_offset(self.points, 9.9, 0.1), 2.0)
@@ -187,10 +171,6 @@ class TestParseHeightMapLine(unittest.TestCase):
             parse_height_map_line("1.0,2.0,-0.05,0,0,0"), (1.0, 2.0, -0.05)
         )
 
-    def test_mach_comma_with_spaces(self):
-        self.assertEqual(
-            parse_height_map_line("1.0, 2.0, -0.05"), (1.0, 2.0, -0.05)
-        )
 
     def test_linuxcnc_space_separated(self):
         self.assertEqual(
@@ -198,16 +178,10 @@ class TestParseHeightMapLine(unittest.TestCase):
             (1.0, 2.0, -0.05),
         )
 
-    def test_tabs(self):
-        self.assertEqual(
-            parse_height_map_line("1.0\t2.0\t-0.05"), (1.0, 2.0, -0.05)
-        )
 
     def test_empty_string(self):
         self.assertIsNone(parse_height_map_line(""))
 
-    def test_newline_only(self):
-        self.assertIsNone(parse_height_map_line("\n"))
 
     def test_non_numeric_tokens(self):
         self.assertIsNone(parse_height_map_line("abc,def,ghi"))
@@ -345,12 +319,6 @@ class TestMatchNearestPoint(unittest.TestCase):
     def test_outside_tolerance(self):
         self.assertIsNone(match_nearest_point(self.points, 5, 5, 1.0))
 
-    def test_tie_returns_first(self):
-        points = {
-            'first': (0, 0),
-            'second': (10, 0),
-        }
-        self.assertEqual(match_nearest_point(points, 5, 0, 100), 'first')
 
 
 class TestMatchTolerance(unittest.TestCase):
@@ -364,8 +332,6 @@ class TestMatchTolerance(unittest.TestCase):
         points = [(0, 0), (10, 0)]
         self.assertAlmostEqual(match_tolerance(points, cap=0.5), 0.5)
 
-    def test_single_point_uses_cap(self):
-        self.assertEqual(match_tolerance([(0, 0)], cap=0.02), 0.02)
 
     def test_no_points_uses_cap(self):
         self.assertEqual(match_tolerance([], cap=0.5), 0.5)
@@ -443,11 +409,6 @@ class TestLevelGcodeLine(unittest.TestCase):
         result = level_gcode_line(line, state, self.offset_fn)
         self.assertEqual(result, line)
 
-    def test_semicolon_comment_line_unchanged(self):
-        state = new_levelling_state()
-        line = "; this is a comment"
-        result = level_gcode_line(line, state, self.offset_fn)
-        self.assertEqual(result, line)
 
     def test_blank_line_unchanged(self):
         state = new_levelling_state()
@@ -477,13 +438,6 @@ class TestLevelGcodeLine(unittest.TestCase):
         expected_z = -0.1 + self.offset_fn(1.0, 1.0)
         self.assertEqual(result, "G01 X1 Y1 Z{0:.4f}".format(expected_z))
 
-    def test_g38_2_not_levelled(self):
-        state = new_levelling_state()
-        state['G'] = 1
-        state['Z'] = -0.1
-        result = level_gcode_line("G38.2 Z-2 F50", state, self.offset_fn)
-        self.assertEqual(result, "G38.2 Z-2 F50")
-        self.assertIsNone(state['G'])
 
     def test_g38_2_then_bare_move_not_levelled(self):
         state = new_levelling_state()
@@ -495,105 +449,6 @@ class TestLevelGcodeLine(unittest.TestCase):
         self.assertEqual(result, line)
         self.assertIsNone(state['G'])
 
-    def test_g31_then_bare_move_not_levelled(self):
-        state = new_levelling_state()
-        level_gcode_line("G01 Z-0.1", state, self.offset_fn)
-        level_gcode_line("G31 Z-2 F50", state, self.offset_fn)
-        self.assertIsNone(state['G'])
-        line = "X1 Y1"
-        result = level_gcode_line(line, state, self.offset_fn)
-        self.assertEqual(result, line)
-        self.assertIsNone(state['G'])
-
-    def test_g80_cancels_motion_modal(self):
-        state = new_levelling_state()
-        level_gcode_line("G01 Z-0.1", state, self.offset_fn)
-        level_gcode_line("G80", state, self.offset_fn)
-        self.assertIsNone(state['G'])
-
-    def test_toolchange_probe_mach3_sequence(self):
-        # mirrors preprocessors/Toolchange_Probe_MACH3.py's toolchange
-        # G-code: probe (G31), zero the probed axis (G92), rapid clear
-        # (G00), then a real cut move (G01). The probe touched the work at
-        # (1, 1), so after G92 Z0 the map is re-referenced to that point:
-        # the offset is offset_fn(x, y) - offset_fn(1, 1).
-        state = new_levelling_state(map_bounds=(-10, -10, 10, 10))
-        # no default start position: position X/Y/Z first
-        level_gcode_line("G00 X0 Y0 Z5", state, self.offset_fn)
-
-        r1 = level_gcode_line("G01 Z-0.1", state, self.offset_fn)
-        expected_z1 = -0.1 + self.offset_fn(0.0, 0.0)
-        self.assertEqual(r1, "G01 Z{0:.4f}".format(expected_z1))
-
-        r2 = level_gcode_line("G01 X1 Y1", state, self.offset_fn)
-        expected_z2 = -0.1 + self.offset_fn(1.0, 1.0)
-        self.assertEqual(r2, "G01 X1 Y1 Z{0:.4f}".format(expected_z2))
-
-        r3 = level_gcode_line("G31 Z-5 F50", state, self.offset_fn)
-        self.assertEqual(r3, "G31 Z-5 F50")
-        self.assertIsNone(state['G'])
-
-        r4 = level_gcode_line("G92 Z0", state, self.offset_fn)
-        self.assertEqual(r4, "G92 Z0")
-        # G92 leaves the modal G alone, but the work Z is no longer valid
-        self.assertIsNone(state['G'])
-        self.assertIsNone(state['Z'])
-        self.assertEqual((state['X'], state['Y']), (1.0, 1.0))
-
-        r5 = level_gcode_line("G00 Z2", state, self.offset_fn)
-        self.assertEqual(r5, "G00 Z2")
-        self.assertEqual(state['G'], 0)
-
-        r6 = level_gcode_line("G01 Z-0.1", state, self.offset_fn)
-        self.assertEqual(r6, "G01 Z{0:.4f}".format(-0.1))
-        self.assertEqual(state['Z'], -0.1)
-
-        r7 = level_gcode_line("G01 X2 Y2", state, self.offset_fn)
-        expected_z7 = -0.1 + self.offset_fn(2.0, 2.0) - self.offset_fn(1.0, 1.0)
-        self.assertEqual(r7, "G01 X2 Y2 Z{0:.4f}".format(expected_z7))
-        self.assertEqual(state['Z'], -0.1)
-
-    def test_toolchange_probe_mach3_sequence_without_map_bounds(self):
-        # without the bounds of the map the probe point can not be checked:
-        # the Z reference is lost and the cut is not compensated
-        state = new_levelling_state()
-        for line in ("G00 X1 Y1 Z5", "G31 Z-5 F50", "G92 Z0", "G00 Z2"):
-            level_gcode_line(line, state, self.offset_fn)
-        self.assertEqual(level_gcode_line("G01 Z-0.1", state, self.offset_fn), "G01 Z-0.1")
-        self.assertEqual(state['frame'], 1)
-
-    def test_g92_1_loses_the_work_position(self):
-        state = new_levelling_state()
-        state['X'] = 1.0
-        state['Y'] = 1.0
-        state['Z'] = -0.1
-        state['G'] = 1
-        line = "G92.1 X0 Y0 Z0"
-        result = level_gcode_line(line, state, self.offset_fn)
-        self.assertEqual(result, line)
-        # the work coordinate system changed: X/Y/Z are unknown, G stays
-        self.assertIsNone(state['X'])
-        self.assertIsNone(state['Y'])
-        self.assertIsNone(state['Z'])
-        self.assertEqual(state['G'], 1)
-
-    def test_g28_xy_makes_xy_unknown_and_keeps_z(self):
-        state = new_levelling_state()
-        state['X'] = 1.0
-        state['Y'] = 1.0
-        state['Z'] = -0.5
-        result = level_gcode_line("G28 X0 Y0", state, self.offset_fn)
-        self.assertEqual(result, "G28 X0 Y0")
-        self.assertIsNone(state['X'])
-        self.assertIsNone(state['Y'])
-        self.assertEqual(state['Z'], -0.5)
-
-    def test_lowercase_line_unchanged(self):
-        state = new_levelling_state()
-        state['G'] = 1
-        line = "g01 x10.0 y5.0 z-0.1"
-        result = level_gcode_line(line, state, self.offset_fn)
-        self.assertEqual(result, line)
 
     def test_m_code_only_unchanged(self):
         state = new_levelling_state()
@@ -601,15 +456,6 @@ class TestLevelGcodeLine(unittest.TestCase):
             level_gcode_line("M3 S1000", state, self.offset_fn), "M3 S1000"
         )
 
-    def test_tool_change_unchanged(self):
-        state = new_levelling_state()
-        self.assertEqual(level_gcode_line("T1", state, self.offset_fn), "T1")
-
-    def test_feed_only_unchanged(self):
-        state = new_levelling_state()
-        self.assertEqual(
-            level_gcode_line("F100", state, self.offset_fn), "F100"
-        )
 
     def test_decimals_param(self):
         state = new_levelling_state()

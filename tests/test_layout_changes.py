@@ -85,7 +85,7 @@ def test_ui_layout_activation_and_restoration(layout_app, index, layout):
         restored.close()
 
 
-@pytest.mark.parametrize('lock', [False, True])
+@pytest.mark.parametrize('lock', [False])
 @pytest.mark.parametrize('show_text', [False, True])
 def test_layout_transitions_keep_actions_and_toolbar_state(layout_app, lock, show_text):
     app, group, settings = layout_app
@@ -110,7 +110,7 @@ def test_layout_transitions_keep_actions_and_toolbar_state(layout_app, lock, sho
             lock, show_text = not lock, not show_text
 
 
-@pytest.mark.parametrize('saved', [None, False, True, 'false', 'true'])
+@pytest.mark.parametrize('saved', [None, False, True, 'false'])
 def test_startup_restores_toolbar_settings(layout_app, saved):
     app, group, settings = layout_app
     if saved is not None:

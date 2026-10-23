@@ -25,10 +25,7 @@ import logging
 from copy import deepcopy
 import numpy as np
 import sys
-try:
-    from numpy import Inf
-except ImportError:
-    from numpy import inf as Inf    # noqa
+from numpy import inf as Inf    # noqa
 
 from shapely import Polygon
 

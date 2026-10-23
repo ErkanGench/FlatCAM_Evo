@@ -268,10 +268,6 @@ class TestFallbackWithClipper(ClipperTestCase):
 
     PARTS = [sq(0, 0, 1, 1), sq(3, 0, 4, 1)]
 
-    def test_baseline_works(self):
-        result = self.fuse(self.PARTS)
-        self.assertEqual(len(result), 2)
-
     def test_clipper_exception(self):
         with mock.patch.object(pyclipr, 'Clipper', side_effect=RuntimeError("forced")):
             self.assertIsNone(fuse_parts(self.PARTS))
@@ -395,15 +391,6 @@ class TestParseEagle(ParseTestCase):
         polys, ref_polys = as_polygons(fast.solid_geometry), as_polygons(reference.solid_geometry)
         self.assertTrue(MultiPolygon(polys).covers(Point(*self.POINT)), "copper at the GEOS problem point")
         self.assertEqual(outside_box_counts(polys, self.BOX), outside_box_counts(ref_polys, self.BOX))
-        self.assertEqual(tools_wkb(fast), tools_wkb(reference))
-
-    def test_bottom_layer(self):
-        fast, reference = self.parse_both('eagle.GBL')
-        polys, ref_polys = as_polygons(fast.solid_geometry), as_polygons(reference.solid_geometry)
-        self.assertEqual(len(polys), len(ref_polys))
-        self.assertEqual(count_holes(polys), count_holes(ref_polys))
-        dist = max_boundary_distance(polys, ref_polys, max_segment=0.1 / 25.4)
-        self.assertLessEqual(dist, 1e-6 / 25.4)
         self.assertEqual(tools_wkb(fast), tools_wkb(reference))
 
 

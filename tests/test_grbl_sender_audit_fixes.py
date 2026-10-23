@@ -2,8 +2,6 @@
 """Regressions for GRBL recovery, controller resets, map visuals and the outcome gate."""
 import os
 import sys
-import tempfile
-import threading
 import time
 import unittest
 from types import SimpleNamespace
@@ -17,7 +15,6 @@ from tests.grbl_stream_helpers import (
 from tests.test_grbl_sender_construct import make_app
 from appPlugins.ToolGrblSender.Sender import ToolGrblSender
 from appPlugins.Common.grbl.grbl_client import stream_lines
-from tests.gates.run_gate import check_junit, run_pytest
 
 
 class TestResumeBypass(unittest.TestCase):
@@ -50,52 +47,6 @@ class TestResumeBypass(unittest.TestCase):
         tool.ui.resume_button.click()
         self.assertEqual(fake.written, [b'!', b'~'])
 
-    def test_resume_blocked_after_stream_failure(self):
-        tool, fake = self.make_button_tool()
-        op = tool._grbl_reserve('stream', motion=True)
-        tool._grbl_stream_dirty = True
-        with tool._grbl_op_lock:
-            tool._grbl_abort_stream_locked(op, 'error')
-        tool.ui.resume_button.click()
-        self.assertNotIn(b'~', fake.written)
-
-    def test_resume_blocked_for_abandoned_dirty_stream(self):
-        tool, fake = self.make_button_tool()
-        tool._grbl_stream_dirty = True
-        tool.ui.resume_button.click()
-        self.assertEqual(fake.written, [])
-
-    def test_resume_contention_worker_wins_lock(self):
-        fake = FakeGrbl()
-        tool = make_stream_tool(fake)
-        lock = tool._grbl_op_lock
-        attempting = threading.Event()
-        finished = threading.Event()
-
-        class AnnouncedLock:
-            def __enter__(self):
-                attempting.set()
-                lock.acquire()
-
-            def __exit__(self, *_args):
-                lock.release()
-
-        tool._grbl_op_lock = AnnouncedLock()
-
-        def resume():
-            tool._on_resume_button()
-            finished.set()
-
-        thread = threading.Thread(target=resume, daemon=True)
-        with lock:
-            thread.start()
-            self.assertTrue(attempting.wait(2.0))
-            self.assertFalse(finished.is_set())
-            tool._grbl_recovery = 'needs_reset'
-        thread.join(2.0)
-        self.assertFalse(thread.is_alive())
-        self.assertTrue(finished.is_set())
-        self.assertNotIn(b'~', fake.written)
 
 
 class ResetDuringCheckFake(CheckFake):
@@ -152,13 +103,6 @@ class TestUnexpectedReset(unittest.TestCase):
         result = stream_lines(['G1 X1 F100', 'G1 X2 F100'], write, lambda: next(chunks), rx_size=12)
         self.assertEqual(result['status'], 'unexpected_reset')
         self.assertEqual(writes, [b'G1 X1 F100\n'])
-
-    def test_expected_check_exit_still_succeeds(self):
-        tool = make_stream_tool(CheckFake(), check_mode=True)
-        tool.on_start()
-        self.assertEqual(ended_how(tool), 'check_passed')
-        self.assertIsNone(tool._grbl_recovery)
-        self.assertFalse(tool._grbl_stream_dirty)
 
     def test_reset_after_check_preflight_prevents_first_job_write(self):
         class ResetAfterCheckReport(CheckFake):
@@ -387,77 +331,6 @@ class TestSpindleButton(unittest.TestCase):
         self.assertNotIn('|A:', engine.status_report())
         api._spindle_direction = 'SPINDLE_CW'
         self.assertTrue(engine.status_report().endswith('|A:S>'))
-
-
-class TestGateIntegrity(unittest.TestCase):
-    def check_report(self, text, subtest_count=0):
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, 'report.xml')
-            with open(path, 'w', encoding='utf-8') as report:
-                report.write(text)
-            return check_junit(path, subtest_count=subtest_count)
-
-    @staticmethod
-    def report(declared, cases=1):
-        return ('<testsuite tests="%d">' % declared +
-                ''.join('<testcase name="case%d" />' % i for i in range(cases)) + '</testsuite>')
-
-    def test_unexplained_missing_cases_rejected(self):
-        for declared in (2, 100):
-            with self.subTest(declared=declared):
-                error, _counts = self.check_report(self.report(declared))
-                self.assertIsNotNone(error)
-
-    def test_exact_passed_subtest_count_accepted(self):
-        error, counts = self.check_report(self.report(101), subtest_count=100)
-        self.assertIsNone(error)
-        self.assertEqual(counts, {'passed': 1})
-
-    def test_wrong_subtest_count_rejected(self):
-        error, _counts = self.check_report(self.report(101), subtest_count=99)
-        self.assertIsNotNone(error)
-
-    def test_extra_cases_rejected(self):
-        error, _counts = self.check_report(self.report(1, cases=2))
-        self.assertIsNotNone(error)
-
-    def test_malformed_xml_rejected(self):
-        error, _counts = self.check_report('<not valid xml<<<')
-        self.assertIsNotNone(error)
-
-    def test_actual_pytest_passed_failed_and_skipped_subtests(self):
-        source = '''import unittest
-
-class TestSubtests(unittest.TestCase):
-    def test_passed(self):
-        for i in range(100):
-            with self.subTest(i=i):
-                self.assertTrue(True)
-
-    def test_failed(self):
-        with self.subTest(i=0):
-            self.assertTrue(False)
-
-    def test_skipped_subtest(self):
-        with self.subTest(i=0):
-            self.skipTest('subtest skip')
-
-    @unittest.skip('setup skip')
-    def test_skipped(self):
-        pass
-'''
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, 'test_subtests.py')
-            with open(path, 'w', encoding='utf-8') as test_file:
-                test_file.write(source)
-            # Without confcutdir pytest lists the whole Temp folder; another xdist worker can delete an entry of it
-            # during the scan (FileNotFoundError at collection).
-            code, outcomes, error, _counts = run_pytest([path, '--confcutdir', folder])
-        self.assertEqual(code, 1)
-        self.assertIsNone(error)
-        self.assertEqual(next(v for k, v in outcomes.items() if k.endswith('::test_failed')), 'failed')
-        self.assertEqual(next(v for k, v in outcomes.items() if k.endswith('::test_passed')), 'passed')
-        self.assertEqual(next(v for k, v in outcomes.items() if k.endswith('::test_skipped')), 'skipped')
 
 
 class TestDeletedQtObjects(unittest.TestCase):

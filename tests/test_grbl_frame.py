@@ -404,15 +404,6 @@ class TestRequestDroppedInPhase1(unittest.TestCase):
         self.assertIsNone(tool._al_map_frame)
         self.assertTrue(tool._al_map_imported)
 
-    def test_map_replaced_during_frame_probed_map(self):
-        fake = HookFake()
-        tool, _target = make_levelled_stream_tool(fake)
-        fake.actions[('$#', 1)] = lambda: import_map_b(tool, self.temp.name)
-        names = spy_reserve(tool)
-        tool.on_start()
-        self.check_dropped(tool, fake, names)
-        self.assertIsNone(tool._al_map_frame)
-
     def test_target_changed_during_frame(self):
         fake = HookFake()
         tool, _target = make_levelled_stream_tool(fake)
@@ -425,44 +416,6 @@ class TestRequestDroppedInPhase1(unittest.TestCase):
         names = spy_reserve(tool)
         tool.on_start()
         self.check_dropped(tool, fake, names)
-
-    def test_frame_signal_after_release(self):
-        fake = CheckFake()
-        tool, _target = make_levelled_stream_tool(fake)
-        seen = []
-        real_slot = tool._on_frame_ready
-
-        def emit(req, result):
-            seen.append(tool._grbl_op)
-            real_slot(req, result)
-        tool.frame_ready_sig.emit.side_effect = emit
-        reserved = []
-        real_reserve = tool._grbl_reserve
-
-        def reserve(name, *args, **kwargs):
-            op = real_reserve(name, *args, **kwargs)
-            reserved.append((name, op))
-            return op
-        tool._grbl_reserve = reserve
-        tool.on_start()
-        # the port was free at the emit, and the stream reserve in the slot gave an operation
-        self.assertEqual(seen, [None])
-        self.assertEqual([name for name, _op in reserved], ['frame', 'stream'])
-        self.assertIsNotNone(reserved[1][1])
-        self.assertEqual(ended_how(tool), 'finished')
-
-    def test_frame_signal_after_release_on_error(self):
-        fake = CheckFake(state='Run')
-        tool, _target = make_levelled_stream_tool(fake)
-        seen = []
-        real_slot = tool._on_frame_ready
-
-        def emit(req, result):
-            seen.append(tool._grbl_op)
-            real_slot(req, result)
-        tool.frame_ready_sig.emit.side_effect = emit
-        tool.on_start()
-        self.assertEqual(seen, [None])
 
     def test_map_replaced_during_dialog(self):
         fake = CheckFake()

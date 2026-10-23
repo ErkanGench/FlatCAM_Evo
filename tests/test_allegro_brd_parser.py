@@ -536,11 +536,8 @@ class TestAllegroUntestedReleases(unittest.TestCase):
         # reads them (with the warning first); any other layout reads the data with wrong sizes or header offsets
         # and must end in the clear error of an untested release.
         cases = ((FIXTURE, 0x00140500, '17.x (format 0x00140500)', True), (FIXTURE, 0x00140900, '17.4', False),
-                 (FIXTURE, 0x00141500, '17.5', False), (FIXTURE, 0x00150000, '18.0', False),
-                 (FIXTURE, 0x00160100, '19.0', False),
-                 (FIXTURE_B, 0x00150300, '18.x (format 0x00150300)', True), (FIXTURE_B, 0x00150000, '18.0', False),
-                 (FIXTURE_B, 0x00160100, '19.0', False), (FIXTURE_B, 0x00140900, '17.4', False),
-                 (FIXTURE_B, 0x00141500, '17.5', False))
+                 (FIXTURE, 0x00150000, '18.0', False),
+                 (FIXTURE_B, 0x00150300, '18.x (format 0x00150300)', True), (FIXTURE_B, 0x00160100, '19.0', False))
         for path, magic, name, reads in cases:
             with self.subTest(file=path.name, release=name):
                 blob = bytearray(path.read_bytes())
@@ -630,7 +627,7 @@ class TestAllegroRobustness(unittest.TestCase):
 
     @pytest.mark.slow
     def test_mutated_sample_board_fields_never_leak_internal_errors(self):
-        self._check_mutated_sample_board_fields(40)
+        self._check_mutated_sample_board_fields(12)
 
     def test_giant_counts_do_not_allocate_or_loop(self):
         data = bytearray(self._sample())

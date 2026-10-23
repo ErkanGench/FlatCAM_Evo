@@ -215,10 +215,7 @@ class TestAllegro181Board(FixtureCase):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         cls.app = _app()
         cls.parsed = AllegroBrdParser(app=cls.app).parse_file(BOARD_B)
-        cls.all_films = {path.name: cls.read_film(path) for path in sorted(FILMS_B_DIR.glob('*.art'))}
-        # the copper films are in all_films too: each film is parsed and fused 1 time
-        cls.films = {name: cls.all_films[film] if film in cls.all_films else cls.read_film(FILMS_B_DIR / film)
-                     for name, film in FILMS_B.items()}
+        cls.films = {name: cls.read_film(FILMS_B_DIR / film) for name, film in FILMS_B.items()}
 
     def test_copper_matches_the_four_copper_films(self):
         for name in FILMS_B:

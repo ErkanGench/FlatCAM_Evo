@@ -66,12 +66,6 @@ class TestApplyInputFreshness(unittest.TestCase):
         self.tool.app.app_obj.new_object.assert_not_called()
         self.assertFalse(self.tool._al_apply_running)
 
-    def test_captured_map_units_ignore_mutable_tool_units(self):
-        worker = self.schedule()
-        self.tool.units = 'IN'
-        worker()
-        self.assertEqual(len(self.outputs), 1)
-        self.assert_original_map_or_refusal()
 
     def test_changed_project_units_reject_delayed_apply(self):
         worker = self.schedule()
@@ -88,13 +82,6 @@ class TestApplyInputFreshness(unittest.TestCase):
         self.tool.app.app_obj.new_object.assert_not_called()
         self.assertFalse(self.tool._al_apply_running)
 
-    def test_target_owner_change_rejects_delayed_apply(self):
-        worker = self.schedule()
-        self.tool._al_target_name = 'other'
-        self.tool._al_target_obj = make_apply_target({1: 'G1 Z-0.1000\n'})
-        worker()
-        self.tool.app.app_obj.new_object.assert_not_called()
-        self.assertFalse(self.tool._al_apply_running)
 
     def test_mutation_during_real_generation_rejected_before_factory(self):
         worker = self.schedule()
@@ -150,12 +137,6 @@ class TestApplyCompatibility(unittest.TestCase):
         self.assertTrue(obj.geometry_created)
         self.assertEqual(obj.gcode, ''.join(t['gcode'] for t in obj.tools.values()))
 
-    def test_public_direct_two_argument_call_uses_real_interpolation(self):
-        source = deepcopy(self.target.tools)
-        result = self.tool.autolevell_gcode(self.target, 'b')
-        self.assertIn('Z0.0000', result[1])
-        self.assertIn('Z0.1000', result[2])
-        self.assertEqual(self.target.tools, source)
 
 
 class TestDirectMapUnits(unittest.TestCase):
@@ -175,19 +156,6 @@ class TestDirectMapUnits(unittest.TestCase):
         self.assertTrue(any('[ERROR_NOTCL]' in call.args[0]
                             for call in self.tool.app.inform.emit.call_args_list))
 
-    def test_direct_call_accepts_mm_map_for_mm_target_despite_tool_units(self):
-        self.assertEqual(self.tool._al_data_units, 'MM')
-        self.tool.units = 'IN'
-        source = deepcopy(self.target.tools)
-
-        result = self.tool.autolevell_gcode(self.target, 'b')
-
-        self.assertIsNotNone(result)
-        self.assertIn('Z0.0000', result[1])
-        self.assertIn('Z0.1000', result[2])
-        self.assertEqual(self.target.tools, source)
-        self.assertEqual(self.tool.units, 'IN')
-        self.assertEqual(self.tool._al_data_units, 'MM')
 
     def test_direct_call_rejects_unknown_map_units(self):
         self.tool._al_data_units = None

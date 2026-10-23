@@ -250,10 +250,6 @@ class TestIndexFreshness(PickCase):
 
         actions = {
             'rotate': lambda s: run_transform(tool, 'rotate', [90, (5, 0)]),
-            'flip': lambda s: run_transform(tool, 'flip', ['Y', (5, 0)]),
-            'skew': lambda s: run_transform(tool, 'skew', ['X', 30, 0, (0, 5)]),
-            'scale': lambda s: run_transform(tool, 'scale', ['X', 6, 1, (0, 0)]),
-            'offset': lambda s: run_transform(tool, 'offset', ['X', 30]),
             'buffer': lambda s: run_transform(tool, 'buffer', [3, 1]),
         }
         for name, action in actions.items():

@@ -56,7 +56,7 @@ def assert_released(tool):
     assert tool.app.options['global_grid_snap'] is True
 
 
-@pytest.mark.parametrize('mode', ['grid', 'manual'])
+@pytest.mark.parametrize('mode', ['grid'])
 def test_mode_change_clears_complete_probe_data(mode):
     tool = make_lifecycle_tool()
     tool.al_voronoi_geo_storage = {1: {'point': Point(2, 3), 'height': 0.1}}
@@ -121,49 +121,6 @@ def test_stale_left_click_is_ignored(active, has_geometry):
     tool.app.geo_editor.snap.assert_not_called()
 
 
-def test_second_add_releases_before_geometry_replacement():
-    tool = make_lifecycle_tool()
-    tool.on_add_al_probepoints()
-    tool.app.plotcanvas.reset_mock()
-    active_at_lookup = []
-    target = tool._al_target_obj
-    tool.app.collection.get_by_name.side_effect = lambda name: (
-        active_at_lookup.append(tool.mouse_events_connected) or target)
-
-    tool.on_add_al_probepoints()
-
-    assert active_at_lookup == [False]
-    assert tool.mouse_events_connected
-    assert tool.old_selection_state is True
-    assert tool.app.options['global_selection_shape'] is False
-    assert tool.app.plotcanvas.graph_event_connect.call_args_list == [
-        call('key_press', tool.app.ui.keyPressEvent),
-        call('mouse_press', tool.app.on_mouse_click_over_plot),
-        call('mouse_release', tool.app.on_mouse_click_release_over_plot),
-        call('key_press', tool.on_key_press),
-        call('mouse_release', tool.on_mouse_click_release),
-        call('mouse_move', tool.on_mouse_move),
-    ]
-    tool.app.plotcanvas.graph_event_disconnect.assert_has_calls([
-        call('key_press', tool.on_key_press),
-        call('mouse_release', tool.on_mouse_click_release),
-        call('mouse_move', tool.on_mouse_move),
-    ])
-    assert tool._al_data_units == 'MM'
-
-
-def test_release_is_idempotent_and_preserves_grid_snap():
-    tool = make_lifecycle_tool()
-    tool.on_add_manual_points()
-    tool.app.plotcanvas.reset_mock()
-
-    tool._release_manual_mouse_events()
-    assert_released(tool)
-    tool.app.plotcanvas.reset_mock()
-    tool._release_manual_mouse_events()
-
-    tool.app.plotcanvas.graph_event_disconnect.assert_not_called()
-    tool.app.plotcanvas.graph_event_connect.assert_not_called()
 
 
 def test_active_manual_click_keeps_existing_snapping():

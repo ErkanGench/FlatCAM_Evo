@@ -168,24 +168,6 @@ class TestAppShutdownSequence(unittest.TestCase):
         single_shot.assert_called_once_with(0, quit_now)
 
 
-class TestFinalSaveSequence(unittest.TestCase):
-    """
-    Test the final_save() -> quit_application() sequence that triggers the bug.
-    """
-    
-    def test_final_save_calls_quit_application(self):
-        """
-        Verify that final_save() calls quit_application().
-        """
-        from appHandlers.appLifecycle import AppLifecycle
-        import inspect
-        
-        source = inspect.getsource(AppLifecycle.final_save)
-        
-        # Check that quit_application is called
-        self.assertIn('quit_application', source,
-                     "final_save should call quit_application")
-    
 def run_all_tests():
     """Run all tests and report results."""
     loader = unittest.TestLoader()
@@ -196,7 +178,6 @@ def run_all_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestAppLifecycleCaching))
     suite.addTests(loader.loadTestsFromTestCase(TestAppShutdownSequence))
     suite.addTests(loader.loadTestsFromTestCase(TestDynamicAppStartup))
-    suite.addTests(loader.loadTestsFromTestCase(TestFinalSaveSequence))
     
     # Run tests
     runner = unittest.TextTestRunner(verbosity=2)

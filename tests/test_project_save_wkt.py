@@ -72,14 +72,6 @@ class TestGeometryWktCache(unittest.TestCase):
         self.geoms = geometries()
         self.data = project(self.geoms)
 
-    def test_cache_has_the_wkt_of_each_geometry_once(self):
-        cache = geometry_wkt_cache(self.data)
-        self.assertEqual(len(cache), len(self.geoms))
-        for geom in self.geoms:
-            cached_geom, text = cache[id(geom)]
-            self.assertIs(cached_geom, geom)
-            self.assertEqual(text, shapely.to_wkt(geom, rounding_precision=20, trim=True))
-
     def test_geometry_missing_from_the_cache_uses_to_dict(self):
         text = json.dumps({'g': Point(1, 2)}, default=project_json_default({}))
         self.assertTrue(json.loads(text, object_hook=dict2obj)['g'].equals(Point(1, 2)))

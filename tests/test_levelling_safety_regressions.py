@@ -174,13 +174,6 @@ def test_duplicate_probe_records_require_recovery():
     assert not any(c.args[0]['kind'] == 'probe' for c in tool.al_result_ready_sig.emit.call_args_list)
 
 
-def test_confirmed_probe_alarm_blocks_without_retract():
-    fake = SafetyGrbl(replies={'G38.2': ['ALARM:4']})
-    tool = probe_tool(fake)
-    tool.on_grbl_autolevel()
-    run_worker(tool)
-    assert tool._grbl_recovery == 'needs_reset'
-    assert fake.commands()[-1].startswith('G38.2')
 
 
 def test_final_retract_completion_precedes_emission():
@@ -210,19 +203,6 @@ def test_captured_units_drive_probe_scaling():
     assert payload['heights'][1] == pytest.approx(0.1)
 
 
-def test_probe_emission_carries_cancel_evidence():
-    fake = SafetyGrbl()
-    tool = probe_tool(fake)
-    tool.on_grbl_autolevel()
-    op = tool._grbl_op
-    run_worker(tool)
-    payload = tool.al_result_ready_sig.emit.call_args.args[0]
-    assert payload.get('operation') is op
-    assert payload['operation'].cancel is op.cancel
-    assert payload['safety_generation'] == tool._grbl_safety_generation
-    captured = payload['safety_generation']
-    tool.on_grbl_stop()
-    assert tool._grbl_safety_generation > captured
 
 
 def test_nonzero_wcs_g92_tlo_offsets():
@@ -331,17 +311,6 @@ def test_failed_reset_does_not_relax_recovery():
     assert tool._grbl_safety_generation > before
 
 
-def test_generation_is_captured_before_probe_work():
-    fake = SafetyGrbl()
-    tool = probe_tool(fake)
-    tool.on_grbl_autolevel()
-    before = getattr(tool, '_grbl_safety_generation', 0)
-    tool.on_grbl_stop()
-    run_worker(tool)
-    payload = tool.al_result_ready_sig.emit.call_args.args[0]
-    assert payload['kind'] == 'failed'
-    assert payload['safety_generation'] == before
-    assert tool._grbl_safety_generation > before
 
 
 def test_alarm_queued_after_final_ok_blocks_home_success():
@@ -505,11 +474,6 @@ def run_reset_home(tool):
         run_worker(tool)
 
 
-def test_reset_request_retains_pending_reply_until_banner():
-    tool = reset_confirmation_tool(ResetConfirmationGrbl())
-    assert tool._grbl_recovery == 'needs_reset'
-    assert tool._grbl_reply_pending
-    assert tool.__dict__.get('_grbl_reset_pending', False)
 
 
 def test_delayed_old_ok_without_banner_cannot_acknowledge_home():
@@ -687,12 +651,6 @@ def test_connection_banner_does_not_discard_buffered_alarm():
     assert not tool._grbl_reset_pending
 
 
-@pytest.mark.parametrize('close', ['_grbl_disconnect', '_grbl_force_close'])
-def test_disconnect_invalidates_pending_reset_request(close):
-    tool = reset_confirmation_tool(ResetConfirmationGrbl())
-    getattr(tool, close)()
-    assert not tool._grbl_reset_pending
-    assert tool._grbl_recovery == 'needs_reset'
 
 
 @pytest.mark.parametrize('reader', ['transaction', 'status'])

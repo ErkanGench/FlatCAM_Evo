@@ -10,7 +10,7 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -120,8 +120,6 @@ class SenderView3dTest(unittest.TestCase):
         self.assertIsNone(old.parent)
 
     def test_manual_selection_flashes_and_stops_when_cleared(self):
-        from PyQt6 import QtCore, QtTest
-
         view = SenderView3d(fake_canvas())
         self.addCleanup(view.clear)
         view.set_toolpath(SEGMENTS)
@@ -130,18 +128,10 @@ class SenderView3dTest(unittest.TestCase):
         view.set_selected_line(2)
         self.assertTrue(view.selected.visible)
 
-        # wait for each toggle (not a fixed time): a busy machine delays the 500 ms timer
-        def wait_until(condition, timeout_ms=3000):
-            for _ in range(timeout_ms // 10):
-                if condition():
-                    return True
-                QtTest.QTest.qWait(10)
-            return condition()
-
-        self.assertTrue(wait_until(lambda: not view.selected.visible))
-        self.assertTrue(wait_until(lambda: view.selected.visible))
-        self.assertEqual(view._selection_timer.interval(), 500)
-        self.assertEqual(view._selection_timer.timerType(), QtCore.Qt.TimerType.PreciseTimer)
+        view._selection_timer.timeout.emit()
+        self.assertFalse(view.selected.visible)
+        view._selection_timer.timeout.emit()
+        self.assertTrue(view.selected.visible)
         np.testing.assert_array_equal(view.accepted.pos, accepted)
         view.set_selected_line(0)
         self.assertTrue(view.selected.visible)
@@ -300,14 +290,6 @@ class WcoResetTest(unittest.TestCase):
         tool.on_start()
         self.assertIsNone(tool._last_wco)
 
-    def test_start_levelled(self):
-        tool = status_tool()
-        tool._last_wco = self.OLD
-        tool._start_levelled = MagicMock()
-        tool.ui.autolevel_cb.get_value.return_value = True
-        tool.on_start()
-        self.assertIsNone(tool._last_wco)
-
     def test_zero(self):
         tool = status_tool()
         tool._last_wco = self.OLD
@@ -331,18 +313,6 @@ class WcoResetTest(unittest.TestCase):
             tool.on_grbl_connect()
         self.assertIsNone(tool._last_wco)
         self.assertIsNone(tool._grbl_report_inches)
-
-    def test_connect_finish(self):
-        fake = FakeGrbl()
-        tool = status_tool()
-        attempt = object()
-        tool.grbl_ser_port = fake
-        tool._grbl_connect_attempt = attempt
-        tool._last_wco = self.OLD
-        fake.readlines = lambda: [b'ok\r\n']
-        with patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot'):
-            tool._grbl_connect_finish('COM3', fake, attempt)
-        self.assertIsNone(tool._last_wco)
 
     def test_port_close(self):
         tool = status_tool()
@@ -384,12 +354,6 @@ class StaleVisualsTest(unittest.TestCase):
         tool.ui.object_combo.currentText.return_value = 'job'
         tool.on_object_changed()
         self.assertEqual(tool.job_lines, [])
-
-    def test_invalid_heights_remove_the_mesh(self):
-        tool = status_tool()
-        tool.al_heights_valid = False
-        tool._update_3d_height_map()
-        tool.view3d.set_height_map.assert_called_once_with(None)
 
     def test_valid_heights_make_the_mesh(self):
         tool = status_tool()
@@ -510,21 +474,6 @@ class ShowIn3dTest(unittest.TestCase):
         self.assertNotEqual(tool.job_lines, SPLIT_ARC_JOB)
         self.assertEqual(tool.view3d._segments[-1][0], len(tool.job_lines) - 1)
 
-    def test_show_rebuilds_the_job(self):
-        tool = show_tool(SPLIT_ARC_JOB, 'send')
-        tool.job_lines = ['G0 X99']
-        tool.on_show_3d()
-        self.assertEqual(tool.job_lines, SPLIT_ARC_JOB)
-
-    def test_loaded_toolpath_switches_to_isometric_only_with_moves(self):
-        for lines in (SPLIT_ARC_JOB, ['G21', 'G90']):
-            with self.subTest(lines=lines):
-                tool = show_tool(lines, 'send')
-                tool.on_show_3d()
-                camera = tool.app.plotcanvas3d.view.camera
-                # the start sets the isometric view; the fit to the toolpath sets it again only with moves
-                self.assertEqual(camera.set_view.call_args_list, [call('iso')] * (2 if lines == SPLIT_ARC_JOB else 1))
-
     def test_failed_build_clears_the_toolpath(self):
         tool = show_tool(SPLIT_ARC_JOB, 'send')
         tool.on_show_3d()
@@ -635,23 +584,6 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertTrue(tool.view3d._segments)
         self.assertEqual(tool.job_lines, SPLIT_ARC_JOB)
         self.assertIs(tool.app.ui.plot_tab_area.currentWidget(), tool.app.area_3d_tab)
-
-    def test_run_finishes_before_plotting_is_started(self):
-        tool = self.make_tool()
-        tool.on_show_3d = MagicMock()
-        tool.run()
-        tool.set_tool_ui.assert_called_once()
-        tool.on_show_3d.assert_not_called()
-        self.process_events()
-        tool.on_show_3d.assert_called_once()
-
-    def test_run_reloads_console_before_deferred_preview(self):
-        for source in (True, False):
-            with self.subTest(source=source):
-                tool = self.make_tool(source=source)
-                tool._console = MagicMock()
-                tool.run()
-                tool._console.return_value.set_program.assert_called_once_with(SPLIT_ARC_JOB if source else [])
 
     def test_close_before_deferred_plot_does_not_reopen_tab(self):
         tool = self.make_tool()

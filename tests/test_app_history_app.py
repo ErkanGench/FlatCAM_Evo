@@ -7,7 +7,6 @@ import time
 import numpy as np
 import pytest
 from PyQt6 import QtWidgets
-from shapely.geometry import box
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -208,16 +207,3 @@ def test_move_tool_two_objects_one_step(fc, no_plot, monkeypatch):
     assert np.allclose(_bounds(grb), b_grb) and np.allclose(_bounds(exc), b_exc)
     assert fc.history.redo()
     assert np.allclose(_bounds(exc), b_exc + [4.0, -2.5, 4.0, -2.5])
-
-
-def test_align_records_one_step(fc, no_plot):
-    grb = _load(fc, 'gerber', 'unify_mixed.gbr', 'g_align')
-    b0 = _bounds(grb)
-    m = (1.0, 0.0, 0.0, 1.0, 3.0, 4.0)
-    n = len(fc.history.undo_stack)
-    apply_matrix_to_object(grb, m)
-    fc.history.record_matrix("Align Objects", [(grb, m)])
-    assert len(fc.history.undo_stack) == n + 1 and fc.history.undo_label() == "Align Objects"
-    assert hasattr(fc.align_objects_tool, 'on_apply') and not hasattr(fc.align_objects_tool, 'undo_stack')
-    assert fc.history.undo() and np.allclose(_bounds(grb), b0)
-

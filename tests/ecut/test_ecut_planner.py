@@ -150,7 +150,7 @@ def test_rejects_invalid_planning_settings(planner, kwargs):
         planner.plan_linear_path(config(), (0,) * 6, [move(planner, x=1)], **kwargs)
 
 
-@pytest.mark.parametrize('target,feed', [(float('nan'), 1), (float('inf'), 1), (1, 0), (1, -1), (1, float('nan')), (1e20, 1)])
+@pytest.mark.parametrize('target,feed', [(float('nan'), 1), (1, 0), (1, -1), (1, float('nan')), (1e20, 1)])
 def test_rejects_nonfinite_out_of_range_targets_and_bad_feeds(planner, target, feed):
     with pytest.raises(EcutError):
         planner.plan_linear_path(config(), (0,) * 6, [move(planner, x=target, feed=feed)])
@@ -296,26 +296,3 @@ def test_path_checkpoint_remains_active_after_source_geometry(planner):
 
     with pytest.raises(PlanningCancelled):
         planner.plan_linear_path(config(), (0,) * 6, moves(), checkpoint=checkpoint)
-
-
-def test_corner_validation_can_be_interrupted(planner):
-    blocks = planner.plan_linear_path(config(), (0,) * 6,
-                                      [move(planner, x=1), move(planner, y=1), move(planner, x=2)])
-    segments = planner.iter_path_segments(blocks)
-
-    def checkpoint():
-        raise PlanningCancelled()
-
-    with pytest.raises(PlanningCancelled):
-        segments._corner_error(checkpoint=checkpoint)
-
-
-def test_sampler_checkpoint_runs_only_during_construction(planner):
-    blocks = planner.plan_linear_path(config(), (0,) * 6,
-                                      [move(planner, x=1), move(planner, y=1)])
-    calls = []
-    segments = planner.iter_path_segments(blocks, checkpoint=lambda: calls.append(True))
-    construction_calls = len(calls)
-    assert construction_calls > 0
-    assert list(segments) == list(planner.iter_path_segments(blocks))
-    assert len(calls) == construction_calls

@@ -1,4 +1,5 @@
 """Gerber.rotate / scale / skew / mirror / offset use one vectorized affine call; compare with shapely.affinity."""
+import copy
 import os
 import sys
 import unittest
@@ -69,9 +70,10 @@ def all_structures(g):
 class TestGerberTransforms(unittest.TestCase):
     def test_equivalence_with_shapely_affinity(self):
         for path in SAMPLES:
+            parsed = load(path)
             for name, (op, ref) in OPS.items():
                 with self.subTest(sample=os.path.basename(path), op=name):
-                    g = load(path)
+                    g = copy.deepcopy(parsed)
                     expected = [ref_map(s, ref) for s in all_structures(g)]
                     self.assertIsNone(op(g))
                     for got, exp in zip(all_structures(g), expected):

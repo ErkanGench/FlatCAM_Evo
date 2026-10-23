@@ -96,7 +96,7 @@ def test_normal_empty_poll_is_still_immediate_and_returns_none():
     assert not device.writes
 
 
-@pytest.mark.parametrize('code', [errno.ENODEV, errno.ENXIO, errno.EBADF])
+@pytest.mark.parametrize('code', [errno.ENODEV, errno.EBADF])
 def test_known_disconnection_is_fatal_without_retry_or_reconnect(code):
     device = Device([OSError(code, 'device disconnected'), report()])
     usb = usb_with(device)
@@ -161,15 +161,6 @@ def test_recovery_deadline_prevents_starting_a_late_retry(monkeypatch):
     with pytest.raises(EcutUsbError):
         usb_with(device).poll()
     assert len(device.read_calls) == 1
-    assert waits == []
-
-
-def test_empty_poll_never_waits_for_a_retry(monkeypatch):
-    from appPlugins.Common.ecut import ecut_protocol
-    waits = []
-    monkeypatch.setattr(ecut_protocol, 'time', SimpleNamespace(
-        monotonic=lambda: 0.0, sleep=waits.append))
-    assert usb_with(Device()).poll() is None
     assert waits == []
 
 

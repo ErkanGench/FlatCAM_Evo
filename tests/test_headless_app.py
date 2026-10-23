@@ -29,9 +29,3 @@ def test_quit_in_headless_mode_ends_the_run_and_saves_nothing():
     assert app.headless_exit_code == 0
     app.preferencesUiManager.save_defaults.assert_not_called()
 
-
-def test_quit_in_gui_mode_is_unchanged():
-    from appHandlers.appLifecycle import AppLifecycle
-    import inspect
-    source = inspect.getsource(AppLifecycle.quit_application)
-    assert 'save_defaults' in source

@@ -82,6 +82,25 @@ class TestBothObjects:
         assert result == pytest.approx((5.3, 5.0))
 
 
+def test_snap_with_big_cursor_keeps_the_user_cursor_color(objs):
+    # The cursor color from Preferences must survive a snap, so that on_exit restores it (not black).
+    fake_app = MagicMock()
+    fake_app.collection.get_list.return_value = [objs[0]]
+    fake_app.options = {}
+    fake_app.defaults = {}
+    fake_app.plotcanvas = SimpleNamespace(cursor_color='#FF0000FF')
+    fake_tool = Mock()
+    fake_tool.original_call_source = 'app'
+    fake_tool.app = fake_app
+    fake_tool.cursor_color_memory = '#FF0000FF'
+    fake_tool.ui.big_cursor_cb.get_value.return_value = True
+
+    assert Distance.snap_handler(fake_tool, (5.2, 5.1)) == pytest.approx((5.0, 5.0))
+    assert fake_app.plotcanvas.cursor_color == '#FF0000FF'
+    assert fake_tool.cursor_color_memory == '#FF0000FF'
+    assert fake_app.app_cursor.set_data.call_args.kwargs['edge_color'] == '#FF0000FF'
+
+
 def test_multipoint_motion_replaces_the_first_preview_without_losing_committed_lines(_headless_qt):
     from vispy.gloo.context import FakeCanvas
     from appGUI.VisPyVisuals import ShapeCollectionVisual

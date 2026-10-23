@@ -1,14 +1,10 @@
-"""PaintGen: the progressive-plotting buffer(0) of the Gerber geometry (3 places) now goes through fused_solid().
-
-TestLegacy pins the old expressions (it passes on the code before the change too); TestNew checks
-``gerber_copper_for_paint`` against them.
-"""
+"""PaintGen: the progressive-plotting copper of the Gerber geometry goes through fused_solid()."""
 
 import pytest
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import unary_union
 
-from fused_consumer_cases import area_diff, case_geometries, outcome
+from fused_consumer_cases import area_diff, case_geometries
 from tests.helpers_objects import app, gerber, _headless_qt  # noqa: F401,E402
 
 

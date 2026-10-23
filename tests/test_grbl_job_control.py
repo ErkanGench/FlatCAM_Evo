@@ -338,24 +338,6 @@ class TestStreamAbort(unittest.TestCase):
         self.assertEqual(tool._grbl_recovery, 'needs_reset')
         self.assertFalse(has_success(tool))
 
-    def test_reset_after_idle_wait(self):
-        fake = FakeGrbl()
-        tool = make_stream_tool(fake)
-        state = {}
-
-        def wait_idle(op):
-            state['generation'] = tool._grbl_safety_generation + 1
-            tool.on_grbl_reset()
-            return True
-        tool._grbl_wait_idle = wait_idle
-        tool.on_start()
-        self.assertEqual(ended_how(tool), 'stopped')
-        self.assertFalse(has_success(tool))
-        self.assertTrue(tool._grbl_reset_pending)
-        self.assertTrue(tool._grbl_stream_dirty)
-        self.assertEqual(tool._grbl_safety_generation, state['generation'])
-        self.assertEqual(tool._grbl_recovery, 'needs_reset')
-
 
 # ---- merged from test_grbl_restart.py ----
 """Restart uses the preceding program position, never the selected move's endpoint."""

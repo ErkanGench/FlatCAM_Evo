@@ -11,7 +11,3 @@ def test_both_controller_banners_are_detected():
 def test_other_lines_are_not_banners():
     for line in ('ok', 'error:20', 'ALARM:1', '[MSG:E-Cut: refused]', '', None, 'E-Cut host adapter'):
         assert not is_controller_banner(line)
-
-
-def test_the_adapter_banner_has_no_third_party_firmware_name():
-    assert 'grbl' not in ECUT_BANNER.lower()

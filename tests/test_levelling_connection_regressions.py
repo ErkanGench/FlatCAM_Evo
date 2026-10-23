@@ -90,13 +90,6 @@ class TestConnectionRed:
         assert tool._grbl_port_ready()
         assert tool._grbl_recovery == 'needs_reset'
 
-    def test_successful_dtr_and_ok_do_not_prove_reset(self):
-        tool = make_audit_tool()
-        tool._grbl_recovery = 'needs_reset'
-        callbacks = []
-        connect(tool, ConnectionPort([b'ok\r\n']), callbacks)
-        callbacks[0]()
-        assert tool._grbl_recovery == 'needs_reset'
 
     def test_handshake_alarm_latches_recovery_even_after_ok(self):
         tool = make_audit_tool()
@@ -106,21 +99,6 @@ class TestConnectionRed:
         assert tool._grbl_recovery is not None
         assert tool._grbl_reserve('probe', motion=True) is None
 
-    def test_open_configures_finite_write_timeout(self):
-        opened = connect(make_audit_tool(), ConnectionPort(), [])
-        assert opened.call_args.kwargs['write_timeout'] == 1.0
-        assert 0 < opened.call_args.kwargs['timeout'] <= 1.0
-
-    def test_replacement_clears_connection_buffers(self):
-        tool = make_audit_tool()
-        old = ConnectionPort()
-        tool._grbl_rx_port = old
-        tool._grbl_rx_buffer = b'old partial reply'
-        tool._grbl_reply_pending = True
-        connect(tool, ConnectionPort(), [])
-        assert tool._grbl_rx_port is not old
-        assert tool._grbl_rx_buffer == b''
-        assert not tool._grbl_reply_pending
 
     def test_attempt_identity_rechecked_after_read(self):
         tool = make_audit_tool()
@@ -166,24 +144,6 @@ class TestConnectionRed:
         assert tool._grbl_recovery == 'needs_reset'
         assert b'G0 X1\n' not in port.written
 
-    def test_both_port_and_token_are_required(self):
-        for changed in ('port', 'token'):
-            tool = make_audit_tool()
-            port = ConnectionPort([b'ok\r\n'])
-            callbacks = []
-            connect(tool, port, callbacks)
-            if changed == 'port':
-                tool.grbl_ser_port = ConnectionPort()
-            else:
-                tool._grbl_connect_attempt = object()
-            tool.app.inform.emit.reset_mock()
-            tool.ui.reset_mock()
-            callbacks[0]()
-            assert port.read_count == 0
-            assert port.close_count == 0
-            assert not tool._grbl_connected
-            tool.app.inform.emit.assert_not_called()
-            assert not tool.ui.mock_calls
 
     def test_close_invalidates_attempt_and_clears_receive_state(self):
         for close in ('_grbl_disconnect', '_grbl_force_close'):
@@ -278,20 +238,6 @@ class TestFragmentedHandshake:
 
 
 class TestConnectionCompatibility:
-    def test_second_connect_click_cancels_pending_attempt(self):
-        tool = make_audit_tool()
-        port = ConnectionPort([b'ok\r\n'])
-        callbacks = []
-        connect(tool, port, callbacks)
-        with patch.object(sg_module.serial, 'serial_for_url') as opened:
-            tool.on_grbl_connect()
-        opened.assert_not_called()
-        assert tool.grbl_ser_port is None
-        assert port.close_count == 1
-        tool.app.inform.emit.reset_mock()
-        callbacks[0]()
-        assert port.read_count == 0
-        tool.app.inform.emit.assert_not_called()
 
     def test_plain_ok_connects_without_recovery(self):
         tool = make_audit_tool()

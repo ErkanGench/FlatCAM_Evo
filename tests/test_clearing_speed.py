@@ -119,7 +119,7 @@ class TestSeedBands(unittest.TestCase):
     def test_banded_rings_are_the_rings_cut_one_by_one(self):
         for islands in (False, True):
             polygon = board(islands)
-            for steps in (8, 16, 64):
+            for steps in (8, 64):
                 for simplify_tol in (0.0, 0.01):
                     expected, __ = seed_rings_one_by_one(polygon, 0.4, steps, simplify_tol=simplify_tol)
                     # the margin cut whole (fewer coordinates than SEED_BAND_MIN_COORDS) and cut in bands

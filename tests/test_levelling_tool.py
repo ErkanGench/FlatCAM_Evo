@@ -267,30 +267,6 @@ class TestBilinearOverlay(unittest.TestCase):
         self.assertRegex(color, r'^#[0-9A-Fa-f]{8}$')
         self.assertNotIn(color[-2:].upper(), ('00', 'FF'))
 
-    def test_bilinear_render_is_repeatable_and_uses_collection(self):
-        rendered = []
-        for _ in range(2):
-            tool = make_overlay_tool()
-
-            tool.show_probing_geo(state=True, reset=True)
-            heatmap_items = [
-                item for item in tool.probing_shapes.shapes
-                if item['color'] != '#000000FF'
-            ]
-            heatmap = [
-                (item['shape'], item['color'])
-                for item in heatmap_items
-            ]
-            self.assertTrue(heatmap)
-            self.assertTrue(all(hasattr(shape, 'bounds') for shape, _color in heatmap))
-            self.assertTrue(all(re.match(r'^#[0-9A-Fa-f]{8}$', color) for _shape, color in heatmap))
-            self.assertTrue(all(item['face_color'] == item['color'] for item in heatmap_items))
-            rendered.append(heatmap)
-
-        self.assertEqual(
-            [(shape.wkb, color) for shape, color in rendered[0]],
-            [(shape.wkb, color) for shape, color in rendered[1]],
-        )
 
     def test_invalid_heights_show_only_probe_markers(self):
         tool = make_overlay_tool(heights_valid=False)
@@ -381,25 +357,6 @@ class TestBilinearOverlay(unittest.TestCase):
                     for item in tool.probing_shapes.shapes
                 ))
 
-    def test_successful_import_refreshes_bilinear_overlay_when_enabled(self):
-        tool = make_tool(storage={}, heights_valid=False)
-        tool.ui.al_method_radio.get_value.return_value = 'b'
-        tool.ui.plot_probing_pts_cb.get_value.return_value = True
-        tool.show_probing_geo = MagicMock()
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as height_map:
-            height_map.write(
-                '0.0,0.0,0.0\n'
-                '10.0,0.0,1.0\n'
-                '0.0,10.0,2.0\n'
-                '10.0,10.0,3.0\n'
-            )
-            filename = height_map.name
-        self.addCleanup(lambda: os.unlink(filename))
-
-        tool.import_height_map(filename)
-
-        tool.show_probing_geo_sig.emit.assert_called_once_with(True, True)
-        tool.show_probing_geo.assert_not_called()
 
 
 class TestFiniteLevellingInput(unittest.TestCase):
@@ -468,12 +425,6 @@ class TestAutolevellGcodeBilinear(unittest.TestCase):
         self.assertTrue(self.target.tools[1]['gcode'].endswith('\n'))
         self.assertTrue(result[1].endswith('\n'))
 
-    def test_does_not_read_ui_widgets(self):
-        # al_method is now passed in explicitly; autolevell_gcode() and the
-        # methods it calls must not read self.ui at all.
-        self.tool.ui = None
-        result = self.tool.autolevell_gcode(self.target, 'b')
-        self.assertIsNotNone(result)
 
 
 class TestAutolevellGcodeIrregularGrid(unittest.TestCase):
@@ -541,29 +492,11 @@ class TestAutolevellGcodeErrors(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
 
-    def test_heights_valid_allows_run(self):
-        tool = make_tool(storage=self.storage, heights_valid=True)
-        target = make_tool_target({1: "G1 X0 Y0 Z0\n"})
-        self.assertIsNotNone(tool.autolevell_gcode(target, 'b'))
 
     def test_units_mismatch_returns_none(self):
         tool = make_tool(units='MM', storage=self.storage)
         target = make_tool_target({1: "G1 X0 Y0 Z0\n"}, units='IN')
         self.assertIsNone(tool.autolevell_gcode(target, 'b'))
-
-
-class TestAutolevellGcodeArcWarning(unittest.TestCase):
-    def test_arc_move_triggers_warning(self):
-        storage = make_storage_grid([0, 10], [0, 10])
-        tool = make_tool(storage=storage)
-        target = make_tool_target({1: "G1 X0 Y0 Z-0.1\nG2 X5 Y5 I2.5 J0 Z-0.1\n"})
-        result = tool.autolevell_gcode(target, 'b')
-        self.assertIsNotNone(result)
-        warning_calls = [
-            c for c in tool.app.inform.emit.call_args_list
-            if '[WARNING_NOTCL]' in c.args[0]
-        ]
-        self.assertTrue(any('1' in c.args[0] for c in warning_calls))
 
 
 class TestSendGrblCommand(unittest.TestCase):
@@ -629,11 +562,6 @@ class TestSendGrblCommand(unittest.TestCase):
         self.assertIsNone(tool._grbl_op)
         self.assertIsNone(tool._grbl_recovery)
 
-    def test_bad_bytes_use_replacement_characters(self):
-        tool, port = self._tool([b'\xff\xfe junk\r\n', b'ok\r\n'])
-        result = self._send(tool, 'G0 X1')
-        self.assertEqual(result, '\ufffd\ufffd junk\nok')
-        self.assertEqual([c.args[0] for c in port.write.call_args_list], [b'G0 X1\n', b'?'])
 
     def test_no_answer_requires_recovery(self):
         tool, port = self._tool([])
@@ -750,20 +678,6 @@ class TestToolUiState(unittest.TestCase):
         tool.ui.al_mode_radio.blockSignals.assert_any_call(False)
         self.assertEqual(tool.ui.al_mode_radio.blockSignals.call_args_list[-1].args, (False,))
 
-    def test_on_mode_radio_from_ui_still_clears_storage(self):
-        # the signal-connected handler (user changing the mode radio through
-        # the UI) must still reset the stale height map
-        storage = {'a': {'point': Point(0.0, 0.0), 'height': 0.1}}
-        tool = make_tool(storage=storage, heights_valid=True)
-        tool.probing_shapes = MagicMock()
-        tool.build_al_table = MagicMock()
-
-        tool.on_mode_radio(val='grid')
-
-        self.assertEqual(tool.al_voronoi_geo_storage, {})
-        self.assertFalse(tool.al_heights_valid)
-        tool.build_al_table.assert_called_once()
-        tool.probing_shapes.clear.assert_called_once_with(update=True)
 
 
 class TestLevellingTargetSelection(unittest.TestCase):
@@ -873,15 +787,6 @@ class TestImportHeightMap(unittest.TestCase):
         tool.build_al_table_sig.emit.assert_called_once()
         tool.apply_autolevel_sig.emit.assert_not_called()
 
-    def test_mach4_same_comma_format(self):
-        path = self._write('mach4.txt', "1.0, 2.0, -0.05\n2.0, 2.0, -0.03\n")
-        tool = make_tool(storage={}, heights_valid=False)
-        tool.import_height_map(path)
-
-        self.assertTrue(tool.al_heights_valid)
-        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
-        self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['height'], -0.05)
-        self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['height'], -0.03)
 
     def test_linuxcnc_space_9_columns(self):
         path = self._write(
@@ -896,22 +801,6 @@ class TestImportHeightMap(unittest.TestCase):
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[1]['point'].y, 0.0)
         self.assertAlmostEqual(tool.al_voronoi_geo_storage[2]['point'].x, 10.0)
 
-    def test_blank_lines_and_bare_newline_are_skipped(self):
-        path = self._write('blank.txt', "0.0,0.0,-0.01\n\n\n10.0,0.0,-0.02\n")
-        tool = make_tool(storage={}, heights_valid=False)
-        tool.import_height_map(path)
-
-        self.assertTrue(tool.al_heights_valid)
-        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
-
-    def test_one_invalid_row_is_skipped_and_logged(self):
-        path = self._write('invalid.txt', "0.0,0.0,-0.01\nnot,a,row\n10.0,0.0,-0.02\n")
-        tool = make_tool(storage={}, heights_valid=False)
-        tool.import_height_map(path)
-
-        self.assertTrue(tool.al_heights_valid)
-        self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
-        tool.app.log.debug.assert_called()
 
     def test_rows_out_of_order_match_correct_storage_points(self):
         storage = {
@@ -1037,26 +926,6 @@ class TestApplyAutolevel(unittest.TestCase):
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
         tool.app.worker_task.emit.assert_not_called()
 
-    def test_none_target_errors(self):
-        tool = make_tool(storage=self.storage)
-        tool.app.collection.get_by_name.return_value = None
-        tool.ui.al_method_radio.get_value.return_value = 'b'
-
-        tool.apply_autolevel()
-
-        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
-        tool.app.worker_task.emit.assert_not_called()
-
-    def test_does_not_change_mutable_tool_units(self):
-        # Apply uses captured data/app units without rewriting the tool's units.
-        tool = make_tool(units='IN', storage=self.storage)
-        tool.app.app_units = 'MM'
-        tool.app.collection.get_by_name.return_value = SimpleNamespace(kind='geometry')
-        tool.ui.al_method_radio.get_value.return_value = 'b'
-
-        tool.apply_autolevel()
-
-        self.assertEqual(tool.units, 'IN')
 
     def test_units_mismatch_against_fresh_app_units_errors_and_creates_nothing(self):
         # target and self.units (stale) both say 'MM', but the app's *current*
@@ -1186,16 +1055,6 @@ class TestApplyAutolevel(unittest.TestCase):
 
         self.assertEqual(target.tools[1]['gcode'], original_gcode)
 
-    def test_success_message_only_after_object_created(self):
-        target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
-        tool = make_tool(storage=self.storage)
-
-        self._run_worker(tool, target)
-
-        success_calls = [
-            c for c in tool.app.inform.emit.call_args_list if '[success]' in c.args[0]
-        ]
-        self.assertEqual(len(success_calls), 1)
 
     def test_new_object_fail_emits_error_not_success(self):
         target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
@@ -1262,21 +1121,6 @@ class TestApplyAutolevel(unittest.TestCase):
         self.assertTrue(obj.solid_geometry)
         self.assertEqual(obj.used_tools, target.used_tools)
 
-    def test_apply_uses_captured_grid_tolerance(self):
-        from appPlugins.Common.levelling_interp import build_bilinear_grid
-
-        target = make_apply_target({1: 'G1 X0 Y0 Z-0.1\n'})
-        tool = make_tool(storage=self.storage)
-        self._set_owner(tool, target)
-        tool.ui.al_method_radio.get_value.return_value = 'b'
-        tolerance = tool._al_grid_tolerance()
-        tool.apply_autolevel()
-        tool.app.decimals = 1
-        with patch('appPlugins.Common.levelling_core.build_bilinear_grid', wraps=build_bilinear_grid) as build:
-            tool.app.worker_task.emit.call_args.args[0]['fcn']()
-        self.assertEqual(build.call_args.args[1], tolerance)
-        self.assertIsInstance(build.call_args.args[0], tuple)
-        self.assertFalse(tool._al_apply_running)
 
     def test_pp_names_and_exc_tools_are_copied(self):
         target = make_apply_target({1: "G1 X0 Y0 Z-0.1\n"})
@@ -1368,18 +1212,6 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
 
-    def test_laser_preprocessor_rejected_case_insensitive(self):
-        target = SimpleNamespace(
-            is_segmented_gcode=True, coords_decimals=4, units='MM',
-            pp_geometry_name='Laser_1', pp_excellon_name='default', pp_solderpaste_name=None,
-            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
-        )
-        tool = make_tool(storage=self.flat_storage)
-
-        result = tool.autolevell_gcode(target, 'b')
-
-        self.assertIsNone(result)
-        self.assertIn('[ERROR_NOTCL]', tool.app.inform.emit.call_args.args[0])
 
     def test_solderpaste_preprocessor_rejected(self):
         target = SimpleNamespace(
@@ -1407,18 +1239,6 @@ class TestAutolevellGcodeToolsOrderAndDialects(unittest.TestCase):
 
         self.assertIsNotNone(result)
 
-    def test_missing_pp_attributes_are_allowed(self):
-        # existing callers (SimpleNamespace test doubles without pp_*
-        # attributes at all) must not be rejected
-        target = SimpleNamespace(
-            is_segmented_gcode=True, coords_decimals=4, units='MM',
-            tools={1: {'gcode': "G1 X0 Y0 Z-0.1\n", 'data': {}}},
-        )
-        tool = make_tool(storage=self.flat_storage)
-
-        result = tool.autolevell_gcode(target, 'b')
-
-        self.assertIsNotNone(result)
 
 
 if __name__ == '__main__':

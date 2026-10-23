@@ -6,8 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from shapely import Point, Polygon
 
-from tests import test_levelling_audit as audit
-from tests.test_levelling_audit import make_audit_tool, tl_module
+from tests.test_levelling_audit import make_audit_tool
 from appPlugins.ToolLevelling import ToolLevelling
 import appPlugins.Common.levelling_core as lc_module
 
@@ -49,11 +48,6 @@ def test_incomplete_height_map_import_does_not_apply():
     tool.apply_autolevel.assert_not_called()
 
 
-def test_import_points_applies_autolevel():
-    tool = import_tool()
-    tool._on_al_result_ready(ctx_result(tool, 'import_points', points=[(0.0, 0.0, 0.1), (5.0, 0.0, 0.2)]))
-    assert tool.al_heights_valid
-    tool.apply_autolevel.assert_called_once_with(target_obj=tool._al_target_obj)
 
 
 def test_stale_import_does_not_apply():

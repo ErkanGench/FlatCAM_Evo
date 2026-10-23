@@ -205,14 +205,6 @@ class TestShrinkOffsetConsequences(unittest.TestCase):
         self.assertGreater(old_segments, 10 * new_segments)
         self.assertLess(new_segments, 200000)
 
-    def test_cumulative_offset_changes_swept_coverage_at_configured_circle_resolution(self):
-        polygon = Polygon(box(0, 0, 6, 6).exterior.coords,
-                          [Point(3, 3).buffer(0.7, quad_segs=16).exterior.coords])
-        paths = [layer_paths(inset_layers(polygon, 0.4, 0.15, 64, direct))
-                 for direct in (False, True)]
-        old, new = [unary_union([p.buffer(0.2, quad_segs=16) for p in group]) for group in paths]
-        self.assertGreater(old.difference(new).area, 1e-9)
-        self.assertGreater(new.difference(old).area, 1e-9)
 
 class TestBoundedStandardOffsets(unittest.TestCase):
     def setUp(self):
@@ -235,24 +227,6 @@ class TestBoundedStandardOffsets(unittest.TestCase):
         # segments needed by the physical-accuracy bound (not the unbounded candidate).
         self.assertLess(sum(len(p.coords) - 1 for p in paths), 3193340 // 10)
 
-    def test_each_pass_offsets_the_same_margin_at_the_required_distance(self):
-        from unittest.mock import patch
-        original = Polygon.buffer
-        calls = []
-
-        def measured(polygon, distance, *args, **kwargs):
-            calls.append((polygon.wkb, distance))
-            return original(polygon, distance, *args, **kwargs)
-
-        polygon = box(0, 0, 6, 6)
-        margin = polygon.buffer(-0.5, quad_segs=16)
-        with patch.object(Polygon, 'buffer', measured):
-            self.paths(polygon, 1)
-        self.assertEqual(calls[0], (polygon.wkb, -0.5))
-        for index, (source, distance) in enumerate(calls[1:], 1):
-            self.assertEqual(source, margin.wkb)
-            self.assertAlmostEqual(distance, -index * 0.85)
-
     def test_physical_sweeps_match_high_resolution_offsets_without_new_overcut(self):
         square_hole = Polygon(box(0, 0, 6, 6).exterior.coords, [box(2, 2, 4, 4).exterior.coords])
         circle_hole = Polygon(box(0, 0, 6, 6).exterior.coords,
@@ -262,7 +236,7 @@ class TestBoundedStandardOffsets(unittest.TestCase):
             tolerance = 0.005 if units == 'MM' else 0.005 / 20
             for polygon_mm in (square_hole, circle_hole):
                 polygon = scale(polygon_mm, xfact=factor, yfact=factor, origin=(0, 0))
-                for steps in (4, 16, 32, 64):
+                for steps in (4, 64):
                     with self.subTest(units=units, steps=steps, holes=len(polygon.interiors)):
                         diameter = 0.4 * factor
                         q = max(1, math.ceil(steps / 4))

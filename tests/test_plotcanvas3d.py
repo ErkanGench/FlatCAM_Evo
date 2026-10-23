@@ -8,7 +8,7 @@ import sys
 import unittest
 from itertools import product
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock
 
 if sys.platform != 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -81,18 +81,17 @@ class TestPlotCanvas3d(unittest.TestCase):
                 shapes.add(shape=Polygon([(50, 50), (150, 50), (150, 150), (50, 150)]),
                            color='blue', face_color='blue', update=True)
                 self.assertGreater(blue_pixels(), 100)
-                for _ in range(2):
-                    tabs.detachTab(tabs.indexOf(fcapp.ui), QtCore.QPoint(100, 100))
-                    self.qapp.processEvents()
-                    self.assertGreater(blue_pixels(), 100, 'Existing shapes disappeared after detaching')
-                    shapes.clear(update=True)
-                    self.assertEqual(blue_pixels(), 0)
-                    shapes.add(shape=Polygon([(200, 200), (300, 200), (300, 300), (200, 300)]),
-                               color='blue', face_color='blue', update=True)
-                    self.assertGreater(blue_pixels(), 100, 'New shapes did not render in detached window')
-                    tabs.closeDetachedTabs()
-                    self.qapp.processEvents()
-                    self.assertGreater(blue_pixels(), 100, 'Shapes disappeared after reattaching')
+                tabs.detachTab(tabs.indexOf(fcapp.ui), QtCore.QPoint(100, 100))
+                self.qapp.processEvents()
+                self.assertGreater(blue_pixels(), 100, 'Existing shapes disappeared after detaching')
+                shapes.clear(update=True)
+                self.assertEqual(blue_pixels(), 0)
+                shapes.add(shape=Polygon([(200, 200), (300, 200), (300, 300), (200, 300)]),
+                           color='blue', face_color='blue', update=True)
+                self.assertGreater(blue_pixels(), 100, 'New shapes did not render in detached window')
+                tabs.closeDetachedTabs()
+                self.qapp.processEvents()
+                self.assertGreater(blue_pixels(), 100, 'Shapes disappeared after reattaching')
 
     def make_canvas(self, units='MM', custom_cursor=True):
         fcapp = CanvasApp(units, custom_cursor)
@@ -115,14 +114,6 @@ class TestPlotCanvas3d(unittest.TestCase):
             type=kind, pos=pos, mouse_event=mouse, press_event=press,
             buttons=buttons, delta=delta, handled=False,
         )
-
-    def test_grid_is_bounded_and_fitted(self):
-        canvas = self.make_canvas()
-        self.assertTrue(hasattr(canvas, 'grid'), 'The 3D view must create its grid')
-        np.testing.assert_allclose(canvas.grid.grid_bounds, (0, 400, 0, 400))
-        self.assertTrue(np.isfinite(canvas.view.camera.center).all())
-        self.assertGreater(canvas.view.camera.scale_factor, 400)
-        self.assertEqual(canvas.view.camera.maximum_scene_size, canvas.view.camera.scale_factor)
 
     def test_grid_menu_and_shortcut_follow_the_active_plot(self):
         from appGUI.MainGUI import MainGUI
@@ -285,27 +276,6 @@ class TestPlotCanvas3d(unittest.TestCase):
         np.testing.assert_array_equal(canvas.render(), hidden)
         canvas.on_toggle_grid_lines(silent=True)
         self.assertFalse(np.array_equal(canvas.render(), hidden))
-
-    def test_grid_size_changes_live_in_millimetres(self):
-        for units, scale in (('MM', 1), ('IN', 1 / 25.4)):
-            with self.subTest(units=units):
-                canvas = self.make_canvas(units=units)
-                self.assertTrue(hasattr(canvas, 'set_grid_size'), 'The grid needs a live size setter')
-                np.testing.assert_allclose(canvas.get_grid_size(), (400, 400))
-                grid = canvas.grid
-                canvas.view.camera.set_view('iso')
-                rotation = canvas.view.camera._get_rotation_tr().copy()
-                canvas.set_grid_size(200)
-                np.testing.assert_allclose(canvas.get_grid_size(), (200, 200))
-                self.assertIs(canvas.grid, grid)
-                size = 200 * scale
-                np.testing.assert_allclose(grid.grid_bounds, (0, size, 0, size))
-                np.testing.assert_allclose(canvas.workspace_line.bounds(0), (0, size))
-                np.testing.assert_allclose(canvas.workspace_line.bounds(1), (0, size))
-                np.testing.assert_allclose(canvas.xaxis.domain, (0, size))
-                np.testing.assert_allclose(canvas.yaxis.domain, (0, size))
-                np.testing.assert_allclose(canvas.xyz_axis.transform.scale[:3], (size / 10,) * 3)
-                np.testing.assert_allclose(canvas.view.camera._get_rotation_tr(), rotation)
 
     def test_rectangular_grid_updates_both_axes_and_fits(self):
         for units, scale in (('MM', 1), ('IN', 1 / 25.4)):

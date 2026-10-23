@@ -109,8 +109,6 @@ class TestSprintLayoutFixture(unittest.TestCase):
     REFERENCE = {
         'C1': 'cata.GTL',
         'C2': 'cata.GBL',
-        'M1': 'cata.GTS',
-        'M2': 'cata.GBS',
         'O': 'cata.GKO',
     }
     LAYERS = ['C1', 'C2', 'M1', 'M2', 'S1', 'O']

@@ -2,30 +2,19 @@
 from PyQt6 import QtWidgets     # noqa
 
 from dataclasses import dataclass, field
+from copy import copy, deepcopy
 
-from copy import deepcopy
 import numpy as np
 
 import traceback
 import logging
 
-try:
-    from numpy import Inf
-except ImportError:
-    from numpy import inf as Inf    # noqa
-
 from shapely import (
-    LineString,
     Polygon,
-    MultiLineString,
     MultiPolygon,
-    Point,
-    LinearRing,
     total_bounds,
 )
-from shapely.geometry import base
-from shapely.ops import unary_union, linemerge
-from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 from typing import TYPE_CHECKING, Union
 
@@ -34,7 +23,6 @@ import appTranslation as fcTranslate
 import builtins
 
 from camlib import (
-    AppRTreeStorage,
     grace,
     flatten_shapely_geometry,
     residual_cleanup,
@@ -42,17 +30,29 @@ from camlib import (
 from defaults import AppDefaults
 from appParsers.feature_access import fused_solid
 from appCommon.SafeEval import safe_eval
+from appPlugins.ToolPaint import PaintModel
+
+if TYPE_CHECKING:
+    from appObjects.GerberObject import GerberObject
+    from appObjects.GeometryObject import GeometryObject
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
-if TYPE_CHECKING:
-    from appObjects.GerberObject import GerberObject
-    from appObjects.GeometryObject import GeometryObject
-    from appMain import App
-
 log = logging.getLogger('base')
+
+
+class _PaintAppSnapshot:
+    """Freeze generation options while forwarding live services and cancellation."""
+    def __init__(self, app):
+        self._app = app
+        self.options = deepcopy(dict(app.options))
+        self.defaults = dict(getattr(app, 'defaults', None) or AppDefaults.factory_defaults)
+        self.units = app.units
+
+    def __getattr__(self, name):
+        return getattr(self._app, name)
 
 
 def gerber_copper_for_paint(obj):
@@ -74,6 +74,8 @@ class Params:
     tools_storage: field(default_factory=dict)
     output_object_name: str | None
     run_threaded: bool
+    rest_offset: float = 0.0
+    source_tools: dict | None = None
 
 
 class PaintGen:
@@ -230,267 +232,34 @@ class PaintGen:
             obj,
     ):
 
-        p_poly: AppRTreeStorage | None = None
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        geometry_circle_steps = self.circle_steps
+        apertures = None
+        if paint_method == 3:
+            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+            geometry_circle_steps = self.app.options.get(
+                "geometry_circle_steps",
+                app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get("geometry_circle_steps", 64))
+            )
+            apertures = obj.tools
 
-        if paint_method == 0:   # _("Standard")
-            try:
-                # Type(cp) == AppRTreeStorage | None
-                p_poly = self.parent_tool.clear_polygon_shrink(
-                    poly_g,
-                    tooldia=tool_diameter,
-                    steps_per_circle=self.circle_steps,
-                    overlap=over,
-                    contour=cont,
-                    connect=conn,
-                    prog_plot=prog_plot,
-                )
-            except grace:
-                return "fail"
-            except Exception as ee:
-                self.app.log.error("ToolPaint.paint_polygon_worker() Standard --> %s" % str(ee))
-        elif paint_method == 1:  # _("Seed")
-            try:
-                # Type(cp) == AppRTreeStorage | None
-                p_poly = self.parent_tool.clear_polygon_seed(
-                    poly_g,
-                    tooldia=tool_diameter,
-                    steps_per_circle=self.circle_steps,
-                    overlap=over,
-                    contour=cont,
-                    connect=conn,
-                    prog_plot=prog_plot,
-                )
-            except grace:
-                return "fail"
-            except Exception as ee:
-                self.app.log.error("ToolPaint.paint_polygon_worker() Seed --> %s" % str(ee))
-        elif paint_method == 2:  # _("Lines")
-            try:
-                # Type(cp) == AppRTreeStorage | None
-                p_poly = self.parent_tool.clear_polygon_lines(
-                    poly_g,
-                    tooldia=tool_diameter,
-                    steps_per_circle=self.circle_steps,
-                    overlap=over,
-                    contour=cont,
-                    connect=conn,
-                    prog_plot=prog_plot,
-                )
-            except grace:
-                return "fail"
-            except Exception as ee:
-                self.app.log.error("ToolPaint.paint_polygon_worker() Lines --> %s" % str(ee))
-        elif paint_method == 3:  # _("Laser_lines")
-            # line = None
-            # aperture_size = None
+        def progress(method):
+            messages = {
+                2: _("Painting polygon with method: lines."),
+                1: _("Failed. Painting polygon with method: seed."),
+                0: _("Failed. Painting polygon with method: standard.")
+            }
+            self.app.inform.emit(messages[method])
 
-            # the key is the aperture type and the val is a list of geo elements
-            flash_el_dict = {}
-            # the key is the aperture size, the val is a list of geo elements
-            traces_el_dict = {}
-
-            try:
-                # find the flashes and the lines that are in the selected polygon and store them separately
-                for apid, ap_val in obj.tools.items():
-                    for geo_el in ap_val['geometry']:
-                        if "size" in ap_val and ap_val["size"] == 0.0:
-                            if ap_val["size"] in traces_el_dict:
-                                traces_el_dict[ap_val["size"]].append(geo_el)
-                            else:
-                                traces_el_dict[ap_val["size"]] = [geo_el]
-
-                        if 'follow' in geo_el and geo_el['follow'].within(poly_g):
-                            if isinstance(geo_el['follow'], Point):
-                                if ap_val["type"] == 'C':
-                                    if 'C' in flash_el_dict:
-                                        flash_el_dict['C'].append(geo_el)
-                                    else:
-                                        flash_el_dict['C'] = [geo_el]
-                                elif ap_val["type"] == 'O':
-                                    if 'O' in flash_el_dict:
-                                        flash_el_dict['O'].append(geo_el)
-                                    else:
-                                        flash_el_dict['O'] = [geo_el]
-                                elif ap_val["type"] == 'R':
-                                    if 'R' in flash_el_dict:
-                                        flash_el_dict['R'].append(geo_el)
-                                    else:
-                                        flash_el_dict['R'] = [geo_el]
-                            else:
-                                aperture_size = ap_val['size']
-
-                                if aperture_size in traces_el_dict:
-                                    traces_el_dict[aperture_size].append(geo_el)
-                                else:
-                                    traces_el_dict[aperture_size] = [geo_el]
-            except grace:
-                return "fail"
-            except Exception as ee:
-                self.app.log.error(
-                    "ToolPaint.paint_polygon_worker() Laser Lines -> Identify flashes/traces--> %s" % str(ee))
-
-            p_poly = AppRTreeStorage()
-            pads_lines_list = []
-
-            # process the flashes found in the selected polygon with the 'lines' method for rectangular
-            # flashes and with _("Seed") for oblong and circular flashes
-            # and pads (flashes) need the contour therefore I override the GUI settings with always True
-            try:
-                for ap_type in flash_el_dict:
-                    for elem in flash_el_dict[ap_type]:
-                        if 'solid' in elem:
-                            if ap_type == 'C':
-                                f_o = self.parent_tool.clear_polygon_seed(
-                                    elem['solid'],
-                                    tooldia=tool_diameter,
-                                    steps_per_circle=self.circle_steps,
-                                    overlap=over,
-                                    contour=True,
-                                    connect=conn,
-                                    prog_plot=prog_plot)
-                                pads_lines_list += [p for p in f_o.get_objects() if p]
-                            # this is the same as above but I keep it in case I will modify something in the future
-                            elif ap_type == 'O':
-                                f_o = self.parent_tool.clear_polygon_seed(
-                                    elem['solid'],
-                                    tooldia=tool_diameter,
-                                    steps_per_circle=self.app.options.get(
-                                        "geometry_circle_steps",
-                                        app_defaults.get(
-                                            "geometry_circle_steps",
-                                            AppDefaults.factory_defaults.get("geometry_circle_steps", 64)
-                                        )
-                                    ),
-                                    overlap=over,
-                                    contour=True,
-                                    connect=conn,
-                                    prog_plot=prog_plot,
-                                )
-                                pads_lines_list += [p for p in f_o.get_objects() if p]
-
-                            elif ap_type == 'R':
-                                f_o = self.parent_tool.clear_polygon_lines(
-                                    elem['solid'],
-                                    tooldia=tool_diameter,
-                                    steps_per_circle=self.app.options.get(
-                                        "geometry_circle_steps",
-                                        app_defaults.get(
-                                            "geometry_circle_steps",
-                                            AppDefaults.factory_defaults.get("geometry_circle_steps", 64)
-                                        )
-                                    ),
-                                    overlap=over,
-                                    contour=True,
-                                    connect=conn,
-                                    prog_plot=prog_plot,
-                                )
-
-                                pads_lines_list += [p for p in f_o.get_objects() if p]
-            except grace:
-                return "fail"
-            except Exception as ee:
-                self.app.log.error("ToolPaint.paint_polygon_worker() Laser Lines -> Process flashes--> %s" % str(ee))
-
-            # add the lines from pads to the storage
-            try:
-                # 1 batch (bulk load)
-                p_poly.insert_many([lin for lin in pads_lines_list if lin])
-            except TypeError:
-                p_poly.insert(pads_lines_list)
-
-            copper_lines_list = []
-            # process the traces found in the selected polygon using the 'laser_lines' method,
-            # method which will follow the 'follow' line therefore use the longer path possible for the
-            # laser, therefore the acceleration will play a smaller factor
-            try:
-                for aperture_size in traces_el_dict:
-                    for elem in traces_el_dict[aperture_size]:
-                        line = elem['follow']
-
-                        if line and isinstance(line, (LineString, MultiLineString)):
-                            t_o = self.parent_tool.fill_with_lines(
-                                line,
-                                aperture_size,
-                                tooldia=tool_diameter,
-                                steps_per_circle=self.app.options.get(
-                                    "geometry_circle_steps",
-                                    app_defaults.get(
-                                        "geometry_circle_steps",
-                                        AppDefaults.factory_defaults.get("geometry_circle_steps", 64)
-                                    )
-                                ),
-                                overlap=over,
-                                contour=cont,
-                                connect=conn,
-                                prog_plot=prog_plot,
-                            )
-
-                            copper_lines_list += [p for p in t_o.get_objects() if p]
-            except grace:
-                return "fail"
-            except Exception as ee:
-                self.app.log.error("ToolPaint.paint_polygon_worker() Laser Lines -> Process traces--> %s" % str(ee))
-
-            # add the lines from copper features to storage but first try to make as few lines as possible
-            # by trying to fuse them
-            lines_union = linemerge(unary_union(copper_lines_list))     # noqa
-            lines_geoms = lines_union.geoms if isinstance(lines_union, MultiLineString) else [lines_union]
-            try:
-                # 1 batch
-                p_poly.insert_many([lin for lin in lines_geoms if lin])
-            except TypeError:
-                p_poly.insert(lines_geoms)
-
-        elif paint_method == 4:  # _("Combo")
-            try:
-                self.app.inform.emit(_("Painting polygon with method: lines."))
-                p_poly = self.parent_tool.clear_polygon_lines(
-                    poly_g,
-                    tooldia=tool_diameter,
-                    steps_per_circle=self.circle_steps,
-                    overlap=over,
-                    contour=cont,
-                    connect=conn,
-                    prog_plot=prog_plot,
-                )
-
-                if p_poly and p_poly.objects:
-                    pass
-                else:
-                    self.app.inform.emit(_("Failed. Painting polygon with method: seed."))
-                    p_poly = self.parent_tool.clear_polygon_seed(
-                        poly_g,
-                        tooldia=tool_diameter,
-                        steps_per_circle=self.circle_steps,
-                        overlap=over,
-                        contour=cont,
-                        connect=conn,
-                        prog_plot=prog_plot,
-                    )
-                    if p_poly and p_poly.objects:
-                        pass
-                    else:
-                        self.app.inform.emit(_("Failed. Painting polygon with method: standard."))
-                        p_poly = self.parent_tool.clear_polygon_shrink(
-                            poly_g,
-                            tooldia=tool_diameter,
-                            steps_per_circle=self.circle_steps,
-                            overlap=over,
-                            contour=cont,
-                            connect=conn,
-                            prog_plot=prog_plot,
-                        )
-            except grace:
-                return "fail"
-            except Exception as ee:
-                self.app.log.error("ToolPaint.paint_polygon_worker() Combo --> %s" % str(ee))
-
-        if p_poly and p_poly.objects:
-            return p_poly
-        else:
+        result = PaintModel.paint_polygon(
+            poly_g, tool_diameter, paint_method, over, conn, cont, prog_plot, self.circle_steps,
+            getattr(self.parent_tool, 'clear_polygon_shrink', None),
+            getattr(self.parent_tool, 'clear_polygon_seed', None),
+            getattr(self.parent_tool, 'clear_polygon_lines', None),
+            apertures=apertures, geometry_circle_steps=geometry_circle_steps,
+            fill_lines=getattr(self.parent_tool, 'fill_with_lines', None), progress=progress)
+        if result is None:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _('Geometry could not be painted completely'))
-            return None
+        return result
 
     def paint_handler(
             self,
@@ -523,13 +292,9 @@ class PaintGen:
         :return: None
         """
 
-        proc = None
-        if run_threaded:
-            proc = self.app.proc_container.new('%s...' % _("Working"))
-        else:
-            self.app.proc_container.view.set_busy('%s...' % _("Working"))
-            QtWidgets.QApplication.processEvents()
-
+        # Each queued callback owns its settings, not the shared controller's next job.
+        self = copy(self)
+        self.app = _PaintAppSnapshot(self.app)
         params = self._create_params(
             order=order,
             method=method,
@@ -541,11 +306,15 @@ class PaintGen:
 
         sorted_paint_tools = self._parse_tool_diameters(tooldia)
         if sorted_paint_tools == 'fail':
-            if proc is not None:
-                proc.done()
-            else:
-                self.app.proc_container.view.set_idle()
             return 'fail'
+        sorted_paint_tools = list(sorted_paint_tools)
+
+        proc = None
+        if run_threaded:
+            proc = self.app.proc_container.new('%s...' % _("Working"))
+        else:
+            self.app.proc_container.view.set_busy('%s...' % _("Working"))
+            QtWidgets.QApplication.processEvents()
 
         def job_thread(app_instance, proc):
             ret = None
@@ -611,19 +380,23 @@ class PaintGen:
         # Preferences store tolerances in mm; both workers consume geometry units.
         if self.app.units.upper() == 'IN':
             simplification_value /= 25.4
+        rest_choice = rest if rest is not None else self.ui.rest_cb.get_value()
+        source_tools = self.paint_tools if tools_storage is None else tools_storage
         return Params(
             units=self.app.units,
             tool_ordering=order if order is not None else self.ui.order_combo.get_value(),
             paint_method=method if method is not None else self.ui.method_combo.get_value(),
-            rest_machining_choice=rest if rest is not None else self.ui.rest_cb.get_value(),
+            rest_machining_choice=rest_choice,
             simplification_value=simplification_value,
             prog_plot=self.app.options.get(
                 "tools_paint_plotting",
                 app_defaults.get("tools_paint_plotting", AppDefaults.factory_defaults.get("tools_paint_plotting"))
             ) == 'progressive',
-            tools_storage=self.paint_tools if tools_storage is None else tools_storage,
+            tools_storage=deepcopy(source_tools),
             output_object_name=outname if outname is not None else self.obj_name + "_paint",
-            run_threaded=run_threaded
+            run_threaded=run_threaded,
+            rest_offset=self.ui.rest_offset_entry.get_value() if rest_choice else 0.0,
+            source_tools=source_tools
         )
 
     def _parse_tool_diameters(self, tooldia):
@@ -655,26 +428,13 @@ class PaintGen:
         return sorted_paint_tools
 
     def _find_tool_uid(self, tool_dia, tools_storage):
-        for k, v in tools_storage.items():
-            if float('%.*f' % (self.decimals, v['tooldia'])) == float('%.*f' % (self.decimals, tool_dia)):
-                return int(k)
-        return None
+        return PaintModel.find_tool_uid(tool_dia, tools_storage, self.decimals)
 
     def _get_tool_params(self, tool_uid, tools_storage):
-        return {
-            'over': float(tools_storage[tool_uid]['data']['tools_paint_overlap']) / 100.0,
-            'conn': tools_storage[tool_uid]['data']['tools_paint_connect'],
-            'cont': tools_storage[tool_uid]['data']['tools_paint_contour'],
-            'offset': float(tools_storage[tool_uid]['data']['tools_paint_offset'])
-        }
+        return PaintModel.tool_params(tool_uid, tools_storage)
 
     def _buffer_geometry(self, geometry, offset):
-        poly_buf = []
-        for pol in flatten_shapely_geometry(geometry):
-            buffered_pol = pol.buffer(-offset)
-            if buffered_pol and not buffered_pol.is_empty:
-                poly_buf.append(buffered_pol)
-        return poly_buf
+        return PaintModel.buffer_geometry(geometry, offset)
 
     def _process_polygon(self, polygon, tool_dia, tool_params, params, painted_object):
         return self.paint_polygon_worker(
@@ -689,9 +449,7 @@ class PaintGen:
         )
 
     def _simplify_geometry(self, geometry_list, simplification_value):
-        if simplification_value > 0.0:
-            return [x.simplify(simplification_value) for x in geometry_list]
-        return list(geometry_list)
+        return PaintModel.simplify_geometry(geometry_list, simplification_value)
 
     def _update_progress(self, current, total, old_disp_number):
         disp_number = int(np.interp(current, [0, total], [0, 100]))
@@ -738,310 +496,120 @@ class PaintGen:
         return True
 
     def _generate_paint_worker(self, output_geo_object, app_obj, params, sorted_paint_tools, geometry, painted_object, plot):
-        tool_dia = None
-        current_uid = None
-        final_solid_geometry = []
-        old_disp_number = 0
-
-        for tool in params.tools_storage.values():
-            tool.pop('paint_cleanup_start', None)
-            tool['solid_geometry'] = []
-
-        if params.tool_ordering == 1:
-            sorted_paint_tools.sort(reverse=False)
-        elif params.tool_ordering == 2:
-            sorted_paint_tools.sort(reverse=True)
-
-        for tool_dia in sorted_paint_tools:
-            self.app.log.debug("Starting geometry processing for tool: %s" % str(tool_dia))
-            msg = '[success] %s %s%s %s' % (_('Painting with tool diameter = '),
-                                            str(tool_dia),
-                                            self.units.lower(),
-                                            _('started'))
-            self.app.inform.emit(msg)
-            self.app.proc_container.update_view_text(' %d%%' % 0)
-
-            current_uid = self._find_tool_uid(tool_dia, params.tools_storage)
-            if not current_uid:
-                return "fail"
-
-            tool_params = self._get_tool_params(current_uid, params.tools_storage)
-
-            poly_buf = self._buffer_geometry(geometry, tool_params['offset'])
-            if not poly_buf:
-                self.app.inform.emit(
-                    '[ERROR_NOTCL] %s' % _("There is no geometry to process or the tool diameter is too big."))
-                continue
-
-            geo_len = len(poly_buf)
-            self.app.log.warning("Total number of polygons to be cleared. %s" % str(geo_len))
-
-            pol_nr = 0
-            cp_list = []
-
-            try:
-                for pp in poly_buf:
-                    QtWidgets.QApplication.processEvents()
-                    if self.app.abort_flag:
-                        raise grace
-
-                    geo_res = self._process_polygon(pp, tool_dia, tool_params, params, painted_object)
-                    if geo_res:
-                        cp_list.append(geo_res)
-
-                    pol_nr += 1
-                    old_disp_number = self._update_progress(pol_nr, geo_len, old_disp_number)
-
-                total_geometry = []
-                if cp_list:
-                    for cp in cp_list:
-                        total_geometry += self._simplify_geometry(cp.get_objects(), params.simplification_value)
-                    total_geometry = [g for g in total_geometry if g and not g.is_empty]
-            except grace:
-                return "fail"
-            except Exception as e:
-                self.app.log.error(
-                    f'"Could not do Paint. Try a different combination of parameters. '
-                    f'Or a different method of Paint" {str(e)}'
-                )
-                self.app.inform.emit(_("Failed."))
-                continue
-
-            params.tools_storage[current_uid]['solid_geometry'] = deepcopy(total_geometry)
-            params.tools_storage[current_uid]['data']['output_object_name'] = params.output_object_name
-            final_solid_geometry += total_geometry
-
-        output_geo_object.tools = {uid: dict(tool) for uid, tool in params.tools_storage.items()
-                                   if tool['solid_geometry']}
-        self.final_cleanup(output_geo_object, params, sorted_paint_tools, geometry)
-        final_solid_geometry = [path for tool in output_geo_object.tools.values()
-                                for path in tool['solid_geometry']]
-
-        self._cleanup_progressive_plotting()
-        self._remove_empty_tools(params.tools_storage)
-
-        if not params.tools_storage:
-            return 'fail'
-
-        output_geo_object.obj_options["tools_mill_tooldia"] = str(tool_dia)
-        output_geo_object.multigeo = True
-        output_geo_object.multitool = True
-        output_geo_object.tools.clear()
-        output_geo_object.tools = dict(params.tools_storage)
-        output_geo_object.solid_geometry = flatten_shapely_geometry(unary_union(final_solid_geometry))
-
-        if not self._set_output_bounds(output_geo_object, output_geo_object.solid_geometry):
-            return
-
-        if not self._validate_output_geometry(output_geo_object):
-            app_obj.inform.emit(_("Failed."))
-            return "fail"
+        return self._generate_worker(output_geo_object, app_obj, params, sorted_paint_tools,
+                                     geometry, painted_object, rest=False)
 
     def _generate_rest_paint_worker(self, output_geo_object, app_obj, params, sorted_paint_tools, geometry, painted_object, plot):
-        current_uid = None
-        final_solid_geometry = []
-        old_disp_number = 0
+        return self._generate_worker(output_geo_object, app_obj, params, sorted_paint_tools,
+                                     geometry, painted_object, rest=True)
 
-        for tool in params.tools_storage.values():
-            tool.pop('paint_cleanup_start', None)
-            tool['solid_geometry'] = []
+    def _check_abort(self):
+        QtWidgets.QApplication.processEvents()
+        if self.app.abort_flag:
+            raise grace
 
-        sorted_paint_tools.sort(reverse=True)
-        paint_offset = self.ui.rest_offset_entry.get_value()
+    def _tool_started(self, diameter):
+        self.app.log.debug("Starting geometry processing for tool: %s" % str(diameter))
+        self.app.inform.emit('[success] %s %s%s %s' % (
+            _('Painting with tool diameter = '), str(diameter), self.units.lower(), _('started')))
+        self.app.proc_container.update_view_text(' %d%%' % 0)
 
-        poly_buf = []
-        for pol in geometry:
-            buffered_pol = pol.buffer(-paint_offset)
-            if buffered_pol and not buffered_pol.is_empty:
-                try:
-                    for x in buffered_pol:
-                        poly_buf.append(x)
-                except TypeError:
-                    poly_buf.append(buffered_pol)
-
-        poly_buf = unary_union(poly_buf)
-        poly_buf = flatten_shapely_geometry(poly_buf)
-
-        if not poly_buf:
-            self.app.inform.emit(
-                '[ERROR_NOTCL] %s' % _("There is no geometry to process or the tool diameter is too big."))
-            return 'fail'
-
-        geo_len = len(poly_buf)
-        self.app.log.warning("Total number of polygons to be cleared. %s" % str(geo_len))
-
-        for tool_index, tool_dia in enumerate(sorted_paint_tools):
-            has_next_tool = tool_index + 1 < len(sorted_paint_tools)
-            self.app.log.debug("Starting geometry processing for tool: %s" % str(tool_dia))
-            msg = '[success] %s %s%s %s' % (_('Painting with tool diameter = '),
-                                            str(tool_dia),
-                                            self.units.lower(),
-                                            _('started'))
-            self.app.inform.emit(msg)
-            self.app.proc_container.update_view_text(' %d%%' % 0)
-
-            current_uid = self._find_tool_uid(tool_dia, params.tools_storage)
-            if not current_uid:
-                return "fail"
-
-            tool_params = self._get_tool_params(current_uid, params.tools_storage)
-            rest_list = []
-            cleared_geo = []
-            pol_nr = 0
-
-            try:
-                for pp in poly_buf:
-                    QtWidgets.QApplication.processEvents()
-                    if self.app.abort_flag:
-                        raise grace
-
-                    # A cutter cannot fit inside a polygon narrower than its diameter.
-                    left, bottom, right, top = pp.bounds
-                    if right - left < tool_dia or top - bottom < tool_dia:
-                        continue
-
-                    check_dist = -tool_dia / 2.0
-                    check_buff = pp.buffer(check_dist)
-                    if not check_buff or check_buff.is_empty:
-                        continue
-
-                    geo_res = self._process_polygon(pp, tool_dia, tool_params, params, painted_object)
-                    if geo_res == 'fail':
-                        raise grace
-                    geo_elems = self._simplify_geometry(
-                        geo_res.get_objects(), params.simplification_value) if geo_res else []
-
-                    if has_next_tool:
-                        pp_cleared = unary_union(geo_elems).buffer(tool_dia / 2.0)
-                        rest_geo = pp.difference(pp_cleared)
-                        if rest_geo:
-                            rest_geo = flatten_shapely_geometry(rest_geo)
-                            for r in rest_geo:
-                                if r.is_valid and not r.is_empty:
-                                    rest_list.append(r)
-
-                    if geo_res:
-                        cleared_geo += geo_elems
-
-                    pol_nr += 1
-                    old_disp_number = self._update_progress(pol_nr, geo_len, old_disp_number)
-            except grace:
-                return "fail"
-            except Exception as e:
-                self.app.log.error("Could not Paint the polygons. %s" % str(e))
-                msg = '[ERROR] %s\n%s' % (_("Could not do Paint. Try a different combination of parameters. "
-                                            "Or a different method of Paint"), str(e))
-                self.app.inform.emit(msg)
-                continue
-
-            if cleared_geo:
-                final_solid_geometry += cleared_geo
-                params.tools_storage[current_uid]['solid_geometry'] = deepcopy(cleared_geo)
-                params.tools_storage[current_uid]['data']['output_object_name'] = params.output_object_name
-                output_geo_object.tools[current_uid] = dict(params.tools_storage[current_uid])
+    def _report_warnings(self, warnings):
+        for kind, error in warnings:
+            if kind == 'cleanup':
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    'Final paint finished. Some areas could not be painted with this tool.'))
+            elif kind == 'skipped':
+                self.app.inform.emit('[WARNING_NOTCL] %s %s' % (
+                    _("A polygon could not be painted with tool diameter ="), error))
+            elif kind == 'empty':
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _(
+                    "There is no geometry to process or the tool diameter is too big."))
             else:
-                self.app.log.debug("There are no geometries in the cleared polygon.")
+                self.app.log.error("Could not Paint the polygons. %s" % error)
+                self.app.inform.emit('[ERROR] %s\n%s' % (_(
+                    "Could not do Paint. Try a different combination of parameters. "
+                    "Or a different method of Paint"), error))
 
-            # Residual coverage is consumed only by a subsequent tool.
-            if not has_next_tool:
-                break
+    def _generate_worker(self, output, app_obj, params, diameters, geometry, painted_object, rest):
+        def process_polygon(polygon, diameter, settings):
+            return self._process_polygon(polygon, diameter, settings, params, painted_object)
 
-            self.app.log.debug("Generating rest geometry for the next tool.")
-
-            buffered_cleared = unary_union(cleared_geo)
-            buffered_cleared = buffered_cleared.buffer(tool_dia / 2.0)
-            poly_buf = MultiPolygon(poly_buf).difference(buffered_cleared)
-            poly_buf = flatten_shapely_geometry(poly_buf)
-
-            tmp = [p for p in poly_buf if p.is_valid]
-            tmp += rest_list
-
-            poly_buf = MultiPolygon(tmp)
-            if not poly_buf.is_valid:
-                poly_buf = unary_union(tmp)
-            if not poly_buf or poly_buf.is_empty or not poly_buf.is_valid:
-                app_obj.log.debug("Rest geometry empty. Breaking.")
-                break
-            poly_buf = flatten_shapely_geometry(poly_buf)
-
-        self.final_cleanup(output_geo_object, params, sorted_paint_tools, geometry, rest_offset=paint_offset)
-        final_solid_geometry = [path for tool in output_geo_object.tools.values()
-                                for path in tool['solid_geometry']]
-
-        output_geo_object.multigeo = True
-        output_geo_object.obj_options["tools_mill_tooldia"] = '0.0'
-
-        self._cleanup_progressive_plotting()
-        self._remove_empty_tools(params.tools_storage)
-
-        if not params.tools_storage:
+        try:
+            generate = PaintModel.generate_rest_paint if rest else PaintModel.generate_paint
+            extra = {'rest_offset': getattr(params, 'rest_offset', 0.0)} if rest else {}
+            result = generate(
+                geometry, params.tools_storage, diameters, getattr(params, 'tool_ordering', 0),
+                params.simplification_value, self.decimals, process_polygon,
+                check_abort=self._check_abort, progress=self._update_progress, tool_started=self._tool_started,
+                find_uid=self._find_tool_uid, get_params=self._get_tool_params,
+                buffer=self._buffer_geometry, simplify=self._simplify_geometry, **extra)
+            if result == 'fail':
+                return 'fail'
+            self._report_warnings(result['warnings'])
+            finished = self._cleanup_result(
+                geometry, result['tools'], result.get('output_tools', result['tools']), params, diameters,
+                getattr(params, 'rest_offset', 0.0) if rest else None)
+            self._report_warnings(finished['warnings'])
+            tools = finished['tools']
+            self._remove_empty_tools(tools)
+            if not tools:
+                return 'fail'
+            solid_geometry = flatten_shapely_geometry(unary_union(finished['paths']))
+            self._check_abort()
+            for tool in tools.values():
+                tool['data']['output_object_name'] = params.output_object_name
+            output.tools = finished['output_tools'] if rest else dict(tools)
+            for tool in output.tools.values():
+                tool['data']['output_object_name'] = params.output_object_name
+            output.solid_geometry = solid_geometry
+            output.multigeo = True
+            output.multitool = True
+            output.obj_options['tools_mill_tooldia'] = '0.0' if rest else str(result['last_diameter'])
+            if finished['residual'] is not None:
+                output.paint_cleanup_residual = finished['residual']
+            if not self._set_output_bounds(output, solid_geometry) or not self._validate_output_geometry(output):
+                app_obj.inform.emit(_("Failed."))
+                return 'fail'
+            publication_tools = getattr(params, 'source_tools', None)
+            if publication_tools is None:
+                publication_tools = params.tools_storage
+            publication_tools.clear()
+            publication_tools.update(tools)
+        except grace:
             return 'fail'
+        finally:
+            self._cleanup_progressive_plotting()
 
-        output_geo_object.multitool = True
+    def _cleanup_result(self, geometry, tools, output_tools, params, diameters, rest_offset):
+        def process_polygon(polygon, diameter, settings):
+            return self.paint_polygon_worker(
+                polygon, diameter, 2 if params.paint_method == 3 else params.paint_method,
+                settings['over'], settings['conn'], True, False, None)
 
-        if not output_geo_object.tools:
-            return "fail"
+        def cleanup(domain, diameter, previous, generate_paths, boundary_first):
+            return residual_cleanup(self.app, domain, diameter, self.circle_steps, previous,
+                                    generate_paths, physical=True, boundary_first=boundary_first)
 
-        if not self._validate_output_geometry(output_geo_object):
-            app_obj.inform.emit(
-                '[ERROR] %s' %
-                _("There is no Painting Geometry in the file.\n"
-                  "Usually it means that the tool diameter is too big for the painted geometry.\n"
-                  "Change the painting parameters and try again.")
-            )
-            return "fail"
-
-        output_geo_object.solid_geometry = flatten_shapely_geometry(unary_union(final_solid_geometry))
-
-        if not self._set_output_bounds(output_geo_object, output_geo_object.solid_geometry):
-            return
+        return PaintModel.final_cleanup(
+            geometry, tools, output_tools, diameters, self.decimals, process_polygon, cleanup,
+            rest_offset=rest_offset, check_abort=self._check_abort, find_uid=self._find_tool_uid,
+            get_params=self._get_tool_params, buffer=self._buffer_geometry)
 
     def final_cleanup(self, output, params, diameters, geometry, rest_offset=None):
         """One final tool; residuals are targets, not new boundaries for the cutter."""
-        selected = {self._find_tool_uid(dia, params.tools_storage) for dia in diameters}
-        eligible = [uid for uid, tool in params.tools_storage.items()
-                    if uid in selected and float(tool['tooldia']) > 0
-                    and tool['data'].get('tools_paint_final_cleanup', False)]
-        if not eligible:
+        result = self._cleanup_result(geometry, params.tools_storage, output.tools,
+                                      params, diameters, rest_offset)
+        if result['residual'] is None:
             return
-        if self.app.abort_flag:
-            raise grace
-        original = unary_union(flatten_shapely_geometry(geometry))
-        for uid in sorted(eligible, key=lambda key: float(params.tools_storage[key]['tooldia'])):
-            tool = params.tools_storage[uid]
-            offset = float(tool['data']['tools_paint_offset']) if rest_offset is None else rest_offset
-            # Negative Paint offsets must not authorize cleanup outside the selection or in holes.
-            domain = original.intersection(unary_union(self._buffer_geometry(geometry, offset)))
-            if not domain.is_empty:
-                break
-        else:
-            return
-        tool_params = self._get_tool_params(uid, params.tools_storage)
-
-        def generate_paths(pol, diameter):
-            result = self.paint_polygon_worker(
-                pol, diameter, 2 if params.paint_method == 3 else params.paint_method,
-                tool_params['over'], tool_params['conn'], True, False, None)
-            if result == 'fail':
-                return 'fail'
-            return list(result.get_objects()) if result else []
-
-        paths, residual = residual_cleanup(
-            self.app, domain, float(tool['tooldia']), self.circle_steps,
-            output.tools.values(), generate_paths, physical=True,
-            boundary_first=not tool_params['conn'])
-        if paths:
-            standard = list(output.tools.get(uid, {}).get('solid_geometry', []))
-            tool['solid_geometry'] = standard + paths
-            tool['data']['output_object_name'] = params.output_object_name
-            tool['paint_cleanup_start'] = len(standard)
-            params.tools_storage[uid] = params.tools_storage.pop(uid)
-            output.tools.pop(uid, None)
-            output.tools[uid] = dict(tool)
-        output.paint_cleanup_residual = residual
-        if not residual.is_empty:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
-                'Final paint finished. Some areas could not be painted with this tool.'))
+        for tool in result['tools'].values():
+            if 'paint_cleanup_start' in tool:
+                tool['data']['output_object_name'] = params.output_object_name
+        params.tools_storage.clear()
+        params.tools_storage.update(result['tools'])
+        output.tools = result['output_tools']
+        output.paint_cleanup_residual = result['residual']
+        self._report_warnings(result['warnings'])
 
     def paint_poly(
             self,
@@ -1100,7 +668,7 @@ class PaintGen:
             self.app.inform.emit('%s %s' % (_("Paint Plugin."), _("Normal painting polygon task started.")))
 
         if inside_pt and poly_list is None:
-            polygon_list = self.parent_tool.find_polygon(point=inside_pt, geoset=obj.solid_geometry)
+            polygon_list = PaintModel.select_polygon(obj.solid_geometry, inside_pt)
             if polygon_list:
                 polygon_list = [polygon_list]
         elif (inside_pt is None and poly_list) or (inside_pt and poly_list):
@@ -1153,38 +721,9 @@ class PaintGen:
         :return:
         """
 
-        def recurse(geometry, reset=True):
-            """
-            Creates a list of non-iterable linear geometry objects.
-            Results are placed in self.flat_geometry
-
-            :param geometry: Shapely type, list or list of lists of such.
-            :param reset: Clears the contents of self.flat_geometry.
-            """
+        def check_abort():
             if self.app.abort_flag:
-                # graceful abort requested by the user
                 raise grace
-
-            if geometry is None:
-                return
-
-            if reset:
-                self.flat_geometry = []
-
-            # ## If iterable, expand recursively.
-            try:
-                for geo in geometry:
-                    if geo and not geo.is_empty:
-                        recurse(geometry=geo, reset=False)
-            # ## Not iterable, do the actual indexing and add.
-            except TypeError:
-                if isinstance(geometry, LinearRing):
-                    g = Polygon(geometry)
-                    self.flat_geometry.append(g)
-                else:
-                    self.flat_geometry.append(geometry)
-
-            return self.flat_geometry
 
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         if obj.kind == 'gerber':
@@ -1207,7 +746,12 @@ class PaintGen:
         else:
             self.app.inform.emit('%s %s' % (_("Paint Plugin."), _("Paint all polygons task started.")))
 
-        painted_area = recurse(obj.solid_geometry)
+        try:
+            painted_area = PaintModel.selection_geometry(obj.solid_geometry, check_abort)
+        except grace:
+            return 'fail'
+        if painted_area is not None:
+            self.flat_geometry = painted_area
 
         # No polygon?
         if not painted_area:
@@ -1340,17 +884,8 @@ class PaintGen:
         :param plot:
         :return:
         """
-        geo = sel_obj.solid_geometry
         try:
-            if isinstance(geo, MultiPolygon):
-                env_obj = geo.convex_hull
-            elif (isinstance(geo, MultiPolygon) and len(geo.geoms) == 1) or \
-                    (isinstance(geo, list) and len(geo) == 1) and isinstance(geo[0], Polygon):
-                env_obj = unary_union(self.bound_obj.solid_geometry)
-            else:
-                env_obj = unary_union(self.bound_obj.solid_geometry)
-                env_obj = env_obj.convex_hull
-            sel_rect = env_obj.buffer(distance=0.0000001, join_style=base.JOIN_STYLE.mitre)
+            sel_rect = PaintModel.reference_area(sel_obj.solid_geometry)
         except Exception as e:
             self.app.log.error("ToolPaint.paint_poly_ref() --> %s" % str(e))
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("No object available."))
@@ -1396,39 +931,9 @@ class PaintGen:
         :return:
         """
 
-        def recurse(geometry: BaseGeometry, reset=True):
-            """
-            Creates a list of non-iterable linear geometry objects.
-            Results are placed in self.flat_geometry
-
-            :param geometry: Shapely type, list or list of lists of such.
-            :param reset: Clears the contents of self.flat_geometry.
-            """
+        def check_abort():
             if self.app.abort_flag:
-                # graceful abort requested by the user
                 raise grace
-
-            if geometry is None:
-                return
-
-            if reset:
-                self.flat_geometry = []
-
-            # ## If iterable, expand recursively.
-            try:
-                multigeo = geometry.geoms if isinstance(geometry, (MultiPolygon, MultiLineString)) else geometry
-                for geo in multigeo:
-                    if geo and not geo.is_empty:
-                        recurse(geometry=geo, reset=False)
-            # ## Not iterable, do the actual indexing and add.
-            except TypeError:
-                if isinstance(geometry, LinearRing):
-                    g = Polygon(geometry)
-                    self.flat_geometry.append(g)
-                else:
-                    self.flat_geometry.append(geometry)
-
-            return self.flat_geometry
 
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
@@ -1454,40 +959,11 @@ class PaintGen:
         else:
             self.app.inform.emit(p_msg)
 
-        if isinstance(areas_to_paint, list):
-            areas_to_paint = unary_union(areas_to_paint)
-        geo_to_paint = target_geo.intersection(areas_to_paint)
-        painted_area = recurse(geo_to_paint, reset=True)
         try:
-            painted_area = linemerge(painted_area)
-        except Exception:
-            pass
-
-        if isinstance(painted_area, (MultiPolygon, MultiLineString)):
-            painted_area = painted_area.geoms
-
-        p_geo_list = []
-        try:
-            for paint_g_elem in painted_area:
-                if isinstance(paint_g_elem, Polygon):
-                    p_geo_list.append(paint_g_elem)
-                elif isinstance(paint_g_elem, (LinearRing, LineString)):
-                    if paint_g_elem.is_closed:
-                        p_geo_list.append(Polygon(paint_g_elem.coords))
-                    else:
-                        coords = list(paint_g_elem.coords)
-                        coords.append(coords[0])
-                        p_geo_list.append(Polygon(coords))
-        except TypeError:
-            if isinstance(painted_area, Polygon):
-                p_geo_list.append(painted_area)
-            elif isinstance(painted_area, (LinearRing, LineString)):
-                if painted_area.is_closed:
-                    p_geo_list.append(Polygon(painted_area.coords))
-                else:
-                    coords = list(painted_area.coords)
-                    coords.append(coords[0])
-                    p_geo_list.append(Polygon(coords))
+            p_geo_list = PaintModel.area_intersection(target_geo, areas_to_paint, check_abort)
+        except grace:
+            return 'fail'
+        self.flat_geometry = p_geo_list
 
         # No polygon?
         if not p_geo_list:

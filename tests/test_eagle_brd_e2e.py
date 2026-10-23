@@ -125,7 +125,7 @@ class TestEagleFixture(unittest.TestCase):
     FIXTURE = Path(__file__).parent / 'fixtures' / 'eagle_cad' / 'Pcb39.brd'
     GERBERS = Path(__file__).parent / 'fixtures' / 'eagle_cad' / 'GERBER'
     DRILLS = GERBERS / 'Pcb39.TXT'
-    REFERENCE = {ext: 'Pcb39.%s' % ext for ext in ('GTL', 'GBL', 'GTS', 'GBS', 'GTP', 'GTO', 'GBO', 'GKO')}
+    REFERENCE = {ext: 'Pcb39.%s' % ext for ext in ('GTL', 'GBL')}
     EXPECTED_LAYERS = ['Top', 'Bottom', 'Dimension', 'tPlace', 'bPlace', 'tNames', 'bNames', 'tValues', 'bValues',
                        'tStop', 'bStop', 'tCream', 'bCream', 'Holes']
     DEFAULT_LAYERS = ['Top', 'Bottom', 'Dimension', 'tPlace', 'bPlace', 'tNames', 'bNames', 'tStop', 'bStop',

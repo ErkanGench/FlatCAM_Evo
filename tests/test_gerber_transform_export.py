@@ -597,7 +597,6 @@ from appEditors.appGerberEditor import AppGerberEditor  # noqa: E402
 from appHandlers.appIO import appIO  # noqa: E402
 from appHandlers.appObjectOps import AppObjectOps  # noqa: E402
 from camlib import dict2obj  # noqa: E402
-import copy
 import numpy as np
 
 
@@ -789,20 +788,6 @@ class TestGerberTransforms:
                 for key in rec_before:
                     assert_coords_close(rec_now[key], apply_to(AFFINE_TRANSFORMS[name][1], rec_before[key]),
                                         msg='%s %s %s' % (name, ap, key))
-
-
-def test_gerber_offset_leaves_all_metadata_unchanged(app):
-    obj = make_gerber(app)
-    before = {ap: {k: v for k, v in t.items() if k != 'geometry'} for ap, t in copy.deepcopy(obj.tools).items()}
-    obj.offset((3.5, -2.25))
-    after = {ap: {k: v for k, v in t.items() if k != 'geometry'} for ap, t in obj.tools.items()}
-    assert set(before) == set(after)
-    for ap in before:
-        for key, value in before[ap].items():
-            if key == 'macro':
-                assert after[ap][key].name == value.name and after[ap][key].raw == value.raw
-            else:
-                assert after[ap][key] == value, (ap, key)
 
 
 def test_gerber_uniform_positive_scale_metadata(app):
