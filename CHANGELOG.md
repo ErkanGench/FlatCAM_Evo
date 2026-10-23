@@ -6,6 +6,54 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+24.10.2026
+
+Release:
+
+- version 1.0 of 2026/10/24 is no longer marked as beta
+
+Start:
+
+- the splash screen is not shown when the app starts with a file to open, for example a double-click on an associated file; this is true also when the file goes to an app that is already open
+- the splash image is scaled to the physical pixels of the screen; on a screen with display scaling above 100% it is no longer blurred; new splash images
+
+Project Tab:
+
+- each object with plot colors has a color swatch at the right side of its row; a click on it opens a color dialog with alpha; if the object is selected, the color goes to all the selected objects, else only to this object; the click does not change the selection
+- a color change from the context menu also updates the swatch
+
+Canvas:
+
+- the shapes, the selection overlay, the drag rectangle and the HUD rectangle set their own alpha blend; before, they could use the additive blend of the grid and show colors that were too light
+
+Align Objects:
+
+- Beginner/Advanced level button; in Advanced, "Limit pairs" sets the number of source points and fit pairs of the Auto mode (0 = no limit); all features still check the result; the result line shows the number of fit pairs
+- the table and the errors of an Auto result show the pairs that made the fit
+
+Project:
+
+- the geometry is saved with 20 decimals; small coordinates (below 1 mm) no longer lose precision after a save and a load
+
+23.10.2026
+
+Plugins:
+
+- the single-file plugins are split in MVC, a controller, a view (UI) and a model (Gen) in their own folder in appPlugins/: Copper Thieving, Cutout, 2-Sided, Distance, Drilling, Etch Compensation, Extract, Fiducials, Film, Follow, Image, Invert Gerber, Isolation, Levelling, Markers, Milling, Move, Object Distance, Optimal, Panelize, PCB Wizard, Punch Gerber, QRCode, Report, Rules Check, Shell, Solder Paste, Subtract, Transform
+- NCC, Paint and PDF Import get a separate model module (NccModel, PaintModel, PdfGen)
+- 2-Sided: new Basic mode; alignment of all source objects, with a warning when 2 fits are almost equal; Mirror is 1 Undo step and restores the object if it fails; the alignment holes use the selected box object; invalid hole coordinates or diameter create nothing; the grid snap is restored after a pick
+- Copper Thieving: the line fill stays inside the fill area; the dots/squares grid starts from the reference area; an Excellon reference is accepted; the plating mask is 1 region aperture that covers the pads, the thieving and the robber bar with the clearance, and the plated area is the area of that union; the thieving and robber Gerbers are exported as regions; a grid size of 0 gives a message that names the grid; the first corner of a zone is no longer moved twice by the grid snap; an object name with no extension gets "<name>_plating_mask"
+- Cutout: the manual bridges can be edited: select, drag, Delete; Escape cancels the session; manual geometry cutout uses the inner contours when they are on; the inner gaps option is enabled only for the cutout type that uses it; Beginner/Advanced level change keeps the values of the current tool
+- Paint: a polygon that cannot be painted is skipped with a warning and the job goes on; the options are read once at the start of the job; the Tcl -box selection works
+- Align Objects: automatic alignment of an Excellon with a Gerber matches the holes with the pads: the score counts only the holes, so the SMD pads do not hide a bad fit; it works in both directions (Excellon or Gerber moves) and takes less than 1 s on a board of 1000 holes and 10000 pads
+- NCC: the tool order of the UI is used; a tool diameter that is not in the tool table no longer makes the margin of the next tool too large; a tool that clears nothing gives a warning; in Tcl, an empty area gives a message; the rest machining no longer writes into the tool table
+
+Tcl:
+
+- a Tcl command that creates objects returns their names: one name as text, several names as a Tcl list; a script can chain the commands: set g [paint ...]; cncjob $g ... A command that creates nothing returns nothing, a command with its own result keeps it
+- a new object named "fail" or "failed" gets a warning, because that name looks like a failure result
+- select_project and close_project return nothing: the objects of the other project are not reported as new
+
 22.10.2026
 
 Tools Database:

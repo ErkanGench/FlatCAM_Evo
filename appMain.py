@@ -235,8 +235,8 @@ class App(QtCore.QObject):
     # ################################### Version and VERSION DATE ##################################################
     # version = "Unstable"
     version = 1.0
-    version_date = "2026/10/16"
-    beta = True
+    version_date = "2026/10/24"
+    beta = False
 
     # current date now
     date = str(dt.today()).rpartition('.')[0]
