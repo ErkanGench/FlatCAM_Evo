@@ -108,9 +108,110 @@ class EventSensitiveListView(QtWidgets.QTreeView):
             return
         self.keyPressed.emit(event.key())
 
+    def swatch_rect(self, index, row_rect):
+        """
+        The rectangle of the color swatch of a row, at the right side of the visible part of the row.
+
+        :param index:       the model index of the row
+        :param row_rect:    the rectangle of the row, in viewport coordinates
+        :return:            a QRect or None if the row has no swatch (groups, objects without plot colors)
+        """
+        if not index.isValid():
+            return None
+        obj = index.internalPointer().obj
+        if obj is None or not dispatch_attr(obj, 'has_plot_colors') or not getattr(obj, 'fill_color', None):
+            return None
+
+        # a small font makes low rows; keep a gap between the swatches of adjacent rows
+        size = min(ProjectItemDelegate.SWATCH_SIZE, row_rect.height() - 2)
+        right = min(row_rect.right(), self.viewport().width() - 1) - ProjectItemDelegate.SWATCH_MARGIN
+        top = row_rect.top() + (row_rect.height() - size) // 2
+        return QtCore.QRect(right - size + 1, top, size, size)
+
+    def _swatch_index_at(self, pos):
+        index = self.indexAt(pos)
+        rect = self.swatch_rect(index, self.visualRect(index))
+        if rect is not None and rect.contains(pos):
+            return index
+        return None
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        # a click on the color swatch must not change the selection: the color goes to the whole selection
+        if self._swatch_index_at(event.position().toPoint()) is not None:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self._swatch_index_at(event.position().toPoint()) is not None:
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        index = self._swatch_index_at(event.position().toPoint())
+        if index is not None:
+            event.accept()
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.on_swatch_clicked(index.internalPointer().obj)
+            return
         self.mouseReleased.emit(event.button())
         super().mouseReleaseEvent(event)
+
+    def on_swatch_clicked(self, obj):
+        current_color = QtGui.QColor(obj.fill_color[:7])
+        try:
+            current_color.setAlpha(int(obj.fill_color[7:9], 16))
+        except ValueError:
+            current_color.setAlpha(255)
+
+        color_dialog = QtWidgets.QColorDialog(self)
+        color_dialog.setOption(QtWidgets.QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
+        color_dialog.setCurrentColor(current_color)
+        if color_dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        selected_color = color_dialog.selectedColor()
+        if not selected_color.isValid():
+            return
+
+        argb = selected_color.name(QtGui.QColor.NameFormat.HexArgb)
+        new_color = ('#%s%s' % (argb[3:], argb[1:3])).upper()
+        self.app.plot_manager.set_color_from_swatch(obj, new_color)
+
+
+class ProjectItemDelegate(QtWidgets.QStyledItemDelegate):
+    """
+    Paints a color swatch at the right side of the rows of the objects that have plot colors.
+    The swatch has the fill color of the object; a click on it is handled by the view.
+    """
+
+    SWATCH_SIZE = 12
+    SWATCH_MARGIN = 6
+
+    def __init__(self, view):
+        super().__init__(view)
+        self.view = view
+
+    def paint(self, painter, option, index):
+        rect = self.view.swatch_rect(index, option.rect)
+        if rect is None:
+            super().paint(painter, option, index)
+            return
+
+        # the background (selection, hover) goes on the whole row, the text stops before the swatch
+        style = option.widget.style() if option.widget else QtWidgets.QApplication.style()
+        style.drawPrimitive(QtWidgets.QStyle.PrimitiveElement.PE_PanelItemViewItem, option, painter, option.widget)
+        text_option = QtWidgets.QStyleOptionViewItem(option)
+        text_option.rect = QtCore.QRect(option.rect)
+        text_option.rect.setRight(rect.left() - self.SWATCH_MARGIN)
+        super().paint(painter, text_option, index)
+
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QtGui.QPen(QColor('dimgray'), 1))
+        painter.setBrush(QColor(index.internalPointer().obj.fill_color[:7]))
+        painter.drawRoundedRect(QtCore.QRectF(rect).adjusted(0.5, 0.5, -0.5, -0.5), 4, 4)
+        painter.restore()
 
     def dragEnterEvent(self, event):
         # if event.source():
@@ -343,6 +444,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # ## View
         self.view = EventSensitiveListView(self.app)
         self.view.setModel(self)
+        self.view.setItemDelegate(ProjectItemDelegate(self.view))
 
         self.view.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.view.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)

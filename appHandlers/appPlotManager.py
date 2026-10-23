@@ -430,6 +430,7 @@ class AppPlotManager(QtCore.QObject):
                 sel_obj.shapes.redraw(
                     update_colors=(new_color, new_line_color)
                 )
+                self.collection.update_view(sel_obj)
 
             self.set_obj_color_in_preferences_dict(sel_obj_list, new_color, new_line_color)
             return
@@ -456,6 +457,7 @@ class AppPlotManager(QtCore.QObject):
                     sel_obj.alpha_level = alpha_str
                     sel_obj.fill_color = new_color
                     sel_obj.shapes.redraw(update_colors=(new_color, new_line_color))
+                    self.collection.update_view(sel_obj)
 
                     if sel_obj.kind == 'gerber':
                         item = sel_obj.item
@@ -473,7 +475,30 @@ class AppPlotManager(QtCore.QObject):
         if act_name == _("White"):
             new_line_color = color_variant("#dedede", 0.7)
 
-        for sel_obj in sel_obj_list:
+        self.apply_plot_color(sel_obj_list, new_color, new_line_color)
+
+    def set_color_from_swatch(self, obj, new_color):
+        """
+        Called by the color swatch of a row in the Project Tab. If the object is part of the selection, the color
+        goes to all the selected objects, else only to this object.
+
+        :param obj:         the object of the clicked row
+        :param new_color:   the fill color, as '#RRGGBBAA'; the alpha of the color becomes the alpha level
+        :return:
+        """
+        selected = self.collection.get_selected()
+        obj_list = selected if obj in selected else [obj]
+
+        new_line_color = color_variant(new_color[:7], 0.7)
+        if new_color[:7].upper() == '#FFFFFF':
+            new_line_color = color_variant("#dedede", 0.7)
+
+        for sel_obj in obj_list:
+            sel_obj.alpha_level = new_color[7:9]
+        self.apply_plot_color(obj_list, new_color, new_line_color)
+
+    def apply_plot_color(self, obj_list, new_color, new_line_color):
+        for sel_obj in obj_list:
             if dispatch_attr(sel_obj, 'has_plot_colors'):
                 sel_obj.fill_color = new_color
                 sel_obj.outline_color = new_line_color
@@ -481,8 +506,10 @@ class AppPlotManager(QtCore.QObject):
                 sel_obj.shapes.redraw(
                     update_colors=(new_color, new_line_color)
                 )
+                # the color swatch of the row in the Project Tab
+                self.collection.update_view(sel_obj)
 
-        self.set_obj_color_in_preferences_dict(sel_obj_list, new_color, new_line_color)
+        self.set_obj_color_in_preferences_dict(obj_list, new_color, new_line_color)
 
     def set_obj_color_in_preferences_dict(self, list_of_obj, fill_color, outline_color):
         """

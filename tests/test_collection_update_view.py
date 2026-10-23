@@ -7,7 +7,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
 from PyQt6.QtTest import QSignalSpy
 
 from appObjects.ObjectCollection import ObjectCollection, TreeItem
@@ -99,6 +99,37 @@ class TestUpdateView(unittest.TestCase):
         self.assertIs(QtCore.QModelIndex(persistent).internalPointer(), self.g2_item)
         selected = view.selectionModel().selectedIndexes()
         self.assertEqual([s.internalPointer() for s in selected], [self.g2_item])
+
+
+class TestColorSwatch(unittest.TestCase):
+    def test_swatch_click_keeps_selection_and_sends_the_dialog_color(self):
+        col = make_collection()
+        g1, _ = add_item(col, "gerber", "g1")
+        e1, _ = add_item(col, "excellon", "e1")
+        g1.fill_color = e1.fill_color = "#00FF00BF"
+        view = col.view
+        view.resize(400, 200)
+        view.show()
+        view.expandAll()
+        _qapp.processEvents()
+
+        gerber_idx = col.index(0, 0, col.index(0, 0, QtCore.QModelIndex()))
+        excellon_idx = col.index(0, 0, col.index(1, 0, QtCore.QModelIndex()))
+        view.selectionModel().select(gerber_idx, QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
+        swatch = view.swatch_rect(excellon_idx, view.visualRect(excellon_idx))
+        # the swatch sits at the right side of the view
+        self.assertGreater(swatch.left(), view.viewport().width() - 40)
+
+        with mock.patch.object(QtWidgets.QColorDialog, "exec",
+                               return_value=QtWidgets.QDialog.DialogCode.Accepted), \
+                mock.patch.object(QtWidgets.QColorDialog, "selectedColor",
+                                  return_value=QtGui.QColor(0x11, 0x22, 0x33, 0x44)):
+            QtTest.QTest.mouseClick(view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=swatch.center())
+
+        col.app.plot_manager.set_color_from_swatch.assert_called_once_with(e1, "#11223344")
+        selected = view.selectionModel().selectedIndexes()
+        self.assertEqual([s.internalPointer().obj for s in selected], [g1])
+        view.close()
 
 
 if __name__ == "__main__":
