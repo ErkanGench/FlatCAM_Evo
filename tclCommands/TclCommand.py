@@ -9,11 +9,18 @@ import contextlib
 import collections
 from PyQt6 import QtCore
 
+import gettext
+import appTranslation as fcTranslate
+import builtins
+from appCommon.StartDir import resolve_user_path
+
+fcTranslate.apply_language('strings')
+if '_' not in builtins.__dict__:
+    _ = gettext.gettext
+
 
 class TclCommandFailure(str):
     """Legacy Python text result that must be translated to an error at the Tcl boundary."""
-
-from appCommon.StartDir import resolve_user_path
 
 
 class TclCommand(object):
@@ -334,6 +341,42 @@ class TclCommand(object):
 
         return named_args, unnamed_args
 
+    def _collection_objects(self):
+        """The objects of all open projects, as they are now. A switch of the active project creates no object."""
+        collections = [ctx.collection for ctx in getattr(getattr(self.app, 'projects', None), 'contexts', None) or []]
+        active = getattr(self.app, 'collection', None)
+        if all(active is not collection for collection in collections):
+            collections.append(active)
+        objects = []
+        for collection in collections:
+            try:
+                objects.extend(collection.get_list())
+            except (AttributeError, TypeError):
+                pass
+        return objects
+
+    def _report_new_objects(self, result, before):
+        """
+        Give the command result its final form: a command that returned nothing returns the names of the objects it
+        created, so a script can chain them: set g [paint ...]. The new objects are found by identity, not by name.
+
+        :param result:  the checked result of the command
+        :param before:  the objects of the collection before the command; this list keeps them alive, so an id()
+                        cannot be reused by a new object
+        :return:        the result; the name of the new object; or a tuple of names (a Tcl list)
+        """
+        if self.returns_value or result is not None:
+            return result
+        known = {id(obj) for obj in before}
+        names = [obj.obj_options['name'] for obj in self._collection_objects() if id(obj) not in known]
+        for name in names:
+            if name.lower() in ('fail', 'failed'):
+                self.app.inform.emit('[WARNING_NOTCL] %s' % (
+                    _("Object name '%s' looks like a failure result; rename it.") % name))
+        if not names:
+            return None
+        return names[0] if len(names) == 1 else tuple(names)
+
     def _history_suspended(self):
         """Context manager: the app Undo history records nothing while a Tcl command runs."""
         history = history_of(self.app)
@@ -366,8 +409,11 @@ class TclCommand(object):
                 self.log.debug("TCL command '%s' executed." % str(type(self).__name__))
                 self.original_args = args
                 args, unnamed_args = self.check_args(args)
+                before = self._collection_objects()
                 result = self.execute(args, unnamed_args)
-                return result if self.returns_value else self.check_result(result)
+                if self.returns_value:
+                    return result
+                return self._report_new_objects(self.check_result(result), before)
         except Exception as unknown:
             error_info = sys.exc_info()
             self.log.error("TCL command '%s' failed. Error text: %s" % (str(self), str(unknown)))
@@ -436,6 +482,7 @@ class TclCommandSignaled(TclCommand):
 
                 # set detail for processing, it will be there until next open or close
                 self.app.shell.open_processing(self.get_current_command())
+                before = self._collection_objects()
 
                 loop = QtCore.QEventLoop()
                 timer = QtCore.QTimer()
@@ -470,7 +517,12 @@ class TclCommandSignaled(TclCommand):
                     self.error = state['error']
                     if self.error is not None:
                         raise self.error
+                    # objects made in the worker join the collection by a queued signal, sent before the finished
+                    # one; the state can be set before the loop ran, so deliver the queued calls now
+                    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.MetaCall.value)
                     self.output = state['output']
+                    if not self.returns_value:
+                        self.output = self._report_new_objects(self.output, before)
                     return self.output
                 finally:
                     timer.stop()

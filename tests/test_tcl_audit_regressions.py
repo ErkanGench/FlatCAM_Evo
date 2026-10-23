@@ -213,3 +213,98 @@ def test_real_worker_validation_exception_becomes_tcl_error_without_excepthook(q
         thread.quit()
         assert thread.wait(3000)
 
+
+class FakeCollection(QtCore.QObject):
+    """A collection that, like the real one, takes the objects of a worker by a queued signal."""
+    created = QtCore.pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.objects = []
+        self.created.connect(self.objects.append)
+
+    def get_list(self):
+        return list(self.objects)
+
+
+class MakeObjects(TclCommand):
+    aliases = ['make_objects']
+    required = []
+    arg_names = collections.OrderedDict()
+    option_types = {}
+
+    def execute(self, args, unnamed_args):
+        for name in self.names:
+            self.app.collection.created.emit(SimpleNamespace(obj_options={'name': name}))
+
+
+class MakeObjectsSignaled(TclCommandSignaled, MakeObjects):
+    aliases = ['make_objects_async']
+
+    def execute(self, args, unnamed_args):
+        return MakeObjects.execute(self, args, unnamed_args)
+
+
+class Worker(QtCore.QObject):
+    @QtCore.pyqtSlot(object)
+    def run(self, task):
+        task['fcn'](*task['params'])
+
+
+@pytest.mark.parametrize('names', [[], ['paint_1'], ['with space', 'plain'], ['fail'], ['failsafe_iso']])
+@pytest.mark.parametrize('use_worker', [False, True])
+def test_a_command_returns_the_names_of_the_objects_it_created(qt_app, names, use_worker):
+    app = make_app()
+    app.collection = FakeCollection()
+    app.collection.objects.append(SimpleNamespace(obj_options={'name': 'old'}))
+    app.inform = Mock()
+    command = (MakeObjectsSignaled if use_worker else MakeObjects)(app)
+    command.names = names
+    thread = QtCore.QThread()
+    worker = Worker()
+    if use_worker:
+        worker.moveToThread(thread)
+        app.worker_task.connect(worker.run)
+        thread.start()
+    app.shell.tcl.createcommand('make', command.execute_wrapper)
+    try:
+        # a script chains the result: the names come back as a proper Tcl list
+        length = app.shell.tcl.eval('set g [make]; llength $g')
+        assert length == (str(len(names)) if names else '1')  # no object: None, as before
+        assert [app.shell.tcl.eval('lindex $g %d' % i) for i in range(len(names))] == names
+    finally:
+        thread.quit()
+        assert thread.wait(3000)
+    warned = [call.args[0] for call in app.inform.emit.call_args_list]
+    assert bool(warned) == (names == ['fail'])
+
+
+def test_a_command_with_returns_value_or_its_own_result_keeps_it():
+    app = make_app()
+    app.collection = FakeCollection()
+    app.inform = Mock()
+
+    class Keeps(MakeObjects):
+        def execute(self, args, unnamed_args):
+            super().execute(args, unnamed_args)
+            return 'mine'
+
+    command = Keeps(app)
+    command.names = ['x']
+    assert command.execute_wrapper() == 'mine'
+
+
+def test_switching_the_active_project_creates_no_new_objects():
+    app = make_app()
+    first, second = FakeCollection(), FakeCollection()
+    first.objects.append(SimpleNamespace(obj_options={'name': 'a'}))
+    second.objects.append(SimpleNamespace(obj_options={'name': 'b'}))
+    app.collection = first
+    app.projects = SimpleNamespace(contexts=[SimpleNamespace(collection=first), SimpleNamespace(collection=second)])
+    app.inform = Mock()
+
+    class Switch(MakeObjects):
+        def execute(self, args, unnamed_args):
+            self.app.collection = second
+
+    assert Switch(app).execute_wrapper() is None
