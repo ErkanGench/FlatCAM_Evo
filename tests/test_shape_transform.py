@@ -98,8 +98,8 @@ class TestTransformKeys(unittest.TestCase):
                         self.assertTrue(np.all(np.sign(areas) == np.sign(areas.sum())))
                         self.assertAlmostEqual(abs(areas.sum()), area, delta=1e-3 * max(1.0, area))
                     # colors are kept
-                    self.assertEqual(d['mesh_colors'].shape, r['mesh_colors'].shape)
-                    np.testing.assert_array_equal(d['line_colors'], r['line_colors'])
+                    np.testing.assert_array_equal(d['mesh_rgba'], r['mesh_rgba'])
+                    np.testing.assert_array_equal(d['line_rgba'], r['line_rgba'])
 
     def test_group_transform(self):
         c = new_collection()

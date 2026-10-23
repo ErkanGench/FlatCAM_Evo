@@ -417,7 +417,7 @@ class ShowIn3dTest(unittest.TestCase):
         self.assertTrue(shapes.data)
         self.assertEqual(len(shapes.data), len(tool.probing_shapes.data))
         for key, data in tool.probing_shapes.data.items():
-            for field in ('mesh_vertices', 'mesh_colors', 'line_pts', 'line_colors'):
+            for field in ('mesh_vertices', 'mesh_rgba', 'line_pts', 'line_rgba'):
                 np.testing.assert_equal(data[field], shapes.data[key][field])
         count = len(shapes.data)
         tool.show_probing_geo(True, reset=True)

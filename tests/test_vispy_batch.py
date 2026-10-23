@@ -18,6 +18,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unittest
+import numpy as np
+from unittest.mock import patch
 from shapely.geometry import Polygon, LineString, MultiPolygon
 
 
@@ -137,6 +139,10 @@ class TestAddCopy(unittest.TestCase):
         options = {"global_graphic_engine_3d_no_mp": True, "global_backface_culling": True}
         self.source = ShapeCollectionVisual(linewidth=1, layers=1, pool=None, fcoptions=options)
         self.target = ShapeCollectionVisual(linewidth=1, layers=1, pool=None, fcoptions=options)
+        # no GL canvas in the tests
+        patcher = patch('appGUI.VisPyVisuals.set_state')
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_polygon_copy_shares_positions_and_has_new_colors(self):
         poly = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)], [[(0.5, 0.5), (1.5, 0.5), (1.5, 1.5), (0.5, 1.5)]])
@@ -147,21 +153,56 @@ class TestAddCopy(unittest.TestCase):
         for name in ('line_pts', 'mesh_vertices', 'mesh_tris'):
             self.assertIs(dst[name], src[name])
         self.assertGreater(len(dst['mesh_tris']), 0)
-        self.assertEqual(dst['line_colors'].shape, src['line_colors'].shape)
-        self.assertEqual(dst['mesh_colors'].shape, src['mesh_colors'].shape)
-        self.assertEqual(dst['line_colors'].dtype.name, 'float32')
-        self.assertEqual(tuple(dst['line_colors'][0]), (1.0, 0.0, 0.0, 1.0))
-        self.assertEqual(tuple(dst['mesh_colors'][0][:3]), (0.0, 1.0, 0.0))
         self.assertTrue(dst['visible'])
         self.assertEqual(self.target._line_width, 3)
         self.assertTrue(self.target._dirty)
+        self.target.redraw([])
+        line_colors = self.target._lines[0]._color
+        mesh_colors = self.target._meshes[0].mesh_data.get_face_colors()
+        self.assertEqual(line_colors.dtype.name, 'float32')
+        self.assertEqual(line_colors.shape, (len(dst['line_pts']), 4))
+        np.testing.assert_array_equal(line_colors, np.tile([1.0, 0.0, 0.0, 1.0], (len(dst['line_pts']), 1)))
+        self.assertEqual(mesh_colors.shape, (len(dst['mesh_tris']) // 3, 4))
+        self.assertTrue(np.all(mesh_colors[:, :3] == (0.0, 1.0, 0.0)))
+        # the source keeps its own colors
+        self.source.redraw([])
+        np.testing.assert_allclose(self.source._lines[0]._color[0], (0x11 / 255, 0x22 / 255, 0x33 / 255, 1.0))
 
     def test_line_copy_has_no_mesh(self):
         key = self.source.add(shape=LineString([(0, 0), (1, 1), (2, 0)]), color='#112233FF', layer=0)
         copy_key = self.target.add_copy(self.source, key, color='#FF0000FF', face_color='#FF000050')
         dst = self.target.data[copy_key]
-        self.assertEqual(len(dst['mesh_colors']), 0)
-        self.assertEqual(len(dst['line_colors']), len(dst['line_pts']))
+        self.target.redraw([])
+        self.assertFalse(self.target._meshes[0].visible)
+        self.assertEqual(len(self.target._lines[0]._color), len(dst['line_pts']))
+
+    def test_two_shapes_get_their_own_color_per_vertex(self):
+        collection = self.source
+        line = LineString([(0, 0), (1, 1), (2, 0)])
+        square = Polygon([(5, 0), (6, 0), (6, 1), (5, 1)])
+        collection.add(shape=line, color='#FF0000FF', layer=0)
+        collection.add(shape=square, color='#0000FFFF', face_color='#00FF00FF', layer=0)
+        collection.redraw([])
+        colors = collection._lines[0]._color
+        n_line = 4
+        self.assertEqual(colors.dtype.name, 'float32')
+        self.assertEqual(colors.shape, (n_line + 8, 4))
+        self.assertTrue(np.all(colors[:n_line] == (1.0, 0.0, 0.0, 1.0)))
+        self.assertTrue(np.all(colors[n_line:] == (0.0, 0.0, 1.0, 1.0)))
+        mesh_colors = collection._meshes[0].mesh_data.get_face_colors()
+        self.assertEqual(len(mesh_colors), 2)
+        self.assertTrue(np.all(mesh_colors == (0.0, 1.0, 0.0, 1.0)))
+
+    def test_update_color_changes_the_painted_shapes(self):
+        collection = self.source
+        k0 = collection.add(shape=LineString([(0, 0), (1, 1)]), color='#FF0000FF', layer=0)
+        collection.add(shape=LineString([(2, 0), (3, 1)]), color='#FF0000FF', layer=0)
+        collection.redraw([])
+        collection.update_color(new_line_color='#0000FFFF', indexes=[k0])
+        collection.redraw([])
+        colors = collection._lines[0]._color
+        self.assertTrue(np.all(colors[:2] == (0.0, 0.0, 1.0, 1.0)))
+        self.assertTrue(np.all(colors[2:] == (1.0, 0.0, 0.0, 1.0)))
 
 if __name__ == '__main__':
     unittest.main()

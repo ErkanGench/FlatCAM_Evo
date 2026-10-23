@@ -70,7 +70,7 @@ def benchmark(args, pool):
                 assert len(keys) == len(obj.tools[ap]['geometry'])
                 for key in keys:
                     data = collection.data[key]
-                    for field in ('line_pts', 'line_colors', 'mesh_vertices', 'mesh_tris', 'mesh_colors'):
+                    for field in ('line_pts', 'line_rgba', 'mesh_vertices', 'mesh_tris', 'mesh_rgba'):
                         digest.update(data[field].tobytes())
                     digest.update(repr((data['visible'], data['layer'], data['tolerance'])).encode())
             obj.clear_plot_apertures()
