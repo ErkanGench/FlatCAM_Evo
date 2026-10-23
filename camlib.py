@@ -9187,7 +9187,7 @@ def to_dict(obj):
     if isinstance(obj, BaseGeometry):
         return {
             "__class__": "Shply",
-            "__inst__": sdumps(obj)
+            "__inst__": sdumps(obj, rounding_precision=20)
         }
     return obj
 
