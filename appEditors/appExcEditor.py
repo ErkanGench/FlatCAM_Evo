@@ -2890,8 +2890,6 @@ class AppExcEditor(QtCore.QObject):
         else:
             self.tool_shape = self.canvas.new_shape_collection(layers=1)
 
-        self.app.pool_recreated.connect(self.pool_recreated)
-
         # Remove from scene
         self.shapes.enabled = False
         self.tool_shape.enabled = False
@@ -3108,10 +3106,6 @@ class AppExcEditor(QtCore.QObject):
         for tool in self.tools_exc:
             self.tools_exc[tool]["button"].triggered.connect(self.make_callback(tool))  # Events
             self.tools_exc[tool]["button"].setCheckable(True)  # Checkable
-
-    def pool_recreated(self, pool):
-        self.shapes.pool = pool
-        self.tool_shape.pool = pool
 
     @staticmethod
     def make_storage():

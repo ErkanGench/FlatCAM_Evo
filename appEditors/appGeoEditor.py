@@ -436,8 +436,6 @@ class AppGeoEditor(QtCore.QObject):
         self.ui.snap_radius_entry.valueChanged.connect(
             lambda value: self.editor_options.update(snap_radius_px=value))
 
-        self.app.pool_recreated.connect(self.pool_recreated)
-
         # connect the toolbar signals
         self.connect_geo_toolbar_signals()
 
@@ -523,11 +521,6 @@ class AppGeoEditor(QtCore.QObject):
         for tool in self.tools:
             self.tools[tool]["button"].triggered.connect(self.make_callback(tool))  # Events
             self.tools[tool]["button"].setCheckable(True)  # Checkable
-
-    def pool_recreated(self, pool):
-        self.shapes.pool = pool
-        self.sel_shapes.pool = pool
-        self.tool_shape.pool = pool
 
     def on_transform_complete(self):
         self.delete_selected()

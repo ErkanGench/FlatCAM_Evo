@@ -322,8 +322,6 @@ class App(QtCore.QObject):
 
     # Emitted when a shell command is finished(one command only)
     shell_command_finished = QtCore.pyqtSignal(object)
-    # Emitted when multiprocess pool has been recreated
-    pool_recreated = QtCore.pyqtSignal(object)
     # Emitted when an unhandled exception happens
     # in the worker task.
     thread_exception = QtCore.pyqtSignal(object)
@@ -960,7 +958,10 @@ class App(QtCore.QObject):
         self.setup_obj_classes()
 
         # ###################################### CREATE MULTIPROCESSING POOL #######################################
-        self.pool = Pool(processes=self.options.get("global_process_number", self.defaults.get("global_process_number")))
+        # A child ends after 100 tasks and a new one starts: the memory of big geometries does not pile up in the
+        # children, and a restart (about 0.4 s) is rare.
+        self.pool = Pool(processes=self.options.get("global_process_number", self.defaults.get("global_process_number")),
+                         maxtasksperchild=100)
 
         # ###################################### Clear GUI Settings - once at first start ###########################
         if self.options.get("first_run", self.defaults.get("first_run")) is True:
@@ -1250,6 +1251,8 @@ class App(QtCore.QObject):
         self.workers = WorkerStack(workers_number=w_number)
 
         self.worker_task.connect(self.workers.add_task)
+        # the workers report an exception on the signal of the stack
+        self.workers.thread_exception.connect(self.thread_exception)
         self.thread_exception.connect(self.on_thread_exception)
         self.log.debug("Finished creating Workers crew.")
 
@@ -1879,19 +1882,11 @@ class App(QtCore.QObject):
 
     def clear_pool(self):
         """
-        Clear the multiprocessing pool and calls garbage collector.
+        Free memory after the objects are gone. The pool lives as long as the application: a restart of the
+        children is expensive, and maxtasksperchild already frees the memory of the children.
 
         :return: None
         """
-        try:
-            self.pool.close()
-            self.pool.join()
-        except (ValueError, AttributeError):
-            pass
-
-        self.pool = Pool(processes=self.options.get("global_process_number", self.defaults.get("global_process_number")))
-        self.pool_recreated.emit(self.pool)
-
         gc.collect()
 
     def install_tools(self, init_tcl=False):

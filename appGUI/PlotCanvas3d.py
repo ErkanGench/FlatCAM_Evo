@@ -180,7 +180,6 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         self.shape_collections = []
 
         self.shape_collection = self.new_shape_collection()
-        self.fcapp.pool_recreated.connect(self.on_pool_recreated)
 
         self.text_collection = self.new_text_collection()
         self.text_collection.enabled = True
@@ -504,9 +503,6 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
     def redraw(self):
         self.shape_collection.redraw([])
         self.text_collection.redraw()
-
-    def on_pool_recreated(self, pool):
-        self.shape_collection.pool = pool
 
 
 class Camera_3D(scene.ArcballCamera):

@@ -3959,7 +3959,6 @@ class AppGerberEditor(QtCore.QObject):
         # #############################################################################################################
         # ######################### Gerber Editor Signals #############################################################
         # #############################################################################################################
-        self.app.pool_recreated.connect(self.pool_recreated)
         self.mp_finished.connect(self.on_multiprocessing_finished)
         self.build_ui_sig.connect(self.build_ui)
         self.update_ui_sig.connect(self.update_ui)
@@ -4271,11 +4270,6 @@ class AppGerberEditor(QtCore.QObject):
         lines.append('%s: %d' % (_("Near endpoint pairs"), len(report['near_endpoints'])))
         self.ui.diagnostics_result.setText('\n'.join(lines))
         return report
-
-    def pool_recreated(self, pool):
-        self.shapes.pool = pool
-        self.tool_shape.pool = pool
-        self.pool = pool
 
     def set_editor_ui(self):
         # updated units

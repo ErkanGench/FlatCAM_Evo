@@ -4,16 +4,16 @@ import os
 import traceback
 from datetime import datetime
 
-from PyQt6 import QtWidgets, QtGui, QtCore
-from PyQt6.QtCore import QSettings, QTimer
-from appMain import App
-from appCommon.DataPath import data_path_from_env
-from appGUI import VisPyPatches
-
-from appGUI.GUIElements import FCMessageBox
-from appCommon.SafeEval import safe_eval
-
 from multiprocessing import freeze_support
+
+# A pool child (spawn runs this file again as __mp_main__; a frozen build runs it as __main__ with
+# --multiprocessing-fork) does Shapely and triangulation work on one thread.
+# This must come before any numpy import: OpenBLAS reserves buffers for every CPU otherwise.
+if __name__ == '__mp_main__' or '--multiprocessing-fork' in sys.argv:
+    for _name in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS'):
+        os.environ.setdefault(_name, '1')
+
+# The heavy imports (Qt, appMain) are in the __main__ block below, so a pool child does not load the whole application.
 
 MIN_VERSION_MAJOR = 3
 MIN_VERSION_MINOR = 10
@@ -31,6 +31,7 @@ def debug_trace():
 
 
 def _shutdown_message_handler(message_type, context, message):
+    from PyQt6 import QtCore
     if message.startswith('QThreadStorage: entry ') and ' destroyed before end of thread ' in message:
         return
     # the views and their selection models are destroyed after their models on exit; the selection is a no-op then
@@ -49,6 +50,7 @@ def _shutdown_message_handler(message_type, context, message):
 
 
 def _install_shutdown_message_handler():
+    from PyQt6 import QtCore
     QtCore.qInstallMessageHandler(_shutdown_message_handler)
 
 
@@ -57,6 +59,14 @@ if __name__ == '__main__':
     # QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_X11InitThreads)
     # NOTE: Never talk to the GUI from threads! This is why I commented the above.
     freeze_support()
+
+    from PyQt6 import QtWidgets, QtGui, QtCore
+    from PyQt6.QtCore import QSettings, QTimer
+    from appMain import App
+    from appCommon.DataPath import data_path_from_env
+    from appGUI import VisPyPatches
+    from appGUI.GUIElements import FCMessageBox
+    from appCommon.SafeEval import safe_eval
 
     portable = False
     # Resolve the override before reading the default or portable configuration.

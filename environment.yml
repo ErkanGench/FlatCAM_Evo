@@ -4,7 +4,6 @@ channels:
 dependencies:
 - PyQt6
 - darkdetect
-- dill
 - ezdxf>=1.4.5
 - fontTools
 - freetype-py

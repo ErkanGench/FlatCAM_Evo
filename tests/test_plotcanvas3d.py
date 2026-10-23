@@ -25,8 +25,6 @@ from appGUI.PlotCanvas import PlotCanvas
 
 
 class CanvasApp(QtCore.QObject):
-    pool_recreated = QtCore.pyqtSignal(object)
-
     def __init__(self, units='MM', custom_cursor=True):
         super().__init__()
         self.ui = QtWidgets.QWidget()
