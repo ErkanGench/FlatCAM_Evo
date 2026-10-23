@@ -6,7 +6,7 @@
 # ##########################################################
 
 from PyQt6 import QtWidgets, QtGui, QtCore
-from appGUI.GUIElements import FCLabel, FCButton, FCFrame, GLay, FCComboBox, RadioSet, FCTable, FCCheckBox
+from appGUI.GUIElements import FCLabel, FCButton, FCFrame, GLay, FCComboBox, RadioSet, FCTable, FCCheckBox, FCSpinner
 
 import gettext
 import appTranslation as fcTranslate
@@ -42,6 +42,12 @@ class AlignUI:
 
         self.title_box = QtWidgets.QHBoxLayout()
         self.tools_box.addLayout(self.title_box)
+        self.level = QtWidgets.QToolButton()
+        self.level.setCheckable(True)
+        self.level.setToolTip(_("Beginner Mode - many parameters are hidden.\n"
+                               "Advanced Mode - full control.\n"
+                               "Permanent change is done in 'Preferences' menu."))
+        self.title_box.addWidget(self.level)
 
         # #############################################################################################################
         # Moving Object Frame
@@ -180,6 +186,21 @@ class AlignUI:
         )
         grid2.addWidget(self.allow_mirror_cb, 6, 0, 1, 2)
 
+        self.advanced_frame = FCFrame()
+        self.tools_box.addWidget(self.advanced_frame)
+        advanced_grid = GLay(v_spacing=5, h_spacing=3)
+        self.advanced_frame.setLayout(advanced_grid)
+        self.limit_pairs_cb = FCCheckBox(_("Limit pairs"))
+        self.limit_pairs_cb.setToolTip(_("Limit source landmarks and fitted pairs in Auto mode.\n"
+                                        "All features still verify the result. Zero means unlimited."))
+        self.limit_pairs_entry = FCSpinner(callback=self.confirmation_message_int)
+        self.limit_pairs_entry.set_range(0, 1000000)
+        self.limit_pairs_entry.set_value(6)
+        self.limit_pairs_entry.setEnabled(False)
+        self.limit_pairs_cb.toggled.connect(self.limit_pairs_entry.setEnabled)
+        advanced_grid.addWidget(self.limit_pairs_cb, 0, 0)
+        advanced_grid.addWidget(self.limit_pairs_entry, 0, 1)
+
         # #############################################################################################################
         # Points Frame
         # #############################################################################################################
@@ -251,9 +272,15 @@ class AlignUI:
         self.layout.addWidget(self.reset_button)
 
         self.show_mode('sp')
+        self.set_level(False)
 
         # #################################### FINSIHED GUI ###########################
         # #############################################################################
+
+    def set_level(self, checked):
+        self.advanced_frame.setVisible(checked)
+        self.level.setText(_("Advanced") if checked else _("Beginner"))
+        self.level.setStyleSheet("QToolButton { color: %s; }" % ('red' if checked else 'green'))
 
     def show_fit_model(self, visible):
         """The fit model combo box and the Apply button are used only in the Best Fit mode."""

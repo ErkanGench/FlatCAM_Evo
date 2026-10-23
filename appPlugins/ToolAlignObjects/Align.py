@@ -123,6 +123,7 @@ class AlignObjects(AppTool):
         self.ui.a_type_radio.activated_custom.connect(self.on_mode_changed)
         self.ui.fit_model_combo.currentIndexChanged.connect(self.update_apply_state)
         self.ui.reset_button.clicked.connect(self.set_tool_ui)
+        self.ui.level.toggled.connect(self.on_level_changed)
 
     def run(self, toggle=True):
         self.app.defaults.report_usage("ToolAlignObjects()")
@@ -217,8 +218,16 @@ class AlignObjects(AppTool):
         self.ui.show_mode(self.ui.a_type_radio.get_value())
         self.ui.type_obj_radio.set_value('grb')
         self.ui.type_aligner_obj_radio.set_value('grb')
+        self.change_level(self._pref_value('global_app_level', ('a', 'b')))
 
         self.update_apply_state()
+
+    def change_level(self, level):
+        self.ui.level.setChecked(level == 'a')
+        self.on_level_changed(self.ui.level.isChecked())
+
+    def on_level_changed(self, checked):
+        self.ui.set_level(checked)
 
     def _pref_value(self, key, allowed):
         """
@@ -548,6 +557,12 @@ class AlignObjects(AppTool):
 
         model = self.ui.get_fit_model()
         allow_mirror = bool(self.ui.allow_mirror_cb.get_value())
+        pair_limit = (int(self.ui.limit_pairs_entry.get_value())
+                      if self.ui.level.isChecked() and self.ui.limit_pairs_cb.isChecked() else 0)
+        minimum = 3 if model == 'affine' else 2
+        if pair_limit and pair_limit < minimum:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % (_("At least %d point pairs are needed.") % minimum))
+            return
 
         try:
             src_index = build_snap_index(self.aligned_obj)
@@ -570,7 +585,7 @@ class AlignObjects(AppTool):
             with proc_container.new(_("Searching the alignment...")):
                 try:
                     results = auto_align(src_index, dst_index, model=model, allow_mirror=allow_mirror,
-                                         max_results=5, progress=progress)
+                                         max_results=5, progress=progress, pair_limit=pair_limit)
                 except AlignError as e:
                     error = str(e)
                 except Exception as e:
@@ -609,9 +624,11 @@ class AlignObjects(AppTool):
         self.auto_index = index % len(self.auto_results)
         res = self.auto_results[self.auto_index]
 
-        P = [(float(x), float(y)) for x, y in res.P[:AUTO_MAX_ROWS]]
-        Q = [(float(x), float(y)) for x, y in res.Q[:AUTO_MAX_ROWS]]
-        errors = [float(e) for e in list(res.errors)[:AUTO_MAX_ROWS]]
+        fit_P = res.fit_P if res.fit_P is not None else res.P
+        fit_Q = res.fit_Q if res.fit_Q is not None else res.Q
+        P = [(float(x), float(y)) for x, y in fit_P[:AUTO_MAX_ROWS]]
+        Q = [(float(x), float(y)) for x, y in fit_Q[:AUTO_MAX_ROWS]]
+        errors = residuals(res.matrix, P, Q)[0]
         self.ui.fill_table(P, Q, errors)
         self.draw_markers(P[:AUTO_MAX_MARKERS], Q[:AUTO_MAX_MARKERS])
 
@@ -621,6 +638,8 @@ class AlignObjects(AppTool):
             max_err, _("candidate"), self.auto_index + 1, len(self.auto_results))
         if res.mirrored:
             text += ' (%s)' % _("mirrored")
+        if res.fit_P is not None:
+            text += ', %d %s (%s)' % (len(res.fit_P), _("fit pairs"), _("RMS/Max: full verification"))
         self.ui.result_label.setText(text)
         self.update_apply_state()
 
