@@ -71,6 +71,7 @@ class TestMenuRequest(unittest.TestCase):
         self.col = make_collection()
         self.ui = self.col.app.ui
         self.ui.menuproject.popup = mock.Mock()
+        self.col.view.indexAt = lambda pos: QtCore.QModelIndex()
 
     def tearDown(self):
         self.ui.menuproject.deleteLater()
@@ -105,6 +106,49 @@ class TestMenuRequest(unittest.TestCase):
         self.request(obj('gerber', 'a', plot=False), obj('gerber', 'b', plot=False))
         self.assertIn('enable', self.shown())
         self.assertNotIn('disable', self.shown())
+
+class TestCategoryMenu(unittest.TestCase):
+
+    def setUp(self):
+        self.col = make_collection()
+        self.shown_menu = []
+        patcher = mock.patch.object(QtWidgets.QMenu, 'popup', new=lambda menu, pos: self.shown_menu.append(menu))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.col.get_list = lambda: [obj('gerber', 'a'), obj('gerber', 'b'), obj('excellon', 'c')]
+
+    def request(self, kind):
+        self.col.view.indexAt = lambda pos: self.col.index(list(self.col.group_items).index(kind), 0,
+                                                           QtCore.QModelIndex())
+        self.col.on_menu_request(QtCore.QPoint(0, 0))
+        self.assertEqual(len(self.shown_menu), 1)
+        return [(a.text(), a.isEnabled()) if not a.isSeparator() else '-' for a in self.shown_menu[0].actions()]
+
+    def test_gerber_category_menu(self):
+        self.assertEqual(self.request('gerber'), [('Show All', True), ('Hide All', True), '-', ('Open', True)])
+
+    def test_show_all_and_hide_all_take_the_objects_of_the_category(self):
+        self.request('gerber')
+        show_all, hide_all = self.shown_menu[0].actions()[:2]
+        show_all.trigger()
+        hide_all.trigger()
+        for call in (self.col.app.enable_plots, self.col.app.disable_plots):
+            self.assertEqual([o.obj_options['name'] for o in call.call_args[0][0]], ['a', 'b'])
+
+    def test_open_runs_the_file_handler_of_the_category(self):
+        for kind, handler in (('gerber', 'on_file_open_gerber'), ('excellon', 'on_file_open_excellon'),
+                              ('geometry', 'on_file_open_geometry'), ('script', 'on_file_open_script'),
+                              ('document', 'on_file_open_document')):
+            self.shown_menu.clear()
+            self.request(kind)
+            self.shown_menu[0].actions()[-1].trigger()
+            getattr(self.col.app.f_handlers, handler).assert_called_once()
+
+    def test_cncjob_has_no_open_and_script_cannot_show_or_hide(self):
+        self.assertEqual(self.request('cncjob'), [('Show All', False), ('Hide All', False)])
+        self.shown_menu.clear()
+        self.assertEqual(self.request('script')[:2], [('Show All', False), ('Hide All', False)])
+
 
 class TestViewSource(unittest.TestCase):
 

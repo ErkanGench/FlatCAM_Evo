@@ -21,6 +21,12 @@ Project Tab:
 
 - each object with plot colors has a color swatch at the right side of its row; a click on it opens a color dialog with alpha; if the object is selected, the color goes to all the selected objects, else only to this object; the click does not change the selection
 - a color change from the context menu also updates the swatch
+- a right click on a category row (Gerber, Excellon, Geometry, CNC Job, Script, Document) shows a menu with: Show All, Hide All, a separator and Open; Show All and Hide All work on the objects of that category; Open shows the icon of the category
+- Open of a category: Gerber, Excellon and Script open their files; Geometry opens SVG or DXF files by the file extension; Document opens FlatDoc files (new); CNC Job has no Open
+
+Toolbar:
+
+- the Snap to grid button shows a status icon when it is on; the icon of a name that ends in "_status" is not recolored by the theme
 
 Canvas:
 

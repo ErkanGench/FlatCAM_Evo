@@ -520,8 +520,54 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         source = getattr(obj, 'source_file', None)
         return isinstance(source, str) and source != ''
 
+    def category_open_actions(self):
+        """
+        :return: {kind: callable} with the file open action of each category of the project tree. CNC Job has none.
+        """
+        f_handlers = self.app.f_handlers
+        return {
+            'gerber': f_handlers.on_file_open_gerber,
+            'excellon': f_handlers.on_file_open_excellon,
+            'geometry': f_handlers.on_file_open_geometry,
+            'script': f_handlers.on_file_open_script,
+            'document': f_handlers.on_file_open_document,
+        }
+
+    def on_category_menu_request(self, kind, pos):
+        """
+        Popup of a category row (Gerber, Excellon, ...): Show All, Hide All of the category and its Open action.
+        """
+        ui = self.app.ui
+        objects = [obj for obj in self.get_list() if obj.kind == kind]
+        plotted = kind in ['geometry', 'gerber', 'excellon', 'cncjob']
+
+        menu = QtWidgets.QMenu(self.view)
+        show_all = menu.addAction(ui.menuprojectenable.icon(), _('Show All'))
+        hide_all = menu.addAction(ui.menuprojectdisable.icon(), _('Hide All'))
+        show_all.setEnabled(plotted and len(objects) > 0)
+        hide_all.setEnabled(plotted and len(objects) > 0)
+        show_all.triggered.connect(lambda: self.app.enable_plots(objects))
+        hide_all.triggered.connect(lambda: self.app.disable_plots(objects))
+
+        open_action = self.category_open_actions().get(kind)
+        if open_action is not None:
+            menu.addSeparator()
+            menu.addAction(QtGui.QIcon(self.icons[kind]), _('Open')).triggered.connect(lambda: open_action())
+
+        menu.popup(self.view.mapToGlobal(pos))
+
     def on_menu_request(self, pos):
         ui = self.app.ui
+
+        index = self.view.indexAt(pos)
+        if index.isValid():
+            item = index.internalPointer()
+            if item is not None and item.obj is None:
+                for kind, group_item in self.group_items.items():
+                    if group_item is item:
+                        self.on_category_menu_request(kind, pos)
+                        return
+
         obj_selection = self.get_selected()
         sel = len(obj_selection) > 0
 

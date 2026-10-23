@@ -2839,6 +2839,96 @@ class appIO(QtCore.QObject):
             # appGUI feedback
             self.inform.emit('[success] %s: %s' % (_("Opened"), filename))
 
+    def on_file_open_document(self, name=None):
+        """
+        Ask for FlatDoc files and open each one as a Document object.
+
+        :param name:    name of a FlatDoc file to open, no dialog if given
+        :return:        None
+        """
+        self.log.debug("on_file_open_document()")
+
+        _filter_ = "FlatCAM Documents (*.FlatDoc);;All Files (*.*)"
+
+        if name:
+            filenames = [name]
+        else:
+            try:
+                filenames, _f = QtWidgets.QFileDialog.getOpenFileNames(
+                    caption=_("Open Document"), directory=self.app.get_last_folder(), filter=_filter_)
+            except TypeError:
+                filenames, _f = QtWidgets.QFileDialog.getOpenFileNames(caption=_("Open Document"), filter=_filter_)
+
+        if len(filenames) == 0:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+            return
+
+        for filename in filenames:
+            if filename != '':
+                self.worker_task.emit({'fcn': self.open_document, 'params': [filename]})
+
+    def open_document(self, filename, outname=None):
+        """
+        Open a FlatDoc file and make a Document object with its text. Thread-safe.
+
+        :param filename:    FlatDoc file
+        :param outname:     name of the new object, None takes the name of the file
+        :return:            'fail' on error
+        """
+        self.log.debug("open_document()")
+        if not os.path.exists(filename):
+            self.inform.emit('[ERROR_NOTCL] %s' % _("File no longer available."))
+            return 'fail'
+
+        try:
+            with open(filename, "r", encoding="utf-8") as opened_doc:
+                content = opened_doc.read()
+        except (IOError, UnicodeDecodeError) as e:
+            self.inform.emit('[ERROR_NOTCL] %s: %s. %s' % (_("Failed to open file"), filename, str(e)))
+            return 'fail'
+
+        def obj_init(doc_obj, app_obj):
+            doc_obj.source_file = content
+
+        with self.app.proc_container.new('%s...' % _("Opening")):
+            doc_name = outname or filename.split('/')[-1].split('\\')[-1]
+            ret_val = self.app.app_obj.new_object("document", doc_name, obj_init, autoselected=False, plot=False)
+            if ret_val == 'fail':
+                self.inform.emit('[ERROR_NOTCL]%s' % _('Failed to open Document.'))
+                return 'fail'
+
+            self.app.file_opened.emit("document", filename)
+            self.inform.emit('[success] %s: %s' % (_("Opened"), filename))
+
+    def on_file_open_geometry(self):
+        """
+        Ask for SVG or DXF files and import each one as a Geometry object, by the extension of the file.
+
+        :return: None
+        """
+        self.log.debug("on_file_open_geometry()")
+
+        _filter_ = add_case_variants("Geometry Files (*.svg *.dxf);;SVG File .svg (*.svg);;DXF File .dxf (*.dxf);;"
+                                     "All Files (*.*)")
+        try:
+            filenames, _f = QtWidgets.QFileDialog.getOpenFileNames(
+                caption=_("Open Geometry"), directory=self.app.get_last_folder(), filter=_filter_)
+        except TypeError:
+            filenames, _f = QtWidgets.QFileDialog.getOpenFileNames(caption=_("Open Geometry"), filter=_filter_)
+
+        if len(filenames) == 0:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+            return
+
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext == '.svg':
+                self.worker_task.emit({'fcn': self.import_svg, 'params': [filename, "geometry"]})
+            elif ext == '.dxf':
+                self.worker_task.emit({'fcn': self.import_dxf, 'params': [filename, "geometry"]})
+            elif filename != '':
+                self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Unsupported file type"), filename))
+
     def open_config_file(self, filename, run_from_arg=None):
         """
         Loads a config file from the specified file.
