@@ -984,13 +984,18 @@ class App(QtCore.QObject):
             del splash_settings
             show_splash = 1
 
-        if show_splash and not self.headless:
+        # no splash when the app starts with a file to open (a double-click on an associated file)
+        if show_splash and not self.headless and not App.args:  # noqa
+            screen = QtWidgets.QApplication.screenAt(QtGui.QCursor.pos())
+            # scale to physical pixels of the screen; a pixmap of logical size is stretched (blurred) on a HiDPI screen
+            dpr = screen.devicePixelRatio() if screen else QtWidgets.QApplication.primaryScreen().devicePixelRatio()
             splash_pix = QtGui.QPixmap(self.resource_location + '/splash.png')
             splash_pix = splash_pix.scaled(
-                QtCore.QSize(622, 344),  # You can set this to your desired width and height
+                QtCore.QSize(round(622 * dpr), round(344 * dpr)),  # logical size of the splash: 622 x 344
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation
             )
+            splash_pix.setDevicePixelRatio(dpr)
 
             # self.splash = QtWidgets.QSplashScreen(splash_pix, Qt.WindowType.WindowStaysOnTopHint)
             self.splash = QtWidgets.QSplashScreen(splash_pix, Qt.WindowType.SplashScreen)
@@ -1003,7 +1008,6 @@ class App(QtCore.QObject):
             # desktop = QtWidgets.QApplication.desktop()
             # screen = desktop.screenNumber(QtGui.QCursor.pos())
             # screen = QtWidgets.QWidget.screen(self.splash)
-            screen = QtWidgets.QApplication.screenAt(QtGui.QCursor.pos())
             if screen:
                 current_screen_center = screen.availableGeometry().center()
                 self.splash.move(current_screen_center - self.splash.rect().center())
