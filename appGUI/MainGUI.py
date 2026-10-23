@@ -1486,8 +1486,10 @@ class MainGUI(QtWidgets.QMainWindow):
         # ########################################################################
 
         # Snap GRID toolbar is always active to facilitate usage of measurements done on GRID
-        self.grid_snap_btn = self.grid_toolbar.addAction(
-            QtGui.QIcon(self.app.resource_location + '/grid18.png'), _('Snap to grid'))
+        grid_icon = QtGui.QIcon(self.app.resource_location + '/grid18.png')
+        grid_icon.addFile(self.app.resource_location + '/grid18_status.png', QtCore.QSize(),
+                          QtGui.QIcon.Mode.Normal, QtGui.QIcon.State.On)
+        self.grid_snap_btn = self.grid_toolbar.addAction(grid_icon, _('Snap to grid'))
         self.grid_gap_x_entry = FCEntry2()
         self.grid_gap_x_entry.setMaximumWidth(70)
         self.grid_gap_x_entry.setToolTip(_("Grid X snapping distance"))

@@ -30,7 +30,7 @@ def recolor_icons(directory, color):
     pending = []
     for path in sorted(directory.iterdir()):
         if (not path.is_file() or path.is_symlink() or path.suffix.lower() not in ('.png', '.ico') or
-                path.stem.endswith('_project') or path.name in PROTECTED_ICONS or
+                path.stem.endswith(('_project', '_status')) or path.name in PROTECTED_ICONS or
                 path.name.endswith('light12.png') or path.stem.startswith('active')):
             continue
         reader = QtGui.QImageReader(str(path))

@@ -26,7 +26,8 @@ class TestIconColors(unittest.TestCase):
             root = Path(directory)
             mono = [(102, 173, 199, 255), (51, 87, 100, 128), (0, 0, 0, 0)]
             for name in ('tool.png', 'tool.ico', 'drill16_project.png', 'axis18.png',
-                         'settings18.png', 'hud18.png', 'graylight12.png', 'active_static.png', 'red32.png'):
+                         'settings18.png', 'hud18.png', 'graylight12.png', 'active_static.png', 'red32.png',
+                         'grid18_status.png'):
                 write_icon(root / name, mono)
             write_icon(root / 'neutral.png', [(227, 233, 237, 255), (110, 114, 116, 64)])
             write_icon(root / 'white.png', [(255, 255, 255, 255)])
