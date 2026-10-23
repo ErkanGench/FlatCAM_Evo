@@ -19,6 +19,10 @@ import numpy as np
 from functools import lru_cache
 from appGUI.VisPyTesselators import GLUTess
 
+# set_gl_state() replaces the whole state and set_state() sends only the given keys, so a visual without these
+# draws with the blend of the previous visual (the grid uses 'additive')
+_BLEND = dict(blend=True, blend_func=('src_alpha', 'one_minus_src_alpha'))
+
 
 # class FlatCAMLineVisual(LineVisual):
 #     def __init__(self, pos=None, color=(0.5, 0.5, 0.5, 1), width=1, connect='strip', method='gl', antialias=False):
@@ -296,8 +300,8 @@ class RectangleVisual(CompoundVisual):
         self._line = LineVisual(pos=self._vertices[[0, 1, 1, 2, 2, 3, 3, 0]],
                                 connect='segments', width=linewidth, antialias=True)
         # Reversing a drag mirrors the unit square; both windings must remain visible.
-        self._mesh.set_gl_state(polygon_offset_fill=True, polygon_offset=(1, 1), cull_face=False)
-        self._line.set_gl_state(blend=True)
+        self._mesh.set_gl_state(polygon_offset_fill=True, polygon_offset=(1, 1), cull_face=False, **_BLEND)
+        self._line.set_gl_state(**_BLEND)
         self._rect = None
         self._colors = None
         super().__init__([self._mesh, self._line])
@@ -378,16 +382,15 @@ class ShapeCollectionVisual(CompoundVisual):
             cull = True
             if self.fc_options:
                 cull = self.fc_options.get("global_backface_culling", True)
-            m.set_gl_state(polygon_offset_fill=True, polygon_offset=(1, 1), cull_face=cull)
+            m.set_gl_state(polygon_offset_fill=True, polygon_offset=(1, 1), cull_face=cull, **_BLEND)
 
         for lne in self._lines:
-            pass
-            lne.set_gl_state(blend=True)
+            lne.set_gl_state(**_BLEND)
 
         # Selected objects are an overlay, independent of their normal plotting layer.
-        self._top_mesh.set_gl_state(blend=True, depth_test=False,
-                                    cull_face=(self.fc_options or {}).get("global_backface_culling", True))
-        self._top_line.set_gl_state(blend=True, depth_test=False)
+        self._top_mesh.set_gl_state(depth_test=False,
+                                    cull_face=(self.fc_options or {}).get("global_backface_culling", True), **_BLEND)
+        self._top_line.set_gl_state(depth_test=False, **_BLEND)
 
         self.freeze()
 

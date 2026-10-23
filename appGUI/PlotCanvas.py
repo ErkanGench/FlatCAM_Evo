@@ -172,7 +172,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         # RECT HUD
         self.rect_hud = Rectangle(width=10, height=10, radius=[5, 5, 5, 5], center=(20, 20),
                                   border_color=self.rect_hud_color, color=self.rect_hud_color, parent=None)
-        self.rect_hud.set_gl_state(depth_test=False)
+        # set_gl_state() replaces the whole state; without 'translucent' the rect inherits the blend of the last visual
+        self.rect_hud.set_gl_state('translucent', depth_test=False)
         self.rect_hud.order = 1
 
         self._hud_update_timer = QtCore.QTimer(self)
