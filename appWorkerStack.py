@@ -1,6 +1,7 @@
 
 import logging
 import time
+from collections import deque
 
 from PyQt6 import QtCore
 from appWorker import Worker
@@ -8,21 +9,20 @@ from appWorker import Worker
 
 class WorkerStack(QtCore.QObject):
     """
-    Manages a pool of Worker threads with load-balanced task dispatch.
+    Manages a pool of Worker threads with a central task queue.
 
-    HIGH and NORMAL priority tasks are dispatched IMMEDIATELY to the
-    least-loaded worker (pre-queued in the worker's signal queue for
-    maximum throughput — zero inter-task delay).
+    HIGH and NORMAL priority tasks wait in one FIFO queue (HIGH first). A task goes to a worker
+    only when that worker is idle, so no task waits behind a long task of a busy worker while
+    another worker is free.
 
     LOW priority tasks have BARRIER semantics: they are held in a
-    deferred list and only dispatched when ALL high/normal tasks
-    have completed. This guarantees finalization tasks (like plot_all)
-    run after all regular work is done.
+    deferred list and only dispatched when no high/normal task is queued or running.
+    This guarantees finalization tasks (like plot_all) run after all regular work is done.
 
     Priority levels:
-        'high'   (0)  — Dispatched immediately, same as normal
-        'normal' (5)  — Default. Dispatched immediately to least-loaded worker
-        'low'    (10) — Barrier: deferred until all high/normal tasks complete
+        'high'   (0)  — Queued before the normal tasks
+        'normal' (5)  — Default. Given to the next idle worker
+        'low'    (10) — Barrier: deferred until no high/normal task is queued or running
 
     Usage:
         # Normal (default — no 'priority' key needed):
@@ -51,11 +51,13 @@ class WorkerStack(QtCore.QObject):
 
         self.workers = []
         self.threads = []
-        self.load = {}                              # {'worker_name': queued_task_count}
+        self.load = {}                              # {'worker_name': 1 if it runs a task else 0}
         self.worker_map = {}                        # 'worker_name' -> Worker instance
 
-        self._pending_count = 0                     # In-flight high/normal tasks (not yet completed)
+        self._high_queue = deque()                  # HIGH tasks waiting for an idle worker
+        self._normal_queue = deque()                # NORMAL tasks waiting for an idle worker
         self._deferred_tasks = []                   # LOW priority tasks waiting for barrier
+        self._low_running = set()                   # workers that run a LOW task now
 
         # Create workers crew
         for i in range(0, workers_number):
@@ -75,10 +77,10 @@ class WorkerStack(QtCore.QObject):
 
     def add_task(self, task):
         """
-        Add a task for execution.
+        Add a task for execution. It waits in the central queue until a worker is idle.
 
-        HIGH/NORMAL tasks are dispatched immediately to the least-loaded worker.
-        LOW tasks are deferred until all high/normal tasks complete (barrier).
+        HIGH tasks go before the queued NORMAL tasks. LOW tasks are deferred until no high/normal
+        task is queued or running (barrier).
 
         :param task: dict with keys:
             'fcn'      — callable to execute (required)
@@ -92,47 +94,45 @@ class WorkerStack(QtCore.QObject):
             priority = self._PRIORITY_MAP.get(priority, self.PRIORITY_NORMAL)
 
         if priority >= self.PRIORITY_LOW:
-            # LOW priority: defer until all normal/high tasks complete
             self._deferred_tasks.append(task)
-            # If nothing is running, flush immediately
-            if self._pending_count == 0:
-                self._flush_deferred()
+        elif priority <= self.PRIORITY_HIGH:
+            self._high_queue.append(task)
         else:
-            # HIGH/NORMAL: dispatch immediately to least-loaded worker
-            self._dispatch_to_worker(task)
-
-    def _dispatch_to_worker(self, task):
-        """Dispatch a task immediately to the least-loaded worker."""
-        worker_name = min(self.load, key=self.load.get)
-        self.load[worker_name] += 1
-        self._pending_count += 1
-        self.worker_map[worker_name].worker_task_signal.emit(
-            {'worker_name': worker_name, 'fcn': task['fcn'], 'params': task['params']}
-        )
+            self._normal_queue.append(task)
+        self._dispatch()
 
     def on_task_completed(self, worker_name):
         """Called via signal when a worker finishes its current task."""
-        self.load[str(worker_name)] -= 1
-        self._pending_count -= 1
-
-        # When all normal/high tasks are done, flush deferred (LOW) tasks
-        if self._pending_count == 0 and self._deferred_tasks:
-            self._flush_deferred()
+        worker_name = str(worker_name)
+        self.load[worker_name] -= 1
+        self._low_running.discard(worker_name)
+        self._dispatch()
 
     def pending_count(self):
         """
         Return the number of tasks that are queued or run now, including the deferred low priority tasks.
         """
-        return self._pending_count + len(self._deferred_tasks)
+        return len(self._high_queue) + len(self._normal_queue) + sum(self.load.values()) + len(self._deferred_tasks)
 
-    def _flush_deferred(self):
-        """Dispatch all deferred LOW tasks. Called only when no normal/high tasks remain."""
-        tasks = self._deferred_tasks[:]
-        self._deferred_tasks.clear()
-        for task in tasks:
-            worker_name = min(self.load, key=self.load.get)
-            self.load[worker_name] += 1
-            self._pending_count += 1  # Track deferred tasks so completion decrements correctly
+    def _dispatch(self):
+        """Give a queued task to each idle worker. The only path that starts a task (GUI thread)."""
+        for worker_name in self.load:
+            if self.load[worker_name]:
+                continue
+            low = False
+            if self._high_queue:
+                task = self._high_queue.popleft()
+            elif self._normal_queue:
+                task = self._normal_queue.popleft()
+            elif self._deferred_tasks and len(self._low_running) == sum(self.load.values()):
+                # the barrier: only LOW tasks run now
+                task = self._deferred_tasks.pop(0)
+                low = True
+            else:
+                break
+            self.load[worker_name] = 1
+            if low:
+                self._low_running.add(worker_name)
             self.worker_map[worker_name].worker_task_signal.emit(
                 {'worker_name': worker_name, 'fcn': task['fcn'], 'params': task['params']}
             )

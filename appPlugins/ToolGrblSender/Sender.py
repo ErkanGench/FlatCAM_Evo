@@ -8,6 +8,7 @@
 import logging
 import math
 import random
+import threading
 import time
 from pathlib import Path
 
@@ -2396,7 +2397,11 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.ui.start_button.setDisabled(True)
         self.ui.progress_bar.setValue(0)
         self.app.inform.emit('%s: %d' % (_("Streaming lines"), len(lines)))
-        self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+        self._start_stream_thread(worker_task)
+
+    def _start_stream_thread(self, fn):
+        """The stream runs for the whole job: its own thread, so it never blocks an app worker."""
+        threading.Thread(target=fn, name='GrblSender-stream', daemon=True).start()
 
     def _grbl_stream_crashed(self, op, reason):
         """An exception ended the stream worker: stop the stream. Stop or Reset of the user keep their state."""

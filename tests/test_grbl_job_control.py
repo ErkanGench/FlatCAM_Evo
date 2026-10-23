@@ -124,6 +124,18 @@ class TestExitCheckMode(unittest.TestCase):
 
 
 class TestCheckModeJob(unittest.TestCase):
+    def test_stream_runs_in_its_own_thread_not_on_an_app_worker(self):
+        import time
+        tool = make_stream_tool(CheckFake(), check_mode=True)
+        del tool._start_stream_thread                      # back to the real method
+        tool.app.worker_task.emit.reset_mock()
+        tool.on_start()
+        deadline = time.monotonic() + 5.0
+        while not tool.stream_ended_sig.emit.called and time.monotonic() < deadline:
+            time.sleep(0.005)
+        self.assertEqual(ended_how(tool), 'check_passed')
+        tool.app.worker_task.emit.assert_not_called()
+
     def test_check_passed(self):
         fake = CheckFake()
         tool = make_stream_tool(fake, check_mode=True)

@@ -24,6 +24,7 @@ def make_stream_tool(fake, source=None, check_mode=False):
     tool._grbl_connected = True
     tool.app.options = {'tools_grbl_status_ms': 20}
     tool.app.worker_task.emit.side_effect = lambda task: task['fcn']()
+    tool._start_stream_thread = lambda fn: fn()
     tool.job_lines = []
     tool.job_line_numbers = []
     tool.job_target_name = None
