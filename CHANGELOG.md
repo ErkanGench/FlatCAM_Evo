@@ -23,6 +23,41 @@ Start:
 - all the file arguments open; before, only the first Gerber, Excellon or G-code file of a launch opened
 - macOS: a file opened from the Finder (double-click, Open With) opens in the app, also while the app starts
 - quit and restart close the socket directly; the restarted app is again the instance that gets the files of a second launch
+- the listener starts before the app is built, so the files that a second launch sends while the first window starts are kept and open when it is ready; they open after the files of its own command line
+- fixed: files opened together in the Explorer start more than 1 process at the same time, and 2 of them could both become the main window (on Windows 2 pipes can have the same name); a lock file now decides which process listens, and the others try to connect for a short time
+- fixed: when the open window did not answer in 10 s, the second launch opened the files itself and the open window opened them later too; each request now has a deadline and a late request is dropped; a sender that closes before the answer is not served
+- fixed: the wait for the answer had no total limit and could miss an answer that had already arrived
+- if the open window does not answer, the new window shows a warning that the files open in it
+- the second launch makes relative file names absolute against its own folder; file:// URLs (some Linux launchers) become local paths
+- Windows: the socket name includes the session, so 2 remote desktop sessions of the same user do not share it
+- files dropped on the main window open the same way as the files of the command line: projects in order, the other files by their type; before, the drop on the main window was off
+- the file type of an argument comes from the last extension only; before, a Gerber named top.tcl.gtl, or a file in a folder board.tcl, ran as a Tcl script
+- SVG, DXF and PDF files dropped on the main window are imported
+
+Open Project:
+
+- an open from the GUI, a double-click or a second launch adds a new project tab; Tcl and the command line replace the active project
+- a failed open removes the tab that it added and shows the previous project again; the reason is shown in a dialog, or in the Tcl error
+- one project loads at a time; a second open during a load is refused with a message
+- an object that cannot be loaded no longer stops the load: the other objects load, and a dialog lists the skipped objects; the file name is not kept, so a Save does not overwrite the file with the missing objects
+- the progress dialog shows the count of the loaded objects and has a Cancel button
+- the units of the project become the units of the app (status bar too); a switch of the project tab also changes them; the length options of a new object are converted to the units of its project
+- a project from a newer app version gives a warning; a project with invalid units ignores them
+- a project whose imported source files are missing tells which files; "Locate folder..." relinks them to the files of the same name in a folder (only for objects imported with this version)
+- a saved job that names a preprocessor that is not installed uses the default preprocessor, with a warning
+- an older Script or Document object with missing attributes loads
+- an object loaded from a file that has the history id of another object gets a new id
+- faster: a project file writes each distinct geometry 1 time in a geometry table, and all the geometries are decoded in 1 call; the stored bounds and buffered Gerber geometry are used; the canvas redraws 1 time at the end of the load; the Properties tab is built 1 time
+- WARNING: a project file saved by this version cannot be opened by an older version; this version still opens the older files
+- a project file larger than 4 GiB after the decompression is refused
+- Tcl open_project waits for the end of the load and returns the names of the objects that could not be loaded
+
+File Associations:
+
+- the associations work on Linux (MIME types and a desktop file in ~/.local/share) and on macOS (an app bundle in ~/Applications, registered with lsregister); before, they were only on Windows
+- new "FlatCAM Files" group in Preferences -> File Associations: register or unregister the .FlatPrj and .FlatConfig files
+- Windows: the files use their own program ids (FlatCAM.Project, FlatCAM.Config) with an icon; an unregister removes only the extensions that still point to FlatCAM
+- make install also installs the MIME types; the desktop file opens files (%F)
 
 Project Tab:
 
@@ -122,6 +157,7 @@ Punch Gerber Plugin:
 - fixed: closing the plugin ends manual mode and clears the marks; the Reset button no longer rebuilds the panel inside its own click
 - the circle steps option sets the smoothness of the holes (steps of the whole circle)
 - the panel has titled sections for the Fixed Diameter, Fixed Annular Ring and Proportional methods
+- fixed: with an Excellon source, a hole that only touched a pad was cleared in the export and erased copper outside the pad; now only a hole that is fully inside the pads is cleared
 
 Copper Thieving Plugin:
 
@@ -199,8 +235,55 @@ Subtract Plugin:
 - new: the selection in the Project Tab sets the target and the subtractors; objects of a different unit are scaled to the target units
 - the options are in Preferences; the old "Delete source" choice becomes Keep target off and Delete subtractors on
 
+Milling Plugin:
+
+- fixed: Copy made more than 1 copy of a selected row; Copy All gave the copies the same id; Delete and Delete All removed the geometry of the object
+- fixed: a new tool from the Add button, the default add or the Tools Database cut with the diameter of another tool; the Tools Database values now go over the default values
+- fixed: an Excellon tool table rebuild duplicated the tools with the same diameter and added the totals again; the Order combo changed the tools of the object
+- fixed: an edit of the tool diameter left the table signals off; a diameter of 0 or less is refused
+- fixed: a change of the level (Beginner / Advanced) changed the tool data; now it only shows or hides the fields
+- fixed: a row click could change the Cut Z of another tool; a change of the tool shape reset the job type; the Cut Z of a V-shape tool and the V-tip edit are now in the same Undo step
+- fixed: the close of the plugin removed the cleanup slots of the other plugins (also in Drilling); the signals could stay off or be connected 2 times
+- fixed: the drag and drop of the Geometry rows did nothing; the Toolchange XY and End XY edits were not stored
+- fixed: a negative Travel Z made the travel moves inside the material; a Depth per Pass of 0 hung the job; a Dwell of 0 crashed the G-code; 2 paths with the same start point lost 1 path
+- fixed: the first-tool Start Z used the tool number, not the first tool of the job (12 preprocessors)
+- fixed: each tool of a job now starts at the end point of the previous tool; the spindle direction comes from the tool
+- fixed: a failed job made an empty CNC Job object; a tool with no usable geometry now gives a message
+- fixed: a second Generate click during a running job could empty the tools of that job
+- fixed: a milling bit too small for a slot-only tool cancelled the drill milling; all the tools with too small holes are told in 1 message
+- the "Exclusion" checkbox now controls the travel around the exclusion areas (off by default; before, the areas always changed the travel); the area ids stay correct after a delete; a cut through an area gives a warning
+- faster: the travel around the exclusion areas is about 20 times faster (390 s to 20 s for a mixed layout)
+- faster: the Excellon milling paths are made in the worker thread, with abort and progress; copy and delete no longer copy all the tools for each selected cell
+- new: Path Optimization type and OR-Tools search time fields (Advanced)
+- new: warnings for wrong tool values; a diameter of 0 or less, or a Depth per Pass of 0 or less with Multi-Depth, blocks the job
+- new: each parameter edit is 1 Undo step
+
+Drilling Plugin:
+
+- fixed: the G-code of an earlier job went into the next job
+- fixed: the tools were keyed by the diameter instead of the tool id; sorting made duplicate tools
+- fixed: the start and the end code were lost when the first or the last tool had no holes
+- fixed: a failed generation crashed or left the app busy; now it shows an error
+- fixed: the "No optimization" path did not work
+- fixed: a positive Cut Z is now made negative, with a warning
+- fixed: the travel after a toolchange now starts from the toolchange XY
+- fixed: the Tcl travel Z after an Over-Z crossing did not go back to the user value
+- fixed: the toolchange check read the mill keys from the drill data
+- fixed: a bad value left the UI disconnected; the plugin removed the cleanup handlers of the other plugins; the rows of the exclusion table changed the wrong area; opening the plugin reset the per-tool values; the Overlap and Last drill fields did not show with "Drill slots"; selection, preprocessor and Reset bugs
+- fixed: the exclusion areas of Milling were used in a Drilling job; each area now has an owner
+- faster: the exclusion area shapes are cached; the TSP optimizer uses numpy; the drill buffers are made in one call; the tool data is not deep-copied for each tool; above 2000 points the OR-Tools route uses a greedy order
+- new: peck drilling with a full retract after each peck; dwell at the bottom of the hole
+- new: plugin fields for the spindle direction, fast plunge and fast retract
+- new: a spot drill pass (needs toolchange)
+- new: XY offset, mirror and array of the job
+- new: more Excellon objects in one job ("Add objects"); with added objects the tool parameters are read-only
+- new: drill only the holes inside drawn areas
+- new: warnings for slots that are not drilled and for tools with the same diameter and different parameters
+- Tcl drillcncjob: uses the per-tool values, converts slots to drills, has the GUI defaults and all the new GUI options (peck, dwell, spot, offset, mirror, array, objects, area and more)
+
 Tcl Commands:
 
+- cncjob: only the arguments that are given change the tool data; -dia only for an object with 1 tool; new arguments -offset_type, -offset_value, -job_type, -polish_margin, -polish_overlap, -polish_method, -optimization, -search_time, -area_exclusion and, for Excellon, -mill_dia, -milling_type, -overlap, -connect, -tools; it no longer empties the exclusion areas
 - new command check_rules runs the Check Rules checks from scripts and in headless mode, with an optional report document and CSV file
 - new command qrcode adds a QR code to a Gerber object or makes a new Gerber object, with the options of the QRCode plugin; it does not plot
 - new command subtract_objects (alias subtract) subtracts, intersects or XORs the area of one or more objects from a Gerber, Geometry or Excellon object, with the options of the Subtract plugin; it does not plot
@@ -209,8 +292,14 @@ Resources:
 
 - the Copper Clearing (NCC) icon is updated, light and dark themes
 
+Translations:
+
+- the new texts of Milling, Drilling, Open Project, File Associations and the start are translated in all 9 languages and the .mo files are compiled; the QRCode version message uses named placeholders
+
 Tests:
 
+- the tests use their own single-instance socket (FLATCAM_INSTANCE_NAME), so they do not send files to an open FlatCAM window
+- a pytest run that ends with a live App no longer crashes at the exit (0xC0000005); the pool is stopped first
 - the test window of the title bar tests closes on Alt+F4 or from the taskbar; before, a window left by a stopped run stayed on the screen and could not be closed
 
 23.10.2026
