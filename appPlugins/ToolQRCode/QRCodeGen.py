@@ -97,8 +97,10 @@ def build_qr(text_data, version, error, box_size, border, file_type, fill_color=
     except (qrcode.exceptions.DataOverflowError, ValueError) as e:
         if fixed is None:
             raise QRDataOverflow(_("The data does not fit in a QR code.")) from e
-        raise QRDataOverflow(_("The data does not fit in QR version %d with error correction %s. "
-                               "Use a higher version, Auto, or a lower error correction.") % (fixed, error)) from e
+        # named placeholders: a translation can put them in its own order
+        raise QRDataOverflow(_("The data does not fit in QR version %(version)d with error correction %(level)s. "
+                               "Use a higher version, Auto, or a lower error correction.") %
+                             {'version': fixed, 'level': error}) from e
 
     if file_type == 'fragment':
         return qr, qr.make_image()
