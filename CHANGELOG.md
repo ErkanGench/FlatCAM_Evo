@@ -37,6 +37,17 @@ Align Objects:
 - Beginner/Advanced level button; in Advanced, "Limit pairs" sets the number of source points and fit pairs of the Auto mode (0 = no limit); all features still check the result; the result line shows the number of fit pairs
 - the table and the errors of an Auto result show the pairs that made the fit
 
+Performance:
+
+- the worker threads take the tasks from 1 central queue: a task goes only to an idle worker and no longer waits behind a busy one; the G-code stream of the GRBL Sender runs in its own thread, so it does not hold an app worker
+- the process pool sends 1 color for each shape, not for each vertex; the result of 2000 shapes is 53% smaller (6.6 MB to 3.1 MB)
+- a pool process starts in 0.35 s with 62 MB instead of 1.29 s with 168 MB: flatcam.py loads Qt and the app only in the main process, and a pool process uses 1 BLAS thread
+- the process pool is made 1 time for the life of the app, not again on New Project; appPool.py and the dill dependency are removed
+- fixed: an exception in a worker task shows in the GUI again
+- the main shape collection of the 2D and 3D canvas joins the redraws: the update runs 30 ms after the last request, at most 150 ms after the first; plot_all of 50 objects: 25.2 s and 50 rebuilds to 9.2 s and 8 rebuilds
+- new "Joined Redraws" option in Preferences -> GUI Preferences (on by default); the change is applied immediately
+- the OR-Tools path optimization of a CNC job runs in the process pool, so the GUI no longer freezes during the search; an abort stops the wait
+
 Project:
 
 - the geometry is saved with 20 decimals; small coordinates (below 1 mm) no longer lose precision after a save and a load
