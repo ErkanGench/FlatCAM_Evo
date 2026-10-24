@@ -60,10 +60,6 @@ if __name__ == '__main__':
     # NOTE: Never talk to the GUI from threads! This is why I commented the above.
     freeze_support()
 
-    # The GUI thread gives the GIL away on each Qt or OpenGL call. With the default 5 ms interval it waits up to
-    # 5 ms to get it back from a busy worker thread, for each call. A short interval keeps the GUI responsive.
-    sys.setswitchinterval(0.0005)
-
     from PyQt6 import QtWidgets, QtGui, QtCore
     from PyQt6.QtCore import QSettings, QTimer
     from appMain import App
