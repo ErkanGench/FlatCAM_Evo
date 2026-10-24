@@ -9,12 +9,13 @@ from PyQt6 import QtWidgets, QtCore
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea
 from appCommon.Common import LoudDict
-from appPlugins.ToolFiducials.FiducialsGen import fiducial_geometry, fiducial_shapes, flatten_geometry
+from appPlugins.ToolFiducials.FiducialsGen import auto_points, fiducial_geometry, fiducial_shapes
 from appPlugins.ToolFiducials.FiducialsUI import FidoUI
+from camlib import flatten_shapely_geometry
 
 import logging
 from copy import deepcopy
-from shapely import box, Point
+from shapely import Point
 
 import gettext
 import appTranslation as fcTranslate
@@ -33,14 +34,10 @@ class ToolFiducials(AppTool):
         AppTool.__init__(self, app)
 
         self.app = app
-        self.canvas = self.app.plotcanvas
 
         self.cursor_color_memory = None
-        # store the current cursor type to be restored after manual geo
-        self.old_cursor_type = self.app.options.get(
-            "global_cursor_type",
-            self.app.defaults.get("global_cursor_type", self.app.defaults.factory_defaults.get("global_cursor_type"))
-        )
+        # the cursor type to be restored after the manual placement; None: the placement did not change the cursor
+        self.old_cursor_type = None
 
         self.decimals = self.app.decimals
         self.units = ''
@@ -52,26 +49,13 @@ class ToolFiducials(AppTool):
         self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
 
-        # Objects involved in Copper thieving
+        # Objects involved in adding the fiducials
         self.grb_object = None
         self.sm_object = None
-
-        self.copper_obj_set = set()
-        self.sm_obj_set = set()
-
-        # store the flattened geometry here:
-        self.flat_geometry = []
-
-        # Mouse cursor positions
-        self.cursor_pos = (0, 0)
-        self.first_click = False
 
         self.mode_method = False
 
         # Tool properties
-        self.fid_dia = None
-        self.sm_opening_dia = None
-
         self.margin_val = None
         self.sec_position = None
 
@@ -80,7 +64,10 @@ class ToolFiducials(AppTool):
             self.app.defaults.get("gerber_circle_steps", self.app.defaults.factory_defaults.get("gerber_circle_steps"))
         )
 
+        # the points of the running manual placement
         self.click_points = []
+        # the points of the last added fiducials; the soldermask openings go on them
+        self.fiducial_points = []
 
         self.handlers_connected = False
         # storage for temporary shapes when adding manual markers
@@ -159,9 +146,13 @@ class ToolFiducials(AppTool):
 
         self.ui.big_cursor_cb.stateChanged.connect(self.on_cursor_change)
 
-        self.ui.reset_button.clicked.connect(self.set_tool_ui)
+        # the UI is rebuilt, so it can't happen inside the clicked slot of its own button
+        self.ui.reset_button.clicked.connect(lambda: QtCore.QTimer.singleShot(0, self.set_tool_ui))
 
     def set_tool_ui(self):
+        if self.handlers_connected:
+            self.on_exit(cancelled=True)
+
         self.units = self.app.app_units
 
         self.clear_ui(self.layout)
@@ -199,12 +190,10 @@ class ToolFiducials(AppTool):
         )))
 
         self.click_points = []
+        self.fiducial_points = []
         self.ui.bottom_left_coords_entry.set_value('')
         self.ui.top_right_coords_entry.set_value('')
         self.ui.sec_points_coords_entry.set_value('')
-
-        self.copper_obj_set = set()
-        self.sm_obj_set = set()
 
         # Show/Hide Advanced Options
         app_mode = self.app.options.get(
@@ -228,11 +217,9 @@ class ToolFiducials(AppTool):
                                   self.app.defaults.factory_defaults.get("tools_fiducials_big_cursor"))
         ))
 
-        # set cursor
-        self.old_cursor_type = self.app.options.get(
-            "global_cursor_type",
-            self.app.defaults.get("global_cursor_type", self.app.defaults.factory_defaults.get("global_cursor_type"))
-        )
+        # set_value() emits the signals only on a change, so the dependent widgets are updated here
+        self.on_method_change(self.ui.mode_radio.get_value())
+        self.on_second_point(self.ui.pos_radio.get_value())
 
     def change_level(self, level):
         """
@@ -282,87 +269,60 @@ class ToolFiducials(AppTool):
     def on_fiducial_type(self, val):
         FidoUI.set_fiducial_type(self.ui, val)
 
-    def add_fiducials(self):
-        self.app.call_source = "fiducials_tool"
-        self.app.ui.notebook.setDisabled(True)
-
-        self.mode_method = self.ui.mode_radio.get_value()
-        self.margin_val = self.ui.margin_entry.get_value()
-        self.sec_position = self.ui.pos_radio.get_value()
-        fid_type = self.ui.fid_type_combo.get_value()
-
-        self.click_points = []
-
-        # get the Gerber object on which the Fiducial will be inserted
+    def selected_gerber(self):
+        """The Gerber object selected in the Source Object combo or None if there is none."""
         selection_index = self.ui.grb_object_combo.currentIndex()
         model_index = self.app.collection.index(selection_index, 0, self.ui.grb_object_combo.rootModelIndex())
 
         try:
-            self.grb_object = model_index.internalPointer().obj
+            return model_index.internalPointer().obj
         except Exception as e:
-            self.app.log.error("ToolFiducials.execute() --> %s" % str(e))
+            self.app.log.error("ToolFiducials.selected_gerber() --> %s" % str(e))
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
-            self.app.ui.notebook.setDisabled(False)
-            self.app.call_source = "app"
+            return None
+
+    def auto_fiducial_points(self, g_obj):
+        """The points of the automatic mode for the bounds of g_obj. They are also shown in the Coordinates."""
+        points = auto_points(g_obj.bounds(), self.ui.margin_entry.get_value(), self.ui.pos_radio.get_value(),
+                             self.grb_steps_per_circle, self.decimals)
+        for point, entry in zip(points, (self.ui.bottom_left_coords_entry, self.ui.top_right_coords_entry,
+                                         self.ui.sec_points_coords_entry)):
+            entry.set_value('(%.*f, %.*f)' % (self.decimals, point[0], self.decimals, point[1]))
+        return points
+
+    def add_fiducials(self):
+        self.mode_method = self.ui.mode_radio.get_value()
+        self.sec_position = self.ui.pos_radio.get_value()
+        fid_type = self.ui.fid_type_combo.get_value()
+
+        # get the Gerber object on which the Fiducial will be inserted
+        self.grb_object = self.selected_gerber()
+        if self.grb_object is None:
             return
 
-        self.copper_obj_set.add(self.grb_object.obj_options['name'])
+        self.app.call_source = "fiducials_tool"
+        self.app.ui.notebook.setDisabled(True)
+
+        self.click_points = []
+        self.fiducial_points = []
 
         if self.mode_method == 'auto':
-            xmin, ymin, xmax, ymax = self.grb_object.bounds()
-            bbox = box(xmin, ymin, xmax, ymax)
-            buf_bbox = bbox.buffer(self.margin_val, self.grb_steps_per_circle, join_style="mitre")
-            x0, y0, x1, y1 = buf_bbox.bounds
-
-            self.click_points.append(
-                (
-                    float('%.*f' % (self.decimals, x0)),
-                    float('%.*f' % (self.decimals, y0))
-                )
-            )
-            self.ui.bottom_left_coords_entry.set_value('(%.*f, %.*f)' % (self.decimals, x0, self.decimals, y0))
-
-            self.click_points.append(
-                (
-                    float('%.*f' % (self.decimals, x1)),
-                    float('%.*f' % (self.decimals, y1))
-                )
-            )
-            self.ui.top_right_coords_entry.set_value('(%.*f, %.*f)' % (self.decimals, x1, self.decimals, y1))
-
-            if self.sec_position == 'up':
-                self.click_points.append(
-                    (
-                        float('%.*f' % (self.decimals, x0)),
-                        float('%.*f' % (self.decimals, y1))
-                    )
-                )
-                self.ui.sec_points_coords_entry.set_value('(%.*f, %.*f)' % (self.decimals, x0, self.decimals, y1))
-            elif self.sec_position == 'down':
-                self.click_points.append(
-                    (
-                        float('%.*f' % (self.decimals, x1)),
-                        float('%.*f' % (self.decimals, y0))
-                    )
-                )
-                self.ui.sec_points_coords_entry.set_value('(%.*f, %.*f)' % (self.decimals, x1, self.decimals, y0))
-
+            self.click_points = self.auto_fiducial_points(self.grb_object)
             ret_val = self.add_fiducials_geo(self.click_points, g_obj=self.grb_object, fid_type=fid_type)
-            self.app.call_source = "app"
-            if ret_val == 'fail':
-                self.app.call_source = "app"
-                self.app.ui.notebook.setDisabled(False)
-                self.disconnect_event_handlers()
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                return
-
-            self.on_exit()
+            if ret_val != 'fail':
+                self.fiducial_points = list(self.click_points)
+            self.on_exit(failed=(ret_val == 'fail'))
         else:
             self.app.inform.emit(_("Click to add first Fiducial. Bottom Left..."))
             self.ui.bottom_left_coords_entry.set_value('')
             self.ui.top_right_coords_entry.set_value('')
             self.ui.sec_points_coords_entry.set_value('')
 
+            self.old_cursor_type = self.app.options.get(
+                "global_cursor_type",
+                self.app.defaults.get("global_cursor_type",
+                                      self.app.defaults.factory_defaults.get("global_cursor_type"))
+            )
             if self.ui.big_cursor_cb.get_value():
                 self.app.on_cursor_type(val="big", control_cursor=True)
                 self.cursor_color_memory = self.app.plotcanvas.cursor_color
@@ -370,7 +330,6 @@ class ToolFiducials(AppTool):
                 self.app.app_cursor.enabled = True
             else:
                 self.app.on_cursor_type(val="small", control_cursor=True)
-                self.app.plotcanvas.cursor_color = self.cursor_color_memory
 
             self.connect_event_handlers()
 
@@ -383,14 +342,12 @@ class ToolFiducials(AppTool):
         :param points_list:     list of coordinates for the fiducials
         :param g_obj:           the Gerber object where to add the geometry
         :param fid_size:        the overall size of the fiducial or fiducial opening depending on the g_obj type
-        :param fid_type:        the type of fiducial: circular, cross, chess
+        :param fid_type:        the type of fiducial: 0 circular, 1 cross, 2 chess
         :param line_size:       the line thickenss when the fiducial type is cross
         :return:
         """
         fid_size = self.ui.fid_size_entry.get_value() if fid_size is None else fid_size
         fid_type = 0 if fid_type is None else fid_type  # default is 'circular' <=> 0
-        if fid_type == "circular":
-            fid_type = 0
         line_thickness = self.ui.line_thickness_entry.get_value() if line_size is None else line_size
 
         new_apertures, solid_geometry, geo_list = fiducial_geometry(
@@ -410,7 +367,8 @@ class ToolFiducials(AppTool):
             grb_obj.follow = deepcopy(g_obj.follow)
             grb_obj.tools = new_apertures
             grb_obj.solid_geometry = solid_geometry
-            grb_obj.follow_geometry = deepcopy(g_obj.follow_geometry) + geo_list
+            old_follow = [] if g_obj.follow_geometry is None else deepcopy(g_obj.follow_geometry)
+            grb_obj.follow_geometry = flatten_shapely_geometry(old_follow) + flatten_shapely_geometry(geo_list)
 
             grb_obj.regenerate_source(name=outname)
 
@@ -421,36 +379,26 @@ class ToolFiducials(AppTool):
     def add_soldermask_opening(self):
         sm_opening_dia = self.ui.fid_size_entry.get_value() * 2.0
 
-        # get the Gerber object on which the Fiducial will be inserted
-        selection_index = self.ui.grb_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.grb_object_combo.rootModelIndex())
-
-        try:
-            self.sm_object = model_index.internalPointer().obj
-        except Exception as e:
-            self.app.log.error("ToolFiducials.add_soldermask_opening() --> %s" % str(e))
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
+        # get the Gerber object on which the soldermask openings will be inserted
+        self.sm_object = self.selected_gerber()
+        if self.sm_object is None:
             return
 
-        self.sm_obj_set.add(self.sm_object.obj_options['name'])
-        ret_val = self.add_fiducials_geo(
-            self.click_points, g_obj=self.sm_object, fid_size=sm_opening_dia, fid_type='circular')
-        self.app.call_source = "app"
-        if ret_val == 'fail':
-            self.app.call_source = "app"
-            self.app.ui.notebook.setDisabled(False)
-            self.disconnect_event_handlers()
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+        # the openings must sit over the copper fiducials, so they use the points of the last added fiducials
+        points = list(self.fiducial_points)
+        if not points:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Add the fiducials first ..."))
             return
 
-        self.on_exit()
+        ret_val = self.add_fiducials_geo(points, g_obj=self.sm_object, fid_size=sm_opening_dia, fid_type=0)
+        self.on_exit(failed=(ret_val == 'fail'))
 
     def on_mouse_release(self, event):
         event_pos = event.pos
         right_button = 2
 
-        if event.button == 1:
-            pos_canvas = self.canvas.translate_coords(event_pos)
+        if event.button == 1 and not self.app.event_is_dragging:
+            pos_canvas = self.app.plotcanvas.translate_coords(event_pos)
             if self.app.grid_status():
                 pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
             else:
@@ -463,65 +411,40 @@ class ToolFiducials(AppTool):
                     float('%.*f' % (self.decimals, click_pt.y))
                 )
             )
-            self.check_points()
-            self.draw_utility_geometry(pos=pos)
+            # the preview is drawn only while the placement continues
+            if not self.check_points():
+                self.draw_utility_geometry(pos=pos)
         elif event.button == right_button and self.app.event_is_dragging is False:
             self.on_exit(cancelled=True)
 
     def check_points(self):
-        fid_type = self.ui.fid_type_combo.get_value()
+        """
+        Show the clicked points. When the last one is clicked add the fiducials and end the placement.
 
-        if len(self.click_points) == 1:
+        :return:    True if the placement ended
+        """
+        fid_type = self.ui.fid_type_combo.get_value()
+        needed = 2 if self.sec_position == 'no' else 3
+        count = len(self.click_points)
+
+        if count == 1:
             self.ui.bottom_left_coords_entry.set_value(self.click_points[0])
             self.app.inform.emit(_("Click to add the last fiducial. Top Right..."))
-
-        if self.sec_position != 'no':
-            if len(self.click_points) == 2:
-                self.ui.top_right_coords_entry.set_value(self.click_points[1])
+        elif count == 2:
+            self.ui.top_right_coords_entry.set_value(self.click_points[1])
+            if needed == 3:
                 self.app.inform.emit(_("Click to add the second fiducial. Top Left or Bottom Right..."))
-            elif len(self.click_points) == 3:
-                self.ui.sec_points_coords_entry.set_value(self.click_points[2])
-                self.app.inform.emit('[success] %s' % _("Done."))
+        elif count == 3:
+            self.ui.sec_points_coords_entry.set_value(self.click_points[2])
 
-                ret_val = self.add_fiducials_geo(self.click_points, g_obj=self.grb_object, fid_type=fid_type)
-                self.app.call_source = "app"
+        if count < needed:
+            return False
 
-                if ret_val == 'fail':
-                    self.app.call_source = "app"
-                    self.app.ui.notebook.setDisabled(False)
-                    self.disconnect_event_handlers()
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    return
-                self.on_exit()
-        else:
-            if len(self.click_points) == 2:
-                self.ui.top_right_coords_entry.set_value(self.click_points[1])
-                self.app.inform.emit('[success] %s' % _("Done."))
-
-                ret_val = self.add_fiducials_geo(self.click_points, g_obj=self.grb_object, fid_type=fid_type)
-                self.app.call_source = "app"
-
-                if ret_val == 'fail':
-                    self.app.call_source = "app"
-                    self.app.ui.notebook.setDisabled(False)
-                    self.disconnect_event_handlers()
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    return
-                self.on_exit()
-
-    def on_mouse_move(self, event):
-        pass
-
-    def replot(self, obj, run_thread=True):
-        def worker_task():
-            with self.app.proc_container.new('%s ...' % _("Plotting")):
-                obj.plot()
-                self.app.app_obj.object_plotted.emit(obj)
-
-        if run_thread:
-            self.app.worker_task.emit({'fcn': worker_task, 'params': []})
-        else:
-            worker_task()
+        self.app.inform.emit('[success] %s' % _("Done."))
+        self.fiducial_points = list(self.click_points)
+        ret_val = self.add_fiducials_geo(self.click_points, g_obj=self.grb_object, fid_type=fid_type)
+        self.on_exit(failed=(ret_val == 'fail'))
+        return True
 
     def connect_event_handlers(self):
         if self.handlers_connected is False:
@@ -541,68 +464,21 @@ class ToolFiducials(AppTool):
             self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
             self.handlers_connected = False
 
-    def flatten(self, geometry):
+    def on_exit(self, cancelled=False, failed=False):
         """
-        Creates a list of non-iterable linear geometry objects.
-        :param geometry: Shapely type or list or list of list of such.
-
-        Results are placed in self.flat_geometry
+        The end of every placement: done, failed or cancelled.
+        The new object is plotted by new_object(), the source objects are not changed.
         """
-
-        self.flat_geometry.extend(flatten_geometry(geometry))
-        return self.flat_geometry
-
-    def on_exit(self, cancelled=None):
-        # restore cursor
-        self.app.on_cursor_type(val=self.old_cursor_type, control_cursor=False)
-        self.app.plotcanvas.cursor_color = self.cursor_color_memory
+        # restore the cursor only if the manual placement changed it
+        if self.old_cursor_type is not None:
+            self.app.on_cursor_type(val=self.old_cursor_type, control_cursor=False)
+            self.old_cursor_type = None
+        if self.cursor_color_memory is not None:
+            self.app.plotcanvas.cursor_color = self.cursor_color_memory
+            self.cursor_color_memory = None
 
         self.clear_utility_geometry()
-
-        # plot the object
-        for ob_name in self.copper_obj_set:
-            try:
-                copper_obj = self.app.collection.get_by_name(name=ob_name)
-                if len(self.copper_obj_set) > 1:
-                    self.replot(obj=copper_obj, run_thread=False)
-                else:
-                    self.replot(obj=copper_obj)
-            except (AttributeError, TypeError):
-                continue
-
-            # update the bounding box values
-            try:
-                a, b, c, d = copper_obj.bounds()
-                copper_obj.obj_options['xmin'] = a
-                copper_obj.obj_options['ymin'] = b
-                copper_obj.obj_options['xmax'] = c
-                copper_obj.obj_options['ymax'] = d
-            except Exception as e:
-                self.app.log.error("ToolFiducials.on_exit() copper_obj bounds error --> %s" % str(e))
-
-        for ob_name in self.sm_obj_set:
-            try:
-                sm_obj = self.app.collection.get_by_name(name=ob_name)
-                if len(self.sm_obj_set) > 1:
-                    self.replot(obj=sm_obj, run_thread=False)
-                else:
-                    self.replot(obj=sm_obj)
-            except (AttributeError, TypeError):
-                continue
-
-            # update the bounding box values
-            try:
-                a, b, c, d = sm_obj.bounds()
-                sm_obj.obj_options['xmin'] = a
-                sm_obj.obj_options['ymin'] = b
-                sm_obj.obj_options['xmax'] = c
-                sm_obj.obj_options['ymax'] = d
-            except Exception as e:
-                self.app.log.error("ToolFiducials.on_exit() sm_obj bounds error --> %s" % str(e))
-
-        # Mouse cursor positions
-        self.cursor_pos = (0, 0)
-        self.first_click = False
+        self.click_points = []
 
         self.disconnect_event_handlers()
 
@@ -611,8 +487,11 @@ class ToolFiducials(AppTool):
 
         if cancelled is True:
             self.app.delete_selection_shape()
-            self.disconnect_event_handlers()
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled by user request."))
+            return
+
+        if failed is True:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
             return
 
         self.app.inform.emit('[success] %s' % _("Fiducials Tool exit."))
@@ -635,4 +514,7 @@ class ToolFiducials(AppTool):
         self.temp_shapes.redraw()
 
     def on_plugin_cleanup(self):
-        self.on_exit()
+        if self.handlers_connected:
+            self.on_exit(cancelled=True)
+        else:
+            self.clear_utility_geometry()

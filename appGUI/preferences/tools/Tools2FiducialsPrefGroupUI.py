@@ -1,7 +1,7 @@
 
 from PyQt6 import QtWidgets
 
-from appGUI.GUIElements import FCDoubleSpinner, RadioSet, FCLabel, GLay, FCComboBox2, FCFrame
+from appGUI.GUIElements import FCDoubleSpinner, RadioSet, FCLabel, GLay, FCComboBox2, FCFrame, FCCheckBox
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 
 import gettext
@@ -45,9 +45,8 @@ class Tools2FiducialsPrefGroupUI(OptionsGroupUI):
               "The soldermask opening is double than that.")
         )
         self.dia_entry = FCDoubleSpinner()
-        self.dia_entry.set_range(1.0000, 3.0000)
+        self.dia_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.dia_entry.set_precision(self.decimals)
-        self.dia_entry.setWrapping(True)
         self.dia_entry.setSingleStep(0.1)
 
         param_grid.addWidget(self.dia_label, 2, 0)
@@ -105,7 +104,7 @@ class Tools2FiducialsPrefGroupUI(OptionsGroupUI):
         # Line Thickness #
         self.line_thickness_label = FCLabel('%s:' % _("Line thickness"))
         self.line_thickness_label.setToolTip(
-            _("Bounding box margin.")
+            _("Thickness of the line that makes the fiducial.")
         )
         self.line_thickness_entry = FCDoubleSpinner()
         self.line_thickness_entry.set_range(0.00001, 10000.0000)
@@ -140,6 +139,11 @@ class Tools2FiducialsPrefGroupUI(OptionsGroupUI):
         )
         grid_sel.addWidget(self.mode_label, 0, 0)
         grid_sel.addWidget(self.mode_radio, 0, 1)
+
+        # Big cursor #
+        self.big_cursor_cb = FCCheckBox('%s' % _("Big cursor"))
+        self.big_cursor_cb.setToolTip(_("Use a big cursor."))
+        grid_sel.addWidget(self.big_cursor_cb, 2, 0, 1, 2)
 
         GLay.set_common_column_size([param_grid, grid_sel], 0)
 

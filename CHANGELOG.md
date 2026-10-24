@@ -81,6 +81,28 @@ Editors:
 - the X, Y and length text near the cursor goes on the side away from the last clicked point, so it does not cover the shape that is drawn; if shapes of the editor are under that side, the text goes to the next free side
 - one function makes the cursor text for the Geometry, Gerber and Excellon Editors (it replaces 16 copies)
 
+Markers Plugin:
+
+- fixed: the cursor color is restored after a manual placement
+- fixed: the plugin connects to the project selection signal only once; before, each run added one more connection
+- fixed: the Reset button no longer rebuilds the panel inside its own click; closing the plugin ends a running placement and clears the preview
+- the circles use the app circle steps for the whole circle (before: 4x more segments)
+- the manual cross is centered on the clicked point; the cut depth of the check Excellon follows the units
+- the panel shows the units next to the values; the thickness and length accept small values
+
+Fiducials Plugin:
+
+- fixed: Cross and Chess fiducials are exported (and saved in the source) with the same shape as on the canvas; before, a Cross was exported as a dot and a Chess as 2 overlapped squares
+- fixed: Add Soldermask Opening puts the openings on the last added fiducials; with no fiducials added it shows a warning and creates nothing; before, it could create an empty copy
+- fixed: Add Fiducial works on a Gerber object made from a DXF file
+- fixed: the Line thickness field is enabled for the Cross type (before: for the Chess type)
+- fixed: no preview shape stays on the canvas after the last manual click; the end of a placement (done, failed or cancelled) always restores the cursor and enables the notebook again
+- fixed: the Reset button no longer rebuilds the panel inside its own click; closing the plugin no longer shows the exit message or redraws the source objects; a drag release does not add a point
+- each Add Fiducial and Add Soldermask Opening is 1 Undo / Redo step (the new object)
+- the circles use the app circle steps for the whole circle (before: 4x more segments)
+- the Size accepts small values (it was limited to 1-3); the panel shows the units next to Size, Margin and Line thickness; the coordinate cells are read-only
+- the Big cursor option is also in Preferences; the Line thickness tooltip in Preferences is fixed
+
 Tests:
 
 - the test window of the title bar tests closes on Alt+F4 or from the taskbar; before, a window left by a stopped run stayed on the screen and could not be closed

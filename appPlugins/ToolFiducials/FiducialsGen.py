@@ -3,7 +3,7 @@
 import math
 from copy import deepcopy
 
-from shapely import LineString, MultiPolygon, Point, Polygon
+from shapely import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 from camlib import flatten_shapely_geometry
@@ -19,21 +19,25 @@ def make_square_poly(center_pt, side_size):
     return Polygon([pt1, pt2, pt3, pt4, pt1])
 
 
-def flatten_geometry(geometry):
-    result = []
-    try:
-        for geo in geometry:
-            if geo is not None:
-                result.extend(flatten_geometry(geo))
-    except TypeError:
-        result.append(geometry)
-    return result
+def auto_points(bounds, margin, sec_position, steps, decimals):
+    """
+    The fiducial points of the automatic mode: bottom left and top right of the bounds grown by the margin, and
+    the second position ('up': top left, 'down': bottom right, 'no': none).
+    """
+    buf_bbox = box(*bounds).buffer(margin, max(1, steps // 4), join_style="mitre")
+    x0, y0, x1, y1 = [round(v, decimals) for v in buf_bbox.bounds]
+    points = [(x0, y0), (x1, y1)]
+    if sec_position == 'up':
+        points.append((x0, y1))
+    elif sec_position == 'down':
+        points.append((x1, y0))
+    return points
 
 
 def fiducial_shapes(pt, fid_size, fid_type, line_thickness, steps):
     radius = fid_size / 2.0
     if fid_type == 0:
-        return [Point(pt).buffer(radius, steps)]
+        return [Point(pt).buffer(radius, max(1, steps // 4))]
     x, y = pt[0], pt[1]
     if fid_type == 1:
         return [LineString([(x - radius + line_thickness / 2.0, y),
@@ -45,41 +49,52 @@ def fiducial_shapes(pt, fid_size, fid_type, line_thickness, steps):
 
 
 def fiducial_geometry(points_list, tools, solid_geometry, fid_size, fid_type, line_thickness, steps, decimals):
+    """
+    :return:    the new apertures, the union of the old solid geometry and the fiducials, the flat list of the
+                fiducial geometries (the center lines for the cross type, the polygons for the others)
+    """
     new_apertures = deepcopy(tools)
+    quad_segs = max(1, steps // 4)
     geo_list = []
     for pt in points_list:
-        shapes = fiducial_shapes(pt, fid_size, fid_type, line_thickness, steps)
-        if fid_type == 1:
-            geo_list.append(shapes)
-        else:
-            geo_list += shapes
+        geo_list += fiducial_shapes(pt, fid_size, fid_type, line_thickness, steps)
 
     ap_type = 'C' if fid_type in (0, 1) else 'R'
-    ap_size = fid_size if fid_type == 0 else (
-        line_thickness if fid_type == 1 else math.sqrt(fid_size**2 + fid_size**2))
+    if fid_type == 0:
+        ap_size = fid_size
+    elif fid_type == 1:
+        ap_size = line_thickness
+    else:
+        # the parser stores the diagonal of the rectangle as the size of an 'R' aperture
+        ap_size = math.hypot(fid_size / 2.0, fid_size / 2.0)
     aperture_found = None
     for ap_id, ap_val in tools.items():
         if ap_val['type'] != ap_type:
             continue
-        same_size = ap_val['size'] == ap_size if fid_type in (0, 1) else (
-            round(ap_val['size'], ndigits=decimals) == round(ap_size, ndigits=decimals))
-        if same_size:
+        if fid_type == 2:
+            same = (round(ap_val.get('width', 0), ndigits=decimals) == round(fid_size / 2.0, ndigits=decimals) and
+                    round(ap_val.get('height', 0), ndigits=decimals) == round(fid_size / 2.0, ndigits=decimals))
+        else:
+            same = ap_val['size'] == ap_size
+        if same:
             aperture_found = ap_id
             break
     if not aperture_found:
         aperture_found = int(max(tools)) + 1 if tools else 10
         new_apertures[aperture_found] = {'type': ap_type, 'size': ap_size, 'geometry': []}
-        if fid_type not in (0, 1):
-            new_apertures[aperture_found].update(width=fid_size, height=fid_size)
+        if fid_type == 2:
+            new_apertures[aperture_found].update(width=fid_size / 2.0, height=fid_size / 2.0)
 
-    solids = [line.buffer(line_thickness / 2.0, steps) for pair in geo_list for line in pair] \
-        if fid_type == 1 else geo_list
-    for geo in solids:
-        new_apertures[aperture_found]['geometry'].append(deepcopy({'follow': geo.centroid, 'solid': geo}))
+    # the 'follow' geometry is what the Gerber export writes: a flash for the circle and the chess squares,
+    # a drawn line for the cross
+    solids = []
+    for geo in geo_list:
+        if fid_type == 1:
+            solid, follow = geo.buffer(line_thickness / 2.0, quad_segs), geo
+        else:
+            solid, follow = geo, geo.centroid
+        solids.append(solid)
+        new_apertures[aperture_found]['geometry'].append(deepcopy({'follow': follow, 'solid': solid}))
     flat_geo = flatten_shapely_geometry(solid_geometry)
-    s_list = list(flat_geo) if flat_geo else []
-    if fid_type == 1:
-        s_list += flatten_shapely_geometry(MultiPolygon(solids).buffer(0))
-    else:
-        s_list += solids
+    s_list = (list(flat_geo) if flat_geo else []) + solids
     return new_apertures, unary_union(s_list), geo_list

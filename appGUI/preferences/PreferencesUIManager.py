@@ -727,6 +727,7 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_fiducials_second_pos": self.ui.plugin2_pref_form.tools2_fiducials_group.pos_radio,
             "tools_fiducials_type": self.ui.plugin2_pref_form.tools2_fiducials_group.fid_type_combo,
             "tools_fiducials_line_thickness": self.ui.plugin2_pref_form.tools2_fiducials_group.line_thickness_entry,
+            "tools_fiducials_big_cursor": self.ui.plugin2_pref_form.tools2_fiducials_group.big_cursor_cb,
 
             # Extract Drills Tool
             "tools_extract_hole_type": self.ui.plugin2_pref_form.tools2_edrills_group.method_radio,

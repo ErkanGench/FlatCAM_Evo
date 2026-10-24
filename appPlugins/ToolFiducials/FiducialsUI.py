@@ -19,6 +19,7 @@ class FidoUI:
         self.app = app
         self.decimals = self.app.decimals
         self.layout = layout
+        self.units = self.app.app_units.lower()
         self.title_box = QtWidgets.QHBoxLayout()
         self.layout.addLayout(self.title_box)
         title_label = FCLabel("%s" % self.pluginName, size=16, bold=True)
@@ -73,6 +74,7 @@ class FidoUI:
         self.bottom_left_coords_lbl.setFlags(flags)
         self.points_table.setItem(row, 1, self.bottom_left_coords_lbl)
         self.bottom_left_coords_entry = EvalEntry()
+        self.bottom_left_coords_entry.setReadOnly(True)
         self.points_table.setCellWidget(row, 2, self.bottom_left_coords_entry)
         row += 1
         id_item_2 = QtWidgets.QTableWidgetItem('%d' % 2)
@@ -82,6 +84,7 @@ class FidoUI:
         self.top_right_coords_lbl.setFlags(flags)
         self.points_table.setItem(row, 1, self.top_right_coords_lbl)
         self.top_right_coords_entry = EvalEntry()
+        self.top_right_coords_entry.setReadOnly(True)
         self.points_table.setCellWidget(row, 2, self.top_right_coords_entry)
         row += 1
         self.id_item_3 = QtWidgets.QTableWidgetItem('%d' % 3)
@@ -91,6 +94,7 @@ class FidoUI:
         self.sec_point_coords_lbl.setFlags(flags)
         self.points_table.setItem(row, 1, self.sec_point_coords_lbl)
         self.sec_points_coords_entry = EvalEntry()
+        self.sec_points_coords_entry.setReadOnly(True)
         self.points_table.setCellWidget(row, 2, self.sec_points_coords_entry)
         vertical_header = self.points_table.verticalHeader()
         vertical_header.hide()
@@ -127,12 +131,12 @@ class FidoUI:
               "The soldermask opening is double than that.")
         )
         self.fid_size_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        self.fid_size_entry.set_range(1.0000, 3.0000)
+        self.fid_size_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.fid_size_entry.set_precision(self.decimals)
-        self.fid_size_entry.setWrapping(True)
         self.fid_size_entry.setSingleStep(0.1)
         param_grid.addWidget(self.size_label, 2, 0)
         param_grid.addWidget(self.fid_size_entry, 2, 1)
+        param_grid.addWidget(FCLabel("%s" % self.units), 2, 2)
         self.margin_label = FCLabel('%s:' % _("Margin"))
         self.margin_label.setToolTip(_("Bounding box margin."))
         self.margin_entry = FCDoubleSpinner(callback=self.confirmation_message)
@@ -141,6 +145,7 @@ class FidoUI:
         self.margin_entry.setSingleStep(0.1)
         param_grid.addWidget(self.margin_label, 4, 0)
         param_grid.addWidget(self.margin_entry, 4, 1)
+        param_grid.addWidget(FCLabel("%s" % self.units), 4, 2)
         self.pos_radio = RadioSet([
             {'label': _('Up'), 'value': 'up'}, {"label": _("Down"), "value": "down"},
             {"label": _("None"), "value": "no"}], compact=True)
@@ -176,6 +181,7 @@ class FidoUI:
         self.line_thickness_entry.setSingleStep(0.1)
         param_grid.addWidget(self.line_thickness_label, 12, 0)
         param_grid.addWidget(self.line_thickness_entry, 12, 1)
+        param_grid.addWidget(FCLabel("%s" % self.units), 12, 2)
 
         # Selection
         self.sel_label = FCLabel('%s' % _("Selection"), color='green', bold=True)
@@ -216,7 +222,7 @@ class FidoUI:
         self.layout.addWidget(self.reset_button)
 
     def set_fiducial_type(self, val):
-        if val == 2:    # 'cross'
+        if val == 1:    # 'cross'
             self.line_thickness_label.setDisabled(False)
             self.line_thickness_entry.setDisabled(False)
         else:
