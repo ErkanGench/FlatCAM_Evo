@@ -176,10 +176,34 @@ QRCode Plugin:
 - a preview image of the QR in the panel
 - the new options are also in Preferences
 
+Subtract Plugin:
+
+- fixed: a subtractor that cut a pad or a trace into 2 parts stopped the Gerber subtraction with an error and made no object
+- fixed: all the copper of the result went to aperture 0; now the pads that the subtractor does not touch keep their aperture, and the pads that are fully removed and the empty apertures are gone
+- fixed: the result Gerber had no follow geometry; now it is kept, or trimmed where the cut goes through it
+- fixed: the clear (hole) areas of the subtractor Gerber were ignored and the copper under them was removed
+- fixed: a Geometry target made of one MultiPolygon gave an empty result when Close paths was off; nested lists, collections and points are now used
+- fixed: a single-geo Geometry result kept the old geometry in its tools, so a CNC job made from a tool used the geometry before the cut
+- fixed: each opening of the plugin added the signal connections again, so one click made more than one result object
+- fixed: an error in the subtraction left the plugin waiting for ever and blocked the next runs; a second click during a run is refused; Cancel stops a run
+- fixed: the deletion of the source objects was not in the Undo history; now the result, the deletions and the rename are one Undo step, and Redo works
+- fixed: the objects were deleted and the widgets were read from a worker thread; the result was added to the recent files list
+- fixed: a Geometry target could also be its subtractor; a missing object showed a wrong name or crashed
+- faster: the shapes are found with a spatial index (2000 pads against 500 subtractor shapes in less than 2 s); the heavy geometry runs in the worker, not in the GUI
+- one panel for all the cases: the target can be a Gerber, a Geometry or an Excellon object, with one or more subtractors of any of these types (Excellon drills and slots as holes)
+- new: the operation can be Subtract, Intersect or XOR (not for an Excellon target)
+- new: a margin grows the subtractor area; the circle steps of the target type are used
+- new: in Advanced mode the apertures / tools of the target that change, and the apertures / tools of each subtractor that cut, can be selected
+- new: output name; Keep target (off: the result replaces the target and takes its name); Delete subtractors
+- new: Preview shows the subtractor area on the canvas; the result message gives the kept, changed, removed and added shapes; a subtractor without area (lines with no margin) gives a warning and no object
+- new: the selection in the Project Tab sets the target and the subtractors; objects of a different unit are scaled to the target units
+- the options are in Preferences; the old "Delete source" choice becomes Keep target off and Delete subtractors on
+
 Tcl Commands:
 
 - new command check_rules runs the Check Rules checks from scripts and in headless mode, with an optional report document and CSV file
 - new command qrcode adds a QR code to a Gerber object or makes a new Gerber object, with the options of the QRCode plugin; it does not plot
+- new command subtract_objects (alias subtract) subtracts, intersects or XORs the area of one or more objects from a Gerber, Geometry or Excellon object, with the options of the Subtract plugin; it does not plot
 
 Resources:
 

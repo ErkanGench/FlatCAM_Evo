@@ -779,7 +779,11 @@ class AppDefaults:
 
         # Subtract Tool
         "tools_sub_close_paths": True,
-        "tools_sub_delete_sources": False,
+        "tools_sub_keep_target": True,
+        "tools_sub_delete_subtractors": False,
+        "tools_sub_operation": 'subtract',
+        "tools_sub_margin": 0.0,
+        "tools_sub_suffix": '_sub',
 
         # Distance Tool
         "tools_dist_snap_center": False,
@@ -1201,6 +1205,12 @@ class AppDefaults:
         saved_filters = defaults.get('gerber_save_filters')
         if saved_filters is not None and 'All Files (*.*)' not in str(saved_filters).split(';;'):
             defaults.pop('gerber_save_filters')
+
+        # The Subtract plugin had one 'delete sources' choice (target and subtractor); it is now 2 choices.
+        if 'tools_sub_delete_sources' in defaults:
+            delete_sources = bool(defaults.pop('tools_sub_delete_sources'))
+            defaults.setdefault('tools_sub_keep_target', not delete_sources)
+            defaults.setdefault('tools_sub_delete_subtractors', delete_sources)
 
         # ponytail: merge saved data over factory defaults. Missing keys get factory values,
         # user overrides (including falsy values) are preserved. No version gating.

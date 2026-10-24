@@ -68,6 +68,18 @@ class TestVersionIndependentPreferences:
         assert defaults["global_update_url"] == AppDefaults.factory_defaults["global_update_url"]
         assert defaults["global_worker_number"] == AppDefaults.factory_defaults["global_worker_number"]
 
+    def test_old_subtract_delete_sources_choice_is_kept(self, tmp_path):
+        """The old Subtract 'delete sources' choice becomes 'keep target' off and 'delete subtractors' on."""
+        filename = tmp_path / "current_defaults.FlatConfig"
+        filename.write_text(json.dumps({"tools_sub_delete_sources": True}))
+
+        defaults = AppDefaults(beta=False, version="2.0")
+        defaults.load(str(filename), FakeSignal())
+
+        assert defaults["tools_sub_keep_target"] is False
+        assert defaults["tools_sub_delete_subtractors"] is True
+        assert "tools_sub_delete_sources" not in defaults.defaults
+
     def test_user_overrides_win_over_factory_defaults_including_falsy_values(self, tmp_path):
         """User overrides (including False, 0, empty strings) must not be replaced by defaults."""
         saved_data = {

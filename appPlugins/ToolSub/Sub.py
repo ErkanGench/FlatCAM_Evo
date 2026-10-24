@@ -8,16 +8,15 @@
 from PyQt6 import QtWidgets, QtCore
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea
+from appCommon.Common import GracefulException
+from appHandlers.appHistory import history_of
+from appObjects.ProjectContext import unique_name
 from defaults import AppDefaults
 from appPlugins.ToolSub.SubUI import SubUI
 from appPlugins.ToolSub import SubGen
 
 import logging
-from copy import deepcopy
-import time
 import traceback
-
-from shapely.ops import unary_union
 
 import gettext
 import appTranslation as fcTranslate
@@ -29,15 +28,22 @@ if '_' not in builtins.__dict__:
 
 log = logging.getLogger('base')
 
+KINDS = ('gerber', 'geometry', 'excellon')
+CHECKED = QtCore.Qt.CheckState.Checked
+UNCHECKED = QtCore.Qt.CheckState.Unchecked
+ID_ROLE = QtCore.Qt.ItemDataRole.UserRole
+
 
 class ToolSub(AppTool):
+    """
+    Threads: the widgets, the object collection, the Undo history and the messages are used in the GUI thread only.
+    One click puts ONE job on the app worker (the geometry work: unions, buffers, the operation) with the values that
+    were read at click time. The job ends with exactly one job_done signal, which the GUI thread receives in
+    on_job_done(): there the result object is created and the deleted objects are recorded as one Undo step.
+    """
 
-    job_finished = QtCore.pyqtSignal(bool)
-
-    # the string param is the outname and the list is a list of tuples each being formed from the new_aperture_geometry
-    # list and the second element is also a list with possible geometry that needs to be added to the 0 aperture
-    # meaning geometry that was deformed
-    aperture_processing_finished = QtCore.pyqtSignal(str, list)
+    # (kind, payload): 'preview' area | 'result' (params, SubResult) | 'cancelled' | 'invalid' text | 'error' text
+    job_done = QtCore.pyqtSignal(str, object)
 
     def __init__(self, app):
         self.app = app
@@ -45,78 +51,32 @@ class ToolSub(AppTool):
 
         AppTool.__init__(self, app)
 
+        self._busy = False
+        self._loading = False
+        self._name_edited = False
+        self._current_sub = None
+        self._target_tools_of = None
+        self._sub_tool_state = {}
+        self._preview_drawn = False
+
         # #############################################################################
         # ######################### Tool GUI ##########################################
         # #############################################################################
         self.ui = SubUI(layout=self.layout, app=self.app)
         self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
-        self.connect_signals_at_init()
+        self.connect_ui()
 
-        # QTimer for periodic check
-        self.check_thread = QtCore.QTimer()
-        # Every time an intersection job is started we add a promise; every time an intersection job is finished
-        # we remove a promise.
-        # When empty we start the layer rendering
-        self.promises = []
-
-        self.new_apertures = {}
-        self.new_tools = {}
-        self.new_solid_geometry = []
-
-        self.sub_solid_union = None
-        self.sub_follow_union = None
-        self.sub_clear_union = None
-
-        self.sub_grb_obj = None
-        self.sub_grb_obj_name = None
-        self.target_grb_obj = None
-        self.target_grb_obj_name = None
-
-        self.sub_geo_obj = None
-        self.sub_geo_obj_name = None
-        self.target_geo_obj = None
-        self.target_geo_obj_name = None
-
-        # signal which type of substraction to do: "geo" or "gerber"
-        self.sub_type = None
-
-        # store here the options from target_obj
-        self.target_options = {}
-
-        self.sub_union = []
-
-        # multiprocessing
-        self.pool = self.app.pool
-        self.results = []
-
-        # start the QTimer to check for promises with 0.5 seconds period check
-        self.check_interval = 500
+        # the signals of the tool and of the app are connected ONCE; only the widgets are connected again
+        self.job_done.connect(self.on_job_done)
+        self.app.object_status_changed.connect(self.on_objects_changed)
+        self.app.proj_selection_changed.connect(self.on_object_selection_changed)
 
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='Alt+W', **kwargs)
 
     def run(self, toggle=True):
         self.app.defaults.report_usage("ToolSub()")
-
-        # if toggle:
-        #     # if the splitter is hidden, display it, else hide it but only if the current widget is the same
-        #     if self.app.ui.splitter.sizes()[0] == 0:
-        #         self.app.ui.splitter.setSizes([1, 1])
-        #     else:
-        #         try:
-        #             if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName:
-        #                 # if tab is populated with the tool but it does not have the focus, focus on it
-        #                 if not self.app.ui.notebook.currentWidget() is self.app.ui.plugin_tab:
-        #                     # focus on Tool Tab
-        #                     self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
-        #                 else:
-        #                     self.app.ui.splitter.setSizes([0, 1])
-        #         except AttributeError:
-        #             pass
-        # else:
-        #     if self.app.ui.splitter.sizes()[0] == 0:
-        #         self.app.ui.splitter.setSizes([1, 1])
 
         if toggle:
             # if the splitter is hidden, display it
@@ -170,466 +130,464 @@ class ToolSub(AppTool):
 
         self.app.ui.notebook.setTabText(2, _("Subtract"))
 
-    def on_object_selection_changed(self, current, previous):
-        found_idx = None
-        for tab_idx in range(self.app.ui.notebook.count()):
-            if self.app.ui.notebook.tabText(tab_idx) == self.ui.pluginName:
-                found_idx = True
-                break
+    def on_plugin_cleanup(self):
+        self.clear_preview()
 
-        if found_idx:
-            try:
-                name = current.indexes()[0].internalPointer().obj.obj_options['name']
-                kind = current.indexes()[0].internalPointer().obj.kind
+    # ------------------------------------------------------------------------------------------------------------
+    # the UI
+    # ------------------------------------------------------------------------------------------------------------
+    def _opt(self, key):
+        return self.app.options.get(key, AppDefaults.factory_defaults.get(key))
 
-                if kind == 'gerber':
-                    self.ui.target_gerber_combo.set_value(name)
-                if kind == 'geometry':
-                    self.ui.target_geo_combo.set_value(name)
-            except Exception:
-                pass
+    def _is_open(self):
+        try:
+            return self.app.ui.plugin_scroll_area.widget() is self
+        except (AttributeError, RuntimeError):
+            return False
 
-    def connect_signals_at_init(self):
-        self.ui.level.toggled.connect(self.on_level_changed)
-        self.ui.intersect_btn.clicked.connect(self.on_subtract_gerber_click)
-        self.ui.intersect_geo_btn.clicked.connect(self.on_subtract_geo_click)
-        self.ui.reset_button.clicked.connect(self.set_tool_ui)
+    def connect_ui(self):
+        """Connect the widgets of the current SubUI. Called each time the UI is built."""
+        ui = self.ui
+        ui.level.toggled.connect(self.on_level_changed)
+        ui.type_combo.currentIndexChanged.connect(self.on_type_changed)
+        ui.target_combo.currentIndexChanged.connect(self.on_target_changed)
+        ui.op_combo.currentIndexChanged.connect(self.on_op_changed)
+        ui.subs_list.currentRowChanged.connect(self.on_sub_row_changed)
+        ui.sub_tools_list.itemChanged.connect(self.on_sub_tool_changed)
+        ui.out_entry.textEdited.connect(self.on_name_edited)
+        ui.preview_button.clicked.connect(self.on_preview)
+        ui.apply_button.clicked.connect(self.on_apply)
+        ui.reset_button.clicked.connect(self.set_tool_ui)
 
-        self.app.proj_selection_changed.connect(self.on_object_selection_changed)
-
-        # Custom Signals
-        self.job_finished.connect(self.on_job_finished)
-        self.aperture_processing_finished.connect(self.new_gerber_object)
-
-    def set_tool_ui(self):
-        self.new_apertures.clear()
-        self.new_tools.clear()
-        self.new_solid_geometry = []
-        self.target_options.clear()
+    def set_tool_ui(self, *args):
+        self.clear_preview()
+        self._name_edited = False
+        self._current_sub = None
+        self._target_tools_of = None
+        self._sub_tool_state = {}
 
         self.clear_ui(self.layout)
         self.ui = SubUI(layout=self.layout, app=self.app)
         self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
-        self.connect_signals_at_init()
+        self.connect_ui()
 
-        self.ui.tools_frame.show()
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        self.ui.close_paths_cb.setChecked(self.app.options.get(
-            "tools_sub_close_paths", app_defaults.get("tools_sub_close_paths", AppDefaults.factory_defaults.get("tools_sub_close_paths"))))
-        self.ui.delete_sources_cb.setChecked(self.app.options.get(
-            "tools_sub_delete_sources", app_defaults.get("tools_sub_delete_sources", AppDefaults.factory_defaults.get("tools_sub_delete_sources"))))
+        ui = self.ui
+        ui.tools_frame.show()
+        ui.close_paths_cb.setChecked(bool(self._opt("tools_sub_close_paths")))
+        ui.keep_target_cb.setChecked(bool(self._opt("tools_sub_keep_target")))
+        ui.delete_subs_cb.setChecked(bool(self._opt("tools_sub_delete_subtractors")))
+        ui.margin_entry.set_value(float(self._opt("tools_sub_margin") or 0.0))
+        idx = ui.op_combo.findData(self._opt("tools_sub_operation"))
+        ui.op_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
         # SELECT THE CURRENT OBJECT
         obj = self.app.collection.get_active()
-        if obj and obj.kind == 'gerber':
-            obj_name = obj.obj_options['name']
-            self.ui.target_gerber_combo.set_value(obj_name)
+        if obj is not None and obj.kind in KINDS:
+            self.apply_selection(obj, [])
+        else:
+            self.apply_selection(None, [])
 
-        # Show/Hide Advanced Options
-        app_mode = self.app.options.get(
-            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
-        self.change_level(app_mode)
+        self.on_op_changed()
+        self.change_level(self._opt("global_app_level"))
 
     def change_level(self, level):
         """
-
         :param level:   application level: either 'b' or 'a'
         :type level:    str
-        :return:
         """
-
-        if level == 'a':
-            self.ui.level.setChecked(True)
-        else:
-            self.ui.level.setChecked(False)
+        self.ui.level.setChecked(level == 'a')
         self.on_level_changed(self.ui.level.isChecked())
 
     def on_level_changed(self, checked):
         if not checked:
             self.ui.level.setText('%s' % _('Beginner'))
-            self.ui.level.setStyleSheet("""
-                                        QToolButton
-                                        {
-                                            color: green;
-                                        }
-                                        """)
-
-            self.ui.param_label.hide()
-            self.ui.gp_frame.hide()
+            self.ui.level.setStyleSheet("QToolButton { color: green; }")
         else:
             self.ui.level.setText('%s' % _('Advanced'))
-            self.ui.level.setStyleSheet("""
-                                        QToolButton
-                                        {
-                                            color: red;
-                                        }
-                                        """)
+            self.ui.level.setStyleSheet("QToolButton { color: red; }")
 
-            self.ui.param_label.show()
-            self.ui.gp_frame.show()
+        for widget in self.ui.advanced_widgets:
+            widget.setVisible(bool(checked))
 
-    def on_subtract_gerber_click(self):
-        # reset previous values
-        self.new_apertures.clear()
-        self.new_solid_geometry = []
-        self.sub_union = []
+    # ------------------------------------------------------------------------------------------------------------
+    # the lists
+    # ------------------------------------------------------------------------------------------------------------
+    def _objects(self, kind):
+        return [o for o in self.app.collection.get_list() if o.kind == kind]
 
-        self.sub_type = "gerber"
-
-        # --------------------------------
-        # Get TARGET name
-        # --------------------------------
-        self.target_grb_obj_name = self.ui.target_gerber_combo.currentText()
-        if self.target_grb_obj_name == '':
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("No Target object loaded."))
-            return
-
-        self.app.inform.emit('%s' % _("Loading geometry from Gerber objects."))
-
-        # --------------------------------
-        # Get TARGET object.
-        # --------------------------------
-        try:
-            self.target_grb_obj = self.app.collection.get_by_name(self.target_grb_obj_name)
-        except Exception as e:
-            self.app.log.error("ToolSub.on_subtract_gerber_click() --> %s" % str(e))
-            self.app.inform.emit(
-                '[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), self.target_grb_obj.obj_options['name']))
-            return "Could not retrieve object: %s" % self.target_grb_obj_name
-
-        # --------------------------------
-        # Get SUBTRACTOR name
-        # --------------------------------
-        self.sub_grb_obj_name = self.ui.sub_gerber_combo.currentText()
-        if self.sub_grb_obj_name == '':
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("No Subtractor object loaded."))
-            return
-
-        # --------------------------------
-        # Get SUBTRACTOR object.
-        # --------------------------------
-        try:
-            self.sub_grb_obj = self.app.collection.get_by_name(self.sub_grb_obj_name)
-        except Exception as e:
-            self.app.log.error("ToolSub.on_subtract_gerber_click() --> %s" % str(e))
-            self.app.inform.emit(
-                '[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), self.target_grb_obj.obj_options['name']))
-            return "Could not retrieve object: %s" % self.sub_grb_obj_name
-
-        if self.target_grb_obj_name == self.sub_grb_obj_name:
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Not possible to subtract from the same object."))
-            return
-
-        # --------------------------------
-        # crate the new_apertures
-        # dict structure from TARGET apertures
-        # --------------------------------
-        for apid in self.target_grb_obj.tools:
-            self.new_apertures[apid] = {}
-            for key in self.target_grb_obj.tools[apid]:
-                if key == 'geometry':
-                    self.new_apertures[apid]['geometry'] = []
-                else:
-                    self.new_apertures[apid][key] = self.target_grb_obj.tools[apid][key]
-
-        def worker_job(app_obj):
-            with app_obj.app.proc_container.new('%s...' % _("Working")):
-                # SUBTRACTOR geometry (always the same)
-                sub_geometry = {'solid': [], 'clear': []}
-                # iterate over SUBTRACTOR geometry and load it in the sub_geometry dict
-                for s_apid in app_obj.sub_grb_obj.tools:
-                    for s_el in app_obj.sub_grb_obj.tools[s_apid]['geometry']:
-                        if "solid" in s_el:
-                            sub_geometry['solid'].append(s_el["solid"])
-                        if "clear" in s_el:
-                            sub_geometry['clear'].append(s_el["clear"])
-
-                for ap_id in app_obj.target_grb_obj.tools:
-                    # TARGET geometry
-                    target_geo = [geo for geo in app_obj.target_grb_obj.tools[ap_id]['geometry']]
-
-                    # send the job to the multiprocessing JOB
-                    app_obj.results.append(
-                        app_obj.pool.apply_async(app_obj.aperture_intersection, args=(ap_id, target_geo, sub_geometry))
-                    )
-
-                output = []
-                for p in app_obj.results:
-                    res = p.get()
-                    output.append(res)
-                    app_obj.app.inform.emit('%s: %s...' % (_("Finished parsing geometry for aperture"), str(res[0])))
-
-                app_obj.app.inform.emit("%s" % _("Subtraction aperture processing finished."))
-
-                outname = app_obj.ui.target_gerber_combo.currentText() + '_sub'
-                app_obj.aperture_processing_finished.emit(outname, output)
-
-        self.app.worker_task.emit({'fcn': worker_job, 'params': [self]})
+    def tool_entries(self, obj):
+        """[(id, label)] of the apertures / tools that can be selected on an object."""
+        if obj is None or (obj.kind == 'geometry' and not getattr(obj, 'multigeo', False)):
+            return []
+        out = []
+        for tid, tool in (getattr(obj, 'tools', None) or {}).items():
+            if obj.kind == 'gerber':
+                desc = ' '.join(str(v) for v in (tool.get('type', ''), tool.get('size', '')) if v != '')
+            elif obj.kind == 'excellon':
+                desc = '%.*f' % (self.decimals, float(tool.get('tooldia', 0.0) or 0.0))
+            else:
+                desc = str(tool.get('tooldia', ''))
+            out.append((tid, ('%s  %s' % (tid, desc)).strip()))
+        return out
 
     @staticmethod
-    def aperture_intersection(apid, target_geo, sub_geometry):
-        return SubGen.aperture_intersection(apid, target_geo, sub_geometry)
+    def _fill_checklist(widget, entries, state=None):
+        widget.blockSignals(True)
+        widget.clear()
+        for tid, label in entries:
+            item = QtWidgets.QListWidgetItem(label)
+            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            item.setData(ID_ROLE, tid)
+            item.setCheckState(CHECKED if (state is None or state.get(tid, True)) else UNCHECKED)
+            widget.addItem(item)
+        widget.blockSignals(False)
 
-    def new_gerber_object(self, outname, output):
-        """
+    @staticmethod
+    def _checked_ids(widget):
+        """The checked ids, or None when all of them are checked (or there are none)."""
+        ids = [widget.item(i).data(ID_ROLE) for i in range(widget.count())
+               if widget.item(i).checkState() == CHECKED]
+        return None if len(ids) == widget.count() else ids
 
-        :param outname:     name for the new Gerber object
-        :type outname:      str
-        :param output:      a list made of tuples in format:
-                            (aperture id in the target Gerber, unaffected_geometry list, affected_geometry list)
-        :type output:       list
-        :return:
-        :rtype:
-        """
-
-        def obj_init(grb_obj, app_obj):
-
-            grb_obj.tools = deepcopy(self.new_apertures)
-            grb_obj.solid_geometry, grb_obj.follow_geometry = SubGen.gerber_geometry(grb_obj.tools, output)
-            grb_obj.regenerate_source(name=outname)
-
-        with self.app.proc_container.new('%s...' % _("Generating")):
-            ret = self.new_object('gerber', outname, obj_init, source=self.target_grb_obj, autoselected=False)
-            if ret == 'fail':
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _('Generating new object failed.'))
-                return
-
-            # GUI feedback
-            self.app.inform.emit('[success] %s: %s' % (_("Created"), outname))
-
-            # Delete source objects if it was selected
-            if self.ui.delete_sources_cb.get_value():
-                self.app.collection.delete_by_name(self.target_grb_obj_name)
-                self.app.collection.delete_by_name(self.sub_grb_obj_name)
-
-            # cleanup
-            self.new_apertures.clear()
-            self.new_solid_geometry[:] = []
-            self.results = []
-
-    def on_subtract_geo_click(self):
-        # reset previous values
-        self.new_tools.clear()
-        self.target_options.clear()
-        self.new_solid_geometry = []
-        self.sub_union = []
-
-        self.sub_type = "geo"
-
-        self.target_geo_obj_name = self.ui.target_geo_combo.currentText()
-        if self.target_geo_obj_name == '':
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("No Target object loaded."))
-            return
-
-        # Get target object.
+    def fill_targets(self, select=None):
+        ui = self.ui
+        names = [o.obj_options['name'] for o in self._objects(ui.type_combo.currentData())]
+        self._loading = True
         try:
-            self.target_geo_obj = self.app.collection.get_by_name(self.target_geo_obj_name)
-        except Exception as e:
-            self.app.log.error("ToolSub.on_subtract_geo_click() --> %s" % str(e))
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), self.target_geo_obj_name))
-            return "Could not retrieve object: %s" % self.target_grb_obj_name
+            ui.target_combo.clear()
+            ui.target_combo.addItems(names)
+            if select in names:
+                ui.target_combo.setCurrentIndex(names.index(select))
+        finally:
+            self._loading = False
 
-        self.sub_geo_obj_name = self.ui.sub_geo_combo.currentText()
-        if self.sub_geo_obj_name == '':
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("No Subtractor object loaded."))
-            return
+    def fill_subtractors(self, checked=None):
+        """All the objects of the 3 kinds but the target. checked: the names to check (None: keep the checks)."""
+        ui = self.ui
+        target = ui.target_combo.currentText()
+        if checked is None:
+            checked = {ui.subs_list.item(i).text() for i in range(ui.subs_list.count())
+                       if ui.subs_list.item(i).checkState() == CHECKED}
+        current = self._current_sub
+        ui.subs_list.blockSignals(True)
+        ui.subs_list.clear()
+        row = -1
+        for obj in self.app.collection.get_list():
+            name = obj.obj_options['name']
+            if obj.kind not in KINDS or name == target:
+                continue
+            item = QtWidgets.QListWidgetItem(name)
+            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(CHECKED if name in checked else UNCHECKED)
+            item.setToolTip(obj.kind)
+            ui.subs_list.addItem(item)
+            if name == current:
+                row = ui.subs_list.count() - 1
+        ui.subs_list.setCurrentRow(row)
+        ui.subs_list.blockSignals(False)
+        self.on_sub_row_changed()
 
-        # Get substractor object.
+    def apply_selection(self, target, others):
+        """Make an object the target and check the others as subtractors (target None: the first of the type)."""
+        ui = self.ui
+        self._loading = True
         try:
-            self.sub_geo_obj = self.app.collection.get_by_name(self.sub_geo_obj_name)
-        except Exception as e:
-            self.app.log.error("ToolSub.on_subtract_geo_click() --> %s" % str(e))
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), self.sub_geo_obj_name))
-            return "Could not retrieve object: %s" % self.sub_geo_obj_name
+            if target is not None:
+                idx = ui.type_combo.findData(target.kind)
+                if idx >= 0:
+                    ui.type_combo.setCurrentIndex(idx)
+        finally:
+            self._loading = False
+        self.fill_targets(select=target.obj_options['name'] if target is not None else None)
+        self.on_target_changed()
+        if others:
+            self.fill_subtractors(checked={o.obj_options['name'] for o in others})
 
-        if self.sub_geo_obj.multigeo:
-            self.app.inform.emit('[ERROR_NOTCL] %s' %
-                                 _("Currently, the Subtractor geometry cannot be of type Multigeo."))
+    def on_type_changed(self, *args):
+        if self._loading:
             return
+        self.fill_targets()
+        self.on_target_changed()
 
-        # create the target_options obj
-        # self.target_options = {}
-        # for k, v in self.target_geo_obj.obj_options.items():
-        #     if k != 'name':
-        #         self.target_options[k] = v
+    def on_target_changed(self, *args):
+        if self._loading:
+            return
+        ui = self.ui
+        name = ui.target_combo.currentText()
+        kind = ui.type_combo.currentData()
+        target = self.app.collection.get_by_name(name) if name else None
 
-        # crate the new_tools dict structure
-        for tool in self.target_geo_obj.tools:
-            self.new_tools[tool] = {}
-            for key, v in self.target_geo_obj.tools[tool].items():
-                self.new_tools[tool][key] = [] if key == 'solid_geometry' else deepcopy(v)
+        # XOR does not exist for Excellon; Close paths is for a Geometry target
+        ui.op_combo.model().item(2).setEnabled(kind != 'excellon')
+        if kind == 'excellon' and ui.op_combo.currentData() == 'xor':
+            ui.op_combo.setCurrentIndex(0)
+        ui.close_paths_cb.setEnabled(kind == 'geometry')
 
-        # add the promises
-        if self.target_geo_obj.multigeo:
-            for tool in self.target_geo_obj.tools:
-                self.promises.append(tool)
-        else:
-            self.promises.append("single")
+        if name != self._target_tools_of:
+            self._fill_checklist(ui.target_tools_list, self.tool_entries(target))
+            self._target_tools_of = name
+        if not self._name_edited:
+            ui.out_entry.setText((name + str(self._opt("tools_sub_suffix") or '')) if name else '')
+        self.fill_subtractors()
 
-        self.sub_union = unary_union(self.sub_geo_obj.solid_geometry)
+    def on_op_changed(self, *args):
+        labels = {'subtract': _("Subtract"), 'intersect': _("Intersect"), 'xor': _("XOR")}
+        self.ui.apply_button.setText(labels.get(self.ui.op_combo.currentData(), _("Subtract")))
 
-        self.periodic_check(self.check_interval, reset=True)
+    def on_name_edited(self, *args):
+        self._name_edited = True
 
-        if self.target_geo_obj.multigeo:
-            for tool in self.target_geo_obj.tools:
-                geo = self.target_geo_obj.tools[tool]['solid_geometry']
-                self.app.worker_task.emit({'fcn': self.toolgeo_intersection, 'params': [tool, geo]})
-        else:
-            geo = self.target_geo_obj.solid_geometry
-            self.app.worker_task.emit({'fcn': self.toolgeo_intersection, 'params': ["single", geo]})
+    def on_sub_row_changed(self, *args):
+        ui = self.ui
+        row = ui.subs_list.currentRow()
+        name = ui.subs_list.item(row).text() if row >= 0 else None
+        self._current_sub = name
+        obj = self.app.collection.get_by_name(name) if name else None
+        self._fill_checklist(ui.sub_tools_list, self.tool_entries(obj), self._sub_tool_state.get(name))
 
-    def toolgeo_intersection(self, tool, geo):
-        self.app.log.debug("Working on promise: %s" % str(tool))
+    def on_sub_tool_changed(self, *args):
+        name = self._current_sub
+        if name is None:
+            return
+        widget = self.ui.sub_tools_list
+        self._sub_tool_state[name] = {widget.item(i).data(ID_ROLE): widget.item(i).checkState() == CHECKED
+                                      for i in range(widget.count())}
 
-        if tool == "single":
-            text = _("Parsing solid_geometry ...")
-        else:
-            text = '%s: %s...' % (_("Parsing solid_geometry for tool"), str(tool))
+    def on_objects_changed(self, obj, action, name):
+        """Objects were added, deleted or renamed: the lists follow (after the collection finished the change)."""
+        if self._is_open():
+            QtCore.QTimer.singleShot(0, self.refresh_objects)
 
-        with self.app.proc_container.new(text):
-            new_geometry = SubGen.subtract_geometry(geo, self.sub_union, self.ui.close_paths_cb.isChecked())
-
-        if new_geometry:
-            if tool == "single":
-                while not self.new_solid_geometry:
-                    self.new_solid_geometry = deepcopy(new_geometry)
-                    time.sleep(0.5)
-            else:
-                while not self.new_tools[tool]['solid_geometry']:
-                    self.new_tools[tool]['solid_geometry'] = deepcopy(new_geometry)
-                    time.sleep(0.5)
-
-        while True:
-            # removal from list is done in a multithreaded way therefore not always the removal can be done,
-            # so we keep trying until it's done
-            if tool not in self.promises:
-                break
-
-            self.promises.remove(tool)
-            time.sleep(0.5)
-        self.app.log.debug("Promise fulfilled: %s" % str(tool))
-
-    def new_geo_object(self, outname):
-        geo_name = outname
-
-        def obj_init(geo_obj, app_obj):
-
-            # geo_obj.obj_options = self.target_options
-            # create the target_options obj
-            for k, v in self.target_geo_obj.obj_options.items():
-                geo_obj.obj_options[k] = v
-            geo_obj.obj_options['name'] = geo_name
-
-            if self.target_geo_obj.multigeo:
-                geo_obj.tools = deepcopy(self.new_tools)
-                # this turn on the FlatCAMCNCJob plot for multiple tools
-                geo_obj.multigeo = True
-                geo_obj.multitool = True
-            else:
-                geo_obj.solid_geometry = deepcopy(self.new_solid_geometry)
-                try:
-                    geo_obj.tools = deepcopy(self.new_tools)
-                    for tool in geo_obj.tools:
-                        geo_obj.tools[tool]['solid_geometry'] = deepcopy(self.new_solid_geometry)
-                except Exception as e:
-                    app_obj.log.error("ToolSub.new_geo_object() --> %s" % str(e))
-                geo_obj.multigeo = False
-
-        with self.app.proc_container.new('%s...' % _("Generating")):
-            ret = self.new_object('geometry', outname, obj_init, source=self.target_geo_obj, autoselected=False)
-            if ret == 'fail':
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _('Generating new object failed.'))
-                return
-            # Register recent file
-            self.app.file_opened.emit('geometry', outname)
-            # GUI feedback
-            self.app.inform.emit('[success] %s: %s' % (_("Created"), outname))
-
-            # Delete source objects if it was selected
-            if self.ui.delete_sources_cb.get_value():
-                self.app.collection.delete_by_name(self.target_geo_obj_name)
-                self.app.collection.delete_by_name(self.sub_geo_obj_name)
-
-            # cleanup
-            self.new_tools.clear()
-            self.new_solid_geometry[:] = []
-            self.sub_union = []
-
-    def periodic_check(self, check_period, reset=False):
-        """
-        This function starts an QTimer, and it will periodically check if intersections are done
-
-        :param check_period: time at which to check periodically
-        :param reset: will reset the timer
-        :return:
-        """
-
-        self.app.log.debug("ToolSub --> Periodic Check started.")
-
+    def refresh_objects(self):
+        if not self._is_open():
+            return
         try:
-            self.check_thread.stop()
-        except (TypeError, AttributeError):
+            self.fill_targets(select=self.ui.target_combo.currentText())
+            self.on_target_changed()
+        except RuntimeError:
             pass
 
-        if reset:
-            self.check_thread.setInterval(check_period)
-            try:
-                self.check_thread.timeout.disconnect(self.periodic_check_handler)
-            except (TypeError, AttributeError):
-                pass
-
-        self.check_thread.timeout.connect(self.periodic_check_handler)
-        self.check_thread.start()
-
-    def periodic_check_handler(self):
-        """
-        If the intersections workers finished then start creating the solid_geometry
-        :return:
-        """
-        # log.debug("checking parsing --> %s" % str(self.parsing_promises))
-
+    def on_object_selection_changed(self, current, previous):
+        """Project tree selection while the plugin is open: the first is the target, the others are subtractors."""
+        if not self._is_open() or self._busy:
+            return
         try:
-            if not self.promises:
-                self.check_thread.stop()
-                self.job_finished.emit(True)
+            selected = [o for o in self.app.collection.get_selected() if o.kind in KINDS]
+        except (AttributeError, RuntimeError):
+            return
+        if selected:
+            self.apply_selection(selected[0], selected[1:])
 
-                # reset the type of substraction for next time
-                self.sub_type = None
+    # ------------------------------------------------------------------------------------------------------------
+    # the click: read the values (GUI thread)
+    # ------------------------------------------------------------------------------------------------------------
+    def _set_busy(self, busy):
+        self._busy = busy
+        try:
+            self.ui.apply_button.setEnabled(not busy)
+            self.ui.preview_button.setEnabled(not busy)
+        except RuntimeError:
+            pass
 
-                self.app.log.debug("ToolSub --> Periodic check finished.")
+    def _error(self, text):
+        self.app.inform.emit('[ERROR_NOTCL] %s' % text)
+        return None
+
+    def collect(self, for_preview=False):
+        """Read every value of the UI and look the objects up. Returns a dict, or None after a message."""
+        ui = self.ui
+        collection = self.app.collection
+
+        target_name = ui.target_combo.currentText()
+        if target_name == '':
+            return self._error(_("No Target object loaded."))
+        target = collection.get_by_name(target_name)
+        if target is None:
+            return self._error('%s: %s' % (_("Could not retrieve object"), target_name))
+
+        subs = []
+        for i in range(ui.subs_list.count()):
+            item = ui.subs_list.item(i)
+            if item.checkState() != CHECKED:
+                continue
+            sub = collection.get_by_name(item.text())
+            if sub is None:
+                return self._error('%s: %s' % (_("Could not retrieve object"), item.text()))
+            subs.append(sub)
+        if not subs:
+            return self._error(_("No Subtractor object selected."))
+        if any(s is target for s in subs):
+            return self._error(_("The target object can not be a subtractor."))
+
+        op = ui.op_combo.currentData()
+        kind = target.kind
+        if not for_preview and kind == 'excellon' and op == 'xor':
+            return self._error(_("XOR is not valid for an Excellon target."))
+
+        advanced = ui.level.isChecked()
+        target_tools = self._checked_ids(ui.target_tools_list) if advanced else None
+        sub_tools = {}
+        if advanced:
+            for sub in subs:
+                state = self._sub_tool_state.get(sub.obj_options['name'])
+                if not state:
+                    continue
+                ids = [tid for tid, label in self.tool_entries(sub)]
+                selected = [tid for tid in ids if state.get(tid, True)]
+                if len(selected) != len(ids):
+                    sub_tools[sub.obj_options['name']] = selected
+
+        base = ui.out_entry.text().strip() or (target_name + str(self._opt("tools_sub_suffix") or ''))
+        return {
+            'target': target, 'target_name': target_name, 'subs': subs, 'op': op, 'kind': kind,
+            'margin': float(ui.margin_entry.get_value()),
+            'steps': int(self._opt('%s_circle_steps' % kind) or 64),
+            'close_paths': bool(ui.close_paths_cb.isChecked()) and kind == 'geometry',
+            'target_tools': target_tools, 'sub_tools': sub_tools,
+            'units': (target.obj_options or {}).get('units'),
+            'out_base': base,
+            'keep_target': bool(ui.keep_target_cb.isChecked()),
+            'delete_subs': bool(ui.delete_subs_cb.isChecked()),
+        }
+
+    def _start(self, params, mode):
+        self._set_busy(True)
+        self.app.inform.emit('%s' % _("Working..."))
+        self.app.worker_task.emit({'fcn': self.worker_job, 'params': [params, mode]})
+
+    def on_apply(self, *args):
+        if self._busy:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Another Subtract run is still working."))
+            return
+        params = self.collect()
+        if params is None:
+            return
+        self.clear_preview()
+        self._start(params, 'apply')
+
+    def on_preview(self, *args):
+        if self._busy:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Another Subtract run is still working."))
+            return
+        params = self.collect(for_preview=True)
+        if params is None:
+            return
+        self._start(params, 'preview')
+
+    # ------------------------------------------------------------------------------------------------------------
+    # the job (worker thread): geometry only, no Qt widgets, no collection changes
+    # ------------------------------------------------------------------------------------------------------------
+    def check_abort(self):
+        if getattr(self.app, 'abort_flag', False):
+            raise GracefulException()
+
+    def worker_job(self, params, mode):
+        kind, payload = 'error', ''
+        try:
+            with self.app.proc_container.new('%s...' % _("Working")):
+                if mode == 'preview':
+                    area = SubGen.subtractor_area(params['subs'], margin=params['margin'], steps=params['steps'],
+                                                  tools_by_name=params['sub_tools'], target_units=params['units'])
+                    kind, payload = 'preview', area
+                else:
+                    result = SubGen.compute(
+                        params['target'], params['subs'], params['op'], params['margin'], params['steps'],
+                        params['close_paths'], params['target_tools'], params['sub_tools'], abort=self.check_abort)
+                    kind, payload = 'result', (params, result)
+        except GracefulException:
+            kind, payload = 'cancelled', None
+        except ValueError as e:
+            kind, payload = 'invalid', str(e)
         except Exception as e:
-            self.job_finished.emit(False)
-            self.app.log.error("ToolSub().periodic_check_handler() --> %s" % str(e))
-            traceback.print_exc()
+            log.error("ToolSub.worker_job() --> %s\n%s" % (str(e), traceback.format_exc()))
+            kind, payload = 'error', str(e)
+        self.job_done.emit(kind, payload)
 
-    def on_job_finished(self, succcess):
-        """
-
-        :param succcess: boolean, this parameter signal if all the apertures were processed
-        :return: None
-        """
-        if succcess is True:
-            if self.sub_type == "gerber":
-                outname = self.ui.target_gerber_combo.currentText() + '_sub'
-
-                # intersection jobs finished, start the creation of solid_geometry
-                self.app.worker_task.emit({'fcn': self.new_gerber_object, 'params': [outname]})
+    # ------------------------------------------------------------------------------------------------------------
+    # the end of the job (GUI thread)
+    # ------------------------------------------------------------------------------------------------------------
+    def on_job_done(self, kind, payload):
+        self._set_busy(False)
+        try:
+            if kind == 'preview':
+                self.draw_preview(payload)
+            elif kind == 'cancelled':
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+            elif kind == 'invalid':
+                self._error(str(payload))
+            elif kind == 'result':
+                self.finish(*payload)
             else:
-                outname = self.ui.target_geo_combo.currentText() + '_sub'
+                self._error('%s: %s' % (_("Subtract failed"), payload))
+        except Exception as e:
+            log.error("ToolSub.on_job_done() --> %s\n%s" % (str(e), traceback.format_exc()))
+            self._error('%s: %s' % (_("Subtract failed"), str(e)))
 
-                # intersection jobs finished, start the creation of solid_geometry
-                self.app.worker_task.emit({'fcn': self.new_geo_object, 'params': [outname]})
-        else:
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Generating new object failed.'))
+    def finish(self, params, result):
+        """Create the result and delete what was asked, as ONE Undo step."""
+        if result.empty_area:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "The subtractor has no area (a Geometry of lines needs a Margin above zero). Nothing was created."))
+            return
 
-    def reset_fields(self):
-        self.ui.target_gerber_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
-        self.ui.sub_gerber_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
+        collection = self.app.collection
+        target = params['target']
+        if collection.get_by_name(params['target_name']) is not target:
+            self._error(_("The target object does not exist anymore."))
+            return
 
-        self.ui.target_geo_combo.setRootModelIndex(self.app.collection.index(2, 0, QtCore.QModelIndex()))
-        self.ui.sub_geo_combo.setRootModelIndex(self.app.collection.index(2, 0, QtCore.QModelIndex()))
+        keep = params['keep_target']
+        to_delete = [] if keep else [target]
+        if params['delete_subs']:
+            to_delete += [s for s in params['subs'] if collection.get_by_name(s.obj_options['name']) is s]
+        # the result is made first (under a free name): a failed creation must not lose the deleted objects
+        outname = params['target_name'] if not keep else unique_name(params['out_base'], collection.get_names())
+        create_name = outname if keep else unique_name(params['out_base'], collection.get_names())
 
-    @staticmethod
-    def poly2rings(poly):
-        return SubGen.poly2rings(poly)
+        def obj_init(new_obj, app_obj):
+            SubGen.apply_result(new_obj, result, target)
+            if result.kind in ('gerber', 'excellon') and new_obj.regenerate_source(name=outname) is False:
+                log.warning("ToolSub: the source text of %s could not be regenerated." % outname)
+
+        history = history_of(self.app)
+        label = self.pluginName
+        with history.group(label):
+            ret = self.new_object(result.kind, create_name, obj_init, source=target, autoselected=False)
+            if ret is None or (isinstance(ret, str) and ret == 'fail'):
+                self._error(_("Generating new object failed."))
+                return
+            if to_delete:
+                history.record_delete(label, to_delete)
+                self.app.object_ops.delete_objects_now(to_delete)
+            new_obj = collection.get_by_name(create_name)
+            if new_obj is not None and create_name != outname:
+                collection.rename_object(new_obj, outname)
+                history.record_rename(new_obj, create_name, outname)
+
+        stats = result.stats
+        self.app.inform.emit('[success] %s: %s. %s %d, %s %d, %s %d, %s %d' % (
+            _("Created"), outname, _("Kept"), stats.get('kept', 0), _("changed"), stats.get('changed', 0),
+            _("removed"), stats.get('removed', 0), _("added"), stats.get('added', 0)))
+
+    # ------------------------------------------------------------------------------------------------------------
+    # the preview (GUI thread)
+    # ------------------------------------------------------------------------------------------------------------
+    def draw_preview(self, area):
+        self.clear_preview()
+        shapes = self.app.tool_shapes
+        if shapes is None:
+            return
+        if area.is_empty:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The subtractor has no area."))
+            return
+        for poly in (area.geoms if hasattr(area, 'geoms') else [area]):
+            if not poly.is_empty:
+                shapes.add(poly, color='#00AA00FF', face_color='#00AA0050', update=False, layer=0, tolerance=None)
+        shapes.redraw()
+        self._preview_drawn = True
+
+    def clear_preview(self):
+        if self._preview_drawn and self.app.tool_shapes is not None:
+            self.app.tool_shapes.clear(update=True)
+        self._preview_drawn = False

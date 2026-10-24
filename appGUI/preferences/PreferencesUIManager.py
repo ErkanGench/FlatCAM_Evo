@@ -647,7 +647,11 @@ class PreferencesUIManager(QtCore.QObject):
 
             # Subtractor Tool
             "tools_sub_close_paths": self.ui.plugin_pref_form.tools_sub_group.close_paths_cb,
-            "tools_sub_delete_sources":  self.ui.plugin_pref_form.tools_sub_group.delete_sources_cb,
+            "tools_sub_keep_target": self.ui.plugin_pref_form.tools_sub_group.keep_target_cb,
+            "tools_sub_delete_subtractors": self.ui.plugin_pref_form.tools_sub_group.delete_subs_cb,
+            "tools_sub_operation": self.ui.plugin_pref_form.tools_sub_group.op_radio,
+            "tools_sub_margin": self.ui.plugin_pref_form.tools_sub_group.margin_entry,
+            "tools_sub_suffix": self.ui.plugin_pref_form.tools_sub_group.suffix_entry,
 
             # Corner Markers Tool
             "tools_markers_type": self.ui.plugin_pref_form.tools_markers_group.type_radio,

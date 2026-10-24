@@ -250,3 +250,104 @@ def test_qrcode_source_insert_is_one_undo_step():
         assert unary_union(obj.solid_geometry).area == pytest.approx(area)
     finally:
         appHistory.RECORD_IN_HEADLESS = False
+
+
+# ---- subtract_objects ---------------------------------------------------------------------------------------------
+def make_subtract(objects):
+    from tclCommands.TclCommandSubtractObjects import TclCommandSubtractObjects
+    from test_tcl_audit_regressions import object_app
+    app = object_app(None)
+    app.collection.get_by_name.side_effect = objects.get
+    app.app_obj = Mock()
+    return TclCommandSubtractObjects(app), app
+
+
+def sub_gerber(name, geo):
+    return SimpleNamespace(kind='gerber', multigeo=False, obj_options={'name': name, 'units': 'MM'},
+                           solid_geometry=[geo],
+                           tools={10: {'type': 'C', 'size': 1.0, 'geometry': [{'solid': geo, 'follow': geo.exterior}]}})
+
+
+def sub_excellon(name, x, y):
+    from shapely import Point
+    return SimpleNamespace(kind='excellon', multigeo=False, obj_options={'name': name, 'units': 'MM'},
+                           solid_geometry=[],
+                           tools={1: {'tooldia': 1.0, 'drills': [Point(x, y)], 'slots': [], 'solid_geometry': []}})
+
+
+def run_init(app, kind='gerber'):
+    args, kwargs = app.app_obj.new_object.call_args
+    assert args[0] == kind and kwargs['plot'] is False
+    new = Mock()
+    new.obj_options = {}
+    new.bounds.return_value = (0, 0, 1, 1)
+    args[2](new, app)
+    return args[1], new
+
+
+def test_subtract_objects_gerber_minus_gerber_creates_sub_object_with_the_cut_copper():
+    from shapely import box
+    from shapely.ops import unary_union
+    objects = {'cu': sub_gerber('cu', box(0, 0, 10, 10)), 'mask': sub_gerber('mask', box(5, -1, 11, 11))}
+    command, app = make_subtract(objects)
+    command.execute({'target': 'cu', 'subtractors': 'mask'}, [])
+    name, new = run_init(app)
+    assert name == 'cu_sub'
+    assert unary_union(new.solid_geometry).area == pytest.approx(50)
+    new.regenerate_source.assert_called_once()
+    assert objects['cu'].solid_geometry[0].area == 100  # the target is untouched
+
+
+def test_subtract_objects_takes_several_subtractors_including_an_excellon():
+    from shapely import box
+    from shapely.ops import unary_union
+    objects = {'cu': sub_gerber('cu', box(0, 0, 10, 10)), 'a': sub_gerber('a', box(0, 0, 2, 10)),
+               'drl': sub_excellon('drl', 8, 5)}
+    command, app = make_subtract(objects)
+    command.execute({'target': 'cu', 'subtractors': 'a,drl', 'outname': 'cut'}, [])
+    name, new = run_init(app)
+    assert name == 'cut'
+    area = unary_union(new.solid_geometry).area
+    assert 80 - 0.9 < area < 80 - 0.7  # minus the strip and the 1 mm hole (~0.78)
+
+
+def test_subtract_objects_keep_target_0_deletes_it_and_takes_its_name():
+    from shapely import box
+    objects = {'cu': sub_gerber('cu', box(0, 0, 10, 10)), 'mask': sub_gerber('mask', box(5, 0, 11, 10))}
+    command, app = make_subtract(objects)
+    new = Mock()
+    new.obj_options = {}
+    new.bounds.return_value = (0, 0, 1, 1)
+    events = []
+
+    def create(kind, name, init, plot=True):
+        events.append('create')
+        init(new, app)
+        new.obj_options['name'] = name
+    app.app_obj.new_object.side_effect = create
+    app.collection.delete_by_name.side_effect = lambda name: events.append('delete ' + name)
+    command.execute({'target': 'cu', 'subtractors': 'mask', 'keep_target': '0', 'delete_subtractors': '1'}, [])
+    # the result exists before the target is deleted, then it takes the target name
+    assert events[:2] == ['create', 'delete cu'] and 'delete mask' in events
+    app.collection.rename_object.assert_called_once_with(new, 'cu')
+
+
+def test_subtract_objects_bad_input_is_a_tcl_error_and_creates_nothing():
+    from shapely import box
+    from test_tcl_audit_regressions import FCShell
+    objects = {'cu': sub_gerber('cu', box(0, 0, 10, 10)), 'mask': sub_gerber('mask', box(5, 0, 11, 10)),
+               'drl': sub_excellon('drl', 1, 1), 'far': sub_gerber('far', box(50, 50, 51, 51)),
+               'nothing': SimpleNamespace(kind='excellon', multigeo=False, obj_options={'name': 'nothing'},
+                                          solid_geometry=[], tools={})}
+    command, app = make_subtract(objects)
+    for args in ({'target': 'cu', 'subtractors': 'cu,mask'},
+                 {'target': 'cu', 'subtractors': 'nope'},
+                 {'target': 'nope', 'subtractors': 'mask'},
+                 {'target': 'drl', 'subtractors': 'mask', 'op': 'xor'},
+                 {'target': 'cu', 'subtractors': 'mask', 'op': 'merge'},
+                 {'target': 'cu', 'subtractors': 'mask', 'target_tools': '99'},
+                 {'target': 'cu', 'subtractors': 'nothing'}):
+        with pytest.raises(FCShell.TclErrorException):
+            command.execute(args, [])
+    app.app_obj.new_object.assert_not_called()
+    app.collection.delete_by_name.assert_not_called()
