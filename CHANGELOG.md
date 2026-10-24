@@ -148,9 +148,31 @@ Check Rules Plugin:
 - rule presets (home etching, CNC milling, typical fab values) fill the rule values; a Cancel button stops a running check
 - the panel shows the units next to each value, each rule has its own tooltip, the Select All checkboxes follow their rules, and the Run button tooltip is fixed
 
+QRCode Plugin:
+
+- fixed: in an inch project the clearance mask and the aperture had mm values; the mask was about 10 times too large and a negative QR made a large copper area
+- fixed: the clearance mask cut only the copper polygons that contained it completely; now it cuts each polygon that it touches
+- fixed: an export to PNG or SVG kept the app in the plugin mode and Undo / Redo stayed blocked; export errors are reported and a success message gives the file name
+- fixed: the SVG export ignored the fill and back colors; the colors are checked before an export
+- fixed: the placement started before the QR was made; data that did not fit, or a failed geometry, left the canvas in the plugin mode or inserted the QR of the previous run; now the placement starts only after the QR is ready, and errors are reported
+- fixed: Reset, plugin close, a change to another plugin, Escape and a right click end the placement; the canvas mouse handlers and the previous mode come back; a drag release does not insert a QR
+- fixed: a deleted target, a target that is not a Gerber or a Gerber in an editor is refused
+- fixed: a fixed Version is used as it is; before, it grew without a message; the new Auto option selects the smallest version
+- fixed: the new aperture keys have the same type as the keys of the object
+- fixed: the Insert QRCode button is shown in Beginner and in Advanced mode
+- after an insert, the bounds, the follow geometry and the apertures table of the object are updated
+- the insert into a big Gerber is fast (0.3 s for 10000 polygons, before: about 8 s); a big QR is made in about 1 s (before: about 4 s); the preview redraws one time for each mouse move
+- new options: Mask Pattern, Border 0, Rotation (0/90/180/270), Mirror, Clearance margin; the panel shows the version, the modules and the size in the app units, and warns when the border is below 4 or the module is below the minimum module size (Preferences)
+- new Placement section: click, or X / Y coordinates; anchor (corners or center); Keep placing with a serial number that increments
+- new Variables: {date}, {time}, {project}, {object} and {serial} in the QR data, with the serial start, step and zero padding
+- new Output section: add the QR to the source object or make a new Gerber object; optional opening in a soldermask Gerber, in the same Undo step
+- a preview image of the QR in the panel
+- the new options are also in Preferences
+
 Tcl Commands:
 
 - new command check_rules runs the Check Rules checks from scripts and in headless mode, with an optional report document and CSV file
+- new command qrcode adds a QR code to a Gerber object or makes a new Gerber object, with the options of the QRCode plugin; it does not plot
 
 Resources:
 

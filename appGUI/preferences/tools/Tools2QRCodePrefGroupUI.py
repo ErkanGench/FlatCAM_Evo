@@ -1,7 +1,8 @@
 
 from PyQt6 import QtGui
 
-from appGUI.GUIElements import FCSpinner, RadioSet, FCTextArea, FCLabel, FCColorEntry, GLay, FCFrame
+from appGUI.GUIElements import FCSpinner, FCDoubleSpinner, FCCheckBox, FCComboBox, RadioSet, FCTextArea, \
+    FCLabel, FCColorEntry, GLay, FCFrame
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 
 import gettext
@@ -43,7 +44,7 @@ class Tools2QRCodePrefGroupUI(OptionsGroupUI):
         self.version_label = FCLabel('%s:' % _("Version"))
         self.version_label.setToolTip(
             _("QRCode version can have values from 1 (21x21 boxes)\n"
-              "to 40 (177x177 boxes).")
+              "to 40 (177x177 boxes). The version is fixed unless Auto is checked.")
         )
         self.version_entry = FCSpinner()
         self.version_entry.set_range(1, 40)
@@ -51,6 +52,13 @@ class Tools2QRCodePrefGroupUI(OptionsGroupUI):
 
         param_grid.addWidget(self.version_label, 0, 0)
         param_grid.addWidget(self.version_entry, 0, 1)
+
+        self.version_auto_cb = FCCheckBox(_("Auto version"))
+        self.version_auto_cb.setToolTip(
+            _("When checked, the smallest version that fits the data is used.\n"
+              "When not checked, the version is fixed and the data must fit in it.")
+        )
+        param_grid.addWidget(self.version_auto_cb, 1, 0, 1, 2)
 
         # ERROR CORRECTION #
         self.error_label = FCLabel('%s:' % _("Error correction"))
@@ -95,7 +103,7 @@ class Tools2QRCodePrefGroupUI(OptionsGroupUI):
               "Default value is 4. The width of the clearance around the QRCode.")
         )
         self.border_size_entry = FCSpinner()
-        self.border_size_entry.set_range(1, 9999)
+        self.border_size_entry.set_range(0, 9999)
         self.border_size_entry.setWrapping(True)
 
         param_grid.addWidget(self.border_size_label, 6, 0)
@@ -180,6 +188,101 @@ class Tools2QRCodePrefGroupUI(OptionsGroupUI):
 
         param_grid.addWidget(self.sel_limit_label, 20, 0)
         param_grid.addWidget(self.sel_limit_entry, 20, 1)
+
+        # MASK PATTERN #
+        self.mask_pattern_label = FCLabel('%s:' % _("Mask pattern"))
+        self.mask_pattern_label.setToolTip(_("The QR mask pattern. Auto lets the encoder choose the best one."))
+        self.mask_pattern_combo = FCComboBox()
+        self.mask_pattern_combo.addItems(['Auto'] + [str(i) for i in range(8)])
+        param_grid.addWidget(self.mask_pattern_label, 22, 0)
+        param_grid.addWidget(self.mask_pattern_combo, 22, 1)
+
+        # MIN MODULE #
+        self.min_module_label = FCLabel('%s [%s]:' % (_("Min module"), _("mm")))
+        self.min_module_label.setToolTip(
+            _("The smallest QR module (box) size, in mm, that the manufacturing process can make.\n"
+              "A smaller module raises a warning."))
+        self.min_module_entry = FCDoubleSpinner()
+        self.min_module_entry.set_range(0.0, 100.0)
+        self.min_module_entry.set_precision(self.decimals)
+        self.min_module_entry.setSingleStep(0.05)
+        param_grid.addWidget(self.min_module_label, 24, 0)
+        param_grid.addWidget(self.min_module_entry, 24, 1)
+
+        # ROTATION / MIRROR #
+        self.rotation_label = FCLabel('%s:' % _("Rotation"))
+        self.rotation_label.setToolTip(_("Rotate the QRCode counter-clockwise, in degrees."))
+        self.rotation_radio = RadioSet([{'label': '0', 'value': 0}, {'label': '90', 'value': 90},
+                                        {'label': '180', 'value': 180}, {'label': '270', 'value': 270}])
+        param_grid.addWidget(self.rotation_label, 26, 0)
+        param_grid.addWidget(self.rotation_radio, 26, 1)
+
+        self.mirror_cb = FCCheckBox(_("Mirror"))
+        self.mirror_cb.setToolTip(_("Mirror the QRCode about the vertical axis (for the bottom layer)."))
+        param_grid.addWidget(self.mirror_cb, 28, 0, 1, 2)
+
+        # CLEARANCE MARGIN #
+        self.margin_label = FCLabel('%s:' % _("Clearance"))
+        self.margin_label.setToolTip(
+            _("The clearance around the QRCode, in app units.\n"
+              "Zero means: the Border Size in boxes."))
+        self.margin_entry = FCDoubleSpinner()
+        self.margin_entry.set_range(0.0, 10000.0)
+        self.margin_entry.set_precision(self.decimals)
+        self.margin_entry.setSingleStep(0.1)
+        param_grid.addWidget(self.margin_label, 30, 0)
+        param_grid.addWidget(self.margin_entry, 30, 1)
+
+        # PLACEMENT #
+        self.placement_label = FCLabel('%s:' % _("Placement"))
+        self.placement_label.setToolTip(_("Place the QRCode with a click on the canvas or at given coordinates."))
+        self.placement_radio = RadioSet([{'label': _('Click'), 'value': 'click'},
+                                         {'label': _('Coordinates'), 'value': 'coords'}])
+        param_grid.addWidget(self.placement_label, 32, 0)
+        param_grid.addWidget(self.placement_radio, 32, 1)
+
+        self.anchor_label = FCLabel('%s:' % _("Anchor"))
+        self.anchor_label.setToolTip(
+            _("The point of the QRCode (clearance included) that goes to the placement point."))
+        self.anchor_radio = RadioSet([{'label': 'BL', 'value': 'bl'}, {'label': 'TL', 'value': 'tl'},
+                                      {'label': 'BR', 'value': 'br'}, {'label': 'TR', 'value': 'tr'},
+                                      {'label': 'C', 'value': 'c'}])
+        param_grid.addWidget(self.anchor_label, 34, 0)
+        param_grid.addWidget(self.anchor_radio, 34, 1)
+
+        self.multi_cb = FCCheckBox(_("Keep placing"))
+        self.multi_cb.setToolTip(_("Stay armed after each click and increment the serial number."))
+        param_grid.addWidget(self.multi_cb, 36, 0, 1, 2)
+
+        # SERIAL #
+        self.serial_start_label = FCLabel('%s:' % _("Serial start"))
+        self.serial_start_label.setToolTip(_("The first value of the {serial} variable."))
+        self.serial_start_entry = FCSpinner()
+        self.serial_start_entry.set_range(0, 999999999)
+        param_grid.addWidget(self.serial_start_label, 38, 0)
+        param_grid.addWidget(self.serial_start_entry, 38, 1)
+
+        self.serial_step_label = FCLabel('%s:' % _("Serial step"))
+        self.serial_step_label.setToolTip(_("The {serial} variable grows with this value after each insertion."))
+        self.serial_step_entry = FCSpinner()
+        self.serial_step_entry.set_range(1, 999999)
+        param_grid.addWidget(self.serial_step_label, 40, 0)
+        param_grid.addWidget(self.serial_step_entry, 40, 1)
+
+        self.serial_pad_label = FCLabel('%s:' % _("Serial width"))
+        self.serial_pad_label.setToolTip(_("The {serial} variable is padded with zeros to this width."))
+        self.serial_pad_entry = FCSpinner()
+        self.serial_pad_entry.set_range(0, 20)
+        param_grid.addWidget(self.serial_pad_label, 42, 0)
+        param_grid.addWidget(self.serial_pad_entry, 42, 1)
+
+        # OUTPUT #
+        self.output_label = FCLabel('%s:' % _("Output"))
+        self.output_label.setToolTip(_("Add the QRCode to the source Gerber or create a new Gerber object."))
+        self.output_radio = RadioSet([{'label': _('Add to source'), 'value': 'source'},
+                                      {'label': _('New object'), 'value': 'new'}])
+        param_grid.addWidget(self.output_label, 44, 0)
+        param_grid.addWidget(self.output_radio, 44, 1)
         # self.layout.addStretch()
 
         # QRCode Tool

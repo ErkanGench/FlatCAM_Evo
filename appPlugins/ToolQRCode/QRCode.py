@@ -5,19 +5,21 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtCore, QtGui
 from appTool import AppTool
 from defaults import AppDefaults
+from appCommon.Common import LoudDict
 from appGUI.GUIElements import VerticalScrollArea, FCFileSaveDialog
 from appHandlers.appHistory import history_of
-from appParsers.SVG import svg_to_shapes, SvgImportError
 from appPlugins.ToolQRCode.QRCodeUI import QRcodeUI
 from appPlugins.ToolQRCode import QRCodeGen
 
+import datetime
 import logging
+import os
+from collections import namedtuple
 from copy import deepcopy
-from io import StringIO, BytesIO
-from shapely import MultiPolygon, box
+from shapely import box
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -28,8 +30,15 @@ if '_' not in builtins.__dict__:
 
 log = logging.getLogger('base')
 
+# modules / utility: the transformed geometry (lower-left anchor handled, insert at the placement point);
+# box_poly: bounding box of the utility geometry; info: the qr_geometry info; text: the expanded data
+QRPlan = namedtuple('QRPlan', ['modules', 'utility', 'box_poly', 'info', 'text'])
+
 
 class QRCode(AppTool):
+
+    # (plan or None, error message): the geometry job hands its result back to the GUI thread
+    plan_ready = QtCore.pyqtSignal(object, str)
 
     def __init__(self, app):
         AppTool.__init__(self, app)
@@ -37,17 +46,27 @@ class QRCode(AppTool):
         self.canvas = self.app.plotcanvas
         self.decimals = self.app.decimals
         self.units = ''
+        self.grb_object = None
+        self.grb_name = ''
+        self.plan = None
+        self.armed = False
+        self.handlers_connected = False
+        self.prev_call_source = None
+        self.serial = 0
+        self.proc = None
+        self.shapes = self.app.sel_shapes
+        self.old_back_color = ''
+        self.pending_params = None
+
+        self.preview_timer = QtCore.QTimer(self)
+        self.preview_timer.setSingleShot(True)
+        self.preview_timer.setInterval(300)
+        self.preview_timer.timeout.connect(self.refresh_preview)
+        self.plan_ready.connect(self.on_plan_ready)
+
         self.ui = QRcodeUI(layout=self.layout, app=self.app)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
-        self.grb_object = None
-        self.box_poly = None
-        self.proc = None
-        self.origin = (0, 0)
-        self.shapes = self.app.sel_shapes
-        self.qrcode_geometry = MultiPolygon()
-        self.qrcode_utility_geometry = MultiPolygon()
-        self.old_back_color = ''
 
     def run(self, toggle=True):
         self.app.defaults.report_usage("QRCode()")
@@ -93,44 +112,89 @@ class QRCode(AppTool):
         AppTool.install(self, icon, separator, shortcut='Alt+Q', **kwargs)
 
     def connect_signals_at_init(self):
-        self.ui.level.toggled.connect(self.on_level_changed)
-        self.ui.qrcode_button.clicked.connect(self.execute)
-        self.ui.export_png_button.clicked.connect(self.export_png_file)
-        self.ui.export_svg_button.clicked.connect(self.export_svg_file)
-        self.ui.fill_color_entry.editingFinished.connect(self.on_qrcode_fill_color_entry)
-        self.ui.fill_color_button.clicked.connect(self.on_qrcode_fill_color_button)
-        self.ui.back_color_entry.editingFinished.connect(self.on_qrcode_back_color_entry)
-        self.ui.back_color_button.clicked.connect(self.on_qrcode_back_color_button)
-        self.ui.transparent_cb.stateChanged.connect(self.on_transparent_back_color)
-        self.ui.reset_button.clicked.connect(self.set_tool_ui)
+        ui = self.ui
+        ui.level.toggled.connect(self.on_level_changed)
+        ui.qrcode_button.clicked.connect(self.execute)
+        ui.export_png_button.clicked.connect(self.export_png_file)
+        ui.export_svg_button.clicked.connect(self.export_svg_file)
+        ui.fill_color_entry.editingFinished.connect(self.on_qrcode_fill_color_entry)
+        ui.fill_color_button.clicked.connect(self.on_qrcode_fill_color_button)
+        ui.back_color_entry.editingFinished.connect(self.on_qrcode_back_color_entry)
+        ui.back_color_button.clicked.connect(self.on_qrcode_back_color_button)
+        ui.transparent_cb.stateChanged.connect(self.on_transparent_back_color)
+        ui.reset_button.clicked.connect(self.set_tool_ui)
+
+        ui.version_auto_cb.stateChanged.connect(self.update_enabled)
+        ui.placement_radio.activated_custom.connect(self.update_enabled)
+        ui.mask_cb.stateChanged.connect(self.update_enabled)
+        ui.serial_start_entry.valueChanged.connect(self.on_serial_start_changed)
+
+        # everything that changes the rendered preview, the info and the warnings
+        ui.text_data.textChanged.connect(self.schedule_preview)
+        ui.version_entry.valueChanged.connect(self.schedule_preview)
+        ui.version_auto_cb.stateChanged.connect(self.schedule_preview)
+        ui.error_radio.activated_custom.connect(self.schedule_preview)
+        ui.mask_pattern_combo.currentIndexChanged.connect(self.schedule_preview)
+        ui.bsize_entry.valueChanged.connect(self.schedule_preview)
+        ui.border_size_entry.valueChanged.connect(self.schedule_preview)
+        ui.serial_pad_entry.valueChanged.connect(self.schedule_preview)
+        ui.serial_start_entry.valueChanged.connect(self.schedule_preview)
+
+    def app_option(self, key):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        return self.app.options.get(key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
 
     def set_tool_ui(self):
+        # a Reset (or a new run) ends a running placement
+        self.on_exit()
+        self.plan = None
         self.units = self.app.app_units
         self.clear_ui(self.layout)
         self.ui = QRcodeUI(layout=self.layout, app=self.app)
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
-        self.ui.border_size_entry.set_value(4)
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        app_option = lambda key: self.app.options.get(
-            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
-        self.ui.version_entry.set_value(int(app_option("tools_qrcode_version")))
-        self.ui.error_radio.set_value(app_option("tools_qrcode_error"))
-        self.ui.bsize_entry.set_value(int(app_option("tools_qrcode_box_size")))
-        self.ui.border_size_entry.set_value(int(app_option("tools_qrcode_border_size")))
-        self.ui.pol_radio.set_value(app_option("tools_qrcode_polarity"))
-        self.ui.bb_radio.set_value(app_option("tools_qrcode_rounded"))
-        self.ui.text_data.set_value(app_option("tools_qrcode_qrdata"))
-        self.ui.fill_color_entry.set_value(app_option('tools_qrcode_fill_color'))
-        self.ui.fill_color_button.setStyleSheet("background-color:%s;" %
-                                                str(app_option('tools_qrcode_fill_color'))[:7])
-        self.ui.back_color_entry.set_value(app_option('tools_qrcode_back_color'))
-        self.ui.back_color_button.setStyleSheet("background-color:%s;" %
-                                                str(app_option('tools_qrcode_back_color'))[:7])
+        ui = self.ui
+        option = self.app_option
+
+        ui.version_entry.set_value(int(option("tools_qrcode_version")))
+        ui.version_auto_cb.set_value(bool(option("tools_qrcode_version_auto")))
+        ui.error_radio.set_value(option("tools_qrcode_error"))
+        pattern = str(option("tools_qrcode_mask_pattern")).strip().lower()
+        ui.mask_pattern_combo.setCurrentIndex(int(pattern) + 1 if pattern.isdigit() and int(pattern) < 8 else 0)
+        ui.bsize_entry.set_value(int(option("tools_qrcode_box_size")))
+        ui.border_size_entry.set_value(int(option("tools_qrcode_border_size")))
+        ui.pol_radio.set_value(option("tools_qrcode_polarity"))
+        ui.bb_radio.set_value(option("tools_qrcode_rounded"))
+        ui.rotation_radio.set_value(int(option("tools_qrcode_rotation")))
+        ui.mirror_cb.set_value(bool(option("tools_qrcode_mirror")))
+        ui.margin_entry.set_value(float(option("tools_qrcode_margin")))
+        ui.text_data.set_value(option("tools_qrcode_qrdata"))
+        ui.placement_radio.set_value(option("tools_qrcode_placement"))
+        ui.anchor_radio.set_value(option("tools_qrcode_anchor"))
+        ui.multi_cb.set_value(bool(option("tools_qrcode_multi")))
+        ui.x_entry.set_value(0.0)
+        ui.y_entry.set_value(0.0)
+        ui.serial_start_entry.set_value(int(option("tools_qrcode_serial_start")))
+        ui.serial_step_entry.set_value(int(option("tools_qrcode_serial_step")))
+        ui.serial_pad_entry.set_value(int(option("tools_qrcode_serial_pad")))
+        ui.output_radio.set_value(option("tools_qrcode_output"))
+        ui.mask_cb.set_value(False)
+        self.serial = ui.serial_start_entry.get_value()
+
+        fill_color = option('tools_qrcode_fill_color')
+        back_color = option('tools_qrcode_back_color')
+        ui.fill_color_entry.set_value(fill_color)
+        ui.fill_color_button.setStyleSheet("background-color:%s;" % str(fill_color)[:7])
+        ui.back_color_entry.set_value(back_color)
+        ui.back_color_button.setStyleSheet("background-color:%s;" % str(back_color)[:7])
+        self.old_back_color = ui.back_color_entry.get_value()
+
         obj = self.app.collection.get_active()
         if obj and obj.kind == 'gerber':
-            self.ui.grb_object_combo.set_value(obj.obj_options['name'])
-        self.change_level(app_option("global_app_level"))
+            ui.grb_object_combo.set_value(obj.obj_options['name'])
+        self.update_enabled()
+        self.change_level(option("global_app_level"))
+        self.schedule_preview()
 
     def change_level(self, level):
         if level == 'a':
@@ -142,76 +206,195 @@ class QRCode(AppTool):
     def on_level_changed(self, checked):
         self.ui.on_level_changed(checked)
 
+    def update_enabled(self, *args):
+        ui = self.ui
+        ui.version_entry.setEnabled(not ui.version_auto_cb.get_value())
+        coords = ui.placement_radio.get_value() == 'coords'
+        for widget in (ui.x_entry, ui.y_entry, ui.x_label, ui.y_label, ui.x_units_label, ui.y_units_label):
+            widget.setEnabled(coords)
+        ui.multi_cb.setEnabled(not coords)
+        ui.mask_object_combo.setEnabled(ui.mask_cb.get_value())
+        ui.mask_object_label.setEnabled(ui.mask_cb.get_value())
+
+    def on_serial_start_changed(self, value):
+        self.serial = int(value)
+
+    # ------------------------------------------------------------------------------------------------------------
+    # parameters and geometry
+    # ------------------------------------------------------------------------------------------------------------
+    def get_params(self):
+        """The values of the widgets (GUI thread only). The geometry code works on this dict."""
+        ui = self.ui
+        self.units = self.app.app_units
+        pattern_idx = ui.mask_pattern_combo.currentIndex()
+        margin = float(ui.margin_entry.get_value())
+        return {
+            'text': ui.text_data.get_value(),
+            'version': None if ui.version_auto_cb.get_value() else int(ui.version_entry.get_value()),
+            'error': ui.error_radio.get_value(),
+            'mask_pattern': None if pattern_idx <= 0 else pattern_idx - 1,
+            'box_size': int(ui.bsize_entry.get_value()),
+            'border': int(ui.border_size_entry.get_value()),
+            'polarity': ui.pol_radio.get_value(),
+            'rounded': ui.bb_radio.get_value(),
+            'rotation': int(ui.rotation_radio.get_value()),
+            'mirror': bool(ui.mirror_cb.get_value()),
+            'margin': margin if margin > 0 else None,
+            'placement': ui.placement_radio.get_value(),
+            'x': float(ui.x_entry.get_value()),
+            'y': float(ui.y_entry.get_value()),
+            'anchor': ui.anchor_radio.get_value(),
+            'multi': bool(ui.multi_cb.get_value()),
+            'serial_step': int(ui.serial_step_entry.get_value()),
+            'serial_pad': int(ui.serial_pad_entry.get_value()),
+            'output': ui.output_radio.get_value(),
+            'mask_opening': bool(ui.mask_cb.get_value()),
+            'mask_name': ui.mask_object_combo.get_value(),
+            'units': self.units,
+            'circle_steps': self.app_option('geometry_circle_steps'),
+            'min_module': float(self.app_option('tools_qrcode_min_module')),
+        }
+
+    def token_context(self, serial, obj_name):
+        project = getattr(self.app, 'project_filename', None)
+        now = datetime.datetime.now()
+        return {'date': now, 'time': now, 'serial': serial, 'object': obj_name or '',
+                'project': os.path.splitext(os.path.basename(project))[0] if project else ''}
+
+    @staticmethod
+    def build_plan(params, text, units=None):
+        """The transformed QR geometry for the expanded text. Pure: no widgets, safe in a worker thread."""
+        units = units or params['units']
+        modules, utility, info = QRCodeGen.qr_geometry(
+            text, params['version'], params['error'], params['box_size'], params['border'], units,
+            params['mask_pattern'], params['circle_steps'])
+        margin = QRCodeGen.effective_margin(params['margin'], params['border'], params['box_size'], units)
+        modules, utility = QRCodeGen.transform_geometry(
+            [modules, utility], params['rotation'], params['mirror'], params['anchor'], margin)
+        box_poly = box(*utility.bounds)
+        return QRPlan(modules, utility, box_poly, info, text)
+
+    def plan_for(self, params, serial, obj_name):
+        text = QRCodeGen.expand_tokens(params['text'], self.token_context(serial, obj_name), params['serial_pad'])
+        return self.build_plan(params, text)
+
+    def target_object(self):
+        """The Gerber selected in the Source Object combo, or None."""
+        name = self.ui.grb_object_combo.get_value()
+        obj = self.app.collection.get_by_name(name) if name else None
+        return obj if obj is not None and obj.kind == 'gerber' else None
+
+    # ------------------------------------------------------------------------------------------------------------
+    # arming
+    # ------------------------------------------------------------------------------------------------------------
     def execute(self):
-        text_data = self.ui.text_data.get_value()
-        if text_data == '':
+        # no stale geometry, no double arming
+        self.on_exit()
+        self.plan = None
+        params = self.get_params()
+        if params['text'].strip() == '':
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Cancelled. There is no QRCode Data in the text box."))
             return
-        selection_index = self.ui.grb_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.grb_object_combo.rootModelIndex())
-        try:
-            self.grb_object = model_index.internalPointer().obj
-        except Exception as e:
-            self.app.log.error("QRCode.execute() --> %s" % str(e))
+        obj = self.target_object()
+        if obj is None:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
             return
-        self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
-        self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
-        self.app.plotcanvas.graph_event_connect('key_release', self.on_key_release)
-        version = self.ui.version_entry.get_value()
-        error = self.ui.error_radio.get_value()
-        box_size = self.ui.bsize_entry.get_value()
-        border = self.ui.border_size_entry.get_value()
+        if self.app.call_source not in ('app', 'qrcode_tool'):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Close the running tool or editor first."))
+            return
+        self.grb_object = obj
+        self.grb_name = name = obj.obj_options['name']
+        self.pending_params = params
+        serial = self.serial
 
-        def job_thread_qr(app_obj):
+        def job_thread_qr():
             with self.app.proc_container.new('%s...' % _("Working")) as self.proc:
-                img = QRCodeGen.make_qr_image(text_data, version, error, box_size, border, 'fragment')
-                svg_file = BytesIO()
-                img.save(svg_file)
-                svg_text = StringIO(svg_file.getvalue().decode('UTF-8'))
-                svg_geometry = self.convert_svg_to_geo(svg_text, units=self.units)
-                self.qrcode_geometry = deepcopy(svg_geometry)
-                self.qrcode_utility_geometry = QRCodeGen.utility_geometry(svg_geometry)
                 try:
-                    a, b, c, d = self.qrcode_utility_geometry.bounds
-                    self.box_poly = box(minx=a, miny=b, maxx=c, maxy=d)
-                except Exception as ee:
-                    self.app.log.error("QRCode.make() bounds error --> %s" % str(ee))
-                app_obj.call_source = 'qrcode_tool'
-                app_obj.inform.emit(_("Click on the DESTINATION point ..."))
-        self.app.worker_task.emit({'fcn': job_thread_qr, 'params': [self.app]})
+                    plan = self.plan_for(params, serial, name)
+                except (ValueError, QRCodeGen.QRDataOverflow) as err:
+                    self.plan_ready.emit(None, str(err))
+                    return
+                except Exception as err:
+                    log.error("QRCode.execute() --> %s" % str(err))
+                    self.plan_ready.emit(None, str(err))
+                    return
+            self.plan_ready.emit(plan, '')
+        self.app.worker_task.emit({'fcn': job_thread_qr, 'params': []})
 
-    def make(self, pos):
-        self.on_exit()
-        with history_of(self.app).snapshot(_("QRCode"), [self.grb_object]):
-            self._write_qrcode(pos)
-        self.replot(obj=self.grb_object)
-        self.app.inform.emit('[success] %s' % _("QRCode Tool done."))
+    def on_plan_ready(self, plan, message):
+        """GUI thread: the geometry is ready (or failed). Arm the canvas, or insert at the given coordinates."""
+        if plan is None:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % (message or _("The QRCode could not be created.")))
+            return
+        params = self.pending_params
+        if params is None:
+            return
+        self.plan = plan
+        if params['placement'] == 'coords':
+            self.make((params['x'], params['y']))
+            return
+        self.arm()
 
-    def _write_qrcode(self, pos):
-        """Apply the model output within the history snapshot and regenerate the Gerber source."""
-        solid_geometry, tools = QRCodeGen.insert_geometry(
-            self.grb_object.solid_geometry, self.grb_object.tools, self.qrcode_geometry,
-            self.qrcode_utility_geometry, pos, self.ui.border_size_entry.get_value(),
-            self.ui.bsize_entry.get_value(), self.ui.bb_radio.get_value(), self.ui.pol_radio.get_value())
-        self.grb_object.solid_geometry = solid_geometry
-        self.grb_object.tools = tools
+    def arm(self):
+        if self.armed:
+            return
+        if self.app.call_source not in ('app', 'qrcode_tool'):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Close the running tool or editor first."))
+            return
+        self.prev_call_source = self.app.call_source
+        self.app.call_source = 'qrcode_tool'
+        canvas = self.app.plotcanvas
+        canvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        canvas.graph_event_connect('mouse_move', self.on_mouse_move)
+        canvas.graph_event_connect('mouse_release', self.on_mouse_release)
+        canvas.graph_event_connect('key_release', self.on_key_release)
+        self.handlers_connected = True
+        self.armed = True
+        self.app.inform.emit(_("Click on the DESTINATION point ..."))
+
+    def hideEvent(self, event):
+        # another plugin took the place of this one while the placement was running
+        super().hideEvent(event)
         try:
-            a, b, c, d = self.grb_object.bounds()
-            self.grb_object.obj_options['xmin'] = a
-            self.grb_object.obj_options['ymin'] = b
-            self.grb_object.obj_options['xmax'] = c
-            self.grb_object.obj_options['ymax'] = d
-        except Exception as e:
-            self.app.log.error("QRCode.make() bounds error --> %s" % str(e))
-        self.grb_object.regenerate_source()
+            if self.armed and self.app.ui.plugin_scroll_area.widget() is not self:
+                self.on_exit(cancelled=True)
+        except (AttributeError, RuntimeError):
+            pass
 
+    def on_plugin_cleanup(self):
+        self.preview_timer.stop()
+        if self.armed:
+            self.on_exit(cancelled=True)
+
+    def on_exit(self, cancelled=False):
+        """End the placement: events, preview shapes and the call_source go back to what they were."""
+        was_armed = self.armed
+        if self.handlers_connected:
+            canvas = self.app.plotcanvas
+            canvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+            canvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+            canvas.graph_event_disconnect('key_release', self.on_key_release)
+            canvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+            self.handlers_connected = False
+        self.armed = False
+        self.delete_utility_geo()
+        if was_armed:
+            if self.app.call_source == 'qrcode_tool':
+                self.app.call_source = self.prev_call_source or 'app'
+            self.prev_call_source = None
+            if cancelled:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+
+    # ------------------------------------------------------------------------------------------------------------
+    # placement
+    # ------------------------------------------------------------------------------------------------------------
     def draw_utility_geo(self, pos):
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        app_option = lambda key: self.app.options.get(
-            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
-        offset_geo = QRCodeGen.preview_geometry(self.qrcode_geometry, self.qrcode_utility_geometry,
-                                                self.box_poly, pos, app_option("tools_qrcode_sel_limit"))
+        if self.plan is None:
+            return
+        offset_geo = QRCodeGen.preview_geometry(self.plan.modules, self.plan.utility, self.plan.box_poly, pos,
+                                                self.app_option("tools_qrcode_sel_limit"))
         for shp in offset_geo:
             self.shapes.add(shp, color='#0000FFAF', update=False, layer=0, tolerance=None)
         self.shapes.redraw()
@@ -219,57 +402,180 @@ class QRCode(AppTool):
     def delete_utility_geo(self):
         self.shapes.clear(update=True)
 
+    def event_position(self, event_pos):
+        pos_canvas = self.app.plotcanvas.translate_coords(event_pos)
+        if self.app.grid_status():
+            return self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
+        return pos_canvas
+
     def on_mouse_move(self, event):
-        event_pos = event.pos
+        if not self.armed:
+            return
         try:
-            x = float(event_pos[0])
-            y = float(event_pos[1])
+            x = float(event.pos[0])
+            y = float(event.pos[1])
         except TypeError:
             return
-        pos_canvas = self.app.plotcanvas.translate_coords((x, y))
-        if self.app.grid_status():
-            pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
-        else:
-            pos = pos_canvas
-        dx = pos[0] - self.origin[0]
-        dy = pos[1] - self.origin[1]
-        self.shapes.clear()
-        self.draw_utility_geo((dx, dy))
+        pos = self.event_position((x, y))
+        # one redraw per move: clear without an update, then draw
+        self.shapes.clear(update=False)
+        self.draw_utility_geo((pos[0], pos[1]))
 
     def on_mouse_release(self, event):
-        event_pos = event.pos
+        if not self.armed or self.app.event_is_dragging:
+            return
         if event.button == 1:
-            pos_canvas = self.app.plotcanvas.translate_coords(event_pos)
-            self.delete_utility_geo()
-            if self.app.grid_status():
-                pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
-            else:
-                pos = pos_canvas
-            dx = pos[0] - self.origin[0]
-            dy = pos[1] - self.origin[1]
-            self.make(pos=(dx, dy))
+            pos = self.event_position(event.pos)
+            self.make(pos=(pos[0], pos[1]))
+        elif event.button == 2:
+            self.on_exit(cancelled=True)
 
     def on_key_release(self, event):
         pass
 
-    def convert_svg_to_geo(self, filename, object_type=None, flip=True, units='MM'):
-        self.app.log.debug("QRCode.import_svg()")
-        units = self.app.app_units if units is None else units
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        app_option = lambda key: self.app.options.get(
-            key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
-        res = app_option('geometry_circle_steps')
-        source = filename.getvalue() if hasattr(filename, 'getvalue') else filename
-        try:
-            geos = svg_to_shapes(source, object_type, units=units, resolution=res, flip=flip, app=self.app)
-        except SvgImportError as e:
-            self.app.log.error("QRCode.import_svg(). %s" % str(e))
-            return []
-        self.app.log.debug("QRCode.import_svg(). Finished parsing the SVG geometry.")
-        return list(self.flatten_list(geos))
+    # ------------------------------------------------------------------------------------------------------------
+    # insert
+    # ------------------------------------------------------------------------------------------------------------
+    def valid_target(self):
+        """The target Gerber if it can still be changed, else None (the reason is reported)."""
+        obj = self.grb_object
+        if obj is None or self.app.collection.get_by_name(self.grb_name) is not obj:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The target Gerber object no longer exists."))
+            return None
+        if obj.kind != 'gerber':
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The target object is not a Gerber object."))
+            return None
+        if self.app.call_source not in ('app', 'qrcode_tool'):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The target Gerber is being edited. Close the editor first."))
+            return None
+        return obj
 
-    def flatten_list(self, geo_list):
-        yield from QRCodeGen.flatten_list(geo_list)
+    def make(self, pos):
+        obj = self.valid_target()
+        if obj is None:
+            self.on_exit()
+            return
+        params = self.get_params()
+        name = self.grb_name
+        try:
+            plan = self.plan_for(params, self.serial, name)
+        except (ValueError, QRCodeGen.QRDataOverflow) as err:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            self.on_exit()
+            return
+
+        mask_obj = None
+        if params['mask_opening']:
+            mask_obj = self.app.collection.get_by_name(params['mask_name'])
+            if mask_obj is None or mask_obj.kind != 'gerber':
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("The soldermask Gerber was not found. Skipped."))
+                mask_obj = None
+
+        if params['output'] == 'new':
+            self.write_new_object(obj, plan, pos, params)
+            changed = [mask_obj] if mask_obj is not None else []
+        else:
+            changed = [obj] + ([mask_obj] if mask_obj is not None and mask_obj is not obj else [])
+        if changed:
+            with history_of(self.app).snapshot(_("QRCode"), changed):
+                if params['output'] != 'new':
+                    self.write_qrcode(obj, plan, pos, params)
+                if mask_obj is not None:
+                    self.write_opening(mask_obj, plan, pos, params)
+            for changed_obj in changed:
+                self.refresh_object(changed_obj)
+
+        self.serial += params['serial_step']
+        self.app.inform.emit('[success] %s' % _("QRCode Tool done."))
+        if self.armed and params['multi']:
+            # stay armed with the next serial number
+            try:
+                self.plan = self.plan_for(params, self.serial, name)
+            except (ValueError, QRCodeGen.QRDataOverflow) as err:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+                self.on_exit()
+        else:
+            self.on_exit()
+
+    def write_qrcode(self, obj, plan, pos, params):
+        """Apply the model output to the Gerber (within the history snapshot) and regenerate its source."""
+        solid_geometry, tools = QRCodeGen.insert_geometry(
+            obj.solid_geometry, obj.tools, plan.modules, plan.utility, pos, params['border'], params['box_size'],
+            params['rounded'], params['polarity'], units=params['units'], margin=params['margin'])
+        obj.solid_geometry = solid_geometry
+        obj.tools = tools
+        if params['polarity'] == 'pos' and obj.follow_geometry:
+            obj.follow_geometry = list(obj.follow_geometry) + \
+                [geo.centroid for geo in QRCodeGen.plan_insertion(
+                    plan.modules, plan.utility, pos, params['border'], params['box_size'], params['rounded'],
+                    params['polarity'], params['units'], params['margin']).modules]
+        self.update_bounds(obj)
+        obj.regenerate_source()
+
+    def write_opening(self, obj, plan, pos, params):
+        """Add the clearance opening of the QRCode to a (soldermask) Gerber."""
+        opening = QRCodeGen.mask_opening(plan.utility, pos, params['border'], params['box_size'], params['rounded'],
+                                         params['units'], params['margin'])
+        solid_geometry, tools = QRCodeGen.add_region(obj.solid_geometry, obj.tools, opening)
+        obj.solid_geometry = solid_geometry
+        obj.tools = tools
+        self.update_bounds(obj)
+        obj.regenerate_source()
+
+    def write_new_object(self, src, plan, pos, params):
+        """A new Gerber object that holds only the QRCode."""
+        solid_geometry, tools = QRCodeGen.new_gerber_geometry(
+            plan.modules, plan.utility, pos, params['border'], params['box_size'], params['rounded'],
+            params['polarity'], units=params['units'], margin=params['margin'])
+        follow = []
+        if params['polarity'] == 'pos':
+            follow = [geo['follow'] for apr in tools.values() for geo in apr['geometry'] if 'follow' in geo]
+        outname = '%s_%s' % (str(src.obj_options['name']), 'qrcode')
+
+        def initialize(grb_obj, app_obj):
+            grb_obj.obj_options = LoudDict()
+            for opt in src.obj_options:
+                if opt != 'name':
+                    grb_obj.obj_options[opt] = deepcopy(src.obj_options[opt])
+            grb_obj.obj_options['name'] = outname
+            grb_obj.multitool = False
+            grb_obj.multigeo = False
+            grb_obj.follow = False
+            grb_obj.tools = tools
+            grb_obj.solid_geometry = solid_geometry
+            grb_obj.follow_geometry = follow
+            grb_obj.export_as_regions = True
+            self.update_bounds(grb_obj)
+            grb_obj.regenerate_source(name=outname)
+
+        ret_val = self.new_object('gerber', outname, initialize, source=src, plot=True, autoselected=False)
+        if ret_val == 'fail':
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+
+    def update_bounds(self, obj):
+        try:
+            a, b, c, d = obj.bounds()
+            obj.obj_options['xmin'] = a
+            obj.obj_options['ymin'] = b
+            obj.obj_options['xmax'] = c
+            obj.obj_options['ymax'] = d
+        except Exception as e:
+            self.app.log.error("QRCode.update_bounds() --> %s" % str(e))
+
+    def refresh_object(self, obj):
+        """The aperture table, the apertures marks and the plot belong to the old apertures."""
+        obj.ui_build = False
+        obj.marked_rows = []
+        try:
+            obj.clear_plot_apertures()
+            obj.build_ui()
+        except Exception as e:
+            self.app.log.debug("QRCode.refresh_object() --> %s" % str(e))
+        self.replot(obj=obj)
+        try:
+            self.app.app_obj.object_changed.emit(obj)
+        except Exception as e:
+            self.app.log.debug("QRCode.refresh_object() --> %s" % str(e))
 
     def replot(self, obj):
         def worker_task():
@@ -277,76 +583,112 @@ class QRCode(AppTool):
                 obj.plot()
         self.app.worker_task.emit({'fcn': worker_task, 'params': []})
 
-    def on_exit(self):
-        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-        self.app.plotcanvas.graph_event_disconnect('key_release', self.on_key_release)
-        self.delete_utility_geo()
-        self.app.call_source = 'app'
+    # ------------------------------------------------------------------------------------------------------------
+    # info, warnings and the rendered preview
+    # ------------------------------------------------------------------------------------------------------------
+    def schedule_preview(self, *args):
+        self.preview_timer.start()
 
-    def export_png_file(self):
-        text_data = self.ui.text_data.get_value()
-        if text_data == '':
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Cancelled. There is no QRCode Data in the text box."))
-            return 'fail'
-        version = self.ui.version_entry.get_value()
-        error = self.ui.error_radio.get_value()
-        box_size = self.ui.bsize_entry.get_value()
-        border = self.ui.border_size_entry.get_value()
-        fill_color = self.ui.fill_color_entry.get_value()
-        back_color = self.ui.back_color_entry.get_value()
+    def refresh_preview(self):
+        ui = self.ui
+        params = self.get_params()
+        units = params['units']
+        module = QRCodeGen.module_size(params['box_size'], units)
+        ui.module_size_label.setText('= %.*f %s' % (self.decimals, module, units.lower()))
+        messages = {
+            'module_below_min': _("The box is smaller than the minimum module size."),
+            'quiet_zone': _("A border below 4 boxes breaks the quiet zone of the QR standard."),
+        }
+        warnings = [messages[key] for key in
+                    QRCodeGen.size_warnings(module, units, params['min_module'], params['border'])]
+        ui.warning_label.setText('\n'.join(warnings))
+        ui.warning_label.setVisible(bool(warnings))
 
-        def job_thread_qr_png(app_obj, fname):
-            img = QRCodeGen.make_qr_image(text_data, version, error, box_size, border, 'png', fill_color, back_color)
-            img.save(fname)
-            app_obj.call_source = 'qrcode_tool'
-
-        name = 'qr_code'
-        _filter = "PNG File (*.png);;All Files (*.*)"
-        try:
-            filename, _f = FCFileSaveDialog.get_saved_filename(
-                caption=_("Export PNG"), directory=self.app.get_last_save_folder() + '/' + str(name) + '_png',
-                ext_filter=_filter)
-        except TypeError:
-            filename, _f = FCFileSaveDialog.get_saved_filename(caption=_("Export PNG"), ext_filter=_filter)
-        filename = str(filename)
-        if filename == "":
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+        text = QRCodeGen.expand_tokens(params['text'], self.token_context(self.serial, self.current_object_name()),
+                                       params['serial_pad'])
+        if not text:
+            ui.info_label.setText('')
+            ui.preview_label.clear()
             return
-        else:
-            self.app.worker_task.emit({'fcn': job_thread_qr_png, 'params': [self.app, filename]})
+        try:
+            info = QRCodeGen.qr_info(text, params['version'], params['error'], params['mask_pattern'])
+            side = (info['modules'] + 2 * params['border']) * module
+            ui.info_label.setText(_("Version %d, %dx%d modules, %.*f x %.*f %s") % (
+                info['version'], info['modules'], info['modules'], self.decimals, side, self.decimals, side,
+                units.lower()))
+            img = QRCodeGen.make_qr_image(text, params['version'], params['error'], 4, params['border'], 'png',
+                                          '#000000', '#FFFFFF', params['mask_pattern'])
+            img = getattr(img, 'get_image', lambda: img)().convert('RGBA')
+            qimage = QtGui.QImage(img.tobytes(), img.width, img.height, 4 * img.width,
+                                  QtGui.QImage.Format.Format_RGBA8888).copy()
+            pixmap = QtGui.QPixmap.fromImage(qimage)
+            ui.preview_label.setPixmap(pixmap.scaled(
+                160, 160, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.FastTransformation))
+        except (ValueError, QRCodeGen.QRDataOverflow) as err:
+            ui.info_label.setText(str(err))
+            ui.preview_label.clear()
+
+    def current_object_name(self):
+        obj = self.target_object()
+        return obj.obj_options['name'] if obj is not None else ''
+
+    # ------------------------------------------------------------------------------------------------------------
+    # export
+    # ------------------------------------------------------------------------------------------------------------
+    def export_png_file(self):
+        return self.export_file('png')
 
     def export_svg_file(self):
-        text_data = self.ui.text_data.get_value()
-        if text_data == '':
+        return self.export_file('svg')
+
+    def export_file(self, file_type):
+        params = self.get_params()
+        if params['text'].strip() == '':
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Cancelled. There is no QRCode Data in the text box."))
             return 'fail'
-        version = self.ui.version_entry.get_value()
-        error = self.ui.error_radio.get_value()
-        box_size = self.ui.bsize_entry.get_value()
-        border = self.ui.border_size_entry.get_value()
         fill_color = self.ui.fill_color_entry.get_value()
         back_color = self.ui.back_color_entry.get_value()
+        if not QRCodeGen.valid_color(fill_color):
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The fill color is not valid"), fill_color))
+            return 'fail'
+        if not QRCodeGen.valid_color(back_color, allow_transparent=True):
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The back color is not valid"), back_color))
+            return 'fail'
+        text = QRCodeGen.expand_tokens(params['text'], self.token_context(self.serial, self.current_object_name()),
+                                       params['serial_pad'])
 
-        def job_thread_qr_svg(app_obj, fname):
-            img = QRCodeGen.make_qr_image(text_data, version, error, box_size, border, 'svg', fill_color, back_color)
-            img.save(fname)
-            app_obj.call_source = 'qrcode_tool'
+        if file_type == 'png':
+            caption = _("Export PNG")
+            ext_filter = "%s (*.png);;%s (*.*)" % (_("PNG File"), _("All Files"))
+            folder = 'qr_code_png'
+        else:
+            caption = _("Export SVG")
+            ext_filter = "%s (*.svg);;%s (*.*)" % (_("SVG File"), _("All Files"))
+            folder = 'qr_code_svg'
 
-        name = 'qr_code'
-        _filter = "SVG File (*.svg);;All Files (*.*)"
+        def job_thread_qr_export(fname):
+            # the export does not touch call_source: Undo / Redo and the other tools stay available
+            try:
+                img = QRCodeGen.make_qr_image(text, params['version'], params['error'], params['box_size'],
+                                              params['border'], file_type, fill_color, back_color,
+                                              params['mask_pattern'])
+                img.save(fname)
+            except Exception as err:
+                log.error("QRCode.export_file() --> %s" % str(err))
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The QRCode could not be exported"), str(err)))
+                return
+            self.app.inform.emit('[success] %s: %s' % (_("QRCode saved"), fname))
+
         try:
             filename, _f = FCFileSaveDialog.get_saved_filename(
-                caption=_("Export SVG"), directory=self.app.get_last_save_folder() + '/' + str(name) + '_svg',
-                ext_filter=_filter)
+                caption=caption, directory=self.app.get_last_save_folder() + '/' + folder, ext_filter=ext_filter)
         except TypeError:
-            filename, _f = FCFileSaveDialog.get_saved_filename(caption=_("Export SVG"), ext_filter=_filter)
+            filename, _f = FCFileSaveDialog.get_saved_filename(caption=caption, ext_filter=ext_filter)
         filename = str(filename)
         if filename == "":
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
             return
-        else:
-            self.app.worker_task.emit({'fcn': job_thread_qr_svg, 'params': [self.app, filename]})
+        self.app.worker_task.emit({'fcn': job_thread_qr_export, 'params': [filename]})
 
     def on_qrcode_fill_color_entry(self):
         self.ui.on_qrcode_fill_color_entry()

@@ -39,7 +39,7 @@ APP_TOOL_PREFIXES = ('tools_grbl_', 'tools_calc_')
 APP_TOOL_SUFFIXES = ('_plotting', '_big_cursor', '_preprocessor_list')
 APP_TOOL_KEYS = frozenset((
     'tools_al_controller', 'tools_gcode_fit_view', 'tools_dist_snap_center',
-    'tools_opt_precision', 'tools_qrcode_sel_limit',
+    'tools_opt_precision', 'tools_qrcode_sel_limit', 'tools_qrcode_min_module',
 ))
 
 
@@ -844,6 +844,19 @@ class AppDefaults:
         "tools_qrcode_fill_color": '#000000',
         "tools_qrcode_back_color": '#FFFFFF',
         "tools_qrcode_sel_limit": 330,
+        "tools_qrcode_version_auto": False,
+        "tools_qrcode_mask_pattern": 'Auto',
+        "tools_qrcode_min_module": 0.15,
+        "tools_qrcode_rotation": 0,
+        "tools_qrcode_mirror": False,
+        "tools_qrcode_placement": 'click',
+        "tools_qrcode_anchor": 'bl',
+        "tools_qrcode_multi": False,
+        "tools_qrcode_serial_start": 1,
+        "tools_qrcode_serial_step": 1,
+        "tools_qrcode_serial_pad": 0,
+        "tools_qrcode_output": 'source',
+        "tools_qrcode_margin": 0.0,
 
         # Copper Thieving Tool
         "tools_copper_thieving_clearance": 0.25,

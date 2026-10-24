@@ -139,3 +139,114 @@ def test_check_rules_writes_csv_and_a_document_without_plotting(tmp_path):
     doc = SimpleNamespace()
     args[2](doc, app)
     assert 'FAILED' in doc.source_file
+
+
+# ---- qrcode -------------------------------------------------------------------------------------------------------
+def make_qrcode(units='MM', obj=None):
+    from tclCommands.TclCommandQRCode import TclCommandQRCode
+    from test_tcl_audit_regressions import object_app
+    app = object_app(obj)
+    app.app_units = units
+    app.app_obj = Mock()
+    return TclCommandQRCode(app), app
+
+
+def qr_gerber():
+    from shapely import box
+    board = box(-5, -5, 60, 60)
+    obj = Mock()
+    obj.kind = 'gerber'
+    obj.obj_options = {'name': 'board'}
+    obj.solid_geometry = [board]
+    obj.tools = {0: {'type': 'REG', 'size': 0.0, 'geometry': [{'solid': board, 'follow': board.exterior}]}}
+    obj.bounds.return_value = (-5, -5, 60, 60)
+    return obj
+
+
+def test_qrcode_source_cuts_copper_and_adds_the_code():
+    from shapely.ops import unary_union
+    obj = qr_gerber()
+    command, _app = make_qrcode(obj=obj)
+    before = unary_union(obj.solid_geometry).area
+    command.execute({'name': 'board', 'data': 'hello', 'x': 10, 'y': 10, 'version': 0, 'polarity': 'neg'}, [])
+    assert unary_union(obj.solid_geometry).area < before
+    assert len(obj.solid_geometry) > 1
+    obj.regenerate_source.assert_called_once()
+
+
+def test_qrcode_inch_project_uses_inch_module_size():
+    from shapely.ops import unary_union
+    obj = qr_gerber()
+    command, _app = make_qrcode('IN', obj)
+    # box_size 10 = 1 mm per module = 0.03937 in
+    command.execute({'name': 'board', 'data': 'hi', 'x': 0, 'y': 0, 'box_size': 10, 'border': 0, 'version': 1,
+                     'anchor': 'bl', 'polarity': 'pos', 'margin': 0.001}, [])
+    qr = [g for g in obj.solid_geometry if g.bounds[0] >= -1e-6 and g.bounds[2] < 1]
+    width = unary_union(qr).bounds[2]
+    assert 21 * 0.03937 * 0.9 < width <= 21 * 0.03937 + 0.0025  # + the 0.001 margin cut
+
+
+def test_qrcode_overflow_and_bad_input_are_tcl_errors_without_change():
+    from test_tcl_audit_regressions import FCShell
+    obj = qr_gerber()
+    geometry, tools = list(obj.solid_geometry), obj.tools
+    command, _app = make_qrcode(obj=obj)
+    for args in ({'name': 'board', 'data': 'x' * 500, 'version': 1},
+                 {'name': 'board', 'data': 'x', 'rotation': 45},
+                 {'name': 'board', 'data': 'x', 'anchor': 'zz'},
+                 {'name': 'board', 'data': 'x', 'output': 'nowhere'}):
+        with pytest.raises(FCShell.TclErrorException):
+            command.execute(args, [])
+    assert obj.solid_geometry == geometry and obj.tools is tools
+    obj.regenerate_source.assert_not_called()
+    command, _app = make_qrcode(obj=None)
+    with pytest.raises(FCShell.TclErrorException):
+        command.execute({'name': 'nope', 'data': 'x'}, [])
+    obj.kind = 'excellon'
+    command, _app = make_qrcode(obj=obj)
+    with pytest.raises(FCShell.TclErrorException):
+        command.execute({'name': 'board', 'data': 'x'}, [])
+
+
+def test_qrcode_new_object_holds_only_the_code_and_does_not_plot():
+    command, app = make_qrcode()
+    command.execute({'data': 'hello', 'output': 'new', 'outname': 'qr_label', 'x': 5, 'y': 5, 'version': 1}, [])
+    args, kwargs = app.app_obj.new_object.call_args
+    assert args[0] == 'gerber' and args[1] == 'qr_label' and kwargs['plot'] is False
+    new = Mock()
+    new.obj_options = {}
+    new.bounds.return_value = (5, 5, 30, 30)
+    args[2](new, app)
+    assert len(new.solid_geometry) > 1 and 10 in new.tools
+    new.regenerate_source.assert_called_once()
+
+
+@pytest.mark.slow
+def test_qrcode_source_insert_is_one_undo_step():
+    import sys
+    from PyQt6 import QtWidgets
+    from shapely import box
+    from shapely.ops import unary_union
+    import appHandlers.appHistory as appHistory
+    from appMain import App
+    from test_tcl_audit_regressions import FCShell
+    from tclCommands.TclCommandQRCode import TclCommandQRCode
+    qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    fc = App(qapp=qapp, headless=True)
+    appHistory.RECORD_IN_HEADLESS = True
+    try:
+        def init(obj, _app):
+            board = box(0, 0, 50, 50)
+            obj.solid_geometry = [board]
+            obj.tools = {0: {'type': 'REG', 'size': 0.0, 'geometry': [{'solid': board, 'follow': board.exterior}]}}
+        obj = fc.app_obj.new_object('gerber', 'board', init, plot=False)
+        area = unary_union(obj.solid_geometry).area
+        steps = len(fc.history.undo_stack)
+        command = TclCommandQRCode(fc)
+        command.execute({'name': 'board', 'data': 'hello', 'x': 10, 'y': 10, 'polarity': 'neg'}, [])
+        assert unary_union(obj.solid_geometry).area < area
+        assert len(fc.history.undo_stack) == steps + 1
+        fc.history.undo()
+        assert unary_union(obj.solid_geometry).area == pytest.approx(area)
+    finally:
+        appHistory.RECORD_IN_HEADLESS = False

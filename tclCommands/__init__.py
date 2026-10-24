@@ -67,6 +67,7 @@ import tclCommands.TclCommandPaint
 import tclCommands.TclCommandPanelize
 import tclCommands.TclCommandPlotAll
 import tclCommands.TclCommandPlotObjects
+import tclCommands.TclCommandQRCode
 import tclCommands.TclCommandQuit
 import tclCommands.TclCommandSaveProject
 import tclCommands.TclCommandSaveSys
