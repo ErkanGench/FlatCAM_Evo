@@ -36,6 +36,7 @@ class SetupStub:
     def __init__(self):
         self.log = Mock()
         self.on_startup_args = Mock()
+        self.on_files_from_other_instance = Mock()
 
 
 @pytest.fixture
@@ -47,8 +48,8 @@ def setup_paths(tmp_path, monkeypatch):
     monkeypatch.delenv('FLATCAM_DATA_PATH', raising=False)
     # the method changes the working folder to the application folder; monkeypatch changes it back
     monkeypatch.chdir(tmp_path)
-    # on Windows the method also starts the listener for the arguments of a second instance
-    monkeypatch.setattr(appMain, 'ArgsThread', MagicMock())
+    # on every platform the method also creates the listener for the files of a second launch
+    monkeypatch.setattr(appMain, 'InstanceServer', MagicMock())
     monkeypatch.setattr(appMain, 'QtCore', MagicMock())
 
     def run():

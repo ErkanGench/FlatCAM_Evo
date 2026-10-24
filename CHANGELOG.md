@@ -16,6 +16,13 @@ Start:
 
 - the splash screen is not shown when the app starts with a file to open, for example a double-click on an associated file; this is true also when the file goes to an app that is already open
 - the splash image is scaled to the physical pixels of the screen; on a screen with display scaling above 100% it is no longer blurred; new splash images
+- a second launch with files now hands them to the open window on Windows, Linux and macOS; the old pipe thread (Windows only) is replaced by a local socket for each user and installation, with JSON messages instead of pickle
+- the second launch hands off its files before the app is built, so it ends fast; it sends absolute paths and no options; a launch with --shellfile, --command or --shellvar, or with no files, starts a new window
+- the open window comes to the front when it gets the files of a second launch
+- a bad message to the socket no longer stops the listener for the rest of the session; a second launch with no files no longer takes or deletes the socket of the open instance
+- all the file arguments open; before, only the first Gerber, Excellon or G-code file of a launch opened
+- macOS: a file opened from the Finder (double-click, Open With) opens in the app, also while the app starts
+- quit and restart close the socket directly; the restarted app is again the instance that gets the files of a second launch
 
 Project Tab:
 

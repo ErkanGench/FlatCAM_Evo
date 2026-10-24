@@ -34,9 +34,7 @@ from io import StringIO
 
 import gc
 
-from multiprocessing.connection import Listener, Client
 from multiprocessing import Pool, current_process
-import socket
 
 import tkinter as tk
 
@@ -65,6 +63,7 @@ from appGUI.themes import dark_style_sheet, light_style_sheet
 # Various
 from appCommon.Common import ExclusionAreas
 from appCommon.Common import AppLogging
+from appCommon.SingleInstance import InstanceServer, FileOpenFilter
 from appCommon.StartDir import resolve_user_path, resolve_existing_paths
 from appCommon.DataPath import data_path_from_env, DATA_PATH_ENV
 from appCommon.RegisterFileKeywords import RegisterFK, Extensions, KeyWords
@@ -456,8 +455,8 @@ class App(QtCore.QObject):
         self.call_source = 'app'
 
         # Paths/config (platform-specific)
-        self.listen_th = None
         self.new_launch = None
+        self.file_open_filter = None
         self.data_path = None
         self.os = None
         self.app_home = None
@@ -729,17 +728,17 @@ class App(QtCore.QObject):
 
     def _setup_paths_and_config(self):
         """Phase 1: Setup paths, config files, and platform-specific settings."""
-        # ################# Setup the listening thread for another instance launching with args ######################
-        # a headless run never hands its arguments to an open instance (ArgsThread.my_loop() then ends this process)
-        if sys.platform == 'win32' and not self.headless:
-            # make sure the thread is stored by using a self. otherwise it's garbage collected
-            self.listen_th = QtCore.QThread()
-            self.listen_th.start(priority=QtCore.QThread.Priority.LowestPriority)
-
-            self.new_launch = ArgsThread(self.log)
-            self.new_launch.open_signal[list].connect(self.on_startup_args)
-            self.new_launch.moveToThread(self.listen_th)
-            self.new_launch.start.emit()  # noqa
+        # ################# Listen for another instance launching with files ##########################################
+        # a headless run never takes files from a second launch; the second launch hands its files over in flatcam.py
+        # before this App exists. The server starts at the end of the init, when the App can open files
+        if not self.headless:
+            self.new_launch = InstanceServer()
+            self.new_launch.files_received.connect(self.on_files_from_other_instance)
+            if sys.platform == 'darwin':
+                # a double-clicked file arrives as a FileOpen event, also while the App is still starting
+                self.file_open_filter = FileOpenFilter()
+                self.file_open_filter.files_received.connect(self.on_files_from_other_instance)
+                self.qapp.installEventFilter(self.file_open_filter)
 
         # ########################################## OS-specific #####################################################
 
@@ -1609,6 +1608,11 @@ class App(QtCore.QObject):
         if App.args:  # noqa
             self.args_at_startup.emit(App.args)  # noqa
 
+        if self.new_launch is not None:
+            self.new_launch.start()
+        if self.file_open_filter is not None:
+            self.file_open_filter.set_ready()
+
         if self.defaults.old_defaults_found is True:
             self.inform.emit('[WARNING_NOTCL] %s' % _("Found old default preferences files. "
                                                       "Please reboot the application to update."))
@@ -1776,45 +1780,28 @@ class App(QtCore.QObject):
                 self.defaults.update(self.options)
                 self.preferencesUiManager.save_defaults()
             else:
-                exc_list = self.ui.util_pref_form.fa_excellon_group.exc_list_text.get_value().split(',')
-                proc_arg = arg_ext
-                for ext in exc_list:
-                    proc_ext = ext.replace(' ', '')
-                    proc_ext = '.%s' % proc_ext
-                    if proc_ext.lower() == proc_arg and proc_ext != '.':
-                        file_name = str(argument)
-                        if file_name == "":
-                            if silent is False:
-                                self.inform.emit(_("Open Excellon file failed."))
-                        else:
-                            self.f_handlers.on_file_open_excellon(name=file_name)
-                            return
-
-                gco_list = self.ui.util_pref_form.fa_gcode_group.gco_list_text.get_value().split(',')
-                for ext in gco_list:
-                    proc_ext = ext.replace(' ', '')
-                    proc_ext = '.%s' % proc_ext
-                    if proc_ext.lower() == proc_arg and proc_ext != '.':
-                        file_name = str(argument)
-                        if file_name == "":
-                            if silent is False:
-                                self.inform.emit(_("Open GCode file failed."))
-                        else:
-                            self.f_handlers.on_file_open_gcode(name=file_name)
-                            return
-
-                grb_list = self.ui.util_pref_form.fa_gerber_group.grb_list_text.get_value().split(',')
-                for ext in grb_list:
-                    proc_ext = ext.replace(' ', '')
-                    proc_ext = '.%s' % proc_ext
-                    if proc_ext.lower() == proc_arg and proc_ext != '.':
-                        file_name = str(argument)
-                        if file_name == "":
-                            if silent is False:
-                                self.inform.emit(_("Open Gerber file failed."))
-                        else:
-                            self.f_handlers.on_file_open_gerber(name=file_name)
-                            return
+                # the file type is searched in the lists in turn; a file opens once and the next argument follows
+                opener = (
+                    ('fa_excellon_group', 'exc_list_text', 'on_file_open_excellon',
+                     _("Open Excellon file failed.")),
+                    ('fa_gcode_group', 'gco_list_text', 'on_file_open_gcode',
+                     _("Open GCode file failed.")),
+                    ('fa_gerber_group', 'grb_list_text', 'on_file_open_gerber',
+                     _("Open Gerber file failed.")),
+                )
+                for group_name, list_name, open_name, failed_msg in opener:
+                    ext_list = getattr(getattr(self.ui.util_pref_form, group_name), list_name).get_value().split(',')
+                    known = any(ext.replace(' ', '') and '.%s' % ext.replace(' ', '').lower() == arg_ext
+                                for ext in ext_list)
+                    if not known:
+                        continue
+                    file_name = str(argument)
+                    if file_name == "":
+                        if silent is False:
+                            self.inform.emit(failed_msg)
+                    else:
+                        getattr(self.f_handlers, open_name)(name=file_name)
+                    break
 
         # if it reached here without already returning then the app was registered with a file that it does not
         # recognize therefore we must quit but take into consideration the app reboot from within, in that case
@@ -1825,6 +1812,22 @@ class App(QtCore.QObject):
         #         continue
         #     else:
         #         sys.exit(2)
+
+    def on_files_from_other_instance(self, files):
+        """
+        The files of a second launch (or a file opened from the Finder): open them and bring the window to the front.
+
+        :param files: list of paths
+        :return: None
+        """
+        self.on_startup_args(files)
+        try:
+            if self.ui.isMinimized():
+                self.ui.showNormal()
+            self.ui.raise_()
+            self.ui.activateWindow()
+        except Exception as e:
+            self.log.debug("App.on_files_from_other_instance() --> %s" % str(e))
 
     def ask_run_script_arg(self, file_name):
         """
@@ -4525,95 +4528,5 @@ class App(QtCore.QObject):
 
         return float('%.*f' % (dec_nr, float(val)))
 
-
-class ArgsThread(QtCore.QObject):
-    open_signal = pyqtSignal(list)
-    start = pyqtSignal()
-    stop = pyqtSignal()
-
-    if sys.platform == 'win32':
-        address = (r'\\.\pipe\NPtest', 'AF_PIPE')
-    else:
-        address = ('/tmp/testipc', 'AF_UNIX')
-
-    def __init__(self, log):
-        super().__init__()
-        self.listener = None
-        self.conn = None
-        self.thread_exit = False
-        self.log = log
-
-        self.start.connect(self.run)  # noqa
-        self.stop.connect(self.close_listener, type=Qt.ConnectionType.QueuedConnection)  # noqa
-
-    def my_loop(self, address):
-        try:
-            self.listener = Listener(*address)
-            while self.thread_exit is False:
-                self.conn = self.listener.accept()
-                self.serve(self.conn)
-        except socket.error:
-            try:
-                self.conn = Client(*address)
-                self.conn.send(sys.argv)
-                self.conn.send('close')
-                # close the current instance only if there are args
-                if len(sys.argv) > 1:
-                    try:
-                        self.listener.close()
-                    except Exception:
-                        pass
-                    sys.exit()
-            except ConnectionRefusedError:
-                if sys.platform == 'win32':
-                    pass
-                else:
-                    try:
-                        os.remove('/tmp/testipc')
-                    except OSError:
-                        pass
-                    self.listener = Listener(*address)
-                    while self.thread_exit is False:
-                        conn = self.listener.accept()
-                        self.serve(conn)
-        except Exception as e:
-            self.log.error("ArgsThread.my_loop() exception: %s" % str(e))
-
-    def serve(self, conn):
-        while self.thread_exit is False:
-            QtCore.QCoreApplication.processEvents()
-            if QtCore.QThread.currentThread().isInterruptionRequested():
-                break
-            msg = conn.recv()
-            if msg == 'close':
-                break
-            self.open_signal.emit(msg)  # noqa
-        conn.close()
-
-    # the decorator is a must; without it this technique will not work unless the start signal is connected
-    # in the main thread (where this class is instantiated) after the instance is moved o the new thread
-    @pyqtSlot()
-    def run(self):
-        self.my_loop(self.address)
-
-    @pyqtSlot()
-    def close_listener(self):
-        self.thread_exit = True
-        try:
-            self.conn.close()
-        except Exception:
-            pass
-        try:
-            self.listener.close()
-        except Exception:
-            pass
-
-    def close_command(self):
-        conn = Client(*self.address)
-        conn.send(['quit'])
-        try:
-            self.listener.close()
-        except Exception:
-            pass
 
 # end of file

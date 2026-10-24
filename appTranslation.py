@@ -267,18 +267,10 @@ def restart_program(app):
                 pass
         return False
 
-    # try to quit the Socket opened by ArgsThread class
+    # the new process must find the socket free
     try:
-        app.new_launch.stop.emit()
-        # app.new_launch.thread_exit = True
-        # app.new_launch.listener.close()
-    except Exception as err:
-        log.error("FlatCAMTranslation.restart_program() --> %s" % str(err))
-
-    # try to quit the QThread that run ArgsThread class
-    try:
-        app.listen_th.quit()
-        app.listen_th.wait(1000)
+        if app.new_launch is not None:
+            app.new_launch.close()
     except Exception as err:
         log.error("FlatCAMTranslation.restart_program() --> %s" % str(err))
 

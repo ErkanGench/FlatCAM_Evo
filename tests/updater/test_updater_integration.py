@@ -103,6 +103,8 @@ def _startup_app(auto_updates, beta=False):
 
     app = App.__new__(App)
     app.headless = False
+    app.new_launch = None
+    app.file_open_filter = None
     app.log = MagicMock()
     app.cmd_line_shellvar = ""
     app.cmd_line_shellfile = ""

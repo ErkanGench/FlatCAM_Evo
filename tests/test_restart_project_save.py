@@ -157,7 +157,7 @@ def restart(qt_app, tmp_path, monkeypatch):
         should_we_save=True, save_in_progress=False, project_save_pending=False, close_after_save=False,
         resource_location='assets/resources', file_opened=Mock(), file_saved=Mock(),
         get_last_save_folder=lambda: str(tmp_path), start_delayed_quit=Mock(), preferencesUiManager=Mock(),
-        new_launch=Mock(), listen_th=Mock(), trayIcon=Mock())
+        new_launch=Mock(), trayIcon=Mock())
     app.f_handlers = appIO(app)
     projects = ProjectManager(app, collection_factory=FakeCollection)
     # the steps that change the canvas and the plugins
@@ -204,8 +204,7 @@ def restart(qt_app, tmp_path, monkeypatch):
 def assert_no_restart(s):
     assert s.restarts == []
     # the app goes on: the listener of the second instances is not stopped, the settings file is not written
-    s.app.new_launch.stop.emit.assert_not_called()
-    s.app.listen_th.quit.assert_not_called()
+    s.app.new_launch.close.assert_not_called()
     s.app.preferencesUiManager.save_defaults.assert_not_called()
     assert s.app.inform.emit.call_args[0][0].startswith('[WARNING_NOTCL]')
 

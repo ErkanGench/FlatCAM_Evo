@@ -121,8 +121,7 @@ class LifecycleChecks(DatabaseCase):
         self.app.ui.isMaximized = MagicMock(return_value=False)
         self.app.ui.geometry = MagicMock(return_value=QtCore.QRect(10, 20, 800, 600))
         self.app.ui.general_pref_form = MagicMock()
-        self.app.new_launch = SimpleNamespace(thread_exit=False, address=('127.0.0.1', 1))
-        self.app.listen_th = MagicMock()
+        self.app.new_launch = None
         self.app.geo_editor = None
         self.app.exc_editor = None
         self.app.grb_editor = None

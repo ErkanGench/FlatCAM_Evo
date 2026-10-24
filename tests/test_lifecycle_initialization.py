@@ -122,7 +122,6 @@ class TestAppShutdownSequence(unittest.TestCase):
         mock_app.options = {}
         mock_app.ui = Mock()
         mock_app.new_launch = Mock()
-        mock_app.listen_th = Mock()
         mock_app.geo_editor = None
         mock_app.exc_editor = None
         mock_app.grb_editor = None

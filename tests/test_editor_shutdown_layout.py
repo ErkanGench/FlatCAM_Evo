@@ -54,7 +54,6 @@ def test_confirmed_quit_restores_and_saves_layout_before_editor_cleanup_can_repl
     s.app.headless = False
     s.app.tools_db_tab = None
     s.app.geo_editor = None
-    s.app.new_launch.address = None
     s.window.general_pref_form = Mock()
     monkeypatch.setattr(QtCore, 'QSettings', Mock(return_value=s.settings))
     monkeypatch.setattr(QtWidgets.QApplication, 'quit', Mock())

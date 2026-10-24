@@ -403,22 +403,12 @@ class AppLifecycle(QtCore.QObject):
         # hide the UI so the user experiences a faster shutdown
         self.app.ui.hide()
 
-        if sys.platform == 'win32':
-            # Set thread_exit directly - safe from main thread (GIL protects bool assignment)
-            self.app.new_launch.thread_exit = True
-            # Unblock listener.accept() by connecting to the pipe and sending 'close'
-            # serve() checks for msg == 'close' to break its loop
-            try:
-                from multiprocessing.connection import Client as MpClient
-                _conn = MpClient(*self.app.new_launch.address)
-                _conn.send('close')
-                _conn.close()
-                self.log.debug("ArgThread pipe close sent OK")
-            except Exception as e:
-                self.log.debug("ArgThread pipe close FAILED: %s" % str(e))
-            if self.app.listen_th.isRunning():
-                self.app.listen_th.requestInterruption()
-                self.log.debug("ArgThread QThread requested an interruption.")
+        # stop listening for the files of a second launch
+        try:
+            if self.app.new_launch is not None:
+                self.app.new_launch.close()
+        except Exception as e:
+            self.log.error("AppLifecycle.quit_application() --> %s" % str(e))
 
         # close editors before quitting the app, if they are open
         for kind, editor_name in (('geometry', 'Geo Editor'), ('excellon', 'Excellon Editor'),
@@ -479,20 +469,6 @@ class AppLifecycle(QtCore.QObject):
 
         if silent is False:
             self.log.debug("AppLifecycle.quit_application() --> App UI state saved.")
-
-        # try to quit the QThread that run ArgsThread class
-        try:
-            # del self.new_launch
-            if sys.platform == 'win32':
-                self.app.listen_th.quit()
-                self.app.listen_th.wait(3000)
-                if self.app.listen_th.isRunning():
-                    self.log.warning("ArgsThread still running after wait, terminating.")
-                    self.app.listen_th.terminate()
-                    self.app.listen_th.wait(1000)
-        except Exception as e:
-            if silent is False:
-                self.log.error("AppLifecycle.quit_application() --> %s" % str(e))
 
         # terminate workers
         # self.workers.__del__()

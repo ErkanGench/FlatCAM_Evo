@@ -212,6 +212,14 @@ if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     app.aboutToQuit.connect(_install_shutdown_message_handler)
 
+    # A launch with files hands them to the window that is already open and ends here, before the App is built. The
+    # options (--shellfile, --command, --shellvar) belong to this process: they start a new one.
+    if (not App.cmd_line_headless and App.args and not App.cmd_line_shellfile and not App.cmd_line_command and
+            not App.cmd_line_shellvar):
+        from appCommon.SingleInstance import send_to_running
+        if send_to_running(App.args):
+            os._exit(0)
+
     # apply style
     settings = QSettings("Open Source", "FlatCAM_EVO")
     styles = QtWidgets.QStyleFactory.keys()

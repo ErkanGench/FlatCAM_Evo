@@ -8,13 +8,15 @@ runs do not go through App.on_startup_args().
 """
 
 import os
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
-from PyQt6 import QtCore, QtGui, QtTest, QtWidgets
+from PyQt6 import QtCore, QtGui, QtNetwork, QtTest, QtWidgets
 
 import appMain
+from appCommon import SingleInstance
 from appHandlers.appIO import appIO
 from defaults import AppDefaults
 
@@ -101,6 +103,14 @@ class TestFileType:
         app.ask_run_script_arg.assert_not_called()
         assert_no_command(app)
 
+    def test_every_file_is_opened(self):
+        app = make_app()
+        run_args(app, ['C:/b/a.gtl', 'C:/b/a.drl', 'C:/b/b.gbr', 'C:/b/a.gcode'])
+        assert app.f_handlers.method_calls == [call.on_file_open_gerber(name='C:/b/a.gtl'),
+                                               call.on_file_open_excellon(name='C:/b/a.drl'),
+                                               call.on_file_open_gerber(name='C:/b/b.gbr'),
+                                               call.on_file_open_gcode(name='C:/b/a.gcode')]
+
     @pytest.mark.parametrize('path', ['C:/boards/a.FlatPrj.bak', 'C:/board.tcl/readme'])
     def test_unknown_extension_opens_nothing(self, path):
         app = make_app()
@@ -161,6 +171,88 @@ class TestScriptArgument:
             io.app.shell.exec_command.assert_called_once_with('puts marker\n')
         else:
             io.app.shell.exec_command.assert_not_called()
+
+
+class TestSingleInstance:
+    """The files of a second launch reach the open instance, whatever else is sent to its socket."""
+
+    @pytest.fixture
+    def name(self, qapp, monkeypatch):
+        unique = 'FlatCAM_EVO-test-%d' % os.getpid()
+        monkeypatch.setattr(SingleInstance, 'server_name', lambda: unique)
+        return unique
+
+    @staticmethod
+    def _run_client(fn, received, count):
+        """
+        The second launch is another process: run its side in a thread, so that the event loop of the server serves it.
+        """
+        result = []
+        thread = threading.Thread(target=lambda: result.append(fn()))
+        thread.start()
+        loop = QtCore.QEventLoop()
+        timer = QtCore.QTimer()
+        timer.setInterval(20)
+        timer.timeout.connect(lambda: loop.quit() if len(received) >= count and not thread.is_alive() else None)
+        QtCore.QTimer.singleShot(3000, loop.quit)
+        timer.start()
+        loop.exec()
+        timer.stop()
+        thread.join(3)
+        return result[0] if result else None
+
+    def test_files_arrive(self, name):
+        server = SingleInstance.InstanceServer()
+        received = []
+        server.files_received.connect(received.append)
+        assert server.start()
+        try:
+            sent = self._run_client(
+                lambda: SingleInstance.send_to_running(['C:/a.gbr', 'C:/b.drl'], 3000), received, 1)
+            assert sent is True
+            assert received == [['C:/a.gbr', 'C:/b.drl']]
+        finally:
+            server.close()
+
+    def test_second_server_does_not_take_the_name(self, name):
+        first = SingleInstance.InstanceServer()
+        received = []
+        first.files_received.connect(received.append)
+        assert first.start()
+        second = SingleInstance.InstanceServer()
+        try:
+            assert second.start() is False
+            sent = self._run_client(lambda: SingleInstance.send_to_running(['C:/a.gbr'], 3000), received, 1)
+            assert sent is True
+            assert received == [['C:/a.gbr']]
+        finally:
+            second.close()
+            first.close()
+
+    def test_no_instance_running(self, name):
+        assert SingleInstance.send_to_running(['C:/a.gbr']) is False
+
+    def test_bad_client_does_not_stop_the_server(self, name):
+        server = SingleInstance.InstanceServer()
+        received = []
+        server.files_received.connect(received.append)
+        assert server.start()
+
+        def client():
+            for junk in (b'\xff\xfe not json\n', b'[1, 2]\n', b'{"files": "a.gbr"}\n', b'{"files": [1]}\n'):
+                sock = QtNetwork.QLocalSocket()
+                sock.connectToServer(name)
+                assert sock.waitForConnected(1000)
+                sock.write(junk)
+                sock.waitForBytesWritten(1000)
+                sock.disconnectFromServer()
+            return SingleInstance.send_to_running(['C:/a.gbr'], 3000)
+
+        try:
+            assert self._run_client(client, received, 1) is True
+            assert received == [['C:/a.gbr']]
+        finally:
+            server.close()
 
 
 class TestRunScriptQuestion:
