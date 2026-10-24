@@ -209,7 +209,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
         self.shape_collections = []
 
-        self.shape_collection = self.new_shape_collection()
+        # deferred: the redraws of a burst of object plots are joined into one rebuild
+        self.shape_collection = self.new_shape_collection(deferred=True)
         self.text_collection = self.new_text_collection()
 
         self.text_collection.enabled = True
@@ -662,6 +663,10 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
     def fit_view(self, rect=None, blocking=True):
 
+        # the bounds need the buffers of the deferred redraws
+        if not rect and blocking:
+            self.shape_collection.flush()
+
         # Lock updates in other threads
         if blocking:
             self.shape_collection.lock_updates()
@@ -729,6 +734,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
     def redraw(self):
         self.shape_collection.redraw([])
+        self.shape_collection.flush()
         self.text_collection.redraw()
 
 

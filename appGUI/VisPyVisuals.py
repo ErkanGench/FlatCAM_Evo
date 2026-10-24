@@ -15,6 +15,7 @@ from vispy.color import Color
 from shapely import Polygon, LineString, LinearRing
 import itertools
 import threading
+import time
 import numpy as np
 from functools import lru_cache
 from appGUI.VisPyTesselators import GLUTess
@@ -327,9 +328,72 @@ class RectangleVisual(CompoundVisual):
         self._mesh.visible = face_color is not None and x1 != x0 and y1 != y0
 
 
+class _DeferredUpdater(object):
+    """
+    One daemon thread shared by all deferred collections. A collection asks for an update; the update runs when
+    no new request came for QUIET seconds, but at most MAX_WAIT seconds after the first pending request.
+    A burst of redraws (plot_all) gives one rebuild. One thread for all: the updates of the collections run one
+    after another, so two updates of one collection never overlap and only one extra thread exists.
+    """
+    QUIET = 0.03
+    MAX_WAIT = 0.15
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._pending = {}      # id(collection) -> [collection, first request time, last request time]
+        self._thread = None
+
+    def request(self, collection):
+        now = time.monotonic()
+        with self._cond:
+            entry = self._pending.get(id(collection))
+            if entry is None:
+                self._pending[id(collection)] = [collection, now, now]
+            else:
+                entry[2] = now
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, name="ShapeCollectionUpdater", daemon=True)
+                self._thread.start()
+            self._cond.notify()
+
+    def cancel(self, collection):
+        with self._cond:
+            return self._pending.pop(id(collection), None) is not None
+
+    def _run(self):
+        while True:
+            with self._cond:
+                while True:
+                    if not self._pending:
+                        self._cond.wait()
+                        continue
+                    now = time.monotonic()
+                    ready = None
+                    wait = None
+                    for key, (collection, first, last) in self._pending.items():
+                        due = min(last + self.QUIET, first + self.MAX_WAIT)
+                        if due <= now:
+                            ready = key
+                            break
+                        wait = due - now if wait is None else min(wait, due - now)
+                    if ready is not None:
+                        collection = self._pending.pop(ready)[0]
+                        break
+                    self._cond.wait(wait)
+            try:
+                collection._update_deferred()
+            except Exception as e:
+                print("VisPyVisuals deferred update error = %s" % str(e))
+            collection = None
+
+
+_deferred_updater = _DeferredUpdater()
+
+
 class ShapeCollectionVisual(CompoundVisual):
 
-    def __init__(self, linewidth=1, triangulation='vispy', layers=3, pool=None, fcoptions=None, **kwargs):
+    def __init__(self, linewidth=1, triangulation='vispy', layers=3, pool=None, fcoptions=None, deferred=False,
+                 **kwargs):
         """
         Represents collection of shapes to draw on VisPy scene
         :param linewidth: float
@@ -341,9 +405,14 @@ class ShapeCollectionVisual(CompoundVisual):
         :param layers: int
             Layers count
             Each layer adds 2 visuals on VisPy scene. Be careful: more layers cause less fps
+        :param deferred: bool
+            True: redraw() only asks for a rebuild, a shared thread joins a burst of redraws into one rebuild.
+            Use flush() to get the buffers at once. Only for the big collection of the plotted objects.
+            False (default): redraw() rebuilds at once, for interactive shapes.
         :param kwargs:
         """
         self.fc_options = fcoptions
+        self._deferred = deferred
 
         self.data = {}
         self.last_key = -1
@@ -856,6 +925,22 @@ class ShapeCollectionVisual(CompoundVisual):
         if not self._dirty:
             return
 
+        with self.update_lock:
+            # another thread may have done the work while this one waited for the lock
+            if not self._dirty:
+                return
+            # reset before the work: a change during the work marks the collection dirty again
+            self._dirty = False
+            try:
+                self._rebuild_visuals()
+            except Exception:
+                self._dirty = True
+                raise
+
+    def _rebuild_visuals(self):
+        """
+        Body of __update(), runs with update_lock held.
+        """
         meshes = self._meshes + [self._top_mesh]
         lines = self._lines + [self._top_line]
         # Optimized: Phase 1 - Collect references (O(1) per shape)
@@ -870,9 +955,6 @@ class ShapeCollectionVisual(CompoundVisual):
         # When merging multiple shapes, indices must be offset by the
         # cumulative vertex count of all previously merged shapes.
         layer_vert_counts = [0] * len(meshes)
-
-        # Lock sub-visuals updates
-        self.update_lock.acquire(True)
 
         # Collect shape buffers
         for key, data in list(self.data.items()):
@@ -935,13 +1017,6 @@ class ShapeCollectionVisual(CompoundVisual):
             line._bounds_changed()
 
         self._bounds_changed()
-        
-        # Reset dirty flag AFTER acquiring lock and completing update
-        # This prevents race conditions where another thread sets dirty
-        # between the initial check and the actual update
-        self._dirty = False
-        
-        self.update_lock.release()
 
     def _collect_results(self, indexes=None):
         """
@@ -1076,7 +1151,10 @@ class ShapeCollectionVisual(CompoundVisual):
             self._dirty = True
 
         if update_colors is None or update_colors is False:
-            self.__update()
+            if self._deferred:
+                _deferred_updater.request(self)
+            else:
+                self.__update()
         else:
             try:
                 self.update_color(
@@ -1086,6 +1164,25 @@ class ShapeCollectionVisual(CompoundVisual):
                 )
             except Exception as e:
                 print("VisPyVisuals.ShapeCollectionVisual.redraw() --> Update colors error = %s." % str(e))
+
+    def _update_deferred(self):
+        """
+        Called by the deferred updater thread.
+        """
+        self.__update()
+
+    def flush(self):
+        """
+        Runs a pending (deferred) update at once in the calling thread, and waits for one that is running.
+        Call it before reading the buffers or the bounds of a deferred collection.
+        Do not call it while holding update_lock.
+        """
+        if self._deferred:
+            _deferred_updater.cancel(self)
+        self.__update()
+        # an update running in the updater thread: wait for it
+        with self.update_lock:
+            pass
 
     def lock_updates(self):
         self.update_lock.acquire(True)

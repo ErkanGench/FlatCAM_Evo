@@ -179,7 +179,8 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
 
         self.shape_collections = []
 
-        self.shape_collection = self.new_shape_collection()
+        # deferred: the redraws of a burst of object plots are joined into one rebuild
+        self.shape_collection = self.new_shape_collection(deferred=True)
 
         self.text_collection = self.new_text_collection()
         self.text_collection.enabled = True
@@ -407,6 +408,8 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         if rect is not None:
             return np.array(list(product((rect.left, rect.right), (rect.bottom, rect.top), (0,))))
         bounds = np.array([(0, 0, 0), (*self.workspace_size, 0)], dtype=float)
+        # the bounds need the buffers of the deferred redraws
+        self.shape_collection.flush()
         nodes = list(self.view.scene.children)
         while nodes:
             node = nodes.pop()
@@ -502,6 +505,7 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
 
     def redraw(self):
         self.shape_collection.redraw([])
+        self.shape_collection.flush()
         self.text_collection.redraw()
 
 

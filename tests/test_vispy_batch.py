@@ -204,5 +204,59 @@ class TestAddCopy(unittest.TestCase):
         self.assertTrue(np.all(colors[:2] == (0.0, 0.0, 1.0, 1.0)))
         self.assertTrue(np.all(colors[2:] == (1.0, 0.0, 0.0, 1.0)))
 
+class TestDeferredRedraw(unittest.TestCase):
+    """A deferred collection joins a burst of redraws into few rebuilds."""
+
+    def setUp(self):
+        from appGUI.VisPyVisuals import ShapeCollectionVisual
+        options = {"global_graphic_engine_3d_no_mp": True, "global_backface_culling": True}
+        self.collection = ShapeCollectionVisual(linewidth=1, layers=1, pool=None, fcoptions=options, deferred=True)
+        self.rebuilds = 0
+        patcher = patch('appGUI.VisPyVisuals.set_state', side_effect=self._count)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _count(self, **kwargs):
+        self.rebuilds += 1
+
+    def _burst(self, count):
+        from appGUI.VisPyVisuals import ShapeGroup
+        for i in range(count):
+            group = ShapeGroup(self.collection)
+            group.add(shape=Polygon([(i, 0), (i + 1, 0), (i + 1, 1), (i, 1)]), color='#112233FF',
+                      face_color='#11223350', layer=0)
+            group.redraw()
+
+    def test_burst_gives_final_buffers_and_fewer_rebuilds(self):
+        self._burst(20)
+        self.collection.flush()
+        self.assertEqual(len(self.collection._meshes[0].mesh_data.get_vertices()), 20 * 4)
+        self.assertEqual(len(self.collection._lines[0]._pos), 20 * 8)
+        self.assertLess(self.rebuilds, 20)
+
+    def test_redraw_alone_is_applied_by_the_updater(self):
+        import time
+        self._burst(3)
+        deadline = time.monotonic() + 3
+        while self.collection._dirty and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(self.collection._dirty)
+        self.assertEqual(len(self.collection._meshes[0].mesh_data.get_vertices()), 12)
+
+    def test_flush_applies_at_once(self):
+        self._burst(2)
+        self.collection.flush()
+        self.assertFalse(self.collection._dirty)
+        self.assertEqual(len(self.collection._meshes[0].mesh_data.get_vertices()), 8)
+
+    def test_update_colors_is_synchronous(self):
+        self._burst(2)
+        self.collection.flush()
+        keys = list(self.collection.data)
+        self.collection.redraw(keys, update_colors=('#00FF00FF', '#0000FFFF'))
+        colors = self.collection._lines[0]._color
+        self.assertTrue(np.all(colors == (0.0, 0.0, 1.0, 1.0)))
+
+
 if __name__ == '__main__':
     unittest.main()
