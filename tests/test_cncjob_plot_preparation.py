@@ -84,12 +84,12 @@ class TestCNCJobPlotPreparation(unittest.TestCase):
                 collection.add(shape=geometry, color=COLORS['C'][1], face_color=COLORS['C'][0], layer=0, tolerance=0)
                 with patch('appGUI.VisPyVisuals.set_state'):        # no GL canvas in the tests
                     collection.redraw([])
-                np.testing.assert_array_equal(collection.layer_visuals(0)[1][0]._color,
+                np.testing.assert_array_equal(collection._lines[0]._color,
                                               np.tile(Color(COLORS['C'][1]).rgba, (len(expected), 1)))
                 if geometry is polygon:
                     faces = data['mesh_vertices'][data['mesh_tris'].reshape(-1, 3)]
                     self.assertAlmostEqual(sum(Polygon(face).area for face in faces), polygon.area)
-                    self.assertEqual(len(collection.layer_visuals(0)[0][0].mesh_data.get_face_colors()), len(faces))
+                    self.assertEqual(len(collection._meshes[0].mesh_data.get_face_colors()), len(faces))
                 else:
                     self.assertEqual(data['mesh_tris'].size, 0)
 

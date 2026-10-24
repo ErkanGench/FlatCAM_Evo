@@ -23,34 +23,6 @@ from appGUI.VisPyTesselators import GLUTess
 # draws with the blend of the previous visual (the grid uses 'additive')
 _BLEND = dict(blend=True, blend_func=('src_alpha', 'one_minus_src_alpha'))
 
-# ShapeGroup ids and the creation order of the buckets of a collection (the later bucket draws over the earlier one)
-_BUCKET_IDS = itertools.count(1)
-_BUCKET_SEQ = itertools.count()
-_DEFAULT_BUCKET = 0
-
-
-class _Bucket(object):
-    """
-    The shapes of one ShapeGroup (one object) in a ShapeCollectionVisual, with their own mesh and line visuals per layer.
-    A bucket that did not change is not uploaded to the GPU again.
-    """
-    __slots__ = ('seq', 'keys', 'dirty', 'meshes', 'lines')
-
-    def __init__(self):
-        self.seq = next(_BUCKET_SEQ)
-        self.keys = {}          # shape keys in draw order (a dict keeps the order)
-        self.dirty = True
-        self.meshes = {}        # layer: MeshVisual, only for the layers with faces
-        self.lines = {}         # layer: LineVisual, only for the layers with lines
-
-
-def _concat(chunks, empty_shape, dtype):
-    return np.concatenate(chunks) if chunks else np.empty(empty_shape, dtype=dtype)
-
-
-def _has_mesh(data):
-    return len(data['mesh_tris']) > 0 and len(data['mesh_vertices']) > 0
-
 
 # class FlatCAMLineVisual(LineVisual):
 #     def __init__(self, pos=None, color=(0.5, 0.5, 0.5, 1), width=1, connect='strip', method='gl', antialias=False):
@@ -197,8 +169,6 @@ class ShapeGroup(object):
         self._visible = True
         self._enabled = True
         self._color = None
-        # the collection keeps the shapes of a group together (own visuals, own GPU upload)
-        self._bucket = next(_BUCKET_IDS)
 
     def add(self, **kwargs):
         """
@@ -206,7 +176,7 @@ class ShapeGroup(object):
         :param kwargs: keyword arguments.
             Arguments for ShapeCollection.add function
         """
-        key = self._collection.add(bucket=self._bucket, **kwargs)
+        key = self._collection.add(**kwargs)
         self._indexes.append(key)
         return key
 
@@ -214,7 +184,7 @@ class ShapeGroup(object):
         """
         Batch adds shapes to collection and stores indexes in group.
         """
-        keys = self._collection.add_batch(shapes_data, bucket=self._bucket, **kwargs)
+        keys = self._collection.add_batch(shapes_data, **kwargs)
         self._indexes.extend(keys)
         return keys
     
@@ -276,7 +246,7 @@ class ShapeGroup(object):
                 data[i]['visible'] = value
 
         # the collection skips the update if it is not marked dirty
-        self._collection.mark_dirty(self._bucket)
+        self._collection._dirty = True
         self._collection.redraw([])
 
     @property
@@ -317,7 +287,7 @@ class ShapeGroup(object):
                     data[i]['visible'] = state
 
         # the collection skips the update if it is not marked dirty
-        self._collection.mark_dirty(self._bucket)
+        self._collection._dirty = True
         self._collection.redraw([])
 
 
@@ -393,91 +363,43 @@ class ShapeCollectionVisual(CompoundVisual):
         self.results = {}
         self._batch_results = []  # NEW: list of (keys, AsyncResult) tuples for batch processing
 
-        self._layers = layers
-        # Backface culling - safe with CCW winding enforcement in tessellator
-        self._cull = True
-        if self.fc_options:
-            self._cull = self.fc_options.get("global_backface_culling", True)
-
-        # Every ShapeGroup has its own bucket: own visuals per layer. The shapes added without a group are in the
-        # default bucket. A bucket that is empty is deleted; its visuals are removed on the next update.
-        self._buckets = {}
-        self._key_bucket = {}       # shape key: bucket id
-        self._dead = []             # empty buckets, their visuals are still in the scene
-        self._visual_rank = {}            # id(visual): (layer, 0 mesh | 1 line, bucket creation order)
-        self._rank_changed = False
-        self._built_width = None
-
-        # Selected objects are an overlay, independent of their normal plotting layer: one global pair of visuals.
-        self._top_order = []
-        self._top_dirty = False
+        self._meshes = [MeshVisual() for _ in range(0, layers)]
+        # self._lines = [LineVisual(antialias=True) for _ in range(0, layers)]
+        self._lines = [LineVisual(antialias=True) for _ in range(0, layers)]
         self._top_mesh = MeshVisual()
         self._top_line = LineVisual(antialias=True)
-        self._visual_rank[id(self._top_mesh)] = (layers, 0, 0)
-        self._visual_rank[id(self._top_line)] = (layers, 1, 0)
 
         self._line_width = linewidth
         self._triangulation = triangulation
 
-        CompoundVisual.__init__(self, [self._top_mesh, self._top_line], **kwargs)
+        visuals_ = [self._lines[i // 2] if i % 2 else self._meshes[i // 2] for i in range(0, layers * 2)]
+        visuals_.extend([self._top_mesh, self._top_line])
 
-        self._top_mesh.set_gl_state(depth_test=False, cull_face=self._cull, **_BLEND)
+        CompoundVisual.__init__(self, visuals_, **kwargs)
+
+        for m in self._meshes:
+            # Backface culling - safe with CCW winding enforcement in tessellator
+            cull = True
+            if self.fc_options:
+                cull = self.fc_options.get("global_backface_culling", True)
+            m.set_gl_state(polygon_offset_fill=True, polygon_offset=(1, 1), cull_face=cull, **_BLEND)
+
+        for lne in self._lines:
+            lne.set_gl_state(**_BLEND)
+
+        # Selected objects are an overlay, independent of their normal plotting layer.
+        self._top_mesh.set_gl_state(depth_test=False,
+                                    cull_face=(self.fc_options or {}).get("global_backface_culling", True), **_BLEND)
         self._top_line.set_gl_state(depth_test=False, **_BLEND)
 
         self.freeze()
 
     def _check_layer(self, layer):
         """
-        Raise ValueError unless layer is an integer in 0..layers-1.
+        Raise ValueError unless layer is an integer in 0..len(self._meshes)-1.
         """
-        if isinstance(layer, bool) or not isinstance(layer, (int, np.integer)) or not 0 <= layer < self._layers:
-            raise ValueError("Layer %r is out of range 0..%d." % (layer, self._layers - 1))
-
-    def layer_visuals(self, layer):
-        """
-        The mesh and the line visuals that paint a layer, in draw order (one per bucket that has shapes there).
-
-        :return: (list of MeshVisual, list of LineVisual)
-        """
-        buckets = sorted(self._buckets.values(), key=lambda b: b.seq)
-        return ([b.meshes[layer] for b in buckets if layer in b.meshes],
-                [b.lines[layer] for b in buckets if layer in b.lines])
-
-    def mark_dirty(self, bucket=None):
-        """
-        The shapes of a bucket (all buckets if None) changed outside of the collection: the next update uploads them.
-        """
-        for bid, b in list(self._buckets.items()):
-            if bucket is None or bid == bucket:
-                b.dirty = True
-        if self._top_keys:
-            self._top_dirty = True
-        self._dirty = True
-
-    def _mark_key(self, key):
-        """
-        The shape changed: the next update uploads the bucket of the shape (and the overlay if it is on top).
-        """
-        b = self._buckets.get(self._key_bucket.get(key))
-        if b is not None:
-            b.dirty = True
-        if key in self._top_keys:
-            self._top_dirty = True
-        self._dirty = True
-
-    def _attach(self, keys, bucket):
-        """
-        Puts new shapes in a bucket. A bucket that was emptied is a new bucket: it draws after the other buckets.
-        """
-        with self.key_lock:
-            b = self._buckets.get(bucket)
-            if b is None:
-                b = self._buckets[bucket] = _Bucket()
-            for k in keys:
-                b.keys[k] = True
-                self._key_bucket[k] = bucket
-            b.dirty = True
-        self._dirty = True
+        if isinstance(layer, bool) or not isinstance(layer, (int, np.integer)) or not 0 <= layer < len(self._meshes):
+            raise ValueError("Layer %r is out of range 0..%d." % (layer, len(self._meshes) - 1))
 
     def set_rectangle(self, start, end, color, face_color):
         """Replace selection contents without rebuilding collection buffers on each move."""
@@ -500,12 +422,12 @@ class ShapeCollectionVisual(CompoundVisual):
             self.last_key += 1
             key = self.last_key
         self.data[key] = buffers.copy()
-        self._attach([key], _DEFAULT_BUCKET)
+        self._dirty = True
         self.redraw()
         return key
 
     def add(self, shape=None, color=None, face_color=None, alpha=None, visible=True,
-            update=False, layer=1, tolerance=0.001, linewidth=None, bucket=_DEFAULT_BUCKET):
+            update=False, layer=1, tolerance=0.001, linewidth=None):
         """
         Adds shape to collection
         :return:
@@ -527,8 +449,6 @@ class ShapeCollectionVisual(CompoundVisual):
             Geometry simplifying tolerance
         :param linewidth: int
             Width of the line
-        :param bucket: int
-            Bucket of the shapes (ShapeGroup id). A change of a bucket uploads only the bucket.
         :return: int
             Index of shape
         """
@@ -564,14 +484,14 @@ class ShapeCollectionVisual(CompoundVisual):
         self.data[key] = _update_shape_buffers(self.data[key])
 
         # Mark buffers as dirty
-        self._attach([key], bucket)
+        self._dirty = True
 
         if update:
             self.redraw()   # redraw() waits for pool process end
 
         return key
 
-    def add_batch(self, shapes_data, layer=1, tolerance=0.001, linewidth=None, visible=True, bucket=_DEFAULT_BUCKET):
+    def add_batch(self, shapes_data, layer=1, tolerance=0.001, linewidth=None, visible=True):
         """
         Add multiple shapes in one pool call. Dramatically reduces IPC overhead.
 
@@ -581,7 +501,6 @@ class ShapeCollectionVisual(CompoundVisual):
         :param tolerance: float - default tolerance for shapes that don't specify one
         :param linewidth: int - line width override
         :param visible: bool - visibility for all shapes in the batch
-        :param bucket: int - bucket of the shapes (ShapeGroup id)
         :return: list of int - keys for all added shapes (in same order as shapes_data)
         """
         if not shapes_data:
@@ -634,10 +553,10 @@ class ShapeCollectionVisual(CompoundVisual):
                 for k, d in zip(keys, data_list):
                     self.data[k] = _update_shape_buffers(d)
 
-        self._attach(keys, bucket)
+        self._dirty = True
         return keys
 
-    def add_copy(self, source, source_key, color=None, face_color=None, linewidth=None, bucket=_DEFAULT_BUCKET):
+    def add_copy(self, source, source_key, color=None, face_color=None, linewidth=None):
         """
         Adds a shape that is already in a collection (this one or another one) with new colors, without a new
         simplification and triangulation. The position buffers are shared: no code changes them after
@@ -648,7 +567,6 @@ class ShapeCollectionVisual(CompoundVisual):
         :param color:       line color of the copy
         :param face_color:  face color of the copy
         :param linewidth:   width of the lines of this collection
-        :param bucket:      bucket of the copy (ShapeGroup id)
         :return:            key of the copy, or None if the source has no buffers for this key (yet)
         """
         src = source.data.get(source_key)
@@ -684,7 +602,7 @@ class ShapeCollectionVisual(CompoundVisual):
             'line_rgba': rgba_of(color, len(src['line_pts']))
         }
 
-        self._attach([key], bucket)
+        self._dirty = True
         return key
 
     def remove(self, key, update=False):
@@ -704,20 +622,9 @@ class ShapeCollectionVisual(CompoundVisual):
         # Remove data
         if key in self.data:
             del self.data[key]
+        self._top_keys.discard(key)
 
-        # Mark buffers as dirty; a bucket without shapes is deleted, its visuals are removed on the update
-        with self.key_lock:
-            bucket = self._key_bucket.pop(key, None)
-            b = self._buckets.get(bucket)
-            if b is not None:
-                b.keys.pop(key, None)
-                b.dirty = True
-                if not b.keys:
-                    del self._buckets[bucket]
-                    self._dead.append(b)
-            if key in self._top_keys:
-                self._top_keys.discard(key)
-                self._top_dirty = True
+        # Mark buffers as dirty
         self._dirty = True
 
         if update:
@@ -734,16 +641,10 @@ class ShapeCollectionVisual(CompoundVisual):
         self.last_key = -1
         self.data.clear()
         self._top_keys.clear()
-        del self._top_order[:]
-
-        # Mark buffers as dirty; the visuals of the buckets are removed on the update
-        with self.key_lock:
-            self._dead.extend(self._buckets.values())
-            self._buckets.clear()
-            self._key_bucket.clear()
-        self._top_dirty = True
+        
+        # Mark buffers as dirty
         self._dirty = True
-
+        
         if update:
             self.__update()
 
@@ -769,292 +670,278 @@ class ShapeCollectionVisual(CompoundVisual):
         try:
             moved = [(k, self.data.pop(k)) for k in keys]
             self.data.update(moved)
-            # the buckets of the old and of the new top shapes are uploaded again
-            for k in itertools.chain(self._top_keys, keys):
-                self._mark_key(k)
-                b = self._buckets.get(self._key_bucket.get(k))
-                if k in key_set and b is not None and k in b.keys:
-                    del b.keys[k]
-                    b.keys[k] = True
             self._top_keys = key_set
-            self._top_order = list(keys)
-            self._top_dirty = True
         finally:
             self.update_lock.release()
 
+        # Mark buffers as dirty
         self._dirty = True
         return True
 
     def update_visibility(self, state: bool, indexes=None) -> None:
         # Lock sub-visuals updates
         self.update_lock.acquire(True)
-        wanted = None if indexes is None else set(indexes)
-        for k, data in list(self.data.items()):
-            if wanted is None or k in wanted:
-                data['visible'] = state
-                self._mark_key(k)
+        if indexes is None:
+            for k, data in list(self.data.items()):
+                self.data[k]['visible'] = state
+        else:
+            for k, data in list(self.data.items()):
+                if k in indexes:
+                    self.data[k]['visible'] = state
 
         self.update_lock.release()
+        
+        # Mark buffers as dirty
+        self._dirty = True
 
     def update_color(self, new_mesh_color=None, new_line_color=None, indexes=None):
-        """
-        Paints the given shapes (all if indexes is None) with new colors. Only the buckets that hold these shapes
-        get new color arrays; no vertices are uploaded.
-        """
         if new_mesh_color is None and new_line_color is None:
             return
 
         if not self.data:
             return
 
-        # an empty string means: do not change this color
-        mesh_color_rgba = Color(new_mesh_color).rgba if new_mesh_color else None
-        line_color_rgba = Color(new_line_color).rgba if new_line_color else None
-        if mesh_color_rgba is None and line_color_rgba is None:
-            return
+        # Mark buffers as dirty (color changes require visual update)
+        self._dirty = True
+        
+        # Rest of the method...
+
+        # if a new color is empty string then make it None so it will not be updated
+        # if a new color is valid then transform it here in a format palatable
+        mesh_color_rgba = None
+        line_color_rgba = None
+        if new_mesh_color:
+            if new_mesh_color != '':
+                mesh_color_rgba = Color(new_mesh_color).rgba
+            else:
+                new_mesh_color = None
+        if new_line_color:
+            if new_line_color != '':
+                line_color_rgba = Color(new_line_color).rgba
+            else:
+                new_line_color = None
+
+        meshes = self._meshes + [self._top_mesh]
+        lines = self._lines + [self._top_line]
+        mesh_colors_chunks = [[] for _ in meshes]     # Face colors chunks
+        line_colors_chunks = [[] for _ in lines]     # Line colors chunks
+        line_pts_chunks = [[] for _ in lines]         # Vertices for line chunks
 
         # Lock sub-visuals updates
         self.update_lock.acquire(True)
-        try:
-            if indexes is None:
-                keys = list(self.data)
-            else:
-                keys = [k for k in set(indexes) if k in self.data]
+        # Merge shapes buffers
 
-            touched = set()
-            top_touched = False
-            for k in keys:
-                data = self.data[k]
-                if not data['visible'] or 'line_pts' not in data:
-                    continue
-                changed = False
-                if mesh_color_rgba is not None and len(data['mesh_tris']) // 3 != 0:
-                    data['face_color'] = new_mesh_color
-                    # Invalidate cached rgba
-                    data['face_color_rgba'] = mesh_color_rgba
-                    data['mesh_rgba'] = np.asarray(mesh_color_rgba, dtype=np.float32)
-                    changed = True
-                if line_color_rgba is not None and len(data['line_pts']) != 0:
-                    data['color'] = new_line_color
-                    # Invalidate cached rgba
-                    data['color_rgba'] = line_color_rgba
-                    data['line_rgba'] = np.asarray(line_color_rgba, dtype=np.float32)
-                    changed = True
-                if changed:
-                    if k in self._top_keys:
-                        top_touched = True
+        if indexes is None:
+            for k, data in list(self.data.items()):
+                if data['visible'] and 'line_pts' in data:
+                    layer = len(self._meshes) if k in self._top_keys else data['layer']
+                    if new_mesh_color and new_mesh_color != '':
+                        dim_mesh_tris = (len(data['mesh_tris']) // 3)
+                        if dim_mesh_tris != 0:
+                            try:
+                                mesh_colors_chunks[layer].append(np.tile(mesh_color_rgba, (dim_mesh_tris, 1)))
+                                self.data[k]['face_color'] = new_mesh_color
+                                # Invalidate cached rgba
+                                data['face_color_rgba'] = mesh_color_rgba
+                                data['mesh_rgba'] = np.asarray(mesh_color_rgba, dtype=np.float32)
+                            except Exception as e:
+                                print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                                      "Create mesh colors --> Data error. %s" % str(e))
+
+                    if new_line_color and new_line_color != '':
+                        dim_line_pts = (len(data['line_pts']))
+                        if dim_line_pts != 0:
+                            try:
+                                line_pts_chunks[layer].append(data['line_pts'])
+                                line_colors_chunks[layer].append(np.tile(line_color_rgba, (dim_line_pts, 1)))
+                                self.data[k]['color'] = new_line_color
+                                # Invalidate cached rgba
+                                data['color_rgba'] = line_color_rgba
+                                data['line_rgba'] = np.asarray(line_color_rgba, dtype=np.float32)
+                            except Exception as e:
+                                print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                                      "Create line colors --> Data error. %s" % str(e))
+        else:
+            for k, data in list(self.data.items()):
+                if data['visible'] and 'line_pts' in data:
+                    layer = len(self._meshes) if k in self._top_keys else data['layer']
+                    dim_mesh_tris = (len(data['mesh_tris']) // 3)
+                    dim_line_pts = (len(data['line_pts']))
+
+                    if k in indexes:
+                        if new_mesh_color and new_mesh_color != '':
+                            if dim_mesh_tris != 0:
+                                try:
+                                    mesh_colors_chunks[layer].append(np.tile(mesh_color_rgba, (dim_mesh_tris, 1)))
+                                    self.data[k]['face_color'] = new_mesh_color
+                                    # Invalidate cached rgba
+                                    data['face_color_rgba'] = mesh_color_rgba
+                                    data['mesh_rgba'] = np.asarray(mesh_color_rgba, dtype=np.float32)
+                                except Exception as e:
+                                    print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                                          "Create mesh colors --> Data error. %s" % str(e))
+                        if new_line_color and new_line_color != '':
+                            if dim_line_pts != 0:
+                                try:
+                                    line_pts_chunks[layer].append(data['line_pts'])
+                                    line_colors_chunks[layer].append(np.tile(line_color_rgba, (dim_line_pts, 1)))
+                                    self.data[k]['color'] = new_line_color
+                                    # Invalidate cached rgba
+                                    data['color_rgba'] = line_color_rgba
+                                    data['line_rgba'] = np.asarray(line_color_rgba, dtype=np.float32)
+                                except Exception as e:
+                                    print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                                          "Create line colors --> Data error. %s" % str(e))
                     else:
-                        touched.add(self._key_bucket.get(k))
+                        if dim_mesh_tris != 0:
+                            try:
+                                # Use cached rgba value if available
+                                if 'face_color_rgba' not in data:
+                                    data['face_color_rgba'] = Color(data['face_color']).rgba
+                                mesh_colors_chunks[layer].append(np.tile(data['face_color_rgba'], (dim_mesh_tris, 1)))
+                            except Exception as e:
+                                print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                                      "Create mesh colors --> Data error. %s" % str(e))
 
-            # A bucket that waits for an update gets the new colors with its next upload
-            for bid in touched:
-                b = self._buckets.get(bid)
-                if b is not None and not b.dirty:
-                    self._apply_colors(b.meshes, b.lines, self._gather(list(b.keys), False),
-                                       mesh_color_rgba is not None, line_color_rgba is not None)
-            if top_touched and not self._top_dirty:
-                self._apply_colors({0: self._top_mesh}, {0: self._top_line}, self._gather(self._top_order, True),
-                                   mesh_color_rgba is not None, line_color_rgba is not None)
-        finally:
-            self.update_lock.release()
+                        if dim_line_pts != 0:
+                            try:
+                                line_pts_chunks[layer].append(data['line_pts'])
+                                # Use cached rgba value if available
+                                if 'color_rgba' not in data:
+                                    data['color_rgba'] = Color(data['color']).rgba
+                                line_colors_chunks[layer].append(np.tile(data['color_rgba'], (dim_line_pts, 1)))
+                            except Exception as e:
+                                print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                                      "Create line colors --> Data error. %s" % str(e))
 
-    def _gather(self, keys, top):
-        """
-        The visible shapes of the keys, in draw order, grouped by layer.
+        # Concatenate chunks for GPU upload
+        mesh_colors = [np.concatenate(c) if c else np.empty((0, 4), dtype=np.float32) for c in mesh_colors_chunks]
+        line_pts = [np.concatenate(c) if c else np.empty((0, 2), dtype=np.float32) for c in line_pts_chunks]
+        line_colors = [np.concatenate(c) if c else np.empty((0, 4), dtype=np.float32) for c in line_colors_chunks]
 
-        :param keys:    shape keys
-        :param top:     True: only the shapes of the top overlay, in one group. False: only the other shapes.
-        :return:        list (one item per layer) of lists of shape data
-        """
-        per_layer = [[] for _ in range(1 if top else self._layers)]
-        top_keys = self._top_keys
-        data = self.data
-        for k in keys:
-            d = data.get(k)
-            if d is None or not d['visible'] or 'line_pts' not in d or (k in top_keys) != top:
-                continue
-            per_layer[0 if top else d['layer']].append(d)
-        return per_layer
+        # Updating meshes
+        if new_mesh_color and new_mesh_color != '':
+            for i, mesh in enumerate(meshes):
+                if len(mesh_colors[i]) > 0:
+                    try:
+                        mesh._meshdata.set_face_colors(colors=mesh_colors[i])
+                        mesh.mesh_data_changed()
+                    except Exception as e:
+                        print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                              "Apply mesh colors --> Data error. %s" % str(e))
 
-    @staticmethod
-    def _apply_colors(meshes, lines, per_layer, mesh_colors, line_colors):
-        """
-        Sets new color arrays on the visuals of a bucket (or of the overlay), the vertices stay on the GPU.
-        The arrays have the order of the buffers that __update() made.
-        """
-        for layer, shapes in enumerate(per_layer):
-            mesh = meshes.get(layer)
-            if mesh_colors and mesh is not None:
-                colors = _concat([np.broadcast_to(d['mesh_rgba'], (len(d['mesh_tris']) // 3, 4))
-                                  for d in shapes if _has_mesh(d)], (0, 4), np.float32)
-                if len(colors) > 0:
-                    mesh._meshdata.set_face_colors(colors=colors)
-                    mesh.mesh_data_changed()
-            line = lines.get(layer)
-            if line_colors and line is not None:
-                colors = _concat([np.broadcast_to(d['line_rgba'], (len(d['line_pts']), 4)) for d in shapes],
-                                 (0, 4), np.float32)
-                if len(colors) > 0:
-                    line._color = colors
-                    line._changed['color'] = True
-                    line.update()
+        # Updating lines
+        if new_line_color and new_line_color != '':
+            for i, line in enumerate(lines):
+                if len(line_pts[i]) > 0:
+                    line.visible = True
+                    try:
+                        line._color = line_colors[i]
+                        line._changed['color'] = True
+                        line.update()
+                    except Exception as e:
+                        print("VisPyVisuals.ShapeCollectionVisual.update_color(). "
+                              "Apply line colors --> Data error. %s" % str(e))
+                else:
+                    # line.clear_data()
+                    line.visible = False
 
-    def _layer_visual(self, bucket, kind, layer):
-        """
-        The mesh (kind 0) or line (kind 1) visual of a bucket for a layer; made and put in the scene if it is missing.
-        """
-        store = bucket.lines if kind else bucket.meshes
-        visual = store.get(layer)
-        if visual is None:
-            if kind:
-                visual = LineVisual(antialias=True)
-                visual.set_gl_state(**_BLEND)
-            else:
-                visual = MeshVisual()
-                visual.set_gl_state(polygon_offset_fill=True, polygon_offset=(1, 1), cull_face=self._cull, **_BLEND)
-            store[layer] = visual
-            self._visual_rank[id(visual)] = (layer, kind, bucket.seq)
-            self._rank_changed = True
-            self.add_subvisual(visual)
-        return visual
-
-    def _drop_visual(self, bucket, kind, layer):
-        visual = (bucket.lines if kind else bucket.meshes).pop(layer, None)
-        if visual is not None:
-            self.remove_subvisual(visual)
-            del self._visual_rank[id(visual)]
-
-    def _upload(self, mesh, line, shapes, bucket, layer):
-        """
-        Merges the buffers of the shapes of one layer and sets them on the visuals of the bucket.
-
-        :param mesh, line:  the visuals of the overlay, or None to get (and remove if not needed) the visuals of
-                            the bucket for the layer
-        """
-        line_pts_chunks = []
-        line_colors_chunks = []
-        mesh_verts_chunks = []
-        mesh_tris_chunks = []
-        mesh_colors_chunks = []
-
-        # mesh_tris contains triangle indices into mesh_vertices.
-        # When merging multiple shapes, indices must be offset by the
-        # cumulative vertex count of all previously merged shapes.
-        vert_count = 0
-
-        for data in shapes:
-            line_pts_chunks.append(data['line_pts'])
-            # one color per shape, repeated for every vertex (a view, copied by np.concatenate)
-            line_colors_chunks.append(np.broadcast_to(data['line_rgba'], (len(data['line_pts']), 4)))
-
-            if _has_mesh(data):
-                mesh_tris_chunks.append(data['mesh_tris'] + vert_count)
-                mesh_verts_chunks.append(data['mesh_vertices'])
-                mesh_colors_chunks.append(np.broadcast_to(data['mesh_rgba'], (len(data['mesh_tris']) // 3, 4)))
-                vert_count += len(data['mesh_vertices'])
-
-        line_pts = _concat(line_pts_chunks, (0, 2), np.float32)
-        line_colors = _concat(line_colors_chunks, (0, 4), np.float32)
-        mesh_vertices = _concat(mesh_verts_chunks, (0, 2), np.float32)
-        mesh_tris = _concat(mesh_tris_chunks, (0,), np.uint32)
-        mesh_colors = _concat(mesh_colors_chunks, (0, 4), np.float32)
-
-        # Updating mesh
-        if mesh is None:
-            if len(mesh_vertices) > 0:
-                mesh = self._layer_visual(bucket, 0, layer)
-            else:
-                self._drop_visual(bucket, 0, layer)
-        if mesh is not None:
-            mesh.visible = len(mesh_vertices) > 0
-            if len(mesh_vertices) > 0:
-                mesh.set_data(
-                    vertices=mesh_vertices,
-                    faces=mesh_tris.reshape((-1, 3)),
-                    face_colors=mesh_colors
-                )
-            else:
-                mesh.set_data()
-            mesh._bounds_changed()
-
-        # Updating line
-        if line is None:
-            if len(line_pts) > 0:
-                line = self._layer_visual(bucket, 1, layer)
-            else:
-                self._drop_visual(bucket, 1, layer)
-        if line is not None:
-            if len(line_pts) > 0:
-                line.visible = True
-                line.set_data(
-                    pos=line_pts,
-                    color=line_colors,
-                    width=self._line_width,
-                    connect='segments')
-            else:
-                line.visible = False
-            line._bounds_changed()
+        self.update_lock.release()
 
     def __update(self):
         """
-        Merges the internal buffers of the changed buckets, sets data to their visuals, redraws collection on scene.
-        A bucket that did not change is not touched.
+        Merges internal buffers, sets data to visuals, redraws collection on scene
         """
         # Skip if nothing has changed
         if not self._dirty:
             return
 
+        meshes = self._meshes + [self._top_mesh]
+        lines = self._lines + [self._top_line]
+        # Optimized: Phase 1 - Collect references (O(1) per shape)
+        layer_line_pts_chunks = [[] for _ in lines]
+        layer_mesh_verts_chunks = [[] for _ in meshes]
+        layer_mesh_tris_chunks = [[] for _ in meshes]
+        layer_mesh_colors_chunks = [[] for _ in meshes]
+        layer_line_colors_chunks = [[] for _ in lines]
+        
+        # Track cumulative vertex counts per layer for mesh_tris offsets
+        # mesh_tris contains triangle indices into mesh_vertices.
+        # When merging multiple shapes, indices must be offset by the
+        # cumulative vertex count of all previously merged shapes.
+        layer_vert_counts = [0] * len(meshes)
+
         # Lock sub-visuals updates
         self.update_lock.acquire(True)
-        try:
-            # Flags are cleared before the buffers are read: a change from another thread during the update marks
-            # its bucket again and is not lost
-            self._dirty = False
 
-            if self._line_width != self._built_width:
-                # the width is the same for all the lines of the collection
-                self._built_width = self._line_width
-                for b in list(self._buckets.values()):
-                    b.dirty = True
-                self._top_dirty = True
+        # Collect shape buffers
+        for key, data in list(self.data.items()):
+            if data['visible'] and 'line_pts' in data:
+                layer = len(self._meshes) if key in self._top_keys else data['layer']
+                layer_line_pts_chunks[layer].append(data['line_pts'])
+                # one color per shape, repeated for every vertex (a view, copied by np.concatenate)
+                layer_line_colors_chunks[layer].append(np.broadcast_to(data['line_rgba'], (len(data['line_pts']), 4)))
 
-            # Remove the visuals of the buckets that are empty
-            dead, self._dead = self._dead, []
-            for b in dead:
-                for layer in list(b.meshes):
-                    self._drop_visual(b, 0, layer)
-                for layer in list(b.lines):
-                    self._drop_visual(b, 1, layer)
+                if len(data['mesh_tris']) > 0 and len(data['mesh_vertices']) > 0:
+                    offset = layer_vert_counts[layer]
+                    layer_mesh_tris_chunks[layer].append(
+                        data['mesh_tris'] + offset
+                    )
+                    layer_mesh_verts_chunks[layer].append(data['mesh_vertices'])
+                    layer_mesh_colors_chunks[layer].append(
+                        np.broadcast_to(data['mesh_rgba'], (len(data['mesh_tris']) // 3, 4)))
+                    layer_vert_counts[layer] += len(data['mesh_vertices'])
 
-            # Set GPU state once, outside the loops (Step 1a optimization)
-            set_state(polygon_offset_fill=False)
+        # Phase 2: Single flatten per layer using np.concatenate
+        def _concat(chunks, empty_shape, dtype):
+            return np.concatenate(chunks) if chunks else np.empty(empty_shape, dtype=dtype)
 
-            for b in sorted(list(self._buckets.values()), key=lambda x: x.seq):
-                if not b.dirty:
-                    continue
-                b.dirty = False
-                per_layer = self._gather(list(b.keys), False)
-                for layer in range(self._layers):
-                    self._upload(None, None, per_layer[layer], b, layer)
+        line_pts = [_concat(layer_line_pts_chunks[i], (0, 2), np.float32) for i in range(len(lines))]
+        line_colors = [_concat(layer_line_colors_chunks[i], (0, 4), np.float32) for i in range(len(lines))]
+        mesh_vertices = [_concat(layer_mesh_verts_chunks[i], (0, 2), np.float32) for i in range(len(meshes))]
+        mesh_tris = [_concat(layer_mesh_tris_chunks[i], (0,), np.uint32) for i in range(len(meshes))]
+        mesh_colors = [_concat(layer_mesh_colors_chunks[i], (0, 4), np.float32) for i in range(len(meshes))]
 
-            if self._top_dirty:
-                self._top_dirty = False
-                self._upload(self._top_mesh, self._top_line, self._gather(self._top_order, True)[0], None, None)
+        # Set GPU state once, outside the mesh loop (Step 1a optimization)
+        set_state(polygon_offset_fill=False)
 
-            if self._rank_changed:
-                self._rank_changed = False
-                last = (self._layers + 1, 0, 0)     # e.g. the selection rectangle
-                # one slice assignment: list.sort() empties the list while it sorts, and the GUI thread can draw then
-                self._subvisuals[:] = sorted(self._subvisuals, key=lambda v: self._visual_rank.get(id(v), last))
+        # Updating meshes
+        for i, mesh in enumerate(meshes):
+            mesh.visible = len(mesh_vertices[i]) > 0
+            if len(mesh_vertices[i]) > 0:
+                mesh.set_data(
+                    vertices=mesh_vertices[i],
+                    faces=mesh_tris[i].reshape((-1, 3)),
+                    face_colors=mesh_colors[i]
+                )
+            else:
+                mesh.set_data()
 
-            self._bounds_changed()
-        except Exception:
-            # try again with everything on the next update
-            self.mark_dirty()
-            self._top_dirty = True
-            raise
-        finally:
-            self.update_lock.release()
+            mesh._bounds_changed()
+
+        # Updating lines
+        for i, line in enumerate(lines):
+            if len(line_pts[i]) > 0:
+                line.visible = True
+                line.set_data(
+                    pos=line_pts[i],
+                    color=line_colors[i],
+                    width=self._line_width,
+                    connect='segments')
+            else:
+                # line.clear_data()
+                line.visible = False
+
+            line._bounds_changed()
+
+        self._bounds_changed()
+        
+        # Reset dirty flag AFTER acquiring lock and completing update
+        # This prevents race conditions where another thread sets dirty
+        # between the initial check and the actual update
+        self._dirty = False
+        
+        self.update_lock.release()
 
     def _collect_results(self, indexes=None):
         """
@@ -1076,7 +963,6 @@ class ShapeCollectionVisual(CompoundVisual):
                 for k, r in zip(batch_keys, batch_data):
                     if k in self.data:
                         self.data[k] = r
-                        self._mark_key(k)
                         results_collected = True
             except Exception as e:
                 print("VisPyVisuals.ShapeCollectionVisual.redraw() --> Batch error = %s" % str(e))
@@ -1092,7 +978,6 @@ class ShapeCollectionVisual(CompoundVisual):
                     if i in self.data:
                         self.data[i] = self.results[i].get()[0]             # Store translated data
                         del self.results[i]
-                        self._mark_key(i)
                         results_collected = True
                 except Exception as e:
                     print("VisPyVisuals.ShapeCollectionVisual.redraw() --> Data error = %s. Indexes = %s" %
@@ -1115,7 +1000,8 @@ class ShapeCollectionVisual(CompoundVisual):
         a, b, d, e, xoff, yoff = (float(v) for v in matrix)
 
         # pool results of the keys (also of the other keys: same wait as in redraw())
-        self._collect_results(keys)
+        if self._collect_results(keys):
+            self._dirty = True
 
         data = self.data
         keys = [k for k in keys if k in data]
@@ -1170,7 +1056,7 @@ class ShapeCollectionVisual(CompoundVisual):
                     dk['mesh_vertices'] = mesh_parts[i]
                 if tri_parts is not None and tri_lens[i]:
                     dk['mesh_tris'] = tri_parts[i]
-                self._mark_key(k)
+            self._dirty = True
         finally:
             self.update_lock.release()
 
@@ -1186,7 +1072,8 @@ class ShapeCollectionVisual(CompoundVisual):
         :param update_colors:
         """
         # Mark dirty if pool results were collected (data changed)
-        self._collect_results(indexes)
+        if self._collect_results(indexes):
+            self._dirty = True
 
         if update_colors is None or update_colors is False:
             self.__update()

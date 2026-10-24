@@ -50,24 +50,25 @@ class TestShapeGroupVisibility(unittest.TestCase):
         _add_squares(self.group, 3)
         self.group.redraw()
         # layer 1 is the default layer of the shapes
-        self.assertEqual(len(self.collection.layer_visuals(1)[1]), 1)
+        self.line = self.collection._lines[1]
+        self.assertTrue(self.line.visible)
 
     def test_visible_setter_updates_canvas(self):
         self.group.visible = False
-        self.assertEqual(self.collection.layer_visuals(1), ([], []))
+        self.assertFalse(self.line.visible)
         self.assertTrue(all(not d['visible'] for d in self.collection.data.values()))
 
         self.group.visible = True
-        self.assertEqual(len(self.collection.layer_visuals(1)[1]), 1)
+        self.assertTrue(self.line.visible)
 
     def test_update_visibility_with_indexes(self):
         keys = list(self.group._indexes)
         self.group.update_visibility(False, indexes=keys[:2])
         self.assertEqual([self.collection.data[k]['visible'] for k in keys], [False, False, True])
-        self.assertEqual(len(self.collection.layer_visuals(1)[1][0]._pos), 8)
+        self.assertTrue(self.line.visible)
 
         self.group.update_visibility(False, indexes=keys[2:])
-        self.assertEqual(self.collection.layer_visuals(1), ([], []))
+        self.assertFalse(self.line.visible)
 
 class TestMoveToTop(unittest.TestCase):
 
@@ -97,7 +98,7 @@ class TestMoveToTop(unittest.TestCase):
         self.assertEqual(len(self.collection._top_mesh.mesh_data.get_vertices()), 12)
         paint.move_to_top()
         self.assertEqual(len(self.collection._top_mesh.mesh_data.get_vertices()), 4)
-        self.assertEqual(sum(len(m.mesh_data.get_vertices()) for m in self.collection.layer_visuals(1)[0]), 20)
+        self.assertEqual(len(self.collection._meshes[1].mesh_data.get_vertices()), 20)
         self.assertTrue(all(self.collection.data[k]['layer'] == 1 for k in self.big._indexes))
         paint.visible = False
         self.assertFalse(self.collection._top_line.visible)
@@ -109,7 +110,7 @@ class TestMoveToTop(unittest.TestCase):
         _add_squares(self.small, 1)
         self.collection.redraw()
         self.assertFalse(self.collection._top_mesh.visible)
-        self.assertEqual(len(self.collection.layer_visuals(1)[0]), 1)
+        self.assertTrue(self.collection._meshes[1].visible)
 
 
 class TestSelectionRedraw(unittest.TestCase):
