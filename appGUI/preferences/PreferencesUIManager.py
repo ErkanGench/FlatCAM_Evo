@@ -91,6 +91,7 @@ class PreferencesUIManager(QtCore.QObject):
             "global_custom_titlebar": self.ui.general_pref_form.general_gui_group.custom_titlebar_cb,
             "global_layout": self.ui.general_pref_form.general_gui_group.layout_combo,
             "global_hover_shape": self.ui.general_pref_form.general_gui_group.hover_cb,
+            "global_joined_redraws": self.ui.general_pref_form.general_gui_group.joined_redraws_cb,
             "global_selection_shape": self.ui.general_pref_form.general_gui_group.selection_cb,
             "global_selection_shape_as_line": self.ui.general_pref_form.general_gui_group.selection_outline_cb,
 

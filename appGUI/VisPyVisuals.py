@@ -1184,6 +1184,14 @@ class ShapeCollectionVisual(CompoundVisual):
         with self.update_lock:
             pass
 
+    def set_deferred(self, value):
+        """
+        Turns the joined (deferred) redraws on or off. Turned off, a pending update is applied at once.
+        """
+        if self._deferred and not value:
+            self.flush()
+        self._deferred = bool(value)
+
     def lock_updates(self):
         self.update_lock.acquire(True)
 

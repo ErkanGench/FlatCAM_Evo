@@ -180,7 +180,8 @@ class PlotCanvas3d(QtCore.QObject, scene.SceneCanvas):
         self.shape_collections = []
 
         # deferred: the redraws of a burst of object plots are joined into one rebuild
-        self.shape_collection = self.new_shape_collection(deferred=True)
+        self.shape_collection = self.new_shape_collection(
+            deferred=_database_option(self.fcapp, 'global_joined_redraws') is not False)
 
         self.text_collection = self.new_text_collection()
         self.text_collection.enabled = True

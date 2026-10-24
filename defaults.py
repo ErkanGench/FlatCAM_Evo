@@ -156,6 +156,7 @@ class AppDefaults:
         "global_hover_shape": False,
         "global_selection_shape": True,
         "global_selection_shape_as_line": False,
+        "global_joined_redraws": True,
 
         "global_sel_fill": '#a5a5ffbf',
         "global_sel_line": '#0000ffbf',

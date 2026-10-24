@@ -257,6 +257,15 @@ class TestDeferredRedraw(unittest.TestCase):
         colors = self.collection._lines[0]._color
         self.assertTrue(np.all(colors == (0.0, 0.0, 1.0, 1.0)))
 
+    def test_turned_off_applies_pending_and_later_redraws_at_once(self):
+        self._burst(2)
+        self.collection.set_deferred(False)
+        self.assertFalse(self.collection._dirty)
+        self.assertEqual(len(self.collection._meshes[0].mesh_data.get_vertices()), 8)
+        self._burst(1)
+        self.assertFalse(self.collection._dirty)
+        self.assertEqual(len(self.collection._meshes[0].mesh_data.get_vertices()), 12)
+
 
 if __name__ == '__main__':
     unittest.main()

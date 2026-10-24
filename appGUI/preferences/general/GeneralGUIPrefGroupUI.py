@@ -182,6 +182,17 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         )
         grid0.addWidget(self.selection_outline_cb, 13, 0, 1, 3)
 
+        # Joined redraws of the object plots
+        self.joined_redraws_cb = FCCheckBox('%s' % _('Joined Redraws'))
+        self.joined_redraws_cb.setToolTip(
+            _("Checked: the canvas joins the redraws of many object plots into one update.\n"
+              "Opening many objects is faster, but a plot can show up to 0.15 s later.\n"
+              "Unchecked: the canvas updates after each object plot.\n"
+              "Each plot shows at once, but many objects plot slower.")
+        )
+        grid0.addWidget(self.joined_redraws_cb, 14, 0, 1, 3)
+        self.joined_redraws_cb.toggled.connect(self.on_joined_redraws)
+
         # Font Size
         self.font_size_lbl = FCLabel('%s:' % _("Font Size"))
         self.font_size_lbl.setToolTip(
@@ -541,6 +552,12 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         msgbox.exec()
         if msgbox.clickedButton() == bt_yes:
             self.app.on_app_restart()
+
+    def on_joined_redraws(self, state):
+        # the legacy (Matplotlib) canvas has no joined redraws
+        collection = getattr(getattr(self.app, 'plotcanvas', None), 'shape_collection', None)
+        if hasattr(collection, 'set_deferred'):
+            collection.set_deferred(state)
 
     @staticmethod
     def handle_font_size(app, val):
