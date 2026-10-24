@@ -84,3 +84,51 @@ def test_abort_stops_the_route_walk():
     cnc.app.abort_flag = True
     with pytest.raises(GracefulException):
         cnc.optimized_ortools_basic(locations=[(0, 0), (1, 1)], opt_time=1)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# solve in the process pool: the OR-Tools search holds the GIL for its whole time limit
+# ---------------------------------------------------------------------------------------------------------------
+
+@pytest.fixture(scope='module')
+def pool():
+    from multiprocessing import get_context
+    with get_context('spawn').Pool(1) as p:
+        p.apply(time.sleep, (0,))     # the child is started before the timed part
+        yield p
+
+
+def _random_locs(count):
+    random.seed(7)
+    return [(random.uniform(0, 100), random.uniform(0, 100)) for _ in range(count)]
+
+
+def test_solve_in_the_pool_does_not_stop_the_other_threads(pool):
+    import threading
+    cnc = make_cnc()
+    cnc.app.pool = pool
+    locs = _random_locs(300)
+    result = {}
+    worker = threading.Thread(
+        target=lambda: result.setdefault('route', cnc.optimized_ortools_meta(locations=locs, opt_time=1)))
+    worker.start()
+    gaps, last = [], time.perf_counter()
+    while worker.is_alive():
+        time.sleep(0.01)
+        now = time.perf_counter()
+        gaps.append(now - last)
+        last = now
+    assert sorted(result['route']) == list(range(len(locs)))
+    assert max(gaps) < 0.3
+
+
+def test_abort_stops_the_wait_for_the_pool(pool):
+    import threading
+    cnc = make_cnc()
+    cnc.app.pool = pool
+    threading.Timer(0.2, lambda: setattr(cnc.app, 'abort_flag', True)).start()
+    t0 = time.perf_counter()
+    with pytest.raises(GracefulException):
+        cnc.optimized_ortools_meta(locations=_random_locs(300), opt_time=3)
+    assert time.perf_counter() - t0 < 1.5
+    pool.apply(time.sleep, (0,))      # the pool is free again for the next test

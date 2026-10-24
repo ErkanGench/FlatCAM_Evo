@@ -11,6 +11,7 @@ from PyQt6 import QtWidgets     # noqa
 from appCommon.Common import GracefulException as grace
 from appCommon.SafeEval import safe_eval
 from appCommon.PathOrder import order_paths, order_points
+from appCommon import RouteSolver
 
 # from scipy.spatial import KDTree, Delaunay
 # from scipy.spatial import Delaunay
@@ -3114,54 +3115,34 @@ class CNCjob(Geometry):
                 text = text.replace(match, str(value))
             return text
 
-    # OR-Tools needs integer arc costs. The distances are multiplied by this factor before they are rounded, so
-    # 2 holes less than 1 unit (mm or inch) apart do not get a distance of 0.
-    ORTOOLS_DISTANCE_SCALE = 1000
-    # OR-Tools search time in seconds if the option is 0
-    ORTOOLS_DEFAULT_SEARCH_TIME = 3
+    ORTOOLS_DISTANCE_SCALE = RouteSolver.DISTANCE_SCALE
+    ORTOOLS_DEFAULT_SEARCH_TIME = RouteSolver.DEFAULT_SEARCH_TIME
 
     @staticmethod
-    def ortools_distance_matrix(locs, scale=ORTOOLS_DISTANCE_SCALE):
-        """
-        Distance matrix of the locations for OR-Tools ``RegisterTransitMatrix``: the Euclidean distances multiplied
-        by ``scale`` and rounded to integers.
+    def ortools_distance_matrix(locs, scale=RouteSolver.DISTANCE_SCALE):
+        return RouteSolver.distance_matrix(locs, scale)
 
-        :param locs:    list of (x, y) tuples
-        :param scale:   factor applied to the distances before the rounding
-        :return:        list of lists of int, the item [i][j] is the cost from location i to location j
-        """
-        pts = np.asarray(locs, dtype=float).reshape(-1, 2)
-        dx = pts[:, 0, None] - pts[None, :, 0]
-        dy = pts[:, 1, None] - pts[None, :, 1]
-        return np.rint(np.hypot(dx, dy) * scale).astype(np.int64).tolist()
+    @staticmethod
+    def ortools_set_time_limit(search_parameters, opt_time):
+        RouteSolver.set_time_limit(search_parameters, opt_time)
 
-    @classmethod
-    def ortools_set_time_limit(cls, search_parameters, opt_time):
-        """
-        Set the time limit of an OR-Tools search. Without a limit the local search runs until no move makes the path
-        shorter, which takes minutes for 1000 holes or more.
-
-        :param search_parameters:   OR-Tools search parameters, changed in place
-        :param opt_time:            search time in seconds (fractions are kept); 0 or None selects
-                                    ORTOOLS_DEFAULT_SEARCH_TIME
-        """
-        seconds = float(opt_time) if opt_time else 0.0
-        if seconds <= 0:
-            seconds = cls.ORTOOLS_DEFAULT_SEARCH_TIME
-        search_parameters.time_limit.FromMilliseconds(int(seconds * 1000))
-
-    def _ortools_route(self, manager, routing, assignment):
-        """The location indexes of the route of an OR-Tools solution, in the order of the route."""
-        route = []
-        node = routing.Start(0)
-        while not routing.IsEnd(node):
-            if self.app.abort_flag:
-                # graceful abort requested by the user
-                raise grace
-
-            route.append(manager.IndexToNode(node))
-            node = assignment.Value(routing.NextVar(node))
-        return route
+    def _ortools_solve(self, locations, depot, metaheuristic, opt_time):
+        """(route, objective) of the OR-Tools search; in the process pool if the app has one."""
+        pool = getattr(self.app, 'pool', None)
+        if pool is None:
+            route, objective = RouteSolver.solve_route(locations, depot, metaheuristic, opt_time)
+        else:
+            res = pool.apply_async(RouteSolver.solve_route, (locations, depot, metaheuristic, opt_time))
+            while not res.ready():
+                res.wait(0.1)
+                if self.app.abort_flag:
+                    # the child ends its search on its own
+                    raise grace
+            route, objective = res.get()
+        if self.app.abort_flag:
+            # graceful abort requested by the user
+            raise grace
+        return route, objective
 
     @staticmethod
     def create_tool_data_array(points):
@@ -3172,36 +3153,16 @@ class CNCjob(Geometry):
         optimized_path = []
 
         tsp_size = len(locations)
-        num_routes = 1  # The number of routes, which is 1 in the TSP.
-        # Nodes are indexed from 0 to tsp_size - 1. The depot is the starting node of the route.
-
         depot = 0 if start is None else start
 
-        # Create routing model.
         if tsp_size == 0:
             self.app.log.warning('OR-tools metaheuristics - Specify an instance greater than 0.')
             return optimized_path
 
-        manager = pywrapcp.RoutingIndexManager(tsp_size, num_routes, depot)
-        routing = pywrapcp.RoutingModel(manager)
-        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-        search_parameters.local_search_metaheuristic = (
-            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
-
-        self.ortools_set_time_limit(search_parameters, opt_time)
-
-        # the matrix is evaluated inside OR-Tools, without a Python call for each arc
-        transit_index = routing.RegisterTransitMatrix(self.ortools_distance_matrix(locations))
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_index)
-
-        # Solve, returns a solution if any.
-        assignment = routing.SolveWithParameters(search_parameters)
-
-        if assignment:
-            # Solution cost.
-            self.app.log.info("OR-tools metaheuristics - Total distance: %s" % str(
-                assignment.ObjectiveValue() / self.ORTOOLS_DISTANCE_SCALE))
-            optimized_path = self._ortools_route(manager, routing, assignment)
+        route, objective = self._ortools_solve(locations, depot, True, opt_time)
+        if route is not None:
+            self.app.log.info("OR-tools metaheuristics - Total distance: %s" % str(objective))
+            optimized_path = route
         else:
             self.app.log.warning('OR-tools metaheuristics - No solution found.')
 
@@ -3215,34 +3176,12 @@ class CNCjob(Geometry):
         if tsp_size == 0:
             self.app.log.warning('Specify an instance greater than 0.')
             return []
-        num_routes = 1  # The number of routes, which is 1 in the TSP.
-        # Nodes are indexed from 0 to tsp_size - 1. The depot is the starting node of the route.
         depot = 0 if start is None else start
-        # Create routing index manager
-        manager = pywrapcp.RoutingIndexManager(tsp_size, num_routes, depot)
 
-        # Create routing model.
-        routing = pywrapcp.RoutingModel(manager)
-
-        # the matrix is evaluated inside OR-Tools, without a Python call for each arc
-        transit_index = routing.RegisterTransitMatrix(self.ortools_distance_matrix(locations))
-        # Define cost of each arc.
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_index)
-
-        # Setting first solution heuristic.
-        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-        search_parameters.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
-        # the local search after the first solution stops at this limit
-        self.ortools_set_time_limit(search_parameters, opt_time)
-
-        # Solve, returns a solution if any.
-        solution = routing.SolveWithParameters(search_parameters)
-
-        if solution:
-            # Solution cost.
-            self.app.log.info("Total distance: {}".format(solution.ObjectiveValue() / self.ORTOOLS_DISTANCE_SCALE))
-            optimized_path = self._ortools_route(manager, routing, solution)
+        route, objective = self._ortools_solve(locations, depot, False, opt_time)
+        if route is not None:
+            self.app.log.info("Total distance: {}".format(objective))
+            optimized_path = route
         else:
             self.app.log.warning('No solution found.')
 
