@@ -48,8 +48,8 @@ class ToolsMarkersPrefGroupUI(OptionsGroupUI):
             {"label": _("Cross"), "value": "c"},
         ])
 
-        param_grid.addWidget(self.type_label, 2, 0)
-        param_grid.addWidget(self.type_radio, 2, 1)
+        param_grid.addWidget(self.type_label, 0, 0)
+        param_grid.addWidget(self.type_radio, 0, 1)
         
         # Thickness #
         self.thick_label = FCLabel('%s:' % _("Thickness"))
@@ -57,13 +57,13 @@ class ToolsMarkersPrefGroupUI(OptionsGroupUI):
             _("The thickness of the line that makes the corner marker.")
         )
         self.thick_entry = FCDoubleSpinner()
-        self.thick_entry.set_range(0.0000, 9.9999)
+        self.thick_entry.set_range(10 ** -self.decimals, 10.0000)
         self.thick_entry.set_precision(self.decimals)
         self.thick_entry.setWrapping(True)
         self.thick_entry.setSingleStep(10 ** -self.decimals)
 
-        param_grid.addWidget(self.thick_label, 4, 0)
-        param_grid.addWidget(self.thick_entry, 4, 1)
+        param_grid.addWidget(self.thick_label, 1, 0)
+        param_grid.addWidget(self.thick_entry, 1, 1)
 
         # Length #
         self.l_label = FCLabel('%s:' % _("Length"))
@@ -71,12 +71,12 @@ class ToolsMarkersPrefGroupUI(OptionsGroupUI):
             _("The length of the line that makes the corner marker.")
         )
         self.l_entry = FCDoubleSpinner()
-        self.l_entry.set_range(-10000.0000, 10000.0000)
+        self.l_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.l_entry.set_precision(self.decimals)
         self.l_entry.setSingleStep(10 ** -self.decimals)
 
-        param_grid.addWidget(self.l_label, 10, 0)
-        param_grid.addWidget(self.l_entry, 10, 1)
+        param_grid.addWidget(self.l_label, 2, 0)
+        param_grid.addWidget(self.l_entry, 2, 1)
 
         # Drill Tool Diameter
         self.drill_dia_label = FCLabel('%s:' % _("Drill Dia"))
@@ -88,13 +88,15 @@ class ToolsMarkersPrefGroupUI(OptionsGroupUI):
         self.drill_dia_entry.set_precision(self.decimals)
         self.drill_dia_entry.setWrapping(True)
 
-        param_grid.addWidget(self.drill_dia_label, 12, 0)
-        param_grid.addWidget(self.drill_dia_entry, 12, 1)
+        param_grid.addWidget(self.drill_dia_label, 3, 0)
+        param_grid.addWidget(self.drill_dia_entry, 3, 1)
 
         # Offset Reference
         self.ref_label = FCLabel('%s:' % _("Reference"))
         self.ref_label.setToolTip(
-            _("Shape of the marker.")
+            _("Reference for offseting the marker locations.\n"
+              "- Edge - referenced from the bounding box edge\n"
+              "- Center - referenced from the bounding box center")
         )
 
         self.ref_radio = RadioSet([
@@ -121,28 +123,28 @@ class ToolsMarkersPrefGroupUI(OptionsGroupUI):
         # Offset X #
         self.offset_x_label = FCLabel('%s X:' % _("Offset"))
         self.offset_x_label.setToolTip(
-            _("Bounding box margin.")
+            _("Offset on the X axis.")
         )
         self.offset_x_entry = FCDoubleSpinner()
         self.offset_x_entry.set_range(-10000.0000, 10000.0000)
         self.offset_x_entry.set_precision(self.decimals)
         self.offset_x_entry.setSingleStep(0.1)
 
-        off_grid.addWidget(self.offset_x_label, 2, 0)
-        off_grid.addWidget(self.offset_x_entry, 2, 1)
+        off_grid.addWidget(self.offset_x_label, 1, 0)
+        off_grid.addWidget(self.offset_x_entry, 1, 1)
 
         # Offset Y #
         self.offset_y_label = FCLabel('%s Y:' % _("Offset"))
         self.offset_y_label.setToolTip(
-            _("Bounding box margin.")
+            _("Offset on the Y axis.")
         )
         self.offset_y_entry = FCDoubleSpinner()
         self.offset_y_entry.set_range(-10000.0000, 10000.0000)
         self.offset_y_entry.set_precision(self.decimals)
         self.offset_y_entry.setSingleStep(0.1)
 
-        off_grid.addWidget(self.offset_y_label, 3, 0)
-        off_grid.addWidget(self.offset_y_entry, 3, 1)
+        off_grid.addWidget(self.offset_y_label, 2, 0)
+        off_grid.addWidget(self.offset_y_entry, 2, 1)
 
         GLay.set_common_column_size([param_grid, off_grid], 0)
 

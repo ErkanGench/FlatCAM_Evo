@@ -19,6 +19,7 @@ class MarkersUI:
         self.app = app
         self.decimals = self.app.decimals
         self.layout = layout
+        self.units = self.app.app_units.lower()
 
         self.title_box = QtWidgets.QHBoxLayout()
         self.layout.addLayout(self.title_box)
@@ -81,23 +82,25 @@ class MarkersUI:
             _("The thickness of the line that makes the corner marker.")
         )
         self.thick_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        self.thick_entry.set_range(0.0000, 10.0000)
+        self.thick_entry.set_range(10 ** -self.decimals, 10.0000)
         self.thick_entry.set_precision(self.decimals)
         self.thick_entry.setWrapping(True)
         self.thick_entry.setSingleStep(10 ** -self.decimals)
         param_grid.addWidget(self.thick_label, 4, 0)
         param_grid.addWidget(self.thick_entry, 4, 1)
+        param_grid.addWidget(FCLabel("%s" % self.units), 4, 2)
 
         self.l_label = FCLabel('%s:' % _("Length"))
         self.l_label.setToolTip(
             _("The length of the line that makes the corner marker.")
         )
         self.l_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        self.l_entry.set_range(-10000.0000, 10000.0000)
+        self.l_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.l_entry.set_precision(self.decimals)
         self.l_entry.setSingleStep(10 ** -self.decimals)
         param_grid.addWidget(self.l_label, 6, 0)
         param_grid.addWidget(self.l_entry, 6, 1)
+        param_grid.addWidget(FCLabel("%s" % self.units), 6, 2)
 
         # Offset Frame
         self.offset_title_label = FCLabel('%s' % _("Offset"), color='magenta', bold=True)
@@ -131,6 +134,7 @@ class MarkersUI:
         self.offset_x_entry.setSingleStep(0.1)
         off_grid.addWidget(self.offset_x_label, 2, 0)
         off_grid.addWidget(self.offset_x_entry, 2, 1)
+        off_grid.addWidget(FCLabel("%s" % self.units), 2, 2)
 
         self.offset_y_label = FCLabel('%s Y:' % _("Offset"))
         self.offset_y_label.setToolTip(
@@ -142,13 +146,14 @@ class MarkersUI:
         self.offset_y_entry.setSingleStep(0.1)
         off_grid.addWidget(self.offset_y_label, 3, 0)
         off_grid.addWidget(self.offset_y_entry, 3, 1)
+        off_grid.addWidget(FCLabel("%s" % self.units), 3, 2)
 
         self.offset_link_button = QtWidgets.QToolButton()
         self.offset_link_button.setIcon(QtGui.QIcon(self.app.resource_location + '/link32.png'))
         self.offset_link_button.setSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding,
                                               QtWidgets.QSizePolicy.Policy.Expanding)
         self.offset_link_button.setCheckable(True)
-        off_grid.addWidget(self.offset_link_button, 2, 2, 2, 1)
+        off_grid.addWidget(self.offset_link_button, 2, 3, 2, 1)
 
         # Locations Frame
         self.locs_label = FCLabel('%s' % _("Locations"), color='red', bold=True)
@@ -176,8 +181,8 @@ class MarkersUI:
         grid_loc.addWidget(self.toggle_all_cb, 6, 0, 1, 2)
 
         # Selection Frame
-        self.mode_label = FCLabel('%s' % _("Selection"), color='green', bold=True)
-        self.tools_box.addWidget(self.mode_label)
+        self.sel_label = FCLabel('%s' % _("Selection"), color='green', bold=True)
+        self.tools_box.addWidget(self.sel_label)
         self.s_frame = FCFrame()
         self.tools_box.addWidget(self.s_frame)
         grid_sel = GLay(v_spacing=5, h_spacing=3)
@@ -229,6 +234,7 @@ class MarkersUI:
         self.drill_dia_entry.setWrapping(True)
         grid_drill.addWidget(self.drill_dia_label, 0, 0)
         grid_drill.addWidget(self.drill_dia_entry, 0, 1)
+        grid_drill.addWidget(FCLabel("%s" % self.units), 0, 2)
         self.drill_button = FCButton(_("Create Excellon Object"), bold=True)
         self.drill_button.setIcon(QtGui.QIcon(self.app.resource_location + '/drill32.png'))
         self.drill_button.setToolTip(

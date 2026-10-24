@@ -35,7 +35,6 @@ class ToolMarkers(AppTool):
         AppTool.__init__(self, app)
 
         self.app = app
-        self.canvas = self.app.plotcanvas
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         self.cursor_color_memory = None
@@ -61,12 +60,6 @@ class ToolMarkers(AppTool):
         # Objects involved in Copper thieving
         self.grb_object = None
 
-        # store the flattened geometry here:
-        self.flat_geometry = []
-
-        # Tool properties
-        self.fid_dia = None
-
         self.grb_steps_per_circle = self.app.options.get(
             "gerber_circle_steps",
             app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps")))
@@ -75,6 +68,9 @@ class ToolMarkers(AppTool):
 
         # storage for temporary shapes when adding manual markers
         self.temp_shapes = self.app.sel_shapes
+
+        # app signal: connect only once, the plugin UI (and its widgets) is rebuilt on every run
+        self.app.proj_selection_changed.connect(self.on_object_selection_changed)
 
     def on_insert_type_changed(self, val):
         obj_type = 2 if val == 'geo' else 0
@@ -174,10 +170,10 @@ class ToolMarkers(AppTool):
         self.ui.check_button.clicked.connect(self.on_create_check_object)
         self.ui.mode_combo.currentIndexChanged.connect(self.on_selection_changed)
         self.ui.insert_type_radio.activated_custom.connect(self.on_insert_type_changed)
-        self.app.proj_selection_changed.connect(self.on_object_selection_changed)
-
         self.ui.big_cursor_cb.stateChanged.connect(self.on_cursor_change)
         self.ui.insert_markers_button.clicked.connect(self.on_insert_markers_in_external_objects)
+        # set_tool_ui() rebuilds the UI, so defer it until the button's own signal returns
+        self.ui.reset_button.clicked.connect(lambda: QtCore.QTimer.singleShot(0, self.set_tool_ui))
 
     def set_tool_ui(self):
         self.units = self.app.app_units
@@ -298,7 +294,6 @@ class ToolMarkers(AppTool):
                 self.app.app_cursor.enabled = True
             else:
                 self.app.on_cursor_type(val="small", control_cursor=True)
-                self.app.plotcanvas.cursor_color = self.cursor_color_memory
 
             # it works only with cross markers
             self.ui.type_radio.set_value('c')
@@ -315,15 +310,8 @@ class ToolMarkers(AppTool):
         bl_state = self.ui.bl_cb.get_value()
         br_state = self.ui.br_cb.get_value()
 
-        # get the Gerber object on which the corner marker will be inserted
-        selection_index = self.ui.object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.object_combo.rootModelIndex())
-
-        try:
-            self.grb_object = model_index.internalPointer().obj
-        except Exception as e:
-            self.app.log.error("ToolMarkers.add_markers() --> %s" % str(e))
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
+        self.grb_object = self._selected_gerber()
+        if self.grb_object is None:
             self.app.call_source = "app"
             return
 
@@ -345,20 +333,13 @@ class ToolMarkers(AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
             return
 
-        self.on_exit(ret_val)
+        self.on_exit()
 
     def handle_manual_placement(self):
         # self.app.inform.emit('[ERROR_NOTCL] %s' % "Not implemented yet.")
 
-        # get the Gerber object on which the corner marker will be inserted
-        selection_index = self.ui.object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.object_combo.rootModelIndex())
-
-        try:
-            self.grb_object = model_index.internalPointer().obj
-        except Exception as e:
-            self.app.log.error("ToolMarkers.add_markers() --> %s" % str(e))
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
+        self.grb_object = self._selected_gerber()
+        if self.grb_object is None:
             self.on_exit()
             return
 
@@ -381,15 +362,8 @@ class ToolMarkers(AppTool):
         self.points['manual'].append(location)
         self.draw_utility_geometry(pos=location)
 
-        # get the Gerber object on which the corner marker will be inserted
-        selection_index = self.ui.object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.object_combo.rootModelIndex())
-
-        try:
-            self.grb_object = model_index.internalPointer().obj
-        except Exception as e:
-            self.app.log.error("ToolMarkers.add_markers() --> %s" % str(e))
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
+        self.grb_object = self._selected_gerber()
+        if self.grb_object is None:
             self.on_exit()
             return
 
@@ -422,6 +396,22 @@ class ToolMarkers(AppTool):
 
         return return_val
 
+    def _selected_gerber(self):
+        """
+        Get the Gerber object currently selected in the object combo.
+
+        :return:    the Gerber object or None (an error is logged and the user is warned)
+        """
+        selection_index = self.ui.object_combo.currentIndex()
+        model_index = self.app.collection.index(selection_index, 0, self.ui.object_combo.rootModelIndex())
+
+        try:
+            return model_index.internalPointer().obj
+        except Exception as e:
+            self.app.log.error("ToolMarkers._selected_gerber() --> %s" % str(e))
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
+            return None
+
     def offset_values(self, offset_reference=None, offset_x=None, offset_y=None):
         """
         Will offset a set of x, y coordinates depending on the chosen reference
@@ -432,8 +422,8 @@ class ToolMarkers(AppTool):
         :type offset_x:             float
         :param offset_y:            value to offset on Y axis
         :type offset_y:             float
-        :return:                    a tuple of offsets (x, y)
-        :rtype:                     tuple
+        :return:                    a tuple of offsets (x, y) or None if the reference object is not available
+        :rtype:                     tuple | None
         """
         if offset_reference is None:
             offset_reference = self.ui.ref_radio.get_value()
@@ -443,17 +433,9 @@ class ToolMarkers(AppTool):
             offset_y = self.ui.offset_y_entry.get_value()
 
         if offset_reference == 'c':  # reference from the bounding box center
-            # get the Gerber object on which the corner marker will be inserted
-            selection_index = self.ui.object_combo.currentIndex()
-            model_index = self.app.collection.index(selection_index, 0, self.ui.object_combo.rootModelIndex())
-
-            try:
-                self.grb_object = model_index.internalPointer().obj
-            except Exception as e:
-                self.app.log.error("ToolMarkers.add_markers() --> %s" % str(e))
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
-                self.on_exit()
-                return
+            self.grb_object = self._selected_gerber()
+            if self.grb_object is None:
+                return None
 
             xmin, ymin, xmax, ymax = self.grb_object.bounds()
             center_x = (xmax - xmin) / 2
@@ -477,7 +459,10 @@ class ToolMarkers(AppTool):
         line_length = self.ui.l_entry.get_value() / 2.0
         mode = self.ui.mode_combo.get_value()
 
-        offset_x, offset_y = self.offset_values()
+        offsets = self.offset_values()
+        if offsets is None:
+            return 'fail'
+        offset_x, offset_y = offsets
 
         if not points_storage:
             self.app.inform.emit("[ERROR_NOTCL] %s." % _("Please select at least a location"))
@@ -522,7 +507,7 @@ class ToolMarkers(AppTool):
 
             grb_obj.regenerate_source(name=outname)
 
-        ret = self.new_object('gerber', outname, initialize, source=self.grb_object, plot=True, autoselected=False)
+        ret = self.new_object('gerber', outname, initialize, source=new_grb_obj, plot=True, autoselected=False)
 
         return ret
 
@@ -575,7 +560,7 @@ class ToolMarkers(AppTool):
             geo_obj.multigeo = True
             geo_obj.tools = deepcopy(new_tools)
 
-        ret = self.new_object('geometry', outname, initialize, source=self.grb_object, plot=True, autoselected=False)
+        ret = self.new_object('geometry', outname, initialize, source=new_geo_obj, plot=True, autoselected=False)
 
         return ret
 
@@ -594,15 +579,8 @@ class ToolMarkers(AppTool):
         bl_state = self.ui.bl_cb.get_value()
         br_state = self.ui.br_cb.get_value()
 
-        # get the Gerber object on which the corner marker will be inserted
-        selection_index = self.ui.object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.object_combo.rootModelIndex())
-
-        try:
-            self.grb_object = model_index.internalPointer().obj
-        except Exception as e:
-            self.app.log.error("ToolMarkers.add_markers() --> %s" % str(e))
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
+        self.grb_object = self._selected_gerber()
+        if self.grb_object is None:
             self.app.call_source = "app"
             return
 
@@ -613,7 +591,11 @@ class ToolMarkers(AppTool):
             return
 
         xmin, ymin, xmax, ymax = self.grb_object.bounds()
-        offset_x, offset_y = self.offset_values()
+        offsets = self.offset_values()
+        if offsets is None:
+            self.app.call_source = "app"
+            return
+        offset_x, offset_y = offsets
 
         if 'manual' in self.points and not self.points['manual']:
             self.app.inform.emit("[ERROR_NOTCL] %s." % _("Please select at least a location"))
@@ -655,15 +637,8 @@ class ToolMarkers(AppTool):
         bl_state = self.ui.bl_cb.get_value()
         br_state = self.ui.br_cb.get_value()
 
-        # get the Gerber object on which the corner marker will be inserted
-        selection_index = self.ui.object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.object_combo.rootModelIndex())
-
-        try:
-            self.grb_object = model_index.internalPointer().obj
-        except Exception as e:
-            self.app.log.error("ToolMarkers.add_markers() --> %s" % str(e))
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
+        self.grb_object = self._selected_gerber()
+        if self.grb_object is None:
             self.app.call_source = "app"
             return
 
@@ -674,7 +649,11 @@ class ToolMarkers(AppTool):
             return
 
         xmin, ymin, xmax, ymax = self.grb_object.bounds()
-        offset_x, offset_y = self.offset_values()
+        offsets = self.offset_values()
+        if offsets is None:
+            self.app.call_source = "app"
+            return
+        offset_x, offset_y = offsets
 
         if 'manual' in self.points and not self.points['manual']:
             self.app.inform.emit("[ERROR_NOTCL] %s." % _("Please select at least a location"))
@@ -694,7 +673,7 @@ class ToolMarkers(AppTool):
             new_obj.create_geometry()
             new_obj.obj_options.update({
                 'name': outname,
-                'tools_drill_cutz': -0.1,
+                'tools_drill_cutz': -0.1 if self.units == 'MM' else -0.004,
                 'tools_drill_ppname_e': 'Check_points'
             })
             new_obj.regenerate_source()
@@ -706,7 +685,7 @@ class ToolMarkers(AppTool):
         if ret_val == 'fail':
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
         else:
-            self.app.inform.emit('[success] %s' % _("Excellon object with corner drills created."))
+            self.app.inform.emit('[success] %s' % _("Excellon object with verification points created."))
 
     def on_insert_markers_in_external_objects(self):
         obj_type = self.ui.insert_type_radio.get_value()    # values in ["grb", "geo"]
@@ -757,33 +736,14 @@ class ToolMarkers(AppTool):
     def on_points_changed(self, val=None):
         MarkersUI.on_points_changed(self.ui, self.points)
 
-    def replot(self, obj, run_thread=True):
-        def worker_task():
-            with self.app.proc_container.new('%s ...' % _("Plotting")):
-                obj.plot()
-                self.app.app_obj.object_plotted.emit(obj)
-
-        if run_thread:
-            self.app.worker_task.emit({'fcn': worker_task, 'params': []})
-        else:
-            worker_task()
-
-    def on_exit(self, corner_gerber_obj=None, cancelled=None, ok=True):
+    def on_exit(self, cancelled=None, ok=True):
         self.clear_utility_geometry()
 
         # restore cursor
         self.app.on_cursor_type(val=self.old_cursor_type, control_cursor=False)
-        self.app.plotcanvas.cursor_color = self.cursor_color_memory
-
-        # plot the object
-        if corner_gerber_obj:
-            try:
-                for ob in corner_gerber_obj:
-                    self.replot(obj=ob)
-            except (AttributeError, TypeError):
-                self.replot(obj=corner_gerber_obj)
-            except Exception:
-                return
+        if self.cursor_color_memory is not None:
+            self.app.plotcanvas.cursor_color = self.cursor_color_memory
+            self.cursor_color_memory = None
 
         # update the bounding box values
         try:
@@ -826,15 +786,12 @@ class ToolMarkers(AppTool):
             self.handlers_connected = False
             self.app.ui.notebook.setDisabled(False)
 
-    def on_mouse_move(self, event):
-        pass
-
     def on_mouse_release(self, event):
         event_pos = event.pos
         right_button = 2
 
         if event.button == 1:
-            pos_canvas = self.canvas.translate_coords(event_pos)
+            pos_canvas = self.app.plotcanvas.translate_coords(event_pos)
             if self.app.grid_status():
                 pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
             else:
@@ -851,6 +808,9 @@ class ToolMarkers(AppTool):
                  _("Click to add next marker or right click to finish.")))
 
         elif event.button == right_button and self.app.event_is_dragging is False:
+            if not self.points.get('manual'):
+                self.on_exit(cancelled=True)
+                return
             self.handle_manual_placement()
 
     def draw_utility_geometry(self, pos):
@@ -864,4 +824,7 @@ class ToolMarkers(AppTool):
         self.temp_shapes.redraw()
 
     def on_plugin_cleanup(self):
-        self.on_exit(ok=False)
+        if self.handlers_connected:
+            self.on_exit(ok=False)
+        else:
+            self.clear_utility_geometry()

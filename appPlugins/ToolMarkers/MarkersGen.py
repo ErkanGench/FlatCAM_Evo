@@ -1,20 +1,26 @@
 """Marker geometry generation with explicit dimensions and point data."""
 
+import math
 from copy import deepcopy
 from shapely import LineString, Point, MultiPolygon
 from shapely.ops import unary_union
 from camlib import flatten_shapely_geometry
 
 
+def _flat(geometry):
+    return flatten_shapely_geometry(geometry) if geometry else []
+
+
 def marker_cross(pos, line_thickness, line_length):
-    x = pos[0] - line_thickness / 2.0
-    y = pos[1] + line_thickness / 2.0
+    x, y = pos[0], pos[1]
     return [LineString([(x - line_length, y), (x + line_length, y)]),
             LineString([(x, y + line_length), (x, y - line_length)])]
 
 
 def create_marker_geometry(points_storage, marker_type, line_thickness, line_length, mode, offset_x, offset_y):
     """Return marker lines; line_length is the half length used by the existing tool."""
+    if line_thickness <= 0 or line_length <= 0:
+        return 'fail'
     geo_list = []
     if mode == 0:   # 'automatic'
         for key in points_storage:
@@ -80,14 +86,15 @@ def gerber_marker_data(tools, solid_geometry, follow_geometry, marker_geometry, 
     new_apertures = deepcopy(tools)
     aperture_found = None
     for ap_id, ap_val in new_apertures.items():
-        if ap_val['type'] == 'C' and ap_val['size'] == line_thickness:
+        if ap_val['type'] == 'C' and math.isclose(ap_val['size'], line_thickness, abs_tol=1e-9):
             aperture_found = ap_id
             break
 
+    quad_segs = max(1, circle_steps // 4)
     geo_buff_list = []
     if aperture_found:
         for geo in marker_geometry:
-            geo_buff = geo.buffer(line_thickness / 2.0, quad_segs=circle_steps, join_style="mitre")
+            geo_buff = geo.buffer(line_thickness / 2.0, quad_segs=quad_segs, join_style="mitre")
             geo_buff_list.append(geo_buff)
             dict_el = {'follow': geo, 'solid': geo_buff}
             new_apertures[aperture_found]['geometry'].append(deepcopy(dict_el))
@@ -96,7 +103,7 @@ def gerber_marker_data(tools, solid_geometry, follow_geometry, marker_geometry, 
         new_apid = int(max(ap_keys)) + 1 if ap_keys else 10
         new_apertures[new_apid] = {'type': 'C', 'size': line_thickness, 'geometry': []}
         for geo in marker_geometry:
-            geo_buff = geo.buffer(line_thickness / 2.0, quad_segs=circle_steps, join_style="bevel")
+            geo_buff = geo.buffer(line_thickness / 2.0, quad_segs=quad_segs, join_style="mitre")
             geo_buff_list.append(geo_buff)
             dict_el = {'follow': geo, 'solid': geo_buff}
             new_apertures[new_apid]['geometry'].append(deepcopy(dict_el))
@@ -118,28 +125,25 @@ def gerber_marker_data(tools, solid_geometry, follow_geometry, marker_geometry, 
     except TypeError:
         s_list.append(geo_buff_list)
     return (new_apertures, flatten_shapely_geometry(unary_union(s_list)),
-            flatten_shapely_geometry(follow_geometry + marker_geometry))
+            _flat(follow_geometry) + list(marker_geometry))
 
 
 def geometry_marker_data(tools, solid_geometry, marker_geometry, tooldia, new_data):
     new_tools = deepcopy(tools)
     tool_found = None
     for tool, tool_dict in new_tools.items():
-        if tool_dict['tooldia'] == tooldia:
+        if math.isclose(tool_dict['tooldia'], tooldia, abs_tol=1e-9):
             tool_found = tool
             break
     if tool_found:
-        if isinstance(new_tools[tool_found]['solid_geometry'], list):
-            new_tools[tool_found]['solid_geometry'] += marker_geometry
-        else:
-            new_tools[tool_found]['solid_geometry'] = [new_tools[tool_found]['solid_geometry'], marker_geometry]
+        new_tools[tool_found]['solid_geometry'] = (_flat(new_tools[tool_found]['solid_geometry']) +
+                                                   list(marker_geometry))
     else:
         obj_tools = list(new_tools.keys())
         new_tool = max(obj_tools) + 1 if obj_tools else 1
         new_tools[new_tool] = {'tooldia': tooldia, 'data': deepcopy(new_data), 'solid_geometry': marker_geometry}
-        for tool in list(new_tools.keys()):
-            if not new_tools[tool]['solid_geometry']:
-                new_tools.pop(tool)
+        if not new_tools[new_tool]['solid_geometry']:
+            new_tools.pop(new_tool)
     s_list = []
     if solid_geometry:
         s_list = flatten_shapely_geometry(solid_geometry)
@@ -170,5 +174,5 @@ def drill_locations(bounds, states, points, line_thickness, offset_x, offset_y):
                                      ymin - offset_y - line_thickness / 2.0)))
     else:
         for pt in points['manual']:
-            drill_list.append(Point((pt[0] - line_thickness / 2, pt[1] + line_thickness / 2)))
+            drill_list.append(Point((pt[0], pt[1])))
     return drill_list
