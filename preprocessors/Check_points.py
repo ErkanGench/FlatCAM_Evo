@@ -138,7 +138,7 @@ class Check_points(PreProc):
             x_toolchange = 0.0
             y_toolchange = 0.0
 
-        if int(p.tool) == 1 and p.startz is not None:
+        if p.startz is not None and p.is_first_tool:
             z_toolchange = p.startz
 
         if str(p['obj_options']['type']) == 'Excellon':

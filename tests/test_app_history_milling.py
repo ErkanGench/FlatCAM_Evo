@@ -202,7 +202,7 @@ def test_geo_tool_actions_undo_redo(fc, no_plot):
     assert fc.history.undo() and _tools(geo) == s6
 
 
-def test_geo_field_edits_add_no_step(fc, no_plot):
+def test_geo_field_edit_is_one_undo_step(fc, no_plot):
     geo = _new_geo(fc, 'm_geo_edits')
     _settle(fc)
     mt = _open(fc, 'geo', geo)
@@ -212,12 +212,42 @@ def test_geo_field_edits_add_no_step(fc, no_plot):
     _pump()
     uid = int(mt.ui.tools_table_mill_geo.item(0, 3).text())
     n = _steps(fc)
-    for v in (-0.1, -0.2, -0.3):
+    for k, v in enumerate((-0.1, -0.2, -0.3), 1):
         mt.ui.cutz_entry.set_value(v)
         mt.ui.cutz_entry.returnPressed.emit()
         _pump()
+        assert _steps(fc) == n + k
     assert geo.tools[uid]['data']['tools_mill_cutz'] == -0.3
-    assert _steps(fc) == n
+    assert fc.history.undo() and geo.tools[uid]['data']['tools_mill_cutz'] == -0.2
+    assert fc.history.redo() and geo.tools[uid]['data']['tools_mill_cutz'] == -0.3
+
+
+def test_v_shape_cut_z_follows_undo_redo(fc, no_plot):
+    """The Cut Z that a V shape (or a V-tip edit) calculates is in the same Undo step as the edit."""
+    geo = _new_geo(fc, 'm_geo_vshape')
+    _settle(fc)
+    mt = _open(fc, 'geo', geo)
+    mt.on_tool_default_add(dia=0.5)
+    _pump()
+    _select_row(mt.ui.tools_table_mill_geo, 0)
+    _pump()
+    uid = int(mt.ui.tools_table_mill_geo.item(0, 3).text())
+    geo.tools[uid]['data']['tools_mill_cutz'] = -2.4
+    before = _tools(geo)
+
+    mt.ui.tool_shape_combo.setCurrentIndex(mt.ui.tool_shape_combo.findText('V'))
+    _pump()
+    v_shape = _tools(geo)
+    assert v_shape[uid]['data']['tools_mill_cutz'] != -2.4
+    assert fc.history.undo() and _tools(geo) == before
+    assert fc.history.redo() and _tools(geo) == v_shape
+
+    mt.ui.tipdia_entry.set_value(float(mt.ui.tipdia_entry.get_value()) + 0.05)
+    _pump()
+    v_tip = _tools(geo)
+    assert v_tip[uid]['data']['tools_mill_cutz'] != v_shape[uid]['data']['tools_mill_cutz']
+    assert fc.history.undo() and _tools(geo) == v_shape
+    assert fc.history.redo() and _tools(geo) == v_tip
 
 
 def test_exc_field_edits_and_order(fc, no_plot):
@@ -233,19 +263,14 @@ def test_exc_field_edits_and_order(fc, no_plot):
     mt.ui.cutz_entry.returnPressed.emit()
     _pump()
     assert exc.tools[uid]['data']['tools_mill_cutz'] == -0.6
-    assert _steps(fc) == n
+    assert _steps(fc) == n + 1
 
-    # a user reorder (Order: Reverse) is 1 step and undo restores the order
+    # the Order combo only orders the table rows: the tools of the object and the history stay as they are
     before = _tools(exc)
     n = _steps(fc)
     mt.ui.order_combo.set_value(2)
     _pump()
     mt.ui.order_combo.set_value(0)
     _pump()
-    after = _tools(exc)
-    if after != before:
-        assert _steps(fc) == n + 1
-        assert fc.history.undo() and _tools(exc) == before
-        assert fc.history.redo() and _tools(exc) == after
-    else:
-        assert _steps(fc) == n
+    assert _tools(exc) == before
+    assert _steps(fc) == n

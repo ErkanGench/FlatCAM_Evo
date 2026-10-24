@@ -15,6 +15,7 @@ from appDatabase import load_tools_database, tools_database_error_message
 from appCommon.ToolDatabase import matching_tools
 from camlib import Geometry, flatten_shapely_geometry
 from appCommon.SafeEval import safe_eval
+from appCommon.Common import ExclusionAreas
 from appPlugins.ToolDrilling import DrillingGen
 from appPlugins.ToolDrilling.DrillingUI import DrillingUI
 
@@ -28,6 +29,7 @@ import sys
 import platform
 import re
 
+import shapely
 from shapely import LineString
 
 import gettext
@@ -40,6 +42,9 @@ if '_' not in builtins.__dict__:
 
 log = logging.getLogger('base')
 
+# the 'owner' stored in the exclusion areas drawn in this plugin (the Milling areas have none)
+EXCLUSION_OWNER = 'drilling'
+
 
 def merge_same_diameter_tools(tools):
     """
@@ -49,7 +54,8 @@ def merge_same_diameter_tools(tools):
 
     :param tools:   Excellon tools, {tool_id: {'tooldia': float, 'drills': list, 'slots': list, ...}}
     :type tools:    dict
-    :return:        the same dict if no diameter repeats, else a new dict with consecutive tool IDs from 1
+    :return:        the same dict if no diameter repeats, else a new dict keyed by the tool id of the first tool of
+                    each diameter
     :rtype:         dict
     """
     return DrillingGen.merge_same_diameter_tools(tools)
@@ -98,11 +104,11 @@ class ToolDrilling(Geometry, AppTool):
         self.obj_name = ""
         self.excellon_obj = None
 
-        # this holds the resulting GCode
-        self.total_gcode = ''
-
-        # this holds the resulting Parsed Gcode
-        self.total_gcode_parsed = []
+        # The areas that select the holes (Holes: Inside area). Drawn with the helper of the exclusion areas but kept in
+        # their own storage (not in app.exc_areas). Created when the plugin opens, when the canvas exists.
+        self.hole_areas = None
+        # the Add objects selection that the tools table shows (ids of the objects)
+        self._merged_extras = ()
 
         self.first_click = False
         self.cursor_pos = None
@@ -196,6 +202,7 @@ class ToolDrilling(Geometry, AppTool):
                         self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
                     else:
                         # else remove the Tool Tab
+                        self.on_plugin_cleanup()
                         self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
                         self.app.ui.notebook.removeTab(2)
 
@@ -243,9 +250,16 @@ class ToolDrilling(Geometry, AppTool):
         self.ui.delete_sel_area_button.clicked.connect(self.on_delete_sel_areas)
         self.ui.strategy_radio.activated_custom.connect(self.on_strategy)
 
+        # more objects in the job, holes inside areas
+        self.ui.extra_objects_list.itemSelectionChanged.connect(self.on_extra_objects_changed)
+        self.ui.hole_area_button.clicked.connect(self.on_add_hole_area_click)
+        self.ui.hole_areas_clear_button.clicked.connect(self.on_clear_hole_areas_click)
+        if self.hole_areas is not None:
+            self.hole_areas.e_shape_modified.connect(self.update_hole_areas_label)
+
         self.ui.pp_excellon_name_cb.activated.connect(self.on_pp_changed)
 
-        self.ui.reset_button.clicked.connect(self.set_tool_ui)
+        self.ui.reset_button.clicked.connect(self.on_reset_clicked)
         # Cleanup on Graceful exit (CTRL+ALT+X combo key)
         self.app.cleanup.connect(self.set_tool_ui)
         # Undo / Redo gives the object a new tools dict
@@ -298,6 +312,14 @@ class ToolDrilling(Geometry, AppTool):
             self.ui.add_area_button.clicked.disconnect()
         except (TypeError, AttributeError):
             pass
+        for signal, slot in ((self.ui.extra_objects_list.itemSelectionChanged, self.on_extra_objects_changed),
+                             (self.ui.hole_area_button.clicked, self.on_add_hole_area_click),
+                             (self.ui.hole_areas_clear_button.clicked, self.on_clear_hole_areas_click),
+                             (getattr(self.hole_areas, 'e_shape_modified', None), self.update_hole_areas_label)):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, AttributeError, RuntimeError):
+                pass
         try:
             self.ui.delete_area_button.clicked.disconnect()
         except (TypeError, AttributeError):
@@ -321,13 +343,26 @@ class ToolDrilling(Geometry, AppTool):
             pass
         # Cleanup on Graceful exit (CTRL+ALT+X combo key)
         try:
-            self.app.cleanup.disconnect()
+            self.app.cleanup.disconnect(self.set_tool_ui)
         except (TypeError, AttributeError):
             pass
         try:
             self.app.app_obj.object_changed.disconnect(self.on_object_tools_replaced)
         except (TypeError, AttributeError, RuntimeError):
             pass
+
+    def on_plugin_cleanup(self):
+        """The plugin is closed: leave the global signals (they would keep calling a hidden plugin)."""
+        for signal, slot in ((self.app.proj_selection_changed, self.on_object_selection_changed),
+                             (self.app.exc_areas.e_shape_modified, self.update_exclusion_table),
+                             (self.app.cleanup, self.set_tool_ui),
+                             (self.app.app_obj.object_changed, self.on_object_tools_replaced)):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError, AttributeError):
+                pass
+        self._clear_hole_areas()
+        self.app.delete_selection_shape()
 
     def set_context_menu(self):
         # #############################################################################################################
@@ -356,6 +391,10 @@ class ToolDrilling(Geometry, AppTool):
         self.clear_ui(self.layout)
         self.init_ui()
 
+        if self.hole_areas is None:
+            self.hole_areas = ExclusionAreas(self.app)
+            self._hole_area_button_stub = FCButton()
+
         self.disconnect_main_signals()
         self.connect_main_signals()
 
@@ -375,7 +414,11 @@ class ToolDrilling(Geometry, AppTool):
             loaded_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
         except Exception as err:
             self.app.log.error("ToolDrilling -> Loaded Excellon object error. %s" % str(err))
-            return
+            loaded_obj = None
+        # the object shown in the combo is the one of the plugin (also after Reset, cleanup or a deleted object)
+        self.excellon_obj = loaded_obj
+        self._clear_hole_areas()
+        self._populate_extra_objects()
 
         self.tool_form_fields.update({
             "tools_drill_cutz": self.ui.cutz_entry,
@@ -390,6 +433,13 @@ class ToolDrilling(Geometry, AppTool):
             "tools_drill_laser_on": self.ui.laser_turn_on_combo,
             "tools_drill_dwell": self.ui.dwell_cb,
             "tools_drill_dwelltime": self.ui.dwelltime_entry,
+            "tools_drill_dwell_bottom": self.ui.dwell_bottom_cb,
+            "tools_drill_peck": self.ui.peck_cb,
+            "tools_drill_peck_depth": self.ui.peck_depth_entry,
+            "tools_drill_peck_retract": self.ui.peck_retract_entry,
+            "tools_drill_spindledir": self.ui.spindledir_radio,
+            "tools_drill_f_plunge": self.ui.fplunge_cb,
+            "tools_drill_f_retract": self.ui.fretract_cb,
 
             "tools_drill_offset": self.ui.offset_entry,
 
@@ -406,6 +456,19 @@ class ToolDrilling(Geometry, AppTool):
 
             "tools_drill_endz": self.ui.endz_entry,
             "tools_drill_endxy": self.ui.endxy_entry,
+
+            "tools_drill_spot": self.ui.spot_cb,
+            "tools_drill_spot_dia": self.ui.spot_dia_entry,
+            "tools_drill_spot_cutz": self.ui.spot_cutz_entry,
+            "tools_drill_spot_feedrate_z": self.ui.spot_feedrate_entry,
+
+            "tools_drill_job_offset_xy": self.ui.job_offset_entry,
+            "tools_drill_mirror": self.ui.mirror_radio,
+            "tools_drill_mirror_point": self.ui.mirror_point_entry,
+            "tools_drill_array_columns": self.ui.array_columns_entry,
+            "tools_drill_array_rows": self.ui.array_rows_entry,
+            "tools_drill_array_pitch": self.ui.array_pitch_entry,
+            "tools_drill_holes_selection": self.ui.holes_radio,
 
             "tools_drill_z_p_depth": self.ui.pdepth_entry,
             "tools_drill_feedrate_probe": self.ui.feedrate_probe_entry,
@@ -431,6 +494,13 @@ class ToolDrilling(Geometry, AppTool):
             "e_laser_turn_on": "tools_drill_laser_on",
             "e_dwell": "tools_drill_dwell",
             "e_dwelltime": "tools_drill_dwelltime",
+            "e_dwell_bottom": "tools_drill_dwell_bottom",
+            "e_peck": "tools_drill_peck",
+            "e_peck_depth": "tools_drill_peck_depth",
+            "e_peck_retract": "tools_drill_peck_retract",
+            "e_spindledir": "tools_drill_spindledir",
+            "e_f_plunge": "tools_drill_f_plunge",
+            "e_f_retract": "tools_drill_f_retract",
 
             "e_offset": "tools_drill_offset",
 
@@ -448,6 +518,19 @@ class ToolDrilling(Geometry, AppTool):
             "e_endz": "tools_drill_endz",
             "e_endxy": "tools_drill_endxy",
 
+            "e_spot": "tools_drill_spot",
+            "e_spot_dia": "tools_drill_spot_dia",
+            "e_spot_cutz": "tools_drill_spot_cutz",
+            "e_spot_feedrate": "tools_drill_spot_feedrate_z",
+
+            "e_job_offset": "tools_drill_job_offset_xy",
+            "e_mirror": "tools_drill_mirror",
+            "e_mirror_point": "tools_drill_mirror_point",
+            "e_array_columns": "tools_drill_array_columns",
+            "e_array_rows": "tools_drill_array_rows",
+            "e_array_pitch": "tools_drill_array_pitch",
+            "e_holes_selection": "tools_drill_holes_selection",
+
             "e_depth_probe": "tools_drill_z_p_depth",
             "e_fr_probe": "tools_drill_feedrate_probe",
 
@@ -459,33 +542,12 @@ class ToolDrilling(Geometry, AppTool):
             "e_area_shape": "tools_drill_area_shape",
         })
 
-        # reset the Excellon preprocessor combo
-        self.ui.pp_excellon_name_cb.clear()
-        # populate Excellon preprocessor combobox list
-        if loaded_obj and loaded_obj.obj_options['tools_drill_ppname_e'] == 'Check_points':
-            pp_list = ['Check_points']
-        else:
-            pp_list = []
-            for name in self.app.preprocessors.keys():
-                # the HPGL preprocessor or Paste_ are not for Excellon job therefore don't add it
-                if name in ['hpgl', 'Paste_1', 'Check_points']:
-                    continue
-                pp_list.append(name)
-            pp_list.sort()
-        if 'default' in pp_list:
-            pp_list.remove('default')
-            pp_list.insert(0, 'default')
-        self.ui.pp_excellon_name_cb.addItems(pp_list)
+        pp_list = self._populate_pp_list(loaded_obj)
 
-        # add tooltips
-        for it in range(self.ui.pp_excellon_name_cb.count()):
-            self.ui.pp_excellon_name_cb.setItemData(it, self.ui.pp_excellon_name_cb.itemText(it),
-                                                    QtCore.Qt.ItemDataRole.ToolTipRole)
-
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        self.ui.order_combo.set_value(self.app.options.get(
+        self._set_tool_order(self.app.options.get(
             "tools_drill_tool_order",
-            app_defaults.get("tools_drill_tool_order", AppDefaults.factory_defaults.get("tools_drill_tool_order"))))
+            AppDefaults.factory_defaults.get("tools_drill_tool_order")))
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         if loaded_obj:
             outname = loaded_obj.obj_options['name']
@@ -495,20 +557,10 @@ class ToolDrilling(Geometry, AppTool):
         # init the working variables
         self.default_data.clear()
 
-        # fill in self.default_data values from self.obj_options
-        # for opt_key, opt_val in self.app.options.items():
-        #     if opt_key.find('excellon_') == 0:
-        #         oname = opt_key[len('excellon_'):]
-        #         self.default_data[oname] = deepcopy(opt_val)
-        #     if opt_key.find('tools_drill_') == 0:
-        #         self.default_data[opt_key] = deepcopy(opt_val)
-        #     if opt_key.find('tools_mill_') == 0:
-        #         self.default_data[opt_key] = deepcopy(opt_val)
-        #
+        # the options of the object; what the object lacks (an old object) comes from the App options
+        self.default_data.update(self.app.options)
         if loaded_obj:
             self.default_data.update(loaded_obj.obj_options)
-        else:
-            self.default_data.update(self.app.options)
 
         self.default_data['name'] = outname + '_drill'
 
@@ -527,12 +579,13 @@ class ToolDrilling(Geometry, AppTool):
         self.ui.tools_table.setMaximumHeight(self.ui.tools_table.getHeight())
 
         # make sure to update the UI on init
-        try:
-            self.excellon_tools = self.excellon_obj.tools
+        if loaded_obj is not None:
+            self.excellon_tools = loaded_obj.tools
             self.tools_are_object_tools = True
-        except AttributeError:
-            # no object loaded
-            pass
+        else:
+            # no object loaded (or it was deleted)
+            self.excellon_tools = {}
+            self.tools_are_object_tools = False
         self.build_tool_ui()
 
         # #############################################################################################################
@@ -541,23 +594,28 @@ class ToolDrilling(Geometry, AppTool):
         # #############################################################################################################
         # #############################################################################################################
 
-        # tool parameters
-        for key in self.tool_form_fields:
-            self.tool_form_fields[key].set_value(self.default_data[key])
-        # common parameters
-        for key in self.general_form_fields:
-            self.general_form_fields[key].set_value(self.default_data[key])
+        # The form shows the defaults of the object. It must not write them into the tools: the stored values of
+        # each tool are shown by update_ui() below (Reset Tool restores the defaults in on_reset_clicked()).
+        self.ui_disconnect()
+        try:
+            # tool parameters
+            for key in self.tool_form_fields:
+                self._set_field(self.tool_form_fields[key], self._default(key))
+            # common parameters
+            for key in self.general_form_fields:
+                self._set_field(self.general_form_fields[key], self._default(key))
 
-        # preprocessor
-        if self.default_data["tools_drill_ppname_e"] in pp_list:
-            sel_ppname_e = self.default_data["tools_drill_ppname_e"]
-        else:
-            sel_ppname_e = 'default'
-        self.ui.pp_excellon_name_cb.set_value(sel_ppname_e)
+            # preprocessor
+            if self._default("tools_drill_ppname_e") in pp_list:
+                sel_ppname_e = self._default("tools_drill_ppname_e")
+            else:
+                sel_ppname_e = 'default'
+            self.ui.pp_excellon_name_cb.set_value(sel_ppname_e)
+        finally:
+            self.ui_connect()
 
-        self.ui.drill_overlap_label.hide()
-        self.ui.drill_overlap_entry.hide()
-        self.ui.last_drill_cb.hide()
+        # Overlap and Last drill are visible only when the slots are drilled (the checkbox drives them)
+        self.ui.ois_drill_overlap.on_cb_change()
 
         # Show/Hide Advanced Options
         app_mode = self.app.options.get(
@@ -566,11 +624,159 @@ class ToolDrilling(Geometry, AppTool):
 
         self.ui.tools_frame.show()
 
+        # show the stored values of the first selected tool
+        self.update_ui()
+
         try:
             self.ui.object_combo.currentTextChanged.disconnect()
         except (AttributeError, TypeError):
             pass
         self.ui.object_combo.currentTextChanged.connect(self.on_object_changed)
+
+    def _default(self, key):
+        """The default of a form field: the object's options, else the App options, else the factory defaults."""
+        if key in self.default_data:
+            return self.default_data[key]
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        return self.app.options.get(key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
+
+    @staticmethod
+    def _set_field(widget, value):
+        """Set a form widget. A blank X,Y / Start Z entry (None) is shown empty, not as the text 'None'."""
+        if value is None and isinstance(widget, (NumericalEvalTupleEntry, NumericalEvalEntry)):
+            widget.setText('')
+            return
+        widget.set_value(value)
+
+    def _populate_pp_list(self, loaded_obj):
+        """Fill the Excellon preprocessor combo; an object with the Check_points preprocessor allows only that one."""
+        combo = self.ui.pp_excellon_name_cb
+        obj_pp = loaded_obj.obj_options.get('tools_drill_ppname_e') if loaded_obj else None
+        if obj_pp == 'Check_points':
+            pp_list = ['Check_points']
+        else:
+            pp_list = []
+            for name in self.app.preprocessors.keys():
+                # the HPGL preprocessor or Paste_ are not for Excellon job therefore don't add it
+                if name in ['hpgl', 'Paste_1', 'Check_points']:
+                    continue
+                pp_list.append(name)
+            pp_list.sort()
+        if 'default' in pp_list:
+            pp_list.remove('default')
+            pp_list.insert(0, 'default')
+
+        # a refill must not be stored in the tools as a user choice
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItems(pp_list)
+            # add tooltips
+            for it in range(combo.count()):
+                combo.setItemData(it, combo.itemText(it), QtCore.Qt.ItemDataRole.ToolTipRole)
+        finally:
+            combo.blockSignals(False)
+        return pp_list
+
+    # ------------------------------------------------------------------------------------------------------------
+    # Tool order: the combo holds an index (0, 1, 2); the options and the generation use 'no', 'fwd', 'rev'
+    # ------------------------------------------------------------------------------------------------------------
+    TOOL_ORDERS = ('no', 'fwd', 'rev')
+
+    def _tool_order(self):
+        """The tool order chosen in the UI: 'no' (as in the file), 'fwd' (small to big) or 'rev' (big to small)."""
+        idx = self.ui.order_combo.get_value()
+        return self.TOOL_ORDERS[idx] if 0 <= idx < len(self.TOOL_ORDERS) else 'no'
+
+    def _set_tool_order(self, value):
+        """Set the order combo from an option value: 'no' / 'fwd' / 'rev' or the index the preferences save."""
+        if isinstance(value, str):
+            idx = self.TOOL_ORDERS.index(value) if value in self.TOOL_ORDERS else 0
+        else:
+            try:
+                idx = int(value)
+            except (TypeError, ValueError):
+                idx = 0
+            if not 0 <= idx < len(self.TOOL_ORDERS):
+                idx = 0
+        self.ui.order_combo.blockSignals(True)
+        try:
+            self.ui.order_combo.set_value(idx)
+        finally:
+            self.ui.order_combo.blockSignals(False)
+
+    def _ordered_tool_ids(self):
+        """The ids of self.excellon_tools in the order of the Order combo. The tools themselves are never touched."""
+        ids = list(self.excellon_tools)
+        order = self._tool_order()
+        if order == 'fwd':
+            return sorted(ids, key=lambda k: float(self.excellon_tools[k]['tooldia']))
+        if order == 'rev':
+            return sorted(ids, key=lambda k: float(self.excellon_tools[k]['tooldia']), reverse=True)
+        return ids
+
+    def _is_beginner(self):
+        return not self.ui.level.isChecked()
+
+    def _effective_tool_data(self, tool_id):
+        """
+        The data of a tool as the job generation must use it. In Beginner mode the advanced options are hidden, so
+        their safe values are used; the values stored in the tool stay as the user set them.
+        """
+        data = deepcopy(self.excellon_tools[tool_id]['data'])
+        if self._is_beginner():
+            data['tools_drill_multidepth'] = False
+            data['tools_drill_dwell'] = False
+            data['tools_drill_dwell_bottom'] = False
+            data['tools_drill_peck'] = False
+            data['tools_drill_spot'] = False
+            data.update(tools_drill_job_offset_xy=None, tools_drill_mirror='no', tools_drill_array_columns=1,
+                        tools_drill_array_rows=1)
+            data['tools_drill_drill_slots'] = False
+            data['tools_drill_area_exclusion'] = False
+        return data
+
+    def _has_toolchange(self, selected_ids):
+        """True if one of the selected tools has the toolchange option on (the other tools do not matter)."""
+        for tool_id in selected_ids:
+            tool = self.excellon_tools.get(tool_id)
+            if tool and tool.get('data', {}).get('tools_drill_toolchange'):
+                return True
+        return False
+
+    def _validate_xy_fields(self, selected_ids=None):
+        """
+        Check the X,Y entries of the Common Parameters before a job: the Toolchange X-Y (needed when a selected tool
+        has toolchange on) and the End move X,Y (optional, but if there is text it must be a pair of numbers).
+
+        :return:    True if the job can use them
+        """
+        def is_xy(val):
+            try:
+                return len(val) == 2 and all(isinstance(v, (int, float)) for v in val)
+            except TypeError:
+                return False
+
+        ids = list(self.excellon_tools) if selected_ids is None else selected_ids
+        for tool_id in ids:
+            data = self.excellon_tools.get(tool_id, {}).get('data', {})
+            if data.get('tools_drill_toolchange') and not is_xy(data.get('tools_drill_toolchangexy')):
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Toolchange X-Y is not valid. Use two numbers: x, y."))
+                return False
+            endxy = data.get('tools_drill_endxy')
+            if endxy not in (None, '') and not is_xy(endxy):
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("End move X,Y is not valid. Use two numbers: x, y."))
+                return False
+        return True
+
+    def on_reset_clicked(self):
+        """Reset Tool: the parameters of every tool go back to the defaults of the object."""
+        with self.history_step(_("Drilling: reset the tool parameters")):
+            for tool in self.excellon_tools.values():
+                data = tool.setdefault('data', {})
+                for key in list(self.tool_form_fields) + list(self.general_form_fields):
+                    data[key] = deepcopy(self._default(key))
+        self.set_tool_ui()
 
     def change_level(self, level):
         """
@@ -587,13 +793,8 @@ class ToolDrilling(Geometry, AppTool):
         self.on_level_changed(self.ui.level.isChecked())
 
     def on_level_changed(self, checked):
-
-        try:
-            loaded_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
-        except Exception as err:
-            self.app.log.error("ToolDrilling -> Loaded Excellon object error. %s" % str(err))
-            return
-
+        # The level only shows or hides controls. The values stored in the tools are never changed here: in Beginner
+        # mode the job generation uses safe values for the hidden options (see _effective_tool_data()).
         if not checked:
             self.ui.level.setText('%s' % _('Beginner'))
             self.ui.level.setStyleSheet("""
@@ -603,27 +804,23 @@ class ToolDrilling(Geometry, AppTool):
                                         }
                                         """)
 
-            # Tool parameters section
-            if loaded_obj:
-                for tool in loaded_obj.tools:
-                    tool_data = loaded_obj.tools[tool]['data']
-
-                    tool_data['tools_drill_multidepth'] = False
-                    tool_data['tools_drill_dwell'] = False
-                    tool_data['tools_drill_drill_slots'] = False
-
-                    tool_data['tools_drill_area_exclusion'] = False
-
             self.ui.search_load_db_btn.hide()
 
             self.ui.mpass_cb.hide()
             self.ui.maxdepth_entry.hide()
 
+            self.ui.dwell_cb.hide()
+            self.ui.dwelltime_entry.hide()
+            for widget in self.ui.advanced_drill_widgets:
+                widget.hide()
+
             self.ui.tool_offset_label.hide()
             self.ui.offset_entry.hide()
 
-            self.ui.drill_slots_cb.set_value(False)
             self.ui.drill_slots_cb.hide()
+            self.ui.drill_overlap_label.hide()
+            self.ui.drill_overlap_entry.hide()
+            self.ui.last_drill_cb.hide()
 
             # All param section
             self.ui.apply_param_to_all.hide()
@@ -634,9 +831,12 @@ class ToolDrilling(Geometry, AppTool):
             self.ui.endmove_xy_label.hide()
             self.ui.endxy_entry.hide()
 
-            self.ui.exclusion_cb.set_value(False)
-            self.ui.exclusion_cb.hide()
+            for widget in self.ui.spot_widgets + self.ui.transform_widgets + self.ui.hole_widgets + \
+                    self.ui.extra_objects_widgets:
+                widget.hide()
 
+            self.ui.exclusion_cb.hide()
+            self.ui.exclusion_frame.hide()
         else:
             self.ui.level.setText('%s' % _('Advanced'))
             self.ui.level.setStyleSheet("""
@@ -646,18 +846,6 @@ class ToolDrilling(Geometry, AppTool):
                                         }
                                         """)
 
-            # Tool parameters section
-            if loaded_obj:
-                options = loaded_obj.obj_options
-                for tool in loaded_obj.tools:
-                    tool_data = loaded_obj.tools[tool]['data']
-
-                    tool_data['tools_drill_multidepth'] = options['tools_drill_multidepth']
-                    tool_data['tools_drill_dwell'] = options['tools_drill_dwell']
-                    tool_data['tools_drill_drill_slots'] = options['tools_drill_drill_slots']
-
-                    tool_data['tools_drill_area_exclusion'] = options['tools_drill_area_exclusion']
-
             self.ui.search_load_db_btn.show()
 
             self.ui.mpass_cb.show()
@@ -665,11 +853,17 @@ class ToolDrilling(Geometry, AppTool):
 
             self.ui.dwell_cb.show()
             self.ui.dwelltime_entry.show()
+            laser = 'laser' in str(self.ui.pp_excellon_name_cb.get_value()).lower()
+            for widget in self.ui.advanced_drill_widgets:
+                if not (laser and widget in self.ui.no_laser_drill_widgets):
+                    widget.show()
 
             self.ui.tool_offset_label.show()
             self.ui.offset_entry.show()
 
             self.ui.drill_slots_cb.show()
+            # Overlap and Last drill follow the Drill slots checkbox
+            self.ui.ois_drill_overlap.on_cb_change()
 
             # All param section
             self.ui.apply_param_to_all.show()
@@ -680,12 +874,22 @@ class ToolDrilling(Geometry, AppTool):
             self.ui.endmove_xy_label.show()
             self.ui.endxy_entry.show()
 
+            # the spot fields are enabled by the spot checkbox
+            for widget in self.ui.spot_widgets + self.ui.transform_widgets + self.ui.hole_widgets + \
+                    self.ui.extra_objects_widgets:
+                widget.show()
+
             self.ui.exclusion_cb.show()
+            # the exclusion frame follows the exclusion checkbox
+            self.ui.ois_exclusion_exc.on_cb_change()
 
         # update the changes in UI depending on the selected preprocessor in Preferences
         # after this moment all the changes in the Posprocessor combo will be handled by the activated signal of the
         # self.ui.pp_excellon_name_cb combobox
         self.on_pp_changed()
+
+        # the extra objects are an Advanced option: the tools table follows the level
+        self.on_extra_objects_changed()
 
     def rebuild_ui(self):
         # read the table tools uid
@@ -693,9 +897,13 @@ class ToolDrilling(Geometry, AppTool):
         for row in range(self.ui.tools_table.rowCount()):
             try:
                 uid = int(self.ui.tools_table.item(row, 3).text())
-                current_uid_list.append(uid)
-            except AttributeError:
+            except (AttributeError, ValueError):
                 continue
+            if uid in self.excellon_tools:
+                current_uid_list.append(uid)
+
+        if not current_uid_list:
+            return
 
         new_tools = {}
         new_uid = 1
@@ -707,6 +915,9 @@ class ToolDrilling(Geometry, AppTool):
         self.excellon_tools = new_tools
         self.tools_are_object_tools = False
 
+        # the rows are now in the order the user dragged them: the Order combo must not sort them again
+        self._set_tool_order('no')
+
         # the tools table changed therefore we need to rebuild it
         QtCore.QTimer.singleShot(20, self.build_tool_ui)
 
@@ -714,49 +925,14 @@ class ToolDrilling(Geometry, AppTool):
         self.app.log.debug("ToolDrilling.build_tool_ui()")
         self.ui_disconnect()
 
-        # # order the tools by tool diameter if it's the case
-        # sorted_tools = []
-        # for k, v in self.excellon_tools.items():
-        #     sorted_tools.append(self.dec_format(float(v['tooldia'])))
-        #
-        # order = self.ui.order_combo.get_value()
-        # if order == 1:  # 'fwd'
-        #     sorted_tools.sort(reverse=False)
-        # elif order == 2:    # 'rev'
-        #     sorted_tools.sort(reverse=True)
-        # else:
-        #     pass
-        #
-        # # remake the excellon_tools dict in the order above
-        # new_id = 1
-        # new_tools = {}
-        # for tooldia in sorted_tools:
-        #     for old_tool in self.excellon_tools:
-        #         if self.dec_format(float(self.excellon_tools[old_tool]['tooldia'])) == tooldia:
-        #             new_tools[new_id] = deepcopy(self.excellon_tools[old_tool])
-        #             new_id += 1
-
-        order = self.ui.order_combo.get_value()
-        if order == 1:  # 'fwd'
-            new_tools = {
-                k: v for k, v in sorted(self.excellon_tools.items(), key=lambda it: it[1]['tooldia'], reverse=False)
-            }
-            for idx, v in enumerate(new_tools.values(), start=1):
-                self.excellon_tools[idx] = v
-        elif order == 2:  # 'rev'
-            new_tools = {
-                k: v for k, v in sorted(self.excellon_tools.items(), key=lambda it: it[1]['tooldia'], reverse=True)
-            }
-            for idx, v in enumerate(new_tools.values(), start=1):
-                self.excellon_tools[idx] = v
-        # for the 'Default' order keep self.excellon_tools as it is; set_tool_ui() and on_object_changed() load it
-        # from the object, and resetting it here undoes replace_tools() and rebuild_ui()
-
+        # The Order combo sorts only the rows of the table (the tool ids stay, the tools are not touched); the job
+        # generation sorts the same way with _tool_order().
         if self.excellon_obj and self.excellon_tools:
             self.ui.exc_param_frame.setDisabled(False)
-            tools = [k for k in self.excellon_tools]
+            tools = self._ordered_tool_ids()
         else:
             self.ui.exc_param_frame.setDisabled(True)
+            self.ui.generate_cnc_button.setDisabled(True)
             self.ui.tools_table.setRowCount(2)
             tools = []
 
@@ -899,17 +1075,16 @@ class ToolDrilling(Geometry, AppTool):
         # #############################################################################################################
         self.ui_disconnect()
 
-        e_len = len(self.app.exc_areas.exclusion_areas_storage)
+        # Only the areas added from an Excellon object are shown. The table row r is the area at
+        # self._area_positions()[r] in the shared storage; the shown number is r + 1.
+        area_positions = self._area_positions()
+        e_len = len(area_positions)
         self.ui.exclusion_table.setRowCount(e_len)
 
-        area_id = 0
+        for area, storage_pos in enumerate(area_positions):
+            area_dict = self.app.exc_areas.exclusion_areas_storage[storage_pos]
 
-        for area in range(e_len):
-            area_id += 1
-
-            area_dict = self.app.exc_areas.exclusion_areas_storage[area]
-
-            area_id_item = QtWidgets.QTableWidgetItem('%d' % int(area_id))
+            area_id_item = QtWidgets.QTableWidgetItem('%d' % (area + 1))
             area_id_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
             self.ui.exclusion_table.setItem(area, 0, area_id_item)  # Area id
 
@@ -991,49 +1166,168 @@ class ToolDrilling(Geometry, AppTool):
         self.obj_name = self.ui.object_combo.currentText()
 
         # Get source object.
+        obj = None
         try:
-            self.excellon_obj = self.app.collection.get_by_name(self.obj_name)
+            obj = self.app.collection.get_by_name(self.obj_name)
         except Exception:
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(self.obj_name)))
+
+        if obj is None:
+            self._clear_for_no_object()
             return
 
-        if self.excellon_obj is None:
-            self.excellon_tools = {}
-            self.tools_are_object_tools = False
-            self.ui.exc_param_frame.setDisabled(True)
-            self.set_tool_ui()
-        else:
-            self.app.collection.set_active(self.obj_name)
-            self.ui.exc_param_frame.setDisabled(False)
+        self.excellon_obj = obj
+        self.app.collection.set_active(self.obj_name)
+        self.ui.exc_param_frame.setDisabled(False)
 
-            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-            if self.app.options.get(
-                    "excellon_autoload_db",
-                    app_defaults.get("excellon_autoload_db", AppDefaults.factory_defaults.get("excellon_autoload_db"))):
-                self.excellon_tools = self.excellon_obj.tools
-                self.tools_are_object_tools = True
-                self.on_tool_db_load()
-            else:
-                # self.on_tool_db_load() already build once the tool UI, no need to do it twice
-                self.excellon_tools = self.excellon_obj.tools
-                self.tools_are_object_tools = True
-                self.build_tool_ui()
+        # the defaults and the preprocessor list are those of the new object
+        self.default_data.clear()
+        self.default_data.update(self.app.options)
+        self.default_data.update(obj.obj_options)
+        self.default_data['name'] = obj.obj_options['name'] + '_drill'
+        self._populate_pp_list(obj)
+
+        self.excellon_tools = obj.tools
+        self.tools_are_object_tools = True
+        # the extra objects and the hole areas belong to the previous object
+        self._clear_hole_areas()
+        self._populate_extra_objects()
+
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        autoload = self.app.options.get(
+            "excellon_autoload_db",
+            app_defaults.get("excellon_autoload_db", AppDefaults.factory_defaults.get("excellon_autoload_db")))
+        # on_tool_db_load() builds the tool UI when it replaces the tools; if it fails or is cancelled, the UI is
+        # built here from the new object anyway
+        if not (autoload and self.on_tool_db_load()):
+            self.build_tool_ui()
 
         self.update_ui()
 
-        sel_rows = set()
-        table_items = self.ui.tools_table.selectedItems()
-        if table_items:
-            for it in table_items:
-                sel_rows.add(it.row())
-
-        if not sel_rows or len(sel_rows) == 0:
+        if not self.ui.tools_table.selectedItems():
             self.ui.generate_cnc_button.setDisabled(True)
             self.ui.tool_data_label.setText(
                 "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("No Tool Selected"))
             )
         else:
             self.ui.generate_cnc_button.setDisabled(False)
+
+    # ------------------------------------------------------------------------------------------------------------
+    # More Excellon objects in one job ("Add objects", Advanced level)
+    # ------------------------------------------------------------------------------------------------------------
+    def _populate_extra_objects(self):
+        """Fill the Add objects list with the other Excellon objects of the project; nothing is selected."""
+        lst = self.ui.extra_objects_list
+        lst.blockSignals(True)
+        try:
+            lst.clear()
+            main_name = self.excellon_obj.obj_options['name'] if self.excellon_obj else None
+            for obj in self.app.collection.get_list():
+                if obj.kind == 'excellon' and obj.obj_options['name'] != main_name:
+                    item = QtWidgets.QListWidgetItem(obj.obj_options['name'])
+                    item.setData(QtCore.Qt.ItemDataRole.UserRole, obj)
+                    lst.addItem(item)
+        finally:
+            lst.blockSignals(False)
+        self._merged_extras = ()
+        # no extra object is selected: the per-tool parameters are editable again
+        self._apply_extras_lock()
+
+    def _apply_extras_lock(self):
+        """While extra objects are selected the per-tool parameters are read-only: the tools are a merged copy."""
+        locked = bool(self._merged_extras)
+        self.ui.tool_param_frame.setDisabled(locked)
+        self.ui.apply_param_to_all.setDisabled(locked)
+        self.ui.extras_note_label.setVisible(locked)
+
+    def _extra_objects(self):
+        """The Excellon objects selected in the Add objects list (none in Beginner mode or without a main object)."""
+        if self.excellon_obj is None or self._is_beginner():
+            return []
+        live = self.app.collection.get_list()
+        extras = []
+        for item in self.ui.extra_objects_list.selectedItems():
+            # the item holds the object: a renamed object is still found, a deleted one is dropped
+            obj = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if any(obj is o for o in live) and obj.kind == 'excellon' and obj is not self.excellon_obj:
+                extras.append(obj)
+        return extras
+
+    def on_extra_objects_changed(self):
+        """
+        The tools table shows the tools of the main object and the extra objects merged by diameter (a copy: the
+        objects are not changed), or the tools of the main object alone when no extra object is selected.
+        """
+        obj = self.excellon_obj
+        if obj is None:
+            return
+        extras = self._extra_objects()
+        ids = tuple(id(extra) for extra in extras)
+        if ids == self._merged_extras:
+            return
+        self._merged_extras = ids
+
+        if extras:
+            merged, conflicts = DrillingGen.merge_object_tools(obj.tools, [extra.tools for extra in extras])
+            for dia, tool_ids, keys in conflicts:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % (
+                    _("Tools {ids} have the same diameter ({dia}) but different parameters ({keys}).")
+                    .format(ids=', '.join(str(i) for i in tool_ids), dia=dia, keys=', '.join(keys))))
+            self.excellon_tools = merged
+            self.tools_are_object_tools = False
+        else:
+            self.excellon_tools = obj.tools
+            self.tools_are_object_tools = True
+        self.build_tool_ui()
+        self.update_ui()
+        self._apply_extras_lock()
+
+    # ------------------------------------------------------------------------------------------------------------
+    # Holes inside areas: the areas are drawn like the exclusion areas but are kept apart from them
+    # ------------------------------------------------------------------------------------------------------------
+    def _clear_hole_areas(self):
+        if self.hole_areas is None:
+            return
+        try:
+            self.hole_areas.clear_shapes()
+        except AttributeError:
+            self.hole_areas.exclusion_areas_storage.clear()
+        self.update_hole_areas_label()
+
+    def update_hole_areas_label(self):
+        count = len(self.hole_areas.exclusion_areas_storage) if self.hole_areas is not None else 0
+        self.ui.hole_areas_label.setText(_("{n} hole areas").format(n=count) if count else _("No hole areas"))
+
+    def on_add_hole_area_click(self):
+        if self.excellon_obj is None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Could not retrieve object"))
+            return
+        # no object geometry to test the areas against: the areas may cover the holes
+        self.hole_areas.on_add_area_click(
+            shape_button=self.ui.hole_area_shape_radio, overz_button=self.ui.over_z_entry,
+            cnc_button=self._hole_area_button_stub, strategy_radio=self.ui.strategy_radio,
+            solid_geo=[], obj_type='holes', owner=EXCLUSION_OWNER)
+
+    def on_clear_hole_areas_click(self):
+        self._clear_hole_areas()
+
+    def _selected_hole_areas(self):
+        """The polygons that select the holes; None when the job drills all the holes (Beginner or Holes: All)."""
+        if self._is_beginner() or self.ui.holes_radio.get_value() != 'area' or self.hole_areas is None:
+            return None
+        return [area['shape'] for area in self.hole_areas.exclusion_areas_storage]
+
+    def _clear_for_no_object(self):
+        """There is no Excellon object (none is loaded or it was deleted): empty table, nothing to edit or generate."""
+        self.excellon_obj = None
+        self.excellon_tools = {}
+        self.tools_are_object_tools = False
+        self.build_tool_ui()
+        self.ui.exc_param_frame.setDisabled(True)
+        self.ui.generate_cnc_button.setDisabled(True)
+        self.ui.tool_data_label.setText(
+            "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("No Tool Selected"))
+        )
 
     def on_object_selection_changed(self, current, previous):
         found_idx = None
@@ -1053,6 +1347,8 @@ class ToolDrilling(Geometry, AppTool):
                 pass
 
     def ui_connect(self):
+        # connecting twice would call a slot twice: start from a clean state
+        self.ui_disconnect()
 
         # When object selection on canvas change
         # self.app.collection.view.selectionModel().selectionChanged.connect(self.on_object_selection_changed)
@@ -1070,7 +1366,7 @@ class ToolDrilling(Geometry, AppTool):
         self.app.exc_areas.e_shape_modified.connect(self.update_exclusion_table)
 
         # rows selected
-        self.ui.tools_table.clicked.connect(self.on_row_selection_change)
+        self.ui.tools_table.selectionModel().selectionChanged.connect(self.on_row_selection_change)
         self.ui.tools_table.horizontalHeader().sectionClicked.connect(self.on_toggle_all_rows)
 
         # Tool Parameters
@@ -1105,7 +1401,9 @@ class ToolDrilling(Geometry, AppTool):
 
         # Exclusion Table widgets connect
         for row in range(self.ui.exclusion_table.rowCount()):
-            self.ui.exclusion_table.cellWidget(row, 2).currentIndexChanged.connect(self.on_exclusion_table_strategy)
+            cell_widget = self.ui.exclusion_table.cellWidget(row, 2)
+            if cell_widget is not None:
+                cell_widget.currentIndexChanged.connect(self.on_exclusion_table_strategy)
 
         self.ui.exclusion_table.itemChanged.connect(self.on_exclusion_table_overz)
 
@@ -1124,8 +1422,8 @@ class ToolDrilling(Geometry, AppTool):
 
         # rows selected
         try:
-            self.ui.tools_table.clicked.disconnect(self.on_row_selection_change)
-        except (TypeError, AttributeError):
+            self.ui.tools_table.selectionModel().selectionChanged.disconnect(self.on_row_selection_change)
+        except (TypeError, AttributeError, RuntimeError):
             pass
         try:
             self.ui.tools_table.horizontalHeader().sectionClicked.disconnect(self.on_toggle_all_rows)
@@ -1225,13 +1523,13 @@ class ToolDrilling(Geometry, AppTool):
             self.app.log.error("Could not load tools DB file.")
             self.app.log.error(str(error))
             self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
-            return
+            return False
 
         if not self.tools_db_dict:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Tools DB empty."))
-            return
+            return False
 
-        self.replace_tools()
+        return self.replace_tools()
 
     def replace_tools(self):
         self.app.log.debug("ToolDrilling.replace_tools()")
@@ -1285,12 +1583,25 @@ class ToolDrilling(Geometry, AppTool):
                         '[WARNING_NOTCL] %s' % _("Cancelled.\n"
                                                  "Multiple tools for one tool diameter found in Tools Database."))
                     self.blockSignals(False)
-                    return
+                    return False
 
-            # more than one original tool can fit in the tolerance of the same DB tool
+            # more than one original tool can fit in the tolerance of the same DB tool: the merged tool keeps the data
+            # of the first one, tell the user which data of the others is lost
+            for dia, tool_ids, keys in DrillingGen.diameter_conflicts(new_tools_dict):
+                self.app.inform.emit('[WARNING_NOTCL] %s' % (
+                    _("Tools %s have the same diameter %s but different data, the data of the first one is used. "
+                      "Different: %s") % (', '.join(str(i) for i in tool_ids), dia, ', '.join(keys))))
             self.excellon_tools = merge_same_diameter_tools(new_tools_dict)
             self.tools_are_object_tools = False
             self.build_tool_ui()
+            return True
+        return False
+
+    def _selected_tool_rows(self):
+        """The selected rows of the Tools table that are tool rows (not the 2 totals rows)."""
+        n_tools = max(self.ui.tools_table.rowCount() - 2, 0)
+        return sorted(set(
+            idx.row() for idx in self.ui.tools_table.selectionModel().selectedIndexes() if idx.row() < n_tools))
 
     def on_toggle_all_rows(self):
         """
@@ -1298,15 +1609,12 @@ class ToolDrilling(Geometry, AppTool):
 
         :return:
         """
-        sel_model = self.ui.tools_table.selectionModel()
-        sel_indexes = sel_model.selectedIndexes()
+        # the last 2 rows of the table are the totals; they are not tools and cannot be selected
+        n_tools = self.ui.tools_table.rowCount() - 2
+        if n_tools <= 0:
+            return
 
-        # it will iterate over all indexes which means all items in all columns too but I'm interested only on rows
-        sel_rows = set()
-        for idx in sel_indexes:
-            sel_rows.add(idx.row())
-
-        if len(sel_rows) == self.ui.tools_table.rowCount():
+        if len(self._selected_tool_rows()) == n_tools:
             self.ui.tools_table.clearSelection()
             self.ui.exc_param_frame.setDisabled(True)
 
@@ -1323,71 +1631,49 @@ class ToolDrilling(Geometry, AppTool):
             )
 
     def on_row_selection_change(self):
-        sel_model = self.ui.tools_table.selectionModel()
-        sel_indexes = sel_model.selectedIndexes()
-
-        # it will iterate over all indexes which means all items in all columns too but I'm interested only on rows
-        sel_rows = set()
-        for idx in sel_indexes:
-            sel_rows.add(idx.row())
-
-        # update UI only if only one row is selected otherwise having multiple rows selected will deform information
-        # for the rows other that the current one (first selected)
-        if len(sel_rows) <= 1:
-            self.update_ui()
+        # One tool: its parameters and name. More tools (also a keyboard selection): the label says "Multiple Tools"
+        # and the form shows the first selected tool.
+        self.update_ui()
 
     def update_ui(self):
         self.blockSignals(True)
         self.ui_disconnect()
+        try:
+            sel_rows = self._selected_tool_rows()
 
-        sel_rows = set()
-        table_items = self.ui.tools_table.selectedItems()
-        if table_items:
-            for it in table_items:
-                sel_rows.add(it.row())
-            # sel_rows = sorted(set(index.row() for index in self.ui.tools_table.selectedIndexes()))
+            if not sel_rows:
+                self.ui.generate_cnc_button.setDisabled(True)
+                self.ui.exc_param_frame.setDisabled(True)
+                self.ui.tool_data_label.setText(
+                    "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("No Tool Selected"))
+                )
+                return
 
-        if not sel_rows or len(sel_rows) == 0:
-            self.ui.generate_cnc_button.setDisabled(True)
-            self.ui.exc_param_frame.setDisabled(True)
-            self.ui.tool_data_label.setText(
-                "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("No Tool Selected"))
-            )
-            self.blockSignals(False)
-            self.ui_connect()
-            return
-        else:
             self.ui.generate_cnc_button.setDisabled(False)
             self.ui.exc_param_frame.setDisabled(False)
 
-        if len(sel_rows) == 1:
-            # update the QLabel that shows for which Tool we have the parameters in the UI form
-            tooluid = int(self.ui.tools_table.item(list(sel_rows)[0], 0).text())
-            self.ui.tool_data_label.setText(
-                "<b>%s: <font color='#0000FF'>%s %d</font></b>" % (_('Parameters for'), _("Tool"), tooluid)
-            )
-        else:
-            self.ui.tool_data_label.setText(
-                "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("Multiple Tools"))
-            )
-
-        # populate the form with the data from the tool associated with the row parameter for the last row selected
-        try:
-            item = self.ui.tools_table.item(list(sel_rows)[-1], 3)
-            if type(item) is not None:
+            # the form shows the data of the first selected tool
+            try:
+                item = self.ui.tools_table.item(sel_rows[0], 3)
                 tooluid = int(item.text())
-                self.storage_to_form(self.excellon_tools[tooluid]['data'])
-            else:
-                self.blockSignals(False)
-                self.ui_connect()
+                tool_data = self.excellon_tools[tooluid]['data']
+            except Exception as e:
+                self.app.log.error("Tool missing. Add a tool in the Tool Table. %s" % str(e))
                 return
-        except Exception as e:
-            self.app.log.error("Tool missing. Add a tool in the Tool Table. %s" % str(e))
+
+            if len(sel_rows) == 1:
+                # update the QLabel that shows for which Tool we have the parameters in the UI form
+                self.ui.tool_data_label.setText(
+                    "<b>%s: <font color='#0000FF'>%s %d</font></b>" % (_('Parameters for'), _("Tool"), tooluid)
+                )
+            else:
+                self.ui.tool_data_label.setText(
+                    "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("Multiple Tools"))
+                )
+            self.storage_to_form(tool_data)
+        finally:
             self.blockSignals(False)
             self.ui_connect()
-            return
-        self.blockSignals(False)
-        self.ui_connect()
 
     def storage_to_form(self, dict_storage):
         """
@@ -1398,29 +1684,18 @@ class ToolDrilling(Geometry, AppTool):
         :return:                None
         :rtype:
         """
+        # a key that the storage lacks (an old object) shows its default, not the value of the previous tool
+        for fields, source in ((self.tool_form_fields, "tool parameters"),
+                               (self.general_form_fields, "common parameters")):
+            for form_key, widget in fields.items():
+                value = dict_storage[form_key] if form_key in dict_storage else self._default(form_key)
+                try:
+                    self._set_field(widget, value)
+                except Exception as e:
+                    self.app.log.error("ToolDrilling.storage_to_form() %s --> %s" % (source, str(e)))
 
-        general_keys = list(self.general_form_fields.keys())
-        tool_keys = list(self.tool_form_fields.keys())
-
-        # update the Tool parameters
-        for form_key in self.tool_form_fields:
-            for storage_key in dict_storage:
-                if form_key == storage_key and form_key not in general_keys:
-                    try:
-                        self.tool_form_fields[form_key].set_value(dict_storage[form_key])
-                    except Exception as e:
-                        self.app.log.error("ToolDrilling.storage_to_form() tool parameters --> %s" % str(e))
-                        pass
-
-        # update the Common parameters
-        for form_key in self.general_form_fields:
-            for storage_key in dict_storage:
-                if form_key == storage_key and form_key not in tool_keys:
-                    try:
-                        self.general_form_fields[form_key].set_value(dict_storage[form_key])
-                    except Exception as e:
-                        self.app.log.error("ToolDrilling.storage_to_form() -> common parameters --> %s" % str(e))
-                        pass
+        # the preprocessor combo changed by code: show the fields that depend on it
+        self.on_pp_changed()
 
     def history_step(self, label):
         """
@@ -1441,11 +1716,19 @@ class ToolDrilling(Geometry, AppTool):
             return
         if self.excellon_tools is not obj.tools:
             self.excellon_tools = obj.tools
-            # the restored order must not be sorted again by the Order combo
-            self.ui.order_combo.blockSignals(True)
-            self.ui.order_combo.set_value(0)
-            self.ui.order_combo.blockSignals(False)
             self.build_tool_ui()
+            self.update_ui()
+
+    def _read_field(self, widget):
+        """
+        The value of a form widget. A blank X,Y / Start Z entry gives None. Text that cannot be read also gives None,
+        and the user gets a warning (the value is not stored as a number).
+        """
+        value = widget.get_value()
+        if value is None and isinstance(widget, (NumericalEvalTupleEntry, NumericalEvalEntry)) and \
+                widget.text().strip():
+            self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (_("Could not interpret the entered text"), widget.text()))
+        return value
 
     def form_to_storage(self):
         """
@@ -1459,39 +1742,34 @@ class ToolDrilling(Geometry, AppTool):
             # Excellon Tool Table has 2 rows by default
             return
 
-        self.ui_disconnect()
-
         widget_changed = self.sender()
-        wdg_objname = widget_changed.objectName()
-        option_changed = self.name2option[wdg_objname]
+        if widget_changed is None:
+            return
+        option_changed = self.name2option.get(widget_changed.objectName())
+        if option_changed is None:
+            return
 
-        # row = self.ui.tools_table.currentRow()
-        rows = sorted(list(set(index.row() for index in self.ui.tools_table.selectedIndexes())))
-        for row in rows:
-            if row < 0:
-                row = 0
-            tooluid_item = int(self.ui.tools_table.item(row, 3).text())
+        self.ui_disconnect()
+        try:
+            # update tool parameters: only the selected tools. A key that the tool lacks (an old object) is added.
+            if option_changed in self.tool_form_fields:
+                new_option_value = self._read_field(self.tool_form_fields[option_changed])
+                for row in self._selected_tool_rows():
+                    item = self.ui.tools_table.item(row, 3)
+                    if item is None:
+                        continue
+                    tool = self.excellon_tools.get(int(item.text()))
+                    if tool is not None:
+                        tool.setdefault('data', {})[option_changed] = new_option_value
 
-            # update tool parameters
-            for tooluid_key, tooluid_val in self.excellon_tools.items():
-                if int(tooluid_key) == tooluid_item:
-                    if option_changed in self.tool_form_fields:
-                        new_option_value = self.tool_form_fields[option_changed].get_value()
-                        if option_changed in tooluid_val:
-                            self.excellon_tools[tooluid_key][option_changed] = new_option_value
-                        if option_changed in tooluid_val['data']:
-                            self.excellon_tools[tooluid_key]['data'][option_changed] = new_option_value
-
-        # update general parameters
-        # they are updated for all tools
-        for tooluid_key, tooluid_val in self.excellon_tools.items():
+            # update general parameters
+            # they are updated for all tools
             if option_changed in self.general_form_fields:
-                new_option_value = self.general_form_fields[option_changed].get_value()
-                if option_changed in tooluid_val:
-                    self.excellon_tools[tooluid_key][option_changed] = new_option_value
-                if option_changed in tooluid_val['data']:
-                    self.excellon_tools[tooluid_key]['data'][option_changed] = new_option_value
-        self.ui_connect()
+                new_option_value = self._read_field(self.general_form_fields[option_changed])
+                for tool in self.excellon_tools.values():
+                    tool.setdefault('data', {})[option_changed] = new_option_value
+        finally:
+            self.ui_connect()
 
     def get_selected_tools_table_items(self):
         """
@@ -1506,8 +1784,7 @@ class ToolDrilling(Geometry, AppTool):
         for x in self.ui.tools_table.selectedItems():
             rows.add(x.row())
 
-        for row in rows:
-            txt = ''
+        for row in sorted(rows):
             elem = []
 
             for column in range(self.ui.tools_table.columnCount()):
@@ -1515,6 +1792,8 @@ class ToolDrilling(Geometry, AppTool):
                     # disregard this column since it's the toolID
                     continue
 
+                # the text of a column must not carry over from the previous column
+                txt = ''
                 try:
                     txt = self.ui.tools_table.item(row, column).text()
                 except AttributeError:
@@ -1524,45 +1803,51 @@ class ToolDrilling(Geometry, AppTool):
                         pass
                 elem.append(txt)
             table_tools_items.append(deepcopy(elem))
-            # table_tools_items.append([self.ui.tools_table.item(x.row(), column).text()
-            #                           for column in range(0, self.ui.tools_table.columnCount() - 1)])
         for item in table_tools_items:
             item[0] = str(item[0])
         return table_tools_items
 
     def on_apply_param_to_all_clicked(self):
-        if self.ui.tools_table.rowCount() == 0:
+        n_tools = self.ui.tools_table.rowCount() - 2
+        if n_tools <= 0:
             # there is no tool in tool table so we can't save the GUI elements values to storage
             self.app.log.debug("ToolDrilling.on_apply_param_to_all_clicked() --> no tool in Tools Table, aborting.")
             return
 
-        self.blockSignals(True)
-
+        # the source is the current tool row; if that is a totals row or nothing, the first selected tool
         row = self.ui.tools_table.currentRow()
-        if row < 0:
-            row = 0
+        if not 0 <= row < n_tools:
+            selected = self._selected_tool_rows()
+            if not selected:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Please select one or more tools from the list and "
+                                                              "try again."))
+                return
+            row = selected[0]
 
-        tooluid_item = int(self.ui.tools_table.item(row, 3).text())
-        temp_tool_data = {}
+        try:
+            source = self.excellon_tools[int(self.ui.tools_table.item(row, 3).text())]['data']
+        except (AttributeError, KeyError, ValueError):
+            self.app.log.debug("ToolDrilling.on_apply_param_to_all_clicked() --> the tool row has no data, aborting.")
+            return
+        if not source:
+            return
+        temp_tool_data = deepcopy(source)
 
-        for tooluid_key, tooluid_val in self.excellon_tools.items():
-            if int(tooluid_key) == tooluid_item:
-                # this will hold the 'data' key of the self.tools[tool] dictionary that corresponds to
-                # the current row in the tool table
-                temp_tool_data = tooluid_val['data']
-                break
-
-        with self.history_step(_("Drilling: apply the parameters to all tools")):
-            for tooluid_key, tooluid_val in self.excellon_tools.items():
-                tooluid_val['data'] = deepcopy(temp_tool_data)
+        self.blockSignals(True)
+        try:
+            with self.history_step(_("Drilling: apply the parameters to all tools")):
+                for tooluid_val in self.excellon_tools.values():
+                    tooluid_val['data'] = deepcopy(temp_tool_data)
+        finally:
+            self.blockSignals(False)
 
         self.app.inform.emit('[success] %s' % _("Current Tool parameters were applied to all tools."))
-        self.blockSignals(False)
 
     def on_order_changed(self, order):
-        if order != 0:  # 'default'
-            with self.history_step(_("Drilling: order the tools")):
-                self.build_tool_ui()
+        # The order is a view of the tools table (and the order of the job): it does not change the tools, so it is
+        # not an Undo / Redo step.
+        self.build_tool_ui()
+        self.update_ui()
 
     def on_tooltable_cellwidget_change(self):
         cw = self.sender()
@@ -1609,7 +1894,36 @@ class ToolDrilling(Geometry, AppTool):
             self.delete_moving_selection_shape()
             self.delete_tool_selection_shape()
 
+    def _area_positions(self):
+        """
+        The positions in the shared exclusion areas storage of the areas that Drilling shows and uses: those drawn in
+        this plugin (owner 'drilling'). The areas of the Milling plugin are in the same storage, also those on an
+        Excellon object, so obj_type alone does not tell them apart.
+        The row r of the exclusion table is the area at _area_positions()[r], so the table works with any 'idx'.
+        """
+        return [pos for pos, area in enumerate(self.app.exc_areas.exclusion_areas_storage)
+                if area.get('owner') == EXCLUSION_OWNER]
+
+    def _drill_exclusion_areas(self):
+        """The exclusion areas (dicts) that apply to a drilling job."""
+        storage = self.app.exc_areas.exclusion_areas_storage
+        return [storage[pos] for pos in self._area_positions()]
+
+    def _area_at_row(self, row):
+        """The storage entry of a row of the exclusion table, None for a row out of the table."""
+        positions = self._area_positions()
+        if not 0 <= row < len(positions):
+            return None
+        return self.app.exc_areas.exclusion_areas_storage[positions[row]]
+
+    def _selected_area_rows(self):
+        return sorted(set(idx.row() for idx in self.ui.exclusion_table.selectionModel().selectedIndexes()))
+
     def on_add_area_click(self):
+        if self.excellon_obj is None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Could not retrieve object"))
+            return
+
         shape_button = self.ui.area_shape_radio
         overz_button = self.ui.over_z_entry
         strategy_radio = self.ui.strategy_radio
@@ -1619,62 +1933,53 @@ class ToolDrilling(Geometry, AppTool):
 
         self.app.exc_areas.on_add_area_click(
             shape_button=shape_button, overz_button=overz_button, cnc_button=cnc_button, strategy_radio=strategy_radio,
-            solid_geo=solid_geo, obj_type=obj_type)
+            solid_geo=solid_geo, obj_type=obj_type, owner=EXCLUSION_OWNER)
 
     def on_clear_area_click(self):
-        if not self.app.exc_areas.exclusion_areas_storage:
+        # only the Drilling areas: the areas of the Milling plugin stay
+        positions = self._area_positions()
+        if not positions:
             self.app.inform.emit("[WARNING_NOTCL] %s" % _("Delete failed. There are no exclusion areas to delete."))
             return
 
-        self.app.exc_areas.on_clear_area_click()
-        self.app.exc_areas.e_shape_modified.emit()
+        self._delete_area_positions(positions)
 
     def on_delete_sel_areas(self):
-        sel_model = self.ui.exclusion_table.selectionModel()
-        sel_indexes = sel_model.selectedIndexes()
-
-        # it will iterate over all indexes which means all items in all columns too but I'm interested only on rows
-        # so the duplicate rows will not be added
-        sel_rows = set()
-        for idx in sel_indexes:
-            sel_rows.add(idx.row())
-
+        sel_rows = self._selected_area_rows()
         if not sel_rows:
             self.app.inform.emit("[WARNING_NOTCL] %s" % _("Delete failed. Nothing is selected."))
             return
 
-        self.app.exc_areas.delete_sel_shapes(idxs=list(sel_rows))
-        self.app.exc_areas.e_shape_modified.emit()
+        positions = self._area_positions()
+        self._delete_area_positions([positions[row] for row in sel_rows if 0 <= row < len(positions)])
+
+    def _delete_area_positions(self, positions):
+        """Delete the areas at these positions of the shared storage and refresh the tables."""
+        if not positions:
+            return
+        exc_areas = self.app.exc_areas
+        if exc_areas.cnc_button is None:
+            # the areas can come from a project: the button was never given by an 'Add Area' click
+            exc_areas.cnc_button = self.ui.generate_cnc_button
+        exc_areas.delete_sel_shapes(idxs=list(positions))
+        exc_areas.e_shape_modified.emit()
 
     def on_copy_exclusion_area_coords(self):
-        sel_model = self.ui.exclusion_table.selectionModel()
-        sel_indexes = sel_model.selectedIndexes()
-
-        # it will iterate over all indexes which means all items in all columns too but I'm interested only on rows
-        # so the duplicate rows will not be added
-        sel_rows = set()
-        for idx in sel_indexes:
-            sel_rows.add(idx.row())
-
+        sel_rows = self._selected_area_rows()
         if len(sel_rows) != 1:
             self.app.inform.emit("[WARNING_NOTCL] %s" % _("Only one selected row is allowed."))
             return
 
-        row_idx = list(sel_rows)[0]
-        poly = self.app.exc_areas.exclusion_areas_storage[row_idx]['shape']
-        poly_coords = list(poly.exterior.coords)
+        area = self._area_at_row(sel_rows[0])
+        if area is None:
+            return
+        poly_coords = list(area['shape'].exterior.coords)
 
         self.app.clipboard.setText(str(poly_coords))
         self.app.inform.emit('[success] %s' % _("Copied to clipboard."))
 
     def draw_sel_shape(self):
-        sel_model = self.ui.exclusion_table.selectionModel()
-        sel_indexes = sel_model.selectedIndexes()
-
-        # it will iterate over all indexes which means all items in all columns too but I'm interested only on rows
-        sel_rows = set()
-        for idx in sel_indexes:
-            sel_rows.add(idx.row())
+        sel_rows = self._selected_area_rows()
 
         self.delete_sel_shape()
 
@@ -1689,8 +1994,11 @@ class ToolDrilling(Geometry, AppTool):
             str(hex(int(0.8 * 255)))[2:]
 
         for row in sel_rows:
-            sel_rect = self.app.exc_areas.exclusion_areas_storage[row]['shape']
-            self.app.sel_shapes.add(sel_rect, color=outline, face_color=face, update=True, layer=0, tolerance=None)
+            area = self._area_at_row(row)
+            if area is None:
+                continue
+            self.app.sel_shapes.add(area['shape'], color=outline, face_color=face, update=True, layer=0,
+                                    tolerance=None)
         self.app.sel_shapes.redraw()
 
     def clear_selection(self):
@@ -1720,15 +2028,7 @@ class ToolDrilling(Geometry, AppTool):
 
         :return:
         """
-        sel_model = self.ui.exclusion_table.selectionModel()
-        sel_indexes = sel_model.selectedIndexes()
-
-        # it will iterate over all indexes which means all items in all columns too but I'm interested only on rows
-        sel_rows = set()
-        for idx in sel_indexes:
-            sel_rows.add(idx.row())
-
-        if sel_rows:
+        if self._selected_area_rows():
             self.ui.exclusion_table.clearSelection()
             self.delete_sel_shape()
         else:
@@ -1737,45 +2037,47 @@ class ToolDrilling(Geometry, AppTool):
 
     def on_exclusion_table_overz(self, current_item):
         self.ui_disconnect()
-
-        current_row = current_item.row()
         try:
-            d = float(self.ui.exclusion_table.item(current_row, 3).text())
-        except ValueError:
-            # try to convert comma to decimal point. if it's still not working error message and return
+            current_row = current_item.row()
+            area = self._area_at_row(current_row)
             try:
-                d = float(self.ui.exclusion_table.item(current_row, 3).text().replace(',', '.'))
+                d = float(self.ui.exclusion_table.item(current_row, 3).text())
             except ValueError:
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
+                # try to convert comma to decimal point. if it's still not working error message and return
+                try:
+                    d = float(self.ui.exclusion_table.item(current_row, 3).text().replace(',', '.'))
+                except ValueError:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
+                    # show the stored value again
+                    self.build_ui_sig.emit()
+                    return
+            except AttributeError:
                 return
-        except AttributeError:
+
+            if area is None:
+                return
+            area['overz'] = self.app.dec_format(d, self.decimals)
+
+            self.app.inform.emit('[success] %s' % _("Value edited in Exclusion Table."))
+            self.build_ui_sig.emit()
+        finally:
             self.ui_connect()
-            return
-
-        overz = self.app.dec_format(d, self.decimals)
-        idx = int(self.ui.exclusion_table.item(current_row, 0).text())
-
-        for area_dict in self.app.exc_areas.exclusion_areas_storage:
-            if area_dict['idx'] == idx:
-                area_dict['overz'] = overz
-
-        self.app.inform.emit('[success] %s' % _("Value edited in Exclusion Table."))
-        self.ui_connect()
-        self.build_ui_sig.emit()
 
     def on_exclusion_table_strategy(self):
         cw = self.sender()
-        cw_index = self.ui.exclusion_table.indexAt(cw.pos())
-        cw_row = cw_index.row()
-        idx = int(self.ui.exclusion_table.item(cw_row, 0).text())
+        if cw is None:
+            return
+        cw_row = self.ui.exclusion_table.indexAt(cw.pos()).row()
+        area = self._area_at_row(cw_row)
 
-        for area_dict in self.app.exc_areas.exclusion_areas_storage:
-            if area_dict['idx'] == idx:
-                strategy = self.ui.exclusion_table.cellWidget(cw_row, 2).currentIndex()
-                area_dict['strategy'] = "around" if strategy == 0 else 'overz'
-
-        self.app.inform.emit('[success] %s' % _("Value edited in Exclusion Table."))
-        self.ui_connect()
+        self.ui_disconnect()
+        try:
+            if area is not None:
+                strategy = cw.currentIndex()
+                area['strategy'] = "around" if strategy == 0 else 'over'
+                self.app.inform.emit('[success] %s' % _("Value edited in Exclusion Table."))
+        finally:
+            self.ui_connect()
         self.build_ui_sig.emit()
 
     @staticmethod
@@ -1813,45 +2115,40 @@ class ToolDrilling(Geometry, AppTool):
         return list(selected_uid)
 
     def create_drill_points(self, selected_tools, selected_sorted_tools, excellon_tools=None):
+        """
+        The drill points of the selected tools (and their slots, for the tools that drill slots). The slot spacing and
+        the last drill are the values of each tool.
+        """
         if excellon_tools is None:
             excellon_tools = self.excellon_tools
         self.app.log.debug("Found %d TOOLS with drills." % sum(
             bool(tl_dict.get('drills')) for tool_key, tl_dict in excellon_tools.items()
             if tool_key in selected_tools))
-        should_add_last_pt = self.ui.last_drill_cb.get_value()
-        drill_overlap = self.ui.drill_overlap_entry.get_value() if any(
-            tl_dict['data']['tools_drill_drill_slots'] and tool_key in selected_tools
-            for tool_key, tl_dict in excellon_tools.items()) else 0.0
         points = DrillingGen.create_drill_points(
-            selected_tools, selected_sorted_tools, excellon_tools,
-            drill_overlap, should_add_last_pt,
+            selected_tools, selected_sorted_tools, excellon_tools, None, None,
             slot_processor=self.process_slot_as_drills)
         self.app.log.debug("Found %d TOOLS with drills after converting slots to drills." % len(points))
         return points
 
     def check_intersection(self, points, excellon_tools=None):
+        """True if a drill point is inside an exclusion area of the Drilling plugin (grown as for the travel lines)."""
         if excellon_tools is None:
             excellon_tools = self.excellon_tools
+        areas = self._drill_exclusion_areas()
         for tool_key in points:
-            # the areas grown as for the travel lines: a drill point inside a grown area would start or end a travel
-            # inside it
-            grown_areas = [self.app.exc_areas.grown_shape(area['shape'], excellon_tools[tool_key]['tooldia'])
-                           for area in self.app.exc_areas.exclusion_areas_storage]
-            for pt in points[tool_key]:
-                for grown in grown_areas:
-                    if grown.intersects(pt):
-                        return True
+            if not points[tool_key]:
+                continue
+            pts = np.empty(len(points[tool_key]), dtype=object)
+            pts[:] = points[tool_key]
+            for area in areas:
+                # a drill point inside a grown area would start or end a travel inside it
+                grown = self.app.exc_areas.grown_shape(area['shape'], excellon_tools[tool_key]['tooldia'])
+                if shapely.intersects(grown, pts).any():
+                    return True
         return False
 
     def on_generate_cnc_job(self):
         obj_name = self.ui.object_combo.currentText()
-        # toolchange = self.ui.toolchange_cb.get_value()
-        # determine if we have toolchange event or not
-        has_toolchange = False
-        for v in self.excellon_tools.values():
-            if v["data"]["tools_drill_toolchange"] is True:
-                has_toolchange = True
-                break
 
         # Get source object.
         try:
@@ -1868,10 +2165,12 @@ class ToolDrilling(Geometry, AppTool):
         # we don't do it here since it will break any changes we've done in the Drilling Tool UI
         # self.excellon_tools = obj.tools
 
-        xmin = obj.obj_options['xmin']
-        ymin = obj.obj_options['ymin']
-        xmax = obj.obj_options['xmax']
-        ymax = obj.obj_options['ymax']
+        # the bounds of the job: the union of the bounds of the main object and the extra objects
+        job_objects = [obj] + self._extra_objects()
+        xmin = min(o.obj_options['xmin'] for o in job_objects)
+        ymin = min(o.obj_options['ymin'] for o in job_objects)
+        xmax = max(o.obj_options['xmax'] for o in job_objects)
+        ymax = max(o.obj_options['ymax'] for o in job_objects)
 
         job_name = obj.obj_options["name"] + "_cnc"
         obj.pp_excellon_name = self.ui.pp_excellon_name_cb.get_value()
@@ -1896,44 +2195,102 @@ class ToolDrilling(Geometry, AppTool):
                 self.app.inform.emit(msg)
                 return
 
-        # #############################################################################################################
-        # #############################################################################################################
-        # TOOLS
-        # sort the tools list by the second item in tuple (here we have a dict with diameter of the tool)
-        # so we actually are sorting the tools by diameter
-        # #############################################################################################################
-        # #############################################################################################################
-        all_tools = []
-        for tool_as_key, v in list(self.excellon_tools.items()):
-            all_tools.append((int(tool_as_key), float(v['tooldia'])))
+        # a stale row of the table may name a tool that is not there anymore
+        selected_tools_ids = [t_id for t_id in selected_tools_ids if t_id in self.excellon_tools]
+        if not selected_tools_ids:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The selected tools are not in the Excellon object."))
+            return
 
-        order = self.ui.order_combo.get_value()
-        if order == 'fwd':
-            sorted_tools = sorted(all_tools, key=lambda t1: t1[1])
-        elif order == 'rev':
-            sorted_tools = sorted(all_tools, key=lambda t1: t1[1], reverse=True)
-        else:
-            sorted_tools = all_tools
-
-        # Create a sorted list of selected sel_tools from the sorted_tools list
-        sel_tools = [i for i, j in sorted_tools for k in selected_tools_ids if i == k]
-
+        # #############################################################################################################
+        # TOOLS: the selected ones, in the order of the Order combo (by diameter, or as in the file)
+        # #############################################################################################################
+        sel_tools = [t_id for t_id in self._ordered_tool_ids() if t_id in selected_tools_ids]
+        sorted_tools = [(t_id, float(self.excellon_tools[t_id]['tooldia'])) for t_id in sel_tools]
         self.app.log.debug("Tools sorted are: %s" % str(sel_tools))
 
-        # #############################################################################################################
+        # determine if we have toolchange event or not: only the selected tools count
+        has_toolchange = self._has_toolchange(sel_tools)
+        if not self._validate_xy_fields(sel_tools):
+            return
+
+        # The tools of this job: only the selected ones, with the data the job generates with (in Beginner mode the
+        # safe values of the hidden options). The tools of the object and the plugin are not changed.
+        gen_tools = {t_id: dict(self.excellon_tools[t_id], data=self._effective_tool_data(t_id)) for t_id in sel_tools}
+
         # #############################################################################################################
         # #### Create Points (Group by tool): a dictionary of shapely Point geo elements grouped by tool number #######
-        # #############################################################################################################
         # #############################################################################################################
         self.app.inform.emit(_("Creating a list of points to drill..."))
 
         # points is a dictionary: keys are tools ad values are lists of Shapely Points
-        points = self.create_drill_points(selected_tools=sel_tools, selected_sorted_tools=sorted_tools)
+        points = self.create_drill_points(selected_tools=sel_tools, selected_sorted_tools=sorted_tools,
+                                          excellon_tools=gen_tools)
+
+        # the slots that are not drilled: tell the user
+        for t_id in sel_tools:
+            tool = gen_tools[t_id]
+            if tool.get('slots') and not tool['data'].get('tools_drill_drill_slots'):
+                self.app.inform.emit('[WARNING_NOTCL] %s' % (
+                    _("{nr} slots of tool {tool} are not drilled. Enable 'Drill slots' or use the Milling plugin.")
+                    .format(nr=len(tool['slots']), tool=t_id)))
+
+        # Holes: Inside area. Only the holes inside the drawn areas, before the job transform.
+        hole_areas = self._selected_hole_areas()
+        if hole_areas is not None:
+            if not hole_areas:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Holes: Inside area needs at least one area. Add a hole "
+                                                            "area or select Holes: All."))
+                return
+            points = DrillingGen.points_in_areas(points, hole_areas)
+
+        # only the tools that have something to drill take part in the job (first / last tool, toolchanges)
+        gen_ids = [t_id for t_id in sel_tools if points.get(t_id)]
+        if not gen_ids:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The selected tools have no drill points."))
+            return
+
+        # the job XY transform (mirror, offset, array) of the drill points; the Excellon object is not changed. The
+        # spot pass below takes its points from these, so it is transformed too.
+        try:
+            points = DrillingGen.transform_job_points(points, gen_tools[gen_ids[0]]['data'])
+        except ValueError as e:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(e))
+            return
 
         # check if there are drill points in the exclusion areas (if any areas)
-        if self.app.exc_areas.exclusion_areas_storage and self.check_intersection(points) is True:
+        if self._drill_exclusion_areas() and self.check_intersection(points, gen_tools) is True:
             self.app.inform.emit("[ERROR_NOTCL] %s %s" % (_("Failed."), _("Drill points inside the exclusion zones.")))
             return 'fail'
+
+        # tools with the same diameter that have different parameters
+        for dia, ids, keys in DrillingGen.diameter_conflicts({t_id: gen_tools[t_id] for t_id in gen_ids}):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % (
+                _("Tools {ids} have the same diameter ({dia}) but different parameters ({keys}).")
+                .format(ids=', '.join(str(i) for i in ids), dia=dia, keys=', '.join(keys))))
+
+        # without a toolchange the parameters of the first tool are used for all the tools
+        if not has_toolchange and len(gen_ids) > 1:
+            first_data = gen_tools[gen_ids[0]]['data']
+            differ = [key for key in ('tools_drill_cutz', 'tools_drill_feedrate_z', 'tools_drill_spindlespeed')
+                      if any(gen_tools[t_id]['data'].get(key) != first_data.get(key) for t_id in gen_ids[1:])]
+            if differ:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % (
+                    _("There is no toolchange: the parameters of tool {tool} (Cut Z, Feedrate Z, Spindle speed) are "
+                      "used for all the selected tools.").format(tool=gen_ids[0])))
+
+        # the spot drilling pass: a job option, one extra tool that drills all the holes of the selected tools first.
+        # It needs the toolchange (the spot drill is another tool): without it the pass is left out. The laser
+        # preprocessors have no tools to change: they ignore it.
+        if gen_tools[gen_ids[0]]['data'].get('tools_drill_spot') and \
+                'laser' not in str(self.ui.pp_excellon_name_cb.get_value()).lower():
+            if not has_toolchange:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    "The spot drilling pass needs a toolchange: it is left out. Enable the toolchange to use it."))
+            else:
+                spot_id = DrillingGen.next_tool_id(self.excellon_tools)
+                gen_tools[spot_id] = DrillingGen.spot_tool(gen_tools[gen_ids[0]]['data'])
+                points[spot_id] = [pt for t_id in gen_ids for pt in points[t_id]]
+                gen_ids = [spot_id] + gen_ids
 
         # #############################################################################################################
         # General Parameters
@@ -1948,9 +2305,7 @@ class ToolDrilling(Geometry, AppTool):
             used_exc_optim_type = 'T'
 
         # #############################################################################################################
-        # #############################################################################################################
         # GCODE creation
-        # #############################################################################################################
         # #############################################################################################################
         self.app.inform.emit('%s...' % _("Starting G-Code"))
 
@@ -1959,116 +2314,59 @@ class ToolDrilling(Geometry, AppTool):
             assert cnc_job_obj.kind == 'cncjob', "Initializer expected a CNCJobObject, got %s" % type(cnc_job_obj)
             app_obj.inform.emit(_("Generating CNCJob..."))
 
-            # #########################################################################################################
+            # the G-code and its parsed form of this job only
+            total_gcode = ''
+            total_gcode_parsed = []
+
             # #########################################################################################################
             # fill the data into the self.tools dictionary attribute of the CNCJob object
             # #########################################################################################################
-            # #########################################################################################################
-            cnc_job_obj.tools = {}
-
-            if has_toolchange:
-                for sel_id in sorted_tools:
-                    for t_id in self.excellon_tools:
-                        selected_id = sel_id[0]
-                        selected_tooldia = sel_id[1]
-
-                        if selected_id == t_id:
-                            cnc_job_obj.tools[selected_id] = deepcopy(self.excellon_tools[selected_id])
-                            sol_geo = []
-
-                            # solid geometry addition; we look into points because we may have slots converted to drills
-                            # therefore more drills than there were originally in
-                            # the self.excellon_tools[to_ol]['drills'] list
-                            drill_no = 0
-                            if selected_id in points and points[selected_id]:
-                                drill_no = len(points[selected_id])
-                                for drill in points[selected_id]:
-                                    sol_geo.append(
-                                        drill.buffer((selected_tooldia / 2.0),
-                                                     quad_segs=cnc_job_obj.geo_steps_per_circle)
-                                    )
-
-                            slot_no = 0
-                            convert_slots = self.excellon_tools[selected_id]['data']['tools_drill_drill_slots']
-                            if 'slots' in self.excellon_tools[selected_id] and convert_slots is False:
-                                slot_no = len(self.excellon_tools[selected_id]['slots'])
-                                for eslot in self.excellon_tools[selected_id]['slots']:
-                                    start = (eslot[0].x, eslot[0].y)
-                                    stop = (eslot[1].x, eslot[1].y)
-                                    line_geo = LineString([start, stop])
-                                    buff_distance = selected_tooldia / 2.0
-                                    sol_geo.append(
-                                        line_geo.buffer(buff_distance, quad_segs=cnc_job_obj.geo_steps_per_circle)
-                                    )
-
-                            # adjust Offset for current tool
-                            try:
-                                z_off = float(self.excellon_tools[selected_id]['data']['offset']) * (-1)
-                            except KeyError:
-                                z_off = 0
-
-                            cnc_job_obj.tools[selected_id]['nr_drills'] = drill_no
-                            cnc_job_obj.tools[selected_id]['nr_slots'] = slot_no
-                            cnc_job_obj.tools[selected_id]['offset'] = z_off
-                            cnc_job_obj.tools[selected_id]['gcode'] = ''
-                            cnc_job_obj.tools[selected_id]['gcode_parsed'] = []
-                            cnc_job_obj.tools[selected_id]['solid_geometry'] = deepcopy(sol_geo)
-            else:
-                # use the first tool in the selection as the tool that we are going to use
-                used_tool = sel_tools[0]
-                cnc_job_obj.tools[used_tool] = deepcopy(self.excellon_tools[used_tool])
-
-                sol_geo = []
-                drill_no = 0
-                slot_no = 0
-
-                for sel_id in sorted_tools:
-                    for t_id in self.excellon_tools:
-                        selected_id = sel_id[0]
-                        selected_tooldia = sel_id[1]
-
-                        if selected_id == t_id:
-
-                            # solid geometry addition; we look into points because we may have slots converted to drills
-                            # therefore more drills than there were originally in
-                            # the self.excellon_tools[to_ol]['drills'] list
-                            if selected_id in points and points[selected_id]:
-                                drill_no += len(points[selected_id])
-                                for drill in points[selected_id]:
-                                    sol_geo.append(
-                                        drill.buffer((selected_tooldia / 2.0),
-                                                     quad_segs=cnc_job_obj.geo_steps_per_circle)
-                                    )
-
-                            convert_slots = self.excellon_tools[selected_id]['data']['tools_drill_drill_slots']
-                            if 'slots' in self.excellon_tools[selected_id] and convert_slots is False:
-                                slot_no += len(self.excellon_tools[selected_id]['slots'])
-                                for eslot in self.excellon_tools[selected_id]['slots']:
-                                    start = (eslot[0].x, eslot[0].y)
-                                    stop = (eslot[1].x, eslot[1].y)
-                                    line_geo = LineString([start, stop])
-                                    buff_distance = selected_tooldia / 2.0
-                                    sol_geo.append(
-                                        line_geo.buffer(buff_distance, quad_segs=cnc_job_obj.geo_steps_per_circle)
-                                    )
+            def tool_entry(tool_id, ids):
+                """The CNCJob tool of tool_id with the geometry of the drills (and slots) of the tools in ids."""
+                tool = gen_tools[tool_id]
+                entry = dict(tool, drills=list(tool.get('drills') or []), slots=list(tool.get('slots') or []))
+                steps = cnc_job_obj.geo_steps_per_circle
+                geo = []
+                drill_nr = 0
+                slot_nr = 0
+                for t_id in ids:
+                    radius = float(gen_tools[t_id]['tooldia']) / 2.0
+                    # the points, not the drills of the tool: slots may have been converted to drills
+                    pts = points.get(t_id) or []
+                    if pts:
+                        drill_nr += len(pts)
+                        geo += list(shapely.buffer(np.array(pts, dtype=object), radius, quad_segs=steps))
+                    slots = gen_tools[t_id].get('slots')
+                    if slots and not gen_tools[t_id]['data'].get('tools_drill_drill_slots'):
+                        slot_nr += len(slots)
+                        lines = np.empty(len(slots), dtype=object)
+                        lines[:] = [LineString([(s[0].x, s[0].y), (s[1].x, s[1].y)]) for s in slots]
+                        geo += list(shapely.buffer(lines, radius, quad_segs=steps))
 
                 # adjust Offset for current tool
                 try:
-                    z_off = float(self.excellon_tools[used_tool]['data']['offset']) * (-1)
-                except KeyError:
+                    z_off = float(tool['data'].get('tools_drill_offset') or 0.0) * (-1)
+                except (TypeError, ValueError):
                     z_off = 0
 
-                cnc_job_obj.tools[used_tool]['nr_drills'] = drill_no
-                cnc_job_obj.tools[used_tool]['nr_slots'] = slot_no
-                cnc_job_obj.tools[used_tool]['offset'] = z_off
-                cnc_job_obj.tools[used_tool]['gcode'] = ''
-                cnc_job_obj.tools[used_tool]['gcode_parsed'] = []
-                cnc_job_obj.tools[used_tool]['solid_geometry'] = deepcopy(sol_geo)
+                entry['nr_drills'] = drill_nr
+                entry['nr_slots'] = slot_nr
+                entry['offset'] = z_off
+                entry['gcode'] = ''
+                entry['gcode_parsed'] = []
+                entry['solid_geometry'] = geo
+                return entry
+
+            cnc_job_obj.tools = {}
+            if has_toolchange:
+                for t_id in gen_ids:
+                    cnc_job_obj.tools[t_id] = tool_entry(t_id, [t_id])
+            else:
+                # the first tool of the job is the tool that we are going to use, for all the selected tools
+                cnc_job_obj.tools[gen_ids[0]] = tool_entry(gen_ids[0], gen_ids)
 
             # #########################################################################################################
-            # #########################################################################################################
             # Initialization
-            # #########################################################################################################
             # #########################################################################################################
             # Preprocessor
             cnc_job_obj.pp_excellon_name = self.ui.pp_excellon_name_cb.get_value()
@@ -2102,36 +2400,37 @@ class ToolDrilling(Geometry, AppTool):
             # first drill point
             # I can read the toolchange x,y point from any tool since it is the same for all, so I read it
             # from the first tool that is available
-
-            first_tool_available = sel_tools[0]
-            cnc_job_obj.xy_toolchange = cnc_job_obj.tools[first_tool_available]['data']["tools_drill_toolchangexy"]
+            cnc_job_obj.xy_toolchange = gen_tools[gen_ids[0]]['data'].get("tools_drill_toolchangexy")
 
             x_tc, y_tc = [0, 0]
-            try:
-                if cnc_job_obj.xy_toolchange != '':
+            if cnc_job_obj.xy_toolchange not in (None, ''):
+                try:
                     tcxy_temp = re.sub(r'[()\[\]]', '', str(cnc_job_obj.xy_toolchange))
                     if tcxy_temp:
                         x_tc, y_tc = [float(safe_eval(a)) for a in tcxy_temp.split(",")]
-            except Exception:
-                x_tc, y_tc = [0, 0]
-                self.app.inform.emit('[ERROR]%s' % _("The Toolchange X,Y format has to be (x, y)."))
+                except Exception:
+                    x_tc, y_tc = [0, 0]
+                    self.app.inform.emit('[ERROR]%s' % _("The Toolchange X,Y format has to be (x, y)."))
 
             cnc_job_obj.oldx = x_tc
             cnc_job_obj.oldy = y_tc
             first_drill_point = (cnc_job_obj.oldx, cnc_job_obj.oldy)
+
+            def fail_job():
+                app_obj.inform.emit('[ERROR_NOTCL] %s' % _("G-Code generation failed."))
+                return 'fail'
 
             # #########################################################################################################
             # ####################### NO TOOLCHANGE ###################################################################
             # #########################################################################################################
             if has_toolchange is False:
                 tool_points = []
-                for tool in sel_tools:
-                    if tool in points:
-                        tool_points += points[tool]
+                for tool in gen_ids:
+                    tool_points += points[tool]
 
                 # use the first tool in the selection as the tool that we are going to use
-                used_tool = sel_tools[0]
-                used_tooldia = self.excellon_tools[used_tool]['tooldia']
+                used_tool = gen_ids[0]
+                used_tooldia = gen_tools[used_tool]['tooldia']
 
                 # those are used by the preprocessors to display data on the toolchange line
                 cnc_job_obj.tool = used_tool
@@ -2140,12 +2439,15 @@ class ToolDrilling(Geometry, AppTool):
 
                 # generate GCode
                 tool_gcode, __, start_gcode = cnc_job_obj.excellon_tool_gcode_gen(used_tool, tool_points,
-                                                                                  cnc_job_obj.tools,
+                                                                                  gen_tools,
                                                                                   first_pt=first_drill_point,
                                                                                   is_first=True,
                                                                                   is_last=True,
                                                                                   opt_type=used_exc_optim_type,
-                                                                                  toolchange=False)
+                                                                                  toolchange=False,
+                                                                                  exclusion_owner=EXCLUSION_OWNER)
+                if tool_gcode == 'fail':
+                    return fail_job()
 
                 # parse the Gcode
                 tool_gcode_parsed = cnc_job_obj.excellon_tool_gcode_parse(used_tooldia, gcode=tool_gcode,
@@ -2158,48 +2460,37 @@ class ToolDrilling(Geometry, AppTool):
                 if start_gcode != '':
                     cnc_job_obj.gc_start = start_gcode
 
-                self.total_gcode = tool_gcode
-                self.total_gcode_parsed = tool_gcode_parsed
+                total_gcode = tool_gcode
+                total_gcode_parsed = tool_gcode_parsed
 
             # ####################### TOOLCHANGE ACTIVE ######################################################
             else:
-                cnc_job_obj.used_tools = deepcopy(sel_tools)
-                for tool_id in sel_tools:
-                    tool_points = []
-                    if tool_id in points:
-                        tool_points = points[tool_id]
-                    used_tooldia = self.excellon_tools[tool_id]['tooldia']
+                cnc_job_obj.used_tools = list(gen_ids)
+                for tool_id in gen_ids:
+                    tool_points = points[tool_id]
+                    used_tooldia = gen_tools[tool_id]['tooldia']
 
                     # those are used by the preprocessors to display data on the toolchange line
                     cnc_job_obj.tool = tool_id
                     cnc_job_obj.postdata['toolC'] = used_tooldia
 
-                    # if slots are converted to drill for this tool, update the number of drills and make slots nr zero
-                    convert_slots = self.excellon_tools[tool_id]['data']['tools_drill_drill_slots']
-                    if convert_slots is True:
-                        nr_drills = len(tool_points)
-                        nr_slots = 0
-                        cnc_job_obj.tools[used_tooldia]['nr_drills'] = nr_drills
-                        cnc_job_obj.tools[used_tooldia]['nr_slots'] = nr_slots
-
                     # calculate if the current tool is the first one or if it is the last one
                     # for the first tool we add some extra GCode (start Gcode, header etc)
                     # for the last tool we add other GCode (the end code, what is happening at the end of the job)
-                    is_last_tool = True if tool_id == sel_tools[-1] else False
-                    is_first_tool = True if tool_id == sel_tools[0] else False
-
-                    if not tool_points:
-                        self.app.log.debug("%s" % "Tool has no drill points. Skipping.")
-                        continue
+                    is_last_tool = tool_id == gen_ids[-1]
+                    is_first_tool = tool_id == gen_ids[0]
 
                     # Generate Gcode for the current tool
                     tool_gcode, last_pt, start_gcode = cnc_job_obj.excellon_tool_gcode_gen(tool_id, tool_points,
-                                                                                           self.excellon_tools,
+                                                                                           gen_tools,
                                                                                            first_pt=first_drill_point,
                                                                                            is_first=is_first_tool,
                                                                                            is_last=is_last_tool,
                                                                                            opt_type=used_exc_optim_type,
-                                                                                           toolchange=True)
+                                                                                           toolchange=True,
+                                                                                           exclusion_owner=EXCLUSION_OWNER)
+                    if tool_gcode == 'fail':
+                        return fail_job()
 
                     # parse Gcode for the current tool
                     tool_gcode_parsed = cnc_job_obj.excellon_tool_gcode_parse(used_tooldia, gcode=tool_gcode,
@@ -2213,17 +2504,14 @@ class ToolDrilling(Geometry, AppTool):
                     if start_gcode != '':
                         cnc_job_obj.gc_start = start_gcode
 
-                    self.total_gcode += tool_gcode
-                    self.total_gcode_parsed += tool_gcode_parsed
+                    total_gcode += tool_gcode
+                    total_gcode_parsed += tool_gcode_parsed
 
-            cnc_job_obj.gcode = self.total_gcode
-            cnc_job_obj.source_file = self.total_gcode
-            cnc_job_obj.gcode_parsed = self.total_gcode_parsed
-            if cnc_job_obj.gcode == 'fail':
-                return 'fail'
+            cnc_job_obj.gcode = total_gcode
+            cnc_job_obj.source_file = total_gcode
+            cnc_job_obj.gcode_parsed = total_gcode_parsed
 
-            # create Geometry for plotting
-            # FIXME is it necessary? didn't we do it previously when filling data in self.tools dictionary?
+            # the geometry of the whole job for plotting (the tools only hold their own)
             cnc_job_obj.create_geometry()
 
             if used_exc_optim_type == 'M':
@@ -2257,11 +2545,15 @@ class ToolDrilling(Geometry, AppTool):
             # traveled_time because it is not always possible to determine the feedrate that the CNC machine uses
             # for G0 move (the fastest speed available to the CNC router). Although self.feedrate_rapids is used only
             # with Marlin preprocessor and derivatives.
-            cnc_job_obj.routing_time = \
-                (cnc_job_obj.measured_down_distance + cnc_job_obj.measured_up_to_zero_distance) / cnc_job_obj.z_feedrate
-            lift_time = cnc_job_obj.measured_lift_distance / cnc_job_obj.feedrate_rapid
-            traveled_time = cnc_job_obj.measured_distance / cnc_job_obj.feedrate_rapid
-            cnc_job_obj.routing_time += lift_time + traveled_time
+            # A feedrate of zero adds no time (no division by zero)
+            z_feed = cnc_job_obj.z_feedrate
+            rapid_feed = cnc_job_obj.feedrate_rapid
+            routing_time = 0.0
+            if z_feed:
+                routing_time += (cnc_job_obj.measured_down_distance + cnc_job_obj.measured_up_to_zero_distance) / z_feed
+            if rapid_feed:
+                routing_time += (cnc_job_obj.measured_lift_distance + cnc_job_obj.measured_distance) / rapid_feed
+            cnc_job_obj.routing_time = routing_time
 
         # To be run in separate thread
         def job_thread(a_obj):

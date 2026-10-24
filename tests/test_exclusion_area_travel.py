@@ -124,7 +124,8 @@ DRILLS = [
 
 
 def check_intersection(exc, point, tooldia=TOOLDIA):
-    drilling = SimpleNamespace(app=SimpleNamespace(exc_areas=exc), excellon_tools={1: {'tooldia': tooldia}})
+    drilling = SimpleNamespace(app=SimpleNamespace(exc_areas=exc), excellon_tools={1: {'tooldia': tooldia}},
+                               _drill_exclusion_areas=lambda: exc.exclusion_areas_storage)
     return ToolDrilling.check_intersection(drilling, {1: [Point(point)]})
 
 
@@ -235,3 +236,172 @@ def test_generated_gcode_keeps_multi_area_clearance(pp_name, strategy):
         travels.append([None if height == 2.0 else height, position])
 
     assert_safe_clearance(exc, (0, 0), end, travels)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Edits of the areas, idx, many travels
+# ---------------------------------------------------------------------------------------------------------------
+
+def test_travel_follows_every_edit_of_the_areas():
+    exc = exclusion_areas(AREA, strategy='around')
+    start, end = (0, 0), (10, 0)
+    before = exc.travel_coordinates(start, end, TOOLDIA)
+    assert len(before) > 1
+
+    exc.exclusion_areas_storage[0]['strategy'] = 'over'
+    over = exc.travel_coordinates(start, end, TOOLDIA)
+    assert over != before and any(z == OVER_Z for z, _xy in over)
+
+    exc.exclusion_areas_storage[0]['strategy'] = 'around'
+    assert exc.travel_coordinates(start, end, TOOLDIA) == before
+    exc.exclusion_areas_storage[0]['overz'] = 9.0
+    assert exc.travel_coordinates(start, end, TOOLDIA) == before
+
+    exc.exclusion_areas_storage.append(
+        dict(obj_type='excellon', shape=box(8, -1, 9, 1), strategy='around', overz=OVER_Z, idx=2))
+    two = exc.travel_coordinates(start, end, TOOLDIA)
+    assert_avoided(start, end, two, AREA, box(8, -1, 9, 1))
+
+    exc.exclusion_areas_storage.clear()
+    assert exc.travel_coordinates(start, end, TOOLDIA) == [[None, end]]
+    # another tool diameter grows the areas again
+    exc.exclusion_areas_storage.append(dict(obj_type='excellon', shape=AREA, strategy='around', overz=OVER_Z, idx=1))
+    thin = exc.travel_coordinates((0, 1.2), (10, 1.2), 0.1)
+    fat = exc.travel_coordinates((0, 1.2), (10, 1.2), 2.0)
+    assert thin == [[None, (10, 1.2)]] and len(fat) > 1
+
+
+def test_idx_is_the_row_number_after_add_and_delete():
+    exc = exclusion_areas(box(0, 0, 1, 1), box(2, 0, 3, 1), box(4, 0, 5, 1))
+    exc.app.inform = Mock()
+    exc.exclusion_shapes = Mock()
+    exc.app.delete_selection_shape = Mock()
+    exc.app.inform = Mock()
+    exc.cnc_button = Mock()
+    exc.renumber()
+    assert [a['idx'] for a in exc.exclusion_areas_storage] == [1, 2, 3]
+
+    exc.delete_sel_shapes([0])
+    assert [a['idx'] for a in exc.exclusion_areas_storage] == [1, 2]
+    assert [a['shape'].bounds[0] for a in exc.exclusion_areas_storage] == [2.0, 4.0]
+    assert exc.next_idx() == 3
+
+    exc.exclusion_areas_storage.append(dict(idx=exc.next_idx(), shape=box(6, 0, 7, 1), strategy='over', overz=1))
+    assert [a['idx'] for a in exc.exclusion_areas_storage] == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Owner: the areas drawn in the Drilling plugin are not seen by the Milling travels and the other way round
+# ---------------------------------------------------------------------------------------------------------------
+
+def test_owner_filter_of_the_travel_planner():
+    exc = exclusion_areas(AREA)
+    start, end = (0, 0), (10, 0)
+
+    # an area without owner (Milling) is seen with owner=None and not by a Drilling job
+    assert len(exc.travel_coordinates(start, end, TOOLDIA)) > 1
+    assert exc.travel_coordinates(start, end, TOOLDIA, owner='drilling') == [[None, end]]
+
+    exc.exclusion_areas_storage[0]['owner'] = 'drilling'
+    assert len(exc.travel_coordinates(start, end, TOOLDIA, owner='drilling')) > 1
+    # Milling (owner None) keeps seeing every area
+    assert len(exc.travel_coordinates(start, end, TOOLDIA)) > 1
+
+
+def test_drilling_job_ignores_a_milling_area_over_a_hole():
+    from test_drilling_gen import make_app as make_gen_app, tool_dict
+
+    hole = (4.5, 0.0)
+    exc = exclusion_areas(AREA)    # no owner: an area of the Milling plugin that covers the hole
+
+    def run(owner):
+        app = make_gen_app(excellon_search_time=1)
+        app.exc_areas = exc
+        app.app_units = 'MM'
+        job = CNCjob(app, pp_excellon_name='default')
+        job.obj_options = {'name': 'job', 'type': 'Excellon', 'xmin': 0, 'xmax': 30, 'ymin': 0, 'ymax': 20}
+        job.coords_decimals = 4
+        job.fr_decimals = 2
+        tools = {1: tool_dict(TOOLDIA, [hole])}
+        job.tools = {1: {'nr_drills': 1}}
+        job.tool = 1
+        return job.excellon_tool_gcode_gen(1, [Point(hole)], tools, (10.0, 10.0), is_first=True, is_last=True,
+                                           opt_type='R', exclusion_owner=owner)
+
+    with_all = run(None)
+    drilling_only = run('drilling')
+    assert drilling_only[0] != 'fail' and 'G00 X4.5000 Y0.0000' in drilling_only[0]
+    # the Over Z lift of the Milling area is in the travel only when the area is seen
+    assert 'Z%.4f' % OVER_Z in with_all[0] and 'Z%.4f' % OVER_Z not in drilling_only[0]
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# OR-Tools route solver size limit
+# ---------------------------------------------------------------------------------------------------------------
+
+def test_route_solver_above_the_limit_uses_a_greedy_order(monkeypatch):
+    from appCommon import RouteSolver
+    locs = [(float(x), 0.0) for x in (5, 1, 4, 2, 3, 0)]
+    monkeypatch.setattr(RouteSolver, 'MAX_MATRIX_POINTS', 3)
+    monkeypatch.setattr(RouteSolver, 'distance_matrix',
+                        lambda *a, **k: pytest.fail('the n x n matrix was built'))
+    route, length = RouteSolver.solve_route(locs, depot=5)
+    assert route == [5, 1, 3, 4, 2, 0]
+    assert length == pytest.approx(5.0)
+
+
+def test_route_solver_small_input_still_solves_with_ortools():
+    pytest.importorskip('ortools')
+    from appCommon import RouteSolver
+    route, length = RouteSolver.solve_route([(0, 0), (3, 0), (1, 0), (2, 0)], depot=0)
+    assert sorted(route) == [0, 1, 2, 3] and route[0] == 0
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# new_object: abort and failure release the promise
+# ---------------------------------------------------------------------------------------------------------------
+
+def _app_object():
+    from appCommon.Common import GracefulException  # noqa: F401
+    from appObjects.AppObject import AppObject
+    from appObjects.ObjectCollection import ObjectCollection
+    app = make_app()
+    app.on_plots_updated = Mock()
+    app.inform_shell = Mock()
+    app.options['units'] = 'MM'
+    app.collection = SimpleNamespace(promises={'job'})
+    app.collection.remove_promise = lambda name: ObjectCollection.remove_promise(app.collection, name)
+    return app, AppObject(app)
+
+
+@pytest.mark.parametrize('failure', ['abort', 'fail', 'crash'])
+def test_new_object_failure_or_abort_releases_the_promise(failure):
+    from unittest.mock import patch
+    from PyQt6 import QtCore
+    from appCommon.Common import GracefulException
+
+    class Result(QtCore.QObject):
+        tool_option_prefix = None
+        inherits_mill_options = False
+        kind = 'geometry'
+
+        def __init__(self, name, app):
+            super().__init__()
+            self.obj_options = {'name': name}
+
+    app, app_obj = _app_object()
+
+    def initialize(obj, _app):
+        if failure == 'abort':
+            raise GracefulException
+        if failure == 'crash':
+            raise RuntimeError('boom')
+        return 'fail'
+
+    with patch('appObjects.AppObject.GeometryObject', Result):
+        assert app_obj.new_object('geometry', 'job', initialize, plot=False) == 'fail'
+
+    assert app.collection.promises == set()
+    messages = ' '.join(str(c.args[0]) for c in app.inform.emit.call_args_list)
+    if failure == 'abort':
+        assert 'WARNING_NOTCL' in messages and 'internal error' not in messages and 'Traceback' not in messages

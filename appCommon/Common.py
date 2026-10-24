@@ -12,7 +12,9 @@
 # ##########################################################
 from PyQt6 import QtCore
 
-from shapely import Polygon, Point, LineString, get_coordinates
+from math import sqrt
+
+from shapely import Polygon, Point, LineString, get_coordinates, prepare
 from shapely.ops import unary_union
 from appGUI.VisPyVisuals import ShapeCollection
 
@@ -22,7 +24,6 @@ from copy import deepcopy
 import collections
 from datetime import datetime
 from heapq import heappop, heappush
-
 import numpy as np
 # from voronoi import Voronoi
 # from voronoi import Polygon as voronoi_polygon
@@ -265,18 +266,21 @@ class ExclusionAreas(QtCore.QObject):
         }
         '''
         self.exclusion_areas_storage = []
+        self._travel_cache = None
 
         self.mouse_is_dragging = False
 
         self.solid_geometry = []
         self.obj_type = None
+        self.owner = None
 
         self.shape_type_button = None
         self.over_z_button = None
         self.strategy_button = None
         self.cnc_button = None
 
-    def on_add_area_click(self, shape_button, overz_button, strategy_radio, cnc_button, solid_geo, obj_type):
+    def on_add_area_click(self, shape_button, overz_button, strategy_radio, cnc_button, solid_geo, obj_type,
+                          owner=None):
         """
 
         :param shape_button:    a FCButton that has the value for the shape
@@ -288,6 +292,8 @@ class ExclusionAreas(QtCore.QObject):
         :param solid_geo:       reference to the object solid geometry for which we add exclusion areas
         :param obj_type:        Type of FlatCAM object that called this method. String: "excellon" or "geometry"
         :type obj_type:         str
+        :param owner:           the plugin that draws the areas ('drilling'), stored in each new area; None for the
+                                plugins that use every area (Milling)
         :return:                None
         """
         self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the start point of the area."))
@@ -301,6 +307,7 @@ class ExclusionAreas(QtCore.QObject):
 
         self.solid_geometry = solid_geo
         self.obj_type = obj_type
+        self.owner = owner
 
         self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
         self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
@@ -364,11 +371,12 @@ class ExclusionAreas(QtCore.QObject):
                     #     "overz":      float < - self.over_z_button
                     # }
                     new_el = {
-                        "idx":      len(self.exclusion_areas_storage) + 1,
+                        "idx":      self.next_idx(),
                         "obj_type": self.obj_type,
                         "shape":    new_rectangle,
                         "strategy": self.strategy_button.get_value(),
-                        "overz":    self.over_z_button.get_value()
+                        "overz":    self.over_z_button.get_value(),
+                        "owner":    self.owner
                     }
                     self.exclusion_areas_storage.append(new_el)
 
@@ -428,14 +436,15 @@ class ExclusionAreas(QtCore.QObject):
                             }
                             """
                             new_el = {
-                                "idx":      len(self.exclusion_areas_storage) + 1,
+                                "idx":      self.next_idx(),
                                 "obj_type": self.obj_type,
                                 "shape":    pol,
                                 "strategy": self.strategy_button.get_value(),
-                                "overz":    self.over_z_button.get_value()
+                                "overz":    self.over_z_button.get_value(),
+                                "owner":    self.owner
                             }
                             self.exclusion_areas_storage.append(new_el)
-
+        
                             if self.obj_type == 'excellon':
                                 color = "#FF7400"
                                 face_color = "#FF7400BF"
@@ -629,6 +638,7 @@ class ExclusionAreas(QtCore.QObject):
         # delete shapes
         for idx in sorted(idxs, reverse=True):
             del self.exclusion_areas_storage[idx]
+        self.renumber()
 
         # re-add what's left after deletion in first step
         if self.obj_type == 'excellon':
@@ -660,6 +670,50 @@ class ExclusionAreas(QtCore.QObject):
             # there are no more exclusion areas in the storage, all have been selected and deleted
             self.app.inform.emit('%s' % _("All exclusion zones deleted."))
 
+    def next_idx(self):
+        """The idx for a new area: one more than the highest in use, so it is never a duplicate."""
+        return max((area.get('idx', 0) for area in self.exclusion_areas_storage), default=0) + 1
+
+    def renumber(self):
+        """idx = the row number (1..n) shown in the exclusion table, in storage order."""
+        for number, area in enumerate(self.exclusion_areas_storage, start=1):
+            area['idx'] = number
+
+    def areas_of(self, owner=None):
+        """The stored areas of one owner ('drilling' when drawn in the Drilling plugin); None = all the areas."""
+        if owner is None:
+            return self.exclusion_areas_storage
+        return [area for area in self.exclusion_areas_storage if area.get('owner') == owner]
+
+    def _travel_cache_for(self, tooldia, owner=None):
+        """
+        The grown shapes, the union of the 'around' ones and the visibility memo of its vertices, for the current areas
+        (of this owner) and tool diameter. The key holds the shapes themselves (Shapely shapes are immutable), so any
+        add, delete, clear or strategy edit gives a new key and the cache is rebuilt on the next call.
+        """
+        areas = self.areas_of(owner)
+        key = (tooldia, owner, self.app.app_units, tuple((id(area['shape']), area['strategy']) for area in areas))
+        cache = getattr(self, '_travel_cache', None)
+        if cache is not None and cache['key'] == key:
+            return cache
+        grown = [self.grown_shape(area['shape'], tooldia) for area in areas]
+        around = unary_union([shape for shape, area in zip(grown, areas) if area['strategy'] == 'around'])
+        prepare(around)
+        for shape in grown:
+            prepare(shape)
+        cache = {
+            'key': key,
+            # keeps the shapes alive, so an id() in the key is never reused by another shape
+            'shapes': [area['shape'] for area in areas],
+            'areas': list(areas),
+            'grown': grown,
+            'around': around,
+            'boundary': list(dict.fromkeys(tuple(xy) for xy in get_coordinates(around.boundary))),
+            'visible': {},
+        }
+        self._travel_cache = cache
+        return cache
+
     def grown_shape(self, shape, tooldia):
         """
         An Exclusion area grown by the half of the tool diameter and a little more. The travel lines go over or around
@@ -676,7 +730,14 @@ class ExclusionAreas(QtCore.QObject):
         buffered_distance = (tooldia / 2.0) + (0.1 if self.app.app_units == 'MM' else 0.00393701)
         return shape.buffer(buffered_distance, join_style="mitre")
 
-    def travel_coordinates(self, start_point, end_point, tooldia):
+    @staticmethod
+    def _crossing_around(cache, line):
+        around = cache['around']
+        if not around.intersects(line):
+            return None
+        return line_crossing(line, around)
+
+    def travel_coordinates(self, start_point, end_point, tooldia, owner=None):
         """
         WIll create a path the go around the exclusion areas on the shortest path when travelling (at a Z above the
         material).
@@ -687,6 +748,7 @@ class ExclusionAreas(QtCore.QObject):
         :type end_point:        tuple
         :param tooldia:         THe tool diameter used and which generates the travel lines
         :type tooldia           float
+        :param owner:           only the areas of this owner ('drilling'); None: all the areas (Milling)
         :return:                A list of x,y tuples that describe the avoiding path
         :rtype:                 list
         :raises ValueError:     when no path around the grown 'around' areas is possible
@@ -695,28 +757,26 @@ class ExclusionAreas(QtCore.QObject):
         # Travel lines: rapids. Should not pass through Exclusion areas
         travel_line = LineString([start_point, end_point])
 
-        buffered_storage = []
-        for area in self.exclusion_areas_storage:
-            new_area = deepcopy(area)
-            new_area['shape'] = self.grown_shape(area['shape'], tooldia)
-            buffered_storage.append(new_area)
+        cache = self._travel_cache_for(tooldia, owner)
+        areas = cache['areas']
+        grown_shapes = cache['grown']
+        around = cache['around']
 
         # Plan XY against all 'around' areas together. The union includes the boundary intersections of overlapping
         # areas, and each candidate leg is checked against the whole union, not only the area being detoured.
-        around = unary_union([area['shape'] for area in buffered_storage if area['strategy'] == 'around'])
         route = [tuple(start_point), tuple(end_point)]
-        if line_crossing(travel_line, around) is not None:
+        if self._crossing_around(cache, travel_line) is not None:
             if around.contains(Point(start_point)) or around.contains(Point(end_point)):
                 raise ValueError(_("Failed. The tool cannot go around an exclusion area: "
                                    "a travel starts or ends too close to the area. "
                                    "Use the 'Over' strategy or change the area."))
 
-            vertices = list(dict.fromkeys(route + [tuple(xy) for xy in get_coordinates(around.boundary)]))
+            vertices = list(dict.fromkeys(route + cache['boundary']))
+            visible = cache['visible']
             distances = {0: 0.0}
             previous = {}
             pending = [(0.0, 0)]
             visited = set()
-            # ponytail: O(V^2) visibility search for the exclusion vertices; add a spatial index if large areas need it.
             while pending:
                 distance, idx = heappop(pending)
                 if idx in visited:
@@ -724,14 +784,20 @@ class ExclusionAreas(QtCore.QObject):
                 visited.add(idx)
                 if idx == 1:
                     break
+                origin = vertices[idx]
                 for next_idx, vertex in enumerate(vertices):
                     if next_idx in visited:
                         continue
-                    leg = LineString([vertices[idx], vertex])
-                    next_distance = distance + leg.length
+                    dx, dy = vertex[0] - origin[0], vertex[1] - origin[1]
+                    next_distance = distance + sqrt(dx * dx + dy * dy)
                     if next_distance >= distances.get(next_idx, float('inf')):
                         continue
-                    if line_crossing(leg, around) is None:
+                    # the visibility of a pair of vertices does not depend on the travel: remember it
+                    key = (origin, vertex)
+                    clear = visible.get(key)
+                    if clear is None:
+                        clear = visible[key] = self._crossing_around(cache, LineString([origin, vertex])) is None
+                    if clear:
                         distances[next_idx] = next_distance
                         previous[next_idx] = idx
                         heappush(pending, (next_distance, next_idx))
@@ -750,10 +816,10 @@ class ExclusionAreas(QtCore.QObject):
         offset = 0.0
         for first, last in zip(route, route[1:]):
             leg = LineString([first, last])
-            for area in buffered_storage:
-                if area['strategy'] == 'around':
+            for area, grown_shape in zip(areas, grown_shapes):
+                if area['strategy'] == 'around' or not grown_shape.intersects(leg):
                     continue
-                crossing = line_crossing(leg, area['shape'])
+                crossing = line_crossing(leg, grown_shape)
                 if crossing is not None:
                     entry_distance, entry_pt, exit_pt = crossing
                     intervals.append([offset + entry_distance, offset + leg.project(exit_pt), float(area['overz']),

@@ -83,6 +83,20 @@ class DrillingUI:
 
         obj_grid.addWidget(self.object_combo, 0, 0, 1, 2)
 
+        # More Excellon objects in the same job (Advanced level): their tools are merged by diameter
+        self.extra_objects_label = FCLabel('%s:' % _("Add objects"))
+        self.extra_objects_label.setToolTip(
+            _("More Excellon objects that are drilled in the same job. Their tools are merged with the tools of\n"
+              "the source object by diameter. The objects themselves are not changed.\n"
+              "Click an object to add it or to remove it.")
+        )
+        self.extra_objects_list = QtWidgets.QListWidget()
+        self.extra_objects_list.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
+        self.extra_objects_list.setMaximumHeight(70)
+        obj_grid.addWidget(self.extra_objects_label, 1, 0)
+        obj_grid.addWidget(self.extra_objects_list, 1, 1)
+        self.extra_objects_widgets = [self.extra_objects_label, self.extra_objects_list]
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
@@ -161,6 +175,13 @@ class DrillingUI:
         )
         self.tools_box.addWidget(self.tool_data_label)
 
+        # shown while extra objects are selected (the tool parameters are read-only then)
+        self.extras_note_label = FCLabel(
+            _("With added objects the tool parameters are read-only. Remove the added objects to edit them."))
+        self.extras_note_label.setWordWrap(True)
+        self.extras_note_label.setVisible(False)
+        self.tools_box.addWidget(self.extras_note_label)
+
         self.exc_param_frame = QtWidgets.QFrame()
         self.exc_param_frame.setContentsMargins(0, 0, 0, 0)
         self.tools_box.addWidget(self.exc_param_frame)
@@ -172,12 +193,12 @@ class DrillingUI:
         # #############################################################################################################
         # Tool Parameters Frame
         # #############################################################################################################
-        tp_frame = FCFrame()
-        self.exc_tools_box.addWidget(tp_frame)
+        self.tool_param_frame = FCFrame()
+        self.exc_tools_box.addWidget(self.tool_param_frame)
 
         # Grid Layout
         param_grid = GLay(v_spacing=5, h_spacing=3)
-        tp_frame.setLayout(param_grid)
+        self.tool_param_frame.setLayout(param_grid)
 
         # Cut Z
         self.cutzlabel = FCLabel('%s:' % _('Cut Z'))
@@ -401,6 +422,101 @@ class DrillingUI:
         self.last_drill_cb.setObjectName("e_drill_last_drill")
         param_grid.addWidget(self.last_drill_cb, 32, 0, 1, 2)
 
+        # Dwell at the bottom of the holes
+        self.dwell_bottom_cb = FCCheckBox('%s' % _('Dwell at bottom'))
+        self.dwell_bottom_cb.setToolTip(
+            _("Pause at the bottom of every hole, for the Dwell time\n"
+              "(the time set above, also when Dwell is not checked).\n"
+              "Ignored by the laser preprocessors.")
+        )
+        self.dwell_bottom_cb.setObjectName("e_dwell_bottom")
+        param_grid.addWidget(self.dwell_bottom_cb, 34, 0, 1, 2)
+
+        # Peck drilling
+        self.peck_cb = FCCheckBox('%s:' % _('Peck drilling'))
+        self.peck_cb.setToolTip(
+            _("Drill each hole in steps of Peck depth. After each step the tool\n"
+              "goes up to the Travel Z (it clears the chips), goes down fast to the\n"
+              "Peck retract clearance above the previous depth and feeds on.\n"
+              "It replaces the Multi-Depth. Ignored by the laser preprocessors.")
+        )
+        self.peck_cb.setObjectName("e_peck")
+
+        self.peck_depth_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.peck_depth_entry.set_precision(self.decimals)
+        self.peck_depth_entry.set_range(0.0, 10000.0000)
+        self.peck_depth_entry.setSingleStep(0.1)
+        self.peck_depth_entry.setToolTip(_("Depth of each peck step (positive)."))
+        self.peck_depth_entry.setObjectName("e_peck_depth")
+
+        param_grid.addWidget(self.peck_cb, 36, 0)
+        param_grid.addWidget(self.peck_depth_entry, 36, 1)
+
+        self.peck_retract_label = FCLabel('%s:' % _('Peck retract'))
+        self.peck_retract_label.setToolTip(
+            _("Clearance above the previous depth to which the tool goes down fast\n"
+              "after the full retract, before it feeds on.")
+        )
+        self.peck_retract_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.peck_retract_entry.set_precision(self.decimals)
+        self.peck_retract_entry.set_range(0.0, 10000.0000)
+        self.peck_retract_entry.setSingleStep(0.1)
+        self.peck_retract_entry.setObjectName("e_peck_retract")
+
+        param_grid.addWidget(self.peck_retract_label, 38, 0)
+        param_grid.addWidget(self.peck_retract_entry, 38, 1)
+
+        self.ois_peck = OptionalInputSection(self.peck_cb, [self.peck_depth_entry, self.peck_retract_label,
+                                                            self.peck_retract_entry])
+
+        # Spindle direction
+        self.spindledir_label = FCLabel('%s:' % _('Spindle direction'))
+        self.spindledir_label.setToolTip(
+            _("The direction that the spindle is rotating.\n"
+              "It can be either:\n"
+              "- CW = clockwise or\n"
+              "- CCW = counter clockwise")
+        )
+        self.spindledir_radio = RadioSet([{'label': _('CW'), 'value': 'CW'},
+                                          {'label': _('CCW'), 'value': 'CCW'}], compact=True)
+        self.spindledir_radio.setObjectName("e_spindledir")
+
+        param_grid.addWidget(self.spindledir_label, 40, 0)
+        param_grid.addWidget(self.spindledir_radio, 40, 1)
+
+        # Fast Plunge
+        self.fplunge_cb = FCCheckBox('%s' % _('Fast Plunge'))
+        self.fplunge_cb.setToolTip(
+            _("By checking this, the vertical move from\n"
+              "Z_Toolchange to Z_move is done with G0,\n"
+              "meaning the fastest speed available.\n"
+              "WARNING: the move is done at Toolchange X,Y coords.")
+        )
+        self.fplunge_cb.setObjectName("e_f_plunge")
+        param_grid.addWidget(self.fplunge_cb, 42, 0, 1, 2)
+
+        # Fast retract
+        self.fretract_cb = FCCheckBox('%s' % _('Fast Retract'))
+        self.fretract_cb.setToolTip(
+            _("Exit hole strategy.\n"
+              " - When unchecked, while exiting the drilled hole the drill bit\n"
+              "will travel slow, with set feedrate (G1), up to zero depth and then\n"
+              "travel as fast as possible (G0) to the Z Move (travel height).\n"
+              " - When checked the travel from Z cut (cut depth) to Z_move\n"
+              "(travel height) is done as fast as possible (G0) in one move.")
+        )
+        self.fretract_cb.setObjectName("e_f_retract")
+        param_grid.addWidget(self.fretract_cb, 44, 0, 1, 2)
+
+        # the controls of the Advanced level; the peck, the bottom dwell and the spindle direction do not apply to a
+        # laser preprocessor
+        self.advanced_drill_widgets = [self.dwell_bottom_cb, self.peck_cb, self.peck_depth_entry,
+                                       self.peck_retract_label, self.peck_retract_entry, self.spindledir_label,
+                                       self.spindledir_radio, self.fplunge_cb, self.fretract_cb]
+        self.no_laser_drill_widgets = [self.dwell_bottom_cb, self.peck_cb, self.peck_depth_entry,
+                                       self.peck_retract_label, self.peck_retract_entry, self.spindledir_label,
+                                       self.spindledir_radio]
+
         self.drill_overlap_label.hide()
         self.drill_overlap_entry.hide()
         self.last_drill_cb.hide()
@@ -571,6 +687,55 @@ class DrillingUI:
         all_par_grid.addWidget(pp_excellon_label, 14, 0)
         all_par_grid.addWidget(self.pp_excellon_name_cb, 14, 1)
 
+        # Spot drilling pass: a job option (Advanced level)
+        self.spot_cb = FCCheckBox('%s:' % _('Spot drilling'))
+        self.spot_cb.setToolTip(
+            _("The job starts with an extra pass over all the selected holes with a spot drill\n"
+              "(centering): its own tool number (the next free one), a toolchange before it,\n"
+              "then the drill tools. Needs the toolchange: without it the pass is left out.\n"
+              "Ignored by the laser preprocessors. Peck, multi-depth and dwell at the bottom\n"
+              "do not apply to it.")
+        )
+        self.spot_cb.setObjectName("e_spot")
+
+        self.spot_dia_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.spot_dia_entry.set_precision(self.decimals)
+        self.spot_dia_entry.set_range(0.0, 10000.0000)
+        self.spot_dia_entry.setSingleStep(0.1)
+        self.spot_dia_entry.setToolTip(_("Diameter of the spot drill."))
+        self.spot_dia_entry.setObjectName("e_spot_dia")
+
+        all_par_grid.addWidget(self.spot_cb, 16, 0)
+        all_par_grid.addWidget(self.spot_dia_entry, 16, 1)
+
+        self.spot_cutz_label = FCLabel('%s:' % _("Spot Cut Z"))
+        self.spot_cutz_label.setToolTip(_("Depth of the spot holes. Negative value, in current units."))
+        self.spot_cutz_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.spot_cutz_entry.set_precision(self.decimals)
+        self.spot_cutz_entry.set_range(-10000.0000, 10000.0000)
+        self.spot_cutz_entry.setSingleStep(0.1)
+        self.spot_cutz_entry.setObjectName("e_spot_cutz")
+
+        all_par_grid.addWidget(self.spot_cutz_label, 17, 0)
+        all_par_grid.addWidget(self.spot_cutz_entry, 17, 1)
+
+        self.spot_feedrate_label = FCLabel('%s:' % _("Spot Feedrate Z"))
+        self.spot_feedrate_label.setToolTip(_("Feedrate on the Z axis of the spot holes."))
+        self.spot_feedrate_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.spot_feedrate_entry.set_precision(self.decimals)
+        self.spot_feedrate_entry.set_range(0.0, 910000.0000)
+        self.spot_feedrate_entry.setSingleStep(0.1)
+        self.spot_feedrate_entry.setObjectName("e_spot_feedrate")
+
+        all_par_grid.addWidget(self.spot_feedrate_label, 18, 0)
+        all_par_grid.addWidget(self.spot_feedrate_entry, 18, 1)
+
+        self.spot_widgets = [self.spot_cb, self.spot_dia_entry, self.spot_cutz_label, self.spot_cutz_entry,
+                             self.spot_feedrate_label, self.spot_feedrate_entry]
+        self.ois_spot = OptionalInputSection(self.spot_cb, [self.spot_dia_entry, self.spot_cutz_label,
+                                                            self.spot_cutz_entry, self.spot_feedrate_label,
+                                                            self.spot_feedrate_entry])
+
         # ------------------------------------------------------------------------------------------------------------
         # ------------------------- EXCLUSION AREAS ------------------------------------------------------------------
         # ------------------------------------------------------------------------------------------------------------
@@ -585,11 +750,11 @@ class DrillingUI:
             ))
         self.exclusion_cb.setObjectName("e_area_exclusion")
 
-        all_par_grid.addWidget(self.exclusion_cb, 16, 0, 1, 2)
+        all_par_grid.addWidget(self.exclusion_cb, 20, 0, 1, 2)
 
         self.exclusion_frame = QtWidgets.QFrame()
         self.exclusion_frame.setContentsMargins(0, 0, 0, 0)
-        all_par_grid.addWidget(self.exclusion_frame, 18, 0, 1, 2)
+        all_par_grid.addWidget(self.exclusion_frame, 22, 0, 1, 2)
 
         self.exclusion_box = QtWidgets.QVBoxLayout()
         self.exclusion_box.setContentsMargins(0, 0, 0, 0)
@@ -675,10 +840,106 @@ class DrillingUI:
         # -------------------------- EXCLUSION AREAS END -------------------------------------------------------------
         # ------------------------------------------------------------------------------------------------------------
 
+        # Job XY transforms of the drill points: mirror -> offset -> array (job options, Advanced level)
+        self.job_offset_label = FCLabel('%s:' % _('Job offset X,Y'))
+        self.job_offset_label.setToolTip(
+            _("Move all the drill points of the job by this X,Y distance (after the mirror, before the array).\n"
+              "Blank: no move. The Excellon object is not changed.")
+        )
+        self.job_offset_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.job_offset_entry.setPlaceholderText(_("X,Y distance"))
+        self.job_offset_entry.setObjectName("e_job_offset")
+        all_par_grid.addWidget(self.job_offset_label, 24, 0)
+        all_par_grid.addWidget(self.job_offset_entry, 24, 1)
+
+        self.mirror_label = FCLabel('%s:' % _('Job mirror'))
+        self.mirror_label.setToolTip(
+            _("Mirror all the drill points of the job: No, on the X axis (the Y values flip),\n"
+              "on the Y axis (the X values flip) or both. The mirror is done first.")
+        )
+        self.mirror_radio = RadioSet([{'label': _('No'), 'value': 'no'}, {'label': 'X', 'value': 'x'},
+                                      {'label': 'Y', 'value': 'y'}, {'label': 'XY', 'value': 'xy'}])
+        self.mirror_radio.setObjectName("e_mirror")
+        all_par_grid.addWidget(self.mirror_label, 25, 0)
+        all_par_grid.addWidget(self.mirror_radio, 25, 1)
+
+        self.mirror_point_label = FCLabel('%s:' % _('Mirror point X,Y'))
+        self.mirror_point_label.setToolTip(
+            _("The point the mirror axes pass through.\n"
+              "Blank: the center of the bounding box of the selected holes.")
+        )
+        self.mirror_point_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.mirror_point_entry.setPlaceholderText(_("Bounding box center"))
+        self.mirror_point_entry.setObjectName("e_mirror_point")
+        all_par_grid.addWidget(self.mirror_point_label, 26, 0)
+        all_par_grid.addWidget(self.mirror_point_entry, 26, 1)
+
+        self.array_columns_label = FCLabel('%s:' % _('Array columns'))
+        self.array_columns_label.setToolTip(_("Repeat the holes along X this many times. 1 x 1 is no array."))
+        self.array_columns_entry = FCSpinner()
+        self.array_columns_entry.set_range(1, 1000)
+        self.array_columns_entry.setObjectName("e_array_columns")
+        all_par_grid.addWidget(self.array_columns_label, 27, 0)
+        all_par_grid.addWidget(self.array_columns_entry, 27, 1)
+
+        self.array_rows_label = FCLabel('%s:' % _('Array rows'))
+        self.array_rows_label.setToolTip(_("Repeat the holes along Y this many times. 1 x 1 is no array."))
+        self.array_rows_entry = FCSpinner()
+        self.array_rows_entry.set_range(1, 1000)
+        self.array_rows_entry.setObjectName("e_array_rows")
+        all_par_grid.addWidget(self.array_rows_label, 28, 0)
+        all_par_grid.addWidget(self.array_rows_entry, 28, 1)
+
+        self.array_pitch_label = FCLabel('%s:' % _('Array pitch X,Y'))
+        self.array_pitch_label.setToolTip(
+            _("The distance between the copies of the array, along X and along Y.\n"
+              "The array is made last, after the mirror and the offset.")
+        )
+        self.array_pitch_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.array_pitch_entry.setPlaceholderText(_("X,Y pitch"))
+        self.array_pitch_entry.setObjectName("e_array_pitch")
+        all_par_grid.addWidget(self.array_pitch_label, 29, 0)
+        all_par_grid.addWidget(self.array_pitch_entry, 29, 1)
+
+        self.transform_widgets = [self.job_offset_label, self.job_offset_entry, self.mirror_label, self.mirror_radio,
+                                  self.mirror_point_label, self.mirror_point_entry, self.array_columns_label,
+                                  self.array_columns_entry, self.array_rows_label, self.array_rows_entry,
+                                  self.array_pitch_label, self.array_pitch_entry]
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
         # all_par_grid.addWidget(separator_line, 25, 0, 1, 2)
+
+        # Hole selection (job option, Advanced level): all the holes or only those inside the areas drawn on the canvas
+        self.holes_label = FCLabel('%s:' % _('Holes'))
+        self.holes_label.setToolTip(
+            _("Which holes are drilled: All, or only those inside the areas drawn on the canvas (Inside area).\n"
+              "The areas are applied before the job mirror, offset and array.")
+        )
+        self.holes_radio = RadioSet([{'label': _('All'), 'value': 'all'}, {'label': _('Inside area'), 'value': 'area'}])
+        self.holes_radio.setObjectName("e_holes_selection")
+        all_par_grid.addWidget(self.holes_label, 30, 0)
+        all_par_grid.addWidget(self.holes_radio, 30, 1)
+
+        self.hole_area_button = FCButton(_('Add Hole Area:'))
+        self.hole_area_button.setToolTip(
+            _("Draw an area on the canvas. Only the holes inside the areas are drilled when Holes is Inside area.\n"
+              "These areas are not exclusion areas."))
+        self.hole_area_shape_radio = RadioSet([{'label': _("Square"), 'value': 'square'},
+                                               {'label': _("Polygon"), 'value': 'polygon'}])
+        self.hole_area_shape_radio.setToolTip(_("The kind of selection shape used for area selection."))
+        all_par_grid.addWidget(self.hole_area_button, 31, 0)
+        all_par_grid.addWidget(self.hole_area_shape_radio, 31, 1)
+
+        self.hole_areas_label = FCLabel(_("No hole areas"))
+        self.hole_areas_clear_button = FCButton(_('Clear Hole Areas'))
+        self.hole_areas_clear_button.setToolTip(_("Delete the areas that select the holes."))
+        all_par_grid.addWidget(self.hole_areas_label, 32, 0)
+        all_par_grid.addWidget(self.hole_areas_clear_button, 32, 1)
+
+        self.hole_widgets = [self.holes_label, self.holes_radio, self.hole_area_button, self.hole_area_shape_radio,
+                             self.hole_areas_label, self.hole_areas_clear_button]
 
         GLay.set_common_column_size([obj_grid, tool_grid, param_grid, all_par_grid], 0)
 
@@ -743,6 +1004,10 @@ class DrillingUI:
 
                 self.endz_label.show()
                 self.endz_entry.show()
+
+                # the feedrate Z was hidden by the 'laser' (no Z) preprocessors
+                self.frzlabel.show()
+                self.feedrate_z_entry.show()
             else:
                 self.travelzlabel.hide()
                 self.travelz_entry.hide()
@@ -758,6 +1023,12 @@ class DrillingUI:
 
             self.dwell_cb.hide()
             self.dwelltime_entry.hide()
+
+            for widget in self.no_laser_drill_widgets:
+                widget.hide()
+            if advanced:
+                self.fplunge_cb.show()
+                self.fretract_cb.show()
 
             self.spindle_label.setText('%s:' % _("Laser Power"))
             self.spindle_label.setToolTip(
@@ -821,12 +1092,24 @@ class DrillingUI:
             if advanced:
                 self.dwell_cb.show()
                 self.dwelltime_entry.show()
+                for widget in self.advanced_drill_widgets:
+                    widget.show()
 
                 try:
                     self.tool_offset_label.show()
                     self.offset_entry.show()
                 except AttributeError:
                     pass
+            else:
+                # Beginner mode: the advanced controls stay hidden after a preprocessor change
+                self.mpass_cb.hide()
+                self.maxdepth_entry.hide()
+                self.dwell_cb.hide()
+                self.dwelltime_entry.hide()
+                for widget in self.advanced_drill_widgets:
+                    widget.hide()
+                self.tool_offset_label.hide()
+                self.offset_entry.hide()
 
     def confirmation_message(self, accepted, minval, maxval):
         if accepted is False:

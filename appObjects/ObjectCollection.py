@@ -26,8 +26,9 @@ from appObjects.GerberObject import GerberObject
 from appObjects.ObjectDispatch import dispatch_attr
 from appObjects.ScriptObject import ScriptObject
 
-import inspect  # TODO: Remove
+import sys
 import json
+import uuid
 
 import re
 import logging
@@ -516,6 +517,10 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.app.log.debug("Object %s has been promised." % obj_name)
         self.promises.add(obj_name)
 
+    def remove_promise(self, obj_name):
+        """The promised object will not be created (it failed or the user aborted): do not stay busy for it."""
+        self.promises.discard(obj_name)
+
     def has_promises(self):
         return len(self.promises) > 0
 
@@ -918,7 +923,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # return QtWidgets.QAbstractItemModel.flags(self, index)
 
     def append(self, obj, active=False, to_index=None):
-        self.app.log.debug(str(inspect.stack()[1][3]) + " --> OC.append()")
+        self.app.log.debug(sys._getframe(1).f_code.co_name + " --> OC.append()")
 
         name = obj.obj_options["name"]
 
@@ -928,8 +933,16 @@ class ObjectCollection(QtCore.QAbstractItemModel):
             # log.debug("Promised object %s became available." % name)
             # log.debug("%d promised objects remaining." % len(self.promises))
 
+        # one pass over the collection for the names and the history ids
+        others = [o for o in self.get_list() if o is not obj]
+        names = {o.obj_options['name'] for o in others}
+
+        # an object restored from a file can bring the history id of another object
+        if getattr(obj, 'history_uid', None) in {getattr(o, 'history_uid', None) for o in others} - {None}:
+            obj.history_uid = uuid.uuid4().hex
+
         # Prevent same name
-        while name in self.get_names():
+        while name in names:
             # ## Create a new name
             # Ends with number?
             self.app.log.debug("app_obj.new_object(): Object name (%s) exists, changing." % name)
@@ -996,7 +1009,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         :rtype:             list
         """
 
-        # log.debug(str(inspect.stack()[1][3]) + " --> OC.get_names()")
+        # log.debug(sys._getframe(1).f_code.co_name + " --> OC.get_names()")
         return [x.obj_options['name'] for x in self.get_list()]
 
     def get_bounds(self):
@@ -1006,7 +1019,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         :return: [xmin, ymin, xmax, ymax]
         :rtype: list
         """
-        self.app.log.debug(str(inspect.stack()[1][3]) + "--> OC.get_bounds()")
+        self.app.log.debug(sys._getframe(1).f_code.co_name + "--> OC.get_bounds()")
 
         # TODO: Move the operation out of here.
 
@@ -1038,7 +1051,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         :return: The requested object or None if no such object.
         :rtype: FlatCAMObj or None
         """
-        # log.debug(str(inspect.stack()[1][3]) + "--> OC.get_by_name()")
+        # log.debug(sys._getframe(1).f_code.co_name + "--> OC.get_by_name()")
 
         if isCaseSensitive is None or isCaseSensitive is True:
             for obj in self.get_list():
@@ -1225,7 +1238,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.app.all_objects_list = self.get_list()
 
     def delete_all(self):
-        self.app.log.debug(str(inspect.stack()[1][3]) + "--> OC.delete_all()")
+        self.app.log.debug(sys._getframe(1).f_code.co_name + "--> OC.delete_all()")
 
         self.app.object_status_changed.emit(None, 'delete_all', '')
 

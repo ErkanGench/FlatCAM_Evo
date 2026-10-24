@@ -3,11 +3,12 @@
 G-code with the GRBL_laser preprocessor."""
 
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from shapely import LineString
 
+from appObjects.CNCJobObject import CNCJobObject
 from appObjects.GeometryObject import GeometryObject
 from camlib import CNCjob
 from preprocessors.GRBL_laser import GRBL_laser
@@ -98,3 +99,80 @@ def test_cncjob_multigeo_laser_power_from_spindlespeed():
 
     data = app.milling_tool.generate_cnc_job_handler.call_args.kwargs['tools_dict'][7]['data']
     assert data['tools_mill_spindlespeed'] == 500
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# cncjob with the Milling plugin options (offset, polishing) and from an Excellon, with the real Milling code
+
+
+def milling_cncjob(make_source, *argv, pp='default'):
+    from test_milling_single_geometry_tools import MillingHarness
+    app, jobs = laser_app()
+    source = make_source(app)
+    app.preprocessors['default'] = default()
+    app.regFK, app.ui, app.inform_no_echo = Mock(), Mock(), Mock()
+
+    def new_object(kind, name, initializer, **kwargs):
+        with patch('appObjects.AppObjectTemplate.ShapeCollection', Mock()):
+            job = CNCJobObject(name, app)
+        assert initializer(job, app) != 'fail'
+        jobs.append(job)
+        return job
+
+    app.app_obj.new_object = Mock(side_effect=new_object)
+    app.milling_tool = MillingHarness(app=app, target_obj=None, sel_tools={}, units='MM', decimals=4, circle_steps=16,
+                                      new_object=new_object)
+    app.collection.get_by_name = Mock(return_value=source)
+    cmd = TclCommandCncjob(app)
+    args, unnamed = cmd.check_args(('src',) + argv + ('-pp', pp))
+    result = cmd.execute(args, unnamed)
+    assert jobs, (result, app.inform.emit.call_args_list)
+    return jobs[0].source_file
+
+
+def line_source(app):
+    source = GeometryObject('src', app)
+    source.solid_geometry = [LineString([(0, 0), (10, 0), (10, 10)])]
+    source.multigeo = False
+    source.obj_options.update(zip(('xmin', 'ymin', 'xmax', 'ymax'), source.bounds()))
+    return source
+
+
+def xy_values(gcode):
+    import re
+    return [(float(x), float(y)) for x, y in re.findall(r'G01 X(-?[\d.]+) Y(-?[\d.]+)', gcode)]
+
+
+def test_cncjob_offset_type_moves_the_path_by_half_the_tool():
+    path = xy_values(milling_cncjob(line_source, '-dia', '1', '-z_cut', '-1', '-feedrate', '100'))
+    out = xy_values(milling_cncjob(line_source, '-dia', '1', '-z_cut', '-1', '-feedrate', '100',
+                                   '-offset_type', 'out'))
+    assert path and out and path != out
+    assert min(y for _, y in path) == 0 and abs(min(y for _, y in out)) == pytest.approx(0.5, abs=0.01)
+
+
+def test_cncjob_polishing_paints_the_bounding_box_with_margin():
+    paint = xy_values(milling_cncjob(line_source,'-dia', '1', '-z_cut', '-0.1', '-feedrate', '100',
+                                     '-job_type', 'polishing', '-polish_margin', '2', '-polish_method', 'standard'))
+    assert paint and min(x for x, _ in paint) < 0 and max(x for x, _ in paint) > 10
+    assert min(y for _, y in paint) < 0 and max(y for _, y in paint) > 10
+
+
+def test_cncjob_mills_the_holes_of_an_excellon():
+    def excellon_source(app):
+        source = make_excellon(app, name='src')
+        source.obj_options.update(zip(('xmin', 'ymin', 'xmax', 'ymax'), source.bounds()))
+        return source
+
+    tools = excellon_source(make_app()).tools.values()
+    holes = [(p.x, p.y) for tool in tools for p in tool['drills']]
+    slot_ends = [(p.x, p.y) for tool in tools for slot in tool['slots'] for p in slot]
+    gcode = milling_cncjob(excellon_source,'-mill_dia', '0.2', '-milling_type', 'drills', '-overlap', '10', '-z_cut', '-1',
+                           '-feedrate', '100')
+    cuts = xy_values(gcode)
+    assert cuts
+    x0, y0 = holes[0]
+    assert all(any(abs(x - hx) < 2 and abs(y - hy) < 2 for hx, hy in holes) for x, y in cuts)
+    assert any(abs(x - x0) < 1 and abs(y - y0) < 1 for x, y in cuts)
+    # -milling_type drills: the slots are not milled
+    assert not any(abs(x - sx) < 0.3 and abs(y - sy) < 0.3 for x, y in cuts for sx, sy in slot_ends)

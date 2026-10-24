@@ -7,7 +7,9 @@
 # Modified by Marius Stanciu (2020)                         #
 # ###########################################################
 
+from appCommon.Common import GracefulException
 from appHandlers.appHistory import history_of
+from defaults import convert_length_options, is_project_key
 from PyQt6 import QtCore, QtWidgets
 
 from appObjects.CNCJobObject import CNCJobObject
@@ -17,6 +19,7 @@ from appObjects.GeometryObject import GeometryObject
 from appObjects.GerberObject import GerberObject
 from appObjects.ScriptObject import ScriptObject
 
+import math
 import time
 import traceback
 import threading
@@ -41,7 +44,10 @@ class ObjectLoadBatch(QtCore.QObject):
 
     batch_event = QtCore.pyqtSignal(str, object)
 
-    def __init__(self, owner, jobs, finished=None, parent=None, interactive=True):
+    # the time that integrate_next() works before it gives the event loop a turn
+    INTEGRATE_SLICE = 0.03
+
+    def __init__(self, owner, jobs, finished=None, parent=None, interactive=True, total=None):
         super().__init__(parent if parent is not None else owner)
         self.owner = owner
         self.app = parent.app if parent is not None else owner.app
@@ -57,12 +63,16 @@ class ObjectLoadBatch(QtCore.QObject):
         self.auto_select = False
         self.selection_changed = False
         self.failed = False
+        # the user pressed Cancel in the progress dialog: the load is a failed load
+        self.cancelled = False
+        # the count of the objects to load (None: unknown, the progress dialog shows the count of the files)
+        self.object_total = total
         self.completed = False
         self.finished = finished
         connection = QtCore.Qt.ConnectionType.QueuedConnection if interactive else QtCore.Qt.ConnectionType.AutoConnection
         self.batch_event.connect(self.on_event, type=connection)
         self.timer = QtCore.QTimer(self)
-        self.timer.setInterval(10)
+        self.timer.setInterval(0)
         self.timer.timeout.connect(self.integrate_next)
         self.progress = None
         if not interactive:
@@ -71,9 +81,13 @@ class ObjectLoadBatch(QtCore.QObject):
             return
         self.selection_model = self.app.collection.view.selectionModel()
         self.selection_model.selectionChanged.connect(self.on_selection_changed)
-        self.progress = QtWidgets.QProgressDialog(_("Loading..."), "", 0, jobs, self.app.ui)
+        self.progress = QtWidgets.QProgressDialog(_("Loading..."), "", 0, total if total else jobs, self.app.ui)
         self.progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
-        self.progress.setCancelButton(None)
+        if total:
+            self.progress.setCancelButtonText(_("Cancel"))
+            self.progress.canceled.connect(self.on_cancel)
+        else:
+            self.progress.setCancelButton(None)
         self.progress.setAutoClose(False)
         self.progress.setAutoReset(False)
         self.progress.show()
@@ -84,12 +98,23 @@ class ObjectLoadBatch(QtCore.QObject):
     def on_selection_changed(self, *args):
         self.selection_changed = True
 
+    def on_cancel(self):
+        """Stop integrating the objects: the objects that are not yet in the project are dropped."""
+        # closing the dialog at the end of the load emits canceled() too
+        if self.cancelled or self.completed:
+            return
+        self.cancelled = True
+        self.failed = True
+        self.pending.clear()
+        self.app.log.warning("Project loading cancelled.")
+        self.check_finished()
+
     def run(self, fcn, params):
         previous = getattr(self.load_context, 'batch', None)
         self.load_context.batch = self
         try:
             result = fcn(*params)
-            if result == 'fail':
+            if result == 'fail' and not self.cancelled:
                 self.batch_event.emit('error', 'Batch object creation failed.')
             return result
         except Exception:
@@ -100,13 +125,14 @@ class ObjectLoadBatch(QtCore.QObject):
 
     def on_event(self, event, value):
         if event == 'created':
-            self.pending.append(value)
-            self.timer.start()
+            if not self.cancelled:
+                self.pending.append(value)
+                self.timer.start()
         elif event == 'done':
             self.jobs -= 1
-            if self.progress is not None:
+            if self.progress is not None and self.object_total is None:
                 self.progress.setValue(self.total - self.jobs)
-            if not self.jobs and self.progress is not None:
+            if not self.jobs and self.progress is not None and self.object_total is None:
                 # Parsing can finish before queued GUI insertions and plots.
                 self.progress.setRange(0, 0)
         elif event == 'plotted':
@@ -118,33 +144,33 @@ class ObjectLoadBatch(QtCore.QObject):
         self.check_finished()
 
     def integrate_next(self):
-        if not self.pending:
-            self.timer.stop()
-            self.check_finished()
-            return
-        args = self.pending.popleft()
-        obj, plot, auto_select, callback, params = args
-        obj._load_batch = self
-        try:
-            self.owner.on_object_created(*args)
-            self.last = obj
-            self.auto_select = self.auto_select or auto_select
-        except Exception:
-            self.failed = True
-            self.app.log.error(traceback.format_exc())
-        finally:
-            del obj._load_batch
-            self.integrated += 1
-            if self.progress is not None:
-                self.progress.setLabelText('%s %d' % (_("Loading..."), self.integrated))
-            # Both existing UI builds are intentional. Restore the selected UI
-            # after insertion without changing the user's tree selection.
+        """Integrate the pending objects for about INTEGRATE_SLICE seconds, then let the event loop run."""
+        deadline = time.perf_counter() + self.INTEGRATE_SLICE
+        while self.pending and not self.cancelled:
+            args = self.pending.popleft()
+            obj, plot, auto_select, callback, params = args
+            obj._load_batch = self
             try:
-                if self.app.collection.get_active() is not None:
-                    self.app.on_notebook_tab_changed()
+                self.owner.on_object_created(*args)
+                self.last = obj
+                self.auto_select = self.auto_select or auto_select
             except Exception:
                 self.failed = True
                 self.app.log.error(traceback.format_exc())
+            finally:
+                del obj._load_batch
+                self.integrated += 1
+            if time.perf_counter() >= deadline:
+                break
+
+        if self.progress is not None:
+            if self.object_total is not None:
+                self.progress.setValue(min(self.integrated, self.object_total))
+                self.progress.setLabelText('%s %d / %d' % (_("Loading..."), self.integrated, self.object_total))
+            else:
+                self.progress.setLabelText('%s %d' % (_("Loading..."), self.integrated))
+        if not self.pending:
+            self.timer.stop()
         self.check_finished()
 
     def check_finished(self):
@@ -168,6 +194,8 @@ class ObjectLoadBatch(QtCore.QObject):
                 self.app.collection.set_active(self.last.obj_options['name'])
             self.app.on_notebook_tab_changed()
             if self.plotted:
+                # the objects did not redraw the canvas while they were plotted (see GerberObject.plot())
+                self.app.plotcanvas.redraw()
                 self.app.on_zoom_fit()
         except Exception:
             self.failed = True
@@ -229,6 +257,28 @@ class AppObject(QtCore.QObject):
     def new_object(self, kind, name, initialize, plot=True, autoselected=True, callback=None,
                    callback_params=None, record_history=True):
         """
+        Creates the object, see _new_object(). When it fails or the user aborts, the promise of the name is removed
+        from the collection, so the app does not stay busy waiting for an object that will never come.
+
+        :return:                Either the object or the string 'fail'
+        """
+        try:
+            result = self._new_object(kind, name, initialize, plot, autoselected, callback, callback_params,
+                                      record_history)
+        except GracefulException:
+            self.app.collection.remove_promise(name)
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Aborted. The object was not created."))
+            return "fail"
+        except BaseException:
+            self.app.collection.remove_promise(name)
+            raise
+        if isinstance(result, str) and result == "fail":
+            self.app.collection.remove_promise(name)
+        return result
+
+    def _new_object(self, kind, name, initialize, plot=True, autoselected=True, callback=None,
+                   callback_params=None, record_history=True):
+        """
         Creates a new specialized FlatCAMObj and attaches it to the application,
         this is, updates the GUI accordingly, any other records and plots it.
         This method is thread-safe.
@@ -264,6 +314,9 @@ class AppObject(QtCore.QObject):
         if callback_params is None:
             callback_params = [None]
         self.app.log.debug("AppObject.new_object()")
+        batch = getattr(self.load_context, 'batch', None)
+        if batch is not None and batch.cancelled:
+            return "fail"
         obj_plot = plot
         obj_autoselected = autoselected
 
@@ -303,27 +356,38 @@ class AppObject(QtCore.QObject):
         # ############################################################################################################
         # this section copies the application defaults related to the object to the object OPTIONS
         # ############################################################################################################
-        for option in self.app.options:
-            if option.find(kind + "_") == 0:
-                oname = option[len(kind) + 1:]
-                obj.obj_options[oname] = self._app_option(option)
+        # The options are read once and stored without the change callback: the object has no UI yet.
+        # An object that is made from a project entry sets "provided_options" on its initialize function: the entry
+        # overwrites those keys, so only the missing ones are filled.
+        provided = getattr(initialize, 'provided_options', None) or ()
+        names = list(self.app.options)
+        sources = {}    # key of the object option -> key of the application option
+
+        for option in names:
+            if option.find(kind + "_") == 0 and option[len(kind) + 1:] not in provided:
+                sources[option[len(kind) + 1:]] = option
 
         # add some of the FlatCAM Tools related properties
         # it is done like this to preserve some kind of order in the keys
         tool_option_prefix = obj.tool_option_prefix
         if tool_option_prefix:
-            for option in self.app.options:
-                if option.find(tool_option_prefix) == 0:
-                    obj.obj_options[option] = self._app_option(option)
+            for option in names:
+                if option.find(tool_option_prefix) == 0 and option not in provided:
+                    sources[option] = option
 
         # the milling options should be inherited by all manufacturing objects
         if obj.inherits_mill_options:
-            for option in self.app.options:
-                if option.find('tools_mill_') == 0:
-                    obj.obj_options[option] = self._app_option(option)
-            for option in self.app.options:
-                if option.find('tools_') == 0:
-                    obj.obj_options[option] = self._app_option(option)
+            for option in names:
+                if option.find('tools_') == 0 and option not in provided:
+                    sources[option] = option
+        fill = {key: self._app_option(option) for key, option in sources.items()}
+
+        # the application keys are in the units of the defaults, the object is in the units of the project
+        app_keys = {key: value for key, value in fill.items() if not is_project_key(sources[key])}
+        defaults = getattr(self.app, "defaults", None)
+        if defaults is not None:
+            fill.update(convert_length_options(app_keys, defaults.get('units'), self._app_option("units")))
+        dict.update(obj.obj_options, fill)
         # ############################################################################################################
         # ############################################################################################################
 
@@ -336,6 +400,8 @@ class AppObject(QtCore.QObject):
 
         try:
             return_value = initialize(obj, self.app)
+        except GracefulException:
+            raise
         except Exception as e:
             msg = '[ERROR_NOTCL] %s' % _("An internal error has occurred. See shell.\n")
             msg += _("Object ({kind}) failed because: {error} \n\n").format(kind=kind, error=str(e))
@@ -356,7 +422,8 @@ class AppObject(QtCore.QObject):
         # Check units and convert if necessary
         # This condition CAN be true because initialize() can change obj.units
         # ############################################################################################################
-        if self._app_option("units").upper() != obj.units.upper():
+        converted = self._app_option("units").upper() != obj.units.upper()
+        if converted:
             self.app.inform.emit('%s: %s' % (_("Converting units to "), self._app_option("units")))
             obj.convert_units(self._app_option("units"))
             t3 = time.time()
@@ -368,7 +435,11 @@ class AppObject(QtCore.QObject):
         # ############################################################################################################
         if kind != 'document' and kind != 'script':
             try:
-                xmin, ymin, xmax, ymax = obj.bounds()
+                # a project file stores the bounds of the object: no pass over all its geometry
+                stored = None
+                if not converted and getattr(obj, "loaded_from_dict", False):
+                    stored = self._stored_bounds(obj)
+                xmin, ymin, xmax, ymax = stored if stored is not None else obj.bounds()
                 obj.obj_options['xmin'] = xmin
                 obj.obj_options['ymin'] = ymin
                 obj.obj_options['xmax'] = xmax
@@ -411,6 +482,17 @@ class AppObject(QtCore.QObject):
             return "defective"
 
         return obj
+
+    @staticmethod
+    def _stored_bounds(obj):
+        """The bounds that a project file stores in the object options; None if they are missing or not valid."""
+        try:
+            xmin, ymin, xmax, ymax = [float(obj.obj_options[key]) for key in ('xmin', 'ymin', 'xmax', 'ymax')]
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not all(math.isfinite(v) for v in (xmin, ymin, xmax, ymax)) or xmin > xmax or ymin > ymax:
+            return None
+        return xmin, ymin, xmax, ymax
 
     def on_object_created(self, obj, plot, auto_select, callback, callback_params):
         """
@@ -545,8 +627,9 @@ class AppObject(QtCore.QObject):
                 if batch is None:
                     self.object_plotted.emit(t_obj)
 
+                # a Gerber from a project file was already buffered when it was saved
                 if t_obj.kind == 'gerber' and self._app_option("gerber_buffering") != 'full' and \
-                        self._app_option("gerber_delayed_buffering"):
+                        self._app_option("gerber_delayed_buffering") and not getattr(t_obj, "loaded_from_dict", False):
                     t_obj.do_buffer_signal.emit()
 
         # Send to worker
@@ -558,11 +641,13 @@ class AppObject(QtCore.QObject):
                 batch.plots += 1
 
                 def batch_plotting_task(t_obj):
+                    t_obj.defer_redraw = True
                     try:
                         plotting_task(t_obj)
                     except Exception:
                         batch.batch_event.emit('error', traceback.format_exc())
                     finally:
+                        t_obj.defer_redraw = False
                         batch.batch_event.emit('plotted', None)
 
                 self.app.worker_task.emit({'fcn': batch_plotting_task, 'params': [obj]})

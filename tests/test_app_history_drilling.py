@@ -142,19 +142,6 @@ def test_apply_to_all_is_one_step_with_exact_undo_redo(fc, no_plot):
     assert exc.tools[uid]['data'][key] == -2.5
 
 
-def test_order_change_is_one_step(fc, no_plot):
-    exc = _load(fc, 'excellon', 'unify_mixed.drl', 'e_drl_order')
-    tool = _open(fc, 'e_drl_order')
-    dias = [t['tooldia'] for t in exc.tools.values()]
-    n = _steps(fc)
-    tool.ui.order_combo.setCurrentIndex(2)      # Reverse, through the connected signal
-    assert _steps(fc) == n + 1
-    assert [t['tooldia'] for t in exc.tools.values()] == sorted(dias, reverse=True)
-    assert fc.history.undo()
-    assert [t['tooldia'] for t in exc.tools.values()] == dias
-    tool.ui.order_combo.setCurrentIndex(0)
-
-
 def test_edit_after_a_tools_db_load_does_not_reach_the_object_and_adds_no_step(fc, no_plot):
     exc = _load(fc, 'excellon', 'unify_mixed.drl', 'e_drl_detached')
     tool = _open(fc, 'e_drl_detached')

@@ -133,7 +133,7 @@ class Marlin(PreProc):
 
         no_drills = 1
 
-        if int(p.tool) == 1 and p.startz is not None:
+        if p.startz is not None and p.is_first_tool:
             z_toolchange = p.startz
 
         toolC_formatted = '%.*f' % (p.decimals, p.toolC)

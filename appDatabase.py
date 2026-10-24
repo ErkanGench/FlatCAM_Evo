@@ -1390,6 +1390,108 @@ class ToolsDB2UI:
         self.grid5.addWidget(self.last_drill_drill_lbl, 30, 0, 1, 2)
         self.grid5.addWidget(self.drill_last_drill_cb, 30, 1)
 
+        separator_line = QtWidgets.QFrame()
+        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
+        self.grid5.addWidget(separator_line, 32, 0, 1, 2)
+
+        # Dwell at the bottom of the holes
+        self.dwell_bottom_drill_lbl = FCLabel('%s:' % _('Dwell at bottom'))
+        self.dwell_bottom_drill_lbl.setToolTip(
+            _("Pause at the bottom of every hole, for the Dwelltime.\n"
+              "Ignored by the laser preprocessors.")
+        )
+        self.drill_dwell_bottom_cb = FCCheckBox()
+        self.drill_dwell_bottom_cb.setObjectName("gdb_e_dwell_bottom")
+
+        self.grid5.addWidget(self.dwell_bottom_drill_lbl, 33, 0)
+        self.grid5.addWidget(self.drill_dwell_bottom_cb, 33, 1)
+
+        # Peck drilling
+        self.peck_drill_lbl = FCLabel('%s:' % _('Peck drilling'))
+        self.peck_drill_lbl.setToolTip(
+            _("Drill each hole in steps. After each step the tool goes up to the\n"
+              "Travel Z (it clears the chips), goes down fast to the Peck Retract\n"
+              "clearance above the previous depth and feeds on.\n"
+              "It replaces the Multi-Depth. Ignored by the laser preprocessors.")
+        )
+        self.drill_peck_cb = FCCheckBox()
+        self.drill_peck_cb.setObjectName("gdb_e_peck")
+
+        self.grid5.addWidget(self.peck_drill_lbl, 34, 0)
+        self.grid5.addWidget(self.drill_peck_cb, 34, 1)
+
+        self.peck_depth_drill_lbl = FCLabel('%s:' % _('Peck depth'))
+        self.peck_depth_drill_lbl.setToolTip(_("Depth of each peck step (positive)."))
+        self.drill_peck_depth_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.drill_peck_depth_entry.set_precision(self.decimals)
+        self.drill_peck_depth_entry.set_range(0.0, 10000.0000)
+        self.drill_peck_depth_entry.setSingleStep(0.1)
+        self.drill_peck_depth_entry.setObjectName("gdb_e_peck_depth")
+
+        self.grid5.addWidget(self.peck_depth_drill_lbl, 35, 0)
+        self.grid5.addWidget(self.drill_peck_depth_entry, 35, 1)
+
+        self.peck_retract_drill_lbl = FCLabel('%s:' % _('Peck retract'))
+        self.peck_retract_drill_lbl.setToolTip(
+            _("Clearance above the previous depth to which the tool goes down fast\n"
+              "after the full retract, before it feeds on.")
+        )
+        self.drill_peck_retract_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.drill_peck_retract_entry.set_precision(self.decimals)
+        self.drill_peck_retract_entry.set_range(0.0, 10000.0000)
+        self.drill_peck_retract_entry.setSingleStep(0.1)
+        self.drill_peck_retract_entry.setObjectName("gdb_e_peck_retract")
+
+        self.grid5.addWidget(self.peck_retract_drill_lbl, 36, 0)
+        self.grid5.addWidget(self.drill_peck_retract_entry, 36, 1)
+
+        separator_line = QtWidgets.QFrame()
+        separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+        separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
+        self.grid5.addWidget(separator_line, 38, 0, 1, 2)
+
+        # Spindle direction
+        self.spindledir_drill_lbl = FCLabel('%s:' % _('Spindle direction'))
+        self.spindledir_drill_lbl.setToolTip(
+            _("The direction that the spindle is rotating.\n"
+              "- CW = clockwise or\n"
+              "- CCW = counter clockwise")
+        )
+        self.drill_spindledir_radio = RadioSet([{'label': _('CW'), 'value': 'CW'},
+                                                {'label': _('CCW'), 'value': 'CCW'}], compact=True)
+        self.drill_spindledir_radio.setObjectName("gdb_e_spindledir")
+
+        self.grid5.addWidget(self.spindledir_drill_lbl, 39, 0)
+        self.grid5.addWidget(self.drill_spindledir_radio, 39, 1)
+
+        # Fast plunge
+        self.fplunge_drill_lbl = FCLabel('%s:' % _('Fast Plunge'))
+        self.fplunge_drill_lbl.setToolTip(
+            _("The vertical move from Z_Toolchange to Z_move is done with G0,\n"
+              "meaning the fastest speed available.\n"
+              "WARNING: the move is done at Toolchange X,Y coords.")
+        )
+        self.drill_fplunge_cb = FCCheckBox()
+        self.drill_fplunge_cb.setObjectName("gdb_e_f_plunge")
+
+        self.grid5.addWidget(self.fplunge_drill_lbl, 40, 0)
+        self.grid5.addWidget(self.drill_fplunge_cb, 40, 1)
+
+        # Fast retract
+        self.fretract_drill_lbl = FCLabel('%s:' % _('Fast Retract'))
+        self.fretract_drill_lbl.setToolTip(
+            _("Exit hole strategy.\n"
+              " - When unchecked the drill bit travels slow (G1) up to zero depth and then\n"
+              "as fast as possible (G0) to the Z Move (travel height).\n"
+              " - When checked the travel from Z cut to Z_move is done as fast as possible (G0).")
+        )
+        self.drill_fretract_cb = FCCheckBox()
+        self.drill_fretract_cb.setObjectName("gdb_e_f_retract")
+
+        self.grid5.addWidget(self.fretract_drill_lbl, 41, 0)
+        self.grid5.addWidget(self.drill_fretract_cb, 41, 1)
+
         # ###########################################################################
         # ################### Cutout UI form ########################################
         # ###########################################################################
@@ -1763,6 +1865,13 @@ class ToolsDB2(QtWidgets.QWidget):
             "tools_drill_drill_slots":      self.ui.drill_slots_cb,
             "tools_drill_drill_overlap":    self.ui.drill_overlap_entry,
             "tools_drill_last_drill":       self.ui.drill_last_drill_cb,
+            "tools_drill_dwell_bottom":     self.ui.drill_dwell_bottom_cb,
+            "tools_drill_peck":             self.ui.drill_peck_cb,
+            "tools_drill_peck_depth":       self.ui.drill_peck_depth_entry,
+            "tools_drill_peck_retract":     self.ui.drill_peck_retract_entry,
+            "tools_drill_spindledir":       self.ui.drill_spindledir_radio,
+            "tools_drill_f_plunge":         self.ui.drill_fplunge_cb,
+            "tools_drill_f_retract":        self.ui.drill_fretract_cb,
 
             # Cutout
             "tools_cutout_margin":          self.ui.cutout_margin_entry,
@@ -1848,6 +1957,13 @@ class ToolsDB2(QtWidgets.QWidget):
             "gdb_e_drill_slots":        "tools_drill_drill_slots",
             "gdb_e_drill_slots_over":   "tools_drill_drill_overlap",
             "gdb_e_drill_last_drill":   "tools_drill_last_drill",
+            "gdb_e_dwell_bottom":       "tools_drill_dwell_bottom",
+            "gdb_e_peck":               "tools_drill_peck",
+            "gdb_e_peck_depth":         "tools_drill_peck_depth",
+            "gdb_e_peck_retract":       "tools_drill_peck_retract",
+            "gdb_e_spindledir":         "tools_drill_spindledir",
+            "gdb_e_f_plunge":           "tools_drill_f_plunge",
+            "gdb_e_f_retract":          "tools_drill_f_retract",
 
             # Cutout
             "gdb_ct_margin":            "tools_cutout_margin",
@@ -1929,7 +2045,9 @@ class ToolsDB2(QtWidgets.QWidget):
             'tools_mill_dwelltime', 'tools_mill_extracut', 'tools_mill_extracut_length',
             'tools_drill_feedrate_rapid', 'tools_drill_dwell', 'tools_drill_dwelltime',
             'tools_drill_offset', 'tools_drill_drill_slots', 'tools_drill_drill_overlap',
-            'tools_drill_last_drill'
+            'tools_drill_last_drill', 'tools_drill_dwell_bottom', 'tools_drill_peck',
+            'tools_drill_peck_depth', 'tools_drill_peck_retract', 'tools_drill_spindledir',
+            'tools_drill_f_plunge', 'tools_drill_f_retract'
         }
         self._detail_rows = {}
 

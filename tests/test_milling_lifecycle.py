@@ -146,9 +146,9 @@ def test_milling_excellon_extracted_paint_matches_per_feature_reference(mill_typ
     offset = (0, -0.25, 0.25, 0.1)[offset_type]
     polygons = []
     if mill_type in ('drills', 'both'):
-        polygons.extend(point.buffer(1 + offset) for point in record['drills'])
+        polygons.extend(point.buffer(1 + offset, 8) for point in record['drills'])
     if mill_type in ('slots', 'both'):
-        polygons.extend(LineString(slot).buffer(1 + offset) for slot in record['slots'])
+        polygons.extend(LineString(slot).buffer(1 + offset, 8) for slot in record['slots'])
     expected = []
     for polygon in polygons:
         storage = tool.clear_polygon_seed(polygon, seedpoint=polygon.centroid, tooldia=0.5,
@@ -161,11 +161,10 @@ def test_milling_excellon_extracted_paint_matches_per_feature_reference(mill_typ
     assert progress[-1] == ' 100%'
 
 
-def test_milling_excellon_paint_abort_precedes_clearing(monkeypatch):
-    tool = MillingHarness(app=SimpleNamespace(abort_flag=False))
+def test_milling_excellon_paint_abort_precedes_clearing():
+    tool = MillingHarness(app=SimpleNamespace(abort_flag=True))
     calls = []
     tool.clear_polygon_seed = lambda *_a, **_kw: calls.append(1)
-    monkeypatch.setattr(QtWidgets.QApplication, 'processEvents', lambda: setattr(tool.app, 'abort_flag', True))
     record = dict(tooldia=2, drills=[Point(0, 0)], data=dict(
         tools_mill_milling_type='drills', tools_mill_milling_dia=0.5,
         tools_mill_milling_overlap=20, tools_mill_milling_connect=False,
@@ -323,59 +322,105 @@ class GeometryObject:
         self.solid_geometry = []
 
 
-def _generator_stub(target, options=None):
+def _excellon_stub(tools, options=None, steps=32):
+    """An ExcellonObject stand-in running the real generate_milling_* methods."""
+    from appObjects.ExcellonObject import ExcellonObject
+    created = {}
+    emitted = []
+    promised = []
     app = SimpleNamespace(
-        options=options or {'geometry_circle_steps': 32},
-        defaults={},
-        decimals=6,
+        options=options if options is not None else {},
+        defaults=SimpleNamespace(get=lambda *_a: None, factory_defaults={'tools_mill_multidepth': False}),
         log=SimpleNamespace(debug=lambda *_args: None),
         inform=SimpleNamespace(emit=lambda *_args: None),
-        worker_task=SimpleNamespace(emit=lambda *_args: None),
+        worker_task=SimpleNamespace(emit=emitted.append),
+        collection=SimpleNamespace(promise=promised.append),
     )
-    generated = {}
 
     def new_object(kind, name, initializer, **kwargs):
         result = GeometryObject()
-        initializer(result, app)
-        generated['object'] = result
-        generated['name'] = name
+        if initializer(result, app) == 'fail':
+            return 'fail'
+        created['object'] = result
+        created['name'] = name
         return result
 
-    tool = SimpleNamespace(
-        app=app,
-        decimals=6,
-        geo_steps_per_circle=32,
-        target_obj=target,
-        get_selected_tools_list=lambda: [1],
-        new_object=new_object,
-    )
-    return tool, generated
+    app.app_obj = SimpleNamespace(new_object=new_object)
+    exc = SimpleNamespace(app=app, decimals=4, geo_steps_per_circle=steps, tools=tools,
+                          obj_options={'name': 'holes', 'slot_tooldia': 0.5},
+                          get_selected_tools_list=lambda: list(tools))
+    for name in ('_milling_tool_keys', '_create_milling_geometry', '_milling_multidepth',
+                 'generate_milling_drills', 'generate_milling_slots'):
+        setattr(exc, name, getattr(ExcellonObject, name).__get__(exc) if name != '_milling_multidepth'
+                else ExcellonObject._milling_multidepth)
+    return exc, created, emitted, promised
 
 
-def test_milling_drills_preserve_per_tool_buffers_and_equal_diameter_epsilon():
-    source = SimpleNamespace(
-        obj_options={'name': 'holes'},
-        tools={
-            1: {'tooldia': 1.0, 'drills': [Point(0, 0), Point(2, 1)]},
-            2: {'tooldia': 2.0, 'drills': [Point(10, 0), Point(12, 1)]},
-        },
-    )
-    milling, generated = _generator_stub(source)
+def test_milling_drills_equal_bit_tolerance_small_hole_and_circle_steps():
+    tools = {
+        1: {'tooldia': 0.8, 'drills': [Point(0, 0)], 'slots': []},
+        2: {'tooldia': 2.0, 'drills': [Point(10, 0), Point(12, 1)], 'slots': []},
+    }
+    exc, created, _, _ = _excellon_stub(tools, steps=32)
 
-    result = ToolMilling.generate_milling_drills(
-        milling, tools=[1, 2], outname='holes_mill', tooldia=1.0, use_thread=False
-    )
+    # 0.8000001 (inch/mm rounding) still fits the 0.8 hole: almost-zero ring, not an empty ring
+    assert exc.generate_milling_drills(tools=[1, 2], tooldia=0.8000001) == (True, '')
+    geometry = created['object'].solid_geometry
+    assert len(geometry) == 3
+    assert not any(ring.is_empty for ring in geometry)
+    assert geometry[0].equals_exact(Point(0, 0).buffer(0.0000001, 8).exterior, 0.0)
+    assert geometry[1].equals_exact(Point(10, 0).buffer(0.6, 8).exterior, 1e-9)
+    # circle steps count the whole circle: 32 steps -> 8 quad segs -> 33 ring points
+    assert len(geometry[1].coords) == 33
 
-    assert result == (True, '')
-    geometry = generated['object'].solid_geometry
-    expected = [
-        point.buffer(0.0000001).exterior
-        for point in source.tools[1]['drills']
-    ] + [
-        point.buffer(0.5).exterior
-        for point in source.tools[2]['drills']
-    ]
-    assert len(geometry) == len(expected) == 4
-    for actual, reference in zip(geometry, expected):
-        assert actual.equals_exact(reference, 0.0)
+    # a bit larger than the hole is refused, no geometry
+    created.clear()
+    assert exc.generate_milling_drills(tools=[1], tooldia=0.9)[0] is False
+    assert not created
 
+    # a small tool with only slots has no drills to mill: it does not cancel the drills of the other tools
+    tools[3] = {'tooldia': 0.5, 'drills': [], 'slots': [((0, 0), (1, 0))]}
+    assert exc.generate_milling_drills(tools=[2, 3], tooldia=0.9) == (True, '')
+    assert len(created['object'].solid_geometry) == 2
+
+
+def test_milling_slots_circle_steps_and_multidepth_key():
+    tools = {1: {'tooldia': 2.0, 'drills': [], 'slots': [((0, 0), (5, 0))]},
+             2: {'tooldia': 1.0, 'drills': [], 'slots': []}}
+    exc, created, _, _ = _excellon_stub(tools, options={'tools_mill_multidepth': True}, steps=32)
+
+    assert exc.generate_milling_slots(tools=[1, 2], tooldia=1.0) == (True, '')
+    geometry = created['object'].solid_geometry
+    assert len(geometry) == 1
+    expected = LineString([(0, 0), (5, 0)]).buffer(0.5001, 8).exterior
+    assert geometry[0].equals_exact(expected, 1e-9)
+    assert len(geometry[0].coords) == len(expected.coords) < 50
+    # the CNC job reads tools_mill_multidepth
+    assert created['object'].obj_options['tools_mill_multidepth'] is True
+    assert 'multidepth' not in created['object'].obj_options
+
+    # nothing to mill (only slotless tool) -> failure, not success
+    created.clear()
+    assert exc.generate_milling_slots(tools=[2], tooldia=1.0)[0] is False
+
+
+def test_milling_generate_use_thread_promises_created_name():
+    tools = {1: {'tooldia': 2.0, 'drills': [Point(0, 0)], 'slots': []}}
+    exc, created, emitted, promised = _excellon_stub(tools)
+    assert exc.generate_milling_drills(tools=[1], outname='holes_mill', tooldia=1.0, use_thread=True) == (True, '')
+    assert promised == ['holes_mill']
+    assert len(emitted) == 1 and not created
+
+
+def test_milling_paint_polygons_circle_steps_and_collapsed_margin():
+    from appPlugins.ToolMilling import MillingGen
+    data = dict(tools_mill_milling_type='drills', tools_mill_milling_dia=0.5, tools_mill_offset_type=0,
+                tools_mill_offset_value=0.0)
+    record = dict(tooldia=2, drills=[Point(0, 0)], slots=[], data=data)
+    polygon = MillingGen.excellon_paint_polygons(record, circle_steps=32)[0]
+    assert len(polygon.exterior.coords) == 33
+
+    # bit as large as the hole, with the offset inside: the margin collapses, tool is reported by caller
+    record['data'] = dict(data, tools_mill_milling_dia=2.0, tools_mill_offset_type=1)
+    assert MillingGen.excellon_paint_margin(record) <= MillingGen.PAINT_MIN_MARGIN
+    assert MillingGen.excellon_paint_polygons(record, circle_steps=32) == []

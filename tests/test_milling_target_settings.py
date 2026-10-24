@@ -107,6 +107,7 @@ def plugin(objects, multigeo=True, **options):
         "tools_mill_feedrate_probe": ui.feedrate_probe_entry, "tools_mill_ppname_g": ui.pp_geo_name_cb,
         "tools_mill_area_exclusion": ui.exclusion_cb, "tools_mill_area_shape": ui.area_shape_radio,
         "tools_mill_area_strategy": ui.strategy_radio, "tools_mill_area_overz": ui.over_z_entry,
+        "tools_mill_optimization_type": ui.opt_algorithm_radio, "tools_mill_search_time": ui.opt_time_entry,
     }
     milling.name2option = {widget.objectName(): key for key, widget in
                            {**milling.form_fields, **milling.general_form_fields}.items() if widget.objectName()}
@@ -185,3 +186,376 @@ def test_old_project_target_resets_the_general_fields():
     assert milling.ui.endz_entry.get_value() == 15.0
     assert generate(milling).pp_geometry_name == 'default'
 
+
+
+# ---- the tools table of the plugin: copy, delete, add, edit, Excellon order ----
+
+def tools_milling(n_tools=2, diameters=None):
+    """The plugin with one Geometry target of n tools; the table shows them."""
+    tools = {}
+    for uid in range(1, n_tools + 1):
+        tool = saved_tool(tools_mill_tooldia=float(uid))
+        tool['tooldia'] = float(uid)
+        tools[uid] = tool
+    obj = make_object('A')
+    obj.tools = tools
+    obj.build_ui = lambda: None
+    obj.ser_attrs = []
+    milling = plugin({'A': obj})
+    milling.build_ui_sig = SimpleNamespace(emit=milling.build_ui)
+    milling.default_data = dict(MILL_OPTIONS, tools_mill_tooldia=1.0)
+    milling.app.plot_all = lambda *a, **k: None
+    select(milling, 'A')
+    return milling, obj
+
+
+def select_rows(milling, rows):
+    table = milling.ui.tools_table_mill_geo
+    table.clearSelection()
+    for row in rows:
+        table.selectionModel().select(
+            table.model().index(row, 0),
+            QtCore.QItemSelectionModel.SelectionFlag.Select | QtCore.QItemSelectionModel.SelectionFlag.Rows)
+
+
+def test_copy_makes_one_tool_per_selected_row():
+    milling, obj = tools_milling(2)
+    select_rows(milling, [0])
+    milling._on_tool_copy()
+    assert sorted(obj.tools) == [1, 2, 3]
+    select_rows(milling, [0, 1])
+    milling._on_tool_copy()
+    assert len(obj.tools) == 5
+
+
+def test_copy_all_gives_each_copy_its_own_tool():
+    milling, obj = tools_milling(3)
+    milling._on_tool_copy(all_tools='all')
+    assert sorted(obj.tools) == [1, 2, 3, 4, 5, 6]
+    assert sorted(obj.tools[uid]['tooldia'] for uid in (4, 5, 6)) == [1.0, 2.0, 3.0]
+
+
+def test_delete_removes_only_the_selected_rows():
+    milling, obj = tools_milling(3)
+    select_rows(milling, [0, 2])
+    milling._on_tool_delete()
+    assert sorted(obj.tools) == [2]
+
+
+def test_delete_all_keeps_the_geometry_in_the_object():
+    milling, obj = tools_milling(2)
+    geometry = obj.tools[1]['solid_geometry']
+    obj.solid_geometry = []
+    milling._on_tool_delete(all_tools='all')
+    assert obj.tools == {} and len(obj.solid_geometry) == len(geometry) > 0
+
+
+def test_new_tool_cuts_with_its_own_diameter():
+    milling, obj = tools_milling(1)
+    milling._on_tool_default_add(dia=0.5)
+    assert obj.tools[2]['tooldia'] == 0.5 and obj.tools[2]['data']['tools_mill_tooldia'] == 0.5
+    milling._on_tool_from_db_inserted({'tooldia': 0.8, 'data': {'tools_mill_cutz': -0.3}})
+    new = obj.tools[3]
+    assert new['data']['tools_mill_tooldia'] == 0.8 and new['data']['tools_mill_cutz'] == -0.3
+    assert new['data']['tools_mill_feedrate'] == MILL_OPTIONS['tools_mill_feedrate']
+
+
+def test_first_tool_gets_the_geometry_of_the_object():
+    milling, obj = tools_milling(1)
+    obj.tools.clear()
+    obj.solid_geometry = [LineString([(0, 0), (4, 0)])]
+    milling._on_tool_default_add(dia=0.5)
+    assert len(obj.tools[1]['solid_geometry']) == 1
+
+
+def test_diameter_zero_is_rejected_in_the_table():
+    milling, obj = tools_milling(1)
+    item = milling.ui.tools_table_mill_geo.item(0, 1)
+    item.setText('0')
+    assert obj.tools[1]['tooldia'] == 1.0 and obj.tools[1]['data']['tools_mill_tooldia'] == 1.0
+    assert float(milling.ui.tools_table_mill_geo.item(0, 1).text()) == 1.0
+
+
+def exc_milling(diameters):
+    milling, _obj = tools_milling(1)
+    tools = {i: {'tooldia': dia, 'drills': [object()] * 2, 'slots': []} for i, dia in enumerate(diameters, 1)}
+    milling.app.dec_format = lambda value, decimals=4: round(value, decimals)
+    milling.target_obj = SimpleNamespace(tools=tools)
+    milling.ui.order_combo.blockSignals(True)
+    return milling, tools
+
+
+def exc_uids(milling):
+    table = milling.ui.tools_table_mill_exc
+    return [int(table.item(row, 3).text()) for row in range(table.rowCount() - 2)]
+
+
+def test_excellon_table_lists_each_tool_once_and_keeps_the_object():
+    milling, tools = exc_milling([0.8, 0.8, 0.8, 1.0])
+    before = dict(tools)
+    for _ in range(3):
+        milling.build_ui_exc()
+    assert exc_uids(milling) == [1, 2, 3, 4] and milling.target_obj.tools == before
+    assert milling.ui.tools_table_mill_exc.item(4, 2).text() == '8'
+    milling.ui.order_combo.set_value(2)
+    milling.build_ui_exc()
+    assert exc_uids(milling) == [4, 1, 2, 3] and milling.target_obj.tools == before
+    assert milling.ui.tools_table_mill_exc.item(4, 2).text() == '8'
+    assert milling.ui.tools_table_mill_exc.item(5, 4).text() == '0'
+
+
+def test_excellon_default_order_is_the_order_of_the_object():
+    milling, tools = exc_milling([1.0, 0.5, 0.8])
+    milling.ui.order_combo.set_value(1)
+    milling.build_ui_exc()
+    assert exc_uids(milling) == [2, 3, 1]
+    milling.ui.order_combo.set_value(0)
+    milling.build_ui_exc()
+    assert exc_uids(milling) == [1, 2, 3]
+
+
+def test_selected_excellon_tools_are_unique_uids():
+    milling, tools = exc_milling([1.0, 0.5])
+    milling.build_ui_exc()
+    assert sorted(milling.get_selected_tools_list()) == [1, 2]
+
+
+# ---- UI state of the tools table and the form ----
+
+def v_index(milling):
+    return milling.ui.tool_shape_combo.findText('V')
+
+
+def click_row(milling, row):
+    table = milling.ui.tools_table_mill_geo
+    table.setCurrentCell(row, 0)
+    milling.update_ui()
+
+
+def test_level_change_does_not_write_the_tool_data():
+    milling, obj = tools_milling(2)
+    data = obj.tools[1]['data']
+    data.update(tools_mill_offset_type=2, tools_mill_offset_value=0.3, tools_mill_job_type=3, tools_mill_extracut=True,
+                tools_mill_dwell=True, tools_mill_area_exclusion=True)
+    before = deepcopy(obj.tools)
+    milling.on_level_changed(False)
+    milling.on_level_changed(True)
+    milling.on_level_changed(False)
+    assert obj.tools == before
+
+
+def test_beginner_hides_and_advanced_shows_the_same_fields_for_each_target():
+    milling, _obj = tools_milling(1)
+    ui = milling.ui
+    advanced_only = (ui.mpass_cb, ui.maxdepth_entry, ui.endxy_entry, ui.exclusion_cb)
+    for target in ('geo', 'exc', 'geo', 'exc'):
+        ui.target_radio.set_value(target)
+        milling.on_level_changed(False)
+        assert all(widget.isHidden() for widget in advanced_only)
+        milling.on_level_changed(True)
+        assert not any(widget.isHidden() for widget in advanced_only)
+
+
+def test_clicking_a_row_keeps_the_cut_z_of_every_tool():
+    milling, obj = tools_milling(2)
+    obj.tools[1]['data'].update(tools_mill_tool_shape=v_index(milling), tools_mill_cutz=-0.2, tools_mill_vtipdia=0.1,
+                                tools_mill_vtipangle=30.0)
+    obj.tools[2]['data'].update(tools_mill_tool_shape=0, tools_mill_cutz=-1.0)
+    click_row(milling, 0)
+    click_row(milling, 1)
+    assert obj.tools[2]['data']['tools_mill_cutz'] == -1.0
+    assert obj.tools[1]['data']['tools_mill_cutz'] == -0.2
+    assert milling.ui.cutz_entry.get_value() == -1.0
+    assert milling.ui.tipdia_entry.isHidden()
+
+
+def test_changing_the_tool_shape_keeps_the_job_type():
+    milling, obj = tools_milling(1)
+    obj.tools[1]['data'].update(tools_mill_job_type=3, tools_mill_tool_shape=0)
+    click_row(milling, 0)
+    milling.ui.tool_shape_combo.set_value(1)
+    data = obj.tools[1]['data']
+    assert data['tools_mill_tool_shape'] == 1 and data['tools_mill_job_type'] == 3
+    milling.ui.tool_shape_combo.set_value(v_index(milling))
+    assert data['tools_mill_job_type'] == 2
+
+
+def test_showing_a_tool_does_not_recompute_its_cut_z():
+    milling, obj = tools_milling(2)
+    obj.tools[2]['data'].update(tools_mill_tool_shape=0, tools_mill_cutz=-1.0, tools_mill_vtipdia=0.3,
+                                tools_mill_vtipangle=45.0)
+    milling.ui.tools_table_mill_geo.setCurrentCell(1, 0)
+    milling.to_form(storage=milling._form_tool_data(obj, 2))
+    assert obj.tools[2]['data']['tools_mill_cutz'] == -1.0
+
+
+def test_v_tip_edit_recomputes_the_cut_z_of_all_selected_v_tools():
+    milling, obj = tools_milling(3)
+    for uid in (1, 2):
+        obj.tools[uid]['data'].update(tools_mill_tool_shape=v_index(milling), tools_mill_vtipangle=90.0)
+    obj.tools[3]['data'].update(tools_mill_tool_shape=0, tools_mill_cutz=-1.0)
+    click_row(milling, 0)
+    select_rows(milling, [0, 1, 2])
+    milling.ui.tipangle_entry.set_value(90.0)
+    milling.ui.tipdia_entry.set_value(0.5)
+    assert obj.tools[1]['data']['tools_mill_cutz'] == pytest.approx(-0.25)
+    assert obj.tools[2]['data']['tools_mill_cutz'] == pytest.approx(-0.75)
+    assert obj.tools[3]['data']['tools_mill_cutz'] == -1.0
+
+
+def test_closing_the_plugin_keeps_the_other_cleanup_slots():
+    class Holder(QtCore.QObject):
+        cleanup = QtCore.pyqtSignal()
+
+    holder, calls = Holder(), []
+    milling, _obj = tools_milling(1)
+    milling.app.cleanup = holder.cleanup
+    milling.set_tool_ui = lambda: calls.append('milling')
+    holder.cleanup.connect(lambda: calls.append('other'))
+    holder.cleanup.connect(milling.set_tool_ui)
+    milling.disconnect_signals()
+    holder.cleanup.emit()
+    assert calls == ['other']
+
+
+def test_dragging_geometry_rows_reorders_the_tools_of_the_object():
+    milling, obj = tools_milling(3)
+    table = milling.ui.tools_table_mill_geo
+    milling.ui_disconnect()
+    for row, uid in enumerate((3, 1, 2)):
+        table.item(row, 3).setText(str(uid))
+    milling.on_geo_rebuild_ui()
+    assert [obj.tools[uid]['tooldia'] for uid in (1, 2, 3)] == [3.0, 1.0, 2.0]
+
+
+def test_toolchange_and_end_xy_edits_reach_all_tools():
+    milling, obj = tools_milling(2)
+    for entry, key in ((milling.ui.toolchangexy_entry, 'tools_mill_toolchangexy'),
+                       (milling.ui.endxy_entry, 'tools_mill_endxy')):
+        entry.setText('1.5, 2')
+        entry.editingFinished.emit()
+        assert all(list(tool['data'][key]) == [1.5, 2] for tool in obj.tools.values())
+
+
+def test_exclusion_overz_works_again_after_a_bad_value():
+    milling, _obj = tools_milling(1)
+    area = {'idx': 1, 'obj_type': 'Gerber', 'strategy': 'over', 'overz': 1.0}
+    milling.app.exc_areas.exclusion_areas_storage[:] = [area]
+    milling.build_ui_sig = SimpleNamespace(emit=lambda: None)
+    milling.build_ui()
+    item = milling.ui.exclusion_table.item(0, 3)
+    item.setText('abc')
+    assert area['overz'] == 1.0
+    item.setText('2.5')
+    assert area['overz'] == 2.5
+
+
+def test_deleted_target_empties_the_tables_and_disables_generate():
+    milling, obj = tools_milling(2)
+    assert milling.ui.tools_table_mill_geo.rowCount() == 2
+    milling.app.collection.get_by_name = lambda name: None
+    milling.on_object_changed()
+    assert milling.ui.tools_table_mill_geo.rowCount() == 0
+    assert milling.ui.tools_table_mill_exc.rowCount() == 0
+    assert not milling.ui.generate_cnc_button.isEnabled()
+
+
+def excellon_generate(diameters, select_exc_rows=None):
+    """The uids that Generate CNCJob hands to the Excellon paint step."""
+    milling, tools = exc_milling(diameters)
+    milling.build_ui_exc()
+    target = milling.app.collection.get_by_name('A')
+    target.kind, target.tools = 'excellon', tools
+    table = milling.ui.tools_table_mill_exc
+    table.clearSelection()
+    for row in select_exc_rows or []:
+        table.selectionModel().select(
+            table.model().index(row, 0),
+            QtCore.QItemSelectionModel.SelectionFlag.Select | QtCore.QItemSelectionModel.SelectionFlag.Rows)
+    painted = []
+    milling.paint_excellon_cncjpb = lambda: painted.append(list(milling.sel_tools))
+    milling.on_generate_cnc_from_exc()
+    return painted
+
+
+def test_excellon_with_one_tool_generates_without_a_selection():
+    assert excellon_generate([0.8]) == [[1]]
+
+
+def test_excellon_generates_the_selected_tools_in_table_order():
+    assert excellon_generate([0.8, 1.0, 1.2], select_exc_rows=[2, 0]) == [[1, 3]]
+
+
+# ---- path optimization, mistakes in the settings ----
+
+def edit(milling, key, value):
+    """The user edits a field of the form: the field's signal reaches form_to_storage()."""
+    field = {**milling.form_fields, **milling.general_form_fields}[key]
+    field.set_value(value)
+    milling.sender = lambda: field
+    milling.form_to_storage()
+
+
+def told(milling, level):
+    return ' '.join(str(c.args[0]) for c in milling.app.inform.emit.call_args_list
+                    if c.args and str(c.args[0]).startswith('[%s' % level))
+
+
+def test_path_optimization_is_stored_in_the_tools_and_the_search_time_follows_the_algorithm():
+    objects = {'A': make_object('A', tools_mill_optimization_type='M', tools_mill_search_time=7)}
+    milling = plugin(objects)
+    ui = milling.ui
+    ui.level.setChecked(True)
+    select(milling, 'A')
+    assert (ui.opt_algorithm_radio.get_value(), ui.opt_time_entry.get_value()) == ('M', 7)
+    assert not ui.opt_algorithm_radio.isHidden() and not ui.opt_time_entry.isHidden()
+
+    edit(milling, 'tools_mill_optimization_type', 'T')
+    assert objects['A'].tools[1]['data']['tools_mill_optimization_type'] == 'T'
+    assert ui.opt_time_entry.isHidden()          # only OR-Tools has a search time
+    edit(milling, 'tools_mill_optimization_type', 'B')
+    edit(milling, 'tools_mill_search_time', 12)
+    assert not ui.opt_time_entry.isHidden()
+    assert objects['A'].tools[1]['data']['tools_mill_search_time'] == 12
+
+    ui.level.setChecked(False)
+    milling.on_level_changed(False)
+    assert ui.opt_algorithm_radio.isHidden() and ui.opt_time_entry.isHidden()
+
+
+@pytest.mark.parametrize('key, value, text', [
+    ('tools_mill_cutz', 0.5, 'Cut Z is above zero'),
+    ('tools_mill_travelz', -1.0, 'Travel Z is below zero'),
+])
+def test_a_likely_mistake_in_a_parameter_is_stored_and_told(key, value, text):
+    objects = {'A': make_object('A', tools_mill_cutz=-1.8, tools_mill_travelz=2.0)}
+    milling = plugin(objects)
+    select(milling, 'A')
+    assert told(milling, 'WARNING') == ''
+    edit(milling, key, value)
+    assert objects['A'].tools[1]['data'][key] == value
+    assert text in told(milling, 'WARNING')
+
+
+@pytest.mark.parametrize('changes, text', [
+    (dict(tools_mill_tooldia=0.0), 'diameter must be above zero'),
+    (dict(tools_mill_multidepth=True, tools_mill_depthperpass=0.0), 'Depth per Pass must be above zero'),
+])
+@pytest.mark.parametrize('multigeo', [False, True])
+def test_a_tool_that_cannot_make_a_job_blocks_the_job(changes, text, multigeo):
+    objects = {'A': make_object('A', multigeo=multigeo, **changes)}
+    milling = plugin(objects, multigeo=multigeo)
+    select(milling, 'A')
+    milling.sel_tools.clear()
+    milling.sel_tools.update(deepcopy(milling.target_obj.tools))
+    assert milling.generate_cnc_job_handler(toolchange=False, plot=False, use_thread=False) == 'fail'
+    assert not milling.jobs
+    assert text in told(milling, 'ERROR')
+
+
+def test_a_likely_mistake_warns_at_generation_but_the_job_is_made():
+    objects = {'A': make_object('A', tools_mill_milling_overlap=120.0)}
+    milling = plugin(objects)
+    select(milling, 'A')
+    assert generate(milling)
+    assert 'overlap must be less than 100%' in told(milling, 'WARNING')

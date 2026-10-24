@@ -1,5 +1,12 @@
 # OR-Tools route solver. Light on purpose: a pool child imports this module, so no camlib, Qt or app here.
+import logging
+
 import numpy as np
+
+log = logging.getLogger('base')
+
+# above this many locations the distance matrix (n x n) is not built
+MAX_MATRIX_POINTS = 2000
 
 # integer arc costs: distances are multiplied by this before the rounding, so close holes do not get 0
 DISTANCE_SCALE = 1000
@@ -23,8 +30,38 @@ def set_time_limit(search_parameters, opt_time):
     search_parameters.time_limit.FromMilliseconds(int(seconds * 1000))
 
 
+def greedy_route(locations, depot=0):
+    """Nearest-neighbour order from the depot, numpy argmin over the remaining points; memory is O(n).
+
+    Returns (route, objective): location indexes in route order and the path length."""
+    pts = np.asarray(locations, dtype=float).reshape(-1, 2)
+    count = len(pts)
+    if count == 0:
+        return [], 0.0
+    remaining = np.ones(count, dtype=bool)
+    route = [depot]
+    remaining[depot] = False
+    total = 0.0
+    current = depot
+    for _step in range(count - 1):
+        dist = np.hypot(pts[:, 0] - pts[current, 0], pts[:, 1] - pts[current, 1])
+        dist[~remaining] = np.inf
+        current = int(np.argmin(dist))
+        total += float(dist[current])
+        remaining[current] = False
+        route.append(current)
+    return route, total
+
+
 def solve_route(locations, depot=0, metaheuristic=False, opt_time=0):
-    """Returns (route, objective): location indexes in route order and the cost / DISTANCE_SCALE, or (None, None)."""
+    """Returns (route, objective): location indexes in route order and the cost / DISTANCE_SCALE, or (None, None).
+
+    Above MAX_MATRIX_POINTS locations the n x n matrix would need too much memory: a greedy order is returned."""
+    if len(locations) > MAX_MATRIX_POINTS:
+        log.warning("%d locations: more than %d, the OR-Tools matrix is skipped, using a nearest-neighbour order." %
+                    (len(locations), MAX_MATRIX_POINTS))
+        return greedy_route(locations, depot)
+
     from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
     manager = pywrapcp.RoutingIndexManager(len(locations), 1, depot)

@@ -1,0 +1,478 @@
+"""Drilling plugin UI / controller behavior: tool order, levels, selection, exclusion areas, form <-> storage."""
+
+import os
+import sys
+from copy import deepcopy
+
+import pytest
+from PyQt6 import QtWidgets, QtCore
+from shapely.geometry import Polygon
+
+os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from appMain import App
+from appObjects.AppObjectTemplate import FlatCAMObj
+from appObjects.ExcellonObject import ExcellonObject
+
+FIX = os.path.join(os.path.dirname(__file__), 'fixtures', 'unify')
+
+pytestmark = pytest.mark.slow
+
+
+@pytest.fixture(scope='module')
+def fc():
+    qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    return App(qapp=qapp, headless=True)
+
+
+@pytest.fixture(autouse=True)
+def no_plot(monkeypatch, fc):
+    monkeypatch.setattr(FlatCAMObj, 'plot', lambda *a, **k: None)
+    monkeypatch.setattr(FlatCAMObj, 'plot_transformed', lambda *a, **k: True)
+    monkeypatch.setattr(ExcellonObject, 'plot_transformed', lambda *a, **k: True)
+    fc.exc_areas.exclusion_areas_storage.clear()
+    yield
+    fc.exc_areas.exclusion_areas_storage.clear()
+
+
+def _load(fc, name):
+    def init(obj, _app):
+        obj.parse_file(os.path.join(FIX, 'unify_mixed.drl'))
+        obj.create_geometry()
+    return fc.app_obj.new_object('excellon', name, init, plot=False)
+
+
+def _open(fc, name):
+    tool = fc.drilling_tool
+    tool.run(toggle=False)
+    tool.ui.object_combo.setCurrentText(name)
+    tool.on_object_changed()
+    tool.ui.tools_table.selectAll()
+    return tool
+
+
+def _edit(widget, value):
+    widget.set_value(value)
+    widget.editingFinished.emit()
+
+
+def _table_uids(tool):
+    t = tool.ui.tools_table
+    return [int(t.item(r, 3).text()) for r in range(t.rowCount() - 2)]
+
+
+def _area(obj_type='excellon', x=0.0, strategy='around', overz=1.0, idx=1):
+    area = {'obj_type': obj_type, 'shape': Polygon([(x, 0), (x + 1, 0), (x + 1, 1), (x, 1)]),
+            'strategy': strategy, 'overz': overz, 'idx': idx}
+    if obj_type == 'excellon':
+        area['owner'] = 'drilling'
+    return area
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Tool order
+# ---------------------------------------------------------------------------------------------------------------------
+
+def test_order_sorts_the_rows_only(fc):
+    exc = _load(fc, 'e_ui_order')
+    tool = _open(fc, 'e_ui_order')
+    before = deepcopy({k: v['tooldia'] for k, v in exc.tools.items()})
+    keys = list(exc.tools)
+
+    tool.ui.order_combo.setCurrentIndex(2)      # Reverse
+    assert _table_uids(tool) == [3, 2, 1]
+    assert list(exc.tools) == keys              # the object's tools are untouched: no new or duplicated tool
+    assert {k: v['tooldia'] for k, v in exc.tools.items()} == before
+    assert len(tool.excellon_tools) == 3
+
+    tool.ui.order_combo.setCurrentIndex(1)      # Forward
+    assert _table_uids(tool) == [1, 2, 3]
+    tool.ui.order_combo.setCurrentIndex(0)
+    assert list(exc.tools) == keys
+
+
+def test_dragged_order_survives_the_next_build(fc):
+    _load(fc, 'e_ui_drag')
+    tool = _open(fc, 'e_ui_drag')
+    tool.ui.order_combo.setCurrentIndex(2)
+    dragged = _table_uids(tool)
+    assert dragged == [3, 2, 1]
+    dias = [tool.excellon_tools[u]['tooldia'] for u in dragged]
+    tool.rebuild_ui()
+    assert tool._tool_order() == 'no'
+    tool.build_tool_ui()
+    t = tool.ui.tools_table
+    assert [float(t.item(r, 1).text()) for r in range(3)] == dias
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Level: stored values are never overwritten
+# ---------------------------------------------------------------------------------------------------------------------
+
+def test_beginner_level_keeps_the_stored_tool_values(fc):
+    exc = _load(fc, 'e_ui_level')
+    for uid, tl in exc.tools.items():
+        tl['data'].update({'tools_drill_multidepth': True, 'tools_drill_dwell': True,
+                           'tools_drill_drill_slots': True, 'tools_drill_area_exclusion': True,
+                           'tools_drill_dwelltime': 3.0})
+    stored = deepcopy({k: v['data'] for k, v in exc.tools.items()})
+    tool = _open(fc, 'e_ui_level')
+    for level in ('b', 'a', 'b'):
+        tool.change_level(level)
+    tool.set_tool_ui()
+    tool.on_object_changed()
+    assert {k: v['data'] for k, v in exc.tools.items()} == stored
+
+    # the generation takes the safe values in Beginner and the stored ones in Advanced
+    tool.change_level('b')
+    safe = tool._effective_tool_data(1)
+    assert not safe['tools_drill_multidepth'] and not safe['tools_drill_dwell']
+    assert not safe['tools_drill_drill_slots'] and not safe['tools_drill_area_exclusion']
+    assert exc.tools[1]['data']['tools_drill_multidepth'] is True
+    tool.change_level('a')
+    assert tool._effective_tool_data(1)['tools_drill_multidepth'] is True
+
+
+def test_pp_change_by_code_updates_the_visibility(fc):
+    exc = _load(fc, 'e_ui_pp')
+    exc.tools[1]['data']['tools_drill_ppname_e'] = 'Toolchange_Probe_MACH3'
+    tool = _open(fc, 'e_ui_pp')
+    tool.ui.tools_table.clearSelection()
+    tool.ui.tools_table.selectRow(0)
+    assert not tool.ui.pdepth_entry.isHidden()
+    exc.tools[2]['data']['tools_drill_ppname_e'] = 'default'
+    tool.ui.tools_table.selectRow(1)
+    assert tool.ui.pdepth_entry.isHidden()
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Object lifecycle
+# ---------------------------------------------------------------------------------------------------------------------
+
+def test_deleted_object_clears_the_table_and_disables_generate(fc, monkeypatch):
+    _load(fc, 'e_ui_gone')
+    tool = _open(fc, 'e_ui_gone')
+    assert tool.ui.generate_cnc_button.isEnabled()
+    # the object of the combo is gone (deleted): the combo text names nothing
+    monkeypatch.setattr(tool.ui.object_combo, 'currentText', lambda: 'does_not_exist')
+    tool.on_object_changed()
+    assert tool.excellon_obj is None and tool.excellon_tools == {}
+    assert tool.ui.tools_table.rowCount() == 2
+    assert not tool.ui.generate_cnc_button.isEnabled()
+    assert tool.ui.exc_param_frame.isEnabled() is False
+    tool.on_add_area_click()                       # no object: a message, no exception
+
+
+def test_old_object_without_drill_keys_opens_and_connects_the_signals(fc):
+    exc = _load(fc, 'e_ui_old')
+    for key in ('tools_drill_ppname_e', 'tools_drill_dwelltime', 'tools_drill_area_shape', 'tools_drill_endxy'):
+        exc.obj_options.pop(key, None)
+        for tl in exc.tools.values():
+            tl['data'].pop(key, None)
+    tool = _open(fc, 'e_ui_old')
+    tool.set_tool_ui()
+    assert tool.excellon_obj is not None
+    # the object-combo signal is connected: a new object is taken
+    _load(fc, 'e_ui_old2')
+    tool.ui.object_combo.setCurrentText('e_ui_old2')
+    assert tool.excellon_obj.obj_options['name'] == 'e_ui_old2'
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Selection
+# ---------------------------------------------------------------------------------------------------------------------
+
+def test_toggle_all_rows_clears_then_selects_all(fc):
+    _load(fc, 'e_ui_toggle')
+    tool = _open(fc, 'e_ui_toggle')
+    assert len(tool._selected_tool_rows()) == 3
+    tool.on_toggle_all_rows()
+    assert tool._selected_tool_rows() == []
+    assert not tool.ui.generate_cnc_button.isEnabled()
+    tool.on_toggle_all_rows()
+    assert len(tool._selected_tool_rows()) == 3
+
+
+def test_keyboard_multi_selection_shows_multiple_tools_and_the_first_one(fc):
+    exc = _load(fc, 'e_ui_multi')
+    exc.tools[1]['data']['tools_drill_cutz'] = -1.1
+    exc.tools[2]['data']['tools_drill_cutz'] = -2.2
+    tool = _open(fc, 'e_ui_multi')
+    table = tool.ui.tools_table
+    table.clearSelection()
+    table.selectRow(1)
+    assert 'Tool 2' in tool.ui.tool_data_label.text()
+    assert tool.ui.cutz_entry.get_value() == -2.2
+    sel = table.selectionModel()
+    sel.select(table.model().index(0, 0), QtCore.QItemSelectionModel.SelectionFlag.Select |
+               QtCore.QItemSelectionModel.SelectionFlag.Rows)
+    assert 'Multiple Tools' in tool.ui.tool_data_label.text()
+    assert tool.ui.cutz_entry.get_value() == -1.1       # the first selected tool
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Form <-> storage
+# ---------------------------------------------------------------------------------------------------------------------
+
+def test_edit_adds_a_missing_key_and_form_shows_default_for_it(fc):
+    exc = _load(fc, 'e_ui_keys')
+    for tl in exc.tools.values():
+        tl['data'].pop('tools_drill_dwelltime', None)
+    tool = _open(fc, 'e_ui_keys')
+    tool.ui.tools_table.clearSelection()
+    tool.ui.tools_table.selectRow(0)
+    # tool 1 lacks the key: the form must not keep the value of a previously shown tool
+    tool.ui.dwelltime_entry.set_value(7.5)
+    tool.ui.tools_table.selectRow(1)
+    assert tool.ui.dwelltime_entry.get_value() == tool._default('tools_drill_dwelltime')
+    _edit(tool.ui.dwelltime_entry, 2.5)
+    assert exc.tools[2]['data']['tools_drill_dwelltime'] == 2.5
+
+
+def test_blank_xy_entries_store_none_and_show_empty(fc):
+    exc = _load(fc, 'e_ui_xy')
+    tool = _open(fc, 'e_ui_xy')
+    assert tool.ui.endxy_entry.text() == ''             # the default is None: not the text 'None'
+    _edit(tool.ui.endxy_entry, '')
+    tool.ui.endxy_entry.setText('')
+    tool.ui.endxy_entry.editingFinished.emit()
+    assert all(t['data']['tools_drill_endxy'] is None for t in exc.tools.values())
+    tool.ui.endxy_entry.setText('1, 2')
+    tool.ui.endxy_entry.editingFinished.emit()
+    assert exc.tools[1]['data']['tools_drill_endxy'] == (1, 2)
+    assert tool._validate_xy_fields()
+    tool.ui.endxy_entry.setText('5')
+    tool.ui.endxy_entry.editingFinished.emit()
+    assert not tool._validate_xy_fields()
+
+
+def test_toolchange_xy_is_validated_only_when_toolchange_is_on(fc):
+    exc = _load(fc, 'e_ui_txy')
+    for tl in exc.tools.values():
+        tl['data']['tools_drill_toolchangexy'] = None
+        tl['data']['tools_drill_toolchange'] = False
+    tool = _open(fc, 'e_ui_txy')
+    assert tool._validate_xy_fields([1, 2, 3])
+    exc.tools[2]['data']['tools_drill_toolchange'] = True
+    assert not tool._validate_xy_fields([1, 2, 3])
+    assert tool._validate_xy_fields([1, 3])
+
+
+def test_apply_to_all_with_a_totals_row_current_never_blanks_the_tools(fc):
+    exc = _load(fc, 'e_ui_all')
+    tool = _open(fc, 'e_ui_all')
+    before = deepcopy({k: v['data'] for k, v in exc.tools.items()})
+    tool.ui.tools_table.setCurrentCell(tool.ui.tools_table.rowCount() - 1, 1)     # the 'Total Slots' row
+    tool.on_apply_param_to_all_clicked()
+    after = {k: v['data'] for k, v in exc.tools.items()}
+    assert all(d for d in after.values())
+    assert set(after[1]) == set(before[1])
+
+
+def test_reset_button_restores_the_defaults_of_the_object(fc):
+    exc = _load(fc, 'e_ui_reset')
+    tool = _open(fc, 'e_ui_reset')
+    default = exc.obj_options['tools_drill_cutz']
+    _edit(tool.ui.cutz_entry, default - 1.0)
+    assert exc.tools[1]['data']['tools_drill_cutz'] == default - 1.0
+    tool.ui.reset_button.click()
+    assert all(t['data']['tools_drill_cutz'] == default for t in exc.tools.values())
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Exclusion areas
+# ---------------------------------------------------------------------------------------------------------------------
+
+def _add_areas(fc, tool, areas):
+    fc.exc_areas.exclusion_areas_storage.extend(areas)
+    tool.build_tool_ui()
+
+
+def test_exclusion_table_shows_only_excellon_areas_and_maps_rows(fc):
+    _load(fc, 'e_ui_ex')
+    tool = _open(fc, 'e_ui_ex')
+    geo = _area('geometry', x=10, idx=1)
+    e1 = _area('excellon', x=20, idx=1, overz=1.0)          # duplicate idx on purpose
+    e2 = _area('excellon', x=30, idx=1, overz=2.0)
+    _add_areas(fc, tool, [geo, e1, e2])
+    table = tool.ui.exclusion_table
+    assert table.rowCount() == 2
+    assert [table.item(r, 0).text() for r in range(2)] == ['1', '2']
+
+    table.item(1, 3).setText('4.5')                         # a user edit of row 2 -> the second excellon area
+    assert e2['overz'] == pytest.approx(4.5) and e1['overz'] == 1.0 and geo['overz'] == 1.0
+    table.cellWidget(0, 1 + 1).setCurrentIndex(1)           # row 1 strategy -> Over
+    assert e1['strategy'] != 'around' and e2['strategy'] == 'around' and geo['strategy'] == 'around'
+
+
+def test_milling_area_on_an_excellon_is_not_a_drilling_area(fc):
+    _load(fc, 'e_ui_ex5')
+    tool = _open(fc, 'e_ui_ex5')
+    milling = _area('excellon', x=10)
+    del milling['owner']                                    # Milling stores obj_type 'excellon' too, without owner
+    mine = _area('excellon', x=20)
+    _add_areas(fc, tool, [milling, mine])
+    assert tool.ui.exclusion_table.rowCount() == 1
+    assert tool._drill_exclusion_areas() == [mine]
+    tool.on_clear_area_click()
+    assert fc.exc_areas.exclusion_areas_storage == [milling]
+
+
+def test_delete_selected_area_after_a_previous_delete(fc):
+    _load(fc, 'e_ui_ex3')
+    tool = _open(fc, 'e_ui_ex3')
+    areas = [_area('excellon', x=10 * i, idx=i + 1) for i in range(3)]
+    _add_areas(fc, tool, areas)
+    tool.ui.exclusion_table.selectRow(0)
+    tool.on_delete_sel_areas()
+    assert fc.exc_areas.exclusion_areas_storage == areas[1:]
+    tool.ui.exclusion_table.selectRow(1)                    # the last one now, whatever its idx is
+    tool.on_delete_sel_areas()
+    assert fc.exc_areas.exclusion_areas_storage == [areas[1]]
+    assert len(tool._drill_exclusion_areas()) == 1
+
+
+def test_bad_over_z_text_reconnects_the_form(fc):
+    exc = _load(fc, 'e_ui_ex4')
+    tool = _open(fc, 'e_ui_ex4')
+    area = _area('excellon', overz=1.0)
+    _add_areas(fc, tool, [area])
+    tool.ui.exclusion_table.item(0, 3).setText('abc')
+    QtWidgets.QApplication.processEvents()
+    assert area['overz'] == 1.0
+    _edit(tool.ui.cutz_entry, -2.4)                         # the form still writes to the tools
+    assert all(t['data']['tools_drill_cutz'] == -2.4 for t in exc.tools.values())
+    assert tool.ui.exclusion_table.item(0, 3).text() == '1.0'
+
+
+def test_peck_dwell_bottom_spindle_and_plunge_fields_are_per_tool_and_advanced_only(fc):
+    exc = _load(fc, 'e_ui_peck')
+    tool = _open(fc, 'e_ui_peck')
+    tool.change_level('a')
+    tool.ui.tools_table.clearSelection()
+    tool.ui.tools_table.selectRow(0)
+    first = list(exc.tools)[0]
+    _edit(tool.ui.peck_depth_entry, 0.8)
+    tool.ui.peck_cb.setChecked(True)
+    tool.ui.peck_cb.clicked.emit(True)
+    _edit(tool.ui.peck_retract_entry, 0.25)
+    tool.ui.spindledir_radio.set_value('CCW')
+    tool.ui.spindledir_radio.activated_custom.emit(tool.ui.spindledir_radio.get_value())
+    data = exc.tools[first]['data']
+    assert data['tools_drill_peck_depth'] == 0.8 and data['tools_drill_peck_retract'] == 0.25
+    assert data['tools_drill_spindledir'] == 'CCW'
+    other = [t for t in exc.tools if t != first][0]
+    assert exc.tools[other]['data']['tools_drill_peck_depth'] != 0.8
+    tool.change_level('b')
+    for widget in (tool.ui.peck_cb, tool.ui.peck_depth_entry, tool.ui.dwell_bottom_cb, tool.ui.spindledir_radio,
+                   tool.ui.fplunge_cb, tool.ui.fretract_cb):
+        assert widget.isHidden()
+    tool.change_level('a')
+    assert not tool.ui.peck_cb.isHidden() and not tool.ui.spindledir_radio.isHidden()
+
+
+def test_spot_pass_fields_are_job_wide_and_advanced_only(fc):
+    exc = _load(fc, 'e_ui_spot')
+    tool = _open(fc, 'e_ui_spot')
+    tool.change_level('a')
+    tool.ui.spot_cb.setChecked(True)
+    tool.ui.spot_cb.clicked.emit(True)
+    _edit(tool.ui.spot_dia_entry, 0.6)
+    _edit(tool.ui.spot_cutz_entry, -0.4)
+    _edit(tool.ui.spot_feedrate_entry, 40.0)
+    for data in (t['data'] for t in exc.tools.values()):
+        assert data['tools_drill_spot'] is True and data['tools_drill_spot_dia'] == 0.6
+        assert data['tools_drill_spot_cutz'] == -0.4 and data['tools_drill_spot_feedrate_z'] == 40.0
+    tool.change_level('b')
+    for widget in (tool.ui.spot_cb, tool.ui.spot_dia_entry, tool.ui.spot_cutz_entry, tool.ui.spot_feedrate_entry):
+        assert widget.isHidden()
+    tool.change_level('a')
+    assert not tool.ui.spot_cb.isHidden()
+
+
+def test_job_transform_fields_are_job_wide_and_advanced_only(fc):
+    exc = _load(fc, 'e_ui_xform')
+    tool = _open(fc, 'e_ui_xform')
+    tool.change_level('a')
+    _edit(tool.ui.job_offset_entry, '1.5, -2')
+    tool.ui.mirror_radio.set_value('xy')
+    tool.ui.mirror_radio.activated_custom.emit(tool.ui.mirror_radio.get_value())
+    _edit(tool.ui.mirror_point_entry, '3, 4')
+    _edit(tool.ui.array_columns_entry, 3)
+    _edit(tool.ui.array_rows_entry, 2)
+    _edit(tool.ui.array_pitch_entry, '10, 20')
+    for data in (t['data'] for t in exc.tools.values()):
+        assert tuple(data['tools_drill_job_offset_xy']) == (1.5, -2) and data['tools_drill_mirror'] == 'xy'
+        assert tuple(data['tools_drill_mirror_point']) == (3, 4)
+        assert data['tools_drill_array_columns'] == 3 and data['tools_drill_array_rows'] == 2
+        assert tuple(data['tools_drill_array_pitch']) == (10, 20)
+    tool.change_level('b')
+    for widget in (tool.ui.job_offset_entry, tool.ui.mirror_radio, tool.ui.mirror_point_entry,
+                   tool.ui.array_columns_entry, tool.ui.array_rows_entry, tool.ui.array_pitch_entry):
+        assert widget.isHidden()
+    tool.change_level('a')
+    assert not tool.ui.job_offset_entry.isHidden() and not tool.ui.array_pitch_entry.isHidden()
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Add objects (more Excellon objects in one job) and holes inside drawn areas
+# ---------------------------------------------------------------------------------------------------------------------
+
+def _pick_extras(tool, *names):
+    for row in range(tool.ui.extra_objects_list.count()):
+        item = tool.ui.extra_objects_list.item(row)
+        item.setSelected(item.text() in names)
+
+
+def test_add_objects_list_shows_the_merged_tools_until_it_is_cleared(fc):
+    _load(fc, 'ui_x1')
+    _load(fc, 'ui_x2')
+    tool = _open(fc, 'ui_x1')
+    tool.ui.level.setChecked(True)
+    names = [tool.ui.extra_objects_list.item(r).text() for r in range(tool.ui.extra_objects_list.count())]
+    assert 'ui_x2' in names and 'ui_x1' not in names
+
+    _pick_extras(tool, 'ui_x2')
+    assert _table_uids(tool) == [1, 2, 3]
+    assert sum(len(t['drills']) for t in tool.excellon_tools.values()) == 12
+    assert sum(len(t['drills']) for t in fc.collection.get_by_name('ui_x1').tools.values()) == 6
+    # the tools are a merged copy while extras are selected: the per-tool parameters are read-only
+    assert tool.ui.tool_param_frame.isEnabled() is False
+    assert tool.ui.apply_param_to_all.isEnabled() is False
+    assert tool.ui.extras_note_label.isHidden() is False
+
+    _pick_extras(tool)
+    assert sum(len(t['drills']) for t in tool.excellon_tools.values()) == 6
+    assert tool.ui.tool_param_frame.isEnabled() is True
+    assert tool.ui.apply_param_to_all.isEnabled() is True
+    assert tool.ui.extras_note_label.isHidden() is True
+
+
+def test_renamed_extra_object_stays_in_the_job(fc):
+    _load(fc, 'ui_r1')
+    _load(fc, 'ui_r2')
+    tool = _open(fc, 'ui_r1')
+    tool.ui.level.setChecked(True)
+    _pick_extras(tool, 'ui_r2')
+    extra = fc.collection.get_by_name('ui_r2')
+    extra.obj_options['name'] = 'ui_r2_renamed'
+    assert tool._extra_objects() == [extra]
+
+
+def test_hole_areas_are_separate_from_the_exclusion_areas_and_cleared_on_object_change(fc):
+    _load(fc, 'ui_y1')
+    _load(fc, 'ui_y2')
+    tool = _open(fc, 'ui_y1')
+    tool.hole_areas.exclusion_areas_storage.append(_area())
+    assert fc.exc_areas.exclusion_areas_storage == []
+    tool.ui.object_combo.setCurrentText('ui_y2')
+    tool.on_object_changed()
+    assert tool.hole_areas.exclusion_areas_storage == []
+
+    tool.hole_areas.exclusion_areas_storage.append(_area())
+    tool.on_clear_hole_areas_click()
+    assert tool.hole_areas.exclusion_areas_storage == []
+    tool.hole_areas.exclusion_areas_storage.append(_area())
+    tool.on_plugin_cleanup()
+    assert tool.hole_areas.exclusion_areas_storage == []

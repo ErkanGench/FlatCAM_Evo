@@ -1189,6 +1189,52 @@ class MillingUI:
         # -------------------------- EXCLUSION AREAS END -------------------------------------------------------------
         # ------------------------------------------------------------------------------------------------------------
 
+        # Path optimization (Advanced only; the plugin shows it)
+        self.opt_algorithm_label = FCLabel('%s:' % _('Path optimization'))
+        self.opt_algorithm_label.setToolTip(
+            _("The order in which the paths of a tool are cut.\n"
+              "- Rtree -> Rtree algorithm\n"
+              "- MetaHeuristic -> Google OR-Tools with Guided Local Search, runs for the search time\n"
+              "- Basic -> Google OR-Tools Basic algorithm, runs for the search time\n"
+              "- TSA -> Travelling Salesman algorithm\n"
+              "- None -> the paths in the order of the geometry\n"
+              "\n"
+              "MetaHeuristic and Basic are disabled when OR-Tools is not available.")
+        )
+        self.opt_algorithm_radio = RadioSet(
+            [
+                {'label': _('Rtree'), 'value': 'R'},
+                {'label': _('MetaHeuristic'), 'value': 'M'},
+                {'label': _('Basic'), 'value': 'B'},
+                {'label': _('TSA'), 'value': 'T'},
+                {'label': _('None'), 'value': 'N'}
+            ], orientation='vertical', compact=True)
+        self.opt_algorithm_radio.setObjectName("mill_opt_type")
+
+        gen_grid.addWidget(self.opt_algorithm_label, 24, 0)
+        gen_grid.addWidget(self.opt_algorithm_radio, 24, 1)
+
+        # OR-Tools search time
+        self.opt_time_label = FCLabel('%s:' % _('Search time'))
+        self.opt_time_label.setToolTip(
+            _("OR-Tools MetaHeuristic and Basic stop the path\n"
+              "optimization after this time.\n"
+              "In seconds. 0 means 3 seconds.")
+        )
+        self.opt_time_entry = FCSpinner(suffix='s')
+        self.opt_time_entry.set_range(0, 999)
+        self.opt_time_entry.setObjectName("mill_search_time")
+
+        gen_grid.addWidget(self.opt_time_label, 26, 0)
+        gen_grid.addWidget(self.opt_time_entry, 26, 1)
+
+        from camlib import HAS_ORTOOLS
+        if not HAS_ORTOOLS:
+            self.opt_algorithm_radio.setOptionsDisabled([_('MetaHeuristic'), _('Basic')], True)
+
+        for widget in (self.opt_algorithm_label, self.opt_algorithm_radio, self.opt_time_label, self.opt_time_entry):
+            widget.hide()
+
         GLay.set_common_column_size(
             [obj_grid, tool_title_grid, tool_grid, new_tool_grid, param_grid, gen_grid], 0)
 

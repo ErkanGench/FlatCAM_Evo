@@ -3981,6 +3981,28 @@ class AppExcEditor(QtCore.QObject):
             "tools_drill_area_shape":       app_option("tools_drill_area_shape"),
             "tools_drill_area_strategy":    app_option("tools_drill_area_strategy"),
             "tools_drill_area_overz":       app_option("tools_drill_area_overz"),
+
+            "tools_drill_dwell_bottom":     app_option("tools_drill_dwell_bottom"),
+            "tools_drill_peck":             app_option("tools_drill_peck"),
+            "tools_drill_peck_depth":       app_option("tools_drill_peck_depth"),
+            "tools_drill_peck_retract":     app_option("tools_drill_peck_retract"),
+
+            "tools_drill_spot":             app_option("tools_drill_spot"),
+            "tools_drill_spot_dia":         app_option("tools_drill_spot_dia"),
+            "tools_drill_spot_cutz":        app_option("tools_drill_spot_cutz"),
+            "tools_drill_spot_feedrate_z": app_option("tools_drill_spot_feedrate_z"),
+
+            "tools_drill_job_offset_xy":    app_option("tools_drill_job_offset_xy"),
+            "tools_drill_mirror":           app_option("tools_drill_mirror"),
+            "tools_drill_mirror_point":     app_option("tools_drill_mirror_point"),
+            "tools_drill_array_columns":    app_option("tools_drill_array_columns"),
+            "tools_drill_array_rows":       app_option("tools_drill_array_rows"),
+            "tools_drill_array_pitch":      app_option("tools_drill_array_pitch"),
+
+            "tools_drill_holes_selection":  app_option("tools_drill_holes_selection"),
+
+            "tools_drill_min_power":        app_option("tools_drill_min_power"),
+            "tools_drill_laser_on":         app_option("tools_drill_laser_on"),
         }
 
         # fill in self.default_data values from self.obj_options

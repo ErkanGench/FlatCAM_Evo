@@ -200,6 +200,148 @@ class ToolsDrillPrefGroupUI(OptionsGroupUI):
 
         self.ois_dwell_exc = OptionalInputSection(self.dwell_cb, [self.dwelltime_entry])
 
+        # Dwell at the bottom of the holes
+        self.dwell_bottom_cb = FCCheckBox('%s' % _('Dwell at bottom'))
+        self.dwell_bottom_cb.setToolTip(
+            _("Pause at the bottom of every hole, for the Dwell Time above.\n"
+              "Ignored by the laser preprocessors.")
+        )
+        param_grid.addWidget(self.dwell_bottom_cb, 21, 0, 1, 3)
+
+        # Peck drilling
+        self.peck_cb = FCCheckBox('%s:' % _('Peck drilling'))
+        self.peck_cb.setToolTip(
+            _("Drill each hole in steps. After each step the tool goes up to the\n"
+              "Travel Z (it clears the chips), goes down fast to the Peck Retract\n"
+              "clearance above the previous depth and feeds on.\n"
+              "It replaces the Multi-Depth. Ignored by the laser preprocessors.")
+        )
+        self.peck_depth_entry = FCDoubleSpinner()
+        self.peck_depth_entry.set_precision(self.decimals)
+        self.peck_depth_entry.set_range(0.0, 10000.0000)
+        self.peck_depth_entry.setSingleStep(0.1)
+        self.peck_depth_entry.setToolTip(_("Depth of each peck step (positive)."))
+
+        param_grid.addWidget(self.peck_cb, 22, 0)
+        param_grid.addWidget(self.peck_depth_entry, 22, 1, 1, 2)
+
+        peck_retract_label = FCLabel('%s:' % _('Peck Retract'))
+        peck_retract_label.setToolTip(
+            _("Clearance above the previous depth to which the tool goes down fast\n"
+              "after the full retract, before it feeds on.")
+        )
+        self.peck_retract_entry = FCDoubleSpinner()
+        self.peck_retract_entry.set_precision(self.decimals)
+        self.peck_retract_entry.set_range(0.0, 10000.0000)
+        self.peck_retract_entry.setSingleStep(0.1)
+
+        param_grid.addWidget(peck_retract_label, 23, 0)
+        param_grid.addWidget(self.peck_retract_entry, 23, 1, 1, 2)
+
+        self.ois_peck = OptionalInputSection(self.peck_cb, [self.peck_depth_entry, peck_retract_label,
+                                                            self.peck_retract_entry])
+
+        # Spot drilling pass (a job option, not a per tool one)
+        self.spot_cb = FCCheckBox('%s:' % _('Spot drilling'))
+        self.spot_cb.setToolTip(
+            _("The job starts with an extra pass over all the selected holes with a spot drill\n"
+              "(centering): its own tool number, a toolchange before it, then the drills.\n"
+              "Needs the toolchange. Ignored by the laser preprocessors.")
+        )
+        self.spot_dia_entry = FCDoubleSpinner()
+        self.spot_dia_entry.set_precision(self.decimals)
+        self.spot_dia_entry.set_range(0.0, 10000.0000)
+        self.spot_dia_entry.setSingleStep(0.1)
+        self.spot_dia_entry.setToolTip(_("Diameter of the spot drill."))
+
+        param_grid.addWidget(self.spot_cb, 24, 0)
+        param_grid.addWidget(self.spot_dia_entry, 24, 1, 1, 2)
+
+        spot_cutz_label = FCLabel('%s:' % _('Spot Cut Z'))
+        spot_cutz_label.setToolTip(_("Depth of the spot holes. Negative value, in current units."))
+        self.spot_cutz_entry = FCDoubleSpinner()
+        self.spot_cutz_entry.set_precision(self.decimals)
+        self.spot_cutz_entry.set_range(-10000.0000, 10000.0000)
+        self.spot_cutz_entry.setSingleStep(0.1)
+
+        param_grid.addWidget(spot_cutz_label, 25, 0)
+        param_grid.addWidget(self.spot_cutz_entry, 25, 1, 1, 2)
+
+        spot_feedrate_label = FCLabel('%s:' % _('Spot Feedrate Z'))
+        spot_feedrate_label.setToolTip(_("Feedrate on the Z axis of the spot holes."))
+        self.spot_feedrate_entry = FCDoubleSpinner()
+        self.spot_feedrate_entry.set_precision(self.decimals)
+        self.spot_feedrate_entry.set_range(0.0, 910000.0000)
+        self.spot_feedrate_entry.setSingleStep(0.1)
+
+        param_grid.addWidget(spot_feedrate_label, 26, 0)
+        param_grid.addWidget(self.spot_feedrate_entry, 26, 1, 1, 2)
+
+        self.ois_spot = OptionalInputSection(self.spot_cb, [self.spot_dia_entry, spot_cutz_label,
+                                                            self.spot_cutz_entry, spot_feedrate_label,
+                                                            self.spot_feedrate_entry])
+
+        # Job XY transforms of the drill points: mirror -> offset -> array
+        job_offset_label = FCLabel('%s:' % _('Job offset X,Y'))
+        job_offset_label.setToolTip(
+            _("Move all the drill points of the job by this X,Y distance (after the mirror, before the array).\n"
+              "Blank: no move. The Excellon object is not changed.")
+        )
+        self.job_offset_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.job_offset_entry.setPlaceholderText(_("X,Y distance"))
+        param_grid.addWidget(job_offset_label, 28, 0)
+        param_grid.addWidget(self.job_offset_entry, 28, 1, 1, 2)
+
+        mirror_label = FCLabel('%s:' % _('Job mirror'))
+        mirror_label.setToolTip(
+            _("Mirror all the drill points of the job: No, on the X axis (the Y values flip),\n"
+              "on the Y axis (the X values flip) or both.")
+        )
+        self.mirror_radio = RadioSet([{'label': _('No'), 'value': 'no'}, {'label': 'X', 'value': 'x'},
+                                      {'label': 'Y', 'value': 'y'}, {'label': 'XY', 'value': 'xy'}])
+        param_grid.addWidget(mirror_label, 29, 0)
+        param_grid.addWidget(self.mirror_radio, 29, 1, 1, 2)
+
+        mirror_point_label = FCLabel('%s:' % _('Mirror point X,Y'))
+        mirror_point_label.setToolTip(
+            _("The point the mirror axes pass through.\n"
+              "Blank: the center of the bounding box of the selected holes.")
+        )
+        self.mirror_point_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.mirror_point_entry.setPlaceholderText(_("Bounding box center"))
+        param_grid.addWidget(mirror_point_label, 30, 0)
+        param_grid.addWidget(self.mirror_point_entry, 30, 1, 1, 2)
+
+        array_columns_label = FCLabel('%s:' % _('Array columns'))
+        array_columns_label.setToolTip(_("Repeat the holes along X this many times. 1 x 1 is no array."))
+        self.array_columns_entry = FCSpinner()
+        self.array_columns_entry.set_range(1, 1000)
+        param_grid.addWidget(array_columns_label, 31, 0)
+        param_grid.addWidget(self.array_columns_entry, 31, 1, 1, 2)
+
+        array_rows_label = FCLabel('%s:' % _('Array rows'))
+        array_rows_label.setToolTip(_("Repeat the holes along Y this many times. 1 x 1 is no array."))
+        self.array_rows_entry = FCSpinner()
+        self.array_rows_entry.set_range(1, 1000)
+        param_grid.addWidget(array_rows_label, 32, 0)
+        param_grid.addWidget(self.array_rows_entry, 32, 1, 1, 2)
+
+        array_pitch_label = FCLabel('%s:' % _('Array pitch X,Y'))
+        array_pitch_label.setToolTip(_("The distance between the copies of the array, along X and along Y."))
+        self.array_pitch_entry = NumericalEvalTupleEntry(border_color='#0069A9')
+        self.array_pitch_entry.setPlaceholderText(_("X,Y pitch"))
+        param_grid.addWidget(array_pitch_label, 33, 0)
+        param_grid.addWidget(self.array_pitch_entry, 33, 1, 1, 2)
+
+        holes_label = FCLabel('%s:' % _('Holes'))
+        holes_label.setToolTip(
+            _("Which holes are drilled: All, or only those inside the areas that are drawn on the canvas\n"
+              "in the Drilling plugin (Inside area).")
+        )
+        self.holes_radio = RadioSet([{'label': _('All'), 'value': 'all'}, {'label': _('Inside area'), 'value': 'area'}])
+        param_grid.addWidget(holes_label, 60, 0)
+        param_grid.addWidget(self.holes_radio, 60, 1, 1, 2)
+
         # preprocessor selection
         pp_excellon_label = FCLabel('%s:' % _("Preprocessor"))
         pp_excellon_label.setToolTip(
@@ -217,8 +359,8 @@ class ToolsDrillPrefGroupUI(OptionsGroupUI):
             self.pp_excellon_name_cb.setItemData(it, self.pp_excellon_name_cb.itemText(it),
                                                  QtCore.Qt.ItemDataRole.ToolTipRole)
 
-        param_grid.addWidget(pp_excellon_label, 24, 0)
-        param_grid.addWidget(self.pp_excellon_name_cb, 24, 1, 1, 2)
+        param_grid.addWidget(pp_excellon_label, 27, 0)
+        param_grid.addWidget(self.pp_excellon_name_cb, 27, 1, 1, 2)
 
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)

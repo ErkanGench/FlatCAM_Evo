@@ -248,3 +248,195 @@ class TestCodesSplit:
                 continue
             assert CNCjob.codes_split(job, line) == expected, (names, line)
 
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Milling G-code: travel Z, depth step, dwell, path ends, exclusion areas, first tool, lost paths
+# ---------------------------------------------------------------------------------------------------------------------
+BOX = shapely.box(4.0, -1.0, 6.0, 1.0)
+TWO_LINES = [LineString([(0, 0), (10, 0)]), LineString([(10, 1), (20, 1)])]
+
+
+def recording_exclusion(job, areas=()):
+    calls = []
+
+    def travel_coordinates(**kw):
+        calls.append(kw)
+        return [(None, kw['end_point'])]
+
+    job.app.exc_areas = SimpleNamespace(exclusion_areas_storage=list(areas), travel_coordinates=travel_coordinates)
+    return calls
+
+
+def messages(job):
+    return [str(call.args[0]) for call in job.app.inform.emit.call_args_list]
+
+
+def single_path_gcode(job, paths, **changes):
+    job.app.options['tools_mill_optimization_type'] = changes.pop('opt_type', 'R')
+    geo = SimpleNamespace(solid_geometry=paths, obj_options={'name': 'g'})
+    kwargs = dict(tooldia=0.1, z_cut=-0.1, z_move=2.0, feedrate=300.0, feedrate_z=100.0, feedrate_rapid=1000.0,
+                  pp_geometry_name='default', is_first=True, toolchangez=15.0, startz=None, endz=2.0)
+    kwargs.update(changes)
+    result = job.generate_from_geometry_2(geo, **kwargs)
+    return result if result == 'fail' else result[0]
+
+
+def multi_geo_gcode(paths, pp_name='default', job=None, uid=1, data=None, **kwargs):
+    job = job or gcode_job(pp_name)
+    tools = milling_tools(paths, tools_mill_ppname_g=pp_name, **(data or {}))
+    tools[uid] = tools.pop(1)
+    kwargs.setdefault('is_first', True)
+    kwargs.setdefault('is_last', True)
+    result = job.geometry_tool_gcode_gen(uid, tools, (0, 0), (0, 0), 0.005, **kwargs)
+    return job, (result if result == 'fail' else result[0])
+
+
+def run_with_deadline(function, seconds=15):
+    import threading
+    box = []
+    thread = threading.Thread(target=lambda: box.append(function()), daemon=True)
+    thread.start()
+    thread.join(seconds)
+    assert box, 'the G-code generation never ended'
+    return box[0]
+
+
+class TestMillingGcodeFixes:
+    @pytest.mark.parametrize('multidepth', [False, True])
+    def test_single_geometry_negative_travel_z_lifts_up(self, multidepth):
+        job = gcode_job('default')
+        gcode = single_path_gcode(job, TWO_LINES, z_move=-2.0, multidepth=multidepth, depthpercut=0.05)
+        assert 'Z-2.0' not in gcode
+        assert 'G00 Z2.0000' in gcode
+
+    def test_multi_depth_with_zero_step_cuts_in_one_pass(self):
+        __, gcode = run_with_deadline(lambda: multi_geo_gcode(
+            [TWO_LINES[0]], data=dict(tools_mill_multidepth=True, tools_mill_depthperpass=0.0,
+                                      tools_mill_cutz=-0.3)))
+        assert 'Z-0.3000' in gcode
+
+    @pytest.mark.parametrize('step', [0, None])
+    def test_multi_pass_with_zero_step_ends(self, step):
+        job = gcode_job('default')
+        job.z_depthpercut = step
+        gcode, __ = run_with_deadline(
+            lambda: job.create_gcode_multi_pass(TWO_LINES[0], 0.1, False, 0.0, 0, job.pp_geometry, 2.0))
+        assert 'Z-0.1000' in gcode
+
+    def test_dwell_with_zero_time_makes_no_dwell_line(self):
+        job, gcode = multi_geo_gcode([TWO_LINES[0]], data=dict(tools_mill_dwell=True, tools_mill_dwelltime=0.0))
+        assert gcode != 'fail'
+        assert 'G4' not in gcode
+        assert gcode == multi_geo_gcode([TWO_LINES[0]], data=dict(tools_mill_dwell=False))[1]
+
+        job, with_time = multi_geo_gcode([TWO_LINES[0]], data=dict(tools_mill_dwell=True, tools_mill_dwelltime=1.5))
+        assert 'G4 P1.5' in with_time
+
+    def test_single_geometry_travel_starts_at_end_of_previous_path(self):
+        job = gcode_job('default')
+        calls = recording_exclusion(job)
+        single_path_gcode(job, TWO_LINES)
+        assert [call['start_point'] for call in calls] == [(0, 0), (10.0, 0.0)]
+
+    @pytest.mark.parametrize('flag', [True, False])
+    def test_exclusion_flag_of_tool_is_honored(self, flag):
+        job = gcode_job('default')
+        calls = recording_exclusion(job)
+        multi_geo_gcode(TWO_LINES, job=job, data=dict(tools_mill_area_exclusion=flag))
+        assert bool(calls) is flag
+
+    @pytest.mark.parametrize('keyword', [{}, {'area_exclusion': True}, {'area_exclusion': False}])
+    def test_single_geometry_exclusion_keyword(self, keyword):
+        job = gcode_job('default')
+        calls = recording_exclusion(job)
+        single_path_gcode(job, TWO_LINES, **keyword)
+        assert bool(calls) is keyword.get('area_exclusion', True)
+
+    @pytest.mark.parametrize('flag', [True, False])
+    def test_cut_through_exclusion_area_warns_once(self, flag):
+        job = gcode_job('default')
+        recording_exclusion(job, [{'shape': BOX, 'strategy': 'over', 'overz': 1.0}])
+        cuts = [LineString([(0, 0), (10, 0)]), LineString([(0, 0.5), (10, 0.5)])]
+        multi_geo_gcode(cuts, job=job, data=dict(tools_mill_area_exclusion=flag))
+        warnings = [m for m in messages(job) if m.startswith('[WARNING]') and 'xclusion' in m]
+        assert len(warnings) == (1 if flag else 0)
+
+    def test_first_tool_uses_start_z_by_position_not_by_uid(self):
+        data = dict(tools_mill_startz=1.5, tools_mill_toolchangez=15.0)
+        job, first = multi_geo_gcode([TWO_LINES[0]], uid=5, toolchange=True, is_first=True, data=data)
+        assert 'G00 Z1.5000\nG00 X0.0000 Y0.0000\nT5' in first
+        job, later = multi_geo_gcode([TWO_LINES[0]], uid=1, toolchange=True, is_first=False, data=data)
+        assert 'G00 Z15.0000\nG00 X0.0000 Y0.0000\nT1' in later
+
+    @pytest.mark.parametrize('paths, changes', [([], {}), ([TWO_LINES[0]], {'tools_mill_offset_value': -5.0})])
+    def test_tool_without_usable_geometry_tells_the_user(self, paths, changes):
+        job, gcode = multi_geo_gcode(paths, data=dict(changes, tools_mill_tooldia=0.25))
+        assert gcode == 'fail'
+        notices = [m for m in messages(job) if m.startswith(('[ERROR_NOTCL]', '[WARNING_NOTCL]'))]
+        assert notices and '0.25' in notices[-1]
+
+    def test_single_geometry_without_usable_path_tells_the_user(self):
+        job = gcode_job('default')
+        recording_exclusion(job)
+        assert single_path_gcode(job, [TWO_LINES[0]], offset=-5.0, tooldia=0.25) == 'fail'
+        assert [m for m in messages(job) if m.startswith(('[ERROR_NOTCL]', '[WARNING_NOTCL]'))]
+
+    @pytest.mark.parametrize('opt_type', ['T', 'N'])
+    @pytest.mark.parametrize('single', [False, True])
+    def test_paths_with_the_same_start_point_are_all_cut(self, opt_type, single):
+        paths = [LineString([(0, 0), (5, 0)]), LineString([(0, 0), (0, 5)]), LineString([(8, 8), (9, 9)])]
+        with patch.object(camlib, 'HAS_ORTOOLS', True):
+            if single:
+                job = gcode_job('default')
+                recording_exclusion(job)
+                gcode = single_path_gcode(job, paths, opt_type=opt_type)
+            else:
+                __, gcode = multi_geo_gcode(paths, data=dict(tools_mill_optimization_type=opt_type))
+        for end in ('X5.0000 Y0.0000', 'X0.0000 Y5.0000', 'X9.0000 Y9.0000'):
+            assert end in gcode
+
+    def test_travelling_salesman_keeps_the_input_and_the_order(self):
+        rng = np.random.default_rng(7)
+        points = [tuple(p) for p in rng.integers(0, 40, size=(60, 2)).astype(float)]
+        original = list(points)
+
+        def reference(pts, start=None):
+            start = pts[0] if start is None else start
+            left, path = list(pts), [start]
+            while left:
+                nearest = min(left, key=lambda x: camlib.distance(path[-1], x))
+                if nearest != path[-1]:
+                    path.append(nearest)
+                left.remove(nearest)
+            return path
+
+        assert CNCjob.optimized_travelling_salesman(points) == reference(original)
+        assert points == original
+
+
+class TestPathOptimizationArgument:
+    PATHS = [LineString([(30, 0), (40, 0)]), LineString([(0, 0), (10, 0)]), LineString([(20, 0), (25, 0)])]
+
+    def test_the_tool_optimization_wins_over_the_application_option(self):
+        by_option = single_path_gcode(gcode_job('default'), self.PATHS, opt_type='N')
+        job = gcode_job('default')
+        job.app.options['tools_mill_optimization_type'] = 'R'
+        geo = SimpleNamespace(solid_geometry=self.PATHS, obj_options={'name': 'g'})
+        by_argument = job.generate_from_geometry_2(
+            geo, tooldia=0.1, z_cut=-0.1, z_move=2.0, feedrate=300.0, feedrate_z=100.0, feedrate_rapid=1000.0,
+            pp_geometry_name='default', is_first=True, toolchangez=15.0, startz=None, endz=2.0, opt_type='N')[0]
+        assert by_argument == by_option
+        assert by_argument != single_path_gcode(gcode_job('default'), self.PATHS, opt_type='R')
+
+    def test_events_are_processed_only_in_the_gui_thread(self):
+        import threading
+        calls = []
+        with patch.object(camlib.QtWidgets.QApplication, 'processEvents', lambda: calls.append(1)):
+            thread = threading.Thread(target=camlib.process_gui_events)
+            thread.start()
+            thread.join()
+            assert not calls
+            camlib.process_gui_events()
+        from PyQt6 import QtWidgets
+        assert bool(calls) == (QtWidgets.QApplication.instance() is not None)

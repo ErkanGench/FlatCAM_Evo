@@ -26,7 +26,7 @@ from copy import deepcopy, copy
 import sys
 import uuid
 import math
-import inspect
+import sys
 import numpy as np
 
 import gettext
@@ -228,6 +228,12 @@ class FlatCAMObj(QtCore.QObject):
         self.muted_ui = False
         self.deleted = False
 
+        # True while the plot runs in a load batch: the batch redraws the canvas once, when all the objects are plotted
+        self.defer_redraw = False
+
+        # True for an object that from_dict() filled: its stored state (bounds, buffered geometry) is trusted
+        self.loaded_from_dict = False
+
         try:
             self._drawing_tolerance = float(self._app_option("global_tolerance")) if \
                 self._app_option("global_tolerance") else 0.001
@@ -269,6 +275,8 @@ class FlatCAMObj(QtCore.QObject):
         :param d: Dictionary with attributes to set.
         :return: None
         """
+
+        self.loaded_from_dict = True
 
         # the history id of a rebuilt object (an old project has none: the object keeps its new id)
         if d.get('history_uid'):
@@ -329,7 +337,7 @@ class FlatCAMObj(QtCore.QObject):
         :param kind:    Used by only some of the FlatCAM objects
         :return:        Whether to continue plotting or not depending on the "plot" option. Boolean
         """
-        # log.debug(str(inspect.stack()[1][3]) + " --> FlatCAMObj.plot()")
+        # log.debug(sys._getframe(1).f_code.co_name + " --> FlatCAMObj.plot()")
 
         if self.deleted:
             return False
@@ -556,8 +564,12 @@ class FlatCAMObj(QtCore.QObject):
         :return: None
         """
 
+        # during a project load the Properties tab is built for the selected object when the load ends
+        if getattr(self, '_load_batch', None) is not None:
+            return
+
         self.muted_ui = True
-        self.app.log.debug(str(inspect.stack()[1][3]) + "--> FlatCAMObj.build_ui()")
+        self.app.log.debug(sys._getframe(1).f_code.co_name + "--> FlatCAMObj.build_ui()")
 
         try:
             # HACK: disconnect the scale entry signal since on focus out event will trigger an undesired scale()
@@ -694,7 +706,7 @@ class FlatCAMObj(QtCore.QObject):
 
         :return: None
         """
-        self.app.log.debug(str(inspect.stack()[1][3]) + " --> FlatCAMObj.to_form()")
+        self.app.log.debug(sys._getframe(1).f_code.co_name + " --> FlatCAMObj.to_form()")
         for option in self.obj_options:
             try:
                 self.set_form_item(option)
@@ -708,7 +720,7 @@ class FlatCAMObj(QtCore.QObject):
         :return: None
         :rtype: None
         """
-        self.app.log.debug(str(inspect.stack()[1][3]) + "--> FlatCAMObj.read_form()")
+        self.app.log.debug(sys._getframe(1).f_code.co_name + "--> FlatCAMObj.read_form()")
         for option in self.obj_options:
             try:
                 self.read_form_item(option)

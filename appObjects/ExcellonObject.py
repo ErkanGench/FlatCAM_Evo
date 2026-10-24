@@ -867,33 +867,59 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
 
         return slots_in_file, ''.join(excellon_parts)
 
+    def _milling_tool_keys(self, tools):
+        """Resolve the tools argument ("all", a list or None = the selected rows) to tool keys."""
+        if tools is None:
+            tools = self.get_selected_tools_list()
+        if tools == "all":
+            tools = [k for k, _v in sorted(((k, v['tooldia']) for k, v in self.tools.items()), key=lambda t: t[1])]
+            self.app.log.debug("Tools 'all' and sorted are: %s" % str(tools))
+        return tools
+
+    def _create_milling_geometry(self, outname, geo_init, plot, use_thread):
+        """Create the milling Geometry object, on the app worker when use_thread is set (GUI buttons).
+
+        Returns (success, msg); with use_thread the result is not known yet, so success is reported."""
+        if use_thread:
+            def geo_thread(a_obj):
+                a_obj.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+
+            # Create a promise with the name of the object that will be created
+            self.app.collection.promise(outname)
+
+            # Send to worker
+            self.app.worker_task.emit({'fcn': geo_thread, 'params': [self.app]})
+            return True, ""
+
+        result = self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
+        if result == 'fail' or result is False:
+            return False, 'Failed to create milling geometry.'
+        return True, ""
+
+    @staticmethod
+    def _milling_multidepth(app_obj):
+        return app_obj.options.get(
+            "tools_mill_multidepth",
+            app_obj.defaults.get("tools_mill_multidepth",
+                                 app_obj.defaults.factory_defaults.get("tools_mill_multidepth")))
+
     def generate_milling_drills(self, tools=None, outname=None, tooldia=None, plot=False, use_thread=False):
         """
         Will generate an Geometry Object allowing to cut a drill hole instead of drilling it.
 
-        Note: This method is a good template for generic operations as
-        it takes it's options from parameters or otherwise from the
-        object's options and returns a (success, msg) tuple as feedback
-        for shell operations.
+        It takes its options from parameters or otherwise from the object's options and returns a
+        (success, msg) tuple as feedback for shell operations. The geometry comes from MillingGen.
 
         :param tools:       A list of tools where the drills are to be milled or a string: "all"
-        :type tools:
         :param outname:     the name of the resulting Geometry object
-        :type outname:      str
         :param tooldia:     the tool diameter to be used in creation of the milling path (Geometry Object)
-        :type tooldia:      float
         :param plot:        if to plot the resulting object
-        :type plot:         bool
-        :param use_thread:  if to use threading for creation of the Geometry object
-        :type use_thread:   bool
+        :param use_thread:  if to create the Geometry object on the app worker (result is not awaited)
         :return:            Success/failure condition tuple (bool, str).
-        :rtype:             tuple
         """
+        from appPlugins.ToolMilling import MillingGen
 
-        # Get the tools from the list. These are keys
-        # to self.tools
-        if tools is None:
-            tools = self.get_selected_tools_list()
+        tools = self._milling_tool_keys(tools)
 
         if outname is None:
             outname = self.obj_options["name"] + "_mill"
@@ -901,128 +927,57 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
         if tooldia is None:
             tooldia = self.ui.tooldia_entry.get_value()
 
-        # Sort tools by diameter. items() -> [('name', diameter), ...]
-        # sorted_tools = sorted(list(self.tools.items()), key=lambda tl: tl[1]) # no longer works in Python3
-
-        sort = []
-        for k, v in self.tools.items():
-            sort.append((k, v['tooldia']))
-        sorted_tools = sorted(sort, key=lambda t1: t1[1])
-
-        if tools == "all":
-            tools = [i[0] for i in sorted_tools]  # List if ordered tool names.
-            self.app.log.debug("Tools 'all' and sorted are: %s" % str(tools))
-
         if len(tools) == 0:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Please select one or more tools from the list and try again."))
             return False, "Error: No tools."
 
-        for tool in tools:
-            if tooldia > self.tools[tool]["tooldia"]:
-                mseg = '[ERROR_NOTCL] %s %s: %s' % (_("Milling tool for DRILLS is larger than hole size. Cancelled."),
-                                                    _("Tool"),
-                                                    str(tool))
-                self.app.inform.emit(mseg)
-                return False, "Error: Milling tool is larger than hole."
+        # all the tools with drills that are too small, in 1 message
+        too_small = MillingGen.milling_drills_too_small(self.tools, tools, tooldia, self.decimals)
+        if too_small:
+            mseg = '[ERROR_NOTCL] %s %s: %s' % (_("Milling tool for DRILLS is larger than hole size. Cancelled."),
+                                                _("Tool"),
+                                                ', '.join(str(tool) for tool in too_small))
+            self.app.inform.emit(mseg)
+            return False, "Error: Milling tool is larger than hole."
 
         def geo_init(geo_obj, app_obj):
-            """
-
-            :param geo_obj:     New object
-            :type geo_obj:      GeometryObject
-            :param app_obj:     App
-            :type app_obj:      FlatCAMApp.App
-            :return:
-            :rtype:
-            """
             assert geo_obj.kind == 'geometry', "Initializer expected a GeometryObject, got %s" % type(geo_obj)
-
-            # ## Add properties to the object
 
             geo_obj.obj_options['type'] = 'Excellon Geometry'
             geo_obj.obj_options["tools_mill_tooldia"] = str(tooldia)
-            geo_obj.obj_options["multidepth"] = app_obj.options.get(
-                "tools_mill_multidepth",
-                app_obj.defaults.get("tools_mill_multidepth",
-                                     app_obj.defaults.factory_defaults.get("tools_mill_multidepth"))
-            )
-            geo_obj.solid_geometry = []
-
-            # in case that the tool used has the same diameter with the hole, and since the maximum resolution
-            # for FlatCAM is 6 decimals,
-            # we add a tenth of the minimum value, meaning 0.0000001, which from our point of view is "almost zero"
-            for etool in tools:
-                for drill in self.tools[etool]['drills']:
-                    buffer_value = self.tools[etool]['tooldia'] / 2 - tooldia / 2
-                    if buffer_value == 0:
-                        geo_obj.solid_geometry.append(drill.buffer(0.0000001).exterior)
-                    else:
-                        geo_obj.solid_geometry.append(drill.buffer(buffer_value).exterior)
+            # the CNC job reads tools_mill_multidepth
+            geo_obj.obj_options["tools_mill_multidepth"] = self._milling_multidepth(app_obj)
+            geo_obj.solid_geometry = MillingGen.milling_drills_geometry(
+                self.tools, tools, tooldia, steps=self.geo_steps_per_circle, decimals=self.decimals)
 
             if not geo_obj.solid_geometry:
                 return "fail"
 
-        if use_thread:
-            def geo_thread(a_obj):
-                a_obj.app_obj.new_object("geometry", outname, geo_init, plot=plot)
-
-            # Create a promise with the new name
-            self.app.collection.promise(outname)
-
-            # Send to worker
-            self.app.worker_task.emit({'fcn': geo_thread, 'params': [self.app]})
-        else:
-            result = self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
-            if result == 'fail' or result is False:
-                return False, 'Failed to create milling geometry.'
-
-        return True, ""
+        return self._create_milling_geometry(outname, geo_init, plot, use_thread)
 
     def generate_milling_slots(self, tools=None, outname=None, tooldia=None, plot=False, use_thread=False):
         """
         Will generate an Geometry Object allowing to cut/mill a slot hole.
 
-        Note: This method is a good template for generic operations as
-        it takes it's options from parameters or otherwise from the
-        object's options and returns a (success, msg) tuple as feedback
-        for shell operations.
+        It takes its options from parameters or otherwise from the object's options and returns a
+        (success, msg) tuple as feedback for shell operations. The geometry comes from MillingGen.
 
-        :param tools:       A list of tools where the drills are to be milled or a string: "all"
-        :type tools:
+        :param tools:       A list of tools where the slots are to be milled or a string: "all"
         :param outname:     the name of the resulting Geometry object
-        :type outname:      str
         :param tooldia:     the tool diameter to be used in creation of the milling path (Geometry Object)
-        :type tooldia:      float
         :param plot:        if to plot the resulting object
-        :type plot:         bool
-        :param use_thread:  if to use threading for creation of the Geometry object
-        :type use_thread:   bool
+        :param use_thread:  if to create the Geometry object on the app worker (result is not awaited)
         :return:            Success/failure condition tuple (bool, str).
-        :rtype:             tuple
         """
+        from appPlugins.ToolMilling import MillingGen
 
-        # Get the tools from the list. These are keys
-        # to self.tools
-        if tools is None:
-            tools = self.get_selected_tools_list()
+        tools = self._milling_tool_keys(tools)
 
         if outname is None:
             outname = self.obj_options["name"] + "_mill_slot"
 
         if tooldia is None:
             tooldia = float(self.obj_options["slot_tooldia"])
-
-        # Sort tools by diameter. items() -> [('name', diameter), ...]
-        # sorted_tools = sorted(list(self.tools.items()), key=lambda tl: tl[1]) # no longer works in Python3
-
-        sort = []
-        for k, v in self.tools.items():
-            sort.append((k, v['tooldia']))
-        sorted_tools = sorted(sort, key=lambda t1: t1[1])
-
-        if tools == "all":
-            tools = [i[0] for i in sorted_tools]  # List if ordered tool names.
-            self.app.log.debug("Tools to consider for slot milling: %s" % str(tools))
 
         if len(tools) == 0:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Please select one or more tools from the list and try again."))
@@ -1033,11 +988,7 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
             if not self.tools[tool]['slots']:
                 # No slots for this tool
                 continue
-
-            # I add the 0.0001 value to account for the rounding error in converting from IN to MM and reverse
-            adj_toolstable_tooldia = float('%.*f' % (self.decimals, float(tooldia)))
-            adj_file_tooldia = float('%.*f' % (self.decimals, float(self.tools[tool]["tooldia"])))
-            if adj_toolstable_tooldia > adj_file_tooldia + 0.0001:
+            if MillingGen.milling_bit_too_large(self.tools[tool]["tooldia"], tooldia, self.decimals):
                 self.app.inform.emit('[ERROR_NOTCL] %s' %
                                      _("Milling tool for SLOTS is larger than hole size. Cancelled."))
                 return False, "Error: Milling tool is larger than hole."
@@ -1047,71 +998,26 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
         def geo_init(geo_obj, app_obj):
             assert geo_obj.kind == 'geometry', "Initializer expected a GeometryObject, got %s" % type(geo_obj)
 
-            # ## Add properties to the object
-
             geo_obj.obj_options['type'] = 'Excellon Geometry'
             geo_obj.obj_options["tools_mill_tooldia"] = str(tooldia)
-            geo_obj.obj_options["tools_mill_multidepth"] = app_obj.options.get(
-                "tools_mill_multidepth",
-                app_obj.defaults.get("tools_mill_multidepth",
-                                     app_obj.defaults.factory_defaults.get("tools_mill_multidepth"))
-            )
-            geo_obj.solid_geometry = []
-
-            # in case that the tool used has the same diameter with the hole, and since the maximum resolution
-            # for FlatCAM is 6 decimals,
-            # we add a tenth of the minimum value, meaning 0.0000001, which from our point of view is "almost zero"
-            for m_tool in use_tools:
-                for slot in self.tools[m_tool]['slots']:
-                    toolstable_tool = float('%.*f' % (self.decimals, float(tooldia)))
-                    file_tool = float('%.*f' % (self.decimals, float(self.tools[m_tool]["tooldia"])))
-
-                    # I add the 0.0001 value to account for the rounding error in converting from IN to MM and reverse
-                    # for the file_tool (tooldia actually)
-                    buffer_value = float(file_tool / 2) - float(toolstable_tool / 2) + 0.0001
-                    if buffer_value == 0:
-                        start = slot[0]
-                        stop = slot[1]
-
-                        lines_string = LineString([start, stop])
-                        poly = lines_string.buffer(0.0000001, int(self.geo_steps_per_circle)).exterior
-                        geo_obj.solid_geometry.append(poly)
-                    else:
-                        start = slot[0]
-                        stop = slot[1]
-
-                        lines_string = LineString([start, stop])
-                        poly = lines_string.buffer(buffer_value, int(self.geo_steps_per_circle)).exterior
-                        geo_obj.solid_geometry.append(poly)
+            geo_obj.obj_options["tools_mill_multidepth"] = self._milling_multidepth(app_obj)
+            geo_obj.solid_geometry = MillingGen.milling_slots_geometry(
+                self.tools, use_tools, tooldia, self.decimals, self.geo_steps_per_circle, line_string=LineString)
             if not geo_obj.solid_geometry:
                 self.app.log.debug("FAIL: No geometry generated.")
                 return "fail"
 
-        if use_thread:
-            def geo_thread(a_obj):
-                a_obj.app_obj.new_object("geometry", outname, geo_init, plot=plot)
-
-            # Create a promise with the new name
-            self.app.collection.promise(outname)
-
-            # Send to worker
-            self.app.worker_task.emit({'fcn': geo_thread, 'params': [self.app]})
-        else:
-            result = self.app.app_obj.new_object("geometry", outname, geo_init, plot=plot)
-            if result == 'fail' or result is False:
-                return False, 'Failed to create milling geometry.'
-
-        return True, ""
+        return self._create_milling_geometry(outname, geo_init, plot, use_thread)
 
     def on_generate_milling_button_click(self):
         self.app.defaults.report_usage("excellon_on_create_milling_drills button")
         self.read_form()
-        self.generate_milling_drills(use_thread=False, plot=True)
+        self.generate_milling_drills(use_thread=True, plot=True)
 
     def on_generate_milling_slots_button_click(self):
         self.app.defaults.report_usage("excellon_on_create_milling_slots_button")
         self.read_form()
-        self.generate_milling_slots(use_thread=False, plot=True)
+        self.generate_milling_slots(use_thread=True, plot=True)
 
     def convert_units(self, units):
         self.app.log.debug("ExcellonObject.convert_units()")

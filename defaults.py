@@ -1,4 +1,5 @@
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -57,6 +58,54 @@ def is_project_key(key):
 def project_options(options):
     """Return a dict with only the project keys of "options", for the project file."""
     return {k: v for k, v in options.items() if is_project_key(k)}
+
+
+def normalize_units(value):
+    """Return 'MM' or 'IN' for a units value, or None if the value is not a valid unit."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip().upper()
+    if value in ('MM', 'METRIC'):
+        return 'MM'
+    if value in ('IN', 'INCH', 'INCHES'):
+        return 'IN'
+    return None
+
+
+_LENGTH_KEY_TAIL = re.compile(
+    r'(tooldia|_dia|margin|cutz|travelz|toolchangez|endz|startz|depth|feedrate\w*|offset)$')
+
+
+def convert_length_options(options, from_units, to_units):
+    """
+    Return the entries of "options" that hold a length (a diameter, a margin, a depth, a feed rate), converted from
+    "from_units" to "to_units". The values of the project file are in the units of the project and need no conversion:
+    this is for the values that come from the application defaults, which are in the units of the defaults.
+    """
+    from_units, to_units = normalize_units(from_units), normalize_units(to_units)
+    if from_units is None or to_units is None or from_units == to_units:
+        return {}
+    factor = 25.4 if to_units == 'MM' else 1 / 25.4
+    return {k: v * factor for k, v in options.items()
+            if isinstance(k, str) and _LENGTH_KEY_TAIL.search(k) and isinstance(v, (int, float))
+            and not isinstance(v, bool)}
+
+
+def clean_project_options(options):
+    """
+    Return the project keys of the options of a project file, ready to be applied: the application keys are left out
+    and the units are 'MM' or 'IN'. A units value that is not valid is left out, so the default stays.
+    """
+    clean = {}
+    for key, value in options.items():
+        if not is_project_key(key):
+            continue
+        if key == 'units':
+            value = normalize_units(value)
+            if value is None:
+                continue
+        clean[key] = value
+    return clean
 
 
 class AppDefaults:
@@ -476,6 +525,24 @@ class AppDefaults:
         "tools_drill_spindlespeed": 0,
         "tools_drill_dwell": False,
         "tools_drill_dwelltime": 1,
+        "tools_drill_dwell_bottom": False,
+        "tools_drill_peck": False,
+        "tools_drill_peck_depth": 0.5,
+        "tools_drill_peck_retract": 0.2,
+        # Spot drilling pass (job options): one extra tool pass over all the selected holes before the drills
+        "tools_drill_spot": False,
+        "tools_drill_spot_dia": 1.0,
+        "tools_drill_spot_cutz": -0.3,
+        "tools_drill_spot_feedrate_z": 300,
+        # Job XY transforms of the drill points (job options): mirror -> offset -> array
+        "tools_drill_job_offset_xy": None,
+        "tools_drill_mirror": 'no',
+        "tools_drill_mirror_point": None,
+        "tools_drill_array_columns": 1,
+        "tools_drill_array_rows": 1,
+        "tools_drill_array_pitch": None,
+        # Which holes are drilled: all of them or only those inside the areas drawn on the canvas (Advanced)
+        "tools_drill_holes_selection": 'all',
         # Laser parameters
         "tools_drill_min_power": 0.0,
         "tools_drill_laser_on": "M3",
@@ -1433,9 +1500,15 @@ class AppOptions:
     def load_project(self, project_options):
         """Set the project keys from a project file. The application keys in the file are ignored."""
         self.reset_from_defaults()
-        for key, value in project_options.items():
-            if is_project_key(key):
-                self.options[key] = value
+        clean = clean_project_options(project_options)
+        # a key that the file does not have keeps the default value, which is in the units of the defaults
+        source = self.app_defaults if self.app_defaults is not None else self.baseline
+        for key, value in convert_length_options(
+                {k: v for k, v in self.options.items() if k not in clean}, source.get('units'),
+                clean.get('units')).items():
+            self.options[key] = value
+        for key, value in clean.items():
+            self.options[key] = value
 
     def load(self, filename: str, inform, baseline=None, include_app_keys=False):
         """

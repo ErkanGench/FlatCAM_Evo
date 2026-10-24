@@ -10,6 +10,7 @@ code and no drill moves at all.
 import importlib
 import pkgutil
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -19,6 +20,8 @@ from appObjects.CNCJobObject import CNCJobObject
 
 for _module in pkgutil.iter_modules(preprocessors.__path__):
     importlib.import_module('preprocessors.' + _module.name)
+# a copy: other tests of the same worker change the global registry
+PREPROCESSORS = dict(appPreProcessor.preprocessors)
 
 HEADERLESS = ('ISEL_ICP_CNC', 'Roland_MDX_20', 'Roland_MDX_540')
 
@@ -34,7 +37,7 @@ class _Log:
 
 
 def _job(kind, ppname):
-    app = SimpleNamespace(preprocessors=appPreProcessor.preprocessors, log=_Log())
+    app = SimpleNamespace(preprocessors=PREPROCESSORS, log=_Log())
     job = SimpleNamespace(
         app=app,
         obj_options={'type': kind, 'name': 'job'},
@@ -74,3 +77,51 @@ def test_headerless_drill_job_has_start_code_tool_code_and_no_page_header(ppname
     # include_header = False: the gc_header block is not written
     assert 'HEADER' not in text
 
+
+def test_hpgl_drill_job_is_detected_from_tools_drill_ppname_e():
+    job = _job('Excellon', 'hpgl')
+    job.tools = {1: {'data': {'tools_drill_ppname_e': 'hpgl'}, 'gcode': 'PA12.7,3.5;\n'}}
+
+    text = _export(job)
+
+    # HPGL output rounds the PA coordinates to whole units
+    assert 'PA12,3;' in text
+    assert 'PA12.7' not in text
+
+
+def test_gcode_header_of_drill_job_reads_legacy_ppname_e():
+    app = SimpleNamespace(log=_Log(), version='1', version_date='2')
+    job = SimpleNamespace(
+        app=app, units='mm', tools={},
+        obj_options={'type': 'Excellon', 'name': 'job', 'ppname_e': 'marlin'},
+    )
+
+    assert ';Marlin(Repetier) G-code' in CNCJobObject.gcode_header(job)
+
+
+@pytest.mark.parametrize('kind', ['Excellon', 'Geometry'])
+def test_unknown_preprocessor_of_a_saved_job_exports_with_the_default_one(kind):
+    job = _job(kind, 'Gone_Machine')
+    job.app.inform = Mock()
+    job.app.options = {}
+
+    text = _export(job)
+
+    assert 'BODY_TOOL_1' in text and 'BODY_TOOL_2' in text
+    assert 'Gone_Machine' in job.app.inform.emit.call_args[0][0]
+
+
+def test_unknown_preprocessor_of_a_saved_tool_generates_with_the_default_one():
+    from camlib import get_preprocessor
+    app = SimpleNamespace(preprocessors={'default': 'DEFAULT_PP'}, inform=Mock())
+
+    assert get_preprocessor(app, 'Gone_Machine') == 'DEFAULT_PP'
+    assert 'Gone_Machine' in app.inform.emit.call_args[0][0]
+
+
+def test_properties_ui_is_not_built_for_each_job_of_a_load_batch():
+    job = SimpleNamespace(_load_batch=object(), ui_disconnect=Mock())
+
+    CNCJobObject.build_ui(job)
+
+    job.ui_disconnect.assert_not_called()
