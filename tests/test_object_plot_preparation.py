@@ -15,7 +15,7 @@ def plotted_line_colors(*shapes):
         collection.add(shape=geometry, color=color, layer=0, tolerance=0)
     with patch.object(visuals, 'set_state'):       # no GL canvas in the tests
         collection.redraw([])
-    return collection._lines[0]._color
+    return collection.layer_visuals(0)[1][0]._color
 
 
 def test_repeated_plot_colors_are_parsed_once():
