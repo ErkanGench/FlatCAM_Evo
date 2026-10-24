@@ -92,12 +92,13 @@ def punch_geometry(solid_geometry, tools, selected_apertures, method, value, dec
             raise ValueError('nothing')
         for tool in (drill_tools or {}).values():
             dia = float(tool['tooldia'])
+            # A clear record erases its full footprint in the export, so it needs the whole footprint inside the pads.
             for point in tool.get('drills', []):
-                if pad_union.intersects(point):
+                if pad_union.contains(point.buffer(dia / 2, quad_segs=quad_segs)):
                     add_clear(dia, point)
             for slot in tool.get('slots', []):
                 line = LineString([slot[0], slot[1]])
-                if pad_union.intersects(line):
+                if pad_union.contains(line.buffer(dia / 2, quad_segs=quad_segs)):
                     add_clear(dia, line)
         punched = source.difference(cutter)
         for apid, idx, _aperture, _record in pads:

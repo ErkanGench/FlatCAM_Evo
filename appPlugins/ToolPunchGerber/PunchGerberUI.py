@@ -287,9 +287,10 @@ class PunchUI:
             selected.append(ap_code)
         self.apertures_table.setRowCount(len(selected))
         for row, ap_code in enumerate(selected):
+            ap_type = tools[ap_code]['type']
             ap_code_item = QtWidgets.QTableWidgetItem(str(ap_code))
             ap_code_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
-            ap_type_item = QtWidgets.QTableWidgetItem(str(tools[ap_code]['type']))
+            ap_type_item = QtWidgets.QTableWidgetItem(str(ap_type))
             ap_type_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
             try:
                 if ap_type in ('R', 'O'):
