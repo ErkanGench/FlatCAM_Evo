@@ -82,6 +82,7 @@ def test_object_factory_rejects_initializer_false_without_publishing():
                            bounds=Mock(return_value=(0, 0, 1, 1)), moveToThread=Mock())
     factory = SimpleNamespace(app=app, _app_option=app.options.get, object_created=Mock(),
                                load_context=SimpleNamespace(batch=None))
+    factory._new_object = lambda *a: AppObject._new_object(factory, *a)
     with patch('appObjects.AppObject.GeometryObject', return_value=obj):
         assert AppObject.new_object(factory, 'geometry', 'out', lambda *_: False, plot=False) == 'fail'
     factory.object_created.emit.assert_not_called()

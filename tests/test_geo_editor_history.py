@@ -478,10 +478,11 @@ def test_numeric_apply_replaces_geometry_and_selection_in_one_step(tool_class, v
 
 
 def test_project_restore_honors_rejected_editor_exit():
-    app = SimpleNamespace(options=Mock())
-    handler = SimpleNamespace(app=app, on_file_new_project=Mock(return_value='fail'))
-    assert appIO._restore_project_handler(handler, {'objs': [], 'options': {}},
-                                          'unused.FlatPrj', False, False, False, False) is False
+    app = MagicMock()
+    handler = appIO(app)
+    handler.on_file_new_project = Mock(return_value='fail')
+    assert handler._restore_project_handler({'objs': [], 'options': {}},
+                                            'unused.FlatPrj', False, False, False, False) is False
     app.options.load_project.assert_not_called()
 
 

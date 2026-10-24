@@ -286,6 +286,33 @@ class TestBatchPropertiesQt(unittest.TestCase):
         self.assertFalse(self.app.app_obj.load_batches)
         self.app.on_zoom_fit.assert_not_called()
 
+    def test_load_with_total_counts_objects_and_cancel_fails_the_load(self):
+        finished = Mock()
+        batch = ObjectLoadBatch(self.app.app_obj, 1, finished, total=3)
+        self.batches.append(batch)
+        first, second = Layer('first', self.app), Layer('second', self.app)
+        batch.on_event('created', (first, False, False, None, []))
+        batch.integrate_next()
+        self.assertEqual(batch.progress.value(), 1)
+        self.assertIn('1 / 3', batch.progress.labelText())
+
+        batch.progress.findChild(QtWidgets.QPushButton).click()
+        batch.on_event('created', (second, False, False, None, []))
+        batch.integrate_next()
+        self.assertEqual(self.app.collection.get_list(), [first])
+        self.assertFalse(finished.called)
+        batch.on_event('done', None)
+        finished.assert_called_once_with(True)
+        self.assertTrue(batch.cancelled)
+
+    def test_object_with_the_history_uid_of_another_object_gets_a_new_one(self):
+        first, second = Layer('first', self.app), Layer('second', self.app)
+        first.history_uid = second.history_uid = 'same'
+        self.app.collection.append(first)
+        self.app.collection.append(second)
+        self.assertEqual(first.history_uid, 'same')
+        self.assertNotEqual(second.history_uid, 'same')
+
     def test_cli_project_waits_for_real_appobject_gui_insertion_without_progress(self):
         from appHandlers.appIO import appIO
 

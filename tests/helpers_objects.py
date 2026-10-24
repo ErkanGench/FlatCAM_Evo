@@ -44,6 +44,7 @@ from appObjects.GeometryObject import GeometryObject  # noqa: E402
 from appParsers.ParseExcellon import Excellon  # noqa: E402
 from appParsers.ParseGerber import Gerber  # noqa: E402
 from camlib import dict2obj  # noqa: E402
+from appCommon.ProjectFile import load_project_file  # noqa: E402
 from defaults import AppDefaults  # noqa: E402
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'unify'
@@ -77,7 +78,7 @@ def make_app():
     app = SimpleNamespace(
         log=Mock(), inform=Mock(), splash=None, worker_task=Mock(), options=options, app_units='MM',
         abort_flag=False, app_obj=Mock(), plot_all=Mock(), defaults=defaults, decimals=4,
-        version='test', version_date='test', proc_container=MagicMock(), plotcanvas=Mock(), pool=Mock(),
+        version='test', version_date='test', proc_container=MagicMock(), plotcanvas=Mock(), pool=None,
         collection=Mock(), new_project_signal=Mock(), file_opened=Mock(), file_saved=Mock(), call_source='app', ui=MagicMock(),
         should_we_save=False, save_in_progress=False, start_delayed_quit=Mock(), history=Mock(),
     )
@@ -232,8 +233,7 @@ def save_and_load(app, objects, tmp_path):
     io.save_project(path, silent=True)
     assert os.path.getsize(path) > 0
 
-    with open(path, 'r') as f:
-        proj = json.load(f, object_hook=dict2obj)
+    proj = load_project_file(path, object_hook=dict2obj)
 
     restored = []
 
@@ -320,7 +320,7 @@ def make_app_0b(**option_overrides):
     plotcanvas.new_shape_collection.side_effect = lambda **kwargs: Mock()
     return SimpleNamespace(
         log=Mock(), inform=Mock(), options=options, defaults=defaults, app_units='MM', decimals=4,
-        plotcanvas=plotcanvas, pool=Mock(), abort_flag=False,
+        plotcanvas=plotcanvas, pool=None, abort_flag=False,
         proc_container=MagicMock(), shell=Mock(), collection=Mock(), call_source='app',
         preprocessors=defaultdict(Mock), splash=None, worker_task=Mock(), app_obj=Mock(),
     )

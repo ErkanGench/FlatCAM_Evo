@@ -11,8 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shapely.geometry import Point
 
 from appCommon import ProjectFile
-from appCommon.ProjectFile import ZSTD_MAGIC, load_project_file, save_project_file
-from camlib import to_dict, dict2obj
+from appCommon.ProjectFile import ZSTD_MAGIC, load_project_file, open_project_stream, save_project_file
+from camlib import to_dict, dict2obj, geometry_wkt_cache, project_json_default
 from appHandlers.appIO import appIO
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -68,6 +68,30 @@ class TestProjectFile(unittest.TestCase):
             f.write(lzma.compress(data, preset=3))
         loaded = load_project_file(self.filename, object_hook=dict2obj)
         self.assertEqual(loaded['options'], {"units": "MM"})
+
+    def test_equal_geometries_are_saved_once_and_loaded_shared(self):
+        circle = Point(1, 2).buffer(1)
+        data = {"objs": [{"solid_geometry": [circle], "tools": {1: {"solid_geometry": [circle, Point(5, 5).buffer(1)]}},
+                          "follow": [Point(1, 2).buffer(1)]}], "version": 9.0}
+        for level in (None, 3):
+            with self.subTest(level=level):
+                save_project_file(self.filename, data, default=project_json_default(geometry_wkt_cache(data)),
+                                  compression_level=level)
+                with open_project_stream(self.filename) as stream:
+                    raw = json.load(stream)
+                self.assertEqual(len(raw['geometry_table']), 2)
+                obj = load_project_file(self.filename, object_hook=dict2obj)['objs'][0]
+                self.assertNotIn('geometry_table', obj)
+                self.assertIs(obj['solid_geometry'][0], obj['tools']['1']['solid_geometry'][0])
+                self.assertIs(obj['solid_geometry'][0], obj['follow'][0])
+                self.assertTrue(obj['solid_geometry'][0].equals_exact(circle, 0))
+
+    def test_project_over_the_decompressed_size_cap_is_refused(self):
+        save_project_file(self.filename, project(), default=to_dict, compression_level=3)
+        with patch.object(ProjectFile, 'MAX_DECOMPRESSED_BYTES', 50):
+            with self.assertRaises(ProjectFile.ProjectTooLargeError):
+                load_project_file(self.filename, object_hook=dict2obj)
+        self.assertEqual(load_project_file(self.filename, object_hook=dict2obj)['version'], 9.0)
 
     def test_failed_save_keeps_the_old_file(self):
         save_project_file(self.filename, project(), default=to_dict, compression_level=3)

@@ -25,6 +25,7 @@ def test_relative_path_is_taken_from_the_working_folder(tmp_path, monkeypatch):
 class SetupStub:
     """The attributes and the path helpers of App that App._setup_paths_and_config uses."""
     headless = False
+    _launch_server = None
     version = appMain.App.version
     tools_database_path = appMain.App.tools_database_path
     defaults_path = appMain.App.defaults_path

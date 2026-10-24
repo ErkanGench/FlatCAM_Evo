@@ -126,14 +126,56 @@ def resolve_user_path(path, start_dir=None):
     return os.path.join(base_dir() if start_dir is None else start_dir, path)
 
 
+COMMAND_WORDS = ('quit', 'exit', 'save')
+
+
+def local_path_from_url(name):
+    """
+    :param name: an argument of the command line
+    :return: the local path of a file:// URL (some launchers pass the files as URLs); anything else unchanged.
+    """
+
+    if isinstance(name, str) and name[:5].lower() == 'file:':
+        from urllib.parse import unquote, urlparse
+        parsed = urlparse(name)
+        path = unquote(parsed.path)
+        if parsed.netloc and parsed.netloc.lower() != 'localhost':
+            # file://server/share/a.gbr
+            path = '//%s%s' % (parsed.netloc, path)
+        elif sys.platform == 'win32' and len(path) > 2 and path[0] == '/' and path[2] == ':':
+            # file:///C:/boards/a.gbr
+            path = path[1:]
+        return path or name
+    return name
+
+
 def resolve_existing_paths(names, start_dir=None):
     """
     :param names: the arguments of the command line (the files to open and words like quit or save)
-    :return: the list with the names of the files that exist made absolute; the other names are unchanged.
+    :return: the list with the names of the files that exist made absolute; the other names are unchanged. A file://
+    URL becomes a local path.
     """
 
     result = []
     for name in names:
+        name = local_path_from_url(name)
         resolved = resolve_user_path(name, start_dir)
         result.append(resolved if os.path.exists(resolved) else name)
+    return result
+
+
+def absolute_paths(names, start_dir=None):
+    """
+    For the arguments that a second launch sends to the open instance, which resolves relative names against its own
+    folder: every name is made absolute here, against the folder this launch started from, also when the file does not
+    exist. The command words (quit, save) and file:// URLs are handled as in resolve_existing_paths().
+    """
+
+    result = []
+    for name in names:
+        name = local_path_from_url(name)
+        if not isinstance(name, str) or name.strip().lower() in COMMAND_WORDS:
+            result.append(name)
+        else:
+            result.append(os.path.normpath(resolve_user_path(name, start_dir)))
     return result

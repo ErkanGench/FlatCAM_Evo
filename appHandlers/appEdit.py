@@ -30,14 +30,22 @@ class appEditor(QtCore.QObject):
         self.app = app
         self.log = self.app.log
         self.inform = self.app.inform
-        self.splash = self.app.splash
         self.worker_task = self.app.worker_task
         self.options = self.app.options
-        self.app_units = self.app.app_units
         self.defaults = self.app.defaults
         self.app_obj = self.app.app_obj
         self.decimals = self.app.decimals
         self.custom_origin_finished.connect(self._on_custom_origin_finished)
+
+    @property
+    def app_units(self):
+        """The units of the active project, read live: they change with a project load or a project tab switch."""
+        return self.app.app_units
+
+    @property
+    def splash(self):
+        # None when the app starts with a file: the splash is created later or not at all
+        return getattr(self.app, 'splash', None)
 
     @property
     def collection(self):

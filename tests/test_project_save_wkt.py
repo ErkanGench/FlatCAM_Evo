@@ -120,15 +120,15 @@ class TestProjectFileWithWktCache(unittest.TestCase):
                 self.assertIsInstance(macro, ApertureMacro)
                 self.assertEqual(macro.raw, '21,1,0.5,0.5,0,0,0')
 
-    def test_format_read_by_older_versions(self):
+    def test_geometry_table_holds_plain_wkt(self):
         self.save(self.data, None)
         with open(self.filename, 'r', encoding='utf-8') as f:
             text = f.read()
         raw = json.loads(text)
         item = raw['objs'][0]['solid_geometry'][0]
         self.assertEqual(item['__class__'], 'Shply')
-        # plain WKT that older versions parse with shapely.wkt.loads()
-        self.assertTrue(shapely.equals_exact(wkt.loads(item['__inst__']), self.geoms[0], 0))
+        # plain WKT in the table, read by shapely.wkt.loads()
+        self.assertTrue(shapely.equals_exact(wkt.loads(raw['geometry_table'][item['__ref__']]), self.geoms[0], 0))
         # the shortest text of each number, not 16 fixed decimals
         self.assertIn('12.445678 3.1', text)
         self.assertNotIn('12.4456779999999991', text)

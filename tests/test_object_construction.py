@@ -28,3 +28,10 @@ def test_object_kind_can_be_constructed(cls, no_shape_collection):  # noqa: F811
     assert obj.kind == KINDS[cls]
     assert obj.obj_options['name'] == 'obj'
     assert obj.app is app
+
+
+@pytest.mark.parametrize('cls', [ScriptObject, DocumentObject], ids=lambda c: c.__name__)
+def test_from_dict_of_an_old_file_without_all_keys(cls, no_shape_collection):  # noqa: F811
+    obj = cls('obj', make_app())
+    obj.from_dict({'kind': KINDS[cls]})
+    assert obj.kind == KINDS[cls]

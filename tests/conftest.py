@@ -18,6 +18,10 @@ warnings.filterwarnings('ignore', message=_SWIG_WARNING, category=DeprecationWar
 if sys.platform == 'win32':
     os.environ.setdefault('QT_QPA_PLATFORM', 'windows')
 
+# Each test process has its own single-instance socket: a test App or a SingleInstance test must not send files to
+# the FlatCAM window of the user, or to the App of another xdist worker that does not run its event loop.
+os.environ['FLATCAM_INSTANCE_NAME'] = 'FlatCAM_EVO-test-%d' % os.getpid()
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _saved_argv = sys.argv
@@ -177,3 +181,57 @@ def _restore_theme_colors():
     for cls, original in _THEME_COLOR_CLASSES:
         if vars(cls).get('patching_text_color') is not original:
             cls.patching_text_color = original
+
+
+# The App of a test module stays alive until the interpreter shuts down. Then Python destroys the Qt / VisPy C++
+# objects in a random order and the process can crash after the summary (0xC0000005 on Windows, in sip). flatcam.py
+# ends with os._exit() for the same reason, after quit_application() stopped the worker threads and the pool. The
+# tests do not stop them, so on Windows also os._exit() can hang (ExitProcess runs the DLL detach code while those
+# threads run): end the process with TerminateProcess. Only when pytest is the program (python -m pytest,
+# pytest.exe): a script that calls pytest.main() (tests/gates/run_gate.py) reads the results after it.
+_session = None
+
+
+def _pytest_is_the_program():
+    spec = getattr(sys.modules.get('__main__'), '__spec__', None)
+    if spec is not None:
+        return spec.name in ('pytest', 'pytest.__main__')
+    return os.path.splitext(os.path.basename(sys.argv[0]))[0] in ('pytest', 'py.test')
+
+
+def pytest_sessionfinish(session, exitstatus):
+    global _session
+    _session = session
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config):
+    if _session is None or hasattr(config, 'workerinput') or not _pytest_is_the_program():
+        return
+    try:
+        from PyQt6 import QtWidgets
+    except ImportError:
+        return
+    if QtWidgets.QApplication.instance() is None:
+        return
+
+    import gc
+    import logging
+    import multiprocessing.pool
+    # stop the pools of the Apps like quit_application() does; a pool starts a new process for each one that ends
+    for pool in [o for o in gc.get_objects() if isinstance(o, multiprocessing.pool.Pool)]:
+        pool.terminate()
+    for child in multiprocessing.active_children():
+        child.terminate()
+        child.join(2)
+    logging.shutdown()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    code = int(_session.exitstatus)
+    if sys.platform == 'win32':
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), code)
+    os._exit(code)

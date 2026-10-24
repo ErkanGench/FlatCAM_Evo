@@ -32,9 +32,11 @@ class TestResponsiveBatch(unittest.TestCase):
         self.collection.get_list.return_value = []
         self.window.notebook = Mock()
         self.window.properties_tab = object()
+        self.window.set_ui_title = Mock()
         self.app = SimpleNamespace(
             ui=self.window, collection=self.collection, log=Mock(), regFK=Mock(),
-            on_notebook_tab_changed=Mock(), on_zoom_fit=Mock(), flush_recent_items=Mock())
+            on_notebook_tab_changed=Mock(), on_zoom_fit=Mock(), flush_recent_items=Mock(),
+            plotcanvas=Mock())
         self.owner = QtCore.QObject()
         self.owner.app = self.app
         self.owner.load_context = threading.local()

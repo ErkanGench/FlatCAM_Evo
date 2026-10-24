@@ -186,7 +186,8 @@ class TestBaseDir:
 class TestTclPathArguments:
     def test_no_command_has_an_unlisted_file_like_argument(self):
         # a new command with a file argument under another name would write into the application folder again
-        flag_arguments = {('TclCommandNew', 'keep_scripts'), ('TclCommandSubtractObjects', 'close_paths')}
+        flag_arguments = {('TclCommandNew', 'keep_scripts'), ('TclCommandSubtractObjects', 'close_paths'),
+                          ('TclCommandDrillcncjob', 'spindledir')}
         missed = []
         for name, cls in _all_commands().items():
             for key in list(cls.arg_names) + list(cls.option_types):

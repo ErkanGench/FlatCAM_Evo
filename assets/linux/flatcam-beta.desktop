@@ -2,8 +2,9 @@
 Name=FlatCAM Evo
 GenericName=PCB CAM
 Comment=G-code for PCB manufacturing from Gerber and Excellon files
-Exec=./bin/flatcam-beta
+Exec=flatcam-beta %F
 Type=Application
 StartupNotify=true
 Icon=./assets/icon.png
 Categories=Graphics;Engineering;Electronics;
+MimeType=application/x-flatcam-project;

@@ -2151,7 +2151,7 @@ class MainGUI(QtWidgets.QMainWindow):
         self.filename = ""
         self.units = ""
 
-        # self.setAcceptDrops(True)
+        self.setAcceptDrops(True)
 
         # ########################################################################
         # ########################## Build GUI # #################################
@@ -4877,72 +4877,30 @@ class MainGUI(QtWidgets.QMainWindow):
         return False
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls:
+        if event.mimeData().hasUrls():
             event.accept()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls:
+        if event.mimeData().hasUrls():
             event.accept()
         else:
             event.ignore()
 
     def dropEvent(self, event):
-        if event.mimeData().hasUrls:
-            event.setDropAction(QtCore.Qt.DropAction.CopyAction)
-            event.accept()
-            for url in event.mimeData().urls():
-                self.filename = str(url.toLocalFile())
-
-                if self.filename == "":
-                    self.app.inform.emit("Cancelled.")
-                else:
-                    extension = self.filename.lower().rpartition('.')[-1]
-
-                    if extension in self.app.regFK.grb_list:
-                        self.app.worker_task.emit({'fcn': self.app.f_handlers.open_gerber,
-                                                   'params': [self.filename]})
-                    else:
-                        event.ignore()
-
-                    if extension in self.app.regFK.exc_list:
-                        self.app.worker_task.emit({'fcn': self.app.f_handlers.open_excellon,
-                                                   'params': [self.filename]})
-                    else:
-                        event.ignore()
-
-                    if extension in self.app.regFK.gcode_list:
-                        self.app.worker_task.emit({'fcn': self.app.f_handlers.open_gcode,
-                                                   'params': [self.filename]})
-                    else:
-                        event.ignore()
-
-                    if extension in self.app.regFK.svg_list:
-                        object_type = 'geometry'
-                        self.app.worker_task.emit({'fcn': self.app.f_handlers.import_svg,
-                                                   'params': [self.filename, object_type, None]})
-
-                    if extension in self.app.regFK.dxf_list:
-                        object_type = 'geometry'
-                        self.app.worker_task.emit({'fcn': self.app.f_handlers.import_dxf,
-                                                   'params': [self.filename, object_type, None]})
-
-                    if extension in self.app.regFK.pdf_list:
-                        self.app.pdf_tool.periodic_check(1000)
-                        self.app.worker_task.emit({'fcn': self.app.pdf_tool.open_pdf,
-                                                   'params': [self.filename]})
-
-                    if extension in self.app.regFK.prj_list:
-                        # self.app.open_project() is not Thread Safe
-                        self.app.f_handlers.open_project(self.filename)
-
-                    if extension in self.app.regFK.conf_list:
-                        self.app.f_handlers.open_config_file(self.filename)
-                    else:
-                        event.ignore()
-        else:
+        # the same path as the files of the command line: projects open in order, the rest by file type
+        if not event.mimeData().hasUrls():
             event.ignore()
+            return
+        event.setDropAction(QtCore.Qt.DropAction.CopyAction)
+        event.accept()
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        paths = [path for path in paths if path]
+        if not paths:
+            self.app.inform.emit("[WARNING_NOTCL] %s" % _("Cancelled."))
+            return
+        self.app.open_files_request(paths)
 
     def closeEvent(self, event):
         updater_active = getattr(self.app, "_check_in_progress", False)

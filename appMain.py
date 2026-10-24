@@ -8,11 +8,12 @@
 # ###########################################################
 
 from appHandlers.appHistory import history_of, object_state, SnapshotStep
+from collections import deque
+
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa
 from PyQt6.QtCore import QSettings, pyqtSlot  # noqa
 from PyQt6.QtCore import Qt, pyqtSignal, QMetaObject  # noqa
 
-import logging
 import os.path
 import sys
 import threading
@@ -50,7 +51,7 @@ from ast import literal_eval
 from appGUI.PlotCanvas import PlotCanvas
 from appGUI.NullCanvas import NullCanvas
 from appGUI.MainGUI import MainGUI
-from appGUI.VisPyVisuals import ShapeCollection
+
 from appGUI.GUIElements import (
     FCMessageBox,
     FCFileSaveDialog,
@@ -63,8 +64,8 @@ from appGUI.themes import dark_style_sheet, light_style_sheet
 # Various
 from appCommon.Common import ExclusionAreas
 from appCommon.Common import AppLogging
-from appCommon.SingleInstance import InstanceServer, FileOpenFilter
-from appCommon.StartDir import resolve_user_path, resolve_existing_paths
+from appCommon.SingleInstance import InstanceServer, FileOpenFilter, add_to_os_recent
+from appCommon.StartDir import resolve_user_path, resolve_existing_paths, local_path_from_url
 from appCommon.DataPath import data_path_from_env, DATA_PATH_ENV
 from appCommon.RegisterFileKeywords import RegisterFK, Extensions, KeyWords
 from appCommon.SafeEval import safe_eval
@@ -79,7 +80,7 @@ from appHandlers.appUIActions import AppUIActions
 from appHandlers.appLifecycle import AppLifecycle
 
 from services.updater.digi.release import prepare_releases, validate_release_roots
-from services.updater.github.checker import GitHubUpdateChecker
+from services.updater.github import GitHubUpdateChecker     # noqa
 from services.updater.github.staging import stage_update
 from services.updater.digi.staging import stage_update_archive
 from services.updater.provider import PROVIDER_DIGI, checker_for, create_update_checker, update_provider
@@ -167,6 +168,31 @@ _EDITOR_ATTR_BY_KIND = {
 }
 
 
+class FCSplashScreen(QtWidgets.QSplashScreen):
+    """
+    The splash screen. The messages are drawn a little away from the left edge.
+    """
+
+    def __init__(self, offset: int = 0, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._offset = offset
+
+    @property
+    def offset_message(self) -> int:
+        return self._offset
+
+    @offset_message.setter
+    def offset_message(self, value: int):
+        self._offset = value
+        self.repaint()
+
+    def drawContents(self, painter: QtGui.QPainter):
+        painter.save()
+        painter.translate(self._offset, 0)
+        super().drawContents(painter)
+        painter.restore()
+
+
 class App(QtCore.QObject):
     """
     The main application class. The constructor starts the GUI and all other classes used by the program.
@@ -177,6 +203,9 @@ class App(QtCore.QObject):
     cmd_line_shellvar = ''
     cmd_line_command = ''
     cmd_line_headless = False
+
+    # the listener for the second launches that flatcam.py started before the App
+    _launch_server = None
 
     cmd_line_help = (
         "FlatCam.py --shellfile=<cmd_line_shellfile>\n"
@@ -348,11 +377,12 @@ class App(QtCore.QObject):
     custom_signal = pyqtSignal(object)
 
     # noinspection PyUnresolvedReferences
-    def __init__(self, qapp, user_defaults=True, headless=None):
+    def __init__(self, qapp, user_defaults=True, headless=None, launch_server=None):
         """
         Starts the application.
 
         :param headless:    no window and no OpenGL; default the --headless option
+        :param launch_server:   the InstanceServer that flatcam.py started before the App; default one is made here
         :return:    the application
         :rtype:     QtCore.QObject
         """
@@ -361,6 +391,7 @@ class App(QtCore.QObject):
 
         # Store qapp reference FIRST before any setup methods
         self.qapp = qapp
+        self._launch_server = launch_server
 
         # headless mode (--headless): no window, no OpenGL canvas, the HeadlessRunner of flatcam.py runs the job
         self.headless = App.cmd_line_headless if headless is None else headless
@@ -457,6 +488,11 @@ class App(QtCore.QObject):
         # Paths/config (platform-specific)
         self.new_launch = None
         self.file_open_filter = None
+        # the requests to open files wait here; one runs at a time
+        self._open_requests = deque()
+        self._open_busy = False
+        self._open_retry_pending = False
+        self._version_check_due = False
         self.data_path = None
         self.os = None
         self.app_home = None
@@ -730,15 +766,21 @@ class App(QtCore.QObject):
         """Phase 1: Setup paths, config files, and platform-specific settings."""
         # ################# Listen for another instance launching with files ##########################################
         # a headless run never takes files from a second launch; the second launch hands its files over in flatcam.py
-        # before this App exists. The server starts at the end of the init, when the App can open files
+        # before this App exists. The server listens since flatcam.py started; it holds the files until the end of the
+        # init, when the App can open them
         if not self.headless:
-            self.new_launch = InstanceServer()
+            self.new_launch = self._launch_server
+            if self.new_launch is None:
+                self.new_launch = InstanceServer()
+                self.new_launch.start()
             self.new_launch.files_received.connect(self.on_files_from_other_instance)
             if sys.platform == 'darwin':
                 # a double-clicked file arrives as a FileOpen event, also while the App is still starting
-                self.file_open_filter = FileOpenFilter()
+                self.file_open_filter = self.new_launch.file_filter
+                if self.file_open_filter is None:
+                    self.file_open_filter = FileOpenFilter()
+                    self.qapp.installEventFilter(self.file_open_filter)
                 self.file_open_filter.files_received.connect(self.on_files_from_other_instance)
-                self.qapp.installEventFilter(self.file_open_filter)
 
         # ########################################## OS-specific #####################################################
 
@@ -989,16 +1031,19 @@ class App(QtCore.QObject):
             screen = QtWidgets.QApplication.screenAt(QtGui.QCursor.pos())
             # scale to physical pixels of the screen; a pixmap of logical size is stretched (blurred) on a HiDPI screen
             dpr = screen.devicePixelRatio() if screen else QtWidgets.QApplication.primaryScreen().devicePixelRatio()
-            splash_pix = QtGui.QPixmap(self.resource_location + '/splash.png')
-            splash_pix = splash_pix.scaled(
-                QtCore.QSize(round(622 * dpr), round(344 * dpr)),  # logical size of the splash: 622 x 344
+            splash_img = QtGui.QImage(self.resource_location + '/splash.png')
+            img_dpi = splash_img.dotsPerMeterX() * 0.0254 or 96.0
+            logical_w = splash_img.width() * 96.0 / img_dpi
+            logical_h = splash_img.height() * 96.0 / img_dpi
+            splash_pix = QtGui.QPixmap.fromImage(splash_img.scaled(
+                QtCore.QSize(round(logical_w * dpr), round(logical_h * dpr)),
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation
-            )
+            ))
             splash_pix.setDevicePixelRatio(dpr)
 
             # self.splash = QtWidgets.QSplashScreen(splash_pix, Qt.WindowType.WindowStaysOnTopHint)
-            self.splash = QtWidgets.QSplashScreen(splash_pix, Qt.WindowType.SplashScreen)
+            self.splash = FCSplashScreen(12, splash_pix, Qt.WindowType.SplashScreen)
 
             # Store for use in other setup methods
             self._show_splash = show_splash
@@ -1255,18 +1300,20 @@ class App(QtCore.QObject):
         self.thread_exception.connect(self.on_thread_exception)
         self.log.debug("Finished creating Workers crew.")
 
-    def on_thread_exception(self, err):
+    def on_thread_exception(self, error_obj):
         """
         Reports an unhandled exception from a worker task. The worker catches the exception,
         so without this the user gets no message in the GUI.
 
-        :param err:     the exception raised in the worker task
-        :type err:      Exception
-        :return:        None
+        :param error_obj:       the exception raised in the worker task
+        :type error_obj:        Exception
+        :return:                None
         """
-        self.log.error("Unhandled exception in a worker task:\n%s" %
-                       ''.join(traceback.format_exception(type(err), err, err.__traceback__)))
-        self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The task failed"), str(err)))
+        self.log.error(
+            "Unhandled exception in a worker task:\n%s" % ''.join(
+                traceback.format_exception(type(error_obj), error_obj, error_obj.__traceback__))
+        )
+        self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("The task failed"), str(error_obj)))
 
     def _setup_canvas_and_plotting(self):
         """Phase 1: Setup tool/editor stubs, bookmarks, tools database, shell, editors, and exclusion areas."""
@@ -1417,6 +1464,7 @@ class App(QtCore.QObject):
 
         # signals emitted when file state change
         self.file_opened.connect(self.register_recent)
+        self.file_opened.connect(self.add_to_os_recent)
         self.file_opened.connect(lambda kind, filename: self.register_folder(filename))
         self.file_saved.connect(lambda kind, filename: self.register_save_folder(filename))
 
@@ -1565,9 +1613,9 @@ class App(QtCore.QObject):
             self.trayIcon.show()
 
         self.refresh_rollback_action()
-        if self.options.get("global_version_check", self.defaults.get("global_version_check")):
-            self.log.info(f"Checking for updates in background (this is version {self.version}).")
-            self._queue_version_check()
+        # the check runs after the files given at the start finished loading: it must not compete with them for workers
+        self._version_check_due = bool(
+            self.options.get("global_version_check", self.defaults.get("global_version_check")))
 
         # ######################################## START-UP ARGUMENTS ###############################################
         # test if the program was started with a script as parameter
@@ -1606,12 +1654,15 @@ class App(QtCore.QObject):
         # accept some type file as command line parameter: FlatCAM project, FlatCAM preferences or scripts
         # the path/file_name must be enclosed in quotes, if it contains spaces
         if App.args:  # noqa
-            self.args_at_startup.emit(App.args)  # noqa
+            self.open_files_request(App.args)  # noqa
+        else:
+            self._drain_open_requests()
 
+        # the files that other launches sent while this one was starting open after the ones of the command line
         if self.new_launch is not None:
-            self.new_launch.start()
+            self.new_launch.set_ready()
         if self.file_open_filter is not None:
-            self.file_open_filter.set_ready()
+            self.file_open_filter.set_ready(skip=App.args)  # noqa
 
         if self.defaults.old_defaults_found is True:
             self.inform.emit('[WARNING_NOTCL] %s' % _("Found old default preferences files. "
@@ -1699,12 +1750,59 @@ class App(QtCore.QObject):
         if target is not None:
             self.custom_signal[params].connect(target)
 
-    def on_startup_args(self, args, silent=False):
+    def open_files_request(self, files):
+        """
+        Open the files of one request: the command line at the start, a second launch, a file dropped on the window.
+        The requests open one after the other, and not while a dialog is open.
+
+        :param files: list of paths (and command words)
+        :return: None
+        """
+        self._open_requests.append(list(files))
+        self._drain_open_requests()
+
+    def _drain_open_requests(self):
+        if self._open_busy:
+            return
+        if not self._open_requests:
+            self._start_deferred_version_check()
+            return
+        if self.qapp.activeModalWidget() is not None:
+            # a dialog is open: its nested loop must not stack another dialog on it
+            if not self._open_retry_pending:
+                self._open_retry_pending = True
+                QtCore.QTimer.singleShot(500, lambda: self._retry_open_requests())
+            return
+        self._open_busy = True
+        files = self._open_requests.popleft()
+        try:
+            self.on_startup_args(files, on_done=self._open_request_done)
+        except Exception as e:
+            self.log.error("App._drain_open_requests() --> %s" % str(e))
+            self._open_request_done()
+
+    def _retry_open_requests(self):
+        self._open_retry_pending = False
+        self._drain_open_requests()
+
+    def _open_request_done(self):
+        self._open_busy = False
+        self._drain_open_requests()
+
+    def _start_deferred_version_check(self):
+        if self._version_check_due:
+            self._version_check_due = False
+            self.log.info(f"Checking for updates in background (this is version {self.version}).")
+            self._queue_version_check()
+
+    def on_startup_args(self, args, silent=False, on_done=None):
         """
         This will process any arguments provided to the application at startup. Like trying to launch a file or project.
+        The arguments open in order: the next one starts when the project before it finished loading.
 
         :param silent: when True it will not print messages on Tcl Shell and/or status bar
         :param args: a list containing the application args at startup
+        :param on_done: called without arguments when every argument was handled
         :return: None
         """
 
@@ -1714,81 +1812,129 @@ class App(QtCore.QObject):
             args_to_process = App.args  # noqa
 
         self.log.debug("Application was started with arguments: %s. Processing ..." % str(args_to_process))
+        # macOS gives a file as an argument and as a FileOpen event: it opens once
+        items = []
+        seen = set()
         for argument in args_to_process:
-            # the file type comes from the last extension and a command word from the whole argument. Searched anywhere
-            # in the path, 'top.tcl.gtl' (a Gerber for Windows) or a file in a folder 'board.tcl' was run as a Tcl script
-            arg_ext = os.path.splitext(argument)[1].lower()
-            arg_word = argument.strip().lower()
-            if arg_ext == '.flatprj':
-                try:
-                    project_name = str(argument)
+            argument = local_path_from_url(argument)
+            key = os.path.normcase(os.path.abspath(argument)) if os.path.splitext(argument)[1] else argument
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(argument)
+        self._open_startup_items(items, silent, on_done)
 
-                    if project_name == "":
-                        if silent is False:
-                            self.inform.emit(_("Cancelled."))
-                    else:
-                        # self.open_project(project_name)
-                        run_from_arg = True
-                        # self.worker_task.emit({'fcn': self.open_project,
-                        #                        'params': [project_name, run_from_arg]})
-                        self.f_handlers.open_project(filename=project_name, run_from_arg=run_from_arg)
-                except Exception as e:
-                    self.log.error("Could not open FlatCAM project file as App parameter due: %s" % str(e))
+    def _open_startup_items(self, items, silent, on_done):
+        items = list(items)
+        while items:
+            argument = items.pop(0)
+            if self._open_startup_item(argument, silent):
+                # a project loads: the next item waits for it, the objects after it go into that project
+                signal = getattr(self.f_handlers, 'project_load_done', None)
+                if signal is not None:
+                    expected = os.path.normcase(os.path.abspath(argument))
+                    timer = QtCore.QTimer()
+                    timer.setSingleShot(True)
 
-            elif arg_ext == '.flatconfig':
-                try:
-                    file_name = str(argument)
+                    def continue_after_load(_ok=True, name='', _skipped=None, rest=items, timed_out=False): # noqa
+                        # the end of another request (an empty name: a refused one) is not the one that is awaited
+                        if not timed_out and name and os.path.normcase(os.path.abspath(name)) != expected:
+                            return
+                        timer.stop()
+                        signal.disconnect(continue_after_load)
+                        if timed_out:
+                            self.inform.emit('[WARNING_NOTCL] %s: %s' % (_("The project did not finish loading"),
+                                                                       argument))
+                        self._open_startup_items(rest, silent, on_done)
 
-                    if file_name == "":
-                        if silent is False:
-                            self.inform.emit(_("Open Config file failed."))
-                    else:
-                        run_from_arg = True
-                        # self.worker_task.emit({'fcn': self.open_config_file,
-                        #                        'params': [file_name, run_from_arg]})
-                        self.f_handlers.open_config_file(file_name, run_from_arg=run_from_arg)
-                except Exception as e:
-                    self.log.error("Could not open FlatCAM Config file as App parameter due: %s" % str(e))
+                    timer.timeout.connect(lambda: continue_after_load(timed_out=True))
+                    timeout = self.options.get('global_background_timeout') or 600000
+                    timer.start(int(timeout))
+                    signal.connect(continue_after_load)
+                    return
+        if on_done is not None:
+            on_done()
 
-            elif arg_ext in ('.flatscript', '.tcl'):
-                try:
-                    file_name = str(argument)
+    def _report_open_failure(self, argument, what, error, silent):
+        self.log.error("%s: %s" % (what, str(error)))
+        message = "%s\n%s\n%s" % (what, argument, str(error))
+        self.inform.emit('[ERROR_NOTCL] %s %s' % (what, argument))
+        if silent is False:
+            QtWidgets.QMessageBox.critical(self.ui, _("Error"), message)
 
-                    if file_name == "":
-                        if silent is False:
-                            self.inform.emit(_("Open Script file failed."))
-                    else:
-                        if silent is False:
-                            self.f_handlers.on_file_open_script(name=file_name)
-                            self.ui.plot_tab_area.setCurrentWidget(self.ui.plot_tab)
-                        # a Tcl script can start programs and delete files: a script given as a file to open (a
-                        # double-click, a file sent by a second launch) runs only after a Yes. The --shellfile option
-                        # and the headless runs (HeadlessRunner) do not come here; they still run unattended.
-                        if self.ask_run_script_arg(file_name):
-                            self.f_handlers.on_file_run_script(name=file_name)
-                        elif silent is False:
-                            self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
-                except Exception as e:
-                    self.log.error("Could not open FlatCAM Script file as App parameter due: %s" % str(e))
+    def _open_startup_item(self, argument, silent=False):
+        """
+        :return: True if a project load started and the next argument has to wait for it
+        """
+        # the file type comes from the last extension and a command word from the whole argument. Searched anywhere
+        # in the path, 'top.tcl.gtl' (a Gerber for Windows) or a file in a folder 'board.tcl' was run as a Tcl script
+        arg_ext = os.path.splitext(argument)[1].lower()
+        arg_word = argument.strip().lower()
+        if arg_ext == '.flatprj':
+            try:
+                project_name = str(argument)
 
-            elif arg_word in ('quit', 'exit'):
-                self.log.debug("App.on_startup_args() --> Quit event.")
-                self.app_quit.emit()
+                if project_name == "":
+                    if silent is False:
+                        self.inform.emit(_("Cancelled."))
+                else:
+                    self.f_handlers.open_project(filename=project_name, run_from_arg=True)
+                    return True
+            except Exception as e:
+                self._report_open_failure(argument, _("Could not open the project file."), e, silent)
 
-            elif arg_word == 'save':
-                self.log.debug("App.on_startup_args() --> Save event. App Defaults saved.")
-                self.defaults.update(self.options)
-                self.preferencesUiManager.save_defaults()
-            else:
-                # the file type is searched in the lists in turn; a file opens once and the next argument follows
-                opener = (
-                    ('fa_excellon_group', 'exc_list_text', 'on_file_open_excellon',
-                     _("Open Excellon file failed.")),
-                    ('fa_gcode_group', 'gco_list_text', 'on_file_open_gcode',
-                     _("Open GCode file failed.")),
-                    ('fa_gerber_group', 'grb_list_text', 'on_file_open_gerber',
-                     _("Open Gerber file failed.")),
-                )
+        elif arg_ext == '.flatconfig':
+            try:
+                file_name = str(argument)
+
+                if file_name == "":
+                    if silent is False:
+                        self.inform.emit(_("Open Config file failed."))
+                else:
+                    self.f_handlers.open_config_file(file_name, run_from_arg=True)
+            except Exception as e:
+                self._report_open_failure(argument, _("Could not open the preferences file."), e, silent)
+
+        elif arg_ext in ('.flatscript', '.tcl'):
+            try:
+                file_name = str(argument)
+
+                if file_name == "":
+                    if silent is False:
+                        self.inform.emit(_("Open Script file failed."))
+                else:
+                    if silent is False:
+                        self.f_handlers.on_file_open_script(name=file_name)
+                        self.ui.plot_tab_area.setCurrentWidget(self.ui.plot_tab)
+                    # a Tcl script can start programs and delete files: a script given as a file to open (a
+                    # double-click, a file sent by a second launch) runs only after a Yes. The --shellfile option
+                    # and the headless runs (HeadlessRunner) do not come here; they still run unattended.
+                    if self.ask_run_script_arg(file_name):
+                        self.f_handlers.on_file_run_script(name=file_name)
+                    elif silent is False:
+                        self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+            except Exception as e:
+                self._report_open_failure(argument, _("Could not open the script file."), e, silent)
+
+        elif arg_word in ('quit', 'exit'):
+            self.log.debug("App.on_startup_args() --> Quit event.")
+            self.app_quit.emit()
+
+        elif arg_word == 'save':
+            self.log.debug("App.on_startup_args() --> Save event. App Defaults saved.")
+            self.defaults.update(self.options)
+            self.preferencesUiManager.save_defaults()
+        else:
+            # the file type is searched in the lists in turn; a file opens once and the next argument follows
+            opener = (
+                ('fa_excellon_group', 'exc_list_text', 'on_file_open_excellon',
+                 _("Open Excellon file failed.")),
+                ('fa_gcode_group', 'gco_list_text', 'on_file_open_gcode',
+                 _("Open GCode file failed.")),
+                ('fa_gerber_group', 'grb_list_text', 'on_file_open_gerber',
+                 _("Open Gerber file failed.")),
+            )
+            try:
                 for group_name, list_name, open_name, failed_msg in opener:
                     ext_list = getattr(getattr(self.ui.util_pref_form, group_name), list_name).get_value().split(',')
                     known = any(ext.replace(' ', '') and '.%s' % ext.replace(' ', '').lower() == arg_ext
@@ -1801,33 +1947,52 @@ class App(QtCore.QObject):
                             self.inform.emit(failed_msg)
                     else:
                         getattr(self.f_handlers, open_name)(name=file_name)
-                    break
+                    return False
+                self._open_import_item(argument, arg_ext.lstrip('.'), silent)
+            except Exception as e:
+                self._report_open_failure(argument, _("Could not open the file."), e, silent)
+        return False
 
-        # if it reached here without already returning then the app was registered with a file that it does not
-        # recognize therefore we must quit but take into consideration the app reboot from within, in that case
-        # the args_to_process will contain the path to the FlatCAM.exe (cx_freezed executable)
+    def _open_import_item(self, argument, ext, silent):
+        """SVG, DXF and PDF files (a drop on the window): imported as Geometry."""
+        reg = self.regFK
+        if reg is None:
+            return
+        if ext in reg.svg_list:
+            self.worker_task.emit({'fcn': self.f_handlers.import_svg, 'params': [argument, 'geometry', None]})
+        elif ext in reg.dxf_list:
+            self.worker_task.emit({'fcn': self.f_handlers.import_dxf, 'params': [argument, 'geometry', None]})
+        elif ext in reg.pdf_list:
+            self.pdf_tool.periodic_check(1000)
+            self.worker_task.emit({'fcn': self.pdf_tool.open_pdf, 'params': [argument]})
+        elif silent is False:
+            self.inform.emit('[WARNING_NOTCL] %s %s' % (_("Not a file that FlatCAM opens:"), argument))
 
-        # for arg in args_to_process:
-        #     if 'FlatCAM.exe' in arg:
-        #         continue
-        #     else:
-        #         sys.exit(2)
+    def bring_to_front(self):
+        """Show the main window (it can be minimized or hidden in the tray), raise it and give it the focus."""
+        try:
+            if self.ui.isMinimized():
+                self.ui.showNormal()
+            elif not self.ui.isVisible():
+                self.ui.show()
+            self.ui.raise_()
+            self.ui.activateWindow()
+        except Exception as e:
+            self.log.debug("App.bring_to_front() --> %s" % str(e))
 
     def on_files_from_other_instance(self, files):
         """
-        The files of a second launch (or a file opened from the Finder): open them and bring the window to the front.
+        The files of a second launch (or a file opened from the Finder): bring the window to the front, then open them.
 
         :param files: list of paths
         :return: None
         """
-        self.on_startup_args(files)
-        try:
-            if self.ui.isMinimized():
-                self.ui.showNormal()
-            self.ui.raise_()
-            self.ui.activateWindow()
-        except Exception as e:
-            self.log.debug("App.on_files_from_other_instance() --> %s" % str(e))
+        self.bring_to_front()
+        self.open_files_request(files)
+
+    def add_to_os_recent(self, kind, filename):
+        if not self.headless:
+            add_to_os_recent(filename)
 
     def ask_run_script_arg(self, file_name):
         """
@@ -2904,15 +3069,11 @@ class App(QtCore.QObject):
         self.log.debug("   %s" % filename)
 
         record = {'kind': str(kind), 'filename': str(filename)}
-        if record in self.recent:
-            return
-        if record in self.recent_projects:
-            return
-
-        if record['kind'] == 'project':
-            self.recent_projects.insert(0, record)
-        else:
-            self.recent.insert(0, record)
+        # a file that is opened again moves to the top of the list
+        target = self.recent_projects if record['kind'] == 'project' else self.recent
+        if record in target:
+            target.remove(record)
+        target.insert(0, record)
 
         if len(self.recent) > self.options.get('global_recent_limit', self.defaults.get('global_recent_limit')):  # Limit reached
             self.recent.pop()

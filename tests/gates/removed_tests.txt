@@ -32,3 +32,7 @@ tests/test_plugin_geometry_bases.py::test_plating_mask_only_pads_excludes_trace_
 tests/test_plugin_geometry_bases.py::test_plating_mask_robber_with_no_source_apertures  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
 tests/test_plugin_geometry_bases.py::test_plating_negative_clearance_can_split_thieving_openings  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
 tests/test_plugin_geometry_bases.py::test_robber_bar_preserves_collection_source_and_single_follow  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_project_save_wkt.py::TestProjectFileWithWktCache::test_format_read_by_older_versions  # Replaced by test_geometry_table_holds_plain_wkt: project saves now write a geometry table.
+tests/test_app_history_drilling.py::test_order_change_is_one_step  # Removed with the Drilling audit fixes.
+tests/test_app_history_milling.py::test_geo_field_edits_add_no_step  # Removed with the Milling audit fixes.
+tests/test_milling_lifecycle.py::test_milling_drills_preserve_per_tool_buffers_and_equal_diameter_epsilon  # Removed with the Milling audit fixes.

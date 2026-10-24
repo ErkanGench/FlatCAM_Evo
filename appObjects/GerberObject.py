@@ -244,7 +244,6 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         # set initial state of the aperture table and associated widgets
         self.on_aperture_table_visibility_change()
 
-        self.build_ui()
         self.units_found = self.app.app_units
 
         self.set_offset_values()
@@ -1085,10 +1084,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     plot_geometry = LineString(plot_geometry)
                     self.add_shape(shape=plot_geometry, color=used_color, face_color=used_face_color, visible=visible)
 
-            self.shapes.redraw(
-                # update_colors=(self.fill_color, self.outline_color),
-                # indexes=self.app.plotcanvas.shape_collection.data.keys()
-            )
+            if not self.defer_redraw:
+                self.shapes.redraw()
             self.mark_full_plot()
         except (ObjectDeleted, AttributeError):
             self.shapes.clear(update=True)

@@ -46,18 +46,23 @@ def test_project_open_loads_only_project_options(cli):
     app.defaults = defaults
     app.options = AppOptions(version='test', baseline=defaults, defaults=defaults)
     app.resource_location = 'assets/resources'
-    handler = SimpleNamespace(app=app, on_file_new_project=MagicMock())
+    app.app_units = 'MM'
+    handler = appIO(app)
+    handler.on_file_new_project = MagicMock()
     project = {'objs': [], 'options': {'global_graphic_engine': '2D', 'global_appearance': 'dark',
-                                     'gerber_bboxmargin': 0.75}}
+                                     'gerber_bboxmargin': 0.75, 'units': 'inch'}}
     with patch('appHandlers.appIO.FCMessageBox') as message:
-        assert appIO._restore_project_handler(handler, project, 'board.FlatPrj',
-                                             True, True, cli, False) is True
+        assert handler._restore_project_handler(project, 'board.FlatPrj', True, True, cli, False) is True
     message.assert_not_called()
+    # the units of the project become the units of the app
+    assert app.options['units'] == 'IN'
+    assert app.app_units == 'IN'
     assert defaults['global_appearance'] == 'light'
     assert app.options['global_appearance'] == 'light'
     assert app.options['gerber_bboxmargin'] == 0.75
     assert app.options['gerber_bboxrounded'] == defaults['gerber_bboxrounded']
     assert 'global_graphic_engine' not in list(defaults)
-    assert app.preferencesUiManager.defaults_write_form.called is (not cli)
+    # the Preferences form reads the project when it is shown; a load does not rewrite every field
+    app.preferencesUiManager.defaults_write_form.assert_not_called()
     assert project['options']['global_graphic_engine'] == '2D'
 

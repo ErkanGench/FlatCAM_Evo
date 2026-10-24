@@ -74,5 +74,68 @@ class TestCloseProject(unittest.TestCase):
             TclCommandCloseProject(app).execute({'force': value}, [])
             app.projects.close.assert_called_once_with(app.projects.active, force=True)
 
+class FakeSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot, connection_type=None):
+        self.slots.append(slot)
+
+    def disconnect(self, slot):
+        self.slots.remove(slot)
+
+    def emit(self, *args):
+        for slot in list(self.slots):
+            slot(*args)
+
+
+def make_open_app(result, delay=0.0):
+    import threading
+    app = make_app()
+    app.options = {}
+    app.defaults = {}
+    signal = FakeSignal()
+
+    def open_project(filename, **kwargs):
+        # the load ends later, on another thread
+        threading.Timer(delay, lambda: signal.emit(*result)).start()
+        return True
+
+    app.f_handlers = SimpleNamespace(project_load_done=signal, open_project=open_project)
+    return app, signal
+
+
+class TestOpenProject(unittest.TestCase):
+    def run_open(self, result, delay=0.05):
+        from tclCommands.TclCommandOpenProject import TclCommandOpenProject
+        app, signal = make_open_app(result, delay)
+        out = TclCommandOpenProject(app).execute({'filename': 'a.FlatPrj'}, [])
+        self.assertEqual(signal.slots, [])
+        return out
+
+    def test_waits_for_the_load(self):
+        import time
+        start = time.time()
+        self.run_open((True, 'a.FlatPrj', []), delay=0.2)
+        self.assertGreaterEqual(time.time() - start, 0.15)
+
+    def test_failed_load_is_an_error(self):
+        with self.assertRaises(TclError):
+            self.run_open((False, 'a.FlatPrj', []))
+
+    def test_failed_load_error_has_the_reason(self):
+        from tclCommands.TclCommandOpenProject import TclCommandOpenProject
+        app, _signal = make_open_app((False, 'a.FlatPrj', []), 0.01)
+        app.f_handlers.last_load_error = 'File no longer available.'
+        with self.assertRaises(TclError) as ctx:
+            TclCommandOpenProject(app).execute({'filename': 'a.FlatPrj'}, [])
+        self.assertIn('File no longer available.', str(ctx.exception))
+
+    def test_partial_load_names_the_skipped_objects(self):
+        out = self.run_open((True, 'a.FlatPrj', ['Bad_1', 'Bad_2']))
+        self.assertIn('Bad_1', str(out))
+        self.assertIn('Bad_2', str(out))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -6,8 +6,13 @@ from dataclasses import dataclass
 import ctypes
 from copy import deepcopy
 import os
+import plistlib
+import shlex
+import shutil
+import subprocess
 import sys
 import typing
+import xml.etree.ElementTree as ET
 
 if sys.platform == 'win32':
     import winreg
@@ -335,9 +340,9 @@ class RegisterFK(QtCore.QObject):
 
         # ###########################################################################################################
         # ##################################### Register files with FlatCAM;  #######################################
-        # ################################### It works only for Windows for now  ####################################
+        # ####### Windows: registry; Linux: ~/.local/share (mime + desktop); macOS: ~/Applications app bundle  ########
         # ###########################################################################################################
-        if sys.platform == 'win32' and self.options.get("first_run") is True:
+        if self.options.get("first_run") is True:
             self.on_register_files()
 
     def connect_signals(self):
@@ -442,25 +447,40 @@ class RegisterFK(QtCore.QObject):
     def on_register_files(self, obj_type=None):
         """
         Called whenever there is a need to register file extensions with FlatCAM.
-        Works only in Windows and should be called only when FlatCAM is run in Windows.
+        Windows writes the registry; Linux and macOS write only into the home folder of the user.
 
         :param obj_type: the type of object to be register for.
-        Can be: 'gerber', 'excellon' or 'gcode'. 'geometry' is not used for the moment.
+        Can be: 'gerber', 'excellon', 'gcode', 'project' or 'config'. 'geometry' is not used for the moment.
 
         :return: None
         """
         self.log.debug("Manufacturing files extensions are registered with FlatCAM.")
 
-        # find if the current user is admin
-        try:
-            is_admin = os.getuid() == 0
-        except AttributeError:
-            is_admin = ctypes.windll.shell32.IsUserAnAdmin() == 1
+        if sys.platform == 'win32':
+            self._register_windows(obj_type)
+        elif sys.platform == 'darwin':
+            self._register_macos(obj_type)
+        elif sys.platform.startswith('linux'):
+            self._register_linux(obj_type)
 
-        if is_admin is True:
-            root_path = winreg.HKEY_LOCAL_MACHINE
-        else:
-            root_path = winreg.HKEY_CURRENT_USER
+    def on_unregister_files(self, obj_type=None):
+        """
+        Remove what on_register_files wrote, only where it still points to FlatCAM.
+
+        :param obj_type: 'gerber', 'excellon', 'gcode', 'project', 'config' or None for all.
+        """
+        if sys.platform == 'win32':
+            self._unregister_windows(obj_type)
+        elif sys.platform == 'darwin':
+            self._unregister_macos(obj_type)
+        elif sys.platform.startswith('linux'):
+            self._unregister_linux(obj_type)
+
+    def _register_windows(self, obj_type=None):
+        root_path = self._root_path()
+
+        if obj_type in (None, 'excellon', 'gcode', 'gerber'):
+            self.register_progid(root_path, 'FlatCAM', 'FlatCAM')
 
         if obj_type is None or obj_type == 'excellon':
             self.register_excellon_extension(root_path)
@@ -470,6 +490,429 @@ class RegisterFK(QtCore.QObject):
 
         if obj_type is None or obj_type == 'gerber':
             self.register_gerber_extension(root_path)
+
+        if obj_type is None or obj_type == 'project':
+            self.register_progid(root_path, 'FlatCAM.Project', _("FlatCAM Project"))
+            self.register_extensions(root_path, self.prj_list, 'FlatCAM.Project')
+
+        if obj_type is None or obj_type == 'config':
+            self.register_progid(root_path, 'FlatCAM.Config', _("FlatCAM Config"))
+            self.register_extensions(root_path, self.conf_list, 'FlatCAM.Config')
+
+        self.notify_assoc_changed()
+
+    def _unregister_windows(self, obj_type=None):
+        root_path = self._root_path()
+
+        for key in ('excellon', 'gcode', 'gerber'):
+            if obj_type is None or obj_type == key:
+                ext_str = self.options.get("fa_%s" % key)
+                self.unregister_extensions(root_path, [x for x in ext_str.replace(' ', '').split(',') if x],
+                                           'FlatCAM')
+        if obj_type is None:
+            self.unregister_progid(root_path, 'FlatCAM')
+
+        if obj_type is None or obj_type == 'project':
+            self.unregister_extensions(root_path, self.prj_list, 'FlatCAM.Project')
+            self.unregister_progid(root_path, 'FlatCAM.Project')
+
+        if obj_type is None or obj_type == 'config':
+            self.unregister_extensions(root_path, self.conf_list, 'FlatCAM.Config')
+            self.unregister_progid(root_path, 'FlatCAM.Config')
+
+        self.notify_assoc_changed()
+
+    # association kinds and their Linux MIME types, macOS UTIs and Preferences widgets
+    ASSOC_KEYS = ('project', 'config', 'gerber', 'excellon', 'gcode')
+    ASSOC_MIME = {
+        'project': 'application/x-flatcam-project',
+        'config': 'application/x-flatcam-config',
+        'gerber': 'application/x-flatcam-gerber',
+        'excellon': 'application/x-flatcam-excellon',
+        'gcode': 'application/x-flatcam-gcode',
+    }
+    ASSOC_UTI = {'project': 'org.flatcam.evo.project', 'config': 'org.flatcam.evo.config'}
+    ASSOC_WIDGET = {
+        'gerber': ('fa_gerber_group', 'grb_list_text'),
+        'excellon': ('fa_excellon_group', 'exc_list_text'),
+        'gcode': ('fa_gcode_group', 'gco_list_text'),
+    }
+    LINUX_XML = 'flatcam-evo.xml'
+    LINUX_DESKTOP = 'flatcam-evo.desktop'
+    MAC_BUNDLE_ID = 'org.flatcam.evo'
+    MAC_LSREGISTER = ('/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/'
+                      'Support/lsregister')
+
+    @staticmethod
+    def assoc_title(key):
+        return {'project': _("FlatCAM Project"), 'config': _("FlatCAM Config"), 'gerber': _("Gerber file"),
+                'excellon': _("Excellon file"), 'gcode': _("G-code file")}[key]
+
+    def assoc_keys(self, obj_type):
+        if obj_type is None:
+            return list(self.ASSOC_KEYS)
+        return [obj_type] if obj_type in self.ASSOC_KEYS else []
+
+    def assoc_exts(self, key):
+        """The extensions of one association kind: fixed for project/config, from the Preferences for the rest."""
+        if key == 'project':
+            return list(self.prj_list)
+        if key == 'config':
+            return list(self.conf_list)
+        group, widget = self.ASSOC_WIDGET[key]
+        text = getattr(getattr(self.ui.util_pref_form, group), widget).get_value()
+        exts = []
+        for ext in text.replace(' ', '').split(','):
+            ext = ext.lstrip('.')
+            if ext and ext.isalnum() and ext.lower() not in exts:
+                exts.append(ext.lower())
+        return exts
+
+    @staticmethod
+    def launcher_argv():
+        """The command (list) that starts this installation: the frozen executable, or python + flatcam.py."""
+        if getattr(sys, 'frozen', False):
+            return [os.path.abspath(sys.executable)]
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'flatcam.py')
+        return [sys.executable, script]
+
+    @staticmethod
+    def png_icon_path():
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base, 'assets', 'resources', 'flatcam_icon256.png')
+
+    @staticmethod
+    def run_tool(name, *args):
+        """Run an optional system tool if it is installed; never raises. Returns True if it was started."""
+        exe = shutil.which(name)
+        if not exe:
+            return False
+        try:
+            subprocess.run([exe, *args], check=False, timeout=30, capture_output=True)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return True
+
+    def inform_error(self, err):
+        self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("File associations failed"), err))  # noqa
+
+    # ################################################ Linux ####################################################
+    @staticmethod
+    def desktop_quote(arg):
+        """Quote one Exec argument per the Desktop Entry specification (and escape backslashes for the file)."""
+        arg = arg.replace('%', '%%')
+        if arg and not any(c in arg for c in ' \t\n"\'\\<>~|&;$*?#()`'):
+            return arg
+        for ch in ('\\', '"', '`', '$'):
+            arg = arg.replace(ch, '\\' + ch)
+        return '"%s"' % arg.replace('\\', '\\\\')
+
+    def linux_paths(self):
+        data = os.environ.get('XDG_DATA_HOME') or os.path.join(os.path.expanduser('~'), '.local', 'share')
+        mime = os.path.join(data, 'mime')
+        apps = os.path.join(data, 'applications')
+        return {'mime': mime, 'xml': os.path.join(mime, 'packages', self.LINUX_XML),
+                'apps': apps, 'desktop': os.path.join(apps, self.LINUX_DESKTOP)}
+
+    def linux_read_state(self, xml_path):
+        """What an earlier registration wrote: {key: [extensions]}."""
+        by_mime = {v: k for k, v in self.ASSOC_MIME.items()}
+        state = {}
+        try:
+            root = ET.parse(xml_path).getroot()
+        except (OSError, ET.ParseError):
+            return state
+        for node in root:
+            key = by_mime.get(node.get('type'))
+            if key is None:
+                continue
+            patterns = [g.get('pattern', '') for g in node if g.tag.endswith('glob')]
+            state[key] = [p[2:] for p in patterns if p.startswith('*.')]
+        return state
+
+    def linux_write(self, paths, state):
+        ns = 'http://www.freedesktop.org/standards/shared-mime-info'
+        ET.register_namespace('', ns)
+        root = ET.Element('{%s}mime-info' % ns)
+        for key in self.ASSOC_KEYS:
+            if key not in state:
+                continue
+            node = ET.SubElement(root, '{%s}mime-type' % ns, type=self.ASSOC_MIME[key])
+            ET.SubElement(node, '{%s}comment' % ns).text = self.assoc_title(key)
+            for ext in state[key]:
+                ET.SubElement(node, '{%s}glob' % ns, pattern='*.%s' % ext, **{'case-sensitive': 'false'})
+        os.makedirs(os.path.dirname(paths['xml']), exist_ok=True)
+        ET.ElementTree(root).write(paths['xml'], encoding='UTF-8', xml_declaration=True)
+
+        mimes = [self.ASSOC_MIME[k] for k in self.ASSOC_KEYS if k in state]
+        exec_line = ' '.join([self.desktop_quote(a) for a in self.launcher_argv()] + ['%F'])
+        desktop = '\n'.join([
+            '[Desktop Entry]',
+            'Type=Application',
+            'Name=FlatCAM EVO',
+            'GenericName=PCB CAM',
+            'Comment=G-code for PCB manufacturing from Gerber and Excellon files',
+            'Exec=%s' % exec_line,
+            'Icon=%s' % self.png_icon_path(),
+            'Terminal=false',
+            'StartupNotify=true',
+            'Categories=Graphics;Engineering;Electronics;',
+            'MimeType=%s;' % ';'.join(mimes),
+            'X-FlatCAM-Evo=true',
+            ''])
+        os.makedirs(paths['apps'], exist_ok=True)
+        with open(paths['desktop'], 'w', encoding='utf-8') as fh:
+            fh.write(desktop)
+
+    def linux_refresh(self, paths, default_mimes=()):
+        self.run_tool('update-mime-database', paths['mime'])
+        self.run_tool('update-desktop-database', paths['apps'])
+        for mime in default_mimes:
+            self.run_tool('xdg-mime', 'default', self.LINUX_DESKTOP, mime)
+
+    def _register_linux(self, obj_type=None):
+        paths = self.linux_paths()
+        keys = self.assoc_keys(obj_type)
+        state = self.linux_read_state(paths['xml'])
+        for key in keys:
+            exts = self.assoc_exts(key)
+            if exts:
+                state[key] = exts
+            else:
+                state.pop(key, None)
+        try:
+            if state:
+                self.linux_write(paths, state)
+            else:
+                self.linux_remove(paths)
+        except OSError as err:
+            self.inform_error(err)
+            return
+        self.linux_refresh(paths, [self.ASSOC_MIME[k] for k in keys if k in state])
+        self.inform.emit('[success] %s' % _("Extensions registered."))  # noqa
+
+    def linux_remove(self, paths):
+        for path in (paths['xml'], paths['desktop']):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+    def _unregister_linux(self, obj_type=None):
+        paths = self.linux_paths()
+        state = self.linux_read_state(paths['xml'])
+        for key in self.assoc_keys(obj_type):
+            state.pop(key, None)
+        try:
+            if state:
+                self.linux_write(paths, state)
+            else:
+                self.linux_remove(paths)
+        except OSError as err:
+            self.inform_error(err)
+            return
+        self.linux_refresh(paths)
+        self.inform.emit('[success] %s' % _("Extensions unregistered."))  # noqa
+
+    # ################################################ macOS ####################################################
+    def mac_bundle_path(self):
+        return os.path.join(os.path.expanduser('~'), 'Applications', 'FlatCAM EVO.app')
+
+    def mac_lsregister(self):
+        return self.MAC_LSREGISTER if os.path.isfile(self.MAC_LSREGISTER) else None
+
+    def mac_read_state(self, plist_path):
+        """{key: [extensions]} from our bundle; None if the bundle belongs to somebody else."""
+        try:
+            with open(plist_path, 'rb') as fh:
+                info = plistlib.load(fh)
+        except (OSError, plistlib.InvalidFileException, ValueError):
+            return {}
+        if info.get('CFBundleIdentifier') != self.MAC_BUNDLE_ID:
+            return None
+        return {k: list(v) for k, v in info.get('FlatCAMAssociations', {}).items() if k in self.ASSOC_KEYS}
+
+    def mac_info(self, state, icon_name=None):
+        doc_types = []
+        exported = []
+        for key in self.ASSOC_KEYS:
+            if key not in state:
+                continue
+            doc = {'CFBundleTypeName': self.assoc_title(key), 'CFBundleTypeRole': 'Editor',
+                   'LSHandlerRank': 'Owner' if key in self.ASSOC_UTI else 'Alternate'}
+            if key in self.ASSOC_UTI:
+                doc['LSItemContentTypes'] = [self.ASSOC_UTI[key]]
+                exported.append({'UTTypeIdentifier': self.ASSOC_UTI[key], 'UTTypeDescription': self.assoc_title(key),
+                                 'UTTypeConformsTo': ['public.data'],
+                                 'UTTypeTagSpecification': {'public.filename-extension': list(state[key])}})
+            else:
+                doc['CFBundleTypeExtensions'] = list(state[key])
+            doc_types.append(doc)
+        info = {'CFBundleIdentifier': self.MAC_BUNDLE_ID, 'CFBundleName': 'FlatCAM EVO',
+                'CFBundleDisplayName': 'FlatCAM EVO', 'CFBundleExecutable': 'flatcam-evo',
+                'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1.0', 'CFBundleShortVersionString': '1.0',
+                'NSHighResolutionCapable': True, 'CFBundleDocumentTypes': doc_types,
+                'FlatCAMAssociations': {k: list(v) for k, v in state.items()}}
+        if exported:
+            info['UTExportedTypeDeclarations'] = exported
+        if icon_name:
+            info['CFBundleIconFile'] = icon_name
+        return info
+
+    def mac_write(self, bundle, state):
+        contents = os.path.join(bundle, 'Contents')
+        os.makedirs(os.path.join(contents, 'MacOS'), exist_ok=True)
+
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        icon_name = None
+        for folder in ('macos', 'resources'):
+            folder = os.path.join(base, 'assets', folder)
+            icons = sorted(f for f in os.listdir(folder) if f.endswith('.icns')) if os.path.isdir(folder) else []
+            if icons:
+                os.makedirs(os.path.join(contents, 'Resources'), exist_ok=True)
+                shutil.copyfile(os.path.join(folder, icons[0]), os.path.join(contents, 'Resources', icons[0]))
+                icon_name = icons[0]
+                break
+
+        with open(os.path.join(contents, 'Info.plist'), 'wb') as fh:
+            plistlib.dump(self.mac_info(state, icon_name), fh)
+
+        script = os.path.join(contents, 'MacOS', 'flatcam-evo')
+        with open(script, 'w', encoding='utf-8') as fh:
+            fh.write('#!/bin/sh\nexec %s "$@"\n' % ' '.join(shlex.quote(a) for a in self.launcher_argv()))
+        os.chmod(script, 0o755)
+
+    def _register_macos(self, obj_type=None):
+        bundle = self.mac_bundle_path()
+        keys = self.assoc_keys(obj_type)
+        state = self.mac_read_state(os.path.join(bundle, 'Contents', 'Info.plist'))
+        if state is None:
+            self.inform_error(_("%s belongs to another application.") % bundle)
+            return
+        for key in keys:
+            exts = self.assoc_exts(key)
+            if exts:
+                state[key] = exts
+            else:
+                state.pop(key, None)
+        try:
+            if state:
+                self.mac_write(bundle, state)
+            else:
+                shutil.rmtree(bundle, ignore_errors=True)
+        except OSError as err:
+            self.inform_error(err)
+            return
+
+        lsregister = self.mac_lsregister()
+        if lsregister and state:
+            self.run_tool(lsregister, '-f', bundle)
+        if shutil.which('duti'):
+            for key in keys:
+                if key not in state:
+                    continue
+                targets = [self.ASSOC_UTI[key]] if key in self.ASSOC_UTI else ['.%s' % e for e in state[key]]
+                for target in targets:
+                    self.run_tool('duti', '-s', self.MAC_BUNDLE_ID, target, 'all')
+        else:
+            self.inform.emit('[warning] %s' % _(  # noqa
+                'To open these files with FlatCAM by default, select one in Finder and use '
+                '"Get Info > Open With" followed by "Change All".'))
+        self.inform.emit('[success] %s' % _("Extensions registered."))  # noqa
+
+    def _unregister_macos(self, obj_type=None):
+        bundle = self.mac_bundle_path()
+        state = self.mac_read_state(os.path.join(bundle, 'Contents', 'Info.plist'))
+        if not state:
+            return
+        for key in self.assoc_keys(obj_type):
+            state.pop(key, None)
+        lsregister = self.mac_lsregister()
+        try:
+            if state:
+                self.mac_write(bundle, state)
+                if lsregister:
+                    self.run_tool(lsregister, '-f', bundle)
+            else:
+                if lsregister:
+                    self.run_tool(lsregister, '-u', bundle)
+                shutil.rmtree(bundle)
+        except OSError as err:
+            self.inform_error(err)
+            return
+        self.inform.emit('[success] %s' % _("Extensions unregistered."))  # noqa
+
+    @staticmethod
+    def _root_path():
+        try:
+            is_admin = os.getuid() == 0
+        except AttributeError:
+            is_admin = ctypes.windll.shell32.IsUserAnAdmin() == 1
+        return winreg.HKEY_LOCAL_MACHINE if is_admin else winreg.HKEY_CURRENT_USER
+
+    @staticmethod
+    def get_reg(root_pth, reg_path, name=''):
+        try:
+            with winreg.OpenKey(root_pth, reg_path) as registry_key:
+                return winreg.QueryValueEx(registry_key, name)[0]
+        except OSError:
+            return None
+
+    @staticmethod
+    def launcher_command():
+        """
+        The command line that opens a file with this installation: the frozen executable, or pythonw + flatcam.py.
+        """
+        if getattr(sys, 'frozen', False):
+            return '"%s" "%%1"' % os.path.normpath(sys.executable)
+
+        exe = sys.executable
+        pythonw = os.path.join(os.path.dirname(exe), 'pythonw.exe')
+        if os.path.isfile(pythonw):
+            exe = pythonw
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'flatcam.py')
+        return '"%s" "%s" "%%1"' % (os.path.normpath(exe), os.path.normpath(script))
+
+    @staticmethod
+    def icon_path():
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base, 'assets', 'resources', 'flatcam_icon256.ico')
+
+    @staticmethod
+    def notify_assoc_changed():
+        try:
+            ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)  # SHCNE_ASSOCCHANGED
+        except (AttributeError, OSError):
+            pass
+
+    def register_progid(self, root_path, progid, friendly_name):
+        base = 'Software\\Classes\\' + progid
+        self.set_reg('', root_pth=root_path, new_reg_path_par=base, value=friendly_name)
+        self.set_reg('', root_pth=root_path, new_reg_path_par=base + '\\DefaultIcon', value=self.icon_path() + ',0')
+        self.set_reg('', root_pth=root_path, new_reg_path_par=base + '\\shell\\open\\command',
+                     value=self.launcher_command())
+
+    def unregister_progid(self, root_path, progid):
+        base = 'Software\\Classes\\' + progid
+        command = self.get_reg(root_path, base + '\\shell\\open\\command')
+        if command is None:
+            return
+        if command != self.launcher_command() and 'flatcam' not in command.lower():
+            return
+        for sub in ('\\shell\\open\\command', '\\shell\\open', '\\shell', '\\DefaultIcon', ''):
+            self.delete_reg(root_pth=root_path, reg_path=base, key_to_del=sub)
+
+    def register_extensions(self, root_path, ext_list, progid):
+        for ext in ext_list:
+            self.set_reg('', root_pth=root_path, new_reg_path_par='Software\\Classes\\.%s' % ext, value=progid)
+        self.inform.emit('[success] %s' % _("Extensions registered."))  # noqa
+
+    def unregister_extensions(self, root_path, ext_list, progid):
+        # only the extensions that still point to our progid
+        for ext in ext_list:
+            ext_key = 'Software\\Classes\\.%s' % ext
+            if self.get_reg(root_path, ext_key) == progid:
+                self.delete_reg(root_pth=root_path, reg_path='', key_to_del=ext_key)
 
     def register_excellon_extension(self, root_path):
         new_reg_path = 'Software\\Classes\\'

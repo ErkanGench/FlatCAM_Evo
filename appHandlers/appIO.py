@@ -10,7 +10,7 @@ from appEditors.appGerberEditor import AppGerberEditor
 from appGUI.GUIElements import FCFileSaveDialog, FCMessageBox, add_case_variants
 from appObjects.ProjectContext import same_path
 from camlib import dict2obj, ParseError, geometry_wkt_cache, project_json_default
-from defaults import project_options
+from defaults import project_options, clean_project_options, normalize_units
 from appParsers.ParseHPGL2 import HPGL2
 from appParsers.ParseGerber import Gerber
 
@@ -28,6 +28,7 @@ from lxml import etree as ET
 import time
 import sys
 import os
+from types import SimpleNamespace
 from copy import deepcopy
 import re
 from shapely.affinity import scale
@@ -41,7 +42,6 @@ except ImportError:
     from numpy import inf as Inf
 
 from datetime import datetime
-import json
 
 from appCommon.Common import LoudDict
 from appCommon.ProjectFile import load_project_file, save_project_file
@@ -67,12 +67,26 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
+class _NoSplash:
+    """Stands in for the splash screen when the app starts with a file: the splash is not created then."""
+    def showMessage(self, *args, **kwargs):
+        pass
+
+
+class ProjectLoadError(Exception):
+    """A project file cannot be loaded. The text of the exception is shown to the user."""
+
+
 class appIO(QtCore.QObject):
     pcbdoc_parsed = QtCore.pyqtSignal(str, object)
     pcbdoc_outputs_ready = QtCore.pyqtSignal(str)
     project_load_requested = QtCore.pyqtSignal(object, bool, bool, object, bool)
-    project_load_failed = QtCore.pyqtSignal()
+    project_load_failed = QtCore.pyqtSignal(str)
     project_objects_requested = QtCore.pyqtSignal(object, str, object, bool)
+    # emitted exactly once for each open_project() request: success, file name, names of the skipped objects
+    project_load_done = QtCore.pyqtSignal(bool, str, list)
+    # the reason of the last failed request, set before project_load_done is emitted
+    last_load_error = ''
     # emitted by the save task of File -> Save and Save As: filename, success, make_copy, was_dirty
     project_save_done = QtCore.pyqtSignal(str, bool, bool, bool)
 
@@ -85,10 +99,11 @@ class appIO(QtCore.QObject):
         self.app = app
         self.log = self.app.log
         self.inform = self.app.inform
-        self.splash = self.app.splash
+        # the project load that runs now (see _open_project); one at a time
+        self._load = None
+        self._load_reason = ''
         self.worker_task = self.app.worker_task
         self.options = self.app.options
-        self.app_units = self.app.app_units
         self.pagesize = {}
 
         self.app.new_project_signal.connect(self.on_new_project_house_keeping)
@@ -98,6 +113,17 @@ class appIO(QtCore.QObject):
         self.project_load_failed.connect(self._on_project_load_failed, Qt.ConnectionType.QueuedConnection)
         self.project_objects_requested.connect(self.restore_project_objects)
         self.project_save_done.connect(self._on_project_save_done)
+
+    @property
+    def app_units(self):
+        # the units of the active project; a project load or a project switch changes them
+        return self.app.app_units
+
+    @property
+    def splash(self):
+        # read when it is used: the app creates the splash after this object, and not at all when it starts with a file
+        splash = getattr(self.app, 'splash', None)
+        return splash if splash is not None else _NoSplash()
 
     # Native PCB formats imported through the PcbDoc pipeline: kind -> file extension, file dialog filter,
     # name in the logs and whether the layer name goes before its id in the checkboxes and in the object names.
@@ -2467,6 +2493,8 @@ class appIO(QtCore.QObject):
                                     _("Object is not Gerber file or empty. Aborting object creation."))
                 return "fail"
 
+            gerber_obj.obj_options['source_path'] = os.path.abspath(filename)
+
             if parse_ret_val:
                 return parse_ret_val
 
@@ -2547,6 +2575,8 @@ class appIO(QtCore.QObject):
                 msg += traceback.format_exc()
                 app_obj.inform.emit(msg)
                 return "fail"
+
+            excellon_obj.obj_options['source_path'] = os.path.abspath(filename)
 
             # populate excellon_obj.solid_geometry list
             ret = excellon_obj.create_geometry()
@@ -2977,105 +3007,270 @@ class appIO(QtCore.QObject):
         """
         Loads a project from the specified file.
 
-        1) Loads and parses file
-        2) Registers the file as recently opened.
-        3) Calls on_file_new_project()
-        4) Updates options
-        5) Calls app_obj.new_object() with the object's from_dict() as init method.
-        6) Calls plot_all() if plot=True
+        1) Refuses the request if another project load runs
+        2) Selects the project that receives the file. GUI, double-click and second launch use the rules of the
+           Project tab (busy check, already open, new project). Tcl and the command line replace the active project.
+        3) Loads and parses the file in a worker
+        4) Checks the version and the options, clears the project and applies the options
+        5) Calls app_obj.new_object() with the object's from_dict() as init method, for each object. An object that
+           fails is skipped and the others still load.
+        6) Registers the file as recently opened
+
+        project_load_done(success, filename, skipped_names) is emitted exactly once for each request, also when
+        the file is missing, the load is refused or declined, the parse or the restore fails.
+        success is True when the project was restored and at least one object loaded (or the file has no objects).
+        A partial load is a success with the names of the skipped objects in the list. The project has no file name
+        then and stays modified, so Save asks for a path and does not overwrite the source file.
+        success is False when nothing loaded, the list is empty and the current project is kept (a failure before
+        the clearing step) or is already cleared (a failure after it).
 
         :param filename:        Name of the file from which to load.
-        :param run_from_arg:    True if run for arguments
+        :param run_from_arg:    True if run for arguments (double-click, second launch); then the splash shows a message
         :param plot:            If True plot all objects in the project
         :param cli:             Run from command line
         :param from_tcl:        True if run from Tcl Shell
-        :return:                None
+        :return:                True: the request is queued, project_load_done tells its end
         """
 
         self.project_load_requested.emit(filename, run_from_arg, plot, cli, from_tcl)
+        return True
 
-    def _on_project_load_failed(self):
-        self.app.ui.set_ui_title(name=self.app.project_filename)
+    def _is_interactive(self, cli, from_tcl):
+        """True if the user can answer dialogs: not Tcl, not the command line, not headless."""
+        return not (cli or from_tcl) and getattr(self.app, 'headless', False) is not True
 
-    def _open_project(self, filename, run_from_arg, plot, cli, from_tcl):
-        project_filename = filename
+    def _end_load(self, load, success, failed=()):
+        """The terminal step of a request: the only place that emits project_load_done."""
+        if load.done:
+            return
+        load.done = True
+        if self._load is load:
+            self._load = None
+        # the reason of a failed request is read by the slots of project_load_done (the Tcl command)
+        reason = getattr(load, 'reason', '')
+        if not success and not reason and failed:
+            reason = '; '.join(str(name) for name in failed)
+        self.last_load_error = '' if success else reason
+        self.project_load_done.emit(bool(success), load.filename, list(failed))
 
-        self.log.debug("Opening project: " + project_filename)
-        if not os.path.exists(project_filename):
-            self.inform.emit('[ERROR_NOTCL] %s' % _("File no longer available."))
+    def missing_sources(self):
+        """Objects whose imported source file ('source_path' in the options) is not on the disk: [(obj, path)]."""
+        missing = []
+        collection = getattr(self.app, 'collection', None)
+        for obj in collection.get_list() if collection is not None else []:
+            path = getattr(obj, 'obj_options', {}).get('source_path')
+            if path and not os.path.isfile(path):
+                missing.append((obj, path))
+        return missing
+
+    def relink_sources(self, folder):
+        """Points each missing source file to the file of the same name in the folder. Returns the number of links."""
+        count = 0
+        for obj, path in self.missing_sources():
+            candidate = os.path.join(folder, os.path.basename(path.replace('\\', '/')))
+            if os.path.isfile(candidate):
+                obj.obj_options['source_path'] = candidate
+                count += 1
+        if count:
+            self.app.should_we_save = True
+            self.inform.emit('[success] %s: %d' % (_("Source files relinked"), count))
+        return count
+
+    def check_missing_sources(self, interactive):
+        """After a project load: tells the user which source files are missing; an interactive load can relink them."""
+        missing = self.missing_sources()
+        if not missing:
+            return
+        lines = ['%s: %s' % (obj.obj_options.get('name', ''), path) for obj, path in missing]
+        text = '%s\n%s' % (_("These source files were not found"), '\n'.join(lines))
+        self.inform.emit('[WARNING_NOTCL] %s' % text.replace('\n', ' '))
+        if not interactive:
             return
 
-        # an open from the GUI adds a project to the Project tab; Tcl and the command line replace the active one
-        projects = getattr(self.app, 'projects', None)
-        if projects is not None and not run_from_arg and not cli and not from_tcl:
-            if not projects.prepare_open(project_filename):
-                return
+        box = QtWidgets.QMessageBox(QtWidgets.QMessageBox.Icon.Warning, _("Missing Source Files"), text,
+                                    parent=self.app.ui)
+        locate = box.addButton(_("Locate folder..."), QtWidgets.QMessageBox.ButtonRole.ActionRole)
+        box.addButton(_("Close"), QtWidgets.QMessageBox.ButtonRole.RejectRole)
 
-        # for some reason, setting ui_title does not work when this method is called from Tcl Shell
-        # it's because the TclCommand is run in another thread (it inherit TclCommandSignaled)
-        if cli is None:
+        def on_click(button):
+            if button is not locate:
+                return
+            folder = QtWidgets.QFileDialog.getExistingDirectory(self.app.ui, _("Locate the folder of the source files"))
+            if folder:
+                self.relink_sources(folder)
+
+        box.buttonClicked.connect(on_click)
+        # not modal: the user keeps working while the notice is open
+        box.setModal(False)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        box.show()
+
+    def _fail(self, reason):
+        self._load_reason = reason
+        return False
+
+    def _on_project_load_failed(self, reason='', load=None):
+        load = load if load is not None else self._load
+        filename = load.filename if load is not None else ''
+        if load is not None:
+            load.reason = reason
+        else:
+            self.last_load_error = reason
+        if reason:
+            text = '%s: %s\n%s' % (_("Failed to open project file"), filename, reason)
+            self.inform.emit('[ERROR_NOTCL] %s' % text)
+            if load is not None and load.interactive:
+                QtWidgets.QMessageBox.critical(self.app.ui, _("Open Project"), text)
+
+        projects = getattr(self.app, 'projects', None)
+        abandoned = False
+        if load is not None and load.created is not None and projects is not None:
+            # the tab that the open added is empty: remove it and show the previous project again
+            abandoned = projects.abandon_open(load.created, load.previous)
+        if not abandoned:
+            if projects is not None:
+                projects.update_title()
+            else:
+                self.app.ui.set_ui_title(name=self.app.project_filename)
+
+        if load is not None:
+            self._end_load(load, False)
+        else:
+            self.project_load_done.emit(False, '', [])
+
+    def _open_project(self, filename, run_from_arg, plot, cli, from_tcl):
+        project_filename = str(filename)
+
+        self.log.debug("Opening project: " + project_filename)
+        if self._load is not None or getattr(getattr(self.app, 'app_obj', None), 'load_batches', None):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("A project is loading. Wait until it ends."))
+            self.last_load_error = _("A project is loading. Wait until it ends.")
+            self.project_load_done.emit(False, project_filename, [])
+            return
+
+        interactive = self._is_interactive(cli, from_tcl)
+        load = SimpleNamespace(filename=project_filename, interactive=interactive, previous=None, created=None,
+                               skipped=[], done=False)
+        self._load = load
+
+        # an open from the GUI, a double-click or a second launch adds a project to the Project tab;
+        # Tcl and the command line replace the active one
+        projects = getattr(self.app, 'projects', None)
+        if projects is not None and not (cli or from_tcl):
+            load.previous = projects.active
+            if not projects.prepare_open(project_filename):
+                self._end_load(load, False)
+                return
+            load.created = projects.last_created
+
+        if interactive:
             self.app.ui.set_ui_title(name=_("Loading Project ... Please Wait ..."))
 
         if run_from_arg:
             self.splash.showMessage('%s: %ssec\n%s' % (_("Canvas initialization started.\n"
                                                          "Canvas initialization finished in"),
-                                                       '%.2f' % self.app.used_time,
+                                                       '%.2f' % getattr(self.app, 'used_time', 0.0),
                                                        _("Opening FlatCAM Project file.")),
                                     alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
                                     color=QtGui.QColor("lightgray"))
 
         def parse_worker(prj_filename):
             with self.app.proc_container.new('%s' % _("Parsing...")):
+                # a bare file name from Tcl is searched in the Tcl folder
                 if from_tcl and not os.path.isfile(prj_filename):
                     name = prj_filename.split('/')[-1].split('\\')[-1]
-                    prj_filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')), name)
+                    prj_filename = os.path.join(
+                        self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')), name)
+
+                # the check is here, not on the GUI thread: a network path can block
+                if not os.path.isfile(prj_filename):
+                    raise ProjectLoadError(_("File no longer available."))
 
                 # Open and parse a Project file: Zstandard, LZMA (older app versions) or uncompressed
                 try:
                     d = load_project_file(prj_filename, object_hook=dict2obj)
                 except Exception as e:
                     self.log.error("Failed to open project file: %s with error: %s" % (prj_filename, str(e)))
-                    self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open project file"), prj_filename))
-                    return
+                    raise ProjectLoadError(str(e) or e.__class__.__name__)
 
                 if not isinstance(d, dict) or not isinstance(d.get('objs'), list) or \
+                        not all(isinstance(obj, dict) for obj in d['objs']) or \
                         not isinstance(d.get('options'), dict):
-                    raise ValueError('Invalid project structure')
+                    raise ProjectLoadError(_("Invalid project structure"))
 
                 self.app.restore_project.emit(d, prj_filename, run_from_arg, from_tcl, cli, plot)
                 return True
 
         def parse_task(prj_filename):
             handed_off = False
+            reason = ''
             try:
                 handed_off = parse_worker(prj_filename) is True
-            except Exception:
+            except ProjectLoadError as e:
+                reason = str(e)
+            except Exception as e:
                 self.log.error(traceback.format_exc())
-                self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open project file"), prj_filename))
+                reason = str(e) or e.__class__.__name__
             finally:
                 if not handed_off:
-                    self.project_load_failed.emit()
+                    self.project_load_failed.emit(reason or _("Unknown error"))
 
         self.app.worker_task.emit({'fcn': parse_task, 'params': [project_filename]})
 
     def restore_project_handler(self, proj_dict, filename, run_from_arg, from_tcl, cli, plot):
+        reason = ''
         try:
             if self._restore_project_handler(proj_dict, filename, run_from_arg, from_tcl, cli, plot):
                 return
-        except Exception:
+            reason = self._load_reason
+        except Exception as e:
             self.log.error(traceback.format_exc())
-            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open project file"), filename))
-        self._on_project_load_failed()
+            reason = str(e) or e.__class__.__name__
+        self._on_project_load_failed(reason)
+
+    @staticmethod
+    def _version_tuple(value):
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            return ()
+        return tuple(int(n) for n in re.findall(r'\d+', str(value)))
+
+    def _apply_units(self):
+        """The units of the loaded project are the units of the app: the app value and the status bar follow."""
+        units = normalize_units(self.app.options.get('units'))
+        if units is None or units == self.app.app_units:
+            return
+        self.app.app_units = units
+        label = getattr(getattr(self.app, 'ui', None), 'units_label', None)
+        if label is not None:
+            label.setText('[%s]' % ('mm' if units == 'MM' else 'in'))
+        self.inform.emit('[WARNING_NOTCL] %s: %s' % (_("The units of the project are now used"), units))
 
     def _restore_project_handler(self, proj_dict, filename, run_from_arg, from_tcl, cli, plot):
+        """
+        Checks the file, clears the active project and applies the options of the file. Runs on the GUI thread.
+
+        :return:    True if the restore of the objects is queued. False if the load stops; the reason is in
+                    self._load_reason ('' if the user declined).
+        """
+        interactive = self._is_interactive(cli, from_tcl)
         if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
             self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
-            return False
+            return self._fail('')
+
+        file_version = self._version_tuple(proj_dict.get('version'))
+        app_version = self._version_tuple(getattr(self.app, 'version', None))
+        if file_version and app_version and file_version > app_version:
+            text = '%s: %s\n%s' % (_("The project was made with a newer app version"), proj_dict.get('version'),
+                                   _("It may not load correctly."))
+            self.inform.emit('[WARNING_NOTCL] %s' % text.replace('\n', ' '))
+            if interactive:
+                QtWidgets.QMessageBox.warning(self.app.ui, _("Newer Project"), text)
+
         # Legacy approval belongs on the GUI thread, before clearing the current project.
         found_older_project = any(
             'cnc_tools' in obj or 'exc_cnc_tools' in obj or 'apertures' in obj for obj in proj_dict['objs'])
         if found_older_project:
-            if not run_from_arg or not cli or from_tcl is False:
+            if interactive:
                 msgbox = FCMessageBox(parent=self.app.ui)
                 title = _("Legacy Project")
                 txt = _("The project was made with an older app version.\n"
@@ -3091,39 +3286,37 @@ class appIO(QtCore.QObject):
                 msgbox.setDefaultButton(bt_ok)
                 msgbox.exec()
                 if msgbox.clickedButton() != bt_ok:
-                    return False
+                    return self._fail('')
             else:
-                self.app.log.error("Legacy Project. Loading not supported.")
-                return False
+                # no dialog without a user
+                self.inform.emit('[WARNING_NOTCL] %s %s' % (_("The project was made with an older app version."),
+                                                           _("It may not load correctly.")))
 
         # The legacy-project modal dialog can process a geometry Save request.
         if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
             self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
-            return False
+            return self._fail('')
 
-        # Clear the current project
-        # # NOT THREAD SAFE # ##
-        if run_from_arg is True:
-            pass
-        elif cli is True:
-            self.app.delete_selection_shape()
-        else:
-            if self.on_file_new_project() == 'fail':
-                return False
+        # The options are made ready before the current project is cleared. The application settings in the file
+        # are ignored.
+        file_options = clean_project_options(proj_dict['options'])
+        if 'units' in proj_dict['options'] and 'units' not in file_options:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("The units of the project are not valid. They are ignored."))
 
-        # Project options. The application settings in the file are ignored.
-        self.app.options.load_project(proj_dict['options'])
-        if not run_from_arg or not cli or from_tcl is False:
-            # Show the options of the loaded project in the Preferences form.
-            self.app.preferencesUiManager.defaults_write_form()
+        # Clear the current project. Tcl and the command line replace it without questions; the Tcl shell of the
+        # running script is kept.
+        if self.on_file_new_project(cli=None if interactive else True, reset_tcl=interactive,
+                                    keep_scripts=False) == 'fail':
+            return self._fail('')
 
-        self.app.project_filename = filename
+        # The Preferences form shows the options of the project when it is opened (show_preferences_gui).
+        self.app.options.load_project(file_options)
+        self._apply_units()
+
+        # The file name is set when all the objects are loaded; until then a Save must not overwrite the file.
         projects = getattr(self.app, 'projects', None)
         if projects is not None:
-            projects.adopt_filename(filename)
-
-        # for some reason, setting ui_title does not work when this method is called from Tcl Shell
-        # it's because the TclCommand is run in another thread (it inherits TclCommandSignaled)
+            projects.adopt_filename(filename, keep_file=False)
 
         self.app.restore_project_objects_sig.emit(proj_dict, filename, cli, plot)
         return True
@@ -3133,118 +3326,177 @@ class appIO(QtCore.QObject):
             self.project_objects_requested.emit(proj_dict, filename, cli, plot)
             return
 
-        def finished(failed):
-            if failed:
-                self.inform.emit('[WARNING_NOTCL] %s: %s' % (_("Project loading failed"), filename))
-            else:
-                self.inform.emit('[success] %s: %s' % (_("Project loaded from"), filename))
-                self.app.should_we_save = False
-                self.app.file_opened.emit("project", filename)
-            if cli is None:
-                self.app.ui.set_ui_title(name=self.app.project_filename)
-            history_of(self.app).clear()
-            self.log.debug(" **************** Finished PROJECT loading... **************** ")
+        load = self._load
+        # the objects of a real request are released one by one while they load
+        release = load is not None
+        if load is None:
+            load = SimpleNamespace(filename=str(filename), interactive=not cli, previous=None, created=None,
+                                   skipped=[], done=False)
+        batch_interactive = not (cli is True and plot is False)
+        objs = proj_dict['objs']
+        total = len(objs)
 
-        batch = ObjectLoadBatch(self.app.app_obj, 1, finished, parent=self,
-                                interactive=not (cli is True and plot is False))
+        def finished(batch_failed):
+            skipped = load.skipped
+            success = total == 0 or len(skipped) < total
+            try:
+                projects = getattr(self.app, 'projects', None)
+                partial = bool(skipped) or batch_failed
+                if partial:
+                    # the file has not all the objects: a Save must not overwrite it
+                    self.app.project_filename = None
+                    if projects is not None:
+                        projects.active.filename = None
+                    self.app.should_we_save = True
+                    lines = ['%s: %s' % (name, reason) for name, reason in skipped] or \
+                            [_("Some objects could not be added.")]
+                    if batch.cancelled:
+                        lines.insert(0, _("Loading was cancelled."))
+                    text = '%s: %s\n%s' % (_("Project loaded without some objects"), filename, '\n'.join(lines))
+                    self.inform.emit('[WARNING_NOTCL] %s' % text)
+                    self.app.file_opened.emit("project", filename)
+                    if load.interactive and batch_interactive:
+                        QtWidgets.QMessageBox.warning(self.app.ui, _("Open Project"), text)
+                else:
+                    self.inform.emit('[success] %s: %s' % (_("Project loaded from"), filename))
+                    self.app.project_filename = filename
+                    if projects is not None:
+                        projects.active.filename = filename
+                    self.app.should_we_save = False
+                    self.app.file_opened.emit("project", filename)
+                if load.interactive and batch_interactive:
+                    if projects is not None:
+                        projects.update_title()
+                    else:
+                        self.app.ui.set_ui_title(name=self.app.project_filename or _("New Project - Not saved"))
+                history_of(self.app).clear()
+                self.check_missing_sources(load.interactive and batch_interactive)
+                self.log.debug(" **************** Finished PROJECT loading... **************** ")
+            finally:
+                self._end_load(load, success, [name for name, reason in skipped])
+
+        try:
+            batch = ObjectLoadBatch(self.app.app_obj, 1, finished, parent=self, interactive=batch_interactive,
+                                    total=total or None)
+        except Exception as e:
+            self.log.error(traceback.format_exc())
+            self._on_project_load_failed(str(e) or e.__class__.__name__, load)
+            return
+
+        def skip(name, reason):
+            load.skipped.append((name, reason))
+            batch.batch_event.emit('error', 'Project object creation failed: %s: %s' % (name, reason))
+
+        def make_init(entry, problems):
+            def obj_init(new_obj, app_inst):
+                try:
+                    new_obj.from_dict(entry)
+                except Exception as except_error:
+                    app_inst.log.error('appIO.open_project() --> ' + str(except_error))
+                    problems.append(str(except_error))
+                    return 'fail'
+
+                # make the 'obj_options' dict a LoudDict
+                new_obj_options = LoudDict()
+                try:
+                    new_obj_options.update(new_obj.obj_options)
+                except AttributeError:
+                    new_obj_options.update(new_obj.options)
+                except Exception as except_error:
+                    app_inst.log.error('appIO.open_project() make a LoudDict--> ' + str(except_error))
+                    problems.append(str(except_error))
+                    return 'fail'
+
+                # the new dict has no callback; set it like the object __init__ does
+                new_obj_options.set_change_callback(new_obj.on_options_change)
+                new_obj.obj_options = new_obj_options
+
+                # Scripts and Documents have no tools
+                if hasattr(new_obj, 'tools'):
+                    # #########################################################################################
+                    # for older projects loading try to convert the 'apertures' or 'cnc_tools' or
+                    # 'exc_cnc_tools' attributes, if found, to 'tools'
+                    # #########################################################################################
+                    if 'apertures' in entry:
+                        new_obj.tools = entry['apertures']
+                    if 'cnc_tools' in entry and entry['cnc_tools']:
+                        new_obj.tools = entry['cnc_tools']
+                    if 'exc_cnc_tools' in entry and entry['exc_cnc_tools']:
+                        new_obj.tools = entry['exc_cnc_tools']
+                        # add the used_tools (all of them will be used)
+                        new_obj.used_tools = [float(k) for k in new_obj.tools.keys()]
+                        # add a missing key, 'tooldia' used for plotting CNCJob objects
+                        for td in new_obj.tools:
+                            new_obj.tools[td]['tooldia'] = float(td)
+
+                    # try to make the keys in the tools dictionary to be integers
+                    # JSON serialization makes them strings
+                    try:
+                        new_obj.tools = {
+                            int(tool): tool_dict for tool, tool_dict in list(new_obj.tools.items())
+                        }
+                    except ValueError:
+                        # for older loaded projects
+                        new_obj.tools = {
+                            float(tool): tool_dict for tool, tool_dict in list(new_obj.tools.items())
+                        }
+                    except Exception as other_error_msg:
+                        app_inst.log.error('appIO.open_project() keys to int--> ' + str(other_error_msg))
+                        problems.append(str(other_error_msg))
+                        return 'fail'
+
+                # #############################################################################################
+                # for older loaded projects
+                # ony older CNCJob objects hold those
+                if 'cnc_tools' in entry:
+                    new_obj.obj_options['type'] = 'Geometry'
+                if 'exc_cnc_tools' in entry:
+                    new_obj.obj_options['type'] = 'Excellon'
+                # #############################################################################################
+
+                if new_obj.kind == 'cncjob':
+                    # some attributes are serialized, so we need to take this into consideration in
+                    # CNCJob.set_ui()
+                    new_obj.is_loaded_from_project = True
+            # new_object() fills only the options that the project entry does not have
+            obj_init.provided_options = entry.get('obj_options', entry.get('options')) or {}
+            return obj_init
 
         def worker_task():
             with self.app.proc_container.new('%s' % _("Loading...")):
-                # Re-create objects
-                self.log.debug(" **************** Started PROEJCT loading... **************** ")
-                for obj in proj_dict['objs']:
+                # Re-create objects, each one on its own: a bad object does not stop the others
+                self.log.debug(" **************** Started PROJECT loading... **************** ")
+                for index in range(total):
+                    if batch.cancelled:
+                        break
+                    entry = objs[index]
+                    if release:
+                        objs[index] = None
+                    label = '#%d' % (index + 1)
                     try:
-                        obj_name = obj['obj_options']['name']
-                    except KeyError:
-                        # allowance for older projects
-                        obj_name = obj['options']['name']
-                    self.app.log.debug(
-                        f"Recreating from opened project an {obj['kind'].capitalize()} object: {obj_name}")
-
-                    def obj_init(new_obj, app_inst):
+                        kind = entry['kind']
                         try:
-                            new_obj.from_dict(obj)
-                        except Exception as except_error:
-                            app_inst.log.error('appIO.open_project() --> ' + str(except_error))
-                            return 'fail'
-
-                        # make the 'obj_options' dict a LoudDict
-                        new_obj_options = LoudDict()
-                        try:
-                            new_obj_options.update(new_obj.obj_options)
-                        except AttributeError:
-                            new_obj_options.update(new_obj.options)
-                        except Exception as except_error:
-                            app_inst.log.error('appIO.open_project() make a LoudDict--> ' + str(except_error))
-                            return 'fail'
-
-                        # the new dict has no callback; set it like the object __init__ does
-                        new_obj_options.set_change_callback(new_obj.on_options_change)
-                        new_obj.obj_options = new_obj_options
-
-                        # #############################################################################################
-                        # for older projects loading try to convert the 'apertures' or 'cnc_tools' or 'exc_cnc_tools'
-                        # attributes, if found, to 'tools'
-                        # #############################################################################################
-                        # for older loaded projects
-                        if 'apertures' in obj:
-                            new_obj.tools = obj['apertures']
-                        if 'cnc_tools' in obj and obj['cnc_tools']:
-                            new_obj.tools = obj['cnc_tools']
-                        if 'exc_cnc_tools' in obj and obj['exc_cnc_tools']:
-                            new_obj.tools = obj['exc_cnc_tools']
-                            # add the used_tools (all of them will be used)
-                            new_obj.used_tools = [float(k) for k in new_obj.tools.keys()]
-                            # add a missing key, 'tooldia' used for plotting CNCJob objects
-                            for td in new_obj.tools:
-                                new_obj.tools[td]['tooldia'] = float(td)
-                        # #############################################################################################
-                        # #############################################################################################
-
-                        # try to make the keys in the tools dictionary to be integers
-                        # JSON serialization makes them strings
-                        # not all FlatCAM objects have the 'tools' dictionary attribute
-                        try:
-                            new_obj.tools = {
-                                int(tool): tool_dict for tool, tool_dict in list(new_obj.tools.items())
-                            }
-                        except ValueError:
-                            # for older loaded projects
-                            new_obj.tools = {
-                                float(tool): tool_dict for tool, tool_dict in list(new_obj.tools.items())
-                            }
-                        except Exception as other_error_msg:
-                            app_inst.log.error('appIO.open_project() keys to int--> ' + str(other_error_msg))
-                            return 'fail'
-
-                        # #############################################################################################
-                        # for older loaded projects
-                        # ony older CNCJob objects hold those
-                        if 'cnc_tools' in obj:
-                            new_obj.obj_options['type'] = 'Geometry'
-                        if 'exc_cnc_tools' in obj:
-                            new_obj.obj_options['type'] = 'Excellon'
-                        # #############################################################################################
-
-                        if new_obj.kind == 'cncjob':
-                            # some attributes are serialized, so we need to take this into consideration in
-                            # CNCJob.set_ui()
-                            new_obj.is_loaded_from_project = True
-
-                    try:
-                        ret = self.app.app_obj.new_object(obj['kind'], obj['obj_options']['name'], obj_init, plot=plot,
-                                                          record_history=False)
-                    except KeyError:
-                        # allowance for older projects
-                        try:
-                            ret = self.app.app_obj.new_object(obj['kind'], obj_name, obj_init, plot=plot,
-                                                              record_history=False)
-                        except Exception:
-                            batch.batch_event.emit('error', traceback.format_exc())
-                            continue
-                    if ret == 'fail':
-                        batch.batch_event.emit('error', 'Project object creation failed: %s' % obj_name)
+                            obj_name = entry['obj_options']['name']
+                        except KeyError:
+                            # allowance for older projects
+                            obj_name = entry['options']['name']
+                    except (KeyError, TypeError):
+                        skip(label, _("The name or the kind of the object is missing."))
                         continue
+                    label = str(obj_name)
+                    self.app.log.debug(f"Recreating from opened project an {str(kind).capitalize()} object: {obj_name}")
+
+                    problems = []
+                    try:
+                        ret = self.app.app_obj.new_object(kind, obj_name, make_init(entry, problems), plot=plot,
+                                                          record_history=False)
+                    except Exception as e:
+                        self.log.error(traceback.format_exc())
+                        skip(label, str(e) or e.__class__.__name__)
+                        continue
+                    if ret == 'fail':
+                        skip(label, problems[0] if problems else _("The object could not be created."))
+                    entry = None
 
         def restore_task():
             batch.run(worker_task, [])
@@ -3325,8 +3577,7 @@ class appIO(QtCore.QObject):
             else:
                 # verification of the saved project: open and parse it
                 try:
-                    with open(filename, 'rb') as saved_f:
-                        saved_d = json.load(saved_f, object_hook=dict2obj)
+                    saved_d = load_project_file(filename)
                 except Exception:
                     saved_d = None
                 if not saved_d or 'version' not in saved_d:

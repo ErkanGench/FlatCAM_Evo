@@ -87,6 +87,32 @@ class TestProjectManagerCore(unittest.TestCase):
         manager.activate.assert_called_once_with(second)
         app.ui.set_ui_title.assert_called_with(name='Board_B')
 
+    def test_switch_makes_the_units_of_the_project_the_app_units(self):
+        app, manager = make_manager()
+        app.app_units = 'MM'
+        app.ui.units_label = Mock()
+        second = manager.add_context('Board_B')
+        second.options = {'units': 'IN'}
+
+        manager.switch(second)
+
+        self.assertEqual(app.app_units, 'IN')
+        app.ui.units_label.setText.assert_called_with('[in]')
+
+    def test_editor_handlers_read_the_live_app_units(self):
+        from appHandlers.appEdit import appEditor
+        app, manager = make_manager()
+        app.app_units = 'MM'
+        app.worker_task = app.decimals = Mock()
+        app.ui.units_label = Mock()
+        handlers = appEditor(app)
+        second = manager.add_context('Board_B')
+        second.options = {'units': 'IN'}
+
+        manager.switch(second)
+
+        self.assertEqual(handlers.app_units, 'IN')
+
     def test_switch_is_refused_while_busy(self):
         app, manager = make_manager()
         second = manager.add_context('Board_B')
@@ -238,6 +264,17 @@ class TestProjectManagerDialogs(unittest.TestCase):
         app, manager = make_manager()
         app.save_in_progress = True
         self.assertFalse(manager.prepare_open(self.path('Board.FlatPrj')))
+
+    def test_failed_open_removes_the_added_project_even_while_a_task_ends(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        self.assertTrue(manager.prepare_open(self.path('Board.FlatPrj')))
+        added = manager.last_created
+        self.assertIsNot(added, first)
+        app.save_in_progress = True
+        self.assertTrue(manager.abandon_open(added, first))
+        self.assertIs(manager.active, first)
+        self.assertEqual(manager.contexts, [first])
 
     def test_request_close_yes_saves_first(self):
         app, manager = make_manager(make_app(FakeCollection([object()])))

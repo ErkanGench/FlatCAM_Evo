@@ -212,13 +212,23 @@ if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     app.aboutToQuit.connect(_install_shutdown_message_handler)
 
-    # A launch with files hands them to the window that is already open and ends here, before the App is built. The
-    # options (--shellfile, --command, --shellvar) belong to this process: they start a new one.
-    if (not App.cmd_line_headless and App.args and not App.cmd_line_shellfile and not App.cmd_line_command and
-            not App.cmd_line_shellvar):
-        from appCommon.SingleInstance import send_to_running
-        if send_to_running(App.args):
-            os._exit(0)
+    # The listener for the files of a second launch starts here, before the App is built: files opened together in the
+    # Explorer start several processes at once and only one of them keeps the window. The others hand their files to
+    # it and end here. The files that arrive while the App is starting are kept until it is ready.
+    # The options (--shellfile, --command, --shellvar) belong to this process: they start a new one.
+    launch_server = None
+    no_answer = False
+    if not App.cmd_line_headless:
+        from appCommon.SingleInstance import start_listening, send_to_running
+        launch_server, listening = start_listening(app)
+        if (not listening and App.args and not App.cmd_line_shellfile and not App.cmd_line_command and
+                not App.cmd_line_shellvar):
+            from appCommon.StartDir import absolute_paths
+            if send_to_running(absolute_paths(App.args)):
+                os._exit(0)
+            # no answer: the files are not lost, this launch opens them itself
+            sys.stderr.write("The open FlatCAM window did not answer: the files open in this one.\n")
+            no_answer = True
 
     # apply style
     settings = QSettings("Open Source", "FlatCAM_EVO")
@@ -245,11 +255,18 @@ if __name__ == '__main__':
         font.setPointSize(font_size)
         app.setFont(font)
 
-    fc = App(qapp=app)
+    fc = App(qapp=app, launch_server=launch_server)
 
     if fc.headless:
         from appCommon.Headless import HeadlessRunner
         os._exit(HeadlessRunner(fc).run())
+
+    if no_answer:
+        # the user sees that this is a second window: the open one did not answer
+        import builtins
+        _ = builtins.__dict__.get('_', lambda text: text)
+        QTimer.singleShot(0, lambda: fc.inform.emit(
+            '[WARNING_NOTCL] %s' % _("The open FlatCAM window did not answer. The files open in this new window.")))
 
     # interrupt the Qt loop such that Python events have a chance to be responsive
     timer = QTimer()

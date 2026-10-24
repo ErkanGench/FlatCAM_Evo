@@ -95,6 +95,25 @@ class TestNewAndOpen(AppIOTestBase):
         self.projects.prepare_open.assert_called_once_with(filename)
         self.assertEqual(self.tasks, [])
 
+    def test_double_click_open_follows_the_gui_rules_and_reports_once(self):
+        filename = self.path('Board.FlatPrj')
+        with open(filename, 'w') as stream:
+            stream.write('{}')
+        self.projects.prepare_open.return_value = False
+        self.app.splash = None
+        done = []
+        self.io.project_load_done.connect(lambda ok, name, failed: done.append((ok, name, failed)))
+
+        self.io._open_project(filename, True, True, False, False)
+
+        self.projects.prepare_open.assert_called_once_with(filename)
+        self.assertEqual(self.tasks, [])
+        self.assertEqual(done, [(False, filename, [])])
+        # the load is over: the next request is accepted
+        self.projects.prepare_open.return_value = True
+        self.io._open_project(filename, True, True, False, False)
+        self.assertEqual(len(self.tasks), 1)
+
 class TestSave(AppIOTestBase):
     def run_queued_save(self, ok):
         """Run the queued save task with a save_project() that returns ok."""

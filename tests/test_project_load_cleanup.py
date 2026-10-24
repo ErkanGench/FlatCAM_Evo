@@ -47,6 +47,15 @@ class TestProjectLoadCleanup(unittest.TestCase):
         self.io = appIO(self.app)
         self.signals.restore.connect(self.io.restore_project_handler)
         self.io.on_file_new_project = Mock()
+        # an interactive load shows a message box on a failure
+        critical = patch.object(QtWidgets.QMessageBox, 'critical')
+        self.critical = critical.start()
+        self.addCleanup(critical.stop)
+        warning = patch.object(QtWidgets.QMessageBox, 'warning')
+        self.warning = warning.start()
+        self.addCleanup(warning.stop)
+        self.done = []
+        self.io.project_load_done.connect(lambda ok, name, failed: self.done.append((ok, name, failed)))
 
     def wait_for(self, predicate):
         timer = QtCore.QElapsedTimer()
@@ -109,6 +118,119 @@ class TestProjectLoadCleanup(unittest.TestCase):
                 self.wait_for(lambda: self.window.set_ui_title.call_args_list[-1:] == [call(name='previous.FlatPrj')])
                 self.assertEqual(self.app.project_filename, 'previous.FlatPrj')
                 self.assertFalse(self.app.app_obj.load_batches)
+                # one result for each request, with the reason shown to the user
+                self.assertEqual([item[0] for item in self.done], [False])
+                self.assertEqual(self.critical.call_count, 1)
+                self.done.clear()
+                self.critical.reset_mock()
+
+    def test_missing_file_reports_one_failure(self):
+        filename = os.path.join(self.directory.name, 'gone.FlatPrj')
+        self.io.open_project(filename)
+        self.wait_for(lambda: bool(self.tasks))
+        task = self.tasks.pop()
+        worker = threading.Thread(target=lambda: task['fcn'](*task['params']))
+        worker.start()
+        worker.join(2)
+        self.wait_for(lambda: bool(self.done))
+        self.assertEqual(self.done, [(False, filename, [])])
+        self.assertIn('no longer available', self.critical.call_args[0][2])
+        self.assertIn('no longer available', self.io.last_load_error)
+
+    def test_relink_points_missing_sources_to_a_folder(self):
+        found = os.path.join(self.directory.name, 'top.gtl')
+        with open(found, 'w') as stream:
+            stream.write('x')
+        gone = SimpleNamespace(obj_options={'name': 'top', 'source_path': 'C:/old/top.gtl'})
+        kept = SimpleNamespace(obj_options={'name': 'bot', 'source_path': 'C:/old/bot.gbl'})
+        self.app.collection = SimpleNamespace(get_list=lambda: [gone, kept])
+        self.assertEqual(len(self.io.missing_sources()), 2)
+        self.assertEqual(self.io.relink_sources(self.directory.name), 1)
+        self.assertEqual(gone.obj_options['source_path'], found)
+        self.assertEqual(kept.obj_options['source_path'], 'C:/old/bot.gbl')
+        self.assertTrue(self.app.should_we_save)
+
+    def test_cold_start_open_without_splash(self):
+        filename = os.path.join(self.directory.name, 'project.FlatPrj')
+        with open(filename, 'w') as stream:
+            stream.write('{}')
+        self.app.splash = None
+        self.io._open_project(filename, True, True, False, False)
+        self.assertEqual(len(self.tasks), 1)
+
+    def test_second_request_is_refused_while_one_loads(self):
+        filename = os.path.join(self.directory.name, 'project.FlatPrj')
+        with open(filename, 'w') as stream:
+            stream.write('{}')
+        self.io._open_project(filename, False, True, True, True)
+        self.io._open_project(filename, False, True, True, True)
+        self.assertEqual(len(self.tasks), 1)
+        self.assertEqual(self.done, [(False, filename, [])])
+
+    def restore_objects(self, objs):
+        """Restore objects with a factory that builds simple objects. Non-interactive: no dialogs."""
+        class Obj:
+            def __init__(self, kind, name):
+                self.kind = kind
+                self.obj_options = {}
+                if kind != 'script':
+                    self.tools = {}
+
+            def from_dict(self, d):
+                if d.get('boom'):
+                    raise ValueError('bad data')
+                self.obj_options = dict(d['obj_options'])
+                if hasattr(self, 'tools'):
+                    self.tools = d.get('tools', {})
+
+            def on_options_change(self, *args):
+                pass
+
+        created = []
+
+        def new_object(kind, name, initialize, **kwargs):
+            obj = Obj(kind, name)
+            if initialize(obj, self.app) == 'fail':
+                return 'fail'
+            created.append((name, obj))
+            return obj
+
+        self.app.app_obj = SimpleNamespace(load_batches=set(), new_object=new_object)
+        self.app.file_opened = self.signals.opened
+        self.app.should_we_save = False
+        self.app.project_filename = None
+        self.io.restore_project_objects({'objs': objs, 'options': {}}, 'board.FlatPrj', True, False)
+        task = self.tasks.pop()
+        task['fcn'](*task['params'])
+        return created
+
+    def test_script_and_bad_objects_do_not_stop_the_load(self):
+        opened = Mock()
+        self.signals.opened.connect(opened)
+        created = self.restore_objects([
+            {'kind': 'script', 'obj_options': {'name': 'run'}},
+            {'kind': 'gerber', 'boom': True, 'obj_options': {'name': 'broken'}},
+            {'kind': 'gerber'},
+            {'kind': 'document', 'obj_options': {'name': 'notes'}},
+            {'kind': 'gerber', 'obj_options': {'name': 'top'}, 'tools': {'10': {}}},
+        ])
+        self.assertEqual([name for name, _obj in created], ['run', 'notes', 'top'])
+        self.assertEqual(list(created[2][1].tools), [10])
+        self.assertEqual(self.done, [(True, 'board.FlatPrj', ['broken', '#3'])])
+        # the file is not the project file: a Save must ask for a path; the recent list still gets it
+        self.assertIsNone(self.app.project_filename)
+        self.assertTrue(self.app.should_we_save)
+        self.assertEqual(opened.call_count, 1)
+
+    def test_all_objects_failing_is_not_a_success(self):
+        self.restore_objects([{'kind': 'gerber', 'boom': True, 'obj_options': {'name': 'broken'}}])
+        self.assertEqual(self.done, [(False, 'board.FlatPrj', ['broken'])])
+
+    def test_complete_load_keeps_the_file_name(self):
+        self.restore_objects([{'kind': 'script', 'obj_options': {'name': 'run'}}])
+        self.assertEqual(self.done, [(True, 'board.FlatPrj', [])])
+        self.assertEqual(self.app.project_filename, 'board.FlatPrj')
+        self.assertFalse(self.app.should_we_save)
 
     def test_empty_project_parses_and_finishes_batch(self):
         from appObjects.AppObject import AppObject

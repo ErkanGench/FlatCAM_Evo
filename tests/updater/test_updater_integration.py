@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import sys
+import types
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -119,6 +121,11 @@ def _startup_app(auto_updates, beta=False):
     app.version = "1.0"
     app.refresh_rollback_action = MagicMock()
     app._queue_version_check = MagicMock()
+    # the update check starts when the files of the command line are open (none here)
+    app._open_requests = deque()
+    app._open_busy = False
+    for name in ("_drain_open_requests", "_start_deferred_version_check"):
+        setattr(app, name, types.MethodType(getattr(App, name), app))
     app.defaults = AppDefaults(beta=beta, version="1.0")
     app.inform = FakeSignal()
     return app

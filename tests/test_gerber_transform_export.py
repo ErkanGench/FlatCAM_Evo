@@ -597,6 +597,7 @@ from appEditors.appGerberEditor import AppGerberEditor  # noqa: E402
 from appHandlers.appIO import appIO  # noqa: E402
 from appHandlers.appObjectOps import AppObjectOps  # noqa: E402
 from camlib import dict2obj  # noqa: E402
+from appCommon.ProjectFile import load_project_file  # noqa: E402
 import numpy as np
 
 
@@ -674,8 +675,7 @@ class TestLifecycleProject:
         path = str(tmp_path / 'old.FlatPrj')
         io = appIO(app)
         io.save_project(path, silent=True)
-        with open(path, 'r') as f:
-            proj = json.load(f, object_hook=dict2obj)
+        proj = load_project_file(path, object_hook=dict2obj)
         assert 'export_as_regions' in proj['objs'][0]
         del proj['objs'][0]['export_as_regions']
 

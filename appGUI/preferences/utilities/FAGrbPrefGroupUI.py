@@ -80,6 +80,14 @@ class FAGrbPrefGroupUI(OptionsGroupUI):
                                        "They will be active after next logon.\n"
                                        "This work only in Windows."))
 
-        self.layout.addWidget(self.grb_list_btn)
+        self.grb_unreg_btn = FCButton(_("Remove Association"))
+        self.grb_unreg_btn.setToolTip(_("Remove the file associations written by 'Apply Association'.\n"
+                                        "Associations that now belong to another application are kept.\n"
+                                        "This work only in Windows."))
+
+        hlay3 = QtWidgets.QHBoxLayout()
+        self.layout.addLayout(hlay3)
+        hlay3.addWidget(self.grb_list_btn)
+        hlay3.addWidget(self.grb_unreg_btn)
 
         # self.layout.addStretch()

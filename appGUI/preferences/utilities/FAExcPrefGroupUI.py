@@ -90,7 +90,15 @@ class FAExcPrefGroupUI(OptionsGroupUI):
                                        "FlatCAM and the files with above extensions.\n"
                                        "They will be active after next logon.\n"
                                        "This work only in Windows."))
-        self.vertical_lay.addWidget(self.exc_list_btn)
+        self.exc_unreg_btn = FCButton(_("Remove Association"))
+        self.exc_unreg_btn.setToolTip(_("Remove the file associations written by 'Apply Association'.\n"
+                                        "Associations that now belong to another application are kept.\n"
+                                        "This work only in Windows."))
+
+        hlay3 = QtWidgets.QHBoxLayout()
+        self.vertical_lay.addLayout(hlay3)
+        hlay3.addWidget(self.exc_list_btn)
+        hlay3.addWidget(self.exc_unreg_btn)
 
         scroll_widget.setLayout(self.vertical_lay)
         self.layout.addWidget(scroll)

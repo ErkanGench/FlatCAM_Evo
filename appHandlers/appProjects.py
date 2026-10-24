@@ -6,7 +6,7 @@ from PyQt6 import QtCore, QtWidgets
 from appHandlers.appHistory import HistoryManager
 from appObjects.ProjectContext import ProjectContext, unique_name, same_path, name_from_filename, \
     is_valid_name, PROJECT_EXT
-from defaults import project_options
+from defaults import project_options, normalize_units
 
 # App Translation
 import gettext
@@ -41,6 +41,8 @@ class ProjectManager(QtCore.QObject):
         # the project that the canvas shows. It is not always the active project: a switch with visuals=False
         # (used on exit) changes the active project but not the canvas.
         self.displayed = first
+        # the project that the last prepare_open() added to the list, or None if it added none
+        self.last_created = None
         self.stack.addWidget(first.collection.view)
         self.stack.setCurrentWidget(first.collection.view)
         app.history = self._ensure_history(first)
@@ -166,20 +168,32 @@ class ProjectManager(QtCore.QObject):
         self.stack.setCurrentWidget(ctx.collection.view)
         self.app.history = self._ensure_history(ctx)
         self.app.history.notify()
+        self._follow_units()
 
-    def switch(self, ctx, visuals=True):
+    def _follow_units(self):
+        """The units of the active project are the units of the app: the app value and the status bar follow."""
+        units = normalize_units(self.app.options.get('units'))
+        if units is None or units == getattr(self.app, 'app_units', None):
+            return
+        self.app.app_units = units
+        label = getattr(getattr(self.app, 'ui', None), 'units_label', None)
+        if label is not None:
+            label.setText('[%s]' % ('mm' if units == 'MM' else 'in'))
+
+    def switch(self, ctx, visuals=True, check_busy=True):
         """
         Make ctx the active project.
 
         :param ctx:     the ProjectContext to activate
         :param visuals: if False, the plots and the plugins are not changed (used on exit)
+        :param check_busy: if False, the switch does not wait for the running tasks (used by abandon_open)
         :return:        True if ctx is now the active project
         """
         if ctx is self.active:
             return True
         if ctx not in self.contexts:
             return False
-        if self.is_busy():
+        if check_busy and self.is_busy():
             self.inform_busy()
             return False
 
@@ -329,13 +343,15 @@ class ProjectManager(QtCore.QObject):
             return filename
         return os.path.join(os.path.dirname(filename), ctx.name + PROJECT_EXT)
 
-    def adopt_filename(self, filename):
+    def adopt_filename(self, filename, keep_file=True):
         """
         The active project now uses this file: its name becomes the file name.
         Called after an open and after a Save As.
+
+        :param keep_file:   if False, only the name changes. The project has no file, so Save asks for a path.
         """
         ctx = self.active
-        ctx.filename = filename
+        ctx.filename = filename if keep_file else None
         used = [other.name for other in self.contexts if other is not ctx]
         ctx.name = unique_name(name_from_filename(filename), used)
         self.projects_changed.emit()
@@ -532,6 +548,7 @@ class ProjectManager(QtCore.QObject):
 
         :return:    True if the load must continue. False if the load must stop.
         """
+        self.last_created = None
         if self.is_busy():
             self.inform_busy()
             return False
@@ -551,7 +568,22 @@ class ProjectManager(QtCore.QObject):
         if not active.collection.get_list() and not self.app.project_filename and not self.app.should_we_save:
             return True
 
-        return self.new() is not None
+        self.last_created = self.new()
+        return self.last_created is not None
+
+    def abandon_open(self, created, previous):
+        """
+        A load failed: remove the project that prepare_open() added and make the previous project active again.
+        The switch does not wait for the running tasks: the task of the failed load can still count as running.
+
+        :return:    True if the previous project is active and the added project is removed
+        """
+        if created is None or created not in self.contexts or previous not in self.contexts or created is previous:
+            return False
+        if created is self.active and not self.switch(previous, check_busy=False):
+            return False
+        self._dispose(created)
+        return True
 
     def request_close(self, ctx):
         """

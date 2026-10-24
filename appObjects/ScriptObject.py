@@ -279,4 +279,6 @@ class ScriptObject(FlatCAMObj):
         :return: None
         """
         for attr in self.ser_attrs:
-            setattr(self, attr, d[attr])
+            # an older file may not have all the attributes
+            if attr in d:
+                setattr(self, attr, d[attr])
