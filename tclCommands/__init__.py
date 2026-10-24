@@ -16,6 +16,7 @@ import tclCommands.TclCommandAlignDrillGrid
 import tclCommands.TclCommandBbox
 import tclCommands.TclCommandBounds
 import tclCommands.TclCommandBuffer
+import tclCommands.TclCommandCheckRules
 import tclCommands.TclCommandClearShell
 import tclCommands.TclCommandCloseProject
 import tclCommands.TclCommandCncjob

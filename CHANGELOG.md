@@ -130,6 +130,32 @@ Copper Thieving Plugin:
 - the dots, the robber bar and the plating mask clearance use the app circle steps for the whole circle (before: 256 segments for each dot); the Circle Steps preference starts at 4
 - the panel and the Preferences show the units next to each length; the sizes and the robber bar thickness accept only values above 0; the robber bar margin is not negative; the Clearance and Margin in Preferences accept values above 99.99
 
+Check Rules Plugin:
+
+- fixed: the clearance and annular ring rules crashed with Shapely 2 on any layer with more than one polygon, and the user got no report and no message
+- fixed: an error in one rule no longer stops the other rules; the busy indicator always goes back to idle
+- fixed: each check makes one result document; before, each opening of the plugin or Reset added one more
+- fixed: the Solder Mask Sliver rule used the Silk to Silk checkbox; the Silk to Outline rule used the Copper to Outline value
+- fixed: the Annular Ring, Silk to Solder Mask, Copper to Outline and Silk to Outline rules check both the top and the bottom layers and both Excellon objects; before, one of them was skipped
+- fixed: Gerber clear (LPC) features are applied; before, most of the copper was not checked and touching copper was reported as a violation
+- fixed: a layer with one polygon shows PASSED, not FAILED; a rule with nothing to check says so
+- fixed: Trace Size uses the short side of rectangle and obround apertures and skips flashed pads
+- fixed: the check no longer reads the panel from the worker thread; the layers are prepared in the worker, so a big board does not freeze the GUI
+- the checks use a spatial index: a few seconds on a board with thousands of pads and holes (before: minutes)
+- new rules: Minimum Slot Width, Hole to Outline, Hole to Copper and Copper Gap vs Isolation Tool (off by default), also in Preferences
+- a results table lists each violation with layer, location, value and limit; a click on a row zooms to it; markers show the violations on the canvas
+- the report shows the limit, the measured values and the units; the results can be exported as CSV
+- rule presets (home etching, CNC milling, typical fab values) fill the rule values; a Cancel button stops a running check
+- the panel shows the units next to each value, each rule has its own tooltip, the Select All checkboxes follow their rules, and the Run button tooltip is fixed
+
+Tcl Commands:
+
+- new command check_rules runs the Check Rules checks from scripts and in headless mode, with an optional report document and CSV file
+
+Resources:
+
+- the Copper Clearing (NCC) icon is updated, light and dark themes
+
 Tests:
 
 - the test window of the title bar tests closes on Alt+F4 or from the taskbar; before, a window left by a stopped run stayed on the screen and could not be closed

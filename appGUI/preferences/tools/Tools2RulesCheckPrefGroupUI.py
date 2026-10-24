@@ -125,6 +125,28 @@ class Tools2RulesCheckPrefGroupUI(OptionsGroupUI):
         self.copper_grid.addWidget(self.ring_integrity_lbl, 14, 0)
         self.copper_grid.addWidget(self.ring_integrity_entry, 14, 1)
 
+        # Copper gap versus the isolation tool
+        self.iso_cb = FCCheckBox('%s:' % _("Copper gap vs isolation tool"))
+        self.iso_cb.setToolTip(
+            _("This checks if the gaps between copper features are wide\n"
+              "enough for the isolation tool to pass.")
+        )
+        self.copper_grid.addWidget(self.iso_cb, 16, 0, 1, 2)
+
+        # Isolation tool diameter
+        self.iso_lbl = FCLabel('%s:' % _("Value"))
+        self.iso_lbl.setToolTip(
+            _("Diameter of the isolation tool. Copper gaps narrower than this cannot be isolated.")
+        )
+
+        self.iso_entry = FCDoubleSpinner()
+        self.iso_entry.set_range(0.0000, 10000.0000)
+        self.iso_entry.set_precision(self.decimals)
+        self.iso_entry.setSingleStep(0.1)
+
+        self.copper_grid.addWidget(self.iso_lbl, 18, 0)
+        self.copper_grid.addWidget(self.iso_entry, 18, 1)
+
         # #############################################################################################################
         # Silk Frame
         # #############################################################################################################
@@ -293,5 +315,67 @@ class Tools2RulesCheckPrefGroupUI(OptionsGroupUI):
 
         self.holes_grid.addWidget(self.drill_size_lbl, 6, 0)
         self.holes_grid.addWidget(self.drill_size_entry, 6, 1)
+
+        # Minimum slot width
+        self.slot_size_cb = FCCheckBox('%s:' % _("Minimum Slot Width"))
+        self.slot_size_cb.setToolTip(
+            _("This checks if the width of the slots is above the threshold.")
+        )
+        self.holes_grid.addWidget(self.slot_size_cb, 8, 0, 1, 2)
+
+        self.slot_size_lbl = FCLabel('%s:' % _("Value"))
+        self.slot_size_lbl.setToolTip(
+            _("Minimum acceptable slot width (the tool diameter that cuts the slot).")
+        )
+
+        self.slot_size_entry = FCDoubleSpinner()
+        self.slot_size_entry.set_range(0.0000, 10000.0000)
+        self.slot_size_entry.set_precision(self.decimals)
+        self.slot_size_entry.setSingleStep(0.1)
+
+        self.holes_grid.addWidget(self.slot_size_lbl, 10, 0)
+        self.holes_grid.addWidget(self.slot_size_entry, 10, 1)
+
+        # Hole to outline clearance
+        self.hole2outline_cb = FCCheckBox('%s:' % _("Hole to Outline clearance"))
+        self.hole2outline_cb.setToolTip(
+            _("This checks if the minimum distance between a hole\n"
+              "and the board outline is met.")
+        )
+        self.holes_grid.addWidget(self.hole2outline_cb, 12, 0, 1, 2)
+
+        self.hole2outline_lbl = FCLabel('%s:' % _("Value"))
+        self.hole2outline_lbl.setToolTip(
+            _("Minimum acceptable distance between the edge of a hole and the board outline.")
+        )
+
+        self.hole2outline_entry = FCDoubleSpinner()
+        self.hole2outline_entry.set_range(0.0000, 10000.0000)
+        self.hole2outline_entry.set_precision(self.decimals)
+        self.hole2outline_entry.setSingleStep(0.1)
+
+        self.holes_grid.addWidget(self.hole2outline_lbl, 14, 0)
+        self.holes_grid.addWidget(self.hole2outline_entry, 14, 1)
+
+        # Hole to copper clearance
+        self.hole2copper_cb = FCCheckBox('%s:' % _("Hole to Copper clearance"))
+        self.hole2copper_cb.setToolTip(
+            _("This checks if the minimum distance between a hole\n"
+              "and copper that is not its own pad is met.")
+        )
+        self.holes_grid.addWidget(self.hole2copper_cb, 16, 0, 1, 2)
+
+        self.hole2copper_lbl = FCLabel('%s:' % _("Value"))
+        self.hole2copper_lbl.setToolTip(
+            _("Minimum acceptable distance between the edge of a hole and foreign copper.")
+        )
+
+        self.hole2copper_entry = FCDoubleSpinner()
+        self.hole2copper_entry.set_range(0.0000, 10000.0000)
+        self.hole2copper_entry.set_precision(self.decimals)
+        self.hole2copper_entry.setSingleStep(0.1)
+
+        self.holes_grid.addWidget(self.hole2copper_lbl, 18, 0)
+        self.holes_grid.addWidget(self.hole2copper_entry, 18, 1)
 
         self.layout.addStretch(1)

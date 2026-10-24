@@ -824,6 +824,14 @@ class AppDefaults:
         "tools_cr_h2h_val": 0.3,
         "tools_cr_dh": True,
         "tools_cr_dh_val": 0.3,
+        "tools_cr_slot": True,
+        "tools_cr_slot_val": 0.5,
+        "tools_cr_h2o": True,
+        "tools_cr_h2o_val": 0.5,
+        "tools_cr_h2c": True,
+        "tools_cr_h2c_val": 0.2,
+        "tools_cr_iso": False,
+        "tools_cr_iso_val": 0.1,
 
         # QRCode Tool
         "tools_qrcode_version": 1,

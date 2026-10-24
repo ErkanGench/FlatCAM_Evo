@@ -686,6 +686,14 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_cr_h2h_val": self.ui.plugin2_pref_form.tools2_checkrules_group.clearance_d2d_entry,
             "tools_cr_dh": self.ui.plugin2_pref_form.tools2_checkrules_group.drill_size_cb,
             "tools_cr_dh_val": self.ui.plugin2_pref_form.tools2_checkrules_group.drill_size_entry,
+            "tools_cr_slot": self.ui.plugin2_pref_form.tools2_checkrules_group.slot_size_cb,
+            "tools_cr_slot_val": self.ui.plugin2_pref_form.tools2_checkrules_group.slot_size_entry,
+            "tools_cr_h2o": self.ui.plugin2_pref_form.tools2_checkrules_group.hole2outline_cb,
+            "tools_cr_h2o_val": self.ui.plugin2_pref_form.tools2_checkrules_group.hole2outline_entry,
+            "tools_cr_h2c": self.ui.plugin2_pref_form.tools2_checkrules_group.hole2copper_cb,
+            "tools_cr_h2c_val": self.ui.plugin2_pref_form.tools2_checkrules_group.hole2copper_entry,
+            "tools_cr_iso": self.ui.plugin2_pref_form.tools2_checkrules_group.iso_cb,
+            "tools_cr_iso_val": self.ui.plugin2_pref_form.tools2_checkrules_group.iso_entry,
 
             # QRCode Tool
             "tools_qrcode_version": self.ui.plugin2_pref_form.tools2_qrcode_group.version_entry,
