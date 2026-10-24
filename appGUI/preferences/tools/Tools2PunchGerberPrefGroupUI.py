@@ -20,6 +20,7 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
 
         self.setTitle(str(_("Punch Gerber Options")))
         self.decimals = app.decimals
+        self.units = app.app_units.lower()
         self.options = app.options
 
         # #############################################################################################################
@@ -109,7 +110,8 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
               "- Excellon Object-> the Excellon object drills center will serve as reference.\n"
               "- Fixed Diameter -> will try to use the pads center as reference adding fixed diameter holes.\n"
               "- Fixed Annular Ring -> will try to keep a set annular ring.\n"
-              "- Proportional -> will make a Gerber punch hole having the diameter a percentage of the pad diameter.")
+              "- Proportional -> will make a Gerber punch hole having the diameter a percentage of the pad size\n"
+              "  (the diameter for circular pads, the smaller side for oblong and rectangular pads).")
         )
         met_grid.addWidget(self.hole_size_label, 9, 0)
         met_grid.addWidget(self.hole_size_radio, 9, 1)
@@ -138,6 +140,7 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
 
         fix_grid.addWidget(self.dia_label, 0, 0)
         fix_grid.addWidget(self.dia_entry, 0, 1)
+        fix_grid.addWidget(FCLabel("%s" % self.units), 0, 2)
 
         # #############################################################################################################
         # Annular ring Frame
@@ -168,6 +171,7 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
 
         ring_grid.addWidget(self.circular_ring_label, 0, 0)
         ring_grid.addWidget(self.circular_ring_entry, 0, 1)
+        ring_grid.addWidget(FCLabel("%s" % self.units), 0, 2)
 
         # Oblong Annular Ring Value
         self.oblong_ring_label = FCLabel('%s:' % _("Oblong"))
@@ -181,6 +185,7 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
 
         ring_grid.addWidget(self.oblong_ring_label, 2, 0)
         ring_grid.addWidget(self.oblong_ring_entry, 2, 1)
+        ring_grid.addWidget(FCLabel("%s" % self.units), 2, 2)
 
         # Square Annular Ring Value
         self.square_ring_label = FCLabel('%s:' % _("Square"))
@@ -194,6 +199,7 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
 
         ring_grid.addWidget(self.square_ring_label, 4, 0)
         ring_grid.addWidget(self.square_ring_entry, 4, 1)
+        ring_grid.addWidget(FCLabel("%s" % self.units), 4, 2)
 
         # Rectangular Annular Ring Value
         self.rectangular_ring_label = FCLabel('%s:' % _("Rectangular"))
@@ -207,6 +213,7 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
 
         ring_grid.addWidget(self.rectangular_ring_label, 6, 0)
         ring_grid.addWidget(self.rectangular_ring_entry, 6, 1)
+        ring_grid.addWidget(FCLabel("%s" % self.units), 6, 2)
 
         # Others Annular Ring Value
         self.other_ring_label = FCLabel('%s:' % _("Others"))
@@ -220,6 +227,7 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
 
         ring_grid.addWidget(self.other_ring_label, 8, 0)
         ring_grid.addWidget(self.other_ring_entry, 8, 1)
+        ring_grid.addWidget(FCLabel("%s" % self.units), 8, 2)
 
         # #############################################################################################################
         # Proportional Diameter Frame
@@ -236,13 +244,14 @@ class Tools2PunchGerberPrefGroupUI(OptionsGroupUI):
         # Factor value
         self.factor_entry = FCDoubleSpinner(suffix='%')
         self.factor_entry.set_precision(self.decimals)
-        self.factor_entry.set_range(0.0000, 100.0000)
+        self.factor_entry.set_range(1.0000, 99.0000)
         self.factor_entry.setSingleStep(0.1)
 
         self.factor_label = FCLabel('%s:' % _("Factor"))
         self.factor_label.setToolTip(
             _("Proportional Diameter.\n"
-              "The hole diameter will be a fraction of the pad size.")
+              "The hole diameter will be a percentage of the pad size:\n"
+              "the diameter for circular pads, the smaller side for oblong and rectangular pads.")
         )
 
         prop_grid.addWidget(self.factor_label, 0, 0)

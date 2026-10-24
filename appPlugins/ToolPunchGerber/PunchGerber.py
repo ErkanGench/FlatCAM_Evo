@@ -65,6 +65,8 @@ class ToolPunchGerber(Geometry, AppTool):
             grb_obj = model_index.internalPointer().obj
         except Exception:
             return
+        if not self.poly_sel_disconnect_flag:
+            self._clear_manual_selection()
         if self.old_name != '':
             old_obj = self.app.collection.get_by_name(self.old_name)
             if old_obj:
@@ -82,12 +84,13 @@ class ToolPunchGerber(Geometry, AppTool):
         if toggle:
             if self.app.ui.splitter.sizes()[0] == 0:
                 self.app.ui.splitter.setSizes([1, 1])
-            found_idx = None
-            for idx in range(self.app.ui.notebook.count()):
-                if self.app.ui.notebook.widget(idx).objectName() == "plugin_tab":
-                    found_idx = idx
-                    break
-            if not found_idx:
+            try:
+                found_idx = self.app.ui.notebook.indexOf(self.app.ui.plugin_tab)
+            except RuntimeError:
+                found_idx = -1
+            if found_idx < 0:
+                found_idx = None
+            if found_idx is None:
                 try:
                     self.app.ui.notebook.addTab(self.app.ui.plugin_tab, _("Plugin"))
                 except RuntimeError:
@@ -100,12 +103,12 @@ class ToolPunchGerber(Geometry, AppTool):
                     self.app.ui.notebook.addTab(self.app.ui.plugin_tab, _("Plugin"))
                 self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
             try:
-                if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName and found_idx:
+                if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName and found_idx is not None:
                     if not self.app.ui.notebook.currentWidget() is self.app.ui.plugin_tab:
                         self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
                     else:
                         self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
-                        self.app.ui.notebook.removeTab(2)
+                        self.app.ui.notebook.removeTab(found_idx)
                         if not self.app.collection.get_list():
                             self.app.ui.splitter.setSizes([0, 1])
             except AttributeError:
@@ -124,7 +127,7 @@ class ToolPunchGerber(Geometry, AppTool):
     def connect_signals_at_init(self):
         self.ui.level.toggled.connect(self.on_level_changed)
         self.ui.method_punch.activated_custom.connect(self.on_method)
-        self.ui.reset_button.clicked.connect(self.set_tool_ui)
+        self.ui.reset_button.clicked.connect(lambda: QtCore.QTimer.singleShot(0, self.set_tool_ui))
         self.ui.punch_object_button.clicked.connect(self.on_punch_object_click)
         self.ui.circular_cb.stateChanged.connect(self.build_tool_ui)
         self.ui.oblong_cb.stateChanged.connect(self.build_tool_ui)
@@ -137,6 +140,10 @@ class ToolPunchGerber(Geometry, AppTool):
         self.ui.clear_all_btn.clicked.connect(self.on_manual_clear_all)
 
     def set_tool_ui(self):
+        if self.poly_sel_disconnect_flag:
+            self._end_manual_selection()
+        else:
+            self._clear_manual_selection()
         self.clear_ui(self.layout)
         self.ui = PunchUI(layout=self.layout, app=self.app)
         self.add_object_creation_controls()
@@ -190,17 +197,17 @@ class ToolPunchGerber(Geometry, AppTool):
         self.old_selection_status = None
         self.manual_pads = []
         obj = self.app.collection.get_active()
-        if obj:
-            if obj.kind == 'gerber':
-                self.ui.gerber_object_combo.set_value(obj.obj_options['name'])
-        else:
+        if not obj or obj.kind != 'gerber':
             available_gerber_list = [o for o in self.app.collection.get_list() if o.kind == 'gerber']
-            if available_gerber_list:
-                self.ui.gerber_object_combo.set_value(available_gerber_list[0].obj_options['name'])
+            obj = available_gerber_list[0] if available_gerber_list else None
+        if obj:
+            self.ui.gerber_object_combo.set_value(obj.obj_options['name'])
         app_mode = self.app.options.get(
             "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
-        self.app.ui.notebook.setTabText(2, _("Punch Gerber"))
+        plugin_idx = self.app.ui.notebook.indexOf(self.app.ui.plugin_tab)
+        if plugin_idx >= 0:
+            self.app.ui.notebook.setTabText(plugin_idx, _("Punch Gerber"))
 
     def build_tool_ui(self):
         self.ui_disconnect()
@@ -232,20 +239,18 @@ class ToolPunchGerber(Geometry, AppTool):
 
     def on_select_all(self, state):
         self.ui_disconnect()
-        self.ui.circular_cb.setChecked(bool(state))
-        self.ui.oblong_cb.setChecked(bool(state))
-        self.ui.square_cb.setChecked(bool(state))
-        self.ui.rectangular_cb.setChecked(bool(state))
-        self.ui.other_cb.setChecked(bool(state))
-        if not state:
-            selection_index = self.ui.gerber_object_combo.currentIndex()
-            model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-            try:
-                grb_obj = model_index.internalPointer().obj
-            except Exception:
-                return
-            grb_obj.clear_plot_apertures()
-        self.ui_connect()
+        try:
+            self.ui.circular_cb.setChecked(bool(state))
+            self.ui.oblong_cb.setChecked(bool(state))
+            self.ui.square_cb.setChecked(bool(state))
+            self.ui.rectangular_cb.setChecked(bool(state))
+            self.ui.other_cb.setChecked(bool(state))
+            if not state:
+                grb_obj = self._selected_gerber()
+                if grb_obj is not None:
+                    grb_obj.clear_plot_apertures()
+        finally:
+            self.ui_connect()
 
     def on_method(self, val):
         self.ui.on_method(val)
@@ -254,6 +259,10 @@ class ToolPunchGerber(Geometry, AppTool):
         self.ui.on_punch_type(val)
 
     def ui_connect(self):
+        try:
+            self.ui.select_all_cb.stateChanged.disconnect(self.on_select_all)
+        except (AttributeError, TypeError):
+            pass
         self.ui.select_all_cb.stateChanged.connect(self.on_select_all)
         for row in range(self.ui.apertures_table.rowCount()):
             try:
@@ -316,6 +325,8 @@ class ToolPunchGerber(Geometry, AppTool):
                 except Exception:
                     self.app.inform.emit('[ERROR_NOTCL] %s' % _("There is no Excellon object loaded ..."))
                     return
+            if self.poly_sel_disconnect_flag:
+                self._end_manual_selection()
             if self.app.ui.grid_snap_btn.isChecked():
                 self.grid_status_memory = True
                 self.app.ui.grid_snap_btn.trigger()
@@ -334,6 +345,7 @@ class ToolPunchGerber(Geometry, AppTool):
             self.app.options['global_selection_shape'] = False
 
     def _generate_punched_object(self, grb_obj, outname, method, manual=False):
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         exc_obj = None
         if method == 'exc':
             selection_index = self.ui.exc_combo.currentIndex()
@@ -358,6 +370,9 @@ class ToolPunchGerber(Geometry, AppTool):
         selected = [int(it.text()) for it in self.ui.apertures_table.selectedItems()]
         enabled = (self.ui.circular_cb.get_value(), self.ui.oblong_cb.get_value(), self.ui.square_cb.get_value(),
                    self.ui.rectangular_cb.get_value(), self.ui.other_cb.get_value())
+        steps = self.app.options.get(
+            "geometry_circle_steps", app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get(
+                "geometry_circle_steps")))
         new_options = {}
         for opt in grb_obj.obj_options:
             new_options[opt] = deepcopy(grb_obj.obj_options[opt])
@@ -366,16 +381,19 @@ class ToolPunchGerber(Geometry, AppTool):
                 grb_obj.solid_geometry, grb_obj.tools, selected, method, value, self.decimals, enabled,
                 manual_pads=self.manual_pads if manual else None,
                 drill_geometry=exc_obj.solid_geometry if exc_obj is not None else None,
-                drill_tools=exc_obj.tools if exc_obj is not None else None)
+                drill_tools=exc_obj.tools if exc_obj is not None else None, steps=steps)
         except ValueError as error:
-            if method != 'fixed':
-                raise
-            if str(error) == 'unchanged':
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
-                    "Failed. The new object geometry is the same as the one in the source object geometry..."))
-            elif str(error) == 'size':
+            code = error.args[0] if error.args else None
+            if code == 'nothing':
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed. No pad was punched."))
+            elif code == 'size':
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _(
                     "Failed. Punch hole size is bigger than some of the apertures in the Gerber object."))
+            elif code == 'zero':
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    "Failed. The hole size is zero. Change the ring or the factor."))
+            elif code == 'empty':
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Failed. The Gerber object has no apertures."))
             else:
                 raise
             return 'fail'
@@ -456,72 +474,50 @@ class ToolPunchGerber(Geometry, AppTool):
         curr_pos = self.app.plotcanvas.translate_coords(event_pos)
         if event.button == 1:
             pads = self.find_pad(point=(curr_pos[0], curr_pos[1]))
-
-            def test_pad(a, b):
-                return True if a['apid'] == b['apid'] and a['idx'] == b['idx'] else False
-
-            if self.manual_pads:
-                tmp_lst = deepcopy(self.manual_pads)
-                tmp_pads = deepcopy(pads)
-                for old_pad in self.manual_pads:
-                    for pad in pads:
-                        if test_pad(old_pad, pad):
-                            tmp_lst.remove(old_pad)
-                            tmp_pads.remove(pad)
-                self.manual_pads = [x for x in tmp_lst if x is not None] + tmp_pads
-            else:
-                self.manual_pads += pads
-            if self.manual_pads:
-                for el in pads:
-                    apid = el['apid']
-                    idx = el['idx']
-                    clicked_poly = self.grb_obj.tools[apid]['geometry'][idx]['solid']
+            if not pads:
+                self.app.inform.emit(_("No pad detected under click position."))
+                return
+            sel_color = self.app.options.get(
+                'global_sel_draw_color', app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get(
+                    'global_sel_draw_color')))
+            if len(sel_color) == 7:
+                sel_color += 'FF'
+            for el in pads:
+                apid = el['apid']
+                idx = el['idx']
+                clicked_poly = self.grb_obj.tools[apid]['geometry'][idx]['solid']
+                already = [p for p in self.manual_pads if p['apid'] == apid and p['idx'] == idx]
+                if not already:
+                    self.manual_pads.append({'apid': apid, 'idx': idx})
                     if clicked_poly not in self.poly_dict.values():
                         shape_id = self.app.tool_shapes.add(
                             tolerance=self.grb_obj.drawing_tolerance, layer=0, shape=clicked_poly,
-                            color=self.app.options.get(
-                                'global_sel_draw_color', app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get(
-                                    'global_sel_draw_color'))) + 'FF',
-                            face_color=self.app.options.get(
-                                'global_sel_draw_color', app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get(
-                                    'global_sel_draw_color'))) + 'FF', visible=True)
+                            color=sel_color, face_color=sel_color, visible=True)
                         self.poly_dict[shape_id] = clicked_poly
-                        self.app.inform.emit(
-                            '%s: %d. %s' % (_("Added pad"), int(len(self.poly_dict)),
-                                            _("Click to add next pad or right click to start.")))
-                    else:
-                        try:
-                            for k, v in list(self.poly_dict.items()):
-                                if v == clicked_poly:
-                                    self.app.tool_shapes.remove(k)
-                                    self.poly_dict.pop(k)
-                                    break
-                        except TypeError:
-                            return
-                        self.app.inform.emit(
-                            '%s. %s' % (_("Removed pad"),
-                                        _("Click to add/remove next pad or right click to start.")))
-                    self.app.tool_shapes.redraw()
-            else:
-                self.app.inform.emit(_("No pad detected under click position."))
+                    self.app.inform.emit(
+                        '%s: %d. %s' % (_("Added pad"), int(len(self.manual_pads)),
+                                        _("Click to add next pad or right click to start.")))
+                else:
+                    for old_pad in already:
+                        self.manual_pads.remove(old_pad)
+                    for k, v in list(self.poly_dict.items()):
+                        if v == clicked_poly:
+                            self.app.tool_shapes.remove(k)
+                            self.poly_dict.pop(k)
+                            break
+                    self.app.inform.emit(
+                        '%s. %s' % (_("Removed pad"),
+                                    _("Click to add/remove next pad or right click to start.")))
+            self.app.tool_shapes.redraw()
         elif event.button == right_button and event_is_dragging is False:
-            if self.grid_status_memory is True:
-                self.app.ui.grid_snap_btn.trigger()
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_single_poly_mouse_release)
-            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
-            self.poly_sel_disconnect_flag = False
-            self.app.options['global_selection_shape'] = self.old_selection_status
-            self.app.tool_shapes.clear(update=True)
-            self.on_manual_punch()
-            self.clear_aperture_marking()
-            self.app.ui.notebook.setDisabled(False)
-            self.manual_pads = []
-            if self.poly_dict:
-                self.poly_dict.clear()
-            else:
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("List of single polygons is empty. Aborting."))
+            try:
+                if self.manual_pads:
+                    self.on_manual_punch()
+                else:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("List of single polygons is empty. Aborting."))
+            finally:
+                self._end_manual_selection()
+                self.clear_aperture_marking()
 
     def on_key_press(self, event):
         if type(event) is int:
@@ -531,22 +527,7 @@ class ToolPunchGerber(Geometry, AppTool):
         else:
             key = event.key
         if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
-            if self.poly_sel_disconnect_flag is True:
-                try:
-                    if self.grid_status_memory is True:
-                        self.app.ui.grid_snap_btn.trigger()
-                    self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_single_poly_mouse_release)
-                    self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-                    self.app.tool_shapes.clear(update=True)
-                except Exception as e:
-                    self.app.log.error("ToolPaint.on_key_press() _2 --> %s" % str(e))
-                self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
-                self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-                self.poly_sel_disconnect_flag = False
-                if self.old_selection_status is not None:
-                    self.app.options['global_selection_shape'] = self.old_selection_status
-            self.app.ui.notebook.setDisabled(False)
-            self.poly_dict.clear()
+            self._end_manual_selection()
             self.clear_aperture_marking()
             self.delete_moving_selection_shape()
             self.delete_tool_selection_shape()
@@ -595,47 +576,102 @@ class ToolPunchGerber(Geometry, AppTool):
         sel_apid = []
         for it in self.ui.apertures_table.selectedItems():
             sel_apid.append(int(it.text()))
-        self.manual_pads = []
+        sel_color_pref = self.app.options.get(
+            'global_sel_draw_color', app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get(
+                'global_sel_draw_color')))
+        sel_color = sel_color_pref + 'FF' if len(sel_color_pref) == 7 else sel_color_pref
+        # keep the pads that are already selected, add the others: every selectable pad is in the list once
+        known = {(pad['apid'], pad['idx']) for pad in self.manual_pads}
         for apid, apid_value in self.grb_obj.tools.items():
-            if apid in sel_apid:
-                for idx, elem in enumerate(apid_value['geometry']):
-                    if 'follow' in elem and isinstance(elem['follow'], Point):
-                        if 'solid' in elem:
-                            sol_geo = elem['solid']
-                            if sol_geo not in self.poly_dict.values():
-                                self.manual_pads.append({'apid': apid, 'idx': idx})
-                                sel_color_pref = self.app.options.get(
-                                    'global_sel_draw_color', app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get(
-                                        'global_sel_draw_color')))
-                                sel_color = sel_color_pref + 'FF' if len(sel_color_pref) == 7 else sel_color_pref
-                                shape_id = self.app.tool_shapes.add(
-                                    tolerance=self.grb_obj.drawing_tolerance, layer=0, shape=sol_geo,
-                                    color=sel_color, face_color=sel_color, visible=True)
-                                self.poly_dict[shape_id] = sol_geo
+            if apid not in sel_apid:
+                continue
+            for idx, elem in enumerate(apid_value['geometry']):
+                if 'follow' in elem and isinstance(elem['follow'], Point) and 'solid' in elem:
+                    if (apid, idx) in known:
+                        continue
+                    known.add((apid, idx))
+                    self.manual_pads.append({'apid': apid, 'idx': idx})
+                    sol_geo = elem['solid']
+                    if sol_geo not in self.poly_dict.values():
+                        shape_id = self.app.tool_shapes.add(
+                            tolerance=self.grb_obj.drawing_tolerance, layer=0, shape=sol_geo,
+                            color=sel_color, face_color=sel_color, visible=True)
+                        self.poly_dict[shape_id] = sol_geo
         self.app.tool_shapes.redraw()
         self.app.inform.emit(_("All selectable pads are selected."))
 
     def on_manual_clear_all(self):
         if self.ui.punch_type_radio.get_value() != 'm':
             return
-        try:
-            for k in list(self.poly_dict.keys()):
-                self.app.tool_shapes.remove(k)
-            self.poly_dict.clear()
-        except TypeError:
-            return
-        self.manual_pads = []
-        self.poly_dict.clear()
-        self.app.tool_shapes.redraw()
+        self._clear_manual_selection()
         self.app.inform.emit(_("Selection cleared."))
+
+    def _clear_manual_selection(self):
+        """Forget the selected pads and remove their highlight."""
+        if self.poly_dict or self.manual_pads:
+            try:
+                self.app.tool_shapes.clear(update=True)
+            except Exception as e:
+                log.error("ToolPunchGerber._clear_manual_selection() --> %s" % str(e))
+        self.poly_dict.clear()
+        self.manual_pads = []
+
+    def _end_manual_selection(self):
+        """
+        The one exit of the manual (click) mode: give back the canvas handlers, the grid snap, the selection shape
+        option and the notebook, and forget the selected pads.
+        """
+        owns_shapes = self.poly_sel_disconnect_flag or bool(self.poly_dict) or bool(self.manual_pads)
+        if self.poly_sel_disconnect_flag:
+            for event, handler in (('mouse_release', self.on_single_poly_mouse_release),
+                                   ('key_press', self.on_key_press)):
+                try:
+                    self.app.plotcanvas.graph_event_disconnect(event, handler)
+                except Exception as e:
+                    log.error("ToolPunchGerber._end_manual_selection() --> %s" % str(e))
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+            if self.grid_status_memory is True:
+                self.app.ui.grid_snap_btn.trigger()
+            self.grid_status_memory = False
+            self.poly_sel_disconnect_flag = False
+            self.app.ui.notebook.setDisabled(False)
+        if self.old_selection_status is not None:
+            self.app.options['global_selection_shape'] = self.old_selection_status
+            self.old_selection_status = None
+        if owns_shapes:
+            # tool_shapes is shared by the app: clear it only when this plugin drew in it
+            self.app.tool_shapes.clear(update=True)
+        self.poly_dict.clear()
+        self.manual_pads = []
+
+    def _selected_gerber(self):
+        """The Gerber object selected in the combo, None if there is none."""
+        try:
+            selection_index = self.ui.gerber_object_combo.currentIndex()
+            model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
+            return model_index.internalPointer().obj
+        except Exception:
+            return None
 
     def clear_aperture_marking(self):
         for row in range(self.ui.apertures_table.rowCount()):
             wdg = self.ui.apertures_table.cellWidget(row, 3)
             assert isinstance(wdg, FCCheckBox)
             wdg.set_value(False)
+        # set_value() does not emit clicked, so the overlays are removed here
+        obj = self._selected_gerber() or self.grb_obj
+        if obj is not None:
+            obj.clear_plot_apertures()
 
     def on_plugin_cleanup(self):
+        self._end_manual_selection()
+        if self.old_name != '':
+            old_obj = self.app.collection.get_by_name(self.old_name)
+            if old_obj:
+                old_obj.clear_plot_apertures()
+                old_obj.mark_shapes.enabled = False
+            self.old_name = ''
         self.reset_fields()
 
     def reset_fields(self):

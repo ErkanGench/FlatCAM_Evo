@@ -18,6 +18,7 @@ class PunchUI:
     def __init__(self, layout, app):
         self.app = app
         self.decimals = self.app.decimals
+        self.units = self.app.app_units.lower()
         self.layout = layout
         self.tools_frame = QtWidgets.QFrame()
         self.tools_frame.setContentsMargins(0, 0, 0, 0)
@@ -101,7 +102,8 @@ class PunchUI:
               "- Excellon Object-> the Excellon object drills center will serve as reference.\n"
               "- Fixed Diameter -> will try to use the pads center as reference adding fixed diameter holes.\n"
               "- Fixed Annular Ring -> will try to keep a set annular ring.\n"
-              "- Proportional -> will make a Gerber punch hole having the diameter a percentage of the pad diameter."))
+              "- Proportional -> will make a Gerber punch hole having the diameter a percentage of the pad size\n"
+              "  (the diameter for circular pads, the smaller side for oblong and rectangular pads)."))
         self.tools_box.addWidget(self.method_label)
         m_frame = FCFrame()
         self.tools_box.addWidget(m_frame)
@@ -128,76 +130,92 @@ class PunchUI:
         self.exc_combo.obj_type = "Excellon"
         grid1.addWidget(self.exc_label, 4, 0, 1, 2)
         grid1.addWidget(self.exc_combo, 6, 0, 1, 2)
+        # Fixed Diameter section
         self.fixed_label = FCLabel('%s' % _("Fixed Diameter"), bold=True)
-        grid1.addWidget(self.fixed_label, 8, 0, 1, 2)
+        self.tools_box.addWidget(self.fixed_label)
+        self.fixed_frame = FCFrame()
+        self.tools_box.addWidget(self.fixed_frame)
+        fix_grid = GLay(v_spacing=5, h_spacing=3)
+        self.fixed_frame.setLayout(fix_grid)
         self.dia_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.dia_entry.set_precision(self.decimals)
         self.dia_entry.set_range(0.0000, 10000.0000)
         self.dia_label = FCLabel('%s:' % _("Value"))
         self.dia_label.setToolTip(_("Fixed hole diameter."))
-        grid1.addWidget(self.dia_label, 10, 0)
-        grid1.addWidget(self.dia_entry, 10, 1)
-        self.ring_frame = QtWidgets.QFrame()
-        self.ring_frame.setContentsMargins(0, 0, 0, 0)
-        grid1.addWidget(self.ring_frame, 12, 0, 1, 2)
-        self.ring_box = QtWidgets.QVBoxLayout()
-        self.ring_box.setContentsMargins(0, 0, 0, 0)
-        self.ring_frame.setLayout(self.ring_box)
+        fix_grid.addWidget(self.dia_label, 0, 0)
+        fix_grid.addWidget(self.dia_entry, 0, 1)
+        fix_grid.addWidget(FCLabel("%s" % self.units), 0, 2)
+
+        # Fixed Annular Ring section
         self.ring_label = FCLabel('%s' % _("Fixed Annular Ring"), bold=True)
         self.ring_label.setToolTip(
             _("The size of annular ring.\n"
               "The copper sliver between the hole exterior\n"
               "and the margin of the copper pad."))
-        self.ring_box.addWidget(self.ring_label)
+        self.tools_box.addWidget(self.ring_label)
+        self.ring_frame = FCFrame()
+        self.tools_box.addWidget(self.ring_frame)
         self.grid1 = GLay(v_spacing=5, h_spacing=3)
-        self.ring_box.addLayout(self.grid1)
+        self.ring_frame.setLayout(self.grid1)
         self.circular_ring_label = FCLabel('%s:' % _("Circular"))
         self.circular_ring_label.setToolTip(_("The size of annular ring for circular pads."))
         self.circular_ring_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.circular_ring_entry.set_precision(self.decimals)
         self.circular_ring_entry.set_range(0.0000, 10000.0000)
-        self.grid1.addWidget(self.circular_ring_label, 3, 0)
-        self.grid1.addWidget(self.circular_ring_entry, 3, 1)
+        self.grid1.addWidget(self.circular_ring_label, 0, 0)
+        self.grid1.addWidget(self.circular_ring_entry, 0, 1)
+        self.grid1.addWidget(FCLabel("%s" % self.units), 0, 2)
         self.oblong_ring_label = FCLabel('%s:' % _("Oblong"))
         self.oblong_ring_label.setToolTip(_("The size of annular ring for oblong pads."))
         self.oblong_ring_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.oblong_ring_entry.set_precision(self.decimals)
         self.oblong_ring_entry.set_range(0.0000, 10000.0000)
-        self.grid1.addWidget(self.oblong_ring_label, 4, 0)
-        self.grid1.addWidget(self.oblong_ring_entry, 4, 1)
+        self.grid1.addWidget(self.oblong_ring_label, 1, 0)
+        self.grid1.addWidget(self.oblong_ring_entry, 1, 1)
+        self.grid1.addWidget(FCLabel("%s" % self.units), 1, 2)
         self.square_ring_label = FCLabel('%s:' % _("Square"))
         self.square_ring_label.setToolTip(_("The size of annular ring for square pads."))
         self.square_ring_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.square_ring_entry.set_precision(self.decimals)
         self.square_ring_entry.set_range(0.0000, 10000.0000)
-        self.grid1.addWidget(self.square_ring_label, 5, 0)
-        self.grid1.addWidget(self.square_ring_entry, 5, 1)
+        self.grid1.addWidget(self.square_ring_label, 2, 0)
+        self.grid1.addWidget(self.square_ring_entry, 2, 1)
+        self.grid1.addWidget(FCLabel("%s" % self.units), 2, 2)
         self.rectangular_ring_label = FCLabel('%s:' % _("Rectangular"))
         self.rectangular_ring_label.setToolTip(_("The size of annular ring for rectangular pads."))
         self.rectangular_ring_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.rectangular_ring_entry.set_precision(self.decimals)
         self.rectangular_ring_entry.set_range(0.0000, 10000.0000)
-        self.grid1.addWidget(self.rectangular_ring_label, 6, 0)
-        self.grid1.addWidget(self.rectangular_ring_entry, 6, 1)
+        self.grid1.addWidget(self.rectangular_ring_label, 3, 0)
+        self.grid1.addWidget(self.rectangular_ring_entry, 3, 1)
+        self.grid1.addWidget(FCLabel("%s" % self.units), 3, 2)
         self.other_ring_label = FCLabel('%s:' % _("Others"))
         self.other_ring_label.setToolTip(_("The size of annular ring for other pads."))
         self.other_ring_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.other_ring_entry.set_precision(self.decimals)
         self.other_ring_entry.set_range(0.0000, 10000.0000)
-        self.grid1.addWidget(self.other_ring_label, 7, 0)
-        self.grid1.addWidget(self.other_ring_entry, 7, 1)
+        self.grid1.addWidget(self.other_ring_label, 4, 0)
+        self.grid1.addWidget(self.other_ring_entry, 4, 1)
+        self.grid1.addWidget(FCLabel("%s" % self.units), 4, 2)
+
+        # Proportional section
         self.prop_label = FCLabel('%s' % _("Proportional Diameter"), bold=True)
-        grid1.addWidget(self.prop_label, 14, 0, 1, 2)
+        self.tools_box.addWidget(self.prop_label)
+        self.prop_frame = FCFrame()
+        self.tools_box.addWidget(self.prop_frame)
+        prop_grid = GLay(v_spacing=5, h_spacing=3)
+        self.prop_frame.setLayout(prop_grid)
         self.factor_entry = FCDoubleSpinner(callback=self.confirmation_message, suffix='%')
         self.factor_entry.set_precision(self.decimals)
-        self.factor_entry.set_range(0.0000, 100.0000)
+        self.factor_entry.set_range(1.0000, 99.0000)
         self.factor_entry.setSingleStep(0.1)
         self.factor_label = FCLabel('%s:' % _("Value"))
         self.factor_label.setToolTip(
             _("Proportional Diameter.\n"
-              "The hole diameter will be a fraction of the pad size."))
-        grid1.addWidget(self.factor_label, 16, 0)
-        grid1.addWidget(self.factor_entry, 16, 1)
+              "The hole diameter will be a percentage of the pad size:\n"
+              "the diameter for circular pads, the smaller side for oblong and rectangular pads."))
+        prop_grid.addWidget(self.factor_label, 0, 0)
+        prop_grid.addWidget(self.factor_entry, 0, 1)
         self.sel_label = FCLabel('%s' % _("Selection"), color='green', bold=True)
         self.tools_box.addWidget(self.sel_label)
         self.s_frame = FCFrame()
@@ -228,8 +246,7 @@ class PunchUI:
         self.punch_object_button = FCButton(_("Punch Gerber"), bold=True)
         self.punch_object_button.setIcon(QtGui.QIcon(self.app.resource_location + '/punch32.png'))
         self.punch_object_button.setToolTip(
-            _("Create a Gerber object from the selected object, within\n"
-              "the specified box."))
+            _("Create a new Gerber object with holes punched in the selected pads."))
         self.tools_box.addWidget(self.punch_object_button)
         self.layout.addStretch(1)
         self.reset_button = FCButton(_("Reset Tool"), bold=True)
@@ -275,12 +292,16 @@ class PunchUI:
             ap_type_item = QtWidgets.QTableWidgetItem(str(tools[ap_code]['type']))
             ap_type_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
             try:
-                if tools[ap_code]['size'] is not None:
+                if ap_type in ('R', 'O'):
+                    w_val = self.app.dec_format(float(tools[ap_code]['width']), self.decimals)
+                    h_val = self.app.dec_format(float(tools[ap_code]['height']), self.decimals)
+                    ap_size_item = QtWidgets.QTableWidgetItem('%sx%s' % (w_val, h_val))
+                elif tools[ap_code]['size'] is not None:
                     size_val = self.app.dec_format(float(tools[ap_code]['size']), self.decimals)
                     ap_size_item = QtWidgets.QTableWidgetItem(str(size_val))
                 else:
                     ap_size_item = QtWidgets.QTableWidgetItem('')
-            except KeyError:
+            except (KeyError, TypeError, ValueError):
                 ap_size_item = QtWidgets.QTableWidgetItem('')
             ap_size_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
             mark_item = FCCheckBox()
@@ -324,10 +345,13 @@ class PunchUI:
         self.exc_label.hide()
         self.exc_combo.hide()
         self.fixed_label.hide()
+        self.fixed_frame.hide()
         self.dia_label.hide()
         self.dia_entry.hide()
+        self.ring_label.hide()
         self.ring_frame.hide()
         self.prop_label.hide()
+        self.prop_frame.hide()
         self.factor_label.hide()
         self.factor_entry.hide()
         if val == 'exc':
@@ -335,12 +359,15 @@ class PunchUI:
             self.exc_combo.show()
         elif val == 'fixed':
             self.fixed_label.show()
+            self.fixed_frame.show()
             self.dia_label.show()
             self.dia_entry.show()
         elif val == 'ring':
+            self.ring_label.show()
             self.ring_frame.show()
         elif val == 'prop':
             self.prop_label.show()
+            self.prop_frame.show()
             self.factor_label.show()
             self.factor_entry.show()
 
