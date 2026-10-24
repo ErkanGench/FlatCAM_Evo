@@ -182,3 +182,40 @@ def test_cncjob_area_exclusion_is_a_setting_of_the_tools_not_a_change_of_the_pro
                                   kw['tools_dict'][7]['data']['tools_mill_area_exclusion']))
     TclCommandCncjob(app).execute({'name': 'g', 'area_exclusion': '0'}, [])
     assert seen == [(['area'], False)]
+
+
+def etch_source():
+    geo = box(0, 0, 10, 10)
+    return SimpleNamespace(kind='gerber', obj_options={'name': 'cu', 'units': 'MM'}, solid_geometry=[geo],
+                           tools={10: {'type': 'C', 'size': 1.0, 'geometry': [{'solid': geo, 'follow': geo.exterior}]}})
+
+
+def run_etch(args):
+    from tclCommands.TclCommandEtchCompensate import TclCommandEtchCompensate
+    source = etch_source()
+    app = factory_app(source)
+    TclCommandEtchCompensate(app).execute({'name': 'cu', **args}, [])
+    return app, source
+
+
+def test_etch_compensate_creates_the_output_with_the_grown_copper():
+    app, source = run_etch({'thickness': 30, 'mode': 'factor', 'factor': 3})  # 10 um lateral
+    kind, name, init = app.app_obj.new_object.call_args[0]
+    assert (kind, name) == ('gerber', 'cu_comp') and app.app_obj.new_object.call_args[1]['plot'] is False
+    new = Mock()
+    new.obj_options = {}
+    init(new, app)
+    area = sum(p.area for p in new.solid_geometry)
+    assert 100 + 4 * 10 * 0.01 < area < 100 + 4 * 10 * 0.01 + 0.01
+    assert new.tools[10]['size'] == pytest.approx(1.02)
+    assert source.solid_geometry[0].area == 100
+
+
+@pytest.mark.parametrize('args', [{'mode': 'etchant', 'etchant': 'nope'}, {'mode': 'factor', 'factor': 0},
+                                  {'mode': 'manual', 'offset': 0}, {'mode': 'bad'}])
+def test_etch_compensate_bad_input_is_a_tcl_error_and_creates_nothing(args):
+    from tclCommands.TclCommandEtchCompensate import TclCommandEtchCompensate
+    app = factory_app(etch_source())
+    with pytest.raises(FCShell.TclErrorException):
+        TclCommandEtchCompensate(app).execute({'name': 'cu', **args}, [])
+    app.app_obj.new_object.assert_not_called()

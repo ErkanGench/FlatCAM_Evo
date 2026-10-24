@@ -806,6 +806,14 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_invert_margin": self.ui.plugin2_pref_form.tools2_invert_group.margin_entry,
             "tools_invert_join_style": self.ui.plugin2_pref_form.tools2_invert_group.join_radio,
 
+            # Etch Compensation Tool
+            "tools_etch_thickness": self.ui.plugin2_pref_form.tools2_etch_group.thickness_entry,
+            "tools_etch_ratio": self.ui.plugin2_pref_form.tools2_etch_group.ratio_radio,
+            "tools_etch_factor": self.ui.plugin2_pref_form.tools2_etch_group.factor_entry,
+            "tools_etch_etchant": self.ui.plugin2_pref_form.tools2_etch_group.etchant_combo,
+            "tools_etch_offset": self.ui.plugin2_pref_form.tools2_etch_group.offset_entry,
+            "tools_etch_suffix": self.ui.plugin2_pref_form.tools2_etch_group.suffix_entry,
+
             # Utilities
             # File associations
             "fa_excellon": self.ui.util_pref_form.fa_excellon_group.exc_list_text,

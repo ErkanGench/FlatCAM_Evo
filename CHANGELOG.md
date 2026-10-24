@@ -12,6 +12,25 @@ Release:
 
 - version 1.0 of 2026/10/24 is no longer marked as beta
 
+Etch Compensation:
+
+- fixed: the lateral offset was thickness x etch factor; it is now thickness / etch factor (etch factor = depth etch / lateral etch); the Etchants list had the same error
+- fixed: the offset ignored the app units; in an IN project it was about 25 times too large
+- fixed: the aperture size, width and height grew by the offset; they now grow by 2 x offset, the same as the copper; a negative offset does not make a size less than 0
+- fixed: the clear (dark/clear polarity) areas were not compensated; they now shrink by the offset
+- fixed: the buffer used the circle steps as segments for each quarter, so round corners had 4 times the points
+- fixed: the source Gerber object was changed by the plugin
+- fixed: an etch factor of 0 crashed the plugin; a factor of 0 or less now shows an error; an offset of 0 shows a warning and makes nothing; a done run shows the output and the offset in um and in app units
+- fixed: "Fe3Cl" is now FeCl3; each etchant has its own etch factor (CuCl2 3.0, FeCl3 2.5, alkaline baths 4.0), shown in the list
+- the compensated copper is a flat list of polygons
+- the work runs in the worker pool; the copper is buffered once instead of polygon by polygon; fewer copies of the geometry
+- new: Preview button that draws the outline of the compensated copper
+- new: a "Lateral offset" label shows the offset of the current values
+- new: "Use all selected Gerber objects" makes one output for each selected Gerber; one Undo removes them all
+- new: Etch Compensation preferences (thickness, ratio, etch factor, etchant, manual offset, name suffix); the last values used are kept for the session
+- new: Tcl command etch_compensate
+- the panel has titled sections; the tooltips match the options
+
 Start:
 
 - the splash screen is not shown when the app starts with a file to open, for example a double-click on an associated file; this is true also when the file goes to an app that is already open

@@ -1000,6 +1000,14 @@ class AppDefaults:
         "tools_invert_margin": 0.1,
         "tools_invert_join_style": 's',
 
+        # Etch Compensation Tool
+        "tools_etch_thickness": 18.0,
+        "tools_etch_ratio": 'factor',
+        "tools_etch_factor": 3.0,
+        "tools_etch_etchant": 'cucl2',
+        "tools_etch_offset": 0.0,
+        "tools_etch_suffix": '_comp',
+
         # Utilities
         # file associations
         "fa_excellon": 'drd, drill, drl, exc, ncd, tap, xln',

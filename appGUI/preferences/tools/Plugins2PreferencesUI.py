@@ -9,6 +9,7 @@ from appGUI.preferences.tools.Tools2CThievingPrefGroupUI import Tools2CThievingP
 from appGUI.preferences.tools.Tools2QRCodePrefGroupUI import Tools2QRCodePrefGroupUI
 from appGUI.preferences.tools.Tools2OptimalPrefGroupUI import Tools2OptimalPrefGroupUI
 from appGUI.preferences.tools.Tools2RulesCheckPrefGroupUI import Tools2RulesCheckPrefGroupUI
+from appGUI.preferences.tools.ToolsEtchPrefGroupUI import ToolsEtchPrefGroupUI
 
 from appGUI.ColumnarFlowLayout import ColumnarFlowLayout
 
@@ -52,6 +53,9 @@ class Plugins2PreferencesUI(QtWidgets.QWidget):
         self.tools2_invert_group = Tools2InvertPrefGroupUI(app=app)
         self.tools2_invert_group.setMinimumWidth(250)
 
+        self.tools2_etch_group = ToolsEtchPrefGroupUI(app=app)
+        self.tools2_etch_group.setMinimumWidth(250)
+
         self.vlay = QtWidgets.QVBoxLayout()
         self.vlay.addWidget(self.tools2_checkrules_group)
         self.vlay.addWidget(self.tools2_optimal_group)
@@ -65,6 +69,7 @@ class Plugins2PreferencesUI(QtWidgets.QWidget):
 
         self.vlay3 = QtWidgets.QVBoxLayout()
         self.vlay3.addWidget(self.tools2_edrills_group)
+        self.vlay3.addWidget(self.tools2_etch_group)
 
         self.vlay4 = QtWidgets.QVBoxLayout()
         self.vlay4.addWidget(self.tools2_punch_group)

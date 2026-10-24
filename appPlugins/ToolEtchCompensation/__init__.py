@@ -3,7 +3,7 @@
 from appPlugins.ToolEtchCompensation.EtchCompensation import ToolEtchCompensation
 from appPlugins.ToolEtchCompensation.EtchCompensationUI import EtchUI
 from appPlugins.ToolEtchCompensation.EtchCompensation import (
-    AppTool, AppDefaults, VerticalScrollArea, flatten_shapely_geometry, safe_eval, deepcopy, log
+    AppTool, AppDefaults, VerticalScrollArea, safe_eval, deepcopy, log
 )
 from appPlugins.ToolEtchCompensation.EtchCompensationUI import (
     QtWidgets, QtCore, QtGui, FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCEntry,

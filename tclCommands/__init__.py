@@ -72,6 +72,7 @@ import tclCommands.TclCommandQuit
 import tclCommands.TclCommandSaveProject
 import tclCommands.TclCommandSaveSys
 import tclCommands.TclCommandScale
+import tclCommands.TclCommandEtchCompensate
 import tclCommands.TclCommandSelectProject
 import tclCommands.TclCommandSetActive
 import tclCommands.TclCommandSetOrigin
