@@ -296,6 +296,9 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
         )
         grid4.addWidget(self.prepare_update_files_btn, 11, 0, 1, 2)
 
+        self.update_provider_combo.currentIndexChanged.connect(self.on_update_provider_changed)
+        self.on_update_provider_changed()
+
         # Send Stats CB
         self.send_stats_cb = FCCheckBox(label='%s' % _('Send Statistics'))
         self.send_stats_cb.setToolTip(
@@ -424,6 +427,13 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
         self.shell_startup_cb.clicked.connect(self.on_toggle_shell_from_settings)
 
         self.language_apply_btn.clicked.connect(lambda: fcTranslate.on_language_apply_click(app=self.app, restart=True))
+
+    def on_update_provider_changed(self):
+        # the Digi share URL and the Prepare Update Files button are used only by the Digi (legacy) source
+        is_digi = self.update_provider_combo.get_value() == "digi"
+        self.legacy_update_url_label.setVisible(is_digi)
+        self.legacy_update_url_entry.setVisible(is_digi)
+        self.prepare_update_files_btn.setVisible(is_digi)
 
     def on_toggle_shell_from_settings(self, state):
         """

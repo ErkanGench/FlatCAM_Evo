@@ -27,6 +27,7 @@ from appObjects.ObjectDispatch import dispatch_attr
 from appObjects.ScriptObject import ScriptObject
 
 import inspect  # TODO: Remove
+import json
 
 import re
 import logging
@@ -56,8 +57,8 @@ class EventSensitiveListView(QtWidgets.QTreeView):
         super(EventSensitiveListView, self).__init__(parent)
         self.setHeaderHidden(True)
 
-        # self.setRootIsDecorated(False)
-        # self.setExpandsOnDoubleClick(False)
+        # no expand arrow before the category rows: a double click expands or collapses a category
+        self.setRootIsDecorated(False)
         self.setEditTriggers(QtWidgets.QTreeView.EditTrigger.NoEditTriggers)    # No edit in the Project Tab Tree
 
         # Enable dragging and dropping onto the appGUI
@@ -102,6 +103,25 @@ class EventSensitiveListView(QtWidgets.QTreeView):
     #     target = drag.target()  # returns widget if inside the application, returns None if windows desktop ... etc.
     #     print("target = %s" % target)
 
+    # Files dragged from the OS are opened by the main window; only the drag of the rows is handled here.
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            self.app.ui.dragEnterEvent(event)
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            self.app.ui.dragMoveEvent(event)
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            self.app.ui.dropEvent(event)
+            return
+        super().dropEvent(event)
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             super().keyPressEvent(event)
@@ -136,7 +156,7 @@ class EventSensitiveListView(QtWidgets.QTreeView):
         return None
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        # a click on the color swatch must not change the selection: the color goes to the whole selection
+        # a click on the color swatch of a selected row keeps the selection: the color goes to the whole selection
         if self._swatch_index_at(event.position().toPoint()) is not None:
             event.accept()
             return
@@ -153,6 +173,9 @@ class EventSensitiveListView(QtWidgets.QTreeView):
         if index is not None:
             event.accept()
             if event.button() == Qt.MouseButton.LeftButton:
+                # the swatch of a row that is not selected makes its row the only selected row
+                if not self.selectionModel().isSelected(index):
+                    self.setCurrentIndex(index)
                 self.on_swatch_clicked(index.internalPointer().obj)
             return
         self.mouseReleased.emit(event.button())
@@ -394,6 +417,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         "document": "assets/resources/notes16_project.png"
     }
 
+    # mime type of the objects dragged inside the Project tab
+    PROJECT_MIME = "application/x-flatcam-project-items"
+
     # will emit the name of the object that was just selected
     item_selected = QtCore.pyqtSignal(str)
     update_list_signal = QtCore.pyqtSignal()
@@ -456,10 +482,11 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         else:
             self.view.setEditTriggers(QtWidgets.QTreeView.EditTrigger.NoEditTriggers)
 
-        # self.view.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
-        # self.view.setDragEnabled(True)
-        # self.view.setAcceptDrops(True)
-        # self.view.setDropIndicatorShown(True)
+        # objects are reordered by drag and drop inside their category (dropMimeData)
+        self.view.setDragDropMode(QtWidgets.QAbstractItemView.DragDropMode.InternalMove)
+        self.view.setDragEnabled(True)
+        self.view.setDropIndicatorShown(True)
+        self.view.setDefaultDropAction(Qt.DropAction.MoveAction)
 
         settings = QSettings("Open Source", "FlatCAM_EVO")
         if settings.contains("notebook_font_size"):
@@ -763,16 +790,126 @@ class ObjectCollection(QtCore.QAbstractItemModel):
     def supportedDropActions(self):
         return Qt.DropAction.MoveAction
 
+    def mimeTypes(self):
+        return [ObjectCollection.PROJECT_MIME]
+
+    def mimeData(self, indexes):
+        """
+        The rows of the dragged objects. Only the objects of one category can be dragged together.
+
+        :return:    a QMimeData or None (no drag) if an index is not an object or the categories differ
+        """
+        groups = set()
+        rows = set()
+        for index in indexes:
+            item = index.internalPointer() if index.isValid() else None
+            if item is None or item.obj is None:
+                return None
+            groups.add(item.parent_item)
+            rows.add(item.row())
+        if len(groups) != 1:
+            return None
+
+        kind = next(k for k, group in self.group_items.items() if group is groups.pop())
+        mime = QtCore.QMimeData()
+        mime.setData(ObjectCollection.PROJECT_MIME,
+                     QtCore.QByteArray(json.dumps({"kind": kind, "rows": sorted(rows)}).encode()))
+        return mime
+
+    def _drop_target(self, data, parent, row):
+        """
+        :return:    (group item, items to move, row where they go in that group) or None if the drop is refused:
+                    foreign data, another category or the drop is not inside a category row.
+        """
+        if not data.hasFormat(ObjectCollection.PROJECT_MIME) or not parent.isValid():
+            return None
+        try:
+            payload = json.loads(bytes(data.data(ObjectCollection.PROJECT_MIME)).decode())
+            kind, rows = payload["kind"], payload["rows"]
+        except (ValueError, KeyError, TypeError):
+            return None
+
+        target = parent.internalPointer()
+        if target.obj is not None:
+            # dropped on an object row: before that object
+            row, target = parent.row(), target.parent_item
+        if target is not self.group_items.get(kind) or not rows or max(rows) >= target.child_count():
+            return None
+        if row < 0 or row > target.child_count():
+            row = target.child_count()
+        return target, [target.child_items[r] for r in rows], row
+
+    def canDropMimeData(self, data, action, row, column, parent):
+        return action == Qt.DropAction.MoveAction and self._drop_target(data, parent, row) is not None
+
+    def dropMimeData(self, data, action, row, column, parent):
+        """
+        Move the dragged objects inside their category to the drop row. The drop returns True when the move is done;
+        the view then asks for removeRows(), which the model does not implement, so nothing else is removed.
+        """
+        if action != Qt.DropAction.MoveAction:
+            return False
+        target = self._drop_target(data, parent, row)
+        if target is None:
+            return False
+        group, moved, row = target
+
+        old_rows = {id(item.obj): item.row() for item in group.child_items}
+        before = sum(1 for item in moved if item.row() < row)
+        rest = [item for item in group.child_items if item not in moved]
+        new_order = rest[:row - before] + moved + rest[row - before:]
+
+        group_index = self.createIndex(group.row(), 0, group)
+        for new_row, item in enumerate(new_order):
+            current = group.child_items.index(item)
+            if current == new_row:
+                continue
+            self.beginMoveRows(group_index, current, current, group_index, new_row)
+            group.child_items.insert(new_row, group.child_items.pop(current))
+            self.endMoveRows()
+
+        if group is self.group_items["gerber"]:
+            self.apply_gerber_row_colors(old_rows)
+        self.app.should_we_save = True
+        return True
+
+    def apply_gerber_row_colors(self, old_rows):
+        """
+        The Gerber colors are positional: row N of the Gerber category has the entry N of "gerber_color_list".
+        After a move, the Gerber objects whose row changed take the colors of the entry of their new row; the list
+        itself is not changed. An object without an entry for its row keeps its colors.
+
+        :param old_rows:    {id(Gerber object): row before the move}
+        """
+        options = self.app.options
+        defaults = getattr(self.app, "defaults", None)
+        store = options.get("gerber_store_color_list",
+                            defaults.get("gerber_store_color_list") if defaults is not None else None)
+        if store is not True:
+            return
+        color_list = options.get("gerber_color_list", [])
+
+        for row, item in enumerate(self.group_items["gerber"].child_items):
+            obj = item.obj
+            if old_rows.get(id(obj)) == row or row >= len(color_list):
+                continue
+            outline, fill = color_list[row][0], color_list[row][1]
+            obj.outline_color = outline
+            obj.fill_color = fill
+            obj.alpha_level = str(hex(int(fill[7:9], 16))[2:])
+            obj.shapes.redraw(update_colors=(fill, outline))
+            self.update_view(obj)
+
     def flags(self, index):
         default_flags = QtCore.QAbstractItemModel.flags(self, index)
 
         if not index.isValid():
             return Qt.ItemFlag.ItemIsEnabled | default_flags
 
-        # Prevent groups from selection
+        # Prevent groups from selection; they accept the drop of the objects of their category
         try:
             if not index.internalPointer().obj:
-                return Qt.ItemFlag.ItemIsEnabled
+                return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsDropEnabled
             else:
                 return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable | \
                        Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled

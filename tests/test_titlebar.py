@@ -41,7 +41,9 @@ class TitleWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self.close_requests += 1
-        event.ignore()
+        # Alt+F4 or the taskbar still close it, so a window left by a stopped run does not block the screen
+        if not event.spontaneous():
+            event.ignore()
 
     def nativeEvent(self, event_type, message):
         return MainGUI.nativeEvent(self, event_type, message)
@@ -133,6 +135,22 @@ class TestTitleBar(unittest.TestCase):
         self.expand()
         QtTest.QTest.keyClick(self.bar.menu, QtCore.Qt.Key.Key_Escape)
         self.assertTrue(self.bar.menu_button.isVisible())
+
+    def test_menu_without_hamburger_stays_open(self):
+        self.bar.set_hamburger(False)
+        self.qapp.processEvents()
+        self.assertFalse(self.bar.menu_button.isVisible())
+        self.assertTrue(self.bar.menu.isVisible())
+        QtTest.QTest.mouseClick(self.window.centralWidget(), QtCore.Qt.MouseButton.LeftButton)
+        QtTest.QTest.keyClick(self.bar.menu, QtCore.Qt.Key.Key_Escape)
+        self.window.open_action.trigger()
+        self.qapp.processEvents()
+        self.assertFalse(self.bar.menu_button.isVisible())
+        self.assertTrue(self.bar.menu.isVisible())
+        self.bar.set_hamburger(True)
+        self.qapp.processEvents()
+        self.assertTrue(self.bar.menu_button.isVisible())
+        self.assertFalse(self.bar.menu.isVisible())
 
     def test_project_title_is_centered_while_title_toolbar_stays_right(self):
         self.assertEqual(self.bar.title_label.alignment(), QtCore.Qt.AlignmentFlag.AlignCenter)

@@ -4,8 +4,10 @@ from unittest.mock import Mock
 
 import pytest
 from PyQt6 import QtCore, QtWidgets
+from shapely import STRtree
 from shapely.geometry import LineString, box
 
+from appEditors.cursor_text import show_cursor_text, hide_cursor_text
 from appEditors.appGeoEditor import AppGeoEditor, DrawToolShape, DrawToolUtilityShape, FCPath, FCCircle, FCRectangle, FCMove, FCCopy
 from appEditors.geo_plugins.GeoCirclePlugin import CircleEditorTool
 from appEditors.geo_plugins.GeoPathPlugin import PathEditorTool
@@ -249,3 +251,32 @@ def test_zero_length_path_enter_cannot_commit_degenerate_geometry(monkeypatch):
     assert dispatch(editor, 'Enter', monkeypatch) == 'fail'
     assert_uncommitted(editor, tool, original)
     editor.select_tool.assert_not_called()
+
+
+def cursor_text_editor(*obstacles):
+    # 10 pixels for 1 unit; the pixel y axis points down as on the canvas
+    canvas = SimpleNamespace(dpi=72, view=SimpleNamespace(scene=object(), camera=SimpleNamespace()),
+                             text_cursor=SimpleNamespace(text='', pos=None, anchors=None, font_size=None, parent=None),
+                             translate_coords_2=lambda p: (500 + 10 * p[0], 500 - 10 * p[1], 0, 1),
+                             translate_coords=lambda p: ((p[0] - 500) / 10, (500 - p[1]) / 10, 0, 1))
+    app = SimpleNamespace(plotcanvas=canvas, decimals=4, app_units='MM', dec_format=lambda v, d: round(v, d))
+    tree = STRtree(list(obstacles)) if obstacles else None
+    return SimpleNamespace(app=app, get_pick_index=lambda: (tree, list(obstacles))), canvas.text_cursor
+
+
+@pytest.mark.parametrize('ref, obstacles, anchors, x', [
+    (None, (), ('left', 'top'), 3.0),                                   # free: right of the cursor, above it
+    ((10.0, 10.0), (), ('right', 'bottom'), -3.0),                      # away from the last point
+    (None, (box(4, 0.5, 5, 1.5),), ('left', 'bottom'), 3.0),            # a shape is above: go below
+    ((-10.0, -10.0), (box(-1000, -1000, 1000, 1000),), ('left', 'top'), 3.0),  # no free side: away from the point
+])
+def test_cursor_text_avoids_the_drawn_shape_and_the_shapes_under_it(ref, obstacles, anchors, x):
+    draw_app, text = cursor_text_editor(*obstacles)
+    show_cursor_text(draw_app, (0.0, 0.0), ref=ref)
+    assert text.parent is draw_app.app.plotcanvas.view.scene
+    assert text.anchors == anchors
+    assert text.pos[0] == pytest.approx(x) and text.pos[1] == pytest.approx(0.0)
+    length = '14.1421' if ref else '0.0'
+    assert text.text == 'X:   0.0 [mm]\nY:   0.0 [mm]\n\nL:   %s [mm]' % length
+    hide_cursor_text(draw_app.app)
+    assert text.parent is None

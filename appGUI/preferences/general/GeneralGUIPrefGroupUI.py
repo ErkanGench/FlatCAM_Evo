@@ -86,7 +86,18 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
               "When unchecked, use the operating system's title bar and the original menu.\n"
               "Changing this option requires an application restart.")
         )
-        grid0.addWidget(self.custom_titlebar_cb, 3, 0, 1, 3)
+        grid0.addWidget(self.custom_titlebar_cb, 3, 0)
+
+        # Hamburger Menu
+        self.hamburger_cb = FCCheckBox('%s' % _('Hamburger Menu'))
+        self.hamburger_cb.setToolTip(
+            _("Collapse the menu of the custom title bar into a hamburger button.\n"
+              "When unchecked, the menu is always shown.")
+        )
+        grid0.addWidget(self.hamburger_cb, 3, 1, 1, 2)
+        # the hamburger button exists only in the custom title bar
+        self.hamburger_cb.setEnabled(self.custom_titlebar_cb.get_value())
+        self.custom_titlebar_cb.toggled.connect(self.hamburger_cb.setEnabled)
 
         # self.theme_button = FCButton(_("Apply Theme"))
         # self.theme_button.setToolTip(
@@ -163,7 +174,7 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
               "It is displayed whenever the mouse cursor is hovering\n"
               "over any kind of not-selected object.")
         )
-        grid0.addWidget(self.hover_cb, 10, 0, 1, 3)
+        grid0.addWidget(self.hover_cb, 10, 0)
 
         # Enable Selection box
         self.selection_cb = FCCheckBox('%s' % _('Selection Shape'))
@@ -173,14 +184,14 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
               "either by clicking or dragging mouse from left to right or\n"
               "right to left.")
         )
-        grid0.addWidget(self.selection_cb, 12, 0, 1, 3)
+        grid0.addWidget(self.selection_cb, 12, 0)
 
         # Enable Selection box
         self.selection_outline_cb = FCCheckBox('%s' % _('Selection Outline'))
         self.selection_outline_cb.setToolTip(
             _("If checked, the selection shape is an outline.")
         )
-        grid0.addWidget(self.selection_outline_cb, 13, 0, 1, 3)
+        grid0.addWidget(self.selection_outline_cb, 12, 1, 1, 2)
 
         # Joined redraws of the object plots
         self.joined_redraws_cb = FCCheckBox('%s' % _('Joined Redraws'))
@@ -190,7 +201,7 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
               "Unchecked: the canvas updates after each object plot.\n"
               "Each plot shows at once, but many objects plot slower.")
         )
-        grid0.addWidget(self.joined_redraws_cb, 14, 0, 1, 3)
+        grid0.addWidget(self.joined_redraws_cb, 10, 1, 1, 2)
         self.joined_redraws_cb.toggled.connect(self.on_joined_redraws)
 
         # Font Size
@@ -458,12 +469,12 @@ class GeneralGUIPrefGroupUI(OptionsGroupUI):
         self.object_autohide_cb = FCCheckBox(label=_('Object AutoHide'))
         self.object_autohide_cb.setToolTip(
             _("When checked, once a new object is generated the source object is hidden on canvas."))
-        grid0.addWidget(self.object_autohide_cb, row + 1, 0, 1, 3)
+        grid0.addWidget(self.object_autohide_cb, row + 1, 0)
 
         self.object_autoswitch_cb = FCCheckBox(label=_('Object Autoswitch'))
         self.object_autoswitch_cb.setToolTip(
             _("When checked, on new object creation, switch to Properties."))
-        grid0.addWidget(self.object_autoswitch_cb, row + 2, 0, 1, 3)
+        grid0.addWidget(self.object_autoswitch_cb, row + 1, 1, 1, 2)
 
         GLay.set_common_column_size([grid0, grid1], 0)
 

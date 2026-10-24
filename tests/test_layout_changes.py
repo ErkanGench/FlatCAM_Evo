@@ -72,6 +72,7 @@ def test_ui_layout_activation_and_restoration(layout_app, index, layout):
     assert app.ui.toolBarArea(app.ui.toolbarfile) == (
         QtCore.Qt.ToolBarArea.LeftToolBarArea if layout == 'compact'
         else QtCore.Qt.ToolBarArea.TopToolBarArea)
+    assert app.ui.toolbarfile.isHidden()
     assert app.ui.toolbarview.isHidden() == (layout == 'minimal')
     assert app.ui.geo_edit_toolbar.isHidden() == (layout == 'minimal')
     assert app.ui.file_open_gerber_btn in app.ui.toolbarfile.actions()

@@ -1058,6 +1058,8 @@ class MainGUI(QtWidgets.QMainWindow):
         self.toolbarfile.setObjectName('File_TB')
         self.toolbarfile.setStyleSheet(toolbar_style)
         self.addToolBar(self.toolbarfile)
+        # off by default; a saved GUI state can show it again
+        self.toolbarfile.setVisible(False)
 
         self.toolbaredit = QtWidgets.QToolBar(_('Edit Toolbar'))
         self.toolbaredit.setObjectName('Edit_TB')
@@ -2374,7 +2376,8 @@ class MainGUI(QtWidgets.QMainWindow):
         self.title_toolbar = None
         if _database_option(self.app, 'global_custom_titlebar'):
             self.title_bar = TitleBar(self, self.menu, self.menu_toggle_nb,
-                                      history_actions=(self.undo_btn, self.redo_btn))
+                                      history_actions=(self.undo_btn, self.redo_btn),
+                                      hamburger=_database_option(self.app, 'global_hamburger_menu'))
             self.title_toolbar = self.title_bar.toolbar
             self.setMenuWidget(self.title_bar)
         else:

@@ -134,11 +134,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         self.create_native()
         self.native.setParent(self.fcapp.ui)
 
-        axis_default_color = _database_option(self.fcapp, 'global_axis_color')
         self.axis_transparency = 0.8
-
-        axis_color = self.color_hex2tuple(axis_default_color)
-        axis_color = axis_color[0], axis_color[1], axis_color[2], self.axis_transparency
+        axis_color = self.axis_rgba()
 
         # ## AXIS # ##
         # Draw the grid before axes and object collections without changing their GL state.
@@ -146,9 +143,11 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         # self.v_line = InfiniteLine(pos=0, color=(0.70, 0.3, 0.3, 0.8), vertical=True,
         #                            parent=self.view.scene)
 
-        self.v_line = InfiniteLine(pos=0, color=axis_color, vertical=True, line_width=1.5,
+        axis_width = _database_option(self.fcapp, 'global_axis_width') or 1
+
+        self.v_line = InfiniteLine(pos=0, color=axis_color, vertical=True, line_width=axis_width,
                                    parent=None)
-        self.h_line = InfiniteLine(pos=0, color=axis_color, vertical=False, line_width=1.5,
+        self.h_line = InfiniteLine(pos=0, color=axis_color, vertical=False, line_width=axis_width,
                                    parent=None)
 
         self.line_parent = None
@@ -157,10 +156,11 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         else:
             c_color = self.line_color
 
-        self.cursor_v_line = InfiniteLine(pos=None, color=c_color, vertical=True,
+        c_width = _database_option(self.fcapp, "global_cursor_width") or 1.0
+        self.cursor_v_line = InfiniteLine(pos=None, color=c_color, vertical=True, line_width=c_width,
                                           parent=self.line_parent)
 
-        self.cursor_h_line = InfiniteLine(pos=None, color=c_color, vertical=False,
+        self.cursor_h_line = InfiniteLine(pos=None, color=c_color, vertical=False, line_width=c_width,
                                           parent=self.line_parent)
 
         # setup HUD
@@ -181,6 +181,8 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         self._hud_update_timer.setInterval(33)
         self._hud_update_timer.timeout.connect(self._update_text_hud)
         self.on_update_text_hud()
+        # the HUD sits against the canvas edges: re-place it after the view got its new size
+        self.events.resize.connect(self._on_hud_resize)
 
         # cursor text t obe attached to mouse cursor in Editors
         self.text_cursor = CursorText('', color=self.text_hud_color, method='cpu', anchor_x='left', parent=None)
@@ -223,6 +225,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         self._cursor_position = None
         self._cursor_line_color = None
         self.native.installEventFilter(self)
+        self.events.mouse_move.connect(self._show_cursor_on_move)
 
         # Parent container
         # self.container = container
@@ -249,6 +252,13 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         b_color = int(color[4:6], 16) / 255
         return r_color, g_color, b_color
 
+    def axis_rgba(self):
+        # an 8 digit color (#RRGGBBAA) gives its own alpha; an old 6 digit color keeps the default transparency
+        hex_color = _database_option(self.fcapp, 'global_axis_color')
+        r_color, g_color, b_color = self.color_hex2tuple(hex_color)
+        alpha = int(hex_color[7:9], 16) / 255 if len(hex_color) >= 9 else self.axis_transparency
+        return r_color, g_color, b_color, alpha
+
     def on_toggle_axis(self, signal=None, state=None, silent=None):
         if not state:
             state = not self.axis_enabled
@@ -258,6 +268,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
             self.fcapp.defaults['global_axis'] = True
             self.v_line.parent = self.view.scene
             self.h_line.parent = self.view.scene
+            self.grid.set_hide_axes(True)
             self.fcapp.ui.axis_status_label.setStyleSheet("""
                                                           QLabel
                                                           {
@@ -272,6 +283,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
             self.fcapp.defaults['global_axis'] = False
             self.v_line.parent = None
             self.h_line.parent = None
+            self.grid.set_hide_axes(False)
             self.fcapp.ui.axis_status_label.setStyleSheet("")
             if silent is None:
                 self.fcapp.inform[str, bool].emit(_("Axis disabled."), False)
@@ -279,10 +291,7 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
     def apply_axis_color(self):
         self.fcapp.log.debug('PlotCanvas.apply_axis_color() -> axis color applied')
 
-        axis_default_color = _database_option(self.fcapp, 'global_axis_color')
-
-        axis_color = self.color_hex2tuple(axis_default_color)
-        axis_color = axis_color[0], axis_color[1], axis_color[2], self.axis_transparency
+        axis_color = self.axis_rgba()
 
         if axis_color is not None:
             axis_color = np.array(axis_color, dtype=np.float32)
@@ -294,6 +303,20 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
 
             self.h_line._color = axis_color
             self.h_line._changed['color'] = True
+
+    def apply_axis_width(self):
+        width = _database_option(self.fcapp, 'global_axis_width')
+        if width and width != self.v_line.line_width:
+            self.v_line.line_width = width
+            self.h_line.line_width = width
+
+    def _on_hud_resize(self, event=None):
+        if getattr(self, 'hud_enabled', False):
+            self._hud_update_timer.start()
+
+    def apply_hud_options(self):
+        """Redraw the HUD with the current HUD options (position, colors, offset)."""
+        self._update_text_hud()
 
     def on_toggle_hud(self, signal=None, state=None, silent=None):
         if state is None:
@@ -378,20 +401,32 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
         ascent = -min(rect.top() for rect in text_bounds)
         height = 4 * line_height + ascent + max(rect.bottom() for rect in text_bounds) + 2 * padding
         width = max(c_font_metrics.horizontalAdvance(line) for line in hud_text) + 2 * padding
-        center_x = (width / 2) + 5
-        center_y = (height / 2) + 5
+
+        # placement: the HUD sits 'offset' pixels from the two canvas edges nearest to the chosen corner
+        offset = _database_option(self.fcapp, 'global_hud_offset')
+        offset = 10 if offset is None else offset
+        position = _database_option(self.fcapp, 'global_hud_position') or 'TL'
+        view_width, view_height = self.view.size
+        left = offset if 'L' in position else view_width - offset - width
+        top = offset if 'T' in position else view_height - offset - height
+        center_x = left + width / 2
+        center_y = top + height / 2
 
         # text
         if self.text_hud.font_size != fsize:
             self.text_hud.font_size = fsize
         if self.text_hud.face != c_font.family():
             self.text_hud.face = c_font.family()
-        text_color = 1.0 if np.mean(self.view.bgcolor.rgb) < 0.5 else 0.0
-        if not np.all(self.text_hud.color.rgb == text_color):
-            self.text_hud.color = (text_color, text_color, text_color, 1.0)
+        if _database_option(self.fcapp, 'global_hud_text_color_enabled'):
+            text_color = Color(_database_option(self.fcapp, 'global_hud_text_color')).rgba
+        else:
+            gray = 1.0 if np.mean(self.view.bgcolor.rgb) < 0.5 else 0.0
+            text_color = (gray, gray, gray, 1.0)
+        if not np.allclose(self.text_hud.color.rgba, text_color):
+            self.text_hud.color = text_color
         if self.text_hud.text != hud_text:
             self.text_hud.text = hud_text
-        text_pos = [(5 + padding, 5 + padding + ascent + row * line_height)
+        text_pos = [(left + padding, top + padding + ascent + row * line_height)
                     for row in (0, 1, 3, 4)]
         if not np.array_equal(self.text_hud.pos[:, :2], text_pos):
             self.text_hud.pos = text_pos
@@ -405,6 +440,11 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
             self.rect_hud.width = width
         if self.rect_hud.height != height:
             self.rect_hud.height = height
+        bg_color = Color(_database_option(self.fcapp, 'global_hud_bg_color') or '#80808040')
+        if not np.allclose(self.rect_hud.color.rgba, bg_color.rgba):
+            self.rect_hud.color = bg_color
+        if not np.allclose(self.rect_hud.border_color.rgba, bg_color.rgba):
+            self.rect_hud.border_color = bg_color
 
     def on_toggle_grid_lines(self, signal=None, silent=None):
         state = self.grid_lines_enabled
@@ -573,6 +613,16 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
                 visual.visible = event.type() == QtCore.QEvent.Type.Enter
         return super().eventFilter(obj, event)
 
+    def _show_cursor_on_move(self, event=None):
+        # a mouse move proves the mouse is over the canvas: a Leave with no Enter after it (a modal dialog, an editor
+        # save) must not keep the cursor hidden
+        if self.c is None:
+            return
+        visuals = (self.cursor_h_line, self.cursor_v_line) if self.big_cursor else (self.c,)
+        for visual in visuals:
+            if not visual.visible:
+                visual.visible = True
+
     @property
     def cursor_color(self):
         return self._cursor_color
@@ -581,11 +631,9 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
     def cursor_color(self, color):
         self._cursor_color = Color(color).rgba
         self._cursor_line_color = None
-        if self.big_cursor is True:
-            self.cursor_h_line.set_data(color=self._cursor_color)
-            self.cursor_v_line.set_data(color=self._cursor_color)
-        else:
-            self.fcapp.cursor_color_3D = self._cursor_color
+        self.cursor_h_line.set_data(color=self._cursor_color)
+        self.cursor_v_line.set_data(color=self._cursor_color)
+        self.fcapp.cursor_color_3D = self._cursor_color
 
     def on_mouse_state(self, state):
         if state:
@@ -596,15 +644,15 @@ class PlotCanvas(QtCore.QObject, VisPyCanvas):
             self.cursor_v_line.parent = None
 
     def on_mouse_position(self, pos):
+        # the Preferences handlers set cursor_color for both states of the 'Cursor Color' checkbox
+        color = tuple(self.cursor_color)
 
-        if _database_option(self.fcapp, 'global_cursor_color_enabled'):
-            # color = Color(self.fcapp.options['global_cursor_color']).rgba
-            color = self.cursor_color
-        else:
-            color = self.line_color
+        width = _database_option(self.fcapp, "global_cursor_width")
+        if width and width != self.cursor_h_line.line_width:
+            self.cursor_h_line.line_width = width
+            self.cursor_v_line.line_width = width
 
         position = (pos[0], pos[1])
-        color = tuple(color)
         if position == self._cursor_position and color == self._cursor_line_color:
             return
 

@@ -10,6 +10,7 @@ from camlib import distance, arc, translate_geometry
 
 from PyQt6 import QtCore, QtWidgets, QtGui
 from PyQt6.QtCore import Qt
+from appEditors.cursor_text import show_cursor_text, hide_cursor_text
 from appEditors.exc_plugins.ExcDrillPlugin import ExcDrillEditorTool
 from appEditors.exc_plugins.ExcSlotPlugin import ExcSlotEditorTool
 from appEditors.exc_plugins.ExcDrillArrayPlugin import ExcDrillArrayEditorTool
@@ -331,48 +332,12 @@ class DrillAdd(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
         if not self.points:
             self.points = self.draw_app.snap_x, self.draw_app.snap_y
-
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(np.sqrt((x - self.points[0]) ** 2 + (y - self.points[1]) ** 2))
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        units = self.draw_app.app.app_units.lower()
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, ref=self.points)
 
     def on_key(self, key):
         # Jump to coords
@@ -802,48 +767,12 @@ class DrillArray(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
         if not self.points:
             self.points = self.draw_app.snap_x, self.draw_app.snap_y
-
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(self.ui.radius_entry.get_value())
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        units = self.draw_app.app.app_units.lower()
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, length=abs(self.ui.radius_entry.get_value()), ref=self.points)
 
     def on_key(self, key):
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
@@ -1189,48 +1118,12 @@ class SlotAdd(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
         if not self.points:
             self.points = self.draw_app.snap_x, self.draw_app.snap_y
-
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(np.sqrt((x - self.points[0]) ** 2 + (y - self.points[1]) ** 2))
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        units = self.draw_app.app.app_units.lower()
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, ref=self.points)
 
     def on_key(self, key):
         # Jump to coords
@@ -1762,48 +1655,12 @@ class SlotArray(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
         if not self.points:
             self.points = self.draw_app.snap_x, self.draw_app.snap_y
-
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(self.ui.radius_entry.get_value())
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        units = self.draw_app.app.app_units.lower()
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, length=abs(self.ui.radius_entry.get_value()), ref=self.points)
 
     def on_key(self, key):
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
@@ -2007,48 +1864,12 @@ class ResizeEditorExc(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
         if not self.points:
             self.points = self.draw_app.snap_x, self.draw_app.snap_y
-
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(np.sqrt((x - self.points[0]) ** 2 + (y - self.points[1]) ** 2))
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        units = self.draw_app.app.app_units.lower()
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, ref=self.points)
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:
@@ -2628,46 +2449,12 @@ class CopyEditorExc(FCShapeTool):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        ref_val = (0, 0) if self.origin is None else self.origin
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(np.sqrt((pos[0] - ref_val[0]) ** 2 + (pos[1] - ref_val[1]) ** 2))
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-        units = self.draw_app.app.app_units.lower()
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0] + 30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        ref = self.origin
+        length = None if ref is not None else math.hypot(pos[0], pos[1])
+        show_cursor_text(self.draw_app, pos, length=length, ref=ref)
 
     def on_key(self, key):
         if key == 'C' or key == QtCore.Qt.Key.Key_C:

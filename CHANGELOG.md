@@ -23,19 +23,41 @@ Project Tab:
 - a color change from the context menu also updates the swatch
 - a right click on a category row (Gerber, Excellon, Geometry, CNC Job, Script, Document) shows a menu with: Show All, Hide All, a separator and Open; Show All and Hide All work on the objects of that category; Open shows the icon of the category
 - Open of a category: Gerber, Excellon and Script open their files; Geometry opens SVG or DXF files by the file extension; Document opens FlatDoc files (new); CNC Job has no Open
+- the objects can be moved by drag and drop inside their category; a drop on the category row moves them to the end; a drop in another category is refused; the move marks the project as changed
+- with "Store colors" on, a Gerber object that moves to a new row takes the colors of that row from the Gerber color list
+- a click on the color swatch of a row that is not selected makes that row the only selected row; on a selected row it keeps the selection
+- the category rows have no expand arrow; a double click expands or collapses a category
+- files dragged from the OS onto the Project Tab are opened, the same as a drop on the main window
 
 Toolbar:
 
 - the Snap to grid button shows a status icon when it is on; the icon of a name that ends in "_status" is not recolored by the theme
+- the File Toolbar is off by default in all the layouts (Standard, Compact, Minimal) of the GUI Preferences; the user can show it again from the toolbar context menu, and a saved toolbar arrangement keeps it
 
 Canvas:
 
 - the shapes, the selection overlay, the drag rectangle and the HUD rectangle set their own alpha blend; before, they could use the additive blend of the grid and show colors that were too light
+- new "Axis Width" option in Preferences -> APP Settings (1 to 10 px); the axis color can have an alpha (#RRGGBBAA); an old 6 digit color keeps the old transparency
+- when the axis is on, the grid lines at X=0 and Y=0 are not drawn, so they do not show beside the axis at some zoom levels
+- new HUD section in Preferences -> APP Settings: Position (TL, TR, BL, BR), Text Color (else a color that contrasts with the canvas), Background and Offset from the canvas edges; the HUD moves to its corner after a resize of the canvas; the changes are applied immediately
+- the cursor width is applied to the big cursor too; a change of the cursor color in the Preferences is applied at once to the small and big cursor; the "Cursor Color" checkbox off gives the theme color
+- new defaults: axis color #AA0000FF, cursor width 1, cursor color #0055FFFF
+- fixed: after an edit and a save in an editor, the canvas cursor could stay hidden while the snap still worked; the cursor hid on the Leave of the canvas and showed only on an Enter that did not come; now a mouse move over the canvas shows it
 
 Align Objects:
 
 - Beginner/Advanced level button; in Advanced, "Limit pairs" sets the number of source points and fit pairs of the Auto mode (0 = no limit); all features still check the result; the result line shows the number of fit pairs
 - the table and the errors of an Auto result show the pairs that made the fit
+
+Title Bar:
+
+- new "Hamburger Menu" option in Preferences -> GUI Preferences (on by default); when it is off, the custom title bar shows the menu bar all the time instead of the hamburger button; the change is applied immediately
+
+Preferences:
+
+- General -> Updates: the Digi share URL and the Prepare Update Files button show only when the update source is Digi (legacy)
+- GUI Preferences: the check boxes are in 2 columns (Custom Title Bar | Hamburger Menu, Hover Shape | Joined Redraws, Selection Shape | Selection Outline, Object AutoHide | Object Autoswitch); Hamburger Menu is enabled only with the custom title bar
+- APP Settings: "Undo memory (MB)" is now "Undo RAM"; the tooltip gives the unit
 
 Performance:
 
@@ -47,10 +69,21 @@ Performance:
 - the main shape collection of the 2D and 3D canvas joins the redraws: the update runs 30 ms after the last request, at most 150 ms after the first; plot_all of 50 objects: 25.2 s and 50 rebuilds to 9.2 s and 8 rebuilds
 - new "Joined Redraws" option in Preferences -> GUI Preferences (on by default); the change is applied immediately
 - the OR-Tools path optimization of a CNC job runs in the process pool, so the GUI no longer freezes during the search; an abort stops the wait
+- the progress dialog of a file open is painted before the parse starts; before, the busy workers made its first paint late
 
 Project:
 
 - the geometry is saved with 20 decimals; small coordinates (below 1 mm) no longer lose precision after a save and a load
+
+Editors:
+
+- the checked radio buttons of the editor plugins are shown again in the Dark theme with the native styling; the editor plugins no longer set their own stylesheet in that case
+- the X, Y and length text near the cursor goes on the side away from the last clicked point, so it does not cover the shape that is drawn; if shapes of the editor are under that side, the text goes to the next free side
+- one function makes the cursor text for the Geometry, Gerber and Excellon Editors (it replaces 16 copies)
+
+Tests:
+
+- the test window of the title bar tests closes on Alt+F4 or from the taskbar; before, a window left by a stopped run stayed on the screen and could not be closed
 
 23.10.2026
 

@@ -89,6 +89,7 @@ class PreferencesUIManager(QtCore.QObject):
             "global_dark_canvas": self.ui.general_pref_form.general_gui_group.dark_canvas_cb,
             "global_dim_text": self.ui.general_pref_form.general_gui_group.dim_text_cb,
             "global_custom_titlebar": self.ui.general_pref_form.general_gui_group.custom_titlebar_cb,
+            "global_hamburger_menu": self.ui.general_pref_form.general_gui_group.hamburger_cb,
             "global_layout": self.ui.general_pref_form.general_gui_group.layout_combo,
             "global_hover_shape": self.ui.general_pref_form.general_gui_group.hover_cb,
             "global_joined_redraws": self.ui.general_pref_form.general_gui_group.joined_redraws_cb,
@@ -123,6 +124,13 @@ class PreferencesUIManager(QtCore.QObject):
             "global_workspace_orientation": self.ui.general_pref_form.general_app_set_group.wk_orientation_radio,
 
             "global_axis_color": self.ui.general_pref_form.general_app_set_group.axis_color_entry,
+            "global_axis_width": self.ui.general_pref_form.general_app_set_group.axis_width_entry,
+
+            "global_hud_position": self.ui.general_pref_form.general_app_set_group.hud_position_combo,
+            "global_hud_text_color_enabled": self.ui.general_pref_form.general_app_set_group.hud_text_color_cb,
+            "global_hud_text_color": self.ui.general_pref_form.general_app_set_group.hud_text_color_entry,
+            "global_hud_bg_color": self.ui.general_pref_form.general_app_set_group.hud_bg_color_entry,
+            "global_hud_offset": self.ui.general_pref_form.general_app_set_group.hud_offset_entry,
 
             "global_cursor_type": self.ui.general_pref_form.general_app_set_group.cursor_radio,
             "global_cursor_size": self.ui.general_pref_form.general_app_set_group.cursor_size_entry,
@@ -1266,6 +1274,8 @@ class PreferencesUIManager(QtCore.QObject):
         # #############################################################################################################
 
         self.ui.app.apply_dim_text(self._pref('global_dim_text'))
+        if getattr(self.ui, 'title_bar', None) is not None:
+            self.ui.title_bar.set_hamburger(self._pref('global_hamburger_menu'))
 
         if save_to_file or should_restart is True:
             self.save_defaults(silent=False)

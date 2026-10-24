@@ -102,34 +102,109 @@ class TestUpdateView(unittest.TestCase):
 
 
 class TestColorSwatch(unittest.TestCase):
-    def test_swatch_click_keeps_selection_and_sends_the_dialog_color(self):
-        col = make_collection()
-        g1, _ = add_item(col, "gerber", "g1")
-        e1, _ = add_item(col, "excellon", "e1")
-        g1.fill_color = e1.fill_color = "#00FF00BF"
-        view = col.view
-        view.resize(400, 200)
-        view.show()
-        view.expandAll()
+    def setUp(self):
+        self.col = make_collection()
+        self.g1, _ = add_item(self.col, "gerber", "g1")
+        self.g2, _ = add_item(self.col, "gerber", "g2")
+        self.e1, _ = add_item(self.col, "excellon", "e1")
+        self.g1.fill_color = self.g2.fill_color = self.e1.fill_color = "#00FF00BF"
+        self.view = self.col.view
+        self.view.resize(400, 200)
+        self.view.show()
+        self.view.expandAll()
         _qapp.processEvents()
 
-        gerber_idx = col.index(0, 0, col.index(0, 0, QtCore.QModelIndex()))
-        excellon_idx = col.index(0, 0, col.index(1, 0, QtCore.QModelIndex()))
-        view.selectionModel().select(gerber_idx, QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
-        swatch = view.swatch_rect(excellon_idx, view.visualRect(excellon_idx))
-        # the swatch sits at the right side of the view
-        self.assertGreater(swatch.left(), view.viewport().width() - 40)
+        gerber = self.col.index(0, 0, QtCore.QModelIndex())
+        self.g1_idx = self.col.index(0, 0, gerber)
+        self.g2_idx = self.col.index(1, 0, gerber)
+        self.e1_idx = self.col.index(0, 0, self.col.index(1, 0, QtCore.QModelIndex()))
+        selection = QtCore.QItemSelection(self.g1_idx, self.g2_idx)
+        self.view.selectionModel().select(selection, QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
 
+    def tearDown(self):
+        self.view.close()
+
+    def _click_swatch(self, idx):
+        swatch = self.view.swatch_rect(idx, self.view.visualRect(idx))
+        # the swatch sits at the right side of the view
+        self.assertGreater(swatch.left(), self.view.viewport().width() - 40)
         with mock.patch.object(QtWidgets.QColorDialog, "exec",
                                return_value=QtWidgets.QDialog.DialogCode.Accepted), \
                 mock.patch.object(QtWidgets.QColorDialog, "selectedColor",
                                   return_value=QtGui.QColor(0x11, 0x22, 0x33, 0x44)):
-            QtTest.QTest.mouseClick(view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=swatch.center())
+            QtTest.QTest.mouseClick(self.view.viewport(), QtCore.Qt.MouseButton.LeftButton, pos=swatch.center())
 
-        col.app.plot_manager.set_color_from_swatch.assert_called_once_with(e1, "#11223344")
-        selected = view.selectionModel().selectedIndexes()
-        self.assertEqual([s.internalPointer().obj for s in selected], [g1])
-        view.close()
+    def _selected_objs(self):
+        return [s.internalPointer().obj for s in self.view.selectionModel().selectedIndexes()]
+
+    def test_swatch_click_on_selected_row_keeps_the_selection(self):
+        self._click_swatch(self.g2_idx)
+
+        self.col.app.plot_manager.set_color_from_swatch.assert_called_once_with(self.g2, "#11223344")
+        self.assertCountEqual(self._selected_objs(), [self.g1, self.g2])
+
+    def test_swatch_click_on_unselected_row_selects_only_that_row(self):
+        self._click_swatch(self.e1_idx)
+
+        self.col.app.plot_manager.set_color_from_swatch.assert_called_once_with(self.e1, "#11223344")
+        self.assertEqual(self._selected_objs(), [self.e1])
+
+
+class TestDragReorder(unittest.TestCase):
+    COLORS = [("#o0", "#f0000000", "L0"), ("#o1", "#f1000011", "L1"), ("#o2", "#f2000022", "L2")]
+
+    def setUp(self):
+        self.col = make_collection()
+        self.col.app.options["gerber_store_color_list"] = True
+        self.col.app.options["gerber_color_list"] = list(self.COLORS)
+        self.g = []
+        for i, color in enumerate(self.COLORS):
+            obj, _item = add_item(self.col, "gerber", "g%d" % i)
+            obj.outline_color, obj.fill_color = color[0], color[1]
+            obj.alpha_level = "00"
+            obj.shapes = mock.MagicMock()
+            self.g.append(obj)
+        self.e1, _item = add_item(self.col, "excellon", "e1")
+
+    def _group_index(self, kind):
+        group = self.col.group_items[kind]
+        return self.col.index(self.col.root_item.child_items.index(group), 0, QtCore.QModelIndex())
+
+    def _mime(self, *rows):
+        group_index = self._group_index("gerber")
+        return self.col.mimeData([self.col.index(r, 0, group_index) for r in rows])
+
+    def _gerber_order(self):
+        return [o for o in self.col.get_list() if o.kind == "gerber"]
+
+    def test_drop_on_category_row_moves_rows_to_the_end(self):
+        data = self._mime(0, 1)
+        self.assertTrue(self.col.dropMimeData(data, QtCore.Qt.DropAction.MoveAction, -1, -1,
+                                              self._group_index("gerber")))
+        self.assertEqual(self._gerber_order(), [self.g[2], self.g[0], self.g[1]])
+
+    def test_moved_gerbers_take_the_colors_of_their_new_rows(self):
+        data = self._mime(2)
+        self.col.dropMimeData(data, QtCore.Qt.DropAction.MoveAction, 0, -1, self._group_index("gerber"))
+
+        self.assertEqual(self._gerber_order(), [self.g[2], self.g[0], self.g[1]])
+        for row, obj in enumerate(self._gerber_order()):
+            self.assertEqual((obj.outline_color, obj.fill_color), self.COLORS[row][:2])
+        self.assertEqual(self.col.app.options["gerber_color_list"], self.COLORS)
+        self.assertEqual(self.g[1].alpha_level, "22")
+        self.g[2].shapes.redraw.assert_called_once_with(update_colors=("#f0000000", "#o0"))
+
+    def test_drop_in_another_category_is_refused(self):
+        data = self._mime(0)
+        excellon = self._group_index("excellon")
+        self.assertFalse(self.col.canDropMimeData(data, QtCore.Qt.DropAction.MoveAction, -1, -1, excellon))
+        self.assertFalse(self.col.dropMimeData(data, QtCore.Qt.DropAction.MoveAction, -1, -1, excellon))
+        self.assertEqual(self._gerber_order(), self.g)
+        self.assertEqual(self.col.group_items["excellon"].child_count(), 1)
+
+        # a selection that spans two categories cannot be dragged
+        excellon_row = self.col.index(0, 0, excellon)
+        self.assertIsNone(self.col.mimeData([self.col.index(0, 0, self._group_index("gerber")), excellon_row]))
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ from appEditors.grb_plugins.GrberRegionPlugin import GrbRegionEditorTool
 from appEditors.grb_plugins.GrbVertices import (grip_geometry, grip_state, apply_vertex_edit, edit_vertices_dialog,
                                               apply_selection_drag)
 from appEditors.vertex_grips import VertexGrips
+from appEditors.cursor_text import show_cursor_text, hide_cursor_text
 from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message
 from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingDialog
 from appParsers.ParseGerber import Gerber
@@ -340,44 +341,10 @@ class PadEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        fsize = q_settings.value('hud_font_size', type=int, defaultValue=8)
-
-        old_x = self.ui.x_entry.get_value()
-        old_y = self.ui.y_entry.get_value()
-
-        x, y = pos
-        try:
-            length = abs(np.sqrt((x - old_x) ** 2 + (y - old_y) ** 2))
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-        units = self.draw_app.app.app_units.lower()
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, ref=(self.ui.x_entry.get_value(), self.ui.y_entry.get_value()))
 
     def on_key(self, key):
         # Jump to coords
@@ -944,48 +911,12 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
         if not self.points:
             self.points = self.draw_app.snap_x, self.draw_app.snap_y
-
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(self.ui.radius_entry.get_value())
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        units = self.draw_app.app.app_units.lower()
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, length=abs(self.ui.radius_entry.get_value()), ref=self.points)
 
     def on_key(self, key):
         key_modifier = QtWidgets.QApplication.keyboardModifiers()
@@ -1296,48 +1227,10 @@ class RegionEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        old_x = self.ui.x_entry.get_value()
-        old_y = self.ui.y_entry.get_value()
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(np.sqrt((x - old_x) ** 2 + (y - old_y) ** 2))
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-        units = self.draw_app.app.app_units.lower()
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        show_cursor_text(self.draw_app, pos, ref=(self.ui.x_entry.get_value(), self.ui.y_entry.get_value()))
 
     def cycle_bend_mode(self, forward):
         """
@@ -1656,52 +1549,11 @@ class TrackEditorGrb(ShapeToolEditorGrb):
             pos = self.draw_app.snap_x, self.draw_app.snap_y
 
         if delete:
-            self.draw_app.app.plotcanvas.text_cursor.parent = None
-            self.draw_app.app.plotcanvas.view.camera.zoom_callback = lambda *args: None
+            hide_cursor_text(self.draw_app.app)
             return
 
-        # font size
-        q_settings = QtCore.QSettings("Open Source", "FlatCAM_EVO")
-        if q_settings.contains("hud_font_size"):
-            fsize = q_settings.value('hud_font_size', type=int)
-        else:
-            fsize = 8
-
-        if not self.points:
-            old_x = self.draw_app.snap_x
-            old_y = self.draw_app.snap_y
-        else:
-            old_x = self.points[-1][0]
-            old_y = self.points[-1][1]
-
-        x = pos[0]
-        y = pos[1]
-        try:
-            length = abs(np.sqrt((x - old_x) ** 2 + (y - old_y) ** 2))
-        except IndexError:
-            length = self.draw_app.app.dec_format(0.0, self.draw_app.app.decimals)
-
-        x_dec = str(self.draw_app.app.dec_format(x, self.draw_app.app.decimals)) if x else '0.0'
-        y_dec = str(self.draw_app.app.dec_format(y, self.draw_app.app.decimals)) if y else '0.0'
-        length_dec = str(self.draw_app.app.dec_format(length, self.draw_app.app.decimals)) if length else '0.0'
-
-        units = self.draw_app.app.app_units.lower()
-        l1_txt = 'X:   %s [%s]' % (x_dec, units)
-        l2_txt = 'Y:   %s [%s]' % (y_dec, units)
-        l3_txt = 'L:   %s [%s]' % (length_dec, units)
-        cursor_text = '%s\n%s\n\n%s' % (l1_txt, l2_txt, l3_txt)
-
-        new_pos = self.draw_app.app.plotcanvas.translate_coords_2((x, y))
-        x, y, __, ___ = self.draw_app.app.plotcanvas.translate_coords((new_pos[0]+30, new_pos[1]))
-
-        # text
-        self.draw_app.app.plotcanvas.text_cursor.font_size = fsize
-        self.draw_app.app.plotcanvas.text_cursor.text = cursor_text
-        self.draw_app.app.plotcanvas.text_cursor.pos = x, y
-        self.draw_app.app.plotcanvas.text_cursor.anchors = 'left', 'top'
-
-        if self.draw_app.app.plotcanvas.text_cursor.parent is None:
-            self.draw_app.app.plotcanvas.text_cursor.parent = self.draw_app.app.plotcanvas.view.scene
+        ref = self.points[-1] if self.points else (self.draw_app.snap_x, self.draw_app.snap_y)
+        show_cursor_text(self.draw_app, pos, ref=ref)
 
     def cycle_bend_mode(self, forward):
         """

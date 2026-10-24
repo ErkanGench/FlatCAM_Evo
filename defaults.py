@@ -151,6 +151,8 @@ class AppDefaults:
         "global_theme": 'light',
         # the custom title bar is on by default only on Windows; macOS and Linux keep the native window decorations
         "global_custom_titlebar": sys.platform == "win32",
+        # the custom title bar collapses its menu into a hamburger button; when False the menu bar is always shown
+        "global_hamburger_menu": True,
 
         "global_layout": "compact",
         "global_hover_shape": False,
@@ -189,15 +191,21 @@ class AppDefaults:
         "global_workspaceT": "A4",
         "global_workspace_orientation": 'p',
         "global_axis": True,
-        "global_axis_color": '#B34D4D',
+        "global_axis_color": '#AA0000FF',
+        "global_axis_width": 1,
         "global_hud": False,
+        "global_hud_position": 'TL',
+        "global_hud_text_color_enabled": False,
+        "global_hud_text_color": '#FFFFFFFF',
+        "global_hud_bg_color": '#80808040',
+        "global_hud_offset": 10,
         "global_grid_lines": True,
         "global_grid_snap": True,
 
         "global_cursor_type": "small",
         "global_cursor_size": 20,
-        "global_cursor_width": 2,
-        "global_cursor_color": '#FF0000',
+        "global_cursor_width": 1,
+        "global_cursor_color": '#0055FFFF',
         "global_cursor_color_enabled": True,
 
         "global_pan_button": '2',

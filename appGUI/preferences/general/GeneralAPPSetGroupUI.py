@@ -282,6 +282,83 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         fnt_grid.addWidget(self.hud_font_size_spinner, 6, 1)
 
         # #############################################################################################################
+        # HUD Frame
+        # #############################################################################################################
+        self.hud_label = FCLabel('%s' % _("HUD"), color='purple', bold=True)
+        self.layout.addWidget(self.hud_label)
+
+        hud_frame = FCFrame()
+        self.layout.addWidget(hud_frame)
+
+        hud_grid = GLay(v_spacing=5, h_spacing=3)
+        hud_frame.setLayout(hud_grid)
+
+        # HUD Position
+        self.hud_position_label = FCLabel('%s:' % _('Position'))
+        self.hud_position_label.setToolTip(
+            _("Set the corner of the canvas where the HUD is placed:\n"
+              "- TL -> top-left\n"
+              "- TR -> top-right\n"
+              "- BL -> bottom-left\n"
+              "- BR -> bottom-right")
+        )
+        self.hud_position_combo = FCComboBox()
+        self.hud_position_combo.addItems(['TL', 'TR', 'BL', 'BR'])
+
+        hud_grid.addWidget(self.hud_position_label, 0, 0)
+        hud_grid.addWidget(self.hud_position_combo, 0, 1)
+
+        # HUD Text Color Enable
+        self.hud_text_color_cb = FCCheckBox(label='%s' % _('Text Color'))
+        self.hud_text_color_cb.setToolTip(
+            _("Check this box to set the color of the HUD text.\n"
+              "Unchecked, the color is chosen automatically to contrast with the canvas.")
+        )
+        hud_grid.addWidget(self.hud_text_color_cb, 2, 0, 1, 2)
+
+        # HUD Text Color
+        self.hud_text_color_label = FCLabel('%s:' % _('Color'))
+        self.hud_text_color_label.setToolTip(
+            _("Set the color of the HUD text.")
+        )
+        self.hud_text_color_entry = FCColorEntry(icon=QtGui.QIcon(self.app.resource_location + '/set_colors64.png'))
+
+        hud_grid.addWidget(self.hud_text_color_label, 4, 0)
+        hud_grid.addWidget(self.hud_text_color_entry, 4, 1)
+
+        self.hud_ois = OptionalInputSection(
+            self.hud_text_color_cb,
+            [
+                self.hud_text_color_label,
+                self.hud_text_color_entry
+            ]
+        )
+
+        # HUD Background
+        self.hud_bg_label = FCLabel('%s:' % _('Background'))
+        self.hud_bg_label.setToolTip(
+            _("Set the background color of the HUD.\n"
+              "First 6 digits are the color and the last 2\n"
+              "digits are for alpha (transparency) level.")
+        )
+        self.hud_bg_color_entry = FCColorEntry(icon=QtGui.QIcon(self.app.resource_location + '/set_colors64.png'))
+
+        hud_grid.addWidget(self.hud_bg_label, 6, 0)
+        hud_grid.addWidget(self.hud_bg_color_entry, 6, 1)
+
+        # HUD Offset
+        self.hud_offset_label = FCLabel('%s:' % _('Offset'))
+        self.hud_offset_label.setToolTip(
+            _("Set the distance, in pixels, between the HUD and the two nearest canvas edges.")
+        )
+        self.hud_offset_entry = FCSpinner()
+        self.hud_offset_entry.set_range(0, 500)
+        self.hud_offset_entry.set_step(1)
+
+        hud_grid.addWidget(self.hud_offset_label, 8, 0)
+        hud_grid.addWidget(self.hud_offset_entry, 8, 1)
+
+        # #############################################################################################################
         # Axis Frame
         # #############################################################################################################
         # Axis Size
@@ -303,6 +380,18 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
 
         ax_grid.addWidget(self.axis_color_label, 0, 0)
         ax_grid.addWidget(self.axis_color_entry, 0, 1)
+
+        # Axis Width
+        self.axis_width_label = FCLabel('%s:' % _('Axis Width'))
+        self.axis_width_label.setToolTip(
+            _("Set the line width of the screen axis, in pixels.")
+        )
+        self.axis_width_entry = FCSpinner()
+        self.axis_width_entry.set_range(1, 10)
+        self.axis_width_entry.setWrapping(True)
+
+        ax_grid.addWidget(self.axis_width_label, 2, 0)
+        ax_grid.addWidget(self.axis_width_entry, 2, 1)
 
         # #############################################################################################################
         # Mouse Frame
@@ -491,16 +580,16 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
 
         self.history_memory_spinner = FCSpinner()
         self.history_memory_spinner.set_range(16, 4096)
-        self.history_memory_label = FCLabel('%s:' % _('Undo memory (MB)'))
+        self.history_memory_label = FCLabel('%s:' % _('Undo RAM'))
         self.history_memory_label.setToolTip(
             _("The memory that the Undo history can keep for each project.\n"
-              "The oldest steps are dropped first.")
+              "The oldest steps are dropped first. In megabytes.")
         )
         par_grid.addWidget(self.history_memory_label, 12, 0)
         par_grid.addWidget(self.history_memory_spinner, 12, 1)
 
         GLay.set_common_column_size(
-            [grids_grid, m_grid, par_grid, wk_grid, fnt_grid, ax_grid], 0
+            [grids_grid, m_grid, par_grid, wk_grid, fnt_grid, hud_grid, ax_grid], 0
         )
 
         self.layout.addStretch()
@@ -509,6 +598,15 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
         self.mouse_cursor_entry.editingFinished.connect(self.on_mouse_cursor_entry)
 
         self.axis_color_entry.editingFinished.connect(self.on_axis_color_entry)
+        self.axis_width_entry.valueChanged.connect(self.on_axis_width_entry)
+
+        for key, widget, signal in (
+                ('global_hud_position', self.hud_position_combo, self.hud_position_combo.currentIndexChanged),
+                ('global_hud_text_color_enabled', self.hud_text_color_cb, self.hud_text_color_cb.stateChanged),
+                ('global_hud_text_color', self.hud_text_color_entry, self.hud_text_color_entry.editingFinished),
+                ('global_hud_bg_color', self.hud_bg_color_entry, self.hud_bg_color_entry.editingFinished),
+                ('global_hud_offset', self.hud_offset_entry, self.hud_offset_entry.valueChanged)):
+            signal.connect(lambda *_args, k=key, w=widget: self.on_hud_changed(k, w))
 
     def on_mouse_cursor_color_enable(self, val):
         if val:
@@ -529,11 +627,33 @@ class GeneralAPPSetGroupUI(OptionsGroupUI):
                 self.app.cursor_color_3D = 'black'
             else:
                 self.app.cursor_color_3D = 'gray'
+        self._apply_cursor_color()
 
     def on_mouse_cursor_entry(self):
         self.app.options['global_cursor_color'] = self.mouse_cursor_entry.get_value()
-        self.app.cursor_color_3D = _database_option(self.app, "global_cursor_color")
+        if self.mouse_cursor_color_cb.get_value():
+            self.app.cursor_color_3D = _database_option(self.app, "global_cursor_color")
+            self._apply_cursor_color()
+
+    def _apply_cursor_color(self):
+        # the canvas cursors (small and big) draw with plotcanvas.cursor_color, not with app.cursor_color_3D
+        plotcanvas = getattr(self.app, 'plotcanvas', None)
+        if plotcanvas is not None and hasattr(plotcanvas, 'cursor_h_line'):
+            plotcanvas.cursor_color = self.app.cursor_color_3D
 
     def on_axis_color_entry(self):
         self.app.options['global_axis_color'] = self.axis_color_entry.get_value()
         self.app.plotcanvas.apply_axis_color()
+
+    def on_axis_width_entry(self, *args):
+        self.app.options['global_axis_width'] = self.axis_width_entry.get_value()
+        plotcanvas = getattr(self.app, 'plotcanvas', None)
+        if plotcanvas is not None:
+            plotcanvas.apply_axis_width()
+
+    def on_hud_changed(self, key, widget):
+        # only the changed option is written: the other widgets may still hold stale values while the form loads
+        self.app.options[key] = widget.get_value()
+        plotcanvas = getattr(self.app, 'plotcanvas', None)
+        if plotcanvas is not None:
+            plotcanvas.apply_hud_options()

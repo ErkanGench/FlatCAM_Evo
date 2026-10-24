@@ -416,6 +416,9 @@ class AppToolEditor(AppTool):
         # TODO Hack, should find the root cause and fix
         # for whatever reason the stylesheet for dark mode is lost at some point here, so we should reapply it for the
         # QWidget
+        # Not with the native styling: a 'QWidget' rule makes the windows11 style draw no checked radio indicator.
+        if self.app.options.get('global_styling', self.app.defaults.get('global_styling')) == 'default':
+            return
         if self.app.options.get(
                 'global_theme',
                 self.app.defaults.get('global_theme', self.app.defaults.factory_defaults.get('global_theme'))

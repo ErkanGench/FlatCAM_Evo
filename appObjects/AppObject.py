@@ -77,6 +77,8 @@ class ObjectLoadBatch(QtCore.QObject):
         self.progress.setAutoClose(False)
         self.progress.setAutoReset(False)
         self.progress.show()
+        # Paint the dialog now; once the workers start parsing they hold the GIL and the first paint lags.
+        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         owner.load_batches.add(self)
 
     def on_selection_changed(self, *args):

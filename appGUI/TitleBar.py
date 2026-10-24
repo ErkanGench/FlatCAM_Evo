@@ -241,9 +241,11 @@ class NotebookButton(QtWidgets.QToolButton):
 class TitleBar(QtWidgets.QWidget):
     """Project title, existing application menus and portable window controls."""
 
-    def __init__(self, window, menu, notebook_action, history_actions=()):
+    def __init__(self, window, menu, notebook_action, history_actions=(), hamburger=True):
         super().__init__(window)
         self.menu = menu
+        # when False, the menu bar is always shown and the hamburger button is not used
+        self.hamburger = True
         self.project_title = None
         self.connected_menus = WeakSet()
         self.move_position = None
@@ -381,8 +383,16 @@ class TitleBar(QtWidgets.QWidget):
             qapp.installNativeEventFilter(self.native_filter)
             native_filter = self.native_filter
             self.destroyed.connect(lambda: qapp.removeNativeEventFilter(native_filter))
+        self.set_hamburger(hamburger)
         self.update_title()
         self.update_window_state()
+
+    def set_hamburger(self, on):
+        self.hamburger = bool(on)
+        if self.hamburger:
+            self.collapse_menu()
+        else:
+            self.expand_menu()
 
     def update_title(self):
         # Symmetric bounds keep the text centered on the window, not the remaining space.
@@ -482,7 +492,7 @@ class TitleBar(QtWidgets.QWidget):
             pending.extend(action.menu() for action in menu.actions() if action.menu() is not None)
 
     def collapse_menu(self):
-        if self.menu.isHidden():
+        if not self.hamburger or self.menu.isHidden():
             return
         for menu in self.menus():
             menu.close()
@@ -562,7 +572,7 @@ class TitleBar(QtWidgets.QWidget):
             self.update_menu_font()
         if obj is self and event_type in (QtCore.QEvent.Type.Resize, QtCore.QEvent.Type.LayoutRequest):
             self.resize_timer.start(0)
-        if not self.menu.isHidden():
+        if self.hamburger and not self.menu.isHidden():
             if event_type == QtCore.QEvent.Type.KeyPress and event.key() == QtCore.Qt.Key.Key_Escape:
                 self.collapse_menu()
                 return True

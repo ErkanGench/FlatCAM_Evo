@@ -203,6 +203,9 @@ class AppLifecycle(QtCore.QObject):
             self.app.ui.grb_edit_toolbar.setStyleSheet("QToolBar{spacing:0px;border:0px;}")
             self.app.ui.addToolBar(self.app.ui.grb_edit_toolbar)
 
+        # The File Toolbar is off in all the layout presets; the user can show it from the toolbar context menu.
+        self.app.ui.toolbarfile.setVisible(False)
+
         if current_layout == 'minimal':
             self.app.ui.toolbarview.setVisible(False)
             self.app.ui.toolbarshell.setVisible(False)

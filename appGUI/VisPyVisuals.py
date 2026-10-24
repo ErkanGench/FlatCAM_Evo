@@ -1227,13 +1227,26 @@ class GridLinesVisual(VisPyGridLinesVisual):
     def __init__(self, scale=(1, 1), color='w', **kwargs):
         super(GridLinesVisual, self).__init__(scale=scale, color=color, **kwargs)
         # Use the actual projected plane footprint, not a constant-depth slice.
+        # With the axis lines on, skip the grid lines at X=0 and Y=0; they show beside the axis at some zooms.
         self._grid_color_fn = Function(_GRID_COLOR.replace(
             'vec2 px = vec2(abs(dx.x) + abs(dy.x), abs(dx.y) + abs(dy.y));',
             'vec2 px = fwidth(pos) * $pixel_scale;'
+        ).replace(
+            '    float alpha = (((log(max(x_alpha, y_alpha))/log(10.)) + 2.) / 3.);',
+            '    if ($hide_axes > 0.5) {\n'
+            '        if (abs(local_pos.x) < 2. * px.x) { x_alpha = 0.; }\n'
+            '        if (abs(local_pos.y) < 2. * px.y) { y_alpha = 0.; }\n'
+            '    }\n'
+            '    float alpha = (((log(max(x_alpha, y_alpha))/log(10.)) + 2.) / 3.);'
         ))
         self._grid_color_fn['color'] = Color(color).rgba
         self._grid_color_fn['scale'] = scale
+        self._grid_color_fn['hide_axes'] = 0.0
         self.shared_program.frag['get_data'] = self._grid_color_fn
+
+    def set_hide_axes(self, state):
+        self._grid_color_fn['hide_axes'] = 1.0 if state else 0.0
+        self.update()
 
     def _prepare_transforms(self, view):
         if view.transforms.canvas is not None:

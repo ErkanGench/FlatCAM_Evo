@@ -204,6 +204,14 @@ class TestPlotCanvas3d(unittest.TestCase):
                     canvas.native, QtGui.QEnterEvent(QtCore.QPointF(), QtCore.QPointF(), QtCore.QPointF())
                 )
                 self.assertTrue(all(visual.visible and visual.parent is canvas.view.scene for visual in visuals))
+                # A Leave with no Enter after it (a modal dialog, an editor save): a mouse move shows the cursor.
+                QtWidgets.QApplication.sendEvent(canvas.native, QtCore.QEvent(QtCore.QEvent.Type.Leave))
+                QtTest.QTest.qWait(20)  # VisPy drops a mouse move within 10 ms of the last one
+                QtWidgets.QApplication.sendEvent(canvas.native, QtGui.QMouseEvent(
+                    QtCore.QEvent.Type.MouseMove, QtCore.QPointF(5, 5), QtCore.QPointF(5, 5),
+                    QtCore.Qt.MouseButton.NoButton, QtCore.Qt.MouseButton.NoButton,
+                    QtCore.Qt.KeyboardModifier.NoModifier))
+                self.assertTrue(all(visual.visible for visual in visuals))
                 cursor.enabled = False
                 QtWidgets.QApplication.sendEvent(canvas.native, QtCore.QEvent(QtCore.QEvent.Type.Leave))
                 QtWidgets.QApplication.sendEvent(
@@ -265,6 +273,11 @@ class TestPlotCanvas3d(unittest.TestCase):
         canvas.cursor_color = '#00FF00'
         canvas.on_mouse_position((6, 6))
         self.assertFalse(np.array_equal(canvas.render(), hidden))
+        # the big cursor follows the 'Cursor Width' preference
+        fcapp.options['global_cursor_width'] = 4
+        canvas.on_mouse_position((6, 6))
+        self.assertEqual((canvas.cursor_h_line.line_width, canvas.cursor_v_line.line_width), (4, 4))
+        fcapp.options['global_cursor_width'] = 1
         canvas.cursor_color = '#FF0000'
         canvas.on_mouse_position((5, 5))
         canvas.grid.visible = True
@@ -274,6 +287,71 @@ class TestPlotCanvas3d(unittest.TestCase):
         np.testing.assert_array_equal(canvas.render(), hidden)
         canvas.on_toggle_grid_lines(silent=True)
         self.assertFalse(np.array_equal(canvas.render(), hidden))
+
+    def make_hud_canvas(self, **options):
+        fcapp = CanvasApp()
+        fcapp.options.update({'global_axis_color': '#FF0000', 'global_backface_culling': True})
+        fcapp.options.update(options)
+        fcapp.defaults = {}
+        fcapp.cursor_color_3D = '#FF0000'
+        fcapp.decimals = 4
+        fcapp.dec_format = lambda value, decimals: round(value, decimals)
+        fcapp.ui.hud_label = QtWidgets.QLabel()
+        fcapp.inform = MagicMock()
+        canvas = PlotCanvas(fcapp)
+        self.addCleanup(fcapp.ui.deleteLater)
+        self.addCleanup(canvas.close)
+        canvas.view.size = (800, 600)
+        canvas.on_toggle_hud(state=True, silent=True)
+        return fcapp, canvas
+
+    def test_hud_sits_in_the_chosen_corner_at_the_offset(self):
+        fcapp, canvas = self.make_hud_canvas()
+        rect = canvas.rect_hud
+        self.assertAlmostEqual(rect.center[0] - rect.width / 2, 10)
+        self.assertAlmostEqual(rect.center[1] - rect.height / 2, 10)
+        for position, offset in (('TR', 12), ('BL', 7), ('BR', 20)):
+            with self.subTest(position=position):
+                fcapp.options['global_hud_position'] = position
+                fcapp.options['global_hud_offset'] = offset
+                canvas.apply_hud_options()
+                left, top = rect.center[0] - rect.width / 2, rect.center[1] - rect.height / 2
+                right, bottom = left + rect.width, top + rect.height
+                if 'R' in position:
+                    self.assertAlmostEqual(800 - right, offset)
+                else:
+                    self.assertAlmostEqual(left, offset)
+                if 'B' in position:
+                    self.assertAlmostEqual(600 - bottom, offset)
+                else:
+                    self.assertAlmostEqual(top, offset)
+                self.assertGreaterEqual(canvas.text_hud.pos[:, 0].min(), left)
+                self.assertLessEqual(canvas.text_hud.pos[:, 1].max(), bottom)
+        # a resize keeps the HUD against the same corner
+        canvas.view.size = (1000, 700)
+        canvas._update_text_hud()
+        self.assertAlmostEqual(1000 - (rect.center[0] + rect.width / 2), 20)
+        self.assertAlmostEqual(700 - (rect.center[1] + rect.height / 2), 20)
+
+    def test_hud_colors_follow_the_options(self):
+        fcapp, canvas = self.make_hud_canvas()
+        automatic = canvas.text_hud.color.rgba.copy()
+        fcapp.options.update({'global_hud_text_color_enabled': True, 'global_hud_text_color': '#FF0000FF',
+                              'global_hud_bg_color': '#00FF0080'})
+        canvas.apply_hud_options()
+        np.testing.assert_allclose(canvas.text_hud.color.rgba.ravel(), (1, 0, 0, 1), atol=0.01)
+        np.testing.assert_allclose(canvas.rect_hud.color.rgba.ravel(), (0, 1, 0, 128 / 255), atol=0.01)
+        np.testing.assert_allclose(canvas.rect_hud.border_color.rgba.ravel(), (0, 1, 0, 128 / 255), atol=0.01)
+        fcapp.options['global_hud_text_color_enabled'] = False
+        canvas.apply_hud_options()
+        np.testing.assert_allclose(canvas.text_hud.color.rgba, automatic)
+
+    def test_axis_width_follows_the_option(self):
+        fcapp, canvas = self.make_hud_canvas(global_axis_width=3)
+        self.assertEqual((canvas.v_line.line_width, canvas.h_line.line_width), (3, 3))
+        fcapp.options['global_axis_width'] = 6
+        canvas.apply_axis_width()
+        self.assertEqual((canvas.v_line.line_width, canvas.h_line.line_width), (6, 6))
 
     def test_rectangular_grid_updates_both_axes_and_fits(self):
         for units, scale in (('MM', 1), ('IN', 1 / 25.4)):
