@@ -103,6 +103,33 @@ Fiducials Plugin:
 - the Size accepts small values (it was limited to 1-3); the panel shows the units next to Size, Margin and Line thickness; the coordinate cells are read-only
 - the Big cursor option is also in Preferences; the Line thickness tooltip in Preferences is fixed
 
+Punch Gerber Plugin:
+
+- fixed: an aperture macro pad is punched inside its own bounds; a macro whose first record is a clear no longer crashes
+- fixed: clear flashes and the geometry outside the apertures are kept in the punched object
+- fixed: a nested or MultiPolygon solid geometry is punched correctly
+- fixed: with an Excellon source, the clear features are kept, only the selected holes are cut, and the slots are cleared
+- fixed: a source with no apertures, or with nothing to punch, shows a warning and creates no object
+- fixed: in manual mode, a second click on a pad removes its highlight; Select All has each pad only once; Escape ends the mode, and the next manual punch does not use the old pads
+- fixed: a right click with no pads ends manual mode and creates nothing; an error during the punch enables the notebook again
+- fixed: closing the plugin ends manual mode and clears the marks; the Reset button no longer rebuilds the panel inside its own click
+- the circle steps option sets the smoothness of the holes (steps of the whole circle)
+- the panel has titled sections for the Fixed Diameter, Fixed Annular Ring and Proportional methods
+
+Copper Thieving Plugin:
+
+- fixed: Escape during the Area Selection crashed; now it ends the selection
+- fixed: every end of the Area Selection (done, Escape, right click, plugin close, Reset) gives back the canvas mouse handlers, removes the zone rectangles and enables Undo again; before, a failed or empty selection could keep the canvas in the plugin mode, and old zones were added to the next fill
+- fixed: a second Add during the Area Selection no longer connects the mouse handlers twice; a pan or drag release is not a zone corner
+- fixed: the Reset button no longer rebuilds the panel inside its own click
+- fixed: Reference Object mode with no reference object shows an error and creates nothing; before, it used the Gerber object itself
+- fixed: an empty Gerber, an empty fill, a robber bar thickness of 0 or an empty plating mask shows a warning and creates no object
+- fixed: the robber bar works on a Gerber with MultiPolygon geometry, with no follow geometry, or with only region apertures; its new aperture number is 10 or more
+- fixed: the plating mask job no longer reads or writes the panel from the worker thread; the busy indicator stays on while a job runs; the plating mask is no longer added to the recent files
+- the thieving object and the plating mask have the follow geometry of the new copper
+- the dots, the robber bar and the plating mask clearance use the app circle steps for the whole circle (before: 256 segments for each dot); the Circle Steps preference starts at 4
+- the panel and the Preferences show the units next to each length; the sizes and the robber bar thickness accept only values above 0; the robber bar margin is not negative; the Clearance and Margin in Preferences accept values above 99.99
+
 Tests:
 
 - the test window of the title bar tests closes on Alt+F4 or from the taskbar; before, a window left by a stopped run stayed on the screen and could not be closed

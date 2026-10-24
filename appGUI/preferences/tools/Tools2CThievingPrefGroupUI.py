@@ -22,6 +22,9 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
         self.setTitle(str(_("Copper Thieving Plugin")))
         self.decimals = app.decimals
         self.options = app.options
+        self.units = app.app_units
+        self.units_len = _("mm") if self.units.upper() == 'MM' else _("in")
+        self.units_area = _("mm") if self.units.upper() == 'MM' else _("in")
 
         # #############################################################################################################
         # Parameters Frame
@@ -47,7 +50,7 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
         )
 
         self.circlesteps_entry = FCSpinner()
-        self.circlesteps_entry.set_range(1, 10000)
+        self.circlesteps_entry.set_range(4, 10000)
 
         grid_par.addWidget(self.circle_steps_lbl, 2, 0)
         grid_par.addWidget(self.circlesteps_entry, 2, 1)
@@ -60,12 +63,13 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
               "and the copper traces in the Gerber file.")
         )
         self.clearance_entry = FCDoubleSpinner()
-        self.clearance_entry.setMinimum(0.00001)
+        self.clearance_entry.set_range(0.00001, 10000.0000)
         self.clearance_entry.set_precision(self.decimals)
         self.clearance_entry.setSingleStep(0.1)
 
         grid_par.addWidget(self.clearance_label, 4, 0)
         grid_par.addWidget(self.clearance_entry, 4, 1)
+        grid_par.addWidget(FCLabel(self.units_len), 4, 2)
 
         # MARGIN #
         self.margin_label = FCLabel('%s:' % _("Margin"))
@@ -73,12 +77,13 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
             _("Bounding box margin.")
         )
         self.margin_entry = FCDoubleSpinner()
-        self.margin_entry.setMinimum(0.0)
+        self.margin_entry.set_range(0.0, 10000.0000)
         self.margin_entry.set_precision(self.decimals)
         self.margin_entry.setSingleStep(0.1)
 
         grid_par.addWidget(self.margin_label, 6, 0)
         grid_par.addWidget(self.margin_entry, 6, 1)
+        grid_par.addWidget(FCLabel(self.units_len), 6, 2)
 
         # Area #
         self.area_label = FCLabel('%s:' % _("Area"))
@@ -92,6 +97,7 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
 
         grid_par.addWidget(self.area_label, 8, 0)
         grid_par.addWidget(self.area_entry, 8, 1)
+        grid_par.addWidget(FCLabel('%s<sup>2</sup>' % self.units_area), 8, 2)
         
         # Reference #
         # Reference #
@@ -123,7 +129,7 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
         separator_line = QtWidgets.QFrame()
         separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        grid_par.addWidget(separator_line, 14, 0, 1, 2)
+        grid_par.addWidget(separator_line, 14, 0, 1, 3)
 
         # Fill Type
         self.fill_type_label = FCLabel('%s:' % _("Fill"))
@@ -159,12 +165,13 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
             _("Dot diameter in Dots Grid.")
         )
         self.dot_dia_entry = FCDoubleSpinner()
-        self.dot_dia_entry.set_range(0.0, 10000.0000)
+        self.dot_dia_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.dot_dia_entry.set_precision(self.decimals)
         self.dot_dia_entry.setSingleStep(0.1)
 
         grid_dots.addWidget(self.dotdia_label, 0, 0)
         grid_dots.addWidget(self.dot_dia_entry, 0, 1)
+        grid_dots.addWidget(FCLabel(self.units_len), 0, 2)
 
         # Dot spacing #
         self.dotspacing_label = FCLabel('%s:' % _("Spacing"))
@@ -178,6 +185,7 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
 
         grid_dots.addWidget(self.dotspacing_label, 2, 0)
         grid_dots.addWidget(self.dot_spacing_entry, 2, 1)
+        grid_dots.addWidget(FCLabel(self.units_len), 2, 2)
 
         # #############################################################################################################
         # Squares Grid Parameters Frame
@@ -198,12 +206,13 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
             _("Square side size in Squares Grid.")
         )
         self.square_size_entry = FCDoubleSpinner()
-        self.square_size_entry.set_range(0.0, 10000.0000)
+        self.square_size_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.square_size_entry.set_precision(self.decimals)
         self.square_size_entry.setSingleStep(0.1)
 
         grid_square.addWidget(self.square_size_label, 0, 0)
         grid_square.addWidget(self.square_size_entry, 0, 1)
+        grid_square.addWidget(FCLabel(self.units_len), 0, 2)
 
         # Squares spacing #
         self.squares_spacing_label = FCLabel('%s:' % _("Spacing"))
@@ -217,6 +226,7 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
 
         grid_square.addWidget(self.squares_spacing_label, 2, 0)
         grid_square.addWidget(self.squares_spacing_entry, 2, 1)
+        grid_square.addWidget(FCLabel(self.units_len), 2, 2)
 
         # #############################################################################################################
         # Lines Grid Parameters Frame
@@ -237,12 +247,13 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
             _("Line thickness size in Lines Grid.")
         )
         self.line_size_entry = FCDoubleSpinner()
-        self.line_size_entry.set_range(0.0, 10000.0000)
+        self.line_size_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.line_size_entry.set_precision(self.decimals)
         self.line_size_entry.setSingleStep(0.1)
 
         grid_line.addWidget(self.line_size_label, 0, 0)
         grid_line.addWidget(self.line_size_entry, 0, 1)
+        grid_line.addWidget(FCLabel(self.units_len), 0, 2)
 
         # Lines spacing #
         self.lines_spacing_label = FCLabel('%s:' % _("Spacing"))
@@ -256,6 +267,7 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
 
         grid_line.addWidget(self.lines_spacing_label, 2, 0)
         grid_line.addWidget(self.lines_spacing_entry, 2, 1)
+        grid_line.addWidget(FCLabel(self.units_len), 2, 2)
 
         # #############################################################################################################
         # Robber Bar Parameters Frame
@@ -280,12 +292,13 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
             _("Bounding box margin for robber bar.")
         )
         self.rb_margin_entry = FCDoubleSpinner()
-        self.rb_margin_entry.set_range(-10000.0000, 10000.0000)
+        self.rb_margin_entry.set_range(0.0, 10000.0000)
         self.rb_margin_entry.set_precision(self.decimals)
         self.rb_margin_entry.setSingleStep(0.1)
 
         grid_robber.addWidget(self.rb_margin_label, 0, 0)
         grid_robber.addWidget(self.rb_margin_entry, 0, 1)
+        grid_robber.addWidget(FCLabel(self.units_len), 0, 2)
 
         # THICKNESS #
         self.rb_thickness_label = FCLabel('%s:' % _("Thickness"))
@@ -293,12 +306,13 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
             _("The robber bar thickness.")
         )
         self.rb_thickness_entry = FCDoubleSpinner()
-        self.rb_thickness_entry.set_range(0.0000, 10000.0000)
+        self.rb_thickness_entry.set_range(10 ** -self.decimals, 10000.0000)
         self.rb_thickness_entry.set_precision(self.decimals)
         self.rb_thickness_entry.setSingleStep(0.1)
 
         grid_robber.addWidget(self.rb_thickness_label, 2, 0)
         grid_robber.addWidget(self.rb_thickness_entry, 2, 1)
+        grid_robber.addWidget(FCLabel(self.units_len), 2, 2)
 
         # #############################################################################################################
         # RPattern Plating Mask Parameters Frame
@@ -336,6 +350,7 @@ class Tools2CThievingPrefGroupUI(OptionsGroupUI):
 
         grid_ppm.addWidget(self.clearance_ppm_label, 2, 0)
         grid_ppm.addWidget(self.clearance_ppm_entry, 2, 1)
+        grid_ppm.addWidget(FCLabel(self.units_len), 2, 2)
 
         # Include geometry
         self.ppm_choice_label = FCLabel('%s:' % _("Add"))

@@ -2,3 +2,33 @@
 # Tests removed on purpose.
 tests/test_tools_database.py::EditorChecks::test_atomic_writer_cancels_failed_write_and_commit  # Replaced QSaveFile call-order mocks with JSON export byte preservation and SQLite transaction rollback checks in test_tools_database.py.
 tests/test_collection_update_view.py::TestColorSwatch::test_swatch_click_keeps_selection_and_sends_the_dialog_color  # Split by the swatch click on a selected and on an unselected row in test_collection_update_view.py.
+tests/test_plugin_geometry_bases.py::test_copper_area_selection_uses_world_coordinates_once  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_dot_grid_larger_than_boundary_is_empty  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_generation_export_preserves_source_region_islands  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_grid_rejects_zero_size[1]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_grid_rejects_zero_size[2]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_grid_rejects_zero_size[3]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_line_grid_respects_clearance_and_does_not_reuse_old_fill  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_line_grid_with_empty_source_returns_empty_geometry  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_self_boundary_does_not_depend_on_source_container[min]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_self_boundary_does_not_depend_on_source_container[rect]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_square_grid_covers_reference_outside_source_extent[excellon]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_square_grid_covers_reference_outside_source_extent[geometry]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_copper_thieving_zero_grid_reports_parameter_and_creates_nothing  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_clearance_export_records_describe_actual_openings  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_controller_preserves_source_name_and_metric_area[board-board_plating_mask]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_controller_preserves_source_name_and_metric_area[board.gbr-board_plating_mask.gbr]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_eroded_robber_does_not_export_negative_aperture  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_export_keeps_pad_inside_buffered_thieving_hole  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_export_preserves_nested_openings[-0.1-1]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_export_preserves_nested_openings[0-0]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_export_preserves_nested_openings[0-1]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_export_preserves_nested_openings[0-3]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_export_preserves_nested_openings[0.1-1]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_export_preserves_nested_openings[0.1-2]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_mask_accepts_shapely_source[collection]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_mask_accepts_shapely_source[polygon]  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_mask_only_pads_excludes_trace_aperture_records  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_mask_robber_with_no_source_apertures  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_plating_negative_clearance_can_split_thieving_openings  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.
+tests/test_plugin_geometry_bases.py::test_robber_bar_preserves_collection_source_and_single_follow  # Moved to tests/test_copper_thieving.py with the Copper Thieving audit fixes.

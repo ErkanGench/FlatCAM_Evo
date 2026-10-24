@@ -12,18 +12,26 @@ class GridParameterError(ValueError):
     """The fill grid size or spacing is out of range."""
 
 
-def robber_bar(solid_geometry, margin, thickness):
-    try:
-        outline = solid_geometry.envelope
-    except (TypeError, AttributeError):
-        outline = MultiPolygon(solid_geometry).envelope
-    line = outline.buffer(margin + thickness / 2.0).exterior
-    return line, line.buffer(thickness / 2.0)
+def _flat(geometry):
+    """Flat list of the shapes of a geometry, [] for None."""
+    return [] if geometry is None else flatten_shapely_geometry(geometry)
 
 
-def robber_bar_data(solid_geometry, tools, follow_geometry, margin, thickness):
+def _quad_segs(circle_steps):
+    """The app counts the steps of the whole circle, Shapely counts the segments of a quarter."""
+    return max(1, int(circle_steps) // 4)
+
+
+def robber_bar(solid_geometry, margin, thickness, circle_steps=64):
+    quad_segs = _quad_segs(circle_steps)
+    outline = unary_union(_flat(solid_geometry)).envelope
+    line = outline.buffer(margin + thickness / 2.0, quad_segs=quad_segs).exterior
+    return line, line.buffer(thickness / 2.0, quad_segs=quad_segs)
+
+
+def robber_bar_data(solid_geometry, tools, follow_geometry, margin, thickness, circle_steps=64):
     """Return the bar outputs and independent merged Gerber geometry and apertures."""
-    line, bar = robber_bar(solid_geometry, margin, thickness)
+    line, bar = robber_bar(solid_geometry, margin, thickness, circle_steps)
     apertures = deepcopy(tools)
     aperture_found = None
     for ap_id, ap_val in tools.items():
@@ -33,20 +41,20 @@ def robber_bar_data(solid_geometry, tools, follow_geometry, margin, thickness):
     if aperture_found:
         apertures[aperture_found]['geometry'].append(deepcopy({'solid': bar, 'follow': line}))
     else:
-        ap_keys = list(apertures.keys())
-        new_apid = int(max(ap_keys)) + 1 if ap_keys else 10
+        # Gerber aperture ids start at 10; the REG key 0 of the generated apertures does not count
+        new_apid = max([10] + [int(key) + 1 for key in apertures])
         apertures[new_apid] = {
             'type': 'C', 'size': deepcopy(thickness),
             'geometry': [deepcopy({'solid': bar, 'follow': line})]}
-    geometry = deepcopy(flatten_shapely_geometry(solid_geometry)) + [deepcopy(bar)]
-    follows = deepcopy(flatten_shapely_geometry(follow_geometry)) + [deepcopy(line)]
+    geometry = deepcopy(_flat(solid_geometry)) + [deepcopy(bar)]
+    follows = deepcopy(_flat(follow_geometry)) + [deepcopy(line)]
     return line, bar, unary_union(geometry), apertures, follows
 
 
 def copper_fill(solid_geometry, tools, reference_geometry, reference_kind, reference, box_type,
                 clearance, margin, min_area, fill_type, dot_dia, dot_spacing, square_size,
                 square_spacing, line_size, line_spacing, circle_steps, abort=None, progress=None,
-                target_geometry=None, line_fill=None):
+                target_geometry=None):
     """Return fill, merged copper and independent aperture records from explicit geometry inputs."""
     def check_abort():
         if abort is not None and abort():
@@ -65,7 +73,7 @@ def copper_fill(solid_geometry, tools, reference_geometry, reference_kind, refer
     geometry = flatten_shapely_geometry(solid_geometry)
     if target_geometry is None:
         target_geometry = solid_geometry
-    steps = int(int(circle_steps) / 4)
+    steps = _quad_segs(circle_steps)
     buffered = []
     for index, poly in enumerate(geometry):
         check_abort()
@@ -92,8 +100,9 @@ def copper_fill(solid_geometry, tools, reference_geometry, reference_kind, refer
             areas.append(poly.buffer(margin, join_style='mitre'))
         boundary = unary_union(areas)
     elif reference_kind == 'gerber':
-        boundary = unary_union(target_geometry).convex_hull.intersection(
-            unary_union(reference_geometry).convex_hull).buffer(margin, join_style='mitre')
+        boundary = unary_union(flatten_shapely_geometry(target_geometry)).convex_hull.intersection(
+            unary_union(flatten_shapely_geometry(reference_geometry)).convex_hull).buffer(
+            margin, join_style='mitre')
     else:
         raise ValueError('The reference object type is not supported.')
 
@@ -114,7 +123,7 @@ def copper_fill(solid_geometry, tools, reference_geometry, reference_kind, refer
             while y <= y1 - half_size:
                 check_abort()
                 if fill_type == 1:
-                    pattern = Point(x, y).buffer(half_size, quad_segs=64)
+                    pattern = Point(x, y).buffer(half_size, quad_segs=steps)
                 else:
                     pattern = box(x - half_size, y - half_size, x + half_size, y + half_size)
                 patterns.append(pattern)
@@ -165,30 +174,33 @@ def copper_fill(solid_geometry, tools, reference_geometry, reference_kind, refer
 
 
 def plating_mask(solid_geometry, tools, follow_geometry, thieving_geometry, robber_geometry, robber_follow,
-                 clearance, choice, thickness, generated_thickness, only_pads):
+                 clearance, choice, only_pads, circle_steps=64):
+    quad_segs = _quad_segs(circle_steps)
     geo_list = []
     if only_pads is False:
-        geo_list = deepcopy(flatten_shapely_geometry(solid_geometry))
+        geo_list = deepcopy(_flat(solid_geometry))
     else:
         for aperture in tools.values():
             for elem in aperture.get('geometry', []):
                 if 'follow' in elem and isinstance(elem['follow'], Point) and 'solid' in elem:
                     geo_list.append(elem['solid'])
     if clearance != 0:
-        geo_list = [geo.buffer(clearance) for geo in geo_list]
-    thieving = deepcopy(flatten_shapely_geometry(thieving_geometry))
-    robber = unary_union(deepcopy(flatten_shapely_geometry(robber_geometry if robber_geometry is not None else [])))
+        geo_list = [geo.buffer(clearance, quad_segs=quad_segs) for geo in geo_list]
+    thieving = deepcopy(_flat(thieving_geometry))
+    robber = unary_union(deepcopy(_flat(robber_geometry)))
     if clearance != 0:
-        robber = robber.buffer(clearance)
-    robber_line = unary_union(deepcopy(flatten_shapely_geometry(robber_follow if robber_follow is not None else [])))
-    follows = deepcopy(flatten_shapely_geometry(follow_geometry))
+        robber = robber.buffer(clearance, quad_segs=quad_segs)
+    robber_line = unary_union(deepcopy(_flat(robber_follow)))
+    follows = deepcopy(_flat(follow_geometry))
     if only_pads:
         follows = [deepcopy(elem['follow']) for aperture in tools.values()
                    for elem in aperture.get('geometry', [])
                    if isinstance(elem.get('follow'), Point) and 'solid' in elem]
     if thieving and choice in [0, 1]:
         for poly in thieving:
-            geo_list.append(poly.buffer(clearance))
+            geo_list.append(poly.buffer(clearance, quad_segs=quad_segs))
+            if isinstance(poly, Polygon) and not poly.is_empty:
+                follows.append(deepcopy(poly.exterior))
     if not robber.is_empty and choice in [0, 2]:
         follows.append(robber_line)
         geo_list.append(robber)

@@ -4681,7 +4681,7 @@ class MainGUI(QtWidgets.QMainWindow):
             elif modifiers == QtCore.Qt.KeyboardModifier.NoModifier:
                 # Escape = Deselect All
                 if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
-                    self.app.copperfill_tool.on_exit()
+                    self.app.copper_thieving_tool.on_exit()
 
                 # Grid toggle
                 if key == QtCore.Qt.Key.Key_G:

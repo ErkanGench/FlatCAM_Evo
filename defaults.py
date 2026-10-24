@@ -841,10 +841,10 @@ class AppDefaults:
         "tools_copper_thieving_clearance": 0.25,
         "tools_copper_thieving_margin": 1.0,
         "tools_copper_thieving_area": 0.1,
-        "tools_copper_thieving_reference": 'itself',
+        "tools_copper_thieving_reference": 0,
         "tools_copper_thieving_box_type": 'rect',
         "tools_copper_thieving_circle_steps": 16,
-        "tools_copper_thieving_fill_type": 'solid',
+        "tools_copper_thieving_fill_type": 0,
         "tools_copper_thieving_dots_dia": 1.0,
         "tools_copper_thieving_dots_spacing": 2.0,
         "tools_copper_thieving_squares_size": 1.0,
@@ -855,7 +855,7 @@ class AppDefaults:
         "tools_copper_thieving_rb_thickness": 1.0,
         "tools_copper_thieving_only_apds": True,
         "tools_copper_thieving_mask_clearance": 0.0,
-        "tools_copper_thieving_geo_choice": 'b',
+        "tools_copper_thieving_geo_choice": 0,
 
         # Fiducials Tool
         "tools_fiducials_dia": 1.0,
