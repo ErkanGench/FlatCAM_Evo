@@ -55,6 +55,16 @@ def _fake_freezer_class(calls, *, include_recovery=True, include_executable=True
 
 @unittest.skipIf(make_freeze is None, "make_freeze.py is not present")
 class TestMakeFreeze(unittest.TestCase):
+    def test_installer_documents_are_bundled_at_the_build_root(self):
+        root = Path(self._tempdir.name)
+        for name in ('README.md', 'LICENSE'):
+            (root / name).write_text(name, encoding='utf-8')
+
+        included = make_freeze.get_main_include_files(root)
+
+        self.assertIn((str(root / 'README.md'), 'README.md'), included)
+        self.assertIn((str(root / 'LICENSE'), 'LICENSE'), included)
+
     def test_windows_has_a_console_executable_for_headless_runs(self):
         created = []
 
