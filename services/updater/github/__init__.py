@@ -8,10 +8,11 @@ from .transport import (
     API_HOST,
     GITHUB_HOST,
     DELETIONS_ASSET_NAME,
-    WINDOWS_ASSET_NAME,
     GitHubRelease,
     GitHubReleaseTransport,
     ReleaseAsset,
     canonical_version,
+    is_windows_asset_name,
     normalize_repository,
+    windows_asset_name,
 )

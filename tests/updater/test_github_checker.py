@@ -13,12 +13,12 @@ from services.updater.github.checker import GitHubUpdateChecker, select_release
 from services.updater.github.transport import (
     API_HOST,
     GITHUB_HOST,
-    WINDOWS_ASSET_NAME,
     GitHubRelease,
     GitHubReleaseTransport,
     ReleaseAsset,
     TransportError,
     canonical_version,
+    windows_asset_name,
 )
 from services.updater.recovery import blocked_release_path, restore_dir_for_install
 
@@ -65,10 +65,11 @@ def _release(tag, *, assets=()):
     )
 
 
-def _windows_asset():
+def _windows_asset(version="1.1", tag="v1.1"):
+    name = windows_asset_name(version)
     return ReleaseAsset(
-        name=WINDOWS_ASSET_NAME,
-        url=f"https://{GITHUB_HOST}/{OWNER}/{REPO}/releases/download/v1.1/{WINDOWS_ASSET_NAME}",
+        name=name,
+        url=f"https://{GITHUB_HOST}/{OWNER}/{REPO}/releases/download/{tag}/{name}",
         size=2048,
         sha256="a" * 64,
     )
@@ -131,29 +132,31 @@ def test_no_releases_is_up_to_date_and_not_an_error(monkeypatch, tmp_path):
 
 
 def test_windows_frozen_x64_selects_the_exact_update_asset(monkeypatch, tmp_path):
+    # the version in the asset name is App.version of the build; it must be the version of the release tag
     _freeze(monkeypatch, frozen=True)
     app = _app(tmp_path, version=1.0)
-    payload = _checker(app, FakeTransport([_release("v1.1", assets=[_windows_asset()])]), tmp_path).run_check(app)
+    assets = [_windows_asset("1.0", "v1.1.0"), _windows_asset("1.1", "v1.1.0")]
+    payload = _checker(app, FakeTransport([_release("v1.1.0", assets=assets)]), tmp_path).run_check(app)
 
     assert payload["status"] == "update_available"
     assert payload["channel"] == "windows"
-    assert payload["tag"] == "v1.1"
-    assert payload["version"] == "1.1"
+    assert payload["tag"] == "v1.1.0"
+    assert payload["version"] == "1.1.0"
     assert payload["build_string"] == f"github:{OWNER.lower()}/{REPO.lower()}:1.1"
     assert payload["mandatory"] is False
     assert payload["automatic"] is True
     assert payload["manual"] is False
     assert payload["install"] == "windows_asset"
     assert payload["asset"] == {
-        "name": WINDOWS_ASSET_NAME,
-        "url": _windows_asset().url,
+        "name": "flatcam-evo-1.1-win64-update.zip",
+        "url": _windows_asset("1.1", "v1.1.0").url,
         "size": 2048,
         "sha256": "a" * 64,
     }
     assert payload["release_notes"] == "release notes"
     assert payload["published_at"] == "2026-09-17T10:00:00Z"
-    assert payload["release_page"] == f"https://{GITHUB_HOST}/{OWNER}/{REPO}/releases/tag/v1.1"
-    assert payload["zipball_url"].endswith("/zipball/v1.1")
+    assert payload["release_page"] == f"https://{GITHUB_HOST}/{OWNER}/{REPO}/releases/tag/v1.1.0"
+    assert payload["zipball_url"].endswith("/zipball/v1.1.0")
     assert "manifest" not in payload
     assert len(app.update_available.payloads) == 1
     assert len(app.update_check_result.payloads) == 1
@@ -162,7 +165,9 @@ def test_windows_frozen_x64_selects_the_exact_update_asset(monkeypatch, tmp_path
 def test_missing_windows_asset_is_an_error_without_fallback(monkeypatch, tmp_path):
     _freeze(monkeypatch, frozen=True)
     app = _app(tmp_path, version=1.0)
-    transport = FakeTransport([_release("v1.1"), _release("v1.0", assets=[_windows_asset()])])
+    # the newest release has only the archive of another version: it is not used
+    transport = FakeTransport([_release("v1.1", assets=[_windows_asset("1.0")]),
+                               _release("v1.0", assets=[_windows_asset("1.0", "v1.0")])])
     payload = _checker(app, transport, tmp_path).run_check(app)
 
     assert payload["status"] == "error"

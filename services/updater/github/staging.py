@@ -33,7 +33,7 @@ from ..manifest import (
 )
 from ..recovery import validate_relative_path as validate_installer_path
 from .checker import _is_appimage, _is_frozen, _is_x64, _platform_name
-from .transport import DELETIONS_ASSET_NAME, WINDOWS_ASSET_NAME, GitHubReleaseTransport
+from .transport import DELETIONS_ASSET_NAME, GitHubReleaseTransport, is_windows_asset_name
 
 
 SOURCE_ARCHIVE_NAME = "flatcam-evo-linux-source.zip"
@@ -219,7 +219,7 @@ def _release_download(payload, platform, install_root: Path) -> _Download:
     }
     if install == "windows_asset":
         asset = payload.get("asset")
-        if not isinstance(asset, dict) or asset.get("name") != WINDOWS_ASSET_NAME:
+        if not isinstance(asset, dict) or not is_windows_asset_name(asset.get("name"), version):
             raise StagingError("Release does not provide the Windows x64 update asset.")
         url = asset.get("url")
         if not isinstance(url, str) or not url:
@@ -235,7 +235,7 @@ def _release_download(payload, platform, install_root: Path) -> _Download:
             sha256 = digest.lower()
         return _Download(
             **common,
-            archive_name=WINDOWS_ASSET_NAME,
+            archive_name=asset["name"],
             url=url,
             size=size,
             sha256=sha256,

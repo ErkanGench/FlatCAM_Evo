@@ -484,6 +484,8 @@ Build:
 - the macOS package is named "FlatCAM Evo"; its version and build number come from App.version and App.version_date (for example 1.0 of 2026/10/25 gives 1.0.0, build 2026.10.25)
 - Linux install (make install / make remove): the program, the launcher, the desktop entry and the MIME file are named flatcam-evo (they were flatcam-beta); the launcher uses the .venv of the project if there is one; a local install puts the launcher in ~/.local/bin; the manual page is installed and removed too; the paths with spaces work; the Python version check of the Makefile is removed
 - the manual page (flatcam-evo.1) has the name flatcam-evo and describes --command, --headless, the exit status in headless mode and FLATCAM_DATA_PATH
+- the update archives have the version in their names: the Windows asset of a GitHub release is flatcam-evo-<version>-win64-update.zip (make_freeze.py --zip takes the version from App.version); the updater takes the asset whose version is the version of the release tag (v1.1 and v1.1.0 both take flatcam-evo-1.1-win64-update.zip) and does not use the archive of another version
+- Digi (legacy): Prepare Update Files writes flatcam-evo-<version>-win64-update.zip and flatcam-evo-<version>-source-update.zip; the manifest.json of each channel names its archive, so the installed versions find the new names
 
 Tests:
 

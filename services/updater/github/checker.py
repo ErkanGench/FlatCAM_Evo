@@ -21,7 +21,6 @@ from ..recovery import blocked_release_path, is_release_blocked, restore_dir_for
 from .transport import (
     DEFAULT_REPOSITORY,
     DELETIONS_ASSET_NAME,
-    WINDOWS_ASSET_NAME,
     GitHubReleaseTransport,
     TransportError,
     canonical_version,
@@ -147,7 +146,7 @@ class GitHubUpdateChecker:
                     "published_at": release.published_at,
                     "release_page": release.html_url,
                     "zipball_url": release.zipball_url,
-                    "asset": _asset_payload(release.asset(WINDOWS_ASSET_NAME)),
+                    "asset": _asset_payload(release.windows_asset()),
                     "deletions_asset": _asset_payload(release.asset(DELETIONS_ASSET_NAME)),
                 }
             )
@@ -289,7 +288,7 @@ class GitHubUpdateChecker:
             return result
 
         install, reason = self._install_plan(app)
-        if install == "windows_asset" and release.asset(WINDOWS_ASSET_NAME) is None:
+        if install == "windows_asset" and release.windows_asset() is None:
             result = self._payload(
                 "error",
                 channel,

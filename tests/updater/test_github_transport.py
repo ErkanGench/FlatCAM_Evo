@@ -16,7 +16,7 @@ from services.updater.github.transport import (
     DEFAULT_REPOSITORY,
     DELETIONS_ASSET_NAME,
     GITHUB_HOST,
-    WINDOWS_ASSET_NAME,
+    windows_asset_name,
     GitHubReleaseTransport,
     TransportError,
     canonical_version,
@@ -24,6 +24,7 @@ from services.updater.github.transport import (
 )
 
 
+WINDOWS_ASSET_NAME = windows_asset_name("1.1")
 OWNER = "MariusAdrian88"
 REPO = "FlatCAM_Evo"
 API_BASE = f"https://{API_HOST}/repos/{OWNER}/{REPO}"

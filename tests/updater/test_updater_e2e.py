@@ -20,7 +20,7 @@ from services.updater.github.staging import stage_update
 from services.updater.github.transport import (
     DELETIONS_ASSET_NAME,
     GITHUB_HOST,
-    WINDOWS_ASSET_NAME,
+    windows_asset_name,
     GitHubReleaseTransport,
 )
 
@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OWNER = "MariusAdrian88"
 REPO = "FlatCAM_Evo"
 VERSION = "1.2.0"
+WINDOWS_ASSET_NAME = windows_asset_name(VERSION)
 API_BASE = f"https://api.github.com/repos/{OWNER}/{REPO}"
 RELEASES_URL = f"{API_BASE}/releases?per_page=100"
 ASSET_URL = (

@@ -138,6 +138,25 @@ class TestMakeFreeze(unittest.TestCase):
         self.assertNotIn("build.py", names)
         self.assertNotIn("updater/FlatCAMUpdater.exe", names)
 
+    def test_update_zip_is_named_from_app_version_and_taken_by_the_updater_for_its_tag(self):
+        from services.updater.github.transport import is_windows_asset_name
+
+        root = Path(self._tempdir.name)
+        source = root / "appMain.py"
+        source.write_text("class App:\n    version = 1.1\n    version_date = '2026/10/25'\n", encoding="utf-8")
+        build_dir = root / "build"
+        (build_dir / "lib").mkdir(parents=True)
+        (build_dir / "FlatCAM.exe").write_bytes(b"main")
+        (build_dir / "lib" / "library.zip").write_bytes(b"runtime")
+
+        archive = make_freeze.make_update_zip(build_dir, app_source=source)
+
+        self.assertEqual("flatcam-evo-1.1-win64-update.zip", archive.name)
+        # the release tag is made from App.version: v1.1 and v1.1.0 take it, another version does not
+        self.assertTrue(is_windows_asset_name(archive.name, "1.1"))
+        self.assertTrue(is_windows_asset_name(archive.name, "1.1.0"))
+        self.assertFalse(is_windows_asset_name(archive.name, "1.2"))
+
     def setUp(self):
         import tempfile
 

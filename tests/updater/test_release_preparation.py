@@ -174,9 +174,8 @@ def test_release_core_failure_leaves_no_partial_final_pair(monkeypatch, tmp_path
         )
 
     assert calls
-    assert not (output / "windows" / "flatcam-windows.zip").exists()
+    assert not list(output.rglob("*.zip"))
     assert not (output / "windows" / "manifest.json").exists()
-    assert not (output / "linux" / "flatcam-source.zip").exists()
     assert not (output / "linux" / "manifest.json").exists()
     assert not list(output.rglob("*.part"))
 
@@ -270,14 +269,16 @@ def test_end_to_end_preparation_has_four_verified_platform_upload_files(monkeypa
         release_notes="Ticket 5",
     )
 
+    # the archives have the version in their names; the client finds them through manifest.json
     expected_paths = (
-        output / "windows" / "flatcam-windows.zip",
+        output / "windows" / "flatcam-evo-3.4.5-win64-update.zip",
         output / "windows" / "manifest.json",
-        output / "linux" / "flatcam-source.zip",
+        output / "linux" / "flatcam-evo-3.4.5-source-update.zip",
         output / "linux" / "manifest.json",
     )
     assert preparation.upload_paths == expected_paths
-    for channel, archive_name in (("windows", "flatcam-windows.zip"), ("linux", "flatcam-source.zip")):
+    for channel, archive_name in (("windows", "flatcam-evo-3.4.5-win64-update.zip"),
+                                  ("linux", "flatcam-evo-3.4.5-source-update.zip")):
         manifest_path = output / channel / "manifest.json"
         manifest = parse_manifest(manifest_path.read_bytes())
         archive_path = output / channel / manifest.archive.filename

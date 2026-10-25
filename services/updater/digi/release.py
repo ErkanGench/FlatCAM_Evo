@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Mapping
 
 from ..archive import DEFAULT_EXCLUSION_POLICY, build_deterministic_zip
+from ..common import update_archive_name
 from ..manifest import (
     ArchiveInfo,
     Manifest,
@@ -99,9 +100,10 @@ def prepare_releases(
     deletions = tuple(deletions)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # the version is in the names; a client finds the archive through the fixed manifest.json of its channel
     archive_names = {
-        "windows": "flatcam-windows.zip",
-        "linux": "flatcam-source.zip",
+        "windows": update_archive_name(version, "win64"),
+        "linux": update_archive_name(version, "source"),
     }
     staging_dir = Path(tempfile.mkdtemp(prefix=".release-", dir=output_dir))
     staged_artifacts = {}

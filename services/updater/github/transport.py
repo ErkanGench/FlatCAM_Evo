@@ -13,7 +13,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..common import DownloadCancelled, TransportError
+from ..common import DownloadCancelled, TransportError, update_archive_name
 from ..manifest import parse_version
 
 
@@ -22,8 +22,8 @@ GITHUB_HOST = "github.com"
 API_HOST = "api.github.com"
 PER_PAGE = 100
 MAX_PAGES = 100
-WINDOWS_ASSET_NAME = "flatcam-evo-windows-x64-update.zip"
 DELETIONS_ASSET_NAME = "flatcam-evo-update-deletions.json"
+_WINDOWS_ASSET_RE = re.compile(r"^flatcam-evo-(\d+(?:\.\d+)*)-win64-update\.zip$")
 _TAG_RE = re.compile(r"^v?\d+(?:\.\d+)*$")
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _DIGEST_RE = re.compile(r"^sha256:([0-9a-fA-F]{64})$")
@@ -37,6 +37,24 @@ def canonical_version(version: str) -> str:
     while len(parts) > 1 and parts[-1] == 0:
         parts.pop()
     return ".".join(str(part) for part in parts)
+
+
+def windows_asset_name(version) -> str:
+    """Return the name of the Windows update asset of a release, made by make_freeze.py from App.version."""
+    return update_archive_name(version, "win64")
+
+
+def is_windows_asset_name(name, version) -> bool:
+    """True if name is the Windows update asset of the release version. The version in the name comes from
+    App.version of the build and the tag can write it in another form, so the 2 are compared as numbers: the tag
+    v1.1.0 takes flatcam-evo-1.1-win64-update.zip."""
+    match = _WINDOWS_ASSET_RE.fullmatch(name) if isinstance(name, str) else None
+    if match is None:
+        return False
+    try:
+        return canonical_version(match.group(1)) == canonical_version(str(version))
+    except ValueError:
+        return False
 
 
 def normalize_repository(repository: str) -> tuple[str, str]:
@@ -90,6 +108,13 @@ class GitHubRelease:
         """Return the named asset metadata, or None when the release lacks it."""
         for asset in self.assets:
             if asset.name == name:
+                return asset
+        return None
+
+    def windows_asset(self) -> ReleaseAsset | None:
+        """Return the Windows update asset whose version is the version of this release, or None."""
+        for asset in self.assets:
+            if is_windows_asset_name(asset.name, self.version):
                 return asset
         return None
 

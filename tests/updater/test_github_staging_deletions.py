@@ -15,12 +15,13 @@ import updater_app
 from services.updater.common import DownloadCancelled, TransportError
 from services.updater.github import staging as staging_module
 from services.updater.github.staging import StagingError, stage_update
-from services.updater.github.transport import DELETIONS_ASSET_NAME, GITHUB_HOST, WINDOWS_ASSET_NAME
+from services.updater.github.transport import DELETIONS_ASSET_NAME, GITHUB_HOST, windows_asset_name
 
 
 OWNER = "MariusAdrian88"
 REPO = "FlatCAM_Evo"
 VERSION = "1.2.0"
+WINDOWS_ASSET_NAME = windows_asset_name(VERSION)
 BUILD = f"github:{OWNER.lower()}/{REPO.lower()}:1.2"
 WRAPPER = f"{OWNER}-{REPO}-6f1a2b3c"
 APP_MAIN = b"class App:\n    version = 1.2\n"

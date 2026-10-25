@@ -18,6 +18,12 @@ class DownloadCancelled(TransportError):
 _log = logging.getLogger(__name__)
 
 
+def update_archive_name(version, platform: str = "win64") -> str:
+    """Return the name of an update archive: the application version (App.version) and the platform are in it,
+    for example flatcam-evo-1.1-win64-update.zip."""
+    return f"flatcam-evo-{version}-{platform}-update.zip"
+
+
 def app_log(app, level: str, message: str) -> None:
     """Log through the application logger, falling back to the module logger."""
     logger = getattr(app, "log", None)
