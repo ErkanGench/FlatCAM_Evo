@@ -33,7 +33,9 @@ if '_' not in builtins.__dict__:
 
 GRIP_HIT_PX = 6             # hit radius of a grip, in screen pixels
 GRIP_SIZE_PX = 4            # half the side of a vertex grip square, in screen pixels
+GRIP_GAP_PX = 12            # minimum distance between 2 shown grips, in screen pixels
 GRIP_LIMIT = 5000           # shapes with more vertices get no grips
+GRIP_FACE_ALPHA = '80'      # the fill of a grip is half transparent: the shape under it stays visible
 GRIP_COLOR = '#FF8000FF'
 INVALID_COLOR = '#FF0000FF'
 # the edit action of a drag and of a Ctrl+click, for each grip kind (no entry: the Ctrl+click does nothing)
@@ -44,6 +46,22 @@ CLICK_ACTIONS = {'vertex': 'remove', 'arc_end': 'remove', 'arc_mid': 'arc_flatte
 
 def xy(pos):
     return float(pos[0]), float(pos[1])
+
+
+def spaced_grips(grips, gap):
+    """The grips that are at least gap apart, so that dense grips do not cover the shape when zoomed out. Vertex,
+    arc and radius grips come before the midpoint grips; in each group, the first grip in the list wins."""
+    cells = {}
+    shown = []
+    for grip in sorted(grips, key=lambda item: item[0] == 'mid'):
+        x, y = grip[2]
+        cx, cy = math.floor(x / gap), math.floor(y / gap)
+        if any(math.dist((x, y), other) < gap
+               for dx in (-1, 0, 1) for dy in (-1, 0, 1) for other in cells.get((cx + dx, cy + dy), ())):
+            continue
+        cells.setdefault((cx, cy), []).append((x, y))
+        shown.append(grip)
+    return shown
 
 
 class VertexGrips:
@@ -65,18 +83,36 @@ class VertexGrips:
         self.geo = None         # the geometry of self.shape
         self.shape = None       # the shape with grips
         self.grips = []         # [(kind, address, (x, y))] of self.shape
+        self.shown = []         # the grips of the last draw(): only these take a press
         self.pressed = None     # (kind, address, grip point, screen point, Ctrl held) of the pressed grip
         self.dragging = False
         self.candidate = None   # (action, address, point) of the last preview with valid input
         self._key = None        # (id(shape), id(shape.geo)) of the last sync()
         self._pixel = None      # pixel size of the last draw()
         self._collection = None
+        self._zoom_timer = None  # redraws the grips after a zoom, also without a mouse move
         self.segment_drag = SegmentDrag(self)
 
     def collection(self):
         if self._collection is None:
             self._collection = self.editor.app.plotcanvas.new_shape_collection(layers=1)
+            self.watch_zoom()
         return self._collection
+
+    def watch_zoom(self):
+        try:
+            changed = self.editor.canvas.view.camera.transform.changed
+        except AttributeError:
+            return  # a canvas without a VisPy camera: the next mouse move redraws the grips
+        self._zoom_timer = QtCore.QTimer()
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.setInterval(50)
+        self._zoom_timer.timeout.connect(self.on_zoom)
+        changed.connect(lambda *args: self._zoom_timer.start())
+
+    def on_zoom(self):
+        if self.shape is not None and self._pixel is not None and self.pixel() != self._pixel:
+            self.draw()
 
     def pixel(self):
         return self.editor.canvas.pixel_size()
@@ -149,7 +185,7 @@ class VertexGrips:
 
     def hide(self):
         self.cancel()
-        self.shape, self.geo, self.grips, self._key, self._pixel = None, None, [], None, None
+        self.shape, self.geo, self.grips, self.shown, self._key, self._pixel = None, None, [], [], None, None
         if self._collection is not None:
             self._collection.clear(update=True)
             self._collection.enabled = False
@@ -158,19 +194,21 @@ class VertexGrips:
         collection = self.collection()
         collection.clear(update=False)
         self._pixel = pixel = self.pixel()
+        self.shown = spaced_grips(self.grips, GRIP_GAP_PX * pixel) if pixel > 0 else list(self.grips)
         color = self.colors()[0]
-        for kind, __, (x, y) in self.grips:
+        face = color[:7] + GRIP_FACE_ALPHA
+        for kind, __, (x, y) in self.shown:
             half = GRIP_SIZE_PX * pixel * (0.6 if kind == 'mid' else 1.0)
             if kind in ('vertex', 'arc_end'):
                 square = box(x - half, y - half, x + half, y + half)
-                collection.add(shape=square, color=color, face_color=color, update=False, layer=0, tolerance=None)
+                collection.add(shape=square, color=color, face_color=face, update=False, layer=0, tolerance=None)
             elif kind == 'mid':
                 square = box(x - half, y - half, x + half, y + half)
                 collection.add(shape=square.exterior, color=color, update=False, layer=0, tolerance=None)
             else:
                 diamond = Polygon([(x - half, y), (x, y - half), (x + half, y), (x, y + half)])
                 if kind == 'radius':
-                    collection.add(shape=diamond, color=color, face_color=color, update=False, layer=0,
+                    collection.add(shape=diamond, color=color, face_color=face, update=False, layer=0,
                                    tolerance=None)
                 else:
                     collection.add(shape=diamond.exterior, color=color, update=False, layer=0, tolerance=None)
@@ -179,12 +217,12 @@ class VertexGrips:
     def hit(self, point):
         """(kind, address, grip point) of the grip under point, or None. With the grid on, the pick radius is at
         least 1 grid step. Midpoint grips last, then the nearest grip, then the lower address (2 parts that touch
-        at 1 vertex)."""
+        at 1 vertex). Only the shown grips count: zoom in to reach the others."""
         radius = GRIP_HIT_PX * self.pixel()
         if self.editor.app.grid_status():
             radius = max(radius, self.grid_step())
         best = None
-        for kind, address, grip in self.grips:
+        for kind, address, grip in self.shown:
             dist = math.dist(point, grip)
             if dist > radius:
                 continue

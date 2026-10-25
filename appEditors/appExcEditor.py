@@ -21,7 +21,8 @@ from appEditors.exc_plugins.ExcHistory import ExcellonHistory, excellon_operatio
 from appEditors.exc_plugins.ExcProperties import (diagnose_features, feature_properties, filter_features,
                                                 native_feature_properties)
 
-from appGUI.GUIElements import FCEntry, FCTable, FCDoubleSpinner, FCButton, FCLabel, FCFrame, GLay
+from appGUI.GUIElements import FCEntry, FCTable, FCDoubleSpinner, FCButton, FCLabel, FCFrame, GLay, \
+    show_selected_rows
 from appEditors.appGeoEditor import (FCShapeTool, DrawTool, DrawToolShape, DrawToolUtilityShape, AppGeoEditor,
                                      PICK_TOLERANCE_PX, CLICK_DRAG_THRESHOLD_PX)
 from appEditors.appGerberEditor import edit_copy_name, get_finite_bounds
@@ -3336,6 +3337,7 @@ class AppExcEditor(QtCore.QObject):
                                               QtCore.QItemSelectionModel.SelectionFlag.Select |
                                               QtCore.QItemSelectionModel.SelectionFlag.Rows)
         del selection_blocker, blocker
+        show_selected_rows(table)
 
     def change_level(self, level):
         """
@@ -5510,6 +5512,8 @@ class AppExcEditor(QtCore.QObject):
             for column in range(table.columnCount()):
                 table.item(row, column).setSelected(record['shape'] in selected)
         del blocker
+        # the panel stays on the tool row (sync_tool_rows); the feature table scrolls inside itself
+        show_selected_rows(table, panel=False)
         # Tool rows summarize the feature selection; never invoke row-click select-all handlers.
         self.sync_tool_rows()
 

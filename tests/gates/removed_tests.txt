@@ -437,3 +437,4 @@ tests/test_view_cube.py::TestViewCube::test_cube_drag_rotates_both_views_about_t
 tests/test_app_history_keys.py::TestViewKeys::test_view_keys_preserve_text_and_other_windows  # flaky (window activation and focus depend on the desktop); removed on the owner's request
 tests/test_startup_args.py::TestOrderAndErrors::test_load_that_never_ends_does_not_block_the_next_file  # flaky (real timer under load); removed on the owner's request
 tests/test_tcl_audit_regressions.py::test_timeout_is_error_and_late_completion_cannot_replace_new_output  # flaky (order-dependent QTimer dispatch); removed on the owner's request
+tests/test_gerber_editor_clear.py::TestEditorSaveWithClear::test_loaded_as_regions_keeps_the_composed_geometry  # parametrized by the Gerber Editor load mode ([False] regions, [True] apertures)

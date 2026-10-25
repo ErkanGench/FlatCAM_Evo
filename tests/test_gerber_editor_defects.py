@@ -6,6 +6,7 @@ factor check, numeric aperture codes, history depth on error, and the zoom switc
 The editor is the real AppGerberEditor built by test_gerber_editor_pick.make_editor; the application, the canvas and
 the worker are stand-ins. Everything is headless and does not sleep."""
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -16,7 +17,8 @@ from shapely.geometry import LineString, Point, Polygon, box
 
 from appEditors.appGerberEditor import AppGerberEditor, ImportEditorGrb, ScaleEditorGrb
 from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
-from appEditors.grb_plugins.GrbCommon import DrawToolShape, numeric_aperture_codes
+from appEditors.grb_plugins.GrbCommon import DrawToolShape, gerber_steps, numeric_aperture_codes
+from appParsers.ParseGerber import Gerber
 from appEditors.grb_plugins.GrbTransformationPlugin import queue_transform
 from test_gerber_editor_pick import aperture, make_editor, pad
 
@@ -141,6 +143,39 @@ def test_intersection_of_disjoint_shapes_fails_and_keeps_sources():
 
 
 # 7. itemChanged connection after an inner error
+
+
+# 8. Dimension edit of R and O apertures: a flash that is no longer the aperture shape (cut by a clear feature or
+# edited) is not replaced by a new full flash
+
+@pytest.mark.parametrize('cut', [False, True])
+@pytest.mark.parametrize('kind', ['R', 'O'])
+def test_dimension_edit_resizes_only_plain_flashes(kind, cut):
+    meta = {'type': kind, 'size': math.hypot(2.0, 1.0), 'width': 2.0, 'height': 1.0}
+    editor = make_editor({})
+    plain = box(-1, -0.5, 1, 0.5) if kind == 'R' else \
+        Gerber.create_flash_geometry(editor, Point(0, 0), meta, gerber_steps(editor.app, 0.5))
+    solid = plain.difference(box(0.5, -1, 2, 1)) if cut else plain
+    flash = DrawToolShape({'solid': solid, 'follow': Point(0, 0)})
+    editor = make_editor({10: dict(meta, geometry=[flash])})
+    editor.history.reset()
+    editor.tid2apcode = {1: 10}
+    editor.oldapcode_newapcode = {10: 10}
+    table = editor.ui.apertures_table
+    table.setRowCount(1)
+    with QtCore.QSignalBlocker(table):
+        table.setItem(0, 1, QtWidgets.QTableWidgetItem('10'))
+        table.setItem(0, 4, QtWidgets.QTableWidgetItem('4, 2'))
+        table.setCurrentCell(0, 4)
+    reconnect_item_changed(editor)
+    editor.on_tool_edit()
+    (shape,) = editor.storage_dict[10]['geometry']
+    if cut:
+        assert shape.geo['solid'].equals(solid)
+        assert editor.history.undo_stack == []
+    else:
+        assert shape.geo['solid'].bounds == pytest.approx((-2, -1, 2, 1), abs=1e-3)
+        assert len(editor.history.undo_stack) == 1
 
 
 # 9. Marked polygons list

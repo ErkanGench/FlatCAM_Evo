@@ -7,62 +7,61 @@ install_dependencies:
 
 USER_ID = $(shell id -u)
 
-LOCAL_PATH = $(shell pwd)
-LOCAL_APPS_PATH = ~/.local/share/applications
-ASSEST_PATH = assets/linux
+LOCAL_PATH = $(CURDIR)
+LOCAL_APPS_PATH = $(HOME)/.local/share/applications
+ASSET_PATH = assets/linux
+LOCAL_BIN_PATH = $(HOME)/.local/bin
+LOCAL_MAN_PATH = $(HOME)/.local/share/man/man1
 
-INSTALL_PATH = /usr/share/flatcam-beta
+INSTALL_PATH = /usr/share/flatcam-evo
 APPS_PATH = /usr/share/applications
-LOCAL_MIME_PATH = ~/.local/share/mime
+LOCAL_MIME_PATH = $(HOME)/.local/share/mime
 MIME_PATH = /usr/share/mime/packages
+MAN_PATH = /usr/local/share/man/man1
 
-MIN_PY3_MINOR_VERSION := 10
-# required version
-MIN_PY3_MINOR_VERSION := $(shell python3 -c 'import sys; print($(MIN_PY3_MINOR_VERSION))')
-
-# current version minimized to required (to allow ifneq test)
-PY3_MIN_MINOR_VERSION := $(shell python3 -c 'import sys; print(min($(MIN_PY3_MINOR_VERSION),sys.version_info.minor))')
-
-ifneq ($(MIN_PY3_MINOR_VERSION), $(PY3_MIN_MINOR_VERSION))
-    $(info Current python version is 3.$(PY3_MIN_MINOR_VERSION))
-    $(error You must have at least 3.$(MIN_PY3_MINOR_VERSION) installed)
-endif
+.PHONY: install_dependencies install remove
 
 install:
 ifeq ($(USER_ID), 0)
 	@ echo "Installing it system-wide"
-	cp -rf $(LOCAL_PATH) $(INSTALL_PATH)
-	@ sed -i "s|python_script_path=.*|python_script_path=$(INSTALL_PATH)|g" $(INSTALL_PATH)/assets/linux/flatcam-beta
-	ln -sf $(INSTALL_PATH)/assets/linux/flatcam-beta /usr/local/bin
-	cp -f $(ASSEST_PATH)/flatcam-beta.desktop $(APPS_PATH)
-	@ sed -i "s|Exec=.*|Exec=$(INSTALL_PATH)/$(ASSEST_PATH)/flatcam-beta %F|g" $(APPS_PATH)/flatcam-beta.desktop
-	@ sed -i "s|Icon=.*|Icon=$(INSTALL_PATH)/$(ASSEST_PATH)/icon.png|g" $(APPS_PATH)/flatcam-beta.desktop
-	mkdir -p $(MIME_PATH)
-	cp -f $(ASSEST_PATH)/flatcam-mime.xml $(MIME_PATH)/flatcam-beta.xml
+	mkdir -p "$(INSTALL_PATH)" "$(APPS_PATH)" /usr/local/bin "$(MIME_PATH)" "$(MAN_PATH)"
+	cp -rf "$(LOCAL_PATH)/." "$(INSTALL_PATH)/"
+	chmod +x "$(INSTALL_PATH)/$(ASSET_PATH)/flatcam-evo"
+	ln -sf "$(INSTALL_PATH)/$(ASSET_PATH)/flatcam-evo" /usr/local/bin/flatcam-evo
+	cp -f "$(ASSET_PATH)/flatcam-evo.desktop" "$(APPS_PATH)/flatcam-evo.desktop"
+	@ sed -i 's|Exec=.*|Exec="$(INSTALL_PATH)/$(ASSET_PATH)/flatcam-evo" %F|g' "$(APPS_PATH)/flatcam-evo.desktop"
+	@ sed -i 's|Icon=.*|Icon=$(INSTALL_PATH)/$(ASSET_PATH)/icon.png|g' "$(APPS_PATH)/flatcam-evo.desktop"
+	cp -f "$(ASSET_PATH)/flatcam-mime.xml" "$(MIME_PATH)/flatcam-evo.xml"
+	install -m 644 flatcam-evo.1 "$(MAN_PATH)/flatcam-evo.1"
 	-update-mime-database /usr/share/mime
-	-update-desktop-database $(APPS_PATH)
+	-update-desktop-database "$(APPS_PATH)"
 else
 	@ echo "Installing locally for $(USER) only"
-	cp -f $(ASSEST_PATH)/flatcam-beta.desktop $(LOCAL_APPS_PATH)
-	@ sed -i "s|Exec=.*|Exec=$(LOCAL_PATH)/$(ASSEST_PATH)/flatcam-beta %F|g" $(LOCAL_APPS_PATH)/flatcam-beta.desktop
-	@ sed -i "s|Icon=.*|Icon=$(LOCAL_PATH)/$(ASSEST_PATH)/icon.png|g" $(LOCAL_APPS_PATH)/flatcam-beta.desktop
-	mkdir -p $(LOCAL_MIME_PATH)/packages
-	cp -f $(ASSEST_PATH)/flatcam-mime.xml $(LOCAL_MIME_PATH)/packages/flatcam-beta.xml
-	-update-mime-database $(LOCAL_MIME_PATH)
-	-update-desktop-database $(LOCAL_APPS_PATH)
+	mkdir -p "$(LOCAL_APPS_PATH)" "$(LOCAL_BIN_PATH)" "$(LOCAL_MIME_PATH)/packages" "$(LOCAL_MAN_PATH)"
+	chmod +x "$(LOCAL_PATH)/$(ASSET_PATH)/flatcam-evo"
+	ln -sf "$(LOCAL_PATH)/$(ASSET_PATH)/flatcam-evo" "$(LOCAL_BIN_PATH)/flatcam-evo"
+	cp -f "$(ASSET_PATH)/flatcam-evo.desktop" "$(LOCAL_APPS_PATH)/flatcam-evo.desktop"
+	@ sed -i 's|Exec=.*|Exec="$(LOCAL_PATH)/$(ASSET_PATH)/flatcam-evo" %F|g' "$(LOCAL_APPS_PATH)/flatcam-evo.desktop"
+	@ sed -i 's|Icon=.*|Icon=$(LOCAL_PATH)/$(ASSET_PATH)/icon.png|g' "$(LOCAL_APPS_PATH)/flatcam-evo.desktop"
+	cp -f "$(ASSET_PATH)/flatcam-mime.xml" "$(LOCAL_MIME_PATH)/packages/flatcam-evo.xml"
+	install -m 644 flatcam-evo.1 "$(LOCAL_MAN_PATH)/flatcam-evo.1"
+	-update-mime-database "$(LOCAL_MIME_PATH)"
+	-update-desktop-database "$(LOCAL_APPS_PATH)"
 endif
 
 remove:
 ifeq ($(USER_ID), 0)
 	@ echo "Uninstalling it system-wide"
-	rm -rf $(INSTALL_PATH)
-	rm -f /usr/local/bin/flatcam-beta
-	rm -r $(APPS_PATH)/flatcam-beta.desktop
-	rm -f $(MIME_PATH)/flatcam-beta.xml
+	rm -rf "$(INSTALL_PATH)"
+	rm -f /usr/local/bin/flatcam-evo
+	rm -f "$(APPS_PATH)/flatcam-evo.desktop"
+	rm -f "$(MIME_PATH)/flatcam-evo.xml" "$(MAN_PATH)/flatcam-evo.1"
 	-update-mime-database /usr/share/mime
+	-update-desktop-database "$(APPS_PATH)"
 else
 	@ echo "Uninstalling only for $(USER) user"
-	rm -f $(LOCAL_APPS_PATH)/flatcam-beta.desktop
-	rm -f $(LOCAL_MIME_PATH)/packages/flatcam-beta.xml
-	-update-mime-database $(LOCAL_MIME_PATH)
+	rm -f "$(LOCAL_BIN_PATH)/flatcam-evo" "$(LOCAL_APPS_PATH)/flatcam-evo.desktop"
+	rm -f "$(LOCAL_MIME_PATH)/packages/flatcam-evo.xml" "$(LOCAL_MAN_PATH)/flatcam-evo.1"
+	-update-mime-database "$(LOCAL_MIME_PATH)"
+	-update-desktop-database "$(LOCAL_APPS_PATH)"
 endif

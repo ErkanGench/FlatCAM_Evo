@@ -1,6 +1,8 @@
 """Launch a frozen FlatCAM from outside its source tree before publishing it."""
 
+import gettext
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -9,6 +11,26 @@ from pathlib import Path
 
 def check_release(executable):
     executable = str(Path(executable).resolve(strict=True))
+    lib_dir = Path(executable).parent / 'lib'
+    if not (lib_dir / 'preprocessors' / 'default.py').is_file():
+        raise RuntimeError(f'Bundled default preprocessor is missing from {lib_dir}')
+    catalogs = sorted((lib_dir / 'locale').glob('*/LC_MESSAGES/strings.mo'))
+    if not catalogs:
+        raise RuntimeError(f'Bundled translations are missing from {lib_dir}')
+    for catalog in catalogs:
+        try:
+            with catalog.open('rb') as stream:
+                gettext.GNUTranslations(stream)
+        except (OSError, EOFError, UnicodeError, struct.error) as error:
+            raise RuntimeError(f'Invalid bundled translation: {catalog}') from error
+
+    command = (
+        'if {[lsearch -exact [list_pp] default] < 0} '
+        '{error "Bundled default preprocessor was not loaded"}; '
+        'if {[llength [glob -nocomplain -- locale/*/LC_MESSAGES/strings.mo]] == 0} '
+        '{error "Bundled translations are not accessible from the application directory"}; '
+        'puts FLATCAM_RELEASE_SMOKE_OK'
+    )
     with tempfile.TemporaryDirectory(prefix='flatcam-release-') as folder:
         env = os.environ.copy()
         for name in ('PYTHONPATH', 'PYTHONHOME', 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH',
@@ -17,7 +39,7 @@ def check_release(executable):
         env['QT_QPA_PLATFORM'] = 'offscreen'
         env['FLATCAM_DATA_PATH'] = str(Path(folder) / 'settings')
         result = subprocess.run(
-            [executable, '--headless', '--command=puts FLATCAM_RELEASE_SMOKE_OK'],
+            [executable, '--headless', f'--command={command}'],
             cwd=folder, env=env, capture_output=True, text=True, timeout=180,
         )
         print(result.stdout)

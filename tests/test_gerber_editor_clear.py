@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from PyQt6 import QtCore
-from shapely.geometry import Point, box
+from shapely.geometry import LineString, Point, box
 
 from appEditors.appGerberEditor import AppGerberEditor, EraserEditorGrb, ImportEditorGrb
 from appEditors.grb_plugins.GrbTransformationPlugin import affine_selection
@@ -65,17 +65,36 @@ class TestBuildEditTools:
     def test_object_without_clear_is_unchanged(self, app):
         source = make_gerber(app, NATIVE_GBR)
         before = deepcopy(source.tools)
-        tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry)
+        tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry, apertures=True)
         assert set(tools) == set(before)
         for ap, tool in before.items():
             assert tools[ap]['type'] == tool['type']
             assert [rec['solid'].wkb for rec in tools[ap]['geometry']] == [rec['solid'].wkb for rec in tool['geometry']]
 
+    def test_apertures_mode_splits_a_cut_record_and_its_follow(self):
+        # the editor draws only Polygon solids: a record cut in 2 becomes 2 records, each with its own follow
+        line = LineString([(0, 0), (10, 0)])
+        clear = box(4, -2, 6, 2)
+        tools = {10: {'type': 'C', 'size': 1.0, 'geometry': [{'solid': line.buffer(0.5), 'follow': line},
+                                                             {'clear': clear}]}}
+        tools = AppGerberEditor.build_edit_tools(tools, line.buffer(0.5).difference(clear), apertures=True)
+        records = tools[10]['geometry']
+        assert len(records) == 2
+        for record in records:
+            assert record['solid'].geom_type == 'Polygon'
+            assert record['follow'].length == pytest.approx(4.0)
+            assert record['solid'].contains(record['follow'].interpolate(0.5, normalized=True))
+            assert not record['solid'].intersects(clear.buffer(-1e-9))
+
 
 class TestEditorSaveWithClear:
-    def test_loaded_as_regions_keeps_the_composed_geometry(self, app, tmp_path):
+    @pytest.mark.parametrize('apertures', [False, True])
+    def test_loaded_as_regions_keeps_the_composed_geometry(self, app, tmp_path, apertures):
         source = make_gerber(app, MIXED_GBR)
-        tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry)
+        before = snapshot(source.tools)
+        tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry, apertures=apertures)
+        assert snapshot(source.tools) == before
+        assert all('clear' not in rec for tool in tools.values() for rec in tool['geometry'])
         edited = editor_save(app, source, tools, loaded_as_regions=True)
         assert_poly_equiv(edited.solid_geometry, source.solid_geometry, rel=1e-4, abs_tol=1e-3, msg='edited')
         union = polygon_union(edited.solid_geometry)
@@ -108,6 +127,26 @@ class TestEditorSaveWithClear:
         assert_poly_equiv(edited.solid_geometry, expected)
         again = reparse_gerber(app, edited.source_file, tmp_path)
         assert_poly_equiv(again.solid_geometry, expected, abs_tol=1e-4)
+
+
+def test_editor_reads_the_load_option_at_each_open(app):
+    from test_gerber_editor_pick import make_editor
+    editor = make_editor()
+    editor.pool = SimpleNamespace(apply_async=lambda fcn, args: SimpleNamespace(get=lambda: fcn(*args)))
+
+    def open_with(load):
+        editor.app.options['gerber_editor_load'] = load
+        editor.app.worker_task.emit.reset_mock()
+        editor.edit_fcgerber(make_gerber(app, MIXED_GBR))
+        job = editor.app.worker_task.emit.call_args.args[0]
+        job['fcn'](*job['params'])
+        return editor.storage_dict
+
+    source = make_gerber(app, MIXED_GBR)
+    assert set(open_with(1)) == set(source.tools)
+    assert editor.loaded_as_regions is True
+    assert set(open_with(0)) == {0}
+    assert editor.loaded_as_regions is True
 
 
 def import_tool(app, source):

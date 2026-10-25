@@ -363,6 +363,8 @@ Geometry Editor:
 - new: the Transformation plugin has the references "Lower Right", "Upper Right" and "Upper Left"; "Minimum" is the lower left corner of the selection
 - the buttons "Flip on X" and "Flip on Y" of the Transformation plugin are now "Reflect X (across Y)" and "Reflect Y (across X)"; the rotation label says "Angle (CW)", and the rotate dialog says "positive CW"
 - Buffer (Interior, Exterior, Full): the result is made from the contours of the polygons and lines, also for the parts of a multi-geometry; a distance that is not finite shows "Invalid distance." and the selection is kept; a failed add of the shapes stops the action; the distance is not shifted by 1e-10 any more
+- a click on a shape selects its row in the shapes tree at once and scrolls the row into view if it is outside the view
+- the vertex grips (also in the Gerber Editor) are at least 12 pixels apart: when zoomed out, the dense grips do not cover the shape (zoom in to reach the others); the fill of a grip is half transparent; the grips are drawn again after a zoom, also without a mouse move
 
 Gerber Editor:
 
@@ -382,6 +384,9 @@ Gerber Editor:
 - fixed: the "Point" reference accepted a text like "inf,1" and gave a wrong result, and an empty selection made a crash with "Selection" or "Minimum"
 - fixed: the Resize circles plugin, the track bend and the history checks found a stored circle only with the steps of the current preference; they also try the other mode (Fixed / Adaptive) and the steps of the loaded object
 - the history combo of the editor takes the full width
+- new: Preferences -> Gerber -> Editor -> "Load" sets how the editor opens a Gerber object with clear (negative) features: "Regions" (default, as before) loads it as one region aperture (0) with one polygon for each solid area; "Apertures" keeps the apertures and cuts the clear areas from the copper and the follow lines of the features (a feature cut in more parts becomes one feature for each part); the value is read each time the editor opens; such an object is saved as regions in both modes
+- fixed: the edit of the dimensions of an R or O aperture made new full flashes, also from a flash that was cut or edited; it now shows "Dimension editing supports flashes with the aperture shape only." and changes nothing
+- fixed: after a click on a shape, the row of its aperture was shown as selected only after the mouse went over the table; the row is now shown at once and comes into view if it is outside the panel; the features table scrolls to the selected feature
 
 Excellon Editor:
 
@@ -394,6 +399,7 @@ Excellon Editor:
 - fixed: the drills that a plugin made (2-Sided) lost the mark of the plugin after a Move, Copy, Resize or Transform in the editor or after a save; the mark is kept
 - new: Transform features has the references "Minimum / lower left", "Lower right", "Upper right" and "Upper left"; the tooltip and the menu entry of Mirror X and Mirror Y say which coordinate is reversed
 - the editor counts the drills and the slots of a tool again only when the tool changed
+- fixed: after a click on a shape, the row of its tool was shown as selected only after the mouse went over the table; the row is now shown at once and comes into view if it is outside the panel; the features table scrolls to the selected feature
 
 Undo / Redo:
 
@@ -473,6 +479,10 @@ Geometry:
 Build:
 
 - the frozen build finds the preprocessors in lib/ next to the executable
+- the release check of a frozen build needs the bundled default preprocessor and the compiled translations, reads every bundled translation file to find a damaged one, and checks in the running application that the default preprocessor is loaded and the translations are found
+- the macOS package is named "FlatCAM Evo"; its version and build number come from App.version and App.version_date (for example 1.0 of 2026/10/25 gives 1.0.0, build 2026.10.25)
+- Linux install (make install / make remove): the program, the launcher, the desktop entry and the MIME file are named flatcam-evo (they were flatcam-beta); the launcher uses the .venv of the project if there is one; a local install puts the launcher in ~/.local/bin; the manual page is installed and removed too; the paths with spaces work; the Python version check of the Makefile is removed
+- the manual page (flatcam-evo.1) has the name flatcam-evo and describes --command, --headless, the exit status in headless mode and FLATCAM_DATA_PATH
 
 Tests:
 
@@ -486,6 +496,7 @@ Translations:
 
 - the new texts of Isolation, Non-Copper Clearing, Paint, Follow, Extract and the other plugins are translated in 9 languages
 - the new texts of the circle preferences, the parsers, Open G-Code, Transform, Move, Distance, the editors, the font parser and the Tcl scripts (140 texts) are translated in 9 languages, as short as possible, with common abbreviations
+- the texts of the Gerber Editor "Load" preference and of the dimension edit check are translated in 9 languages
 
 24.10.2026
 

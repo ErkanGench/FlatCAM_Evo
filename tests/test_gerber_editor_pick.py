@@ -446,5 +446,36 @@ class TestEditorOperations(PickCase):
                 self.assertIn(imported, draw_app.storage_dict[destination]['geometry'])
 
 
+def test_canvas_selection_brings_the_aperture_row_into_view():
+    # the panel scrolls (the table has its full height): the row of the picked shape must come into the viewport
+    shapes = {10 + i: aperture([pad(i * 3, 0, 1)]) for i in range(40)}
+    editor = make_editor(shapes)
+    editor.gerber_obj = SimpleNamespace(obj_options={'name': 'board'})
+    AppGerberEditor.build_ui(editor)
+    area = QtWidgets.QScrollArea()
+    area.setWidgetResizable(True)
+    area.setWidget(editor.ui.grb_edit_widget)
+    area.resize(300, 250)
+    area.show()
+    _qapp.processEvents()
+    last = shapes[49]['geometry'][0]
+    editor.selected = [last]
+    tool = SelectEditorGrb.__new__(SelectEditorGrb)
+    tool.draw_app, tool.sel_aperture = editor, set()
+    tool.after_selection()
+    _qapp.processEvents()
+    table = editor.ui.apertures_table
+    (row,) = {index.row() for index in table.selectionModel().selectedRows()}
+    assert table.item(row, 1).text() == '49'
+    rect = table.visualRect(table.model().index(row, 1))
+    center = table.viewport().mapTo(area.viewport(), rect.center())
+    assert area.viewport().rect().contains(center)
+    # the feature table scrolls inside itself to the feature of the picked shape
+    features = editor.ui.features_table
+    (feature_row,) = {index.row() for index in features.selectionModel().selectedRows()}
+    assert features.viewport().rect().intersects(features.visualRect(features.model().index(feature_row, 0)))
+    area.close()
+
+
 if __name__ == '__main__':
     unittest.main()

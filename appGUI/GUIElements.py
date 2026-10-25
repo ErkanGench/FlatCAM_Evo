@@ -6407,6 +6407,41 @@ class FCDate(QtWidgets.QDateEdit):
         return date_formated
 
 
+def show_selected_rows(view, panel=True):
+    """
+    Repaint an item view after a selection made with its signals blocked (the view repaints on the selectionChanged
+    signal) and bring the first selected row into view: in the view itself and, with ``panel``, in each scroll area
+    that holds the view, as a table of full height in a scrolled panel. Nothing scrolls while a selected row is
+    visible, so a click on a row does not move the view.
+
+    :param view:    a QAbstractItemView (table or tree)
+    :param panel:   also scroll the scroll areas that hold the view
+    :return:        None
+    """
+    view.viewport().update()
+    model = view.selectionModel()
+    indexes = model.selectedIndexes() if model is not None else []
+    if not indexes:
+        return
+    if not any(view.viewport().rect().intersects(view.visualRect(index)) for index in indexes):
+        first = min(indexes, key=lambda index: view.visualRect(index).top())
+        view.scrollTo(first, QtWidgets.QAbstractItemView.ScrollHint.EnsureVisible)
+    if not panel:
+        return
+    parent = view.parentWidget()
+    while parent is not None:
+        if isinstance(parent, QtWidgets.QScrollArea) and parent.widget() is not None:
+            shown = parent.viewport()
+            rects = [(view.visualRect(index), index) for index in indexes]
+            rects = [(QtCore.QRect(view.viewport().mapTo(shown, rect.topLeft()), rect.size()), rect, index)
+                     for rect, index in rects]
+            if not any(shown.rect().intersects(mapped) for mapped, rect, index in rects):
+                mapped, rect, index = min(rects, key=lambda item: item[0].top())
+                center = view.viewport().mapTo(parent.widget(), rect.center())
+                parent.ensureVisible(center.x(), center.y(), 0, rect.height())
+        parent = parent.parentWidget()
+
+
 def message_dialog(title, message, kind="info", parent=None):
     """
     Builds and show a custom QMessageBox to be used in FlatCAM.

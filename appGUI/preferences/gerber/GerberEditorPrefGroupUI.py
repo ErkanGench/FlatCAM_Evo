@@ -1,8 +1,8 @@
 
 from PyQt6 import QtWidgets
 
-from appGUI.GUIElements import FCSpinner, FCDoubleSpinner, FCComboBox, FCLabel, RadioSet, NumericalEvalTupleEntry, \
-    GLay, FCFrame
+from appGUI.GUIElements import FCSpinner, FCDoubleSpinner, FCComboBox, FCComboBox2, FCLabel, RadioSet, \
+    NumericalEvalTupleEntry, GLay, FCFrame
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
 
 import gettext
@@ -115,6 +115,19 @@ class GerberEditorPrefGroupUI(OptionsGroupUI):
 
         param_grid.addWidget(self.adddim_label, 10, 0)
         param_grid.addWidget(self.adddim_entry, 10, 1)
+
+        # How an object with clear features is loaded
+        self.load_label = FCLabel('%s:' % _('Load'))
+        self.load_label.setToolTip(
+            _("How the editor loads a Gerber object that has clear (negative) features.\n"
+              "- Regions: Load the object as one region aperture (0), with one polygon for each solid area. Fast.\n"
+              "- Apertures: Keep the apertures. Slow load.")
+        )
+        self.load_combo = FCComboBox2()
+        self.load_combo.addItems([_("Regions"), _("Apertures")])
+
+        param_grid.addWidget(self.load_label, 12, 0)
+        param_grid.addWidget(self.load_combo, 12, 1)
 
         # #############################################################################################################
         # Linear Pad Array Frame

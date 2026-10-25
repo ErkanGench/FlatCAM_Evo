@@ -50,12 +50,21 @@ the DMG is assembled. They aren't Developer ID signed or notarized. Users may ne
 **System Settings → Privacy & Security → Open Anyway** after trying to open it. Copy the app to Applications first.
 These packages should not be advertised as supporting macOS versions older than the build and dependency baseline.
 
+The Apple Silicon (`arm64`) package targets M1 and later M-series processors natively. The macOS bundle's name is
+**FlatCAM Evo**. Its application version and numeric build identifier come from `App.version` and `App.version_date`
+in the tagged `appMain.py`: for example, version `1.0` dated `2026/10/25` becomes application version `1.0.0` and build
+`2026.10.25`. Reading these literals doesn't import or start the application during packaging. Asset filenames still
+use the full release tag.
+
 ## Validation
 
 Before uploading, `scripts/check_release.py` starts the frozen program from a temporary directory with separate
-settings and no inherited Python, Qt, Tcl or loader path overrides. It runs a Tcl command and requires its success
-marker and a zero exit status. Linux checks the extracted final AppImage; macOS checks the signed app used in the
-DMG. This catches missing startup imports, basic Qt/Tcl failures and working-directory assumptions.
+settings and no inherited Python, Qt, Tcl or loader path overrides. It requires the bundled default preprocessor
+and compiled translations, and parses every bundled translation catalog to reject corrupt files. Its Tcl command
+checks that the running app registered the default preprocessor and can find translations from its application
+directory, then requires a success marker and a zero exit status. Linux checks the extracted final AppImage; macOS
+checks the signed app used in the DMG. This catches missing startup imports, basic Qt/Tcl failures, missing or corrupt
+resources and working-directory assumptions.
 
 The headless check doesn't exercise the VisPy/OpenGL GUI, all CAM operations or Gatekeeper on another machine.
 Test the first downloaded packages on clean Linux and macOS machines before treating them as validated releases.

@@ -25,7 +25,7 @@ from camlib import distance, arc, three_point_circle, Geometry, AppRTreeStorage,
     translate_geometry, affine_translate_matrix, affine_rotate_matrix, affine_scale_matrix, affine_skew_matrix, \
     affine_mirror_matrix, affine_geometry_many, object_circle_steps, object_quad_segs
 from appGUI.GUIElements import FCLabel, GLay, FCDoubleSpinner, FCTree, FCButton, FCFrame, FCCheckBox, FCEntry, \
-    FCTextEdit
+    FCTextEdit, show_selected_rows
 from appGUI.VisPyVisuals import ShapeCollection
 
 from appEditors.geo_plugins.GeoBufferPlugin import BufferSelectionTool
@@ -962,6 +962,7 @@ class AppGeoEditor(QtCore.QObject):
                     iterator += 1
         finally:
             tw.blockSignals(False)
+        show_selected_rows(tw)
 
     def vertex_edit_target(self, target=None):
         """Vertex editing never guesses a selected contour: exactly 1 selected shape."""

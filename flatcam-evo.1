@@ -1,9 +1,9 @@
-.TH FLATCAM "1" "October 2026" "flatcam-beta" "User Commands"
+.TH FLATCAM-EVO "1" "October 2026" "FlatCAM Evo" "User Commands"
 .SH NAME
-flatcam-beta \- FlatCAM Evo, 2D CAM software for PCB manufacturing
+flatcam-evo \- FlatCAM Evo, 2D CAM software for PCB manufacturing
 .SH SYNOPSIS
-.B flatcam-beta
-[\fI\,FILE\/\fR]... [\fB\-\-shellfile\fR=\fI\,SCRIPT\/\fR] [\fB\-\-shellvar\fR=\fI\,VALUE1,VALUE2,...\/\fR]
+.B flatcam-evo
+[\fI\,OPTION\/\fR]... [\fI\,FILE\/\fR]...
 .SH DESCRIPTION
 .PP
 FlatCAM Evo reads the manufacturing files of a printed circuit board (Gerber, Excellon, and the board files of
@@ -22,6 +22,20 @@ Run the Tcl script file after the program starts.
 .TP
 \fB\-\-shellvar\fR=\fIVALUE1,VALUE2,...\fR
 Define the Tcl variables shellvar_0, shellvar_1, ... with these values, for use in the script.
+.TP
+\fB\-\-command\fR=\fICOMMANDS\fR
+Run Tcl commands separated by semicolons. Quote the commands to protect them from the system shell.
+.TP
+\fB\-\-headless\fR
+Run without a window or an OpenGL canvas. Without \fB\-\-shellfile\fR or \fB\-\-command\fR,
+read Tcl commands from standard input.
+.SH "EXIT STATUS"
+In headless mode, 0 indicates success, 1 indicates a failed Tcl command, and 2 indicates an invalid command line.
+The Tcl command \fBexit N\fR sets the exit status to N.
+.SH ENVIRONMENT
+.TP
+\fBFLATCAM_DATA_PATH\fR
+Use this directory for application data instead of the default directory listed below.
 .SH FILES
 .TP
 \fI~/.FlatCAM\fR

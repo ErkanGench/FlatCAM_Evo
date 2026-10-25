@@ -4537,6 +4537,19 @@ class AppGerberEditor(QtCore.QObject):
             return None
         return result
 
+    def _is_plain_flash(self, geo, aperture):
+        """True if the 'solid' of a flash record of an 'R' or 'O' aperture is the full shape of the aperture."""
+        solid, follow = geo.get('solid'), geo['follow']
+        width, height = float(aperture['width']), float(aperture['height'])
+        if solid is None or solid.is_empty or not getattr(geo.get('clear'), 'is_empty', True):
+            return False
+        if str(aperture['type']) == 'R':
+            plain = box(follow.x - width / 2, follow.y - height / 2, follow.x + width / 2, follow.y + height / 2)
+        else:
+            plain = Gerber.create_flash_geometry(self, follow, aperture, gerber_steps(self.app, min(width, height) / 2))
+        # compare the footprints, not the vertex order or the circle steps
+        return solid.hausdorff_distance(plain) <= max(min(width, height) * 0.005, 1e-8)
+
     def _apply_tool_edit(self):
         """Apply the edited aperture table cell. Return True when the table must be rebuilt."""
         self.is_modified = True
@@ -4588,6 +4601,14 @@ class AppGerberEditor(QtCore.QObject):
             else:
                 if not all(math.isfinite(value) and value > 0 for value in val_edited):
                     self.app.inform.emit('[WARNING_NOTCL] %s' % _("Dimensions must be finite and positive."))
+                    return 'fail'
+                # the edit makes new full flashes: a flash with another shape (cut or edited) would lose its shape
+                aperture = self.storage_dict[ap_code_old]
+                if str(aperture['type']) in ('R', 'O') and \
+                        not all(self._is_plain_flash(shape.geo, aperture) for shape in aperture['geometry']
+                                if isinstance(shape.geo.get('follow'), Point)):
+                    self.app.inform.emit('[WARNING_NOTCL] %s' %
+                                         _("Dimension editing supports flashes with the aperture shape only."))
                     return 'fail'
                 self.app.inform.emit("[success] %s" % _("Dimensions edited."))
 
@@ -5269,12 +5290,21 @@ class AppGerberEditor(QtCore.QObject):
 
         pending = self.history.reserve()
         source = self.gerber_obj
+        # read at each open: 0 loads an object with clear features as regions, 1 keeps its apertures
+        load_apertures = self.app.options.get(
+            "gerber_editor_load",
+            self.app.defaults.get(
+                "gerber_editor_load",
+                self.app.defaults.factory_defaults.get("gerber_editor_load")
+            )
+        ) == 1
 
         def load():
             result = {'pending': pending}
             with self.app.proc_container.new('%s ...' % _("Loading")):
                 try:
-                    tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry)
+                    tools = AppGerberEditor.build_edit_tools(source.tools, source.solid_geometry,
+                                                             apertures=load_apertures)
                     result['regions'] = tools is not source.tools
                     jobs = [self.pool.apply_async(AppGerberEditor.add_apertures, args=(key, value))
                             for key, value in tools.items()]
@@ -5286,37 +5316,110 @@ class AppGerberEditor(QtCore.QObject):
         self.app.worker_task.emit({'fcn': load, 'params': []})
 
     @staticmethod
-    def build_edit_tools(tools, solid_geometry):
+    def build_edit_tools(tools, solid_geometry, apertures=False):
         """
         Build the apertures dictionary that the editor loads.
 
         The editor draws and saves only the 'solid' of the records, so the 'clear' (LPC) features of a record would
-        be lost. An object that holds such features is loaded as its composed geometry (the polarity is already
-        applied there): one region 'aperture' 0 with 1 record per polygon, the largest exterior first. An object
-        without clear features is loaded as it is.
+        be lost. An object that holds such features is loaded in one of two ways:
+
+        * as its composed geometry (the polarity is already applied there): one region 'aperture' 0 with 1 record
+          per polygon, the largest exterior first;
+        * with ``apertures`` set, as its apertures, with the clear features cut from the 'solid' and the 'follow'
+          of the records (see clip_edit_tools()).
+
+        An object without clear features is loaded as it is.
 
         :param tools:           the apertures dictionary of the source Gerber object; it is not changed
         :param solid_geometry:  the composed solid_geometry of the source Gerber object
-        :return:                ``tools`` itself (no clear feature), or a new dictionary with the region aperture 0
+        :param apertures:       keep the apertures of an object with clear features
+        :return:                ``tools`` itself (no clear feature), or a new dictionary
         """
-        for tool in tools.values():
-            for record in tool.get('geometry', ()):
-                # same test as Gerber.needs_region_export(); None, or [] of older code, is no clear geometry
-                if not getattr(record.get('clear'), 'is_empty', True):
-                    break
-            else:
-                continue
-            break
-        else:
+        # same test as Gerber.needs_region_export(); None, or [] of older code, is no clear geometry
+        clears = [record['clear'] for tool in tools.values() for record in tool.get('geometry', ())
+                  if not getattr(record.get('clear'), 'is_empty', True)]
+        if not clears:
             return tools
 
         from appParsers.feature_access import normalize_polygonal
         solid = normalize_polygonal(solid_geometry if solid_geometry is not None else [])
+        if apertures:
+            return AppGerberEditor.clip_edit_tools(tools, solid, clears)
         polygons = [solid] if isinstance(solid, Polygon) else list(solid.geoms)
         polygons = [poly for poly in polygons if not poly.is_empty]
         polygons.sort(key=lambda poly: Polygon(poly.exterior).area, reverse=True)
         return {0: {'type': 'REG', 'size': 0.0,
                     'geometry': [{'solid': poly, 'follow': poly.exterior} for poly in polygons]}}
+
+    @staticmethod
+    def clip_edit_tools(tools, solid, clears):
+        """
+        Keep the apertures of an object with clear features: cut from each record the area that the clear features
+        remove. That area is the part of the clear features that is not in the composed solid, so the cut needs no
+        order of the records, and the union of the cut records is the composed solid.
+
+        The records that hold only a clear feature are dropped, and no record keeps its 'clear'. The editor draws only
+        a Polygon solid, so each polygon of a cut record is a record, with the part of the 'follow' inside it: a
+        region gets the exterior of its polygon, a flash whose 'follow' point the cut removes gets the boundary.
+        The work is done on shapely arrays: one tree query finds the (record, removed part) pairs.
+
+        :param tools:   the apertures dictionary of the source Gerber object; it is not changed
+        :param solid:   the composed solid of the source Gerber object (Polygon or MultiPolygon)
+        :param clears:  the clear geometries of the records
+        :return:        a new apertures dictionary with the same aperture codes
+        """
+        removed = shapely.get_parts(shapely.difference(shapely.union_all(np.array(clears, dtype=object)), solid))
+        removed = removed[shapely.area(removed) > 0]
+
+        records = [record for tool in tools.values() for record in tool.get('geometry', ())
+                   if record.get('solid') is not None and not record['solid'].is_empty]
+        cut = {}
+        if len(removed) and records:
+            solids = np.array([record['solid'] for record in records], dtype=object)
+            rec_idx, part_idx = shapely.STRtree(removed).query(solids, predicate='intersects')
+            order = np.argsort(rec_idx, kind='stable')
+            rec_idx, part_idx = rec_idx[order], part_idx[order]
+            starts = np.flatnonzero(np.r_[True, rec_idx[1:] != rec_idx[:-1]]) if len(rec_idx) else rec_idx
+            ends = np.r_[starts[1:], len(rec_idx)]
+            # a record with 1 removed part is cut by that part, the others by the union of their parts
+            cutters = np.empty(len(starts), dtype=object)
+            single = (ends - starts) == 1
+            cutters[single] = removed[part_idx[starts[single]]]
+            for group in np.flatnonzero(~single):
+                cutters[group] = shapely.union_all(removed[part_idx[starts[group]:ends[group]]])
+            hit = rec_idx[starts]
+            new_solids = shapely.difference(solids[hit], cutters)
+            follows = np.array([records[i].get('follow') for i in hit], dtype=object)
+            has_follow = np.array([follow is not None for follow in follows], dtype=bool)
+            new_follows = np.empty(len(hit), dtype=object)
+            new_follows[has_follow] = shapely.difference(follows[has_follow], cutters[has_follow])
+            for i, new_solid, new_follow in zip(hit, new_solids, new_follows):
+                cut[id(records[i])] = (new_solid, new_follow)
+
+        new_tools = {}
+        for apid, tool in tools.items():
+            new_tools[apid] = {key: value for key, value in tool.items() if key != 'geometry'}
+            geometry = new_tools[apid]['geometry'] = []
+            for record in tool.get('geometry', ()):
+                if record.get('solid') is None or record['solid'].is_empty:
+                    continue
+                new_record = {key: value for key, value in record.items() if key != 'clear'}
+                if id(record) not in cut:
+                    geometry.append(new_record)
+                    continue
+                new_solid, new_follow = cut[id(record)]
+                # the editor draws only a Polygon solid: each polygon of the cut is a record
+                for part in shapely.get_parts(new_solid):
+                    if not isinstance(part, Polygon) or part.is_empty:
+                        continue
+                    part_record = dict(new_record, solid=part)
+                    if tool.get('type') == 'REG':
+                        part_record['follow'] = part.exterior
+                    elif new_follow is not None:
+                        piece = new_follow.intersection(part)
+                        part_record['follow'] = part.boundary if piece.is_empty else piece
+                    geometry.append(part_record)
+        return new_tools
 
     @staticmethod
     def add_apertures(aperture_id, aperture_dict):
@@ -6042,6 +6145,7 @@ class AppGerberEditor(QtCore.QObject):
                         table.selectRow(row)
                         self.last_aperture_selected = by_text[item.text()]
                 table.setSelectionMode(old_mode)
+        show_selected_rows(table)
 
     def get_snap_index(self):
         """Index FOLLOW vertices and segments once per geometry revision and editor session."""
@@ -6166,6 +6270,8 @@ class AppGerberEditor(QtCore.QObject):
                 if shape in selected:
                     selection.select(table.model().index(row, 0), table.model().index(row, table.columnCount() - 1))
             table.selectionModel().select(selection, QtCore.QItemSelectionModel.SelectionFlag.Select)
+        # the panel stays on the aperture row (sync_aperture_rows); the feature table scrolls inside itself
+        show_selected_rows(table, panel=False)
 
     def on_feature_selection(self):
         if not self.history.ready():

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import plistlib
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,7 @@ except ImportError:
     make_freeze = None
 
 from services.updater.archive import build_deterministic_zip
+from scripts.check_release import check_release
 
 
 class FakeExecutable:
@@ -142,6 +145,45 @@ class TestMakeFreeze(unittest.TestCase):
 
     def tearDown(self):
         self._tempdir.cleanup()
+
+
+class TestReleasePackaging(unittest.TestCase):
+    def test_mac_bundle_metadata_uses_application_version_and_build_date(self):
+        from scripts.freeze_release import bundle_metadata
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'appMain.py'
+            source.write_text("class App:\n    version = 1.0\n    version_date = '2026/10/25'\n", encoding='utf-8')
+            metadata = plistlib.loads(plistlib.dumps(bundle_metadata(source)))
+
+        self.assertEqual('FlatCAM Evo', metadata['CFBundleName'])
+        self.assertEqual('FlatCAM Evo', metadata['CFBundleDisplayName'])
+        self.assertEqual('org.flatcam.evo', metadata['CFBundleIdentifier'])
+        self.assertEqual('1.0.0', metadata['CFBundleShortVersionString'])
+        self.assertEqual('2026.10.25', metadata['CFBundleVersion'])
+
+    def test_release_rejects_missing_or_corrupt_bundled_resources(self):
+        catalog_data = (Path(__file__).resolve().parents[1] / 'locale/de/LC_MESSAGES/strings.mo').read_bytes()
+        for state in ('valid', 'missing_preprocessor', 'missing_translation', 'corrupt_translation'):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                executable = root / 'FlatCAM'
+                executable.touch()
+                if state != 'missing_preprocessor':
+                    preprocessor = root / 'lib/preprocessors/default.py'
+                    preprocessor.parent.mkdir(parents=True)
+                    preprocessor.write_text('# bundled preprocessor', encoding='utf-8')
+                if state != 'missing_translation':
+                    catalog = root / 'lib/locale/de/LC_MESSAGES/strings.mo'
+                    catalog.parent.mkdir(parents=True)
+                    catalog.write_bytes(b'corrupt' if state == 'corrupt_translation' else catalog_data)
+                result = SimpleNamespace(returncode=0, stdout='FLATCAM_RELEASE_SMOKE_OK', stderr='')
+                with patch('scripts.check_release.subprocess.run', return_value=result):
+                    if state == 'valid':
+                        check_release(executable)
+                    else:
+                        with self.assertRaises((RuntimeError, OSError)):
+                            check_release(executable)
 
 
 if __name__ == "__main__":
