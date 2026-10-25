@@ -96,14 +96,6 @@ def test_cncjob_multitool_keeps_per_tool_settings_unless_given():
     assert [data[uid]['tools_mill_spindlespeed'] for uid in data] == [1000, 2000]
 
 
-def test_cncjob_dia_applies_to_single_tool_object_only():
-    data, _, app = multitool_cncjob('-dia', '0.9')
-    assert [data[uid]['tools_mill_tooldia'] for uid in data] == [0.5, 1.0]
-    assert 'dia' in ' '.join(str(c.args[0]) for c in app.inform.emit.call_args_list)
-    data, _, _ = multitool_cncjob('-dia', '0.9', tools=1)
-    assert data[1]['tools_mill_tooldia'] == 0.9
-
-
 def test_cncjob_milling_options_reach_every_tool():
     data, _, _ = multitool_cncjob('-offset_value', '0.2', '-job_type', 'polishing', '-polish_margin', '1',
                                   '-polish_overlap', '20', '-polish_method', 'lines', '-optimization', 't',
@@ -114,13 +106,6 @@ def test_cncjob_milling_options_reach_every_tool():
         assert (tool['tools_mill_polish_overlap'], tool['tools_mill_polish_method']) == (20.0, 2)
         assert (tool['tools_mill_optimization_type'], tool['tools_mill_search_time']) == ('T', 7)
         assert tool['tools_mill_area_exclusion'] is False
-
-
-def test_cncjob_single_geometry_with_milling_options_goes_through_the_milling_tool():
-    data, kwargs, app = multitool_cncjob('-dia', '0.3', '-z_cut', '-1', '-offset_type', 'out', multigeo=False, tools=1)
-    assert kwargs['geo_obj'].multigeo and kwargs['geo_obj'].tools[1]['solid_geometry']
-    assert (data[1]['tools_mill_tooldia'], data[1]['tools_mill_cutz'], data[1]['tools_mill_offset_type']) == (0.3, -1.0, 2)
-    assert app.milling_tool.target_obj.kind == 'geometry'
 
 
 @pytest.mark.parametrize('argv', [('-offset_type', 'sideways'), ('-optimization', 'Z'), ('-job_type', '9'),

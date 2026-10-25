@@ -18,6 +18,7 @@ if '_' not in builtins.__dict__:
 
 from PyQt6 import QtCore
 from appGUI.GUIElements import FCMessageBox
+from appGUI.VisPyVisuals import stop_deferred_updates
 from appCommon.Headless import HeadlessExit
 
 
@@ -56,6 +57,9 @@ class AppLifecycle(QtCore.QObject):
     # Method 2: on_app_restart
     # --------------------------------------------------------------------------
     def on_app_restart(self):
+        if getattr(self.app, 'script_state', '') == 'running':
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before restarting."))
+            return False
         # make sure that the Sys Tray icon is hidden before restart otherwise it will
         # be left in the SySTray
         try:
@@ -256,6 +260,10 @@ class AppLifecycle(QtCore.QObject):
         """
         from PyQt6 import QtGui, QtWidgets
 
+        if getattr(self.app, 'script_state', '') == 'running' and not getattr(self.app, 'headless', False):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before closing."))
+            return False
+
         if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
             self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
             return False
@@ -369,6 +377,10 @@ class AppLifecycle(QtCore.QObject):
         from PyQt6.QtCore import QSettings
         from PyQt6 import QtCore, QtWidgets
 
+        if getattr(self.app, 'script_state', '') == 'running' and not getattr(self.app, 'headless', False):
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before closing."))
+            return False
+
         if getattr(getattr(self.app, 'geo_editor', None), '_source_save_pending', False) is True:
             self.inform.emit('[WARNING_NOTCL] %s' % _("Geometry save is running. Wait until it ends."))
             return False
@@ -430,6 +442,8 @@ class AppLifecycle(QtCore.QObject):
         # Release VisPy OpenGL resources early so the GL thread has time to
         # fully exit before QApplication.quit() processes the quit event
         try:
+            # a deferred redraw that runs after the close fails: Gloo has no canvas
+            stop_deferred_updates()
             self.app.plotcanvas.close()
         except Exception:
             pass

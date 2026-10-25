@@ -12,7 +12,7 @@
 
 from copy import deepcopy
 
-from PyQt6 import QtCore
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from appEditors.appTextEditor import AppTextEditor
 from appObjects.AppObjectTemplate import FlatCAMObj
@@ -68,7 +68,7 @@ class ScriptObject(FlatCAMObj):
 
         self.script_editor_tab = None
 
-        self.ser_attrs = ['obj_options', 'kind', 'source_file']
+        self.ser_attrs = ['obj_options', 'kind', 'source_file', 'script_filename']
         self.source_file = ''
         self.script_code = ''
         self.script_filename = ''
@@ -108,6 +108,8 @@ class ScriptObject(FlatCAMObj):
         self.change_level(app_mode)
 
         self.script_editor_tab = AppTextEditor(app=self.app, plain_text=True, parent=self.app.ui)
+        self.script_editor_tab.script_owner = self
+        self.script_editor_tab.code_editor.textChanged.connect(self.on_source_changed)
 
         # tab_here = False
         # # try to not add too many times a tab that it is already installed
@@ -146,14 +148,18 @@ class ScriptObject(FlatCAMObj):
         self.script_editor_tab.buttonOpen.clicked.disconnect()
         self.script_editor_tab.buttonOpen.clicked.connect(lambda: self.script_editor_tab.handleOpen(filt=flt))
         self.script_editor_tab.buttonSave.clicked.disconnect()
-        self.script_editor_tab.buttonSave.clicked.connect(lambda: self.script_editor_tab.handleSaveGCode(filt=flt))
+        self.script_editor_tab.buttonSave.clicked.connect(self.handle_save)
+        save_menu = QtWidgets.QMenu(self.script_editor_tab.buttonSave)
+        save_menu.addAction(_('Save As'), lambda: self.script_editor_tab.handleSaveGCode(filt=flt))
+        self.script_editor_tab.buttonSave.setMenu(save_menu)
+        self.script_editor_tab.buttonSave.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup)
 
         self.script_editor_tab.buttonRun.clicked.connect(self.handle_run_code)
         self.script_editor_tab.handleTextChanged()
 
         self.ui.autocomplete_cb.stateChanged.connect(self.on_autocomplete_changed)
 
-        self.ser_attrs = ['obj_options', 'kind', 'source_file']
+        self.ser_attrs = ['obj_options', 'kind', 'source_file', 'script_filename']
 
         # ---------------------------------------------------- #
         # ----------- LOAD THE TEXT SOURCE FILE -------------- #
@@ -173,12 +179,15 @@ class ScriptObject(FlatCAMObj):
         self.build_ui()
 
     def build_ui(self):
+        if self.ui is None:
+            self.set_ui(self.ui_type(app=self.app))
+            return
         FlatCAMObj.build_ui(self)
 
         tab_here = False
         # try to not add too many times a tab that it is already installed
         for idx in range(self.app.ui.plot_tab_area.count()):
-            if self.app.ui.plot_tab_area.widget(idx).objectName() == (self.obj_options['name'] + "_editor_tab"):
+            if self.app.ui.plot_tab_area.widget(idx) is self.script_editor_tab:
                 tab_here = True
                 break
 
@@ -214,16 +223,76 @@ class ScriptObject(FlatCAMObj):
         :param filename:    Tcl Script file to parse
         :return:            None
         """
-        with open(filename, "r") as opened_script:
-            script_content = opened_script.readlines()
-            script_content = ''.join(script_content)
+        with open(filename, "r", encoding='utf-8-sig') as opened_script:
+            script_content = opened_script.read()
 
         self.source_file = script_content
         self.script_filename = filename
 
     def handle_run_code(self):
-        self.script_code = self.script_editor_tab.code_editor.toPlainText()
-        self.app.run_script.emit(self.script_code)
+        self.on_source_changed()
+        result = self.app.script_processing(self.source_file, origin=self.script_filename, owner=self)
+        line = getattr(self.app, 'script_error_line', None)
+        if line is not None and self.script_editor_tab is not None:
+            edit = self.script_editor_tab.code_editor
+            block = edit.document().findBlockByNumber(line - 1)
+            edit.setTextCursor(QtGui.QTextCursor(block))
+            edit.ensureCursorVisible()
+        return result
+
+    def on_source_changed(self):
+        text = self.script_editor_tab.code_editor.toPlainText()
+        if text != self.source_file:
+            self.source_file = text
+            self.mark_project_dirty()
+
+    def mark_project_dirty(self):
+        collection = getattr(self, '_script_collection', None)
+        if collection is not None and collection is not getattr(self.app, 'collection', None):
+            for context in getattr(getattr(self.app, 'projects', None), 'contexts', []):
+                if context.collection is collection:
+                    context.should_we_save = True
+                    return
+        else:
+            self.app.should_we_save = True
+
+    def handle_save(self):
+        if not self.script_filename:
+            return self.script_editor_tab.handleSaveGCode(filt='FlatCAM Scripts (*.FlatScript);;All Files (*.*)')
+        self.on_source_changed()
+        if self.save_file() == 'fail':
+            return 'fail'
+        self.script_editor_tab.buttonSave.setStyleSheet('')
+        self.script_editor_tab.buttonSave.setIcon(QtGui.QIcon(self.app.resource_location + '/save_as.png'))
+        if self._app_option('global_open_style') is False:
+            self.app.file_opened.emit('script', self.script_filename)
+        self.app.file_saved.emit('script', self.script_filename)
+        self.app.inform.emit('%s: %s' % (_('Saved to'), self.script_filename))
+
+    def save_file(self, filename=None):
+        """Atomically save canonical text, without accessing an editor from a save worker."""
+        filename = filename or self.script_filename
+        if not filename:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _('Choose a script filename before saving.'))
+            return 'fail'
+        file = QtCore.QSaveFile(filename)
+        file.setDirectWriteFallback(False)
+        data = self.source_file.encode('utf-8')
+        if not file.open(QtCore.QIODevice.OpenModeFlag.WriteOnly):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % file.errorString())
+            return 'fail'
+        if file.write(data) != len(data):
+            message = file.errorString()
+            file.cancelWriting()
+            self.app.inform.emit('[ERROR_NOTCL] %s' % message)
+            return 'fail'
+        if not file.commit():
+            self.app.inform.emit('[ERROR_NOTCL] %s' % file.errorString())
+            return 'fail'
+        if self.script_filename != filename:
+            self.script_filename = filename
+            self.mark_project_dirty()
+        return None
 
     def on_autocomplete_changed(self, state):
         if state:

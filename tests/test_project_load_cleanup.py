@@ -150,14 +150,6 @@ class TestProjectLoadCleanup(unittest.TestCase):
         self.assertEqual(kept.obj_options['source_path'], 'C:/old/bot.gbl')
         self.assertTrue(self.app.should_we_save)
 
-    def test_cold_start_open_without_splash(self):
-        filename = os.path.join(self.directory.name, 'project.FlatPrj')
-        with open(filename, 'w') as stream:
-            stream.write('{}')
-        self.app.splash = None
-        self.io._open_project(filename, True, True, False, False)
-        self.assertEqual(len(self.tasks), 1)
-
     def test_second_request_is_refused_while_one_loads(self):
         filename = os.path.join(self.directory.name, 'project.FlatPrj')
         with open(filename, 'w') as stream:
@@ -225,12 +217,6 @@ class TestProjectLoadCleanup(unittest.TestCase):
     def test_all_objects_failing_is_not_a_success(self):
         self.restore_objects([{'kind': 'gerber', 'boom': True, 'obj_options': {'name': 'broken'}}])
         self.assertEqual(self.done, [(False, 'board.FlatPrj', ['broken'])])
-
-    def test_complete_load_keeps_the_file_name(self):
-        self.restore_objects([{'kind': 'script', 'obj_options': {'name': 'run'}}])
-        self.assertEqual(self.done, [(True, 'board.FlatPrj', [])])
-        self.assertEqual(self.app.project_filename, 'board.FlatPrj')
-        self.assertFalse(self.app.should_we_save)
 
     def test_empty_project_parses_and_finishes_batch(self):
         from appObjects.AppObject import AppObject

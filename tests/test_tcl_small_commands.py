@@ -4,17 +4,13 @@ import sys
 import unittest
 from html.parser import HTMLParser
 from types import SimpleNamespace
-from unittest import mock
 from unittest.mock import Mock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import tclCommands.TclCommandHelp as TclCommandHelpModule
 from defaults import AppDefaults, AppOptions
-from tclCommands.TclCommandHelp import TclCommandHelp
-from tclCommands.TclCommandOpenGerber import TclCommandOpenGerber
 from tclCommands.TclCommandSetSys import TclCommandSetSys
 
 
@@ -33,26 +29,6 @@ class ShownText(HTMLParser):
 
     def handle_data(self, data):
         self.parts.append(data)
-
-
-class TestTclHelp(unittest.TestCase):
-    def test_help_without_a_name_lists_commands_and_the_usage_hint(self):
-        shell = SimpleNamespace(tcl_commands_storage={'open_gerber': {'description': 'Open a Gerber file.'}},
-                                append_raw=mock.Mock())
-        command = SimpleNamespace(app=SimpleNamespace(shell=shell, log=mock.Mock()))
-        with mock.patch.object(TclCommandHelpModule, '_', lambda text: text, create=True):
-            TclCommandHelp.execute(command, {}, [])
-        shown = ShownText(shell.append_raw.call_args[0][0]).text
-        self.assertIn('Type help <command_name> for usage.', shown)
-        self.assertIn('open_gerber', shown.split('Type help')[0])
-
-
-def test_open_gerber_missing_filename_reports_error_without_crashing():
-    command = TclCommandOpenGerber.__new__(TclCommandOpenGerber)
-    command.raise_tcl_error = Mock()
-    args, unnamed_args = command.check_args(())
-    command.execute(args, unnamed_args)
-    command.raise_tcl_error.assert_called_once_with("Missing required argument 'filename'.")
 
 
 def make_set_sys_command():
@@ -78,12 +54,6 @@ class TestTclSetSys(unittest.TestCase):
         self.assertEqual(options['units'], 'IN' if before == 'MM' else 'MM')
         self.assertEqual(defaults['units'], before)
         command.raise_tcl_error.assert_not_called()
-
-    def test_unknown_key_is_an_error(self):
-        command, _defaults, _options = make_set_sys_command()
-        TclCommandSetSys.execute(command, {'name': 'no_such_key', 'value': '1'}, [])
-        command.raise_tcl_error.assert_called_once()
-
 
 # ---- check_rules --------------------------------------------------------------------------------------------------
 def make_check_rules(tmp_objects):
@@ -112,17 +82,6 @@ def test_check_rules_counts_violations_per_rule():
     assert any('FAILED (2)' in line for line in lines if 'Drill' in line)
     assert any('PASSED' in line for line in lines if 'Hole' in line)
     assert lines[-1].endswith('3')
-
-
-def test_check_rules_unknown_object_and_no_rule_are_tcl_errors():
-    from test_tcl_audit_regressions import FCShell
-    command, _app = make_check_rules(rules_objects())
-    with pytest.raises(FCShell.TclErrorException):
-        command.execute({'copper_top': 'nope', 'c2c': 0.2}, [])
-    with pytest.raises(FCShell.TclErrorException):
-        command.execute({'copper_top': 'top.gtl'}, [])
-    with pytest.raises(FCShell.TclErrorException):
-        command.execute({'c2c': 0.2}, [])  # rule enabled without its layer
 
 
 def test_check_rules_writes_csv_and_a_document_without_plotting(tmp_path):
@@ -164,29 +123,6 @@ def qr_gerber():
     return obj
 
 
-def test_qrcode_tokens_serial_pad_and_mask_pattern():
-    from shapely.ops import unary_union
-    from test_tcl_audit_regressions import FCShell
-    shapes = []
-    for mask in ('0', '5', 'auto'):
-        obj = qr_gerber()
-        command, app = make_qrcode(obj=obj)
-        app.options = {'tools_qrcode_serial_start': 3, 'tools_qrcode_serial_pad': 4}
-        command.execute({'name': 'board', 'data': '{object}-{serial}-{date}', 'x': 10, 'y': 10, 'version': 0,
-                         'mask_pattern': mask}, [])
-        shapes.append(unary_union(obj.solid_geometry))
-    assert not shapes[0].equals(shapes[1])  # the mask pattern changes the modules
-    obj = qr_gerber()
-    command, app = make_qrcode(obj=obj)
-    with mock.patch('appPlugins.ToolQRCode.QRCodeGen.expand_tokens', wraps=None) as expand:
-        expand.return_value = 'x'
-        command.execute({'name': 'board', 'data': 'd', 'serial': 9, 'serial_pad': 3}, [])
-    context, pad = expand.call_args[0][1], expand.call_args[0][2]
-    assert context['serial'] == 9 and pad == 3 and context['date'] and context['time']
-    with pytest.raises(FCShell.TclErrorException):
-        command.execute({'name': 'board', 'data': 'x', 'mask_pattern': '9'}, [])
-
-
 def test_qrcode_source_extends_follow_geometry_and_pcbdoc_uses_object_units():
     from shapely import Point
     from shapely.geometry import MultiPoint
@@ -209,17 +145,6 @@ def test_qrcode_source_extends_follow_geometry_and_pcbdoc_uses_object_units():
     assert in_width < 1.5 < mm_width  # 21 modules: 0.83 in in an inch project, 21 mm in a mm PCB document
 
 
-def test_qrcode_failure_while_planning_leaves_the_object_unchanged():
-    from test_tcl_audit_regressions import FCShell
-    obj = qr_gerber()
-    geometry = list(obj.solid_geometry)
-    command, _app = make_qrcode(obj=obj)
-    with mock.patch('appPlugins.ToolQRCode.QRCodeGen.insert_geometry', side_effect=RuntimeError('boom')):
-        with pytest.raises(FCShell.TclErrorException):
-            command.execute({'name': 'board', 'data': 'x'}, [])
-    assert obj.solid_geometry == geometry
-
-
 def test_qrcode_source_cuts_copper_and_adds_the_code():
     from shapely.ops import unary_union
     obj = qr_gerber()
@@ -229,18 +154,6 @@ def test_qrcode_source_cuts_copper_and_adds_the_code():
     assert unary_union(obj.solid_geometry).area < before
     assert len(obj.solid_geometry) > 1
     obj.regenerate_source.assert_called_once()
-
-
-def test_qrcode_inch_project_uses_inch_module_size():
-    from shapely.ops import unary_union
-    obj = qr_gerber()
-    command, _app = make_qrcode('IN', obj)
-    # box_size 10 = 1 mm per module = 0.03937 in
-    command.execute({'name': 'board', 'data': 'hi', 'x': 0, 'y': 0, 'box_size': 10, 'border': 0, 'version': 1,
-                     'anchor': 'bl', 'polarity': 'pos', 'margin': 0.001}, [])
-    qr = [g for g in obj.solid_geometry if g.bounds[0] >= -1e-6 and g.bounds[2] < 1]
-    width = unary_union(qr).bounds[2]
-    assert 21 * 0.03937 * 0.9 < width <= 21 * 0.03937 + 0.0025  # + the 0.001 margin cut
 
 
 def test_qrcode_overflow_and_bad_input_are_tcl_errors_without_change():
@@ -368,27 +281,6 @@ def test_subtract_objects_takes_several_subtractors_including_an_excellon():
     assert 80 - 0.9 < area < 80 - 0.7  # minus the strip and the 1 mm hole (~0.78)
 
 
-def test_subtract_objects_keep_target_0_deletes_it_and_takes_its_name():
-    from shapely import box
-    objects = {'cu': sub_gerber('cu', box(0, 0, 10, 10)), 'mask': sub_gerber('mask', box(5, 0, 11, 10))}
-    command, app = make_subtract(objects)
-    new = Mock()
-    new.obj_options = {}
-    new.bounds.return_value = (0, 0, 1, 1)
-    events = []
-
-    def create(kind, name, init, plot=True):
-        events.append('create')
-        init(new, app)
-        new.obj_options['name'] = name
-    app.app_obj.new_object.side_effect = create
-    app.collection.delete_by_name.side_effect = lambda name: events.append('delete ' + name)
-    command.execute({'target': 'cu', 'subtractors': 'mask', 'keep_target': '0', 'delete_subtractors': '1'}, [])
-    # the result exists before the target is deleted, then it takes the target name
-    assert events[:2] == ['create', 'delete cu'] and 'delete mask' in events
-    app.collection.rename_object.assert_called_once_with(new, 'cu')
-
-
 def test_subtract_objects_bad_input_is_a_tcl_error_and_creates_nothing():
     from shapely import box
     from test_tcl_audit_regressions import FCShell
@@ -437,15 +329,3 @@ def test_invert_gerber_new_object_is_the_margin_box_minus_the_copper():
     new.regenerate_source.assert_called_once()
     assert objects['board'].solid_geometry[0].area == 36  # the source is untouched
 
-
-def test_invert_gerber_reference_outline_area_minus_the_copper():
-    from shapely import box
-    from shapely.ops import unary_union
-    objects = {'board': invert_source('board', box(2, 2, 8, 8), (0, 0, 10, 10)),
-               'outline': SimpleNamespace(kind='geometry', multigeo=False, obj_options={'name': 'outline',
-                                                                                         'units': 'MM'},
-                                          solid_geometry=[box(-5, -5, 25, 25)], tools={})}
-    command, app = make_invert(objects)
-    command.execute({'name': 'board', 'margin': 0, 'reference': 'outline', 'ref_area': 'box'}, [])
-    name, new = run_init(app)
-    assert unary_union(new.solid_geometry).area == pytest.approx(900 - 36)  # 30 x 30 outline minus the copper

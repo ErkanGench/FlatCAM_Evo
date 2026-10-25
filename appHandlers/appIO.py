@@ -32,7 +32,7 @@ from types import SimpleNamespace
 from copy import deepcopy
 import re
 from shapely.affinity import scale
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 from shapely.ops import unary_union
 
 import numpy as np
@@ -788,10 +788,11 @@ class appIO(QtCore.QObject):
             self.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
             return
         else:
-            self.save_source_file(name, filename)
+            if self.save_source_file(name, filename) == 'fail':
+                return 'fail'
             if self.app.options.get("global_open_style", self.app.defaults.get("global_open_style")) is False:
-                self.app.file_opened.emit("Script", filename)
-            self.app.file_saved.emit("Script", filename)
+                self.app.file_opened.emit("script", filename)
+            self.app.file_saved.emit("script", filename)
 
     def on_file_save_document(self):
         """
@@ -1120,6 +1121,13 @@ class appIO(QtCore.QObject):
 
         self.log.debug("on_file_new_project()")
 
+        pending = getattr(self.app, 'script_pending_work', [])
+        if getattr(self.app, '_script_event_pump', False) is True or \
+                (reset_tcl and getattr(self.app, 'script_state', '') == 'running') or \
+                any(not state['finished'] for state in pending):
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Cannot reset Tcl while a script is running."))
+            return 'fail'
+
         t_start_proj = time.time()
 
         # close any editor that might be open
@@ -1372,13 +1380,14 @@ class appIO(QtCore.QObject):
 
         if name:
             filename = name
-            self.splash.showMessage('%s: %ssec\n%s' %
-                                    (_("Canvas initialization started.\n"
-                                       "Canvas initialization finished in"), '%.2f' % self.app.used_time,
-                                     _("Executing ScriptObject file.")
-                                     ),
-                                    alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
-                                    color=QtGui.QColor("lightgray"))
+            if self.splash is not None:
+                self.splash.showMessage('%s: %ssec\n%s' %
+                                        (_("Canvas initialization started.\n"
+                                           "Canvas initialization finished in"), '%.2f' % self.app.used_time,
+                                         _("Executing ScriptObject file.")
+                                         ),
+                                        alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
+                                        color=QtGui.QColor("lightgray"))
         else:
             _filter_ = "TCL script .FlatScript (*.FlatScript);;TCL script .tcl (*.TCL);;TCL script .txt (*.TXT);;" \
                        "All Files (*.*)"
@@ -1401,15 +1410,18 @@ class appIO(QtCore.QObject):
                 self.app.ui.shell_dock.show()
 
             try:
-                with open(filename, "r") as tcl_script:
+                with open(filename, "r", encoding='utf-8-sig') as tcl_script:
                     cmd_line_shell_file_content = tcl_script.read()
-                    self.app.shell.exec_command(cmd_line_shell_file_content)
+                self.app.script_processing(cmd_line_shell_file_content, origin=filename)
 
-                if silent is False:
+                if silent is False and self.app.script_state == 'completed':
                     self.inform.emit('[success] %s' % _("TCL script file opened in Code Editor and executed."))
+                if self.app.script_state != 'completed':
+                    return 'fail'
             except Exception as e:
                 self.app.log.error("App.on_file_run_cript() -> %s" % str(e))
-                sys.exit(2)
+                self.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to execute script"), str(e)))
+                return 'fail'
 
     def on_file_save_project(self, silent=False):
         """
@@ -2578,14 +2590,19 @@ class appIO(QtCore.QObject):
 
             excellon_obj.obj_options['source_path'] = os.path.abspath(filename)
 
-            # populate excellon_obj.solid_geometry list
-            ret = excellon_obj.create_geometry()
-            if ret == 'fail':
-                app_obj.log.debug("Could not create geometry for Excellon object.")
-                return "fail"
+            # populate excellon_obj.solid_geometry list; if the object is converted to the app units right after
+            # this, convert_units() makes the geometry, so it is not made twice
+            app_units = str(app_obj.options.get('units', app_obj.app_units)).upper()
+            converted_next = str(excellon_obj.units).upper() != app_units
+            if not converted_next:
+                ret = excellon_obj.create_geometry()
+                if ret == 'fail':
+                    app_obj.log.debug("Could not create geometry for Excellon object.")
+                    return "fail"
 
             for tool in excellon_obj.tools:
-                if excellon_obj.tools[tool]['solid_geometry']:
+                if excellon_obj.tools[tool]['solid_geometry'] or \
+                        (converted_next and (excellon_obj.tools[tool]['drills'] or excellon_obj.tools[tool]['slots'])):
                     return
             app_obj.inform.emit('[ERROR_NOTCL] %s: %s' % (_("No geometry found in file"), filename))
             return "fail"
@@ -2612,15 +2629,16 @@ class appIO(QtCore.QObject):
 
     def open_gcode(self, filename, outname=None, force_parsing=None, plot=True, from_tcl=False):
         """
-        Opens a G-gcode file, parses it and creates a new object for
-        it in the program. Thread-safe.
+        Opens a G-code file and creates a CNCJob object for it, built like a native one (Drilling / Milling): the
+        tools, the parsed geometry and the options come from the parsing of the text, the text itself is kept as it is.
+        Thread-safe.
 
         :param filename:        G-code file filename
         :param outname:         Name of the resulting object. None causes the name to be that of the file.
-        :param force_parsing:
+        :param force_parsing:   not used (kept for the callers)
         :param plot:            If True, then plot the object on canvas
         :param from_tcl:        True if run from Tcl Shell
-        :return:                None
+        :return:                None, 'fail' on failure
         """
         self.log.debug("open_gcode()")
 
@@ -2631,91 +2649,180 @@ class appIO(QtCore.QObject):
             self.inform.emit('[ERROR_NOTCL] %s' % _("File no longer available."))
             return 'fail' if from_tcl else None
 
-        # How the object should be initialized
+        # the error that obj_init told the user about
+        reported = []
+        # what the job assumes because the file does not say it; told to the user once, after the job is made
+        notes = []
+        default_dia_tools = []
+        default_values = []
+
         def obj_init(job_obj, app_obj_: "appMain.App"):
             """
             :param job_obj: the resulting object
             :type app_obj_: App
             """
+            from appParsers.ParseGCode import parse_gcode
+
+            def fail(message):
+                reported.append(message)
+                app_obj_.inform.emit('[ERROR_NOTCL] %s' % message)      # noqa
+                return 'fail'
 
             app_obj_.inform.emit('%s...' % _("Reading GCode file"))     # noqa
             try:
-                f = open(filename)
-                gcode = f.read()
-                f.close()
-            except IOError:
-                app_obj_.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Failed to open"), filename))      # noqa
-                return "fail"
+                with open(filename, 'rb') as f:
+                    raw = f.read()
+            except OSError:
+                return fail('%s: %s' % (_("Failed to open"), filename))
+            # the text is kept exactly (line endings too); a file that is not UTF-8 is read as latin-1
+            encoding = 'utf-8'
+            try:
+                gcode = raw.decode(encoding)
+            except UnicodeDecodeError:
+                encoding = 'latin-1'
+                gcode = raw.decode(encoding)
+            job_obj.gcode_encoding = encoding
 
-            # try to find from what kind of object this GCode was created
-            gcode_origin = 'Geometry'
-            match = re.search(r'^.*Type:\s*.*(\bGeometry\b|\bExcellon\b)', gcode, re.MULTILINE)
-            if match:
-                gcode_origin = match.group(1)
-                job_obj.obj_options['type'] = gcode_origin
-                # add at least one default tool
-                if 'excellon' in gcode_origin.lower():
-                    job_obj.tools = {1: {'data': {'tools_drill_ppname_e': 'default'}}}
-                if 'geometry' in gcode_origin.lower():
-                    job_obj.tools = {1: {'data': {'tools_mill_ppname_g': 'default'}}}
+            options = app_obj_.options
+            units = str(app_obj_.app_units).upper()
 
-            # try to find from what kind of object this GCode was created
-            match = re.search(r'^.*Preprocessor:\s*.*\bGeometry\b|\bExcellon\b:\s(\b.*\b)', gcode, re.MULTILINE)
-            detected_preprocessor = 'default'
-            if match:
-                detected_preprocessor = match.group(1)
-            # determine if there is any tool data
-            match_list = re.findall(r'^.*Tool:\s*(\d*)\s*->\s*Dia:\s*(\d*\.?\d*)', gcode, re.MULTILINE)
-            if match_list:
-                job_obj.tools = {}
-                for match in match_list:
-                    tool = int(match[0])
-                    if 'excellon' in gcode_origin.lower():
-                        job_obj.tools[tool] = {
-                            'tooldia': float(match[1]),
-                            'nr_drills': 0,
-                            'nr_slots': 0,
-                            'offset_z': 0.0,
-                            'data': {'tools_drill_ppname_e': detected_preprocessor}
-                        }
-                    # if 'geometry' in gcode_origin.lower():
-                    #     job_obj.tools[int(m[0])] = {
-                    #         'tooldia': float(m[1]),
-                    #         'data': {
-                    #             'tools_mill_ppname_g': detected_preprocessor,
-                    #             'tools_mill_offset_value': 0.0,
-                    #             'tools_mill_job_type': _('Roughing'),
-                    #             'tools_mill_tool_shape': "C1"
-                    #
-                    #         }
-                    #     }
-                job_obj.used_tools = list(job_obj.tools.keys())
-            # determine if there is any Cut Z data
-            match_list = re.findall(r'^.*Tool:\s*(\d*)\s*->\s*Z_Cut:\s*([\-|+]?\d*\.?\d*)', gcode, re.MULTILINE)
-            if match_list:
-                for match in match_list:
-                    tool = int(match[0])
-                    if 'excellon' in gcode_origin.lower():
-                        if tool in job_obj.tools:
-                            job_obj.tools[tool]['offset_z'] = 0.0
-                            job_obj.tools[tool]['data']['tools_drill_cutz'] = float(match[1])
-                    # if 'geometry' in gcode_origin.lower():
-                    #     if int(m[0]) in job_obj.tools:
-                    #         job_obj.tools[int(m[0])]['data']['tools_mill_cutz'] = float(m[1])
+            def option_dia(key, fallback_mm):
+                # the first diameter of the option (it can be a list of diameters); the option is in the app units
+                try:
+                    dia = float(str(options.get(key)).split(',')[0])
+                except (TypeError, ValueError):
+                    dia = 0.0
+                if dia <= 0:
+                    dia = fallback_mm if units == 'MM' else fallback_mm / 25.4
+                return dia
+
+            # a tool without a diameter in the file: the default drill or mill tool of the application
+            drill_tooldia = option_dia('excellon_drill_tooldia', 0.8)
+            mill_tooldia = option_dia('tools_mill_tooldia', 2.4)
+            try:
+                feedrate_rapid = float(options.get('tools_mill_feedrate_rapid'))
+            except (TypeError, ValueError):
+                feedrate_rapid = None
+
+            try:
+                # (the default diameter is used only for the drill rings of an Excellon job)
+                parsed = parse_gcode(gcode, steps_per_circle=job_obj.steps_per_circle,
+                                     default_tooldia=drill_tooldia, feedrate_rapid=feedrate_rapid,
+                                     target_units=units)
+            except Exception as err:
+                self.log.error("open_gcode() --> %s" % str(err))
+                return fail(_("This is not GCODE"))
+            if not parsed or not parsed.get('motion_count') or not parsed.get('tools'):
+                return fail(_("This is not GCODE"))
+
+            if parsed.get('warnings'):
+                self.log.warning("open_gcode() --> %s" % '; '.join(parsed['warnings']))
+                shown = '; '.join(parsed['warnings'][:3])
+                if len(parsed['warnings']) > 3:
+                    shown += ' (+%d)' % (len(parsed['warnings']) - 3)
+                notes.append('%s: %s' % (_("The G-code has unsupported parts"), shown))
+            if not parsed.get('units'):
+                notes.append(_("no G20/G21 in the file, the units of the application are assumed"))
+
+            is_exc = parsed['type'] == 'Excellon'
+            prefix = 'tools_drill_' if is_exc else 'tools_mill_'
+            default_tooldia = drill_tooldia if is_exc else mill_tooldia
+            pp_name = parsed.get('preprocessor')
+            if pp_name not in getattr(app_obj_, 'preprocessors', {}):
+                pp_name = 'default'
+
+            job_obj.units = units
+            job_obj.multitool = True
+            job_obj.multigeo = False
+            job_obj.gcode_imported = True
+            job_obj.obj_options['type'] = parsed['type']
+            job_obj.obj_options['gcode_units'] = parsed.get('units') or ''
+            if is_exc:
+                job_obj.pp_excellon_name = pp_name
+            else:
+                job_obj.pp_geometry_name = pp_name
+
+            job_obj.tools = {}
+            total_parsed = []
+            for key, tool in parsed['tools'].items():
+                tooldia = tool.get('tooldia')
+                if tooldia is None or float(tooldia) <= 0:
+                    tooldia = default_tooldia
+                    default_dia_tools.append(str(key))
+                else:
+                    tooldia = float(tooldia)
+                # the data of a native tool: the application defaults of the tool, then what the G-code says
+                data = {k: deepcopy(v) for k, v in options.items() if k.startswith(prefix)}
+                found = {'cutz': tool.get('z_cut'), 'travelz': tool.get('z_move'),
+                         'feedrate_z': tool.get('feedrate_z'), 'spindlespeed': tool.get('spindlespeed')}
+                if not re.search(r'[Zz]\s*[-+.\d]', tool['gcode']):
+                    # no Z move in the block: the Z values are not from the file, the defaults of the tool stay
+                    found['cutz'] = found['travelz'] = None
+                if is_exc:
+                    data[prefix + 'ppname_e'] = pp_name
+                else:
+                    found['feedrate'] = tool.get('feedrate')
+                    data[prefix + 'tooldia'] = tooldia
+                    data[prefix + 'offset_value'] = 0.0
+                    data[prefix + 'ppname_g'] = pp_name
+                data.update({prefix + name: value for name, value in found.items() if value is not None})
+                for name, value in found.items():
+                    if value is None and name not in default_values:
+                        default_values.append(name)
+
+                entry = {
+                    'tool': tool.get('tool') if tool.get('tool') is not None else key,
+                    'tooldia': tooldia,
+                    'data': data,
+                    'gcode': tool['gcode'],
+                    'gcode_parsed': tool['gcode_parsed'],
+                    'solid_geometry': tool['solid_geometry'],
+                }
+                if is_exc:
+                    entry.update({
+                        'drills': [Point(x, y) for x, y in tool.get('drills') or []],
+                        'slots': [],
+                        'nr_drills': int(tool.get('nr_drills') or 0),
+                        'nr_slots': int(tool.get('nr_slots') or 0),
+                        'offset': 0.0,
+                    })
+                job_obj.tools[key] = entry
+                total_parsed += tool['gcode_parsed']
+            if default_values:
+                labels = {'cutz': _("Cut Z"), 'travelz': _("Travel Z"), 'feedrate': _("Feedrate X-Y"),
+                          'feedrate_z': _("Feedrate Z"), 'spindlespeed': _("Spindle speed")}
+                notes.insert(0, '%s: %s' % (_("Not in the file, the default values are used"),
+                                            ', '.join(labels[name] for name in default_values)))
+            if default_dia_tools:
+                notes.insert(0, _("No tool diameter in the file for the tools %s: the default %s is used") % (
+                    ', '.join(default_dia_tools), '%g %s' % (default_tooldia, units.lower())))
+            job_obj.used_tools = list(job_obj.tools.keys())
+
+            first_dia = next(iter(job_obj.tools.values()))['tooldia']
+            job_obj.obj_options['tooldia'] = first_dia
+            job_obj.obj_options['tool_dia'] = first_dia
+            job_obj.tooldia = first_dia
+            for attr, name, pick in (('z_cut', 'z_cut', min), ('z_move', 'z_move', max),
+                                     ('feedrate', 'feedrate', None), ('z_feedrate', 'feedrate_z', None),
+                                     ('spindlespeed', 'spindlespeed', None)):
+                values = [t[name] for t in parsed['tools'].values() if t.get(name) is not None]
+                if values:
+                    setattr(job_obj, attr, pick(values) if pick else values[0])
+            if feedrate_rapid is not None:
+                job_obj.feedrate_rapid = feedrate_rapid
+
+            bounds = parsed.get('bounds') or (0.0, 0.0, 0.0, 0.0)
+            (job_obj.obj_options['xmin'], job_obj.obj_options['ymin'],
+             job_obj.obj_options['xmax'], job_obj.obj_options['ymax']) = bounds
+
+            job_obj.coords_decimals = int(options.get('cncjob_coords_decimals', 4))
+            job_obj.fr_decimals = int(options.get('cncjob_fr_decimals', 2))
+            job_obj.travel_distance = parsed.get('travel_distance') or 0.0
+            job_obj.routing_time = parsed.get('routing_time') or 0.0
 
             job_obj.gcode = gcode
-
-            gcode_ret = job_obj.gcode_parse(force_parsing=force_parsing)
-            if gcode_ret == "fail":
-                self.inform.emit('[ERROR_NOTCL] %s' % _("This is not GCODE"))
-                return "fail"
-
-            for k in job_obj.tools:
-                job_obj.tools[k]['gcode'] = gcode
-                job_obj.tools[k]['gcode_parsed'] = []
-
-            for k in job_obj.tools:
-                print(k, job_obj.tools[k])
+            job_obj.source_file = gcode
+            job_obj.gcode_parsed = total_parsed
             job_obj.create_geometry()
 
         with self.app.proc_container.new('%s...' % _("Opening")):
@@ -2726,23 +2833,18 @@ class appIO(QtCore.QObject):
             # New object creation and file processing
             ret_val = self.app.app_obj.new_object("cncjob", name, obj_init, autoselected=False, plot=plot)
             if ret_val == 'fail':
-                if from_tcl:
-                    filename = os.path.join(self.app.options.get('global_tcl_path', self.app.defaults.get('global_tcl_path')),
-                                            os.path.basename(filename.replace('\\', '/')))
-                    ret_val = self.app.app_obj.new_object("cncjob", name, obj_init, autoselected=False, plot=plot)
-                if ret_val == 'fail':
-                    self.inform.emit('[ERROR_NOTCL] %s' %
-                                     _("Failed to create CNCJob Object. Probable not a GCode file. "
-                                       "Try to load it from File menu.\n "
-                                       "Attempting to create a FlatCAM CNCJob Object from "
-                                       "G-Code file failed during processing"))
-                    return "fail"
+                if not reported:
+                    self.inform.emit('[ERROR_NOTCL] %s' % _("Failed to create the CNCJob object from the G-code file."))
+                return "fail"
 
             # Register recent file
             self.app.file_opened.emit("cncjob", filename)
 
             # appGUI feedback
             self.inform.emit('[success] %s: %s' % (_("Opened"), filename))
+            if notes:
+                self.inform.emit('[WARNING_NOTCL] %s: %s' % (_("G-code without complete tool data"),
+                                                              '; '.join(notes)))
 
     def open_hpgl2(self, filename, outname=None):
         """
@@ -3628,6 +3730,9 @@ class appIO(QtCore.QObject):
         self.log.debug("save_source_file()")
 
         obj = self.app.collection.get_by_name(obj_name)
+
+        if isinstance(obj, ScriptObject):
+            return obj.save_file(filename)
 
         if not obj.source_file:
             msg = _("Save cancelled because source file is empty. Try to export the file.")

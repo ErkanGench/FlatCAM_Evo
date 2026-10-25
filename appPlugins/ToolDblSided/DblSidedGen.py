@@ -129,9 +129,24 @@ def _remove_generated(tools):
         tool['drills'] = [p for i, p in enumerate(tool.get('drills', [])) if i not in indices]
 
 
+def has_generated(obj):
+    """True for an Excellon object that holds drills this plugin generated and therefore owns."""
+    return obj.kind == 'excellon' and any(t.get(GENERATED) for t in obj.tools.values())
+
+
+def unowned_features(obj):
+    """The drills and slots of an object that this plugin did not generate."""
+    count = 0
+    for tool in obj.tools.values():
+        generated = set(tool.get(GENERATED, ()))
+        count += sum(1 for index in range(len(tool.get('drills') or ())) if index not in generated)
+        count += len(tool.get('slots') or ())
+    return count
+
+
 def source_view(obj):
     """A drill-only working copy without our holes; never edit the live source for a search/bounds read."""
-    if obj.kind != 'excellon' or not any(t.get(GENERATED) for t in obj.tools.values()):
+    if not has_generated(obj):
         return obj
     view = Excellon(obj.app)
     view.kind = 'excellon'
@@ -147,6 +162,13 @@ def combined_bounds(objects):
         raise ValueError('Select source objects with non-empty, finite geometry.')
     return min(b[0] for b in bounds), min(b[1] for b in bounds), \
         max(b[2] for b in bounds), max(b[3] for b in bounds)
+
+
+def _refresh_source(obj):
+    xmin, ymin, xmax, ymax = obj.bounds()
+    obj.obj_options.update({'xmin': xmin, 'ymin': ymin, 'xmax': xmax, 'ymax': ymax})
+    if obj.regenerate_source() is False:
+        raise ValueError('Could not regenerate the Excellon source.')
 
 
 def replace_generated(obj, diameter, drills, decimals):
@@ -168,10 +190,23 @@ def replace_generated(obj, diameter, drills, decimals):
     obj.tools = {key: t for key, t in obj.tools.items() if t.get('drills') or t.get('slots')}
     if obj.create_geometry() == 'fail':
         raise ValueError('Could not create alignment drill geometry.')
-    xmin, ymin, xmax, ymax = obj.bounds()
-    obj.obj_options.update({'xmin': xmin, 'ymin': ymin, 'xmax': xmax, 'ymax': ymax})
-    if obj.regenerate_source() is False:
-        raise ValueError('Could not regenerate the Excellon source.')
+    _refresh_source(obj)
+
+
+def retire_generated(obj):
+    """Drop our holes from an object we generated into before; every other feature stays."""
+    if not has_generated(obj):
+        return False
+    _remove_generated(obj.tools)
+    obj.tools = {key: t for key, t in obj.tools.items() if t.get('drills') or t.get('slots')}
+    if obj.create_geometry() == 'fail':
+        raise ValueError('Could not create alignment drill geometry.')
+    if not obj.tools:
+        # An empty Excellon has no export; regenerate_source() would keep the stale text.
+        obj.source_file = ''
+    else:
+        _refresh_source(obj)
+    return True
 
 
 def alignment_drills(holes, align_type, origin):

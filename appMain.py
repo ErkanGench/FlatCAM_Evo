@@ -8,6 +8,7 @@
 # ###########################################################
 
 from appHandlers.appHistory import history_of, object_state, SnapshotStep
+from appCommon.TclExecution import catch_tcl, completion_code
 from collections import deque
 
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa
@@ -50,7 +51,7 @@ from ast import literal_eval
 # App appGUI
 from appGUI.PlotCanvas import PlotCanvas
 from appGUI.NullCanvas import NullCanvas
-from appGUI.MainGUI import MainGUI
+from appGUI.MainGUI import MainGUI, cursor_screen
 
 from appGUI.GUIElements import (
     FCMessageBox,
@@ -1028,9 +1029,9 @@ class App(QtCore.QObject):
 
         # no splash when the app starts with a file to open (a double-click on an associated file)
         if show_splash and not self.headless and not App.args:  # noqa
-            screen = QtWidgets.QApplication.screenAt(QtGui.QCursor.pos())
+            screen = cursor_screen()
             # scale to physical pixels of the screen; a pixmap of logical size is stretched (blurred) on a HiDPI screen
-            dpr = screen.devicePixelRatio() if screen else QtWidgets.QApplication.primaryScreen().devicePixelRatio()
+            dpr = screen.devicePixelRatio() if screen else 1.0
             splash_img = QtGui.QImage(self.resource_location + '/splash.png')
             img_dpi = splash_img.dotsPerMeterX() * 0.0254 or 96.0
             logical_w = splash_img.width() * 96.0 / img_dpi
@@ -1043,16 +1044,15 @@ class App(QtCore.QObject):
             splash_pix.setDevicePixelRatio(dpr)
 
             # self.splash = QtWidgets.QSplashScreen(splash_pix, Qt.WindowType.WindowStaysOnTopHint)
-            self.splash = FCSplashScreen(12, splash_pix, Qt.WindowType.SplashScreen)
+            # the splash is made on the screen of the mouse cursor; a splash made on the primary screen and moved
+            # later can stay on the primary screen or get the scale of the primary screen
+            self.splash = FCSplashScreen(12, screen, splash_pix, Qt.WindowType.SplashScreen)
 
             # Store for use in other setup methods
             self._show_splash = show_splash
             # self.splash.setMask(splash_pix.mask())
 
-            # move splashscreen to the current monitor
-            # desktop = QtWidgets.QApplication.desktop()
-            # screen = desktop.screenNumber(QtGui.QCursor.pos())
-            # screen = QtWidgets.QWidget.screen(self.splash)
+            # center the splash in the available area of the screen of the mouse cursor
             if screen:
                 current_screen_center = screen.availableGeometry().center()
                 self.splash.move(current_screen_center - self.splash.rect().center())
@@ -1166,7 +1166,7 @@ class App(QtCore.QObject):
         # ########################################### Initialize Tcl Shell ##########################################
         # ###########################    always initialize it after the UI is initialized   #########################
         self.shell = FCShell(app=self, version=self.version)
-        self.log.debug("Stardate: %s" % self.date)
+        self.log.debug("StartDate: %s" % self.date)
         self.log.debug("TCL Shell has been initialized.")
 
         # ####################################### Auto-complete KEYWORDS ############################################
@@ -1595,6 +1595,8 @@ class App(QtCore.QObject):
             return
 
         # ########################################## SHOW GUI #######################################################
+        # before the splash finish: QSplashScreen.finish() makes the native window of the main window
+        self.ui.place_on_cursor_screen()
         if self.splash:
             # finish the splash
             self.splash.finish(self.ui)
@@ -1628,23 +1630,7 @@ class App(QtCore.QObject):
                 sys.exit(2)
 
         if self.cmd_line_shellfile:
-            if self.ui.shell_dock.isHidden():
-                self.ui.shell_dock.show()
-            try:
-                with open(self.cmd_line_shellfile, "r") as myfile:
-                    # if show_splash:
-                    #     self.splash.showMessage('%s: %ssec\n%s' % (
-                    #         _("Canvas initialization started.\n"
-                    #           "Canvas initialization finished in"), '%.2f' % self.used_time,
-                    #         _("Executing Tcl Script ...")),
-                    #                             alignment=Qt.AlignBottom | Qt.AlignmentFlag.AlignLeft,
-                    #                             color=QtGui.QColor("lightgray"))
-                    cmd_line_shellfile_text = myfile.read()
-                    self.shell.exec_command(cmd_line_shellfile_text)
-
-            except Exception as ext:
-                print("ERROR: ", ext)
-                sys.exit(2)
+            self.f_handlers.on_file_run_script(name=self.cmd_line_shellfile, silent=True)
 
         if self.cmd_line_command:
             if self.ui.shell_dock.isHidden():
@@ -2066,6 +2052,12 @@ class App(QtCore.QObject):
         :return: None
         """
 
+        pending = getattr(self, 'script_pending_work', [])
+        if init_tcl and (getattr(self, 'script_state', '') == 'running' or
+                         any(not state['finished'] for state in pending)):
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Cannot reset Tcl while a script is running."))
+            return 'fail'
+
         if init_tcl:
             # Tcl "Shell" tool has to be initialized always first because other tools print messages in the Shell Dock
             self.shell = FCShell(app=self, version=self.version)
@@ -2272,6 +2264,12 @@ class App(QtCore.QObject):
         :param init_tcl:    Bool. If True will init the Tcl Shell
         :return:            None
         """
+
+        pending = getattr(self, 'script_pending_work', [])
+        if init_tcl and (getattr(self, 'script_state', '') == 'running' or
+                         any(not state['finished'] for state in pending)):
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Cannot reset Tcl while a script is running."))
+            return 'fail'
 
         self.log.debug("init_tools()")
 
@@ -3769,6 +3767,9 @@ class App(QtCore.QObject):
 
         :return:
         """
+        interrupt = getattr(self, 'script_interrupt', None)
+        if interrupt is not None:
+            interrupt.cancel.set()
         if self.abort_flag is False:
             msg = "%s %s" % (_("Aborting."), _("The current task will be gracefully closed as soon as possible..."))
             self.inform.emit(msg)
@@ -4613,73 +4614,84 @@ class App(QtCore.QObject):
             self.log.debug(
                 "shell_message() is called before Shell Class is instantiated. The message is: %s" % str(msg))
 
-    def script_processing(self, script_code):
-        # trying to run a Tcl command without having the Shell open will create some warnings because the Tcl Shell
-        # tries to print on a hidden widget, therefore show the dock if hidden
+    def script_processing(self, script_code, origin='', owner=None):
+        """Evaluate one unchanged script on the Tcl/GUI thread, never retry a failed prefix."""
+        collection = getattr(owner, '_script_collection', None)
+        if collection is not None and collection is not getattr(self, 'collection', None):
+            self.inform.emit('[ERROR_NOTCL] %s' % _("Activate the script's project before running it."))
+            return 'fail'
+        if getattr(self, 'script_state', '') == 'running':
+            self.inform.emit('[ERROR_NOTCL] %s' % _("A script is already running."))
+            return 'fail'
+        pending = getattr(self, 'script_pending_work', None)
+        if pending is not None:
+            pending[:] = [state for state in pending if not state['finished']]
+            if pending:
+                self.script_state = 'timed_out_work'
+                self.inform.emit('[ERROR_NOTCL] %s' % _("Timed-out script work is still running; changes are not rolled back."))
+                return 'fail'
         if self.ui.shell_dock.isHidden():
             self.ui.shell_dock.show()
-
-        self.shell.open_processing()  # Disables input box.
-
-        old_line = ''
-        # set tcl info script to actual script file
-
-        set_tcl_script_name = '''proc procExists p {{
-                            return uplevel 1 [expr {{[llength [info command $p]] > 0}}]
-                        }}
-
-                        if  {{[procExists "info_original"]==0}} {{
-                            rename info info_original
-                        }}
-
-                        proc info args {{
-                            switch [lindex $args 0] {{
-                                script {{
-                                    return "{0}"
-                                }}
-                                default {{
-                                    return [uplevel info_original $args]
-                                }}
-                            }}
-                        }}'''.format(script_code)
-
-        for tcl_command_line in set_tcl_script_name.splitlines() + script_code.splitlines():
-            # do not process lines starting with '#' = comment and empty lines
-            if not tcl_command_line.startswith('#') and tcl_command_line != '':
-                # if FlatCAM is run in Windows then replace all the slashes with
-                # the UNIX style slash that TCL understands
-                if sys.platform == 'win32':
-                    tcl_command_line_lowered = tcl_command_line.lower()
-                    if "open" in tcl_command_line_lowered or "path" in tcl_command_line_lowered:
-                        tcl_command_line = tcl_command_line.replace('\\', '/')
-
-                new_command = '%s%s\n' % (old_line, tcl_command_line) if old_line != '' else tcl_command_line
-
-                # execute the actual Tcl command
-                try:
-                    result = self.shell.tcl.eval(str(new_command))
-                    if result != 'None':
-                        self.shell.append_output(result + '\n')
-                    if result == 'fail':
-                        self.shell.append_output(result.capitalize() + '\n')
-                        self.shell.close_processing()
-                        self.log.error("%s: %s" % ("Tcl Command failed", str(new_command)))
-                        self.inform.emit("[ERROR] %s" % _("Aborting."))
-                        return
-                    old_line = ''
-                except tk.TclError:
-                    old_line = old_line + tcl_command_line + '\n'
-                except Exception as e:
-                    self.log.error("App.script_processing() --> %s" % str(e))
-
-        if old_line != '':
-            # it means that the script finished with an error
-            result = self.shell.tcl.eval("set errorInfo")
-            if "quit_app" not in result:
-                self.log.error("Exec command Exception: %s\n" % result)
-                self.shell.append_error('ERROR: %s\n' % result)
-
-        self.shell.close_processing()
+        tcl = self.shell.tcl
+        self.script_state = 'running'
+        self.script_cancelled = False
+        self.script_error_line = None
+        self.script_owner = owner
+        self.script_project = getattr(self, 'collection', None)
+        self.shell.open_processing()
+        previous_origin = tcl.call('info', 'script')
+        flush_output = getattr(self.shell, 'flush_tcl_output', lambda: None)
+        details = ''
+        result_var = '::flatcam_script_result'
+        options_var = '::flatcam_script_options'
+        try:
+            if not tcl.getboolean(tcl.call('info', 'complete', script_code)):
+                raise tk.TclError('Incomplete Tcl script; no commands were executed.')
+            tcl.call('info', 'script', origin or '')
+            code = catch_tcl(self, tcl, script_code, result_var, options_var)
+            result = tcl.eval('set ::flatcam_script_result')
+            options = tcl.getvar(options_var)
+            code = completion_code(tcl, code, options)
+            if getattr(self, 'script_cancelled', False):
+                details = 'Script cancelled; completed changes are not rolled back.'
+                raise tk.TclError(details)
+            if code != 0:
+                if code == 1:
+                    if tcl.getboolean(tcl.call('dict', 'exists', options, '-errorline')):
+                        self.script_error_line = int(tcl.call('dict', 'get', options, '-errorline'))
+                    if tcl.getboolean(tcl.call('dict', 'exists', options, '-errorinfo')):
+                        details = str(tcl.call('dict', 'get', options, '-errorinfo'))
+                else:
+                    details = 'Unexpected Tcl completion code: %s' % code
+                raise tk.TclError(result or details)
+            flush_output()
+            if result not in ('', 'None'):
+                self.shell.append_output(result + '\n')
+            self.script_state = 'completed'
+            return result
+        except tk.TclError as error:
+            flush_output()
+            pending = getattr(self, 'script_pending_work', None)
+            self.script_state = ('timed_out_work' if pending and any(not s['finished'] for s in pending)
+                                 else 'cancelled' if getattr(self, 'script_cancelled', False) else 'failed')
+            details = details or str(error)
+            location = origin or '<script>'
+            if self.script_error_line is not None:
+                location += ':%s' % self.script_error_line
+            message = '%s: %s' % (location, details)
+            self.log.error(message)
+            self.shell.append_error('ERROR: %s\n' % message)
+            return 'fail'
+        except Exception:
+            self.script_state = 'failed'
+            raise
+        finally:
+            flush_output()
+            tcl.call('unset', '-nocomplain', result_var, options_var)
+            tcl.call('info', 'script', previous_origin)
+            self.script_owner = None
+            self.script_project = None
+            self.shell.close_processing()
 
     def dec_format(self, val, dec=None):
         """

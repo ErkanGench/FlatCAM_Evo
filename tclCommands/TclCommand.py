@@ -511,6 +511,10 @@ class TclCommandSignaled(TclCommand):
                     if not state['finished']:
                         loop.exec()
                     if not state['finished']:
+                        pending = getattr(self.app, 'script_pending_work', None)
+                        if pending is None:
+                            pending = self.app.script_pending_work = []
+                        pending.append(state)
                         self.raise_tcl_error('Operation timed out. Queued or running work has not been cancelled. '
                                              'Consider increasing -timeout <milliseconds>.')
                     self.error_info = state['error_info']

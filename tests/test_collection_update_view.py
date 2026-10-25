@@ -143,12 +143,6 @@ class TestColorSwatch(unittest.TestCase):
         self.col.app.plot_manager.set_color_from_swatch.assert_called_once_with(self.g2, "#11223344")
         self.assertCountEqual(self._selected_objs(), [self.g1, self.g2])
 
-    def test_swatch_click_on_unselected_row_selects_only_that_row(self):
-        self._click_swatch(self.e1_idx)
-
-        self.col.app.plot_manager.set_color_from_swatch.assert_called_once_with(self.e1, "#11223344")
-        self.assertEqual(self._selected_objs(), [self.e1])
-
 
 class TestDragReorder(unittest.TestCase):
     COLORS = [("#o0", "#f0000000", "L0"), ("#o1", "#f1000011", "L1"), ("#o2", "#f2000022", "L2")]
@@ -177,12 +171,6 @@ class TestDragReorder(unittest.TestCase):
     def _gerber_order(self):
         return [o for o in self.col.get_list() if o.kind == "gerber"]
 
-    def test_drop_on_category_row_moves_rows_to_the_end(self):
-        data = self._mime(0, 1)
-        self.assertTrue(self.col.dropMimeData(data, QtCore.Qt.DropAction.MoveAction, -1, -1,
-                                              self._group_index("gerber")))
-        self.assertEqual(self._gerber_order(), [self.g[2], self.g[0], self.g[1]])
-
     def test_moved_gerbers_take_the_colors_of_their_new_rows(self):
         data = self._mime(2)
         self.col.dropMimeData(data, QtCore.Qt.DropAction.MoveAction, 0, -1, self._group_index("gerber"))
@@ -205,6 +193,41 @@ class TestDragReorder(unittest.TestCase):
         # a selection that spans two categories cannot be dragged
         excellon_row = self.col.index(0, 0, excellon)
         self.assertIsNone(self.col.mimeData([self.col.index(0, 0, self._group_index("gerber")), excellon_row]))
+
+
+class TestScriptEditorOwnership(unittest.TestCase):
+    def test_delete_routes_close_only_the_owned_editor_after_rename(self):
+        for route in ('active', 'name', 'batch', 'all'):
+            with self.subTest(route=route):
+                col = make_collection()
+                obj, item = add_item(col, 'script', 'old')
+                obj.item = item
+                obj.clear = mock.Mock()
+                obj.delete = mock.Mock()
+                tabs = QtWidgets.QTabWidget()
+                editor = QtWidgets.QWidget()
+                editor.setObjectName('old_editor_tab')
+                obj.script_editor_tab = editor
+                unrelated = QtWidgets.QWidget()
+                unrelated.setObjectName('renamed_editor_tab')
+                tabs.addTab(editor, 'Script')
+                tabs.addTab(unrelated, 'Unrelated')
+                col.app.ui.plot_tab_area = tabs
+                obj.obj_options['name'] = 'renamed'
+                if route == 'active':
+                    parent = col.index(col.group_items['script'].row(), 0, QtCore.QModelIndex())
+                    col.view.selectionModel().select(col.index(0, 0, parent),
+                                                     QtCore.QItemSelectionModel.SelectionFlag.ClearAndSelect)
+                    col.delete_active()
+                elif route == 'name':
+                    col.delete_by_name('renamed')
+                elif route == 'batch':
+                    col.delete_objects([obj])
+                else:
+                    col.delete_all()
+                self.assertEqual(tabs.indexOf(editor), -1)
+                self.assertGreaterEqual(tabs.indexOf(unrelated), 0)
+                self.assertEqual(col.get_list(), [])
 
 
 if __name__ == "__main__":

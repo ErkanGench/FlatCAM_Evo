@@ -98,6 +98,10 @@ class ProjectManager(QtCore.QObject):
         a switch can add its result to the wrong project.
         """
         app = self.app
+        if getattr(app, 'script_state', '') == 'running':
+            return True
+        if any(not state['finished'] for state in getattr(app, 'script_pending_work', [])):
+            return True
         if self.is_editing():
             return True
         # a task counts from the moment it is queued, before its worker starts. A worker that hands its result to

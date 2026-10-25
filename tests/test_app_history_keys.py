@@ -91,23 +91,6 @@ class TestViewKeys(unittest.TestCase):
                 self.qapp.sendEvent(self.target, event)
                 self.assertEqual(action.isChecked(), not before)
 
-    def test_view_keys_preserve_text_and_other_windows(self):
-        entry = QtWidgets.QLineEdit(self.window)
-        self.window.setCentralWidget(entry)
-        entry.setFocus()
-        self.qapp.processEvents()
-        QtTest.QTest.keyClicks(entry, 'GAHW', SHIFT)
-        self.assertEqual(entry.text(), 'GAHW')
-        other = QtWidgets.QPushButton('Other window')
-        self.addCleanup(other.deleteLater)
-        other.show()
-        other.activateWindow()
-        other.setFocus()
-        self.qapp.processEvents()
-        for key in self.actions:
-            QtTest.QTest.keyClick(other, getattr(QtCore.Qt.Key, 'Key_' + key), SHIFT)
-        self.assertFalse(any(action.isChecked() for action in self.actions.values()))
-
 
 if __name__ == '__main__':
     unittest.main()

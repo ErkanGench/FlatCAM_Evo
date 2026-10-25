@@ -1,6 +1,7 @@
 """App Undo / Redo history on real objects in a headless App: matrix, snapshot, delete + rebuild, create, rename."""
 
 import os
+import re
 import sys
 import time
 
@@ -207,3 +208,57 @@ def test_move_tool_two_objects_one_step(fc, no_plot, monkeypatch):
     assert np.allclose(_bounds(grb), b_grb) and np.allclose(_bounds(exc), b_exc)
     assert fc.history.redo()
     assert np.allclose(_bounds(exc), b_exc + [4.0, -2.5, 4.0, -2.5])
+
+
+def _source_without_time(text):
+    return re.sub(r'^(?:G04 |;)Created on :.*$', '', text or '', flags=re.M)
+
+
+def test_move_tool_undo_redo_regenerates_source(fc, no_plot):
+    kind, filename = 'gerber', 'unify_mixed.gbr'
+    obj = _load(fc, kind, filename, 'move_source_' + kind)
+    assert obj.regenerate_source()
+    source0, b0 = _source_without_time(obj.source_file), _bounds(obj)
+    fc.move_tool.move_handler((4.0, -2.5), objects=[obj])
+    _settle(fc)
+    source1 = _source_without_time(obj.source_file)
+    assert source1 != source0
+    assert fc.history.undo()
+    assert np.allclose(_bounds(obj), b0)
+    assert _source_without_time(obj.source_file) == source0
+    assert fc.history.redo()
+    assert _source_without_time(obj.source_file) == source1
+
+
+def test_failed_source_regeneration_keeps_the_undo_step(fc, no_plot, monkeypatch):
+    failure = 'raise'
+    obj = _load(fc, 'gerber', 'unify_mixed.gbr', 'move_recovery')
+    assert obj.regenerate_source()
+    source0, b0 = _source_without_time(obj.source_file), _bounds(obj)
+    fc.move_tool.move_handler((4.0, -2.5), objects=[obj])
+    _settle(fc)
+    source1, b1 = _source_without_time(obj.source_file), _bounds(obj)
+    undo_len, redo_len, label = len(fc.history.undo_stack), len(fc.history.redo_stack), fc.history.undo_label()
+
+    original = type(obj).regenerate_source
+
+    def broken(self, *args, **kwargs):
+        if failure == 'raise':
+            raise RuntimeError('source export failed')
+        return False
+
+    monkeypatch.setattr(type(obj), 'regenerate_source', broken)
+    try:
+        assert fc.history.undo() is False
+    finally:
+        monkeypatch.setattr(type(obj), 'regenerate_source', original)
+
+    assert np.allclose(_bounds(obj), b1)
+    assert _source_without_time(obj.source_file) == source1
+    assert len(fc.history.undo_stack) == undo_len
+    assert len(fc.history.redo_stack) == redo_len
+    assert fc.history.undo_label() == label
+
+    assert fc.history.undo()
+    assert np.allclose(_bounds(obj), b0)
+    assert _source_without_time(obj.source_file) == source0

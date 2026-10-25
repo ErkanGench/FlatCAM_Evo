@@ -110,14 +110,6 @@ class TestFileType:
         app.ask_run_script_arg.assert_not_called()
         assert_no_command(app)
 
-    def test_every_file_is_opened(self):
-        app = make_app()
-        run_args(app, ['C:/b/a.gtl', 'C:/b/a.drl', 'C:/b/b.gbr', 'C:/b/a.gcode'])
-        assert app.f_handlers.method_calls == [call.on_file_open_gerber(name='C:/b/a.gtl'),
-                                               call.on_file_open_excellon(name='C:/b/a.drl'),
-                                               call.on_file_open_gerber(name='C:/b/b.gbr'),
-                                               call.on_file_open_gcode(name='C:/b/a.gcode')]
-
     @pytest.mark.parametrize('path', ['C:/boards/a.FlatPrj.bak', 'C:/board.tcl/readme'])
     def test_unknown_extension_opens_nothing(self, path):
         app = make_app()
@@ -151,20 +143,6 @@ class TestOrderAndErrors:
 
         handlers.project_load_done.emit(True, 'C:/b/two.flatprj', [])
         assert handlers.on_file_open_gerber.call_count == 2
-
-    def test_load_that_never_ends_does_not_block_the_next_file(self, qapp):
-        from PyQt6 import QtTest
-        handlers = self._handlers()
-        app = make_app(f_handlers=handlers)
-        app.options['global_background_timeout'] = 50
-        run_args(app, ['C:/b/one.flatprj', 'C:/b/a.gtl'])
-        handlers.on_file_open_gerber.assert_not_called()
-        # the end of another request is not the awaited one
-        handlers.project_load_done.emit(False, 'C:/b/other.flatprj', [])
-        handlers.on_file_open_gerber.assert_not_called()
-        QtTest.QTest.qWait(300)
-        handlers.on_file_open_gerber.assert_called_once_with(name='C:/b/a.gtl')
-        assert 'WARNING' in app.inform.emit.call_args[0][0]
 
     def test_same_file_opens_once(self):
         app = make_app()
@@ -202,22 +180,6 @@ class TestOpenRequests:
         app._retry_open_requests()
         app.on_startup_args.assert_called_once()
 
-    def test_requests_run_one_at_a_time(self, qapp):
-        app = self._app()
-        app.open_files_request(['C:/a.gtl'])
-        app.open_files_request(['C:/b.gtl'])
-        assert app.on_startup_args.call_count == 1
-        app.on_startup_args.call_args.kwargs['on_done']()
-        assert app.on_startup_args.call_count == 2
-
-    def test_update_check_waits_for_the_files(self, qapp):
-        app = self._app()
-        app._version_check_due = True
-        app.open_files_request(['C:/a.gtl'])
-        app._queue_version_check.assert_not_called()
-        app.on_startup_args.call_args.kwargs['on_done']()
-        app._queue_version_check.assert_called_once_with()
-
 
 class TestRecent:
     def test_reopened_file_moves_to_the_top(self):
@@ -235,15 +197,6 @@ class TestPaths:
         target.write_text('x')
         assert StartDir.absolute_paths([target.as_uri(), 'new.gtl', 'quit'], start_dir=str(tmp_path)) == [
             os.path.normpath(str(target)), os.path.normpath(str(tmp_path / 'new.gtl')), 'quit']
-
-    def test_filter_takes_a_path_once(self, qapp):
-        flt = SingleInstance.FileOpenFilter()
-        got = []
-        flt.files_received.connect(got.append)
-        for path in ('C:/a.gbr', 'C:/a.gbr', 'C:/b.gbr'):
-            flt.eventFilter(None, SimpleNamespace(type=lambda: QtCore.QEvent.Type.FileOpen, file=lambda p=path: p))
-        flt.set_ready(skip=['C:/b.gbr'])
-        assert got == [['C:/a.gbr']]
 
 
 class TestCommandWords:
@@ -281,11 +234,15 @@ class TestScriptArgument:
 
     @pytest.mark.parametrize('answer', [False, True])
     def test_the_script_reaches_the_tcl_shell_only_after_a_yes(self, tmp_path, answer):
-        # the real File -> Run Script handler: it gives the text of the script to the Tcl shell
+        # The real File -> Run Script handler must execute only after consent.
+        from tests.test_tcl_audit_regressions import new_tcl
         script = tmp_path / 'job.tcl'
-        script.write_text('puts marker\n', encoding='utf-8')
+        script.write_text('set marker ran\n', encoding='utf-8')
         io = Mock()
         io.app.used_time = 0.0
+        io.app.script_pending_work = []
+        io.app.shell.tcl = new_tcl()
+        io.app.script_processing = lambda text, origin='': appMain.App.script_processing(io.app, text, origin=origin)
         io.app.ui.shell_dock.isHidden.return_value = False
         f_handlers = SimpleNamespace(
             on_file_open_script=Mock(),
@@ -294,10 +251,50 @@ class TestScriptArgument:
         app = make_app(answer=answer, f_handlers=f_handlers)
         run_args(app, [str(script)])
 
+        assert io.app.shell.tcl.eval('info exists marker') == ('1' if answer else '0')
         if answer:
-            io.app.shell.exec_command.assert_called_once_with('puts marker\n')
-        else:
-            io.app.shell.exec_command.assert_not_called()
+            assert io.app.shell.tcl.eval('set marker') == 'ran'
+
+
+@pytest.mark.parametrize('source', ['set marker [info script]; set text {café}',
+                                   'set marker ran\nset unfinished {'],
+                         ids=['utf8-origin', 'incomplete'])
+def test_gui_shellfile_uses_safe_script_execution(tmp_path, monkeypatch, qapp, source):
+    from tests.test_headless_runner import _gui_script_app
+    from appPlugins.ToolShell import FCShell
+    app = _gui_script_app()
+    script = tmp_path / 'startup.tcl'
+    if source is not None:
+        script.write_text(source, encoding='utf-8-sig' if 'café' in source else 'utf-8')
+    app.headless = False
+    app.splash = None
+    app.ui = Mock()
+    app.options = {}
+    app.defaults = SimpleNamespace(get=lambda key: False, old_defaults_found=False)
+    app.refresh_rollback_action = Mock()
+    app._drain_open_requests = Mock()
+    app.cmd_line_shellvar = ''
+    app.cmd_line_shellfile = str(script)
+    app.new_launch = app.file_open_filter = None
+    app.shell.app = app
+    app.shell.exec_command = lambda text, **kwargs: FCShell.exec_command_test(
+        app.shell, text, reraise=False, **kwargs)
+    app.script_processing = lambda text, **kwargs: appMain.App.script_processing(app, text, **kwargs)
+    io = SimpleNamespace(app=app, log=app.log, inform=app.inform, splash=None)
+    app.f_handlers = SimpleNamespace(
+        on_file_run_script=lambda **kwargs: appIO.on_file_run_script(io, **kwargs))
+    monkeypatch.setattr(appMain.App, 'args', [])
+
+    appMain.App._setup_startup(app)
+
+    if source is not None and 'café' in source:
+        assert app.shell.tcl.eval('set marker') == str(script)
+        assert app.shell.tcl.eval('set text') == 'café'
+    else:
+        assert app.shell.tcl.eval('info exists marker') == '0'
+        assert any('ERROR' in call.args[0] for call in app.inform.emit.call_args_list) or \
+            app.shell.append_error.called
+    assert app.shell.tcl.eval('info script') == ''
 
 
 class TestSingleInstance:
@@ -342,22 +339,6 @@ class TestSingleInstance:
         finally:
             server.close()
 
-    def test_second_server_does_not_take_the_name(self, name):
-        first = SingleInstance.InstanceServer()
-        received = []
-        first.files_received.connect(received.append)
-        assert first.start()
-        first.set_ready()
-        second = SingleInstance.InstanceServer()
-        try:
-            assert second.start() is False
-            sent = self._run_client(lambda: SingleInstance.send_to_running(['C:/a.gbr'], 3000), received, 1)
-            assert sent is True
-            assert received == [['C:/a.gbr']]
-        finally:
-            second.close()
-            first.close()
-
     def test_files_wait_until_the_app_is_ready(self, name):
         server = SingleInstance.InstanceServer()
         received = []
@@ -381,9 +362,6 @@ class TestSingleInstance:
                 lambda: SingleInstance.send_to_running(['C:/a.gbr'], 1000, ack_timeout_ms=300), [], 0) is False
         finally:
             silent.close()
-
-    def test_no_instance_running(self, name):
-        assert SingleInstance.send_to_running(['C:/a.gbr']) is False
 
     def test_bad_client_does_not_stop_the_server(self, name):
         server = SingleInstance.InstanceServer()

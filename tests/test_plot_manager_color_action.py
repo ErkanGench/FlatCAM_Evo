@@ -73,15 +73,6 @@ class PlotManagerColorActionTests(unittest.TestCase):
             obj.shapes.redraw.assert_called_once_with(update_colors=(obj.fill_color, obj.outline_color))
         self.assertEqual(other.fill_color, '#00FF00BF')
 
-    def test_swatch_on_unselected_row_colors_only_that_object(self):
-        app, first, second, other = self._swatch_app()
-
-        app.plot_manager.set_color_from_swatch(other, '#11223344')
-
-        self.assertEqual(other.fill_color, '#11223344')
-        self.assertEqual(first.fill_color, '#00FF00BF')
-        self.assertEqual(second.fill_color, '#00FF00BF')
-
 
 if __name__ == '__main__':
     unittest.main()

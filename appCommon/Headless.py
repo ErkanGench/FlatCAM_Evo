@@ -85,6 +85,35 @@ def console_write(style, text, out=None, err=None):
     stream.flush()
 
 
+def install_tcl_puts(tcl, write):
+    """Route standard channels to the console; leave file channels and errors to Tcl."""
+    tcl.createcommand('flatcam_console_write', write)
+    if not tcl.call('info', 'commands', 'flatcam_native_puts'):
+        tcl.call('rename', 'puts', 'flatcam_native_puts')
+    tcl.eval('''
+        proc puts {args} {
+            set original $args
+            set newline "\\n"
+            if {[llength $args] > 1 && [lindex $args 0] eq "-nonewline"} {
+                set newline ""
+                set args [lrange $args 1 end]
+            }
+            if {[llength $args] == 1} {
+                set channel stdout
+            } elseif {[llength $args] == 2} {
+                set channel [lindex $args 0]
+            } else {
+                return [flatcam_native_puts {*}$original]
+            }
+            if {$channel eq "stdout" || $channel eq "stderr"} {
+                flatcam_console_write $channel "[lindex $args end]$newline"
+                return
+            }
+            return [flatcam_native_puts {*}$original]
+        }
+    ''')
+
+
 class HeadlessRunner:
     """
     Runs the job of a headless start in this order: --shellvar, --shellfile, --command. Without --shellfile and
@@ -110,13 +139,14 @@ class HeadlessRunner:
         """
         self.app.headless_console = True
         self._install_exit()
+        install_tcl_puts(self.tcl, self._write_puts)
         try:
             try:
                 for command in self.app.shellvar_commands():
                     self._eval(command, echo=False)
                 if self.app.cmd_line_shellfile:
-                    with open(self.app.cmd_line_shellfile, 'r') as f:
-                        self._eval(f.read())
+                    with open(self.app.cmd_line_shellfile, 'r', encoding='utf-8-sig') as f:
+                        self._eval(f.read(), origin=self.app.cmd_line_shellfile)
                 if self.app.cmd_line_command:
                     self._eval(self.app.cmd_line_command)
                 code = 0
@@ -124,7 +154,9 @@ class HeadlessRunner:
                     code = self._prompt()
             except HeadlessExit as stop:
                 code = stop.code
-            except tk.TclError:
+            except (tk.TclError, OSError, UnicodeError) as error:
+                if not isinstance(error, tk.TclError):
+                    console_write('err', '%s\n' % error, out=self.out, err=self.err)
                 code = 1
             self._wait_for_workers()
         finally:
@@ -141,17 +173,32 @@ class HeadlessRunner:
             self.tcl.eval('rename exit flatcam_tcl_exit')
         self.tcl.createcommand('exit', tcl_exit)
 
-    def _eval(self, text, echo=True):
+    def _write_puts(self, channel, text):
+        stream = (self.err or sys.stderr) if channel == 'stderr' else (self.out or sys.stdout)
+        stream.write(text)
+        stream.flush()
+        return ''
+
+    def _eval(self, text, echo=True, origin=''):
         """
         Runs Tcl code. A Tcl error is written to stderr and raised again; quit_app and exit raise HeadlessExit.
         """
+        previous_origin = self.tcl.call('info', 'script')
+        complete = self.tcl.getboolean(self.tcl.call('info', 'complete', text))
         try:
+            if not complete:
+                raise tk.TclError('Incomplete Tcl script; no commands were executed.')
+            self.tcl.call('info', 'script', origin)
             result = self.tcl.eval(text)
-        except tk.TclError:
+        except tk.TclError as error:
             if self.app.headless_exit_code is not None:
                 raise HeadlessExit(self.app.headless_exit_code)
-            console_write('err', 'ERROR Report: %s\n' % self.tcl.eval('set errorInfo'), out=self.out, err=self.err)
+            details = self.tcl.eval('set errorInfo') if complete else str(error)
+            console_write('err', 'ERROR Report: %s: %s\n' % (origin or '<stdin>', details),
+                          out=self.out, err=self.err)
             raise
+        finally:
+            self.tcl.call('info', 'script', previous_origin)
         if echo and result not in ('', 'None'):
             console_write('out', '%s\n' % result, out=self.out, err=self.err)
         return result
@@ -171,6 +218,10 @@ class HeadlessRunner:
                 out.flush()
             line = stdin.readline()
             if not line:
+                if buffer:
+                    console_write('err', 'ERROR: incomplete Tcl command at end of input\n',
+                                  out=self.out, err=self.err)
+                    failed = True
                 break
             buffer += line
             if not self.tcl.getboolean(self.tcl.call('info', 'complete', buffer)):

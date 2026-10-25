@@ -342,10 +342,14 @@ class _DeferredUpdater(object):
         self._cond = threading.Condition()
         self._pending = {}      # id(collection) -> [collection, first request time, last request time]
         self._thread = None
+        self._stopped = False
+        self._run_lock = threading.Lock()   # held while an update runs
 
     def request(self, collection):
         now = time.monotonic()
         with self._cond:
+            if self._stopped:
+                return
             entry = self._pending.get(id(collection))
             if entry is None:
                 self._pending[id(collection)] = [collection, now, now]
@@ -359,6 +363,17 @@ class _DeferredUpdater(object):
     def cancel(self, collection):
         with self._cond:
             return self._pending.pop(id(collection), None) is not None
+
+    def stop(self):
+        """
+        Drops the pending updates, refuses new requests and waits for an update that is running.
+        Call it before the canvas closes: an update after that fails because Gloo has no canvas.
+        """
+        with self._cond:
+            self._stopped = True
+            self._pending.clear()
+        with self._run_lock:
+            pass
 
     def _run(self):
         while True:
@@ -378,16 +393,26 @@ class _DeferredUpdater(object):
                         wait = due - now if wait is None else min(wait, due - now)
                     if ready is not None:
                         collection = self._pending.pop(ready)[0]
+                        self._run_lock.acquire()
                         break
                     self._cond.wait(wait)
             try:
                 collection._update_deferred()
             except Exception as e:
                 print("VisPyVisuals deferred update error = %s" % str(e))
+            finally:
+                self._run_lock.release()
             collection = None
 
 
 _deferred_updater = _DeferredUpdater()
+
+
+def stop_deferred_updates():
+    """
+    Stops the deferred updates of all collections. The app calls it at quit, before it closes the canvas.
+    """
+    _deferred_updater.stop()
 
 
 class ShapeCollectionVisual(CompoundVisual):

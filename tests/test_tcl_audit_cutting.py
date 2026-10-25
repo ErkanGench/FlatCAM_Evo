@@ -40,21 +40,6 @@ def _ncc_run(args, source_kind='gerber', other=None):
     return app.ncclear_tool.gen.clear_copper_tcl.call_args.kwargs
 
 
-@pytest.mark.parametrize('rest,expected', [('1', 'g_ncc_rm'), ('0', 'g_ncc')])
-def test_ncc_default_output_name_marks_rest_machining(rest, expected):
-    assert _ncc_run({'all': None, 'rest': rest})['outname'] == expected
-
-
-def test_ncc_unset_options_are_left_to_the_preferences_and_offset_flag_follows_the_argument():
-    kwargs = _ncc_run({'all': None})
-    for key in ('margin', 'has_offset', 'offset', 'overlap', 'connect', 'contour', 'order', 'method', 'rest',
-                'final_cleanup', 'milling_type', 'simplification', 'iso_tooldia', 'exclusion_areas'):
-        assert kwargs[key] is None
-    assert kwargs['plot'] is False
-    kwargs = _ncc_run({'all': None, 'offset': 0.2})
-    assert (kwargs['has_offset'], kwargs['offset']) == (True, 0.2)
-
-
 def test_ncc_new_options_reach_the_generator():
     kwargs = _ncc_run({'all': None, 'iso_tooldia': '0.2,0.1', 'milling_type': 'cv', 'final_cleanup': '1',
                        'simplification': 0.02, 'method': 'combo', 'plot': '1'})

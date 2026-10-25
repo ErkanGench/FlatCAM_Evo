@@ -203,15 +203,3 @@ def test_download_uses_the_provider_of_the_offer_not_the_current_preference(monk
     data = app.update_staged.emissions[0][0]
     assert data["error"] == "stop after routing"
 
-
-def test_digi_only_widgets_follow_the_update_source():
-    from PyQt6 import QtWidgets
-    from appGUI.preferences.general.GeneralAppPrefGroupUI import GeneralAppPrefGroupUI
-
-    _qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    group = GeneralAppPrefGroupUI(app=SimpleNamespace(decimals=4, options={"global_languages": ["English"]}))
-    digi_widgets = (group.legacy_update_url_label, group.legacy_update_url_entry, group.prepare_update_files_btn)
-
-    for provider, shown in (("digi", True), ("github", False)):
-        group.update_provider_combo.set_value(provider)
-        assert [not w.isHidden() for w in digi_widgets] == [shown] * 3

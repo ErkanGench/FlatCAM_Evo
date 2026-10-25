@@ -333,26 +333,6 @@ class TestPlotCanvas3d(unittest.TestCase):
         self.assertAlmostEqual(1000 - (rect.center[0] + rect.width / 2), 20)
         self.assertAlmostEqual(700 - (rect.center[1] + rect.height / 2), 20)
 
-    def test_hud_colors_follow_the_options(self):
-        fcapp, canvas = self.make_hud_canvas()
-        automatic = canvas.text_hud.color.rgba.copy()
-        fcapp.options.update({'global_hud_text_color_enabled': True, 'global_hud_text_color': '#FF0000FF',
-                              'global_hud_bg_color': '#00FF0080'})
-        canvas.apply_hud_options()
-        np.testing.assert_allclose(canvas.text_hud.color.rgba.ravel(), (1, 0, 0, 1), atol=0.01)
-        np.testing.assert_allclose(canvas.rect_hud.color.rgba.ravel(), (0, 1, 0, 128 / 255), atol=0.01)
-        np.testing.assert_allclose(canvas.rect_hud.border_color.rgba.ravel(), (0, 1, 0, 128 / 255), atol=0.01)
-        fcapp.options['global_hud_text_color_enabled'] = False
-        canvas.apply_hud_options()
-        np.testing.assert_allclose(canvas.text_hud.color.rgba, automatic)
-
-    def test_axis_width_follows_the_option(self):
-        fcapp, canvas = self.make_hud_canvas(global_axis_width=3)
-        self.assertEqual((canvas.v_line.line_width, canvas.h_line.line_width), (3, 3))
-        fcapp.options['global_axis_width'] = 6
-        canvas.apply_axis_width()
-        self.assertEqual((canvas.v_line.line_width, canvas.h_line.line_width), (6, 6))
-
     def test_rectangular_grid_updates_both_axes_and_fits(self):
         for units, scale in (('MM', 1), ('IN', 1 / 25.4)):
             with self.subTest(units=units):

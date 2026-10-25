@@ -554,12 +554,13 @@ class ObjectCollection(QtCore.QAbstractItemModel):
 
     def category_open_actions(self):
         """
-        :return: {kind: callable} with the file open action of each category of the project tree. CNC Job has none.
+        :return: {kind: callable} with the file open action of each category of the project tree
         """
         f_handlers = self.app.f_handlers
         return {
             'gerber': f_handlers.on_file_open_gerber,
             'excellon': f_handlers.on_file_open_excellon,
+            'cncjob': f_handlers.on_file_open_gcode,
             'geometry': f_handlers.on_file_open_geometry,
             'script': f_handlers.on_file_open_script,
             'document': f_handlers.on_file_open_document,
@@ -963,8 +964,11 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # ############################################################################################################
         # ############################# Set the Object UI (Properties Tab) ###########################################
         # ############################################################################################################
-        obj.set_ui(obj.ui_type(app=self.app))
-        obj.build_ui()
+        if obj.kind == 'script':
+            obj._script_collection = self
+        if obj.kind != 'script' or getattr(obj, '_load_batch', None) is None:
+            obj.set_ui(obj.ui_type(app=self.app))
+            obj.build_ui()
 
         # a way to signal that the object was fully loaded
         obj.load_complete = True
@@ -1063,7 +1067,27 @@ class ObjectCollection(QtCore.QAbstractItemModel):
                     return obj
         return None
 
+    def close_object_editor(self, obj):
+        tabs = self.app.ui.plot_tab_area
+        if obj.kind == 'script':
+            editor = getattr(obj, 'script_editor_tab', None)
+            if editor is not None:
+                for idx in reversed(range(tabs.count())):
+                    if tabs.widget(idx) is editor:
+                        tabs.removeTab(idx)
+                editor.script_owner = None
+                editor.deleteLater()
+                obj.script_editor_tab = None
+            return
+        name = obj.obj_options['name']
+        for idx in reversed(range(tabs.count())):
+            if tabs.widget(idx).objectName() in (name, name + '_editor_tab'):
+                tabs.removeTab(idx)
+
     def delete_active(self, select_project=True):
+        if getattr(self.app, '_script_event_pump', False) is True:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before deleting objects."))
+            return 'fail'
         selections = self.view.selectedIndexes()
         if len(selections) == 0:
             return
@@ -1074,13 +1098,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         # send signal with the object that is deleted
         # self.app.object_status_changed.emit(active.obj, 'delete')
 
-        # some objects add a Tab on creation, close it here
-        for idx in range(self.app.ui.plot_tab_area.count()):
-            widget_name = self.app.ui.plot_tab_area.widget(idx).objectName()
-            if widget_name == active.obj.obj_options['name'] or \
-                    widget_name == (active.obj.obj_options['name'] + "_editor_tab"):
-                self.app.ui.plot_tab_area.removeTab(idx)
-                break
+        self.close_object_editor(active.obj)
 
         # update the SHELL auto-completer model data
         name = active.obj.obj_options['name']
@@ -1120,6 +1138,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
 
     def delete_objects(self, objects):
         """Detach a batch from the tree before cleanup, then refresh shared visuals once."""
+        if getattr(self.app, '_script_event_pump', False) is True:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before deleting objects."))
+            return 'fail'
         object_ids = {id(obj) for obj in objects}
         items = []
         for group in self.root_item.child_items:
@@ -1154,10 +1175,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         for item in items:
             obj = item.obj
             name = obj.obj_options['name']
-            for idx in reversed(range(self.app.ui.plot_tab_area.count())):
-                widget_name = self.app.ui.plot_tab_area.widget(idx).objectName()
-                if widget_name in (name, name + "_editor_tab"):
-                    self.app.ui.plot_tab_area.removeTab(idx)
+            self.close_object_editor(obj)
             try:
                 self.app.regFK.remove_keyword(name, update=False)
             except Exception as e:
@@ -1180,6 +1198,9 @@ class ObjectCollection(QtCore.QAbstractItemModel):
                 self.app.ui.splitter.setSizes([0, 1])
 
     def delete_by_name(self, name, select_project=True):
+        if getattr(self.app, '_script_event_pump', False) is True:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before deleting objects."))
+            return 'fail'
         obj = self.get_by_name(name=name)
         item = obj.item
         group = self.group_items[obj.kind]
@@ -1190,13 +1211,7 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         deleted = item_index.internalPointer()
         group = deleted.parent_item
 
-        # some objects add a Tab on creation, close it here
-        for idx in range(self.app.ui.plot_tab_area.count()):
-            wdg_name = self.app.ui.plot_tab_area.widget(idx).objectName()
-            if wdg_name == deleted.obj.obj_options['name'] or \
-                    wdg_name == (deleted.obj.obj_options['name'] + "_editor_tab"):
-                self.app.ui.plot_tab_area.removeTab(idx)
-                break
+        self.close_object_editor(deleted.obj)
 
         # update the SHELL auto-completer model data
         name = deleted.obj.obj_options['name']
@@ -1238,7 +1253,14 @@ class ObjectCollection(QtCore.QAbstractItemModel):
         self.app.all_objects_list = self.get_list()
 
     def delete_all(self):
+        if getattr(self.app, '_script_event_pump', False) is True:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before deleting objects."))
+            return 'fail'
         self.app.log.debug(sys._getframe(1).f_code.co_name + "--> OC.delete_all()")
+
+        for obj in self.get_list():
+            if obj.kind == 'script':
+                self.close_object_editor(obj)
 
         self.app.object_status_changed.emit(None, 'delete_all', '')
 

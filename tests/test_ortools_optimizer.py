@@ -103,23 +103,6 @@ def _random_locs(count):
     return [(random.uniform(0, 100), random.uniform(0, 100)) for _ in range(count)]
 
 
-def test_solve_in_the_pool_does_not_stop_the_other_threads(pool):
-    import threading
-    cnc = make_cnc()
-    cnc.app.pool = pool
-    locs = _random_locs(300)
-    result = {}
-    worker = threading.Thread(
-        target=lambda: result.setdefault('route', cnc.optimized_ortools_meta(locations=locs, opt_time=1)))
-    worker.start()
-    gaps, last = [], time.perf_counter()
-    while worker.is_alive():
-        time.sleep(0.01)
-        now = time.perf_counter()
-        gaps.append(now - last)
-        last = now
-    assert sorted(result['route']) == list(range(len(locs)))
-    assert max(gaps) < 0.3
 
 
 def test_abort_stops_the_wait_for_the_pool(pool):

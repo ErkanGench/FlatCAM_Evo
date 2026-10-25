@@ -35,12 +35,19 @@ class _Collection(QtGui.QStandardItemModel):
     def __init__(self):
         super().__init__()
         self.objs = {}
+        self.promises = set()
 
     def get_by_name(self, name):
         return self.objs[name]
 
     def promise(self, name):
-        pass
+        self.promises.add(name)
+
+    def remove_promise(self, name):
+        self.promises.discard(name)
+
+    def has_promises(self):
+        return bool(self.promises)
 
 
 def make_geometry(app, name, geos):
@@ -68,6 +75,9 @@ def load_source(app, name):
 def make_tool():
     from appPlugins.ToolCutOut import CutOut
     app = make_app()
+    # the fixtures are parsed with a fixed count of circle segments, so the golden files do not depend on the
+    # adaptive tolerance
+    app.options['gerber_circle_steps_mode'] = 'fixed'
     app.collection = _Collection()
     app.resource_location = 'res'
     app.plotcanvas = Mock()
@@ -86,7 +96,9 @@ def make_tool():
             obj = ExcellonObject(name, app)
         ret = init(obj, app)
         if ret == 'fail':
+            app.collection.remove_promise(name)
             return 'fail'
+        app.collection.remove_promise(name)
         app.created[name] = obj
         return None
 

@@ -12,7 +12,7 @@ from appPlugins.ToolCutOut.CutOutUI import CutoutUI
 from appPlugins.ToolCutOut import CutOutGen
 import appPlugins.ToolCutOut as cutout_plugin
 from appPlugins.ToolCutOut.CutOutGen import (
-    _cutout_paths, _manual_gap_geometry, _manual_subtract_selected,
+    _cutout_paths, _manual_gap_geometry, _manual_material_side, _manual_subtract_selected,
     _valid_mouse_bite_step, _validate_thin_depth,
 )
 from appDatabase import load_tools_database, tools_database_error_message
@@ -684,103 +684,121 @@ class CutOut(AppTool):
             inner_gaps = bool(self.ui.inner_gaps_cb.get_value()) and inner_active
 
             outname_exc = "%s_mouse_bites" % formatted_name
+            reserved = [outname, outname_exc] if has_mouse_bites else [outname]
             if has_mouse_bites is True:
                 self.app.collection.promise(outname_exc)
 
+            created = set()
+
             def job_thread(app_obj):
-                result = cutout_plugin.freeform_cutout_paths(
-                    cutout_obj, kind, cut_dia, margin, gaps, gapsize,
-                    convex_box, gap_type, thin_entry, mb_dia, mb_spacing, self.any_cutout_handler,
-                    inner_active=inner_active, inner_gaps=inner_gaps)
-                for message in result.errors:
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % message)
-                for message in result.warnings:
-                    self.app.inform.emit('[WARNING_NOTCL] %s' % message)
-                if result.failed:
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                    return 'fail'
-
-                solid_geo = result.solid_geo
-                gaps_solid_geo = result.gaps_solid_geo
-                holes = result.holes
-                def geo_init(geo_obj, app_object):
-                    geo_obj.multigeo = True
-                    geo_obj.solid_geometry = deepcopy(solid_geo)
-
-                    geo_obj.tools[1] = deepcopy(cut_tool_dict)
-                    geo_obj.tools[1]['tooldia'] = str(abs(cut_dia))
-                    geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
-
-                    geo_obj.tools[1]['data']['name'] = outname
-                    geo_obj.tools[1]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.tools[1]['data']['tools_mill_cutz'] = cutz
-
-                    geo_obj.tools[1]['data']['tools_mill_multidepth'] = multidepth
-                    geo_obj.tools[1]['data']['tools_mill_depthperpass'] = depthperpass
-
-                    # if there are "thin gaps"
-                    if gaps_solid_geo:
-                        geo_obj.tools[99] = deepcopy(cut_tool_dict)
-                        geo_obj.tools[99]['tooldia'] = str(abs(cut_dia))
-                        geo_obj.tools[99]['solid_geometry'] = gaps_solid_geo
-
-                        geo_obj.tools[99]['data']['name'] = outname
-                        geo_obj.tools[99]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                        geo_obj.tools[99]['data']['tools_mill_cutz'] = thin_entry
-                        geo_obj.tools[99]['data']['tools_mill_multidepth'] = multidepth
-                        geo_obj.tools[99]['data']['tools_mill_depthperpass'] = depthperpass
-                        # plot this tool in a different color
-                        geo_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
-
-                    xmin, ymin, xmax, ymax = CutOut.recursive_bounds(geo_obj.solid_geometry)
-                    geo_obj.obj_options['xmin'] = xmin
-                    geo_obj.obj_options['ymin'] = ymin
-                    geo_obj.obj_options['xmax'] = xmax
-                    geo_obj.obj_options['ymax'] = ymax
-
-                    geo_obj.obj_options['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.obj_options['tools_mill_cutz'] = cutz
-                    geo_obj.obj_options['tools_mill_multidepth'] = multidepth
-                    geo_obj.obj_options['tools_mill_depthperpass'] = depthperpass
-
-                def excellon_init(exc_obj, app_o):
-                    if not holes:
+                try:
+                    result = cutout_plugin.freeform_cutout_paths(
+                        cutout_obj, kind, cut_dia, margin, gaps, gapsize,
+                        convex_box, gap_type, thin_entry, mb_dia, mb_spacing, self.any_cutout_handler,
+                        inner_active=inner_active, inner_gaps=inner_gaps)
+                    for message in result.errors:
+                        self.app.inform.emit('[ERROR_NOTCL] %s' % message)
+                    for message in result.warnings:
+                        self.app.inform.emit('[WARNING_NOTCL] %s' % message)
+                    if result.failed:
+                        self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
                         return 'fail'
 
-                    exc_obj.multigeo = True
-                    exc_obj.tools = {}
-                    exc_obj.add_tool(mb_dia, drills=holes)
-                    exc_obj.create_geometry()
-                    exc_obj.regenerate_source()
-                    # calculate the bounds
-                    xmin, ymin, xmax, ymax = CutOut.recursive_bounds(exc_obj.solid_geometry)
-                    exc_obj.obj_options['xmin'] = xmin
-                    exc_obj.obj_options['ymin'] = ymin
-                    exc_obj.obj_options['xmax'] = xmax
-                    exc_obj.obj_options['ymax'] = ymax
+                    solid_geo = result.solid_geo
+                    gaps_solid_geo = result.gaps_solid_geo
+                    holes = result.holes
+                    def geo_init(geo_obj, app_object):
+                        geo_obj.multigeo = True
+                        geo_obj.solid_geometry = deepcopy(solid_geo)
 
-                try:
-                    if gap_type == 2:  # "mouse bytes"
-                        ret = self.new_object('excellon', outname_exc, excellon_init,
-                                              source=cutout_obj, autoselected=False)
+                        geo_obj.tools[1] = deepcopy(cut_tool_dict)
+                        geo_obj.tools[1]['tooldia'] = str(abs(cut_dia))
+                        geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
+
+                        geo_obj.tools[1]['data']['name'] = outname
+                        geo_obj.tools[1]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
+                        geo_obj.tools[1]['data']['tools_mill_cutz'] = cutz
+
+                        geo_obj.tools[1]['data']['tools_mill_multidepth'] = multidepth
+                        geo_obj.tools[1]['data']['tools_mill_depthperpass'] = depthperpass
+
+                        # if there are "thin gaps"
+                        if gaps_solid_geo:
+                            geo_obj.tools[99] = deepcopy(cut_tool_dict)
+                            geo_obj.tools[99]['tooldia'] = str(abs(cut_dia))
+                            geo_obj.tools[99]['solid_geometry'] = gaps_solid_geo
+
+                            geo_obj.tools[99]['data']['name'] = outname
+                            geo_obj.tools[99]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
+                            geo_obj.tools[99]['data']['tools_mill_cutz'] = thin_entry
+                            geo_obj.tools[99]['data']['tools_mill_multidepth'] = multidepth
+                            geo_obj.tools[99]['data']['tools_mill_depthperpass'] = depthperpass
+                            # plot this tool in a different color
+                            geo_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
+
+                        xmin, ymin, xmax, ymax = CutOut.recursive_bounds(geo_obj.solid_geometry)
+                        geo_obj.obj_options['xmin'] = xmin
+                        geo_obj.obj_options['ymin'] = ymin
+                        geo_obj.obj_options['xmax'] = xmax
+                        geo_obj.obj_options['ymax'] = ymax
+
+                        geo_obj.obj_options['tools_mill_tooldia'] = str(abs(cut_dia))
+                        geo_obj.obj_options['tools_mill_cutz'] = cutz
+                        geo_obj.obj_options['tools_mill_multidepth'] = multidepth
+                        geo_obj.obj_options['tools_mill_depthperpass'] = depthperpass
+
+                    def excellon_init(exc_obj, app_o):
+                        if not holes:
+                            return 'fail'
+
+                        exc_obj.multigeo = True
+                        exc_obj.tools = {}
+                        exc_obj.add_tool(mb_dia, drills=holes)
+                        exc_obj.create_geometry()
+                        exc_obj.regenerate_source()
+                        # calculate the bounds
+                        xmin, ymin, xmax, ymax = CutOut.recursive_bounds(exc_obj.solid_geometry)
+                        exc_obj.obj_options['xmin'] = xmin
+                        exc_obj.obj_options['ymin'] = ymin
+                        exc_obj.obj_options['xmax'] = xmax
+                        exc_obj.obj_options['ymax'] = ymax
+
+                    try:
+                        if gap_type == 2:  # "mouse bytes"
+                            ret = self.new_object('excellon', outname_exc, excellon_init,
+                                                  source=cutout_obj, autoselected=False)
+                            if ret == 'fail':
+                                app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
+                            else:
+                                created.add(outname_exc)
+                            app_obj.should_we_save = True
+
+                        ret = self.new_object('geometry', outname, geo_init, source=cutout_obj,
+                                              autoselected=False)
                         if ret == 'fail':
-                            app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
+                            self.app.log.debug("Cutout.on_freeform_cutout() -> Failure in creating an Geometry object..")
+                            app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                            return
+                        created.add(outname)
+
+                        # cutout_obj.plot(plot_tool=1)
+                        app_obj.inform.emit('[success] %s' % _("Any-form Cutout operation finished."))
+                        # self.app.ui.notebook.setCurrentWidget(self.app.ui.project_tab)
                         app_obj.should_we_save = True
+                    except Exception as ee:
+                        app_obj.log.error(str(ee))
+                finally:
+                    for name in reserved:
+                        if name not in created:
+                            self.app.collection.remove_promise(name)
 
-                    ret = self.new_object('geometry', outname, geo_init, source=cutout_obj, autoselected=False)
-                    if ret == 'fail':
-                        self.app.log.debug("Cutout.on_freeform_cutout() -> Failure in creating an Geometry object..")
-                        app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                        return
-
-                    # cutout_obj.plot(plot_tool=1)
-                    app_obj.inform.emit('[success] %s' % _("Any-form Cutout operation finished."))
-                    # self.app.ui.notebook.setCurrentWidget(self.app.ui.project_tab)
-                    app_obj.should_we_save = True
-                except Exception as ee:
-                    app_obj.app.log.error(str(ee))
-
-            self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
+            try:
+                self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
+            except Exception:
+                for name in reserved:
+                    if name not in created:
+                        self.app.collection.remove_promise(name)
+                raise
 
     def any_cutout_handler(self, geom, cut_diameter, gaps, gapsize, margin):
         return CutOutGen.any_cutout_handler(geom, cut_diameter, gaps, gapsize, margin)
@@ -852,110 +870,128 @@ class CutOut(AppTool):
         self.app.collection.promise(outname)
 
         outname_exc = cutout_obj.obj_options["name"] + "_mouse_bites"
+        reserved = [outname, outname_exc] if has_mouse_bites_val else [outname]
         if has_mouse_bites_val is True:
             self.app.collection.promise(outname_exc)
+
+        created = set()
 
         with self.app.proc_container.new("Generating Cutout ..."):
             def job_thread(self_c, app_obj, gaps, gapsize, gap_type, cut_dia, margin, mb_dia, mb_spacing, thin_entry,
                            has_mouse_bites):
-                if cutout_obj.multigeo is False:
-                    object_geo = cutout_obj.solid_geometry
-                else:
-                    # first tool in the tools dict
-                    t_first = list(cutout_obj.tools.keys())[0]
-                    object_geo = cutout_obj.tools[t_first]['solid_geometry']
-
-                result = CutOutGen.rectangular_cutout_paths(
-                    object_geo, cutout_obj.kind, kind, gaps, gapsize, gap_type, cut_dia, margin,
-                    mb_dia, mb_spacing, thin_entry, self_c.rect_cutout_handler)
-                for message in result.errors:
-                    app_obj.inform.emit('[ERROR_NOTCL] %s' % message)
-                if result.failed:
-                    return "fail"
-                solid_geo = result.solid_geo
-                gaps_solid_geo = result.gaps_solid_geo
-                holes = result.holes
-
-                def geo_init(geo_obj, application_obj):
-                    geo_obj.multigeo = True
-                    geo_obj.solid_geometry = deepcopy(solid_geo)
-
-                    geo_obj.tools[1] = deepcopy(cut_tool_dict)
-                    geo_obj.tools[1]['tooldia'] = str(abs(cut_dia))
-                    geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
-
-                    geo_obj.tools[1]['data']['name'] = outname
-                    geo_obj.tools[1]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.tools[1]['data']['tools_mill_cutz'] = cutz
-                    geo_obj.tools[1]['data']['tools_mill_multidepth'] = multidepth
-                    geo_obj.tools[1]['data']['tools_mill_depthperpass'] = depthperpass
-
-                    if gaps_solid_geo:
-                        geo_obj.tools[99] = deepcopy(cut_tool_dict)
-                        geo_obj.tools[99]['tooldia'] = str(abs(cut_dia))
-                        geo_obj.tools[99]['solid_geometry'] = gaps_solid_geo
-
-                        geo_obj.tools[99]['data']['name'] = outname
-                        geo_obj.tools[99]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
-                        geo_obj.tools[99]['data']['tools_mill_cutz'] = thin_entry
-                        geo_obj.tools[99]['data']['tools_mill_multidepth'] = multidepth
-                        geo_obj.tools[99]['data']['tools_mill_depthperpass'] = depthperpass
-                        geo_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
-
-                    xmin, ymin, xmax, ymax = CutOut.recursive_bounds(geo_obj.solid_geometry)
-                    geo_obj.obj_options['xmin'] = xmin
-                    geo_obj.obj_options['ymin'] = ymin
-                    geo_obj.obj_options['xmax'] = xmax
-                    geo_obj.obj_options['ymax'] = ymax
-
-                    geo_obj.obj_options['tools_mill_tooldia'] = str(abs(cut_dia))
-                    geo_obj.obj_options['tools_mill_cutz'] = cutz
-                    geo_obj.obj_options['tools_mill_multidepth'] = multidepth
-                    geo_obj.obj_options['tools_mill_depthperpass'] = depthperpass
-
-                def excellon_init(exc_obj, app_o):
-                    if not holes:
-                        return 'fail'
-
-                    exc_obj.tools = {}
-                    exc_obj.add_tool(mb_dia, drills=holes)
-                    exc_obj.create_geometry()
-                    exc_obj.regenerate_source()
-                    # calculate the bounds
-                    e_xmin, e_ymin, e_xmax, e_ymax = CutOut.recursive_bounds(exc_obj.solid_geometry)
-                    exc_obj.obj_options['xmin'] = e_xmin
-                    exc_obj.obj_options['ymin'] = e_ymin
-                    exc_obj.obj_options['xmax'] = e_xmax
-                    exc_obj.obj_options['ymax'] = e_ymax
-
                 try:
-                    if gap_type == 2:  # "mouse bytes"
-                        ret = self_c.new_object('excellon', outname_exc, excellon_init,
-                                                source=cutout_obj, autoselected=False)
+                    if cutout_obj.multigeo is False:
+                        object_geo = cutout_obj.solid_geometry
+                    else:
+                        # first tool in the tools dict
+                        t_first = list(cutout_obj.tools.keys())[0]
+                        object_geo = cutout_obj.tools[t_first]['solid_geometry']
+
+                    result = CutOutGen.rectangular_cutout_paths(
+                        object_geo, cutout_obj.kind, kind, gaps, gapsize, gap_type, cut_dia, margin,
+                        mb_dia, mb_spacing, thin_entry, self_c.rect_cutout_handler)
+                    for message in result.errors:
+                        app_obj.inform.emit('[ERROR_NOTCL] %s' % message)
+                    if result.failed:
+                        return "fail"
+                    solid_geo = result.solid_geo
+                    gaps_solid_geo = result.gaps_solid_geo
+                    holes = result.holes
+
+                    def geo_init(geo_obj, application_obj):
+                        geo_obj.multigeo = True
+                        geo_obj.solid_geometry = deepcopy(solid_geo)
+
+                        geo_obj.tools[1] = deepcopy(cut_tool_dict)
+                        geo_obj.tools[1]['tooldia'] = str(abs(cut_dia))
+                        geo_obj.tools[1]['solid_geometry'] = geo_obj.solid_geometry
+
+                        geo_obj.tools[1]['data']['name'] = outname
+                        geo_obj.tools[1]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
+                        geo_obj.tools[1]['data']['tools_mill_cutz'] = cutz
+                        geo_obj.tools[1]['data']['tools_mill_multidepth'] = multidepth
+                        geo_obj.tools[1]['data']['tools_mill_depthperpass'] = depthperpass
+
+                        if gaps_solid_geo:
+                            geo_obj.tools[99] = deepcopy(cut_tool_dict)
+                            geo_obj.tools[99]['tooldia'] = str(abs(cut_dia))
+                            geo_obj.tools[99]['solid_geometry'] = gaps_solid_geo
+
+                            geo_obj.tools[99]['data']['name'] = outname
+                            geo_obj.tools[99]['data']['tools_mill_tooldia'] = str(abs(cut_dia))
+                            geo_obj.tools[99]['data']['tools_mill_cutz'] = thin_entry
+                            geo_obj.tools[99]['data']['tools_mill_multidepth'] = multidepth
+                            geo_obj.tools[99]['data']['tools_mill_depthperpass'] = depthperpass
+                            geo_obj.tools[99]['data']['override_color'] = "#29a3a3fa"
+
+                        xmin, ymin, xmax, ymax = CutOut.recursive_bounds(geo_obj.solid_geometry)
+                        geo_obj.obj_options['xmin'] = xmin
+                        geo_obj.obj_options['ymin'] = ymin
+                        geo_obj.obj_options['xmax'] = xmax
+                        geo_obj.obj_options['ymax'] = ymax
+
+                        geo_obj.obj_options['tools_mill_tooldia'] = str(abs(cut_dia))
+                        geo_obj.obj_options['tools_mill_cutz'] = cutz
+                        geo_obj.obj_options['tools_mill_multidepth'] = multidepth
+                        geo_obj.obj_options['tools_mill_depthperpass'] = depthperpass
+
+                    def excellon_init(exc_obj, app_o):
+                        if not holes:
+                            return 'fail'
+
+                        exc_obj.tools = {}
+                        exc_obj.add_tool(mb_dia, drills=holes)
+                        exc_obj.create_geometry()
+                        exc_obj.regenerate_source()
+                        # calculate the bounds
+                        e_xmin, e_ymin, e_xmax, e_ymax = CutOut.recursive_bounds(exc_obj.solid_geometry)
+                        exc_obj.obj_options['xmin'] = e_xmin
+                        exc_obj.obj_options['ymin'] = e_ymin
+                        exc_obj.obj_options['xmax'] = e_xmax
+                        exc_obj.obj_options['ymax'] = e_ymax
+
+                    try:
+                        if gap_type == 2:  # "mouse bytes"
+                            ret = self_c.new_object('excellon', outname_exc, excellon_init,
+                                                    source=cutout_obj, autoselected=False)
+                            if ret == 'fail':
+                                app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
+                            else:
+                                created.add(outname_exc)
+
+                        ret = self_c.new_object('geometry', outname, geo_init, source=cutout_obj,
+                                                autoselected=False)
                         if ret == 'fail':
-                            app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Mouse bites failed."))
+                            self.app.log.debug("Cutout.on_rectangular_cutout() -> Could not create a Geometry object.")
+                            app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+                            return
+                        created.add(outname)
 
-                    ret = self_c.new_object('geometry', outname, geo_init, source=cutout_obj, autoselected=False)
-                    if ret == 'fail':
-                        self.app.log.debug("Cutout.on_rectangular_cutout() -> Could not create a Geometry object.")
-                        app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                        return
+                        # cutout_obj.plot(plot_tool=1)
+                        app_obj.inform.emit('[success] %s' % _("Rectangular CutOut operation finished."))
+                        # self_c.app.ui.notebook.setCurrentWidget(self_c.app.ui.project_tab)
+                        app_obj.should_we_save = True
+                    except Exception as ee:
+                        app_obj.log.error(str(ee))
+                finally:
+                    for name in reserved:
+                        if name not in created:
+                            self.app.collection.remove_promise(name)
 
-                    # cutout_obj.plot(plot_tool=1)
-                    app_obj.inform.emit('[success] %s' % _("Rectangular CutOut operation finished."))
-                    # self_c.app.ui.notebook.setCurrentWidget(self_c.app.ui.project_tab)
-                    app_obj.should_we_save = True
-                except Exception as ee:
-                    app_obj.log.error(str(ee))
-
-            self.app.worker_task.emit(
-                {
-                    'fcn': job_thread,
-                    'params': [
-                        self, self.app, gaps_val, gapsize_val, gap_type_val, cut_dia_val, margin_val, mb_dia_val,
-                        mb_spacing_val, thin_entry_val, has_mouse_bites_val
-                    ]
-                })
+            try:
+                self.app.worker_task.emit(
+                    {
+                        'fcn': job_thread,
+                        'params': [
+                            self, self.app, gaps_val, gapsize_val, gap_type_val, cut_dia_val, margin_val,
+                            mb_dia_val, mb_spacing_val, thin_entry_val, has_mouse_bites_val
+                        ]
+                    })
+            except Exception:
+                for name in reserved:
+                    if name not in created:
+                        self.app.collection.remove_promise(name)
+                raise
 
     def rect_cutout_handler(self, geom, cut_dia, gaps, gapsize, margin, xmin, ymin, xmax, ymax,
                             include_gaps=False):
@@ -1253,7 +1289,11 @@ class CutOut(AppTool):
                     # contours together can merge a neighboring inner contour's drill row.
                     if path.is_closed:
                         offset = (abs(self.ui.dia.get_value()) - self.ui.mb_dia_entry.get_value()) / 2.0
-                        mb_paths = _cutout_paths(Polygon(path).buffer(-offset))
+                        # The drill row belongs on the board side: a contour enclosing material
+                        # is offset inward, a hole boundary outward. Winding is unreliable, so the
+                        # side comes from the original contour nesting.
+                        offset *= _manual_material_side(original['solid_geometry'], path)
+                        mb_paths = _cutout_paths(Polygon(path).buffer(offset))
                     else:
                         mb_paths = _cutout_paths(self.mb_manual_solid_geo)
                     if mb_paths:

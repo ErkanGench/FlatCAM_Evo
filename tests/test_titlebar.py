@@ -51,6 +51,9 @@ class TitleWindow(QtWidgets.QMainWindow):
     def normalGeometry(self):
         return MainGUI.normalGeometry(self)
 
+    def place_on_cursor_screen(self):
+        return MainGUI.place_on_cursor_screen(self)
+
 
 class TestTitleBar(unittest.TestCase):
     @classmethod
@@ -382,7 +385,9 @@ class TestTitleBar(unittest.TestCase):
         with tempfile.TemporaryDirectory() as path:
             settings = QtCore.QSettings(os.path.join(path, 'startup.ini'), QtCore.QSettings.Format.IniFormat)
             settings.setValue('maximized_gui', True)
-            with patch('appMain.QSettings', return_value=settings), patch.object(App, 'args', []):
+            # the mouse cursor of the test run can be on any screen
+            with patch('appMain.QSettings', return_value=settings), patch.object(App, 'args', []), \
+                    patch('appGUI.MainGUI.cursor_screen', return_value=window.screen()):
                 App._setup_startup(app)
             self.qapp.processEvents()
             self.assertTrue(window.isMaximized())
@@ -457,6 +462,19 @@ class TestTitleBar(unittest.TestCase):
                         window.showNormal()
                         self.qapp.processEvents()
                         self.assertEqual(window.geometry(), original)
+
+    def test_startup_window_opens_on_the_screen_of_the_mouse_cursor(self):
+        from appGUI.MainGUI import geometry_on_screen
+
+        Rect = QtCore.QRect
+        left_screen = Rect(-1920, 0, 1920, 1040)
+        right_screen = Rect(0, 0, 2560, 1400)
+        # saved on the cursor screen: kept as it is
+        self.assertEqual(Rect(100, 100, 800, 400), geometry_on_screen(Rect(100, 100, 800, 400), right_screen))
+        # saved on the other screen: same size, centered on the cursor screen
+        self.assertEqual(Rect(-1360, 320, 800, 400), geometry_on_screen(Rect(100, 100, 800, 400), left_screen))
+        # saved larger than the cursor screen: fits in it
+        self.assertEqual(left_screen, geometry_on_screen(Rect(0, 0, 2560, 1400), left_screen))
 
 
 class TestTitleBarPreferences(unittest.TestCase):

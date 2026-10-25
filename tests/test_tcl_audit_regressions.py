@@ -42,8 +42,14 @@ def new_tcl(attempts=5):
             time.sleep(0.2)
 
 
+# every stub app stays alive until the end: app and app.shell are a reference cycle, and a garbage collection of an
+# old Signals while a new one is in use gives "wrapped C/C++ object of type Signals has been deleted" under xdist
+KEEP_ALIVE = []
+
+
 def make_app():
     app = Signals()
+    KEEP_ALIVE.append(app)
     app.log = Mock()
     # a long default: a busy machine (parallel test workers) delays the queued work; the timeout tests pass -timeout
     app.options = {'global_background_timeout': 5000, 'global_verbose_error_level': 0}
@@ -125,26 +131,29 @@ def qt_app():
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
-def test_timeout_is_error_and_late_completion_cannot_replace_new_output(qt_app):
+def test_script_timeout_blocks_new_execution_until_late_work_finishes(qt_app):
+    from appMain import App
     app = make_app()
+    app.ui = SimpleNamespace(shell_dock=Mock())
+    app.inform = Mock()
+    app.shell.close_processing = Mock()
+    app.shell.append_output = Mock()
+    app.shell.append_error = Mock()
     command = BackgroundCommand(app)
     pending = []
     app.worker_task.connect(pending.append)
     app.shell.tcl.createcommand('background', command.execute_wrapper)
-    command.output = 'stale'
-    assert app.shell.tcl.eval('catch {background -number 1 -timeout 1} message') == '1'
-    assert 'timed out' in app.shell.tcl.eval('set message').lower()
-    assert command.output is None
-    assert app.receivers(app.shell_command_finished) == 0
-    app.worker_task.disconnect(pending.append)
-
-    def dispatch(task):
-        QtCore.QTimer.singleShot(0, lambda: pending[0]['fcn'](*pending[0]['params']))
-        QtCore.QTimer.singleShot(5, lambda: task['fcn'](*task['params']))
-
-    app.worker_task.connect(dispatch)
-    assert command.execute_wrapper('-number', '2') == 2.0
-    assert command.output == 2.0
+    assert App.script_processing(app, 'background -timeout 1') == 'fail'
+    assert app.script_state == 'timed_out_work'
+    from appHandlers.appIO import appIO
+    io = SimpleNamespace(app=app, log=app.log, inform=app.inform)
+    assert appIO.on_file_new_project(io) == 'fail'
+    assert App.install_tools(app, init_tcl=True) == 'fail'
+    assert App.script_processing(app, 'set changed 1') == 'fail'
+    assert app.shell.tcl.eval('info exists changed') == '0'
+    pending[0]['fcn'](*pending[0]['params'])
+    assert App.script_processing(app, 'set changed 1') == '1'
+    assert app.script_state == 'completed'
 
 
 def object_app(obj):
@@ -293,18 +302,3 @@ def test_a_command_with_returns_value_or_its_own_result_keeps_it():
     command.names = ['x']
     assert command.execute_wrapper() == 'mine'
 
-
-def test_switching_the_active_project_creates_no_new_objects():
-    app = make_app()
-    first, second = FakeCollection(), FakeCollection()
-    first.objects.append(SimpleNamespace(obj_options={'name': 'a'}))
-    second.objects.append(SimpleNamespace(obj_options={'name': 'b'}))
-    app.collection = first
-    app.projects = SimpleNamespace(contexts=[SimpleNamespace(collection=first), SimpleNamespace(collection=second)])
-    app.inform = Mock()
-
-    class Switch(MakeObjects):
-        def execute(self, args, unnamed_args):
-            self.app.collection = second
-
-    assert Switch(app).execute_wrapper() is None

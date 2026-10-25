@@ -48,6 +48,28 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
+def cursor_screen():
+    """
+    :return: The screen under the mouse cursor, or the primary screen when no screen holds the cursor.
+    """
+    return QtWidgets.QApplication.screenAt(QtGui.QCursor.pos()) or QtWidgets.QApplication.primaryScreen()
+
+
+def geometry_on_screen(geometry: QtCore.QRect, available: QtCore.QRect) -> QtCore.QRect:
+    """
+    :param geometry: The saved geometry of the window.
+    :param available: The available geometry of the screen where the window opens.
+    :return: The saved geometry when its center is on that screen; else the same size, made to fit and centered
+    on that screen.
+    """
+    if available.contains(geometry.center()):
+        return QtCore.QRect(geometry)
+    width = min(geometry.width(), available.width())
+    height = min(geometry.height(), available.height())
+    return QtCore.QRect(available.x() + (available.width() - width) // 2,
+                        available.y() + (available.height() - height) // 2, width, height)
+
+
 class MainGUI(QtWidgets.QMainWindow):
     final_save = QtCore.pyqtSignal(name='saveBeforeExit')
     # screenChanged = QtCore.pyqtSignal(QtGui.QScreen, QtGui.QScreen)
@@ -2411,6 +2433,17 @@ class MainGUI(QtWidgets.QMainWindow):
         self.setWindowTitle('FlatCAM Evo %s' % self.app.version)
         self.title_bar.update_title()
 
+    def place_on_cursor_screen(self):
+        """
+        Moves the window, before the first show, to the screen of the mouse cursor. A maximized window is
+        maximized on the screen that holds its normal geometry, so it also opens on that screen.
+        """
+        screen = cursor_screen()
+        if screen is None:
+            return
+        self.setScreen(screen)
+        self.setGeometry(geometry_on_screen(self.geometry(), screen.availableGeometry()))
+
     def on_toggle_gui(self):
         if self.isHidden():
             mgui_settings = QSettings("Open Source", "FlatCAM_EVO")
@@ -4633,6 +4666,11 @@ class MainGUI(QtWidgets.QMainWindow):
                     # abort the measurement action
                     self.app.distance_tool.on_exit()
                     self.app.inform.emit(_("Cancelled."))
+                    return
+
+                if key == QtCore.Qt.Key.Key_Backspace or key == 'Backspace':
+                    if not self.app_focus_in_text():
+                        self.app.distance_tool.undo_last_point()
                     return
 
                 if key == QtCore.Qt.Key.Key_G or key == 'G':

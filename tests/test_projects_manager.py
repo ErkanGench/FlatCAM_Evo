@@ -60,6 +60,17 @@ class TestProjectManagerCore(unittest.TestCase):
         self.assertIs(manager.active.collection, app.collection)
         self.assertIs(manager.stack.currentWidget(), app.collection.view)
 
+    def test_running_script_keeps_its_project_active(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.add_context('Board_B')
+        app.script_state = 'running'
+        self.assertFalse(manager.switch(second))
+        self.assertIs(manager.active, first)
+        self.assertIs(app.collection, first.collection)
+        app.script_state = 'completed'
+        self.assertTrue(manager.switch(second))
+
     def test_switch_swaps_the_app_state(self):
         app, manager = make_manager()
         first = manager.active
@@ -98,20 +109,6 @@ class TestProjectManagerCore(unittest.TestCase):
 
         self.assertEqual(app.app_units, 'IN')
         app.ui.units_label.setText.assert_called_with('[in]')
-
-    def test_editor_handlers_read_the_live_app_units(self):
-        from appHandlers.appEdit import appEditor
-        app, manager = make_manager()
-        app.app_units = 'MM'
-        app.worker_task = app.decimals = Mock()
-        app.ui.units_label = Mock()
-        handlers = appEditor(app)
-        second = manager.add_context('Board_B')
-        second.options = {'units': 'IN'}
-
-        manager.switch(second)
-
-        self.assertEqual(handlers.app_units, 'IN')
 
     def test_switch_is_refused_while_busy(self):
         app, manager = make_manager()

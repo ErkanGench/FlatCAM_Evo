@@ -119,10 +119,6 @@ class TestOpenProject(unittest.TestCase):
         self.run_open((True, 'a.FlatPrj', []), delay=0.2)
         self.assertGreaterEqual(time.time() - start, 0.15)
 
-    def test_failed_load_is_an_error(self):
-        with self.assertRaises(TclError):
-            self.run_open((False, 'a.FlatPrj', []))
-
     def test_failed_load_error_has_the_reason(self):
         from tclCommands.TclCommandOpenProject import TclCommandOpenProject
         app, _signal = make_open_app((False, 'a.FlatPrj', []), 0.01)

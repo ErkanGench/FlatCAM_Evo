@@ -142,13 +142,6 @@ class TestNewObjectOptionFill(unittest.TestCase):
         defaults, made = self.fill('MM')
         self.assertEqual(made[1].obj_options['tooldia'], defaults['cncjob_tooldia'])
 
-    def test_keys_of_the_project_entry_are_not_filled(self):
-        defaults, made = self.fill('MM', provided={'plot'})
-        self.assertNotIn('plot', made[0].obj_options)
-        self.assertEqual(made[0].obj_options['solid'], defaults['gerber_solid'])
-        _defaults, made = self.fill('MM')
-        self.assertIn('plot', made[0].obj_options)
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,7 +4,8 @@ from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea
 from appPlugins.ToolDblSided.DblSidedUI import DsidedUI
 from appPlugins.ToolDblSided.DblSidedGen import alignment_drills, valid_diameter, validate_holes, \
-    bounds_drills, valid_drill_offset, combined_bounds, source_view, replace_generated, alignment_matrices, compose
+    bounds_drills, valid_drill_offset, combined_bounds, source_view, replace_generated, alignment_matrices, compose, \
+    has_generated, unowned_features, retire_generated
 from appPlugins.ToolAlignObjects.AlignGen import build_snap_index, SnapIndex, apply_matrix, invert
 from defaults import AppDefaults
 from appParsers.feature_access import iter_features
@@ -930,11 +931,21 @@ class DblSidedTool(AppTool):
         history = history_of(self.app)
         output = None
         source_ids = sorted(obj.obj_options.get('_2sided_source_id', obj.history_uid) for obj in objects)
+        previous, discard = [], []
         if settings:
             target = settings[2]
             output = target if target is not None else next((obj for obj in self.app.collection.get_list()
                 if obj.kind == 'excellon' and obj.obj_options.get('_2sided_sources') == source_ids), None)
-        affected = objects + ([output] if output is not None and output not in objects else [])
+            # Our holes live in 1 output at a time: retire them from the location used before.
+            for obj in self.app.collection.get_list():
+                if obj is output or not has_generated(obj) or \
+                        not (obj in objects or obj.obj_options.get('_2sided_sources') == source_ids):
+                    continue
+                if obj in objects or unowned_features(obj):
+                    previous.append(obj)
+                else:
+                    discard.append(obj)
+        affected = objects + [obj for obj in [output] + previous if obj is not None and obj not in objects]
         before = []
         for obj in affected:
             before.append(object_state(obj))
@@ -988,6 +999,9 @@ class DblSidedTool(AppTool):
                     if settings:
                         for obj in objects:
                             obj.obj_options.setdefault('_2sided_source_id', obj.history_uid)
+                        for obj in previous:
+                            retire_generated(obj)
+                            changed[obj] = None
                         diameter = settings[0]
                         if output is not None:
                             replace_generated(output, diameter, points, self.decimals)
@@ -1012,6 +1026,10 @@ class DblSidedTool(AppTool):
                                                  autoselected=False)
                         if output is None or output == 'fail':
                             raise ValueError(_('Could not create alignment drills.'))
+                    # The earlier output held only our holes: it has nothing left to drill.
+                    if discard:
+                        history.record_delete(_('2-Sided Process'), discard)
+                        self.app.object_ops.delete_objects_now(discard)
         except Exception:
             for obj, state in zip(affected, before):
                 restore_object_state(obj, state)

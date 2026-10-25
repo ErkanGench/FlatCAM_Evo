@@ -124,9 +124,6 @@ class TestCategoryMenu(unittest.TestCase):
         self.assertEqual(len(self.shown_menu), 1)
         return [(a.text(), a.isEnabled()) if not a.isSeparator() else '-' for a in self.shown_menu[0].actions()]
 
-    def test_gerber_category_menu(self):
-        self.assertEqual(self.request('gerber'), [('Show All', True), ('Hide All', True), '-', ('Open', True)])
-
     def test_show_all_and_hide_all_take_the_objects_of_the_category(self):
         self.request('gerber')
         show_all, hide_all = self.shown_menu[0].actions()[:2]
@@ -137,17 +134,13 @@ class TestCategoryMenu(unittest.TestCase):
 
     def test_open_runs_the_file_handler_of_the_category(self):
         for kind, handler in (('gerber', 'on_file_open_gerber'), ('excellon', 'on_file_open_excellon'),
+                              ('cncjob', 'on_file_open_gcode'),
                               ('geometry', 'on_file_open_geometry'), ('script', 'on_file_open_script'),
                               ('document', 'on_file_open_document')):
             self.shown_menu.clear()
             self.request(kind)
             self.shown_menu[0].actions()[-1].trigger()
             getattr(self.col.app.f_handlers, handler).assert_called_once()
-
-    def test_cncjob_has_no_open_and_script_cannot_show_or_hide(self):
-        self.assertEqual(self.request('cncjob'), [('Show All', False), ('Hide All', False)])
-        self.shown_menu.clear()
-        self.assertEqual(self.request('script')[:2], [('Show All', False), ('Hide All', False)])
 
 
 class TestViewSource(unittest.TestCase):

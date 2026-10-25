@@ -109,6 +109,16 @@ def test_extensionless_mouse_bites_keep_source_name(cutout_app):
     assert _drills(cutout_app)
 
 
+@pytest.mark.parametrize('rectangular', [False, True])
+def test_failed_cutout_releases_its_promises(cutout_app, rectangular):
+    source = make_geometry(cutout_app.test_app, 'board', box(0, 0, 10, 10))
+    _configure(cutout_app, source, rectangular, gap_type=2, gapsize=20.0)
+    _generate(cutout_app, rectangular)
+    assert not cutout_app.test_app.created
+    assert not cutout_app.test_app.collection.has_promises()
+
+
+
 def test_manual_gap_without_cutter_preserves_geometry(cutout_app):
     source = _manual_target(cutout_app, [LineString([(0, 0), (20, 0)])])
     source.tools = {}
@@ -229,6 +239,26 @@ def test_manual_bridge_edit_rebuilds_overlaps_and_keeps_inner_contours(cutout_ap
     assert states_equal((source.solid_geometry, source.tools, source.multigeo), original)
     cutout_app.on_mouse_click_release(SimpleNamespace(pos=(0, 0), button=2))
     assert states_equal((source.solid_geometry, source.tools, source.multigeo), original)
+
+
+def test_manual_mouse_bites_stay_on_the_material_side_of_inner_contours(cutout_app):
+    outer = box(0, 0, 50, 30).exterior
+    inner = box(10, 5, 40, 25).exterior
+    _manual_target(cutout_app, [outer, inner])
+    app = cutout_app.test_app
+    app.ui.keyPressEvent = Mock()
+    app.ui.notebook = Mock()
+    app.plotcanvas.translate_coords = lambda pos: pos
+    cutout_app.ui.big_cursor_cb.set_value(False)
+    cutout_app.ui.gaptype_combo.set_value(2)
+    cutout_app.ui.mb_dia_entry.set_value(0.6)
+    cutout_app.ui.mb_spacing_entry.set_value(0.3)
+    cutout_app.on_manual_gap_click()
+    cutout_app.on_mouse_click_release(SimpleNamespace(pos=(25, 5), button=1))
+    cutout_app.on_mouse_click_release(SimpleNamespace(pos=(0, 0), button=2))
+    holes = _drills(cutout_app)
+    assert holes
+    assert all(point.y == pytest.approx(4.1) for point in holes)
 
 
 @pytest.mark.parametrize('gap_type', [0, 1, 2])

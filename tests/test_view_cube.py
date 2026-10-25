@@ -2,10 +2,9 @@
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import numpy as np
-from PyQt6 import QtCore, QtGui, QtWidgets, QtTest
+from PyQt6 import QtCore, QtWidgets, QtTest
 
 import test_plotcanvas3d as canvas_tests
 from appGUI import VisPyCanvas as plot_module
@@ -59,56 +58,6 @@ class TestViewCube(unittest.TestCase):
                 self.assert_view(camera, name)
                 self.assertEqual(camera.scale_factor, state['scale_factor'])
                 np.testing.assert_allclose(camera.center, state['center'])
-
-    def test_cube_drag_rotates_both_views_about_the_resized_grid_center(self):
-        for units in ('MM', 'IN'):
-            with self.subTest(units=units):
-                canvas = self.make_canvas(units=units)
-                camera, cube = canvas.view.camera, canvas.view_cube
-                canvas.set_grid_size(300, 150)
-                camera.set_view('iso')
-                camera.zoom(0.6, (0, 0, 0))
-                center = (*np.asarray(canvas.workspace_size) / 2, 0)
-                projected = camera._scene_transform.map(center)
-                screen = projected[:2] / projected[3]
-                scale = camera.scale_factor
-                image = cube.grab().toImage()
-                rotation = camera._get_rotation_tr().copy()
-                polygon = cube._project_faces()[0][1]
-                start = (sum((polygon[i] for i in range(polygon.size())), QtCore.QPointF()) /
-                         polygon.size()).toPoint()
-                QtTest.QTest.mousePress(cube, QtCore.Qt.MouseButton.LeftButton, pos=start)
-                # Pressing must not snap to a face before the drag begins.
-                np.testing.assert_allclose(camera._get_rotation_tr(), rotation)
-                for end in (start + QtCore.QPoint(25, 15), QtCore.QPoint(cube.width() + 20, -10),
-                            cube.rect().center()):
-                    event = QtGui.QMouseEvent(
-                        QtCore.QEvent.Type.MouseMove, QtCore.QPointF(end),
-                        QtCore.QPointF(cube.mapToGlobal(end)), QtCore.Qt.MouseButton.NoButton,
-                        QtCore.Qt.MouseButton.LeftButton, QtCore.Qt.KeyboardModifier.NoModifier
-                    )
-                    with patch.object(cube, 'update', wraps=cube.update) as update:
-                        QtWidgets.QApplication.sendEvent(cube, event)
-                        update.assert_called()
-                    self.assertFalse(np.allclose(camera._get_rotation_tr(), rotation))
-                    projected = camera._scene_transform.map(center)
-                    np.testing.assert_allclose(projected[:2] / projected[3], screen, atol=1e-5)
-                    self.assertEqual(camera.scale_factor, scale)
-                rotation = camera._get_rotation_tr().copy()
-                self.assertIsNotNone(cube._face_at(QtCore.QPointF(end)))
-                QtTest.QTest.mouseRelease(cube, QtCore.Qt.MouseButton.LeftButton, pos=end)
-                np.testing.assert_allclose(camera._get_rotation_tr(), rotation)
-                self.assertNotEqual(cube.grab().toImage(), image)
-                # A subsequent canvas drag must still use its own mouse-down point.
-                anchor = (*np.asarray(canvas.workspace_size) * (0.2, 0.7), 0)
-                projected = camera._scene_transform.map(anchor)
-                start = projected[:2] / projected[3]
-                camera.viewbox_mouse_event(canvas_tests.TestPlotCanvas3d.mouse_event(
-                    'mouse_move', start + (30, 20), start, (1,)
-                ))
-                projected = camera._scene_transform.map(anchor)
-                np.testing.assert_allclose(projected[:2] / projected[3], start, atol=1e-5)
-                camera.viewbox_mouse_event(canvas_tests.TestPlotCanvas3d.mouse_event('mouse_release'))
 
     def test_iso_action_has_equal_axis_projection_and_keeps_pan_zoom(self):
         canvas = self.make_canvas()

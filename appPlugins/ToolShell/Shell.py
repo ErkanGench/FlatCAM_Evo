@@ -9,6 +9,8 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 from appPlugins.ToolShell.ShellUI import TermWidget
 from defaults import AppDefaults
+from appCommon.Headless import install_tcl_puts
+from appCommon.TclExecution import catch_tcl, completion_code
 
 import traceback
 
@@ -149,17 +151,31 @@ class FCShell(TermWidget):
         for cmd in self.tcl_commands_storage:
             self.tcl.createcommand(cmd, self.tcl_commands_storage[cmd]['fcn'])
 
-        # Make the tcl puts function return instead of print to stdout
-        self.tcl.eval('''
-            rename puts original_puts
-            proc puts {args} {
-                if {[llength $args] == 1} {
-                    return "[lindex $args 0]"
-                } else {
-                    eval original_puts $args
-                }
-            }
-            ''')
+        self._tcl_output = []
+        self._tcl_output_size = 0
+        self._tcl_output_channel = 'stdout'
+        install_tcl_puts(self.tcl, self.write_tcl_output)
+
+    def write_tcl_output(self, channel, text):
+        if channel != self._tcl_output_channel:
+            self.flush_tcl_output()
+        self._tcl_output_channel = channel
+        self._tcl_output.append(text)
+        self._tcl_output_size += len(text)
+        if self._tcl_output_size >= 8192 or getattr(self.app, 'script_state', '') != 'running':
+            self.flush_tcl_output()
+        return ''
+
+    def flush_tcl_output(self):
+        if not self._tcl_output:
+            return
+        text = ''.join(self._tcl_output)
+        self._tcl_output.clear()
+        self._tcl_output_size = 0
+        if self._tcl_output_channel == 'stderr':
+            self.append_error(text)
+        else:
+            self.append_output(text)
 
     def is_command_complete(self, text):
 
@@ -179,7 +195,7 @@ class FCShell(TermWidget):
         #             return False
         #     text = text[1:]
 
-        return True
+        return self.tcl.getboolean(self.tcl.call('info', 'complete', text))
 
     def child_exec_command(self, text):
         self.exec_command(text)
@@ -210,17 +226,52 @@ class FCShell(TermWidget):
 
         tcl_command_string = str(text)
 
+        busy_error = None
+        if getattr(self.app, 'script_state', '') == 'running':
+            busy_error = 'A script is already running.'
+        pending = getattr(self.app, 'script_pending_work', None)
+        if pending and any(not state['finished'] for state in pending):
+            busy_error = 'Timed-out work is still running; changes are not rolled back.'
+        if busy_error:
+            if reraise:
+                raise tk.TclError(busy_error)
+            if no_echo is False:
+                self.append_error(busy_error + '\n')
+            return 'fail'
+
+        self.app.script_state = 'running'
+        self.app.script_cancelled = False
+        result_var = '::flatcam_shell_result'
+        options_var = '::flatcam_shell_options'
+        details = ''
         try:
             if no_echo is False:
                 self.open_processing()  # Disables input box.
 
-            result = self.tcl.eval(str(tcl_command_string))
-            if result != 'None' and no_echo is False:
+            if not self.tcl.getboolean(self.tcl.call('info', 'complete', tcl_command_string)):
+                raise tk.TclError('Incomplete Tcl script; no commands were executed.')
+            code = catch_tcl(self.app, self.tcl, tcl_command_string, result_var, options_var)
+            result = self.tcl.eval('set ::flatcam_shell_result')
+            options = self.tcl.getvar(options_var)
+            code = completion_code(self.tcl, code, options)
+            if self.app.script_cancelled:
+                raise tk.TclError('Script cancelled; completed changes are not rolled back.')
+            if code != 0:
+                if self.tcl.getboolean(self.tcl.call('dict', 'exists', options, '-errorinfo')):
+                    details = str(self.tcl.call('dict', 'get', options, '-errorinfo'))
+                raise tk.TclError(result or 'Unexpected Tcl completion code: %s' % code)
+            self.flush_tcl_output()
+            if result not in ('', 'None') and no_echo is False:
                 self.append_output(result + '\n')
+            self.app.script_state = 'completed'
 
         except tk.TclError as e:
+            pending = getattr(self.app, 'script_pending_work', None)
+            self.app.script_state = ('timed_out_work' if pending and any(not s['finished'] for s in pending)
+                                     else 'cancelled' if self.app.script_cancelled else 'failed')
+            self.flush_tcl_output()
             # This will display more precise answer if something in TCL shell fails
-            result = self.tcl.eval("set errorInfo")
+            result = details or str(e)
             self.app.log.error("Exception on Tcl Command execution: %s" % (result + '\n'))
             if no_echo is False:
                 self.append_error('ERROR Report: ' + result + '\n')
@@ -228,6 +279,10 @@ class FCShell(TermWidget):
             if reraise:
                 raise e
         finally:
+            self.tcl.call('unset', '-nocomplain', result_var, options_var)
+            self.flush_tcl_output()
+            if self.app.script_state == 'running':
+                self.app.script_state = 'failed'
             if no_echo is False:
                 self.close_processing()
             pass

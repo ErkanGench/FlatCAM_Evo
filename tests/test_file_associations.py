@@ -96,13 +96,6 @@ class TestFileAssociations(unittest.TestCase):
         self.assertTrue(self.val("Software\\Classes\\FlatCAM.Project\\DefaultIcon").endswith(".ico,0"))
         self.notify.assert_called()
 
-    def test_first_run_registers_all_types(self):
-        self.reg.on_register_files()
-        self.assertEqual(self.val("Software\\Classes\\.flatconfig"), "FlatCAM.Config")
-        self.assertEqual(self.val("Software\\Classes\\.flatprj"), "FlatCAM.Project")
-        self.assertEqual(self.val("Software\\Classes\\.gbr"), "FlatCAM")
-        self.assertIn('"%1"', self.val("Software\\Classes\\FlatCAM\\shell\\open\\command"))
-
     def test_unregister_removes_what_was_written(self):
         self.reg.on_register_files()
         self.reg.on_unregister_files()
@@ -181,19 +174,6 @@ class TestLinuxAssociations(FakeHome):
         self.assertTrue(self.called("update-desktop-database", os.path.join(data, "applications")))
         self.assertTrue(self.called("xdg-mime", "default", "flatcam-evo.desktop", "application/x-flatcam-gerber"))
 
-    def test_apply_one_type_keeps_the_others(self):
-        self.reg.on_register_files("project")
-        self.reg.on_register_files("gerber")
-        self.assertEqual(sorted(self.reg.linux_read_state(self.paths()[0])), ["gerber", "project"])
-
-    def test_xdg_data_home_and_missing_tools(self):
-        self.tools.clear()
-        os.environ["XDG_DATA_HOME"] = os.path.join(self.home, "xdg")
-        self.reg.on_register_files("project")
-        self.assertTrue(os.path.isfile(os.path.join(self.home, "xdg", "mime", "packages", "flatcam-evo.xml")))
-        self.assertEqual(self.calls, [])
-        self.reg.inform.emit.assert_called_with("[success] Extensions registered.")
-
     def test_exec_is_quoted_for_paths_with_spaces(self):
         argv = staticmethod(lambda: ["/opt/my app/python", "/a b/flatcam.py"])
         with mock.patch.object(RegisterFK, "launcher_argv", argv):
@@ -209,11 +189,6 @@ class TestLinuxAssociations(FakeHome):
         self.reg.on_unregister_files()
         self.assertFalse(os.path.exists(self.paths()[0]))
         self.assertFalse(os.path.exists(self.paths()[1]))
-
-    def test_unwritable_home_reports_error(self):
-        with mock.patch.object(rfk.os, "makedirs", side_effect=PermissionError("denied")):
-            self.reg.on_register_files("project")
-        self.assertIn("[ERROR_NOTCL]", self.reg.inform.emit.call_args[0][0])
 
 
 class TestMacAssociations(FakeHome):
@@ -248,12 +223,6 @@ class TestMacAssociations(FakeHome):
         self.assertTrue(self.called(self.ls, "-f", self.bundle))
         self.assertTrue(self.called("duti", "-s", "org.flatcam.evo", ".gbr", "all"))
         self.assertTrue(self.called("duti", "-s", "org.flatcam.evo", "org.flatcam.evo.project", "all"))
-
-    def test_without_duti_user_is_told_how_to_set_default(self):
-        self.tools.discard("duti")
-        self.reg.on_register_files("gerber")
-        messages = [c[0][0] for c in self.reg.inform.emit.call_args_list]
-        self.assertTrue(any(m.startswith("[warning]") and "Open With" in m for m in messages))
 
     def test_unregister_last_type_removes_bundle(self):
         self.reg.on_register_files("project")

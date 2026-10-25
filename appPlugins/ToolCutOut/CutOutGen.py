@@ -264,6 +264,18 @@ def _manual_gap_geometry(geometry, position, cut_diameter, gap_width):
     return selected, gap_line, gap_line.buffer(cut_diameter / 2.0, cap_style='flat')
 
 
+def _manual_material_side(geometry, path):
+    """Return -1 for a contour enclosing material and 1 for a hole boundary."""
+    probe = path.interpolate(0.5, normalized=True)
+    depth = 0
+    for other in _cutout_paths(geometry):
+        if not other.is_closed or other.equals(path):
+            continue
+        if Polygon(other).contains(probe):
+            depth += 1
+    return -1.0 if depth % 2 == 0 else 1.0
+
+
 def _manual_subtract_selected(geometry, selected, gap_line, expected_gap_length=None):
     def complement(path):
         ranges = []

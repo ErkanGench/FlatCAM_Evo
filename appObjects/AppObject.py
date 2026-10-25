@@ -227,6 +227,10 @@ class AppObject(QtCore.QObject):
     # Emitted when a object has been changed (like scaled, mirrored)
     object_changed = QtCore.pyqtSignal(object)
 
+    # Emitted after a transform of the object; the second argument says whether the Properties Offset entry is filled.
+    # A worker thread emits it queued, so the Qt widget is written on the GUI thread.
+    object_transform_done = QtCore.pyqtSignal(object, bool)
+
     # Emitted after object has been plotted.
     # Calls 'on_zoom_fit' method to fit object in scene view in main thread to prevent drawing glitches.
     object_plotted = QtCore.pyqtSignal(object)
@@ -243,6 +247,7 @@ class AppObject(QtCore.QObject):
         # signals that are emitted when object state changes
         self.object_created.connect(self.on_object_created)
         self.object_changed.connect(self.on_object_changed)
+        self.object_transform_done.connect(self.on_object_transform_done)
         self.object_plotted.connect(self.on_object_plotted)
         self.plots_updated.connect(self.app.on_plots_updated)
 
@@ -682,6 +687,27 @@ class AppObject(QtCore.QObject):
         # delete the old selection shape
         self.app.delete_selection_shape()
         self.app.should_we_save = True
+
+    def on_object_transform_done(self, obj, set_offset):
+        """Fill the Properties Offset entry after a transform; called on the GUI thread by the queued signal."""
+        if not set_offset:
+            return
+        # the transform already emitted object_changed, which stored the fresh bounds in obj_options; reuse them
+        # instead of running obj.bounds() a second time
+        bounds = None
+        try:
+            bounds = (float(obj.obj_options['xmin']), float(obj.obj_options['ymin']),
+                      float(obj.obj_options['xmax']), float(obj.obj_options['ymax']))
+            if not all(math.isfinite(value) for value in bounds):
+                bounds = None
+        except (AttributeError, KeyError, TypeError, ValueError):
+            bounds = None
+        try:
+            obj.set_offset_values(bounds=bounds)
+        except AttributeError:
+            pass
+        except Exception as e:
+            self.app.log.debug("AppObject.on_object_transform_done() --> %s" % str(e))
 
     def on_object_plotted(self):
         """

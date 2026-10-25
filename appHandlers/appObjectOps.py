@@ -904,6 +904,9 @@ class AppObjectOps(QtCore.QObject):
         :param force_deletion:  used by Tcl command
         :return: None
         """
+        if getattr(self.app, '_script_event_pump', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before deleting objects."))
+            return 'fail'
         self.defaults.report_usage("on_delete()")
 
         response = None
@@ -950,6 +953,9 @@ class AppObjectOps(QtCore.QObject):
         Delete the objects without a confirmation and without a history step: the cleanup of the visuals of each
         object, then the removal from the collection. on_delete() and the Undo / Redo history use it.
         """
+        if getattr(self.app, '_script_event_pump', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before deleting objects."))
+            return 'fail'
         selected = list(objects)
         bulk = len(selected) > 1
         clear_tool_shapes = False
@@ -1005,6 +1011,9 @@ class AppObjectOps(QtCore.QObject):
             self.app.exc_areas.clear_shapes()
 
     def delete_first_selected(self, del_obj=None):
+        if getattr(self.app, '_script_event_pump', False) is True:
+            self.inform.emit('[WARNING_NOTCL] %s' % _("Stop the running script before deleting objects."))
+            return 'fail'
         # Keep this for later
         try:
             if del_obj is not None:
