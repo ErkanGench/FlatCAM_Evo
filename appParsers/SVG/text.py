@@ -62,7 +62,6 @@ class FontService:
         self.ready = False
         self.found = {}
         self.cache = {}
-        self.faces = {}
         self.lower = {}
 
     def _init(self):
@@ -111,25 +110,10 @@ class FontService:
         return result
 
     def _advance(self, path, text):
-        """Advance width in em using FreeType (kerning included)."""
-        import freetype as ft
-        face = self.faces.get(path)
-        if face is None:
-            face = ft.Face(path)
-            face.set_char_size(int(_RENDER_SIZE * 64))
-            self.faces[path] = face
-        total, prev = 0.0, 0
-        for ch in text:
-            gi = face.get_char_index(ch)
-            if prev and gi:
-                try:
-                    total += face.get_kerning(prev, gi).x
-                except Exception:
-                    pass
-            face.load_glyph(gi, ft.FT_LOAD_NO_HINTING)
-            total += face.glyph.advance.x
-            prev = gi
-        return total / 64.0 / _RENDER_SIZE
+        """Advance width in em from the same engine that rendered the run."""
+        if self.mgr is None:
+            return 0.5 * len(text)
+        return self.mgr.text_advance(text, path, _RENDER_SIZE) / _RENDER_SIZE
 
     def render(self, text, families, bold, italic):
         """
@@ -152,7 +136,10 @@ class FontService:
         name, kind, path = font
         try:
             geom = self.mgr.font_to_geometry(text, name, kind, _RENDER_SIZE, 'MM', 0, 0)
-            if isinstance(geom, str) or geom is None or geom.is_empty:
+            if isinstance(geom, str):
+                log.warning('SVG text: %s', geom)
+                geom = None
+            if geom is None or geom.is_empty:
                 geom = None
             else:
                 u = 1.0 / (_RENDER_SIZE * 64.0 * ParseFont.SCALE_MM)

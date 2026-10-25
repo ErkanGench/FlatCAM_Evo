@@ -54,17 +54,31 @@ def trace(filename, black_white=True, threshold=128, options=None):
     :param options:     a dict with the keys of a PRESETS entry; None means PRESETS['default']
     :return:            the SVG text
     """
+    if not os.path.exists(filename):
+        raise FileNotFoundError("%s does not exist!" % filename)
+    with Image.open(filename) as img:
+        return trace_image(img, black_white, threshold, options)
+
+
+def trace_image(image, black_white=True, threshold=128, options=None):
+    """
+    Trace an image that is already in memory and return the SVG as a string.
+
+    :param image:       a PIL.Image.Image
+    :param black_white: True: trace the dark pixels only. False: trace every color region
+    :param threshold:   B/W only: a pixel darker than this (0-255) is traced
+    :param options:     a dict with the keys of a PRESETS entry; None means PRESETS['default']
+    :return:            the SVG text
+    """
     if vtracer is None:
         raise ImportError("Image tracing needs the 'vtracer' package, which could not be imported (%s). "
                           "Install it with: pip install vtracer" % _VTRACER_IMPORT_ERROR)
-    if not os.path.exists(filename):
-        raise FileNotFoundError("%s does not exist!" % filename)
 
     opt = dict(PRESETS['default'])
     if options:
         opt.update(options)
 
-    img = Image.open(filename).convert('RGBA')
+    img = image.convert('RGBA')
     flat = Image.new('RGBA', img.size, (255, 255, 255, 255))
     flat.alpha_composite(img)
     if black_white:

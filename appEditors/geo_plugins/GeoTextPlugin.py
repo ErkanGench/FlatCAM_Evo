@@ -1,9 +1,10 @@
 
 from PyQt6 import QtWidgets, QtGui
 from appTool import AppToolEditor
-from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCTextAreaRich, FCComboBox
+from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCTextAreaRich, FCComboBox, FCDoubleSpinner
 from appParsers.ParseFont import ParseFont
 
+import math
 import sys
 
 import gettext
@@ -142,47 +143,74 @@ class TextInputTool(AppToolEditor):
         self.app.ui.notebook.callback_on_close = lambda: None
 
     def on_apply_button(self):
-        font_to_geo_type = ""
+        # drop any previous result so a failed Apply can never place stale geometry
+        self.text_path = None
 
-        if self.font_bold is True:
-            font_to_geo_type = 'bold'
-        elif self.font_italic is True:
-            font_to_geo_type = 'italic'
-        elif self.font_bold is True and self.font_italic is True:
+        if self.font_bold and self.font_italic:
             font_to_geo_type = 'bi'
-        elif self.font_bold is False and self.font_italic is False:
+        elif self.font_bold:
+            font_to_geo_type = 'bold'
+        elif self.font_italic:
+            font_to_geo_type = 'italic'
+        else:
             font_to_geo_type = 'regular'
 
         string_to_geo = self.ui.text_input_entry.get_value()
-        font_to_geo_size = self.ui.font_size_cb.get_value()
+
+        font_to_geo_size = self._valid_font_size()
+        if font_to_geo_size is None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Enter a positive font size."))
+            return
 
         # Call font_to_geometry and handle edge cases
-        font_geo = self.f_parse.font_to_geometry(char_string=string_to_geo, font_name=self.font_name,
-                                                font_size=font_to_geo_size,
-                                                font_type=font_to_geo_type,
-                                                units=self.app.app_units.upper())
+        try:
+            font_geo = self.f_parse.font_to_geometry(char_string=string_to_geo, font_name=self.font_name,
+                                                     font_size=font_to_geo_size,
+                                                     font_type=font_to_geo_type,
+                                                     units=self.app.app_units.upper(),
+                                                     bitmap_smoothing=self.ui.bitmap_smoothing_entry.get_value())
+        except (ValueError, TypeError, OverflowError, OSError, RuntimeError) as error:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % str(error))
+            return
+        except Exception as error:
+            self.app.log.error('TextInputTool.on_apply_button() --> %s' % str(error))
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(error)))
+            return
 
         # Handle edge case: font_to_geometry returns error string or empty geometry
         if isinstance(font_geo, str):
             # Error occurred (e.g., "flatcam font parse failed")
             self.app.inform.emit('[ERROR] %s' % font_geo)
-            self.text_path = None
         elif hasattr(font_geo, 'is_empty') and font_geo.is_empty:
             # Empty geometry - valid but empty
             self.app.inform.emit('[WARNING] %s' % _("No geometry generated from text input."))
-            self.text_path = None
         else:
             self.text_path = font_geo
 
+    def _valid_font_size(self):
+        try:
+            size = float(self.ui.font_size_cb.get_value())
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return size if math.isfinite(size) and size > 0 else None
+
     def font_family(self, font):
-        self.ui.text_input_entry.selectAll()
-        font.setPointSize(int(self.ui.font_size_cb.get_value()))
-        self.ui.text_input_entry.setCurrentFont(font)
         self.font_name = self.ui.font_type_cb.currentFont().family()
+        size = self._valid_font_size()
+        if size is None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Enter a positive font size."))
+            return
+        self.ui.text_input_entry.selectAll()
+        font.setPointSizeF(size)
+        self.ui.text_input_entry.setCurrentFont(font)
 
     def font_size(self):
+        size = self._valid_font_size()
+        if size is None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Enter a positive font size."))
+            return
         self.ui.text_input_entry.selectAll()
-        self.ui.text_input_entry.setFontPointSize(float(self.ui.font_size_cb.get_value()))
+        self.ui.text_input_entry.setFontPointSize(size)
 
     def on_bold_button(self):
         if self.ui.font_bold_tb.isChecked():
@@ -282,6 +310,20 @@ class TextEditorUI:
 
         param_grid.addWidget(FCLabel('%s:' % _("Size")), 2, 0)
         param_grid.addLayout(hlay, 2, 1)
+
+        # Bitmap smoothing
+        self.bitmap_smoothing_lbl = FCLabel('%s:' % _("Bitmap smoothing (px)"))
+        self.bitmap_smoothing_entry = FCDoubleSpinner()
+        self.bitmap_smoothing_entry.set_precision(2)
+        self.bitmap_smoothing_entry.set_range(0, 2)
+        self.bitmap_smoothing_entry.set_step(0.1)
+        self.bitmap_smoothing_entry.set_value(0.5)
+        tooltip = _("Applies to bitmap fonts only. 0 keeps the pixel edges; higher values fit smoother "
+                    "contours and may change fine details.")
+        self.bitmap_smoothing_lbl.setToolTip(tooltip)
+        self.bitmap_smoothing_entry.setToolTip(tooltip)
+        param_grid.addWidget(self.bitmap_smoothing_lbl, 4, 0)
+        param_grid.addWidget(self.bitmap_smoothing_entry, 4, 1)
 
         # Text input
         self.text_tools_box.addWidget(FCLabel('%s:' % _("Text"), bold=True, color='green'))

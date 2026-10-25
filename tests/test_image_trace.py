@@ -14,7 +14,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from appCommon import imagetrace  # noqa: E402
-from appCommon.imagetrace import trace, PRESETS, PRESET_NAMES, CURVE_MODES  # noqa: E402
+from appCommon.imagetrace import trace, trace_image, PRESETS, PRESET_NAMES, CURVE_MODES  # noqa: E402
 from appParsers.SVG import svg_to_shapes  # noqa: E402
 
 
@@ -69,6 +69,25 @@ class ImageTraceTestCase(unittest.TestCase):
         img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
         ImageDraw.Draw(img).rectangle((20, 20, 43, 43), fill=(0, 0, 0, 255))
         self.assertAlmostEqual(svg_to_shape(trace(self.save(img))).area, 24 * 24)
+
+    def test_in_memory_trace_matches_the_file_trace(self):
+        img = Image.new('RGB', (64, 64), 'white')
+        ImageDraw.Draw(img).rectangle((20, 20, 43, 43), fill='black')
+        self.assertEqual(trace_image(img), trace(self.save(img)))
+        alpha = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+        ImageDraw.Draw(alpha).rectangle((20, 20, 43, 43), fill=(0, 0, 0, 255))
+        self.assertAlmostEqual(svg_to_shape(trace_image(alpha)).area, 24 * 24)
+        ring = Image.new('RGB', (100, 100), 'white')
+        ImageDraw.Draw(ring).rectangle((10, 10, 89, 89), outline='black', width=6)
+        self.assertEqual(len(svg_to_shape(trace_image(ring)).interiors), 1)
+
+    def test_isolated_dot_survives_without_speckle_filter(self):
+        # glyph dots and counters: the default filter_speckle=4 drops a small dot, 0 keeps it
+        img = Image.new('RGB', (32, 32), 'white')
+        ImageDraw.Draw(img).rectangle((10, 10, 11, 11), fill='black')
+        shape = svg_to_shape(trace_image(img, options={'filter_speckle': 0}))
+        self.assertEqual(shape.bounds, (10.0, 10.0, 12.0, 12.0))
+        self.assertAlmostEqual(shape.area, 4.0)
 
     def test_threshold(self):
         img = Image.new('RGB', (64, 64), 'white')

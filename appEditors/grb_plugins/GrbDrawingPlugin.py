@@ -4,13 +4,14 @@ import builtins
 import gettext
 import math
 
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 from shapely.affinity import rotate, translate
 from shapely.geometry import box
 
 from appEditors.geo_plugins.GeoRectanglePlugin import RectangleEditorUI
 from appEditors.geo_plugins.GeoTextPlugin import TextEditorUI
-from appGUI.GUIElements import FCDoubleSpinner
+from appEditors.grb_plugins.GrbCommon import DrawToolUtilityShape, gerber_quad
+from appGUI.GUIElements import FCButton, FCDoubleSpinner
 from appParsers.ParseFont import ParseFont
 import appTranslation as fcTranslate
 
@@ -19,7 +20,7 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
-def rectangle_region(x, y, length, width, anchor, corner, radius, angle, steps):
+def rectangle_region(x, y, length, width, anchor, corner, radius, angle, quad_segs):
     values = (x, y, length, width, radius, angle)
     if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values) or \
             length <= 0 or width <= 0 or radius < 0 or anchor not in ('c', 'tl', 'tr', 'bl', 'br') or \
@@ -31,26 +32,33 @@ def rectangle_region(x, y, length, width, anchor, corner, radius, angle, steps):
     polygon = box(cx - length / 2 + inset, cy - width / 2 + inset,
                   cx + length / 2 - inset, cy + width / 2 - inset)
     if inset:
-        polygon = polygon.buffer(inset, quad_segs=steps, join_style='round' if corner == 'r' else 'bevel')
+        polygon = polygon.buffer(inset, quad_segs=quad_segs, join_style='round' if corner == 'r' else 'bevel')
     return rotate(polygon, angle, origin=(x, y))
 
 
-def text_region(parser, text, family, style, size, units, x, y, angle):
+def text_region(parser, text, family, style, size, units, x, y, angle, bitmap_smoothing=0.5):
     try:
         size = float(size)
+        bitmap_smoothing = float(bitmap_smoothing)
         valid = all(math.isfinite(value) for value in (size, x, y, angle)) and size > 0
+        smoothing_valid = math.isfinite(bitmap_smoothing) and bitmap_smoothing >= 0
     except (TypeError, ValueError, OverflowError):
         valid = False
+        smoothing_valid = False
     if not valid or not text.strip() or units.upper() not in ('MM', 'IN'):
         raise ValueError(_("Enter text, a positive font size and finite coordinates and rotation."))
+    if not smoothing_valid:
+        raise ValueError(_("Bitmap smoothing must be a finite nonnegative number."))
     polygon = parser.font_to_geometry(char_string=text, font_name=family, font_type=style,
-                                      font_size=size, units=units.upper())
+                                      font_size=size, units=units.upper(), bitmap_smoothing=bitmap_smoothing)
     if isinstance(polygon, str) or polygon is None or polygon.is_empty:
         raise ValueError(_("No geometry generated from text input."))
     return translate(rotate(polygon, angle, origin=(0, 0)), xoff=x, yoff=y)
 
 
-class RegionDrawingDialog(QtWidgets.QDialog):
+class RegionDrawingPanel(QtWidgets.QWidget):
+    """Numeric drawing controls hosted in the editor Properties tab."""
+
     def __init__(self, editor, kind):
         super().__init__(editor.ui.grb_edit_widget)
         self.editor = editor
@@ -59,8 +67,14 @@ class RegionDrawingDialog(QtWidgets.QDialog):
         self.session = editor.history.session
         self.units = self.app.app_units
         self.parser = None
-        self.setWindowTitle(_("Rectangle Region") if kind == 'rectangle' else _("Text Regions"))
+        self._text_cache = None
+        self._preview_error_key = None
+        # the canvas event dispatcher reads these of the active tool
+        self.name = 'drawing'
+        self.complete = True
+        self.clear_utility_on_none = True
         layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(QtWidgets.QLabel(_("Explicit material regions. Dimensions use %s; font size uses points.") %
                                           self.app.app_units))
         if kind == 'rectangle':
@@ -74,6 +88,8 @@ class RegionDrawingDialog(QtWidgets.QDialog):
             button = self.ui.add_button
         else:
             self.ui = TextEditorUI(layout, self)
+            # the output is one outline for the whole text, so mixed rich-text styles would not match the preview
+            self.ui.text_input_entry.setAcceptRichText(False)
             position = QtWidgets.QFormLayout()
             layout.addLayout(position)
             self.ui.x_entry = self.coordinate_entry()
@@ -87,10 +103,16 @@ class RegionDrawingDialog(QtWidgets.QDialog):
         angle_row = QtWidgets.QFormLayout()
         angle_row.addRow(_("Rotation (degrees, about anchor)"), self.angle_entry)
         layout.addLayout(angle_row)
-        cancel = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        cancel.rejected.connect(self.reject)
+        cancel = FCButton(_("Close"))
+        cancel.clicked.connect(self.cancel)
         layout.addWidget(cancel)
         button.clicked.connect(self.on_apply)
+        if kind == 'text':
+            self.ui.font_type_cb.currentFontChanged.connect(self.sync_text_format)
+            self.ui.font_size_cb.currentTextChanged.connect(self.sync_text_format)
+            self.ui.font_bold_tb.toggled.connect(self.sync_text_format)
+            self.ui.font_italic_tb.toggled.connect(self.sync_text_format)
+            self.sync_text_format()
 
     def coordinate_entry(self):
         entry = FCDoubleSpinner()
@@ -98,33 +120,132 @@ class RegionDrawingDialog(QtWidgets.QDialog):
         entry.set_range(-10000, 10000)
         return entry
 
+    def _style(self):
+        bold, italic = self.ui.font_bold_tb.isChecked(), self.ui.font_italic_tb.isChecked()
+        return 'bi' if bold and italic else 'bold' if bold else 'italic' if italic else 'regular'
+
+    def sync_text_format(self, *args):
+        """Show the whole-text output style in the text input; mixed styles are not part of the output."""
+        if self.kind != 'text':
+            return
+        font = self.ui.font_type_cb.currentFont()
+        try:
+            size = float(self.ui.font_size_cb.get_value())
+            if math.isfinite(size) and size > 0:
+                font.setPointSizeF(size)
+        except (TypeError, ValueError):
+            pass
+        font.setBold(self.ui.font_bold_tb.isChecked())
+        font.setItalic(self.ui.font_italic_tb.isChecked())
+        self.ui.text_input_entry.setFont(font)
+        # setFont only changes the base font: restyle the characters already in the document too
+        char_format = QtGui.QTextCharFormat()
+        char_format.setFont(font)
+        cursor = self.ui.text_input_entry.textCursor()
+        position = cursor.position()
+        cursor.beginEditBlock()
+        cursor.select(QtGui.QTextCursor.SelectionType.Document)
+        cursor.mergeCharFormat(char_format)
+        cursor.clearSelection()
+        cursor.setPosition(position)
+        cursor.endEditBlock()
+        self.ui.text_input_entry.setTextCursor(cursor)
+        self.ui.text_input_entry.setCurrentCharFormat(char_format)
+        self._text_cache = None
+
+    def _polygon_key(self, angle):
+        if self.kind == 'rectangle':
+            return (self.kind, angle, self.ui.length_entry.get_value(),
+                    self.ui.width_entry.get_value(), self.ui.anchor_radio.get_value(),
+                    self.ui.corner_radio.get_value(), self.ui.radius_entry.get_value())
+        return (self.kind, self.ui.text_input_entry.get_value(),
+                self.ui.font_type_cb.currentFont().family(), self._style(),
+                self.ui.font_size_cb.get_value(), self.app.app_units,
+                self.ui.bitmap_smoothing_entry.get_value())
+
+    def _text_polygon(self, x, y, angle):
+        if self.parser is None:
+            self.parser = ParseFont(self.app)
+            self.parser.get_fonts_by_types()
+        key = (self.ui.text_input_entry.get_value(),
+               self.ui.font_type_cb.currentFont().family(), self._style(),
+               self.ui.font_size_cb.get_value(), self.app.app_units,
+               self.ui.bitmap_smoothing_entry.get_value())
+        if self._text_cache is None or self._text_cache[0] != key:
+            text, family, style, size, units, smoothing = key
+            polygon = text_region(self.parser, text, family, style, size, units, 0, 0, 0,
+                                  bitmap_smoothing=smoothing)
+            self._text_cache = (key, polygon)
+        return translate(rotate(self._text_cache[1], angle, origin=(0, 0)), xoff=x, yoff=y)
+
+    def build_polygon(self, x, y, angle):
+        if self.kind == 'rectangle':
+            return rectangle_region(x, y, self.ui.length_entry.get_value(), self.ui.width_entry.get_value(),
+                                    self.ui.anchor_radio.get_value(), self.ui.corner_radio.get_value(),
+                                    self.ui.radius_entry.get_value(), angle,
+                                    gerber_quad(self.app, self.ui.radius_entry.get_value()))
+        return self._text_polygon(x, y, angle)
+
+    def on_key(self, key):
+        if key in ('Escape', QtCore.Qt.Key.Key_Escape):
+            self.editor.close_region_drawing()
+        elif key in (QtCore.Qt.Key.Key_J, 'J'):
+            self.app.on_jump_to()
+        return None
+
+    def click(self, pos):
+        x, y = pos
+        if all(math.isfinite(value) for value in (x, y)):
+            self.ui.x_entry.set_value(x)
+            self.ui.y_entry.set_value(y)
+            self.editor.update_utility_geometry(data=(x, y))
+
+    def utility_geometry(self, data=None):
+        if self.session != self.editor.history.session or self.units != self.app.app_units:
+            self.editor.close_region_drawing()
+            return None
+        if not data:
+            return None
+        try:
+            key = self._polygon_key(self.angle_entry.get_value())
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if key == self._preview_error_key:
+            return None
+        try:
+            polygon = self.build_polygon(data[0], data[1], self.angle_entry.get_value())
+        except Exception:
+            # a font or input failure at mouse-move must not spam the status bar; keep this preview empty
+            self._preview_error_key = key
+            return None
+        self._preview_error_key = None
+        if polygon is None or polygon.is_empty:
+            return None
+        return DrawToolUtilityShape({'solid': polygon})
+
     def on_apply(self):
         if self.session != self.editor.history.session or self.units != self.app.app_units:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Editor session or units changed. Reopen the drawing tool."))
+            self.editor.close_region_drawing()
             return
         if not self.editor.history.ready():
             return
         try:
             x, y = self.ui.x_entry.get_value(), self.ui.y_entry.get_value()
             angle = self.angle_entry.get_value()
-            if self.kind == 'rectangle':
-                polygon = rectangle_region(x, y, self.ui.length_entry.get_value(), self.ui.width_entry.get_value(),
-                                           self.ui.anchor_radio.get_value(), self.ui.corner_radio.get_value(),
-                                           self.ui.radius_entry.get_value(), angle,
-                                           int(self.app.options.get('gerber_circle_steps', 64)))
-            else:
-                if self.parser is None:
-                    self.parser = ParseFont(self.app)
-                    self.parser.get_fonts_by_types()
-                bold, italic = self.ui.font_bold_tb.isChecked(), self.ui.font_italic_tb.isChecked()
-                style = 'bi' if bold and italic else 'bold' if bold else 'italic' if italic else 'regular'
-                polygon = text_region(self.parser, self.ui.text_input_entry.get_value(),
-                                      self.ui.font_type_cb.currentFont().family(), style,
-                                      self.ui.font_size_cb.get_value(), self.app.app_units, x, y, angle)
+            polygon = self.build_polygon(x, y, angle)
             if self.editor.add_region_geometry(polygon) != 'fail':
-                self.accept()
+                if self.editor.active_tool is self:
+                    self.editor.update_utility_geometry(data=(x, y))
         except (ValueError, TypeError, OverflowError) as error:
             self.app.inform.emit('[WARNING_NOTCL] %s' % str(error))
         except Exception as error:
-            self.app.log.error('RegionDrawingDialog.on_apply() --> %s' % str(error))
+            self.app.log.error('RegionDrawingPanel.on_apply() --> %s' % str(error))
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Action was not executed"), str(error)))
+
+    def cancel(self):
+        self.editor.close_region_drawing()
+
+    def clean_up(self):
+        # MainGUI's Escape handler calls clean_up() before it selects the Select tool
+        self.editor.close_region_drawing(return_to_select=False)

@@ -9,7 +9,7 @@ from shapely.affinity import rotate, translate
 from shapely.geometry import box, MultiPolygon
 from shapely.ops import unary_union
 
-from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingDialog, rectangle_region, text_region
+from appEditors.grb_plugins.GrbDrawingPlugin import rectangle_region, text_region
 from appEditors.appGerberEditor import AppGerberEditor
 from appParsers.ParseFont import ParseFont
 from test_gerber_editor_clear import editor_save
@@ -63,6 +63,19 @@ def test_text_holes_units_and_transform():
             text_region(parser, text, family, 'regular', size, 'MM', x, 0, 0)
 
 
+def test_text_region_bitmap_smoothing_is_validated_and_forwarded():
+    seen = []
+    parser = SimpleNamespace(
+        font_to_geometry=lambda **kwargs: seen.append(kwargs['bitmap_smoothing']) or box(0, 0, 1, 1))
+    assert text_region(parser, 'A', 'Arial', 'regular', 12, 'MM', 0, 0, 0,
+                       bitmap_smoothing=0).equals(box(0, 0, 1, 1))
+    assert seen == [0]
+    for smoothing in (-0.1, float('nan'), float('inf')):
+        with pytest.raises(ValueError):
+            text_region(parser, 'A', 'Arial', 'regular', 12, 'MM', 0, 0, 0,
+                        bitmap_smoothing=smoothing)
+
+
 def test_region_commit_preserves_owners_and_undo():
     existing = pad(20, 20, 1)
     editor = make_editor({10: aperture([existing])})
@@ -97,3 +110,85 @@ def test_text_and_rectangle_native_export_reparse(app, tmp_path):
     edited = editor_save(app, source, tools, loaded_as_regions=editor.loaded_as_regions)
     again = reparse_gerber(app, edited.source_file, tmp_path)
     assert_poly_equiv(again.solid_geometry, expected, abs_tol=1e-4)
+
+
+def opened_panel(editor, kind='rectangle'):
+    editor.on_region_drawing(kind)
+    panel = editor.region_drawing_panel
+    assert panel is not None
+    return panel
+
+
+def test_region_drawing_repeats_without_resetting_parameters():
+    editor = make_editor()
+    panel = opened_panel(editor)
+    panel.ui.length_entry.set_value(4)
+    panel.ui.width_entry.set_value(2)
+    panel.on_apply()
+    key = next(key for key, aperture in editor.storage_dict.items() if aperture['type'] == 'REG')
+    assert len(editor.storage_dict[key]['geometry']) == 1
+    assert editor.region_drawing_panel is panel
+    assert panel.ui.length_entry.get_value() == 4
+    panel.on_apply()
+    assert len(editor.storage_dict[key]['geometry']) == 2
+    assert len(editor.history.undo_stack) == 2
+    panel.cancel()
+
+
+def test_region_drawing_cancel_drops_preview_without_committing():
+    editor = make_editor()
+    panel = opened_panel(editor)
+    panel.ui.length_entry.set_value(4)
+    panel.ui.width_entry.set_value(2)
+    assert panel.utility_geometry((1, 2)) is not None
+    panel.cancel()
+    assert editor.storage_dict == {}
+    assert editor.history.undo_stack == []
+    assert editor.region_drawing_panel is None
+
+
+def test_region_drawing_preview_tracks_numeric_click_position():
+    editor = make_editor()
+    panel = opened_panel(editor)
+    panel.ui.length_entry.set_value(4)
+    panel.ui.width_entry.set_value(2)
+    assert panel.utility_geometry((3, 4)).geo['solid'].bounds == (1, 3, 5, 5)
+    panel.click((7, 8))
+    assert panel.ui.x_entry.get_value() == 7
+    assert panel.ui.y_entry.get_value() == 8
+    assert panel.utility_geometry((7, 8)).geo['solid'].bounds == (5, 7, 9, 9)
+    panel.cancel()
+
+
+def test_text_preview_uses_the_selected_output_style():
+    editor = make_editor()
+    panel = opened_panel(editor, 'text')
+    panel.parser = SimpleNamespace(font_to_geometry=lambda **kwargs: box(0, 0, 2, 1))
+    panel.ui.text_input_entry.setText('A')
+    panel.ui.font_size_cb.setCurrentText('12')
+    panel.ui.font_bold_tb.setChecked(True)
+    assert panel.utility_geometry((5, 6)).geo['solid'].equals(box(5, 6, 7, 7))
+    panel.cancel()
+
+
+def test_text_preview_rebuilds_when_bitmap_smoothing_changes():
+    editor = make_editor()
+    panel = opened_panel(editor, 'text')
+    calls = []
+
+    def parser(**kwargs):
+        smoothing = kwargs['bitmap_smoothing']
+        calls.append(smoothing)
+        return box(0, 0, 2, 1 + smoothing)
+
+    panel.parser = SimpleNamespace(font_to_geometry=parser)
+    panel.ui.text_input_entry.setText('A')
+    panel.ui.bitmap_smoothing_entry.set_value(0)
+    assert panel.build_polygon(0, 0, 0).bounds == (0, 0, 2, 1)
+    # position and rotation reuse the cached outline
+    assert panel.build_polygon(10, 20, 0).bounds == (10, 20, 12, 21)
+    assert calls == [0]
+    panel.ui.bitmap_smoothing_entry.set_value(1)
+    assert panel.build_polygon(0, 0, 0).bounds == (0, 0, 2, 2)
+    assert calls == [0, 1]
+    panel.cancel()

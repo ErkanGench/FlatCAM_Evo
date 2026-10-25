@@ -1080,7 +1080,8 @@ class PcbDocParser:
             if name not in mapping:
                 raise PcbDocParseError('Source font is not installed or embedded: %s %s' % (name, style))
             font = mapping[name]
-        face = freetype.Face(io.BytesIO(font)) if isinstance(font, bytes) else freetype.Face(font)
+        face = freetype.Face(io.BytesIO(font)) if isinstance(font, bytes) \
+            else freetype.Face(font, index=getattr(font, 'face_index', 0))
         face.set_char_size(64 * 100)
         load_flags = FT_LOAD_FLAGS['FT_LOAD_NO_HINTING'] | FT_LOAD_FLAGS['FT_LOAD_NO_BITMAP']
         cap = face.get_char_index('H')
@@ -1103,7 +1104,7 @@ class PcbDocParser:
             if not glyph:
                 raise PcbDocParseError('Font %s has no glyph for %r' % (name, char))
             if previous:
-                pen_x += face.get_kerning(previous, glyph).x
+                pen_x += face.get_kerning(previous, char).x
             face.load_glyph(glyph, load_flags)
             outline = face.glyph.outline
             contours = []
@@ -1123,7 +1124,7 @@ class PcbDocParser:
                 result = result.union(contour) if depth % 2 == 0 else result.difference(contour)
             geometry.append(translate(result, xoff=pen_x, yoff=pen_y))
             pen_x += face.glyph.advance.x
-            previous = glyph
+            previous = char
         return scale(unary_union(geometry), xfact=factor, yfact=factor, origin=(0, 0))
 
     def _finish(self):
