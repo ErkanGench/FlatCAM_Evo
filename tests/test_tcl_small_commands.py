@@ -159,8 +159,65 @@ def qr_gerber():
     obj.obj_options = {'name': 'board'}
     obj.solid_geometry = [board]
     obj.tools = {0: {'type': 'REG', 'size': 0.0, 'geometry': [{'solid': board, 'follow': board.exterior}]}}
+    obj.follow_geometry = []
     obj.bounds.return_value = (-5, -5, 60, 60)
     return obj
+
+
+def test_qrcode_tokens_serial_pad_and_mask_pattern():
+    from shapely.ops import unary_union
+    from test_tcl_audit_regressions import FCShell
+    shapes = []
+    for mask in ('0', '5', 'auto'):
+        obj = qr_gerber()
+        command, app = make_qrcode(obj=obj)
+        app.options = {'tools_qrcode_serial_start': 3, 'tools_qrcode_serial_pad': 4}
+        command.execute({'name': 'board', 'data': '{object}-{serial}-{date}', 'x': 10, 'y': 10, 'version': 0,
+                         'mask_pattern': mask}, [])
+        shapes.append(unary_union(obj.solid_geometry))
+    assert not shapes[0].equals(shapes[1])  # the mask pattern changes the modules
+    obj = qr_gerber()
+    command, app = make_qrcode(obj=obj)
+    with mock.patch('appPlugins.ToolQRCode.QRCodeGen.expand_tokens', wraps=None) as expand:
+        expand.return_value = 'x'
+        command.execute({'name': 'board', 'data': 'd', 'serial': 9, 'serial_pad': 3}, [])
+    context, pad = expand.call_args[0][1], expand.call_args[0][2]
+    assert context['serial'] == 9 and pad == 3 and context['date'] and context['time']
+    with pytest.raises(FCShell.TclErrorException):
+        command.execute({'name': 'board', 'data': 'x', 'mask_pattern': '9'}, [])
+
+
+def test_qrcode_source_extends_follow_geometry_and_pcbdoc_uses_object_units():
+    from shapely import Point
+    from shapely.geometry import MultiPoint
+    obj = qr_gerber()
+    obj.follow_geometry = MultiPoint([(1, 1), (2, 2)])
+    command, _app = make_qrcode('IN', obj)
+    command.execute({'name': 'board', 'data': 'hi', 'x': 10, 'y': 10, 'version': 1, 'box_size': 10,
+                     'border': 0, 'polarity': 'pos'}, [])
+    assert isinstance(obj.follow_geometry, list) and len(obj.follow_geometry) > 2
+    assert all(isinstance(p, Point) for p in obj.follow_geometry)
+    in_width = max(p.x for p in obj.follow_geometry[2:]) - 10
+    obj = qr_gerber()
+    obj.follow_geometry = []
+    obj.obj_options['pcbdoc_import'] = True
+    obj.units = 'mm'
+    command, _app = make_qrcode('IN', obj)
+    command.execute({'name': 'board', 'data': 'hi', 'x': 10, 'y': 10, 'version': 1, 'box_size': 10,
+                     'border': 0, 'polarity': 'pos'}, [])
+    mm_width = max(g.bounds[2] for g in obj.solid_geometry[1:]) - 10
+    assert in_width < 1.5 < mm_width  # 21 modules: 0.83 in in an inch project, 21 mm in a mm PCB document
+
+
+def test_qrcode_failure_while_planning_leaves_the_object_unchanged():
+    from test_tcl_audit_regressions import FCShell
+    obj = qr_gerber()
+    geometry = list(obj.solid_geometry)
+    command, _app = make_qrcode(obj=obj)
+    with mock.patch('appPlugins.ToolQRCode.QRCodeGen.insert_geometry', side_effect=RuntimeError('boom')):
+        with pytest.raises(FCShell.TclErrorException):
+            command.execute({'name': 'board', 'data': 'x'}, [])
+    assert obj.solid_geometry == geometry
 
 
 def test_qrcode_source_cuts_copper_and_adds_the_code():

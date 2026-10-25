@@ -1,4 +1,5 @@
 import collections
+import datetime
 import logging
 
 import gettext
@@ -6,6 +7,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from appHandlers.appHistory import history_of
+from camlib import flatten_shapely_geometry
 from tclCommands.TclCommand import TclCommand
 
 fcTranslate.apply_language('strings')
@@ -48,6 +50,8 @@ class TclCommandQRCode(TclCommand):
         ('output', str),
         ('outname', str),
         ('serial', int),
+        ('serial_pad', int),
+        ('mask_pattern', str),
     ])
 
     required = ['data']
@@ -55,7 +59,8 @@ class TclCommandQRCode(TclCommand):
     help = {
         'main': "Insert a QR Code in a Gerber object (output source, undoable) or create a new Gerber object "
                 "that contains only the QR Code (output new). The values that are not given are taken from the "
-                "QR Code plugin defaults. The position is in the units of the application.",
+                "QR Code plugin defaults. The position (-x, -y) is in the units of the application; for a PCB "
+                "document target (-output source) it is in the units of that object.",
         'args': collections.OrderedDict([
             ('name', 'Name of the target Gerber object. Required for -output source.'),
             ('data', 'Text of the QR Code. Tokens: {date} {time} {project} {object} {serial}.'),
@@ -73,7 +78,9 @@ class TclCommandQRCode(TclCommand):
             ('margin', 'Clearance around the QR. 0 or not given: border * module size.'),
             ('output', 'source: modify the Gerber (default). new: create a new Gerber object.'),
             ('outname', 'Name of the new Gerber object, for -output new.'),
-            ('serial', 'Value of the {serial} token.'),
+            ('serial', 'Value of the {serial} token. Default: the plugin Serial start.'),
+            ('serial_pad', 'Zero padding width of the {serial} token. Default: the plugin Serial pad.'),
+            ('mask_pattern', 'QR mask pattern 0..7, or auto.'),
         ]),
         'examples': ['qrcode board.gtl -data "{object} {serial}" -x 10 -y 10 -serial 7 -version 0 -anchor c',
                      'qrcode -data "hello" -output new -outname qr_label']
@@ -157,20 +164,42 @@ class TclCommandQRCode(TclCommand):
             return 'fail'
 
         units = str(getattr(self.app, 'app_units', 'MM')).upper()
+        if output == 'source' and obj.obj_options.get('pcbdoc_import'):
+            units = str(obj.units).upper()  # the units of a PCB document import are the object units
         pos = (float(args.get('x', 0.0)), float(args.get('y', 0.0)))
 
         project = getattr(self.app, 'project_filename', None)
         if project:
             import os
             project = os.path.splitext(os.path.basename(str(project)))[0]
+        now = datetime.datetime.now()
+        serial = args['serial'] if 'serial' in args and args['serial'] is not None else \
+            pick('serial', 'tools_qrcode_serial_start', int, 0)
+        serial_pad = int(pick('serial_pad', 'tools_qrcode_serial_pad', int, 0))
+        if serial_pad < 0:
+            self.raise_tcl_error(_("Serial pad must be 0 or more."))
+            return 'fail'
         context = {'object': obj.obj_options['name'] if obj is not None else str(args.get('outname', '')),
-                   'project': project or ''}
-        if 'serial' in args:
-            context['serial'] = args['serial']
-        text = Gen.expand_tokens(data, context)
+                   'project': project or '', 'date': now, 'time': now, 'serial': serial}
+        text = Gen.expand_tokens(data, context, serial_pad)
+
+        mask_text = str(args['mask_pattern'] if args.get('mask_pattern') is not None
+                        else options.get('tools_qrcode_mask_pattern', 'auto')).strip().lower()
+        if mask_text in ('', 'auto'):
+            mask_pattern = None
+        elif mask_text in ('0', '1', '2', '3', '4', '5', '6', '7'):
+            mask_pattern = int(mask_text)
+        else:
+            self.raise_tcl_error('%s: %s' % (_("Mask pattern must be 0..7 or auto"), mask_text))
+            return 'fail'
+        try:
+            circle_steps = int(options.get('geometry_circle_steps', 64))
+        except (TypeError, ValueError):
+            circle_steps = 64
 
         try:
-            modules, utility, info = Gen.qr_geometry(text, version or None, error, box_size, border, units)
+            modules, utility, info = Gen.qr_geometry(text, version or None, error, box_size, border, units,
+                                                     mask_pattern, circle_steps)
             eff_margin = Gen.effective_margin(margin, border, box_size, units)
             modules, utility = Gen.transform_geometry([modules, utility], rotation, mirror, anchor, eff_margin)
         except (Gen.QRDataOverflow, ValueError) as err:
@@ -178,11 +207,24 @@ class TclCommandQRCode(TclCommand):
             return 'fail'
 
         if output == 'source':
-            with history_of(self.app).snapshot(_("QRCode"), [obj]):
+            src_units = units
+            try:
                 solid, tools = Gen.insert_geometry(obj.solid_geometry, obj.tools, modules, utility, pos, border,
-                                                   box_size, rounded, polarity, units=units, margin=eff_margin)
+                                                   box_size, rounded, polarity, units=src_units, margin=eff_margin)
+                follow = None
+                if polarity == 'pos' and obj.follow_geometry:
+                    follow = flatten_shapely_geometry(obj.follow_geometry) + \
+                        [geo.centroid for geo in Gen.plan_insertion(
+                            modules, utility, pos, border, box_size, rounded, polarity, src_units,
+                            eff_margin).modules]
+            except Exception as err:
+                self.raise_tcl_error(str(err))
+                return 'fail'
+            with history_of(self.app).snapshot(_("QRCode"), [obj]):
                 obj.solid_geometry = solid
                 obj.tools = tools
+                if follow is not None:
+                    obj.follow_geometry = follow
                 try:
                     a, b, c, d = obj.bounds()
                     obj.obj_options['xmin'] = a

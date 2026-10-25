@@ -535,3 +535,91 @@ def test_undo_of_an_insert_restores_the_gerber(fc, tool):
     _settle(lambda: not fc.projects.is_busy())
     assert _area(obj) == pytest.approx(area) and sorted(obj.tools) == keys
 
+
+
+@pytest.mark.slow
+def test_a_result_that_arrives_after_a_reset_is_ignored(fc, tool):
+    obj = _gerber(fc)
+    _setup(tool, obj, placement_radio='coords', x_entry=50.0, y_entry=40.0)
+    before = obj.solid_geometry
+    tool.execute()
+    tool.on_exit()          # Reset / close while the worker still runs
+    _settle(lambda: False, timeout=1.0)
+    assert not tool.armed and obj.solid_geometry is before
+
+
+@pytest.mark.slow
+def test_the_insert_uses_the_settings_of_the_insert_click(fc, tool):
+    obj = _gerber(fc)
+    _setup(tool, obj)
+    before = obj.solid_geometry
+    _arm(tool)
+    tool.ui.border_size_entry.set_value(6)      # edited after the preview was planned
+    _click(tool, 30, 30)
+    added = unary_union([g for g in obj.solid_geometry if g not in before])
+    assert added.bounds[0] == pytest.approx(30.0 + 2.0, abs=1e-3)
+
+
+@pytest.mark.slow
+def test_a_merged_gerber_with_shapely_follow_geometry_can_take_a_qrcode(fc, tool):
+    from shapely.geometry import MultiPoint
+    obj = _gerber(fc)
+    obj.follow_geometry = MultiPoint([(0, 0), (1, 1)])
+    _setup(tool, obj)
+    before = _area(obj)
+    _arm(tool)
+    _click(tool, 30, 30)
+    assert not tool.armed and _area(obj) != before
+    assert not any('ERROR' in m for m in tool.messages)
+
+
+@pytest.mark.slow
+def test_the_target_as_soldermask_adds_no_opening_box(fc, tool):
+    plain, same = _gerber(fc, 'plain'), _gerber(fc, 'same')
+    _setup(tool, plain, placement_radio='coords', x_entry=50.0, y_entry=40.0)
+    tool.execute()
+    _settle(lambda: not tool.armed and _area(plain) != _area(same))
+    _setup(tool, same, placement_radio='coords', x_entry=50.0, y_entry=40.0, mask_cb=True)
+    tool.ui.mask_object_combo.set_value('same')
+    tool.execute()
+    _settle(lambda: _area(plain) == _area(same), timeout=2.0)
+    assert _area(same) == pytest.approx(_area(plain))
+
+
+@pytest.mark.slow
+def test_pcbdoc_object_gets_the_qr_in_its_own_units(fc, tool):
+    obj = _gerber(fc)
+    obj.units = 'IN'
+    obj.obj_options['pcbdoc_import'] = True
+    _setup(tool, obj, placement_radio='coords', x_entry=0.0, y_entry=0.0)
+    before = obj.solid_geometry
+    tool.execute()
+    _settle(lambda: obj.solid_geometry is not before)
+    added = unary_union([g for g in obj.solid_geometry if g not in before])
+    assert added.bounds[2] - added.bounds[0] == pytest.approx(21 / MM, rel=0.02)
+
+
+@pytest.mark.slow
+def test_new_object_output_works_without_any_gerber(fc, tool):
+    ui = tool.ui
+    ui.text_data.set_value('HELLO')
+    ui.version_auto_cb.set_value(True)
+    ui.output_radio.set_value('new')
+    ui.placement_radio.set_value('coords')
+    tool.update_enabled()
+    tool.execute()
+    _settle(lambda: fc.collection.get_by_name('qrcode') is not None)
+    new = fc.collection.get_by_name('qrcode')
+    assert new is not None and _area(new) > 0
+
+
+@pytest.mark.slow
+def test_huge_border_neither_wraps_nor_allocates_a_huge_preview(fc, tool):
+    ui = tool.ui
+    ui.border_size_entry.set_value(0)
+    ui.border_size_entry.stepDown()
+    assert ui.border_size_entry.get_value() == 0
+    ui.text_data.set_value('HELLO')
+    ui.border_size_entry.set_value(9999)
+    tool.refresh_preview()
+    assert not tool.ui.preview_label.pixmap().isNull()

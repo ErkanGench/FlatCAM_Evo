@@ -9,14 +9,12 @@ import re
 from collections import namedtuple
 from html import escape
 from io import BytesIO
-from typing import Iterable
 
 import qrcode
 import qrcode.exceptions
 import qrcode.image.pil
 import qrcode.image.svg
-from copy import deepcopy  # noqa: F401  re-exported by appPlugins/ToolQRCode/__init__.py
-from shapely import MultiPolygon, Polygon, box  # noqa: F401  MultiPolygon re-exported by __init__.py
+from shapely import Polygon, box
 from shapely.affinity import rotate, scale, translate
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
@@ -107,8 +105,6 @@ def build_qr(text_data, version, error, box_size, border, file_type, fill_color=
     kwargs = {}
     if file_type == 'png':
         if _is_transparent(back_color):
-            kwargs['back_color'] = (0, 0, 0, 0)
-            kwargs['fill_color'] = fill_color or 'black'
             return qr, _transparent_png(qr, fill_color or 'black')
         kwargs['back_color'] = back_color
         if fill_color:
@@ -177,14 +173,6 @@ def qr_info(text_data, version, error, mask_pattern=None):
     """Actual version and module count (without border) the data needs: {'version': int, 'modules': int}."""
     qr = build_qr(text_data, version, error, 10, 0, 'fragment', mask_pattern=mask_pattern)[0]
     return {'version': qr.version, 'modules': qr.modules_count}
-
-
-def flatten_list(geo_list):
-    for item in geo_list:
-        if isinstance(item, Iterable) and not isinstance(item, (str, bytes)):
-            yield from flatten_list(item)
-        else:
-            yield item
 
 
 def _as_list(geom):
@@ -298,7 +286,7 @@ def transform_geometry(geoms, rotation=0, mirror=False, anchor='bl', margin=0.0)
     """
     rot = int(rotation) % 360
     if rot not in (0, 90, 180, 270) or anchor not in ANCHORS:
-        raise ValueError("Wrong rotation or anchor.")
+        raise ValueError(_("Wrong rotation or anchor."))
     flat = [g for item in geoms for g in _as_list(item)]
     if not flat:
         return list(geoms)

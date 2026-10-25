@@ -925,7 +925,7 @@ class AppDefaults:
         "tools_qrcode_fill_color": '#000000',
         "tools_qrcode_back_color": '#FFFFFF',
         "tools_qrcode_sel_limit": 330,
-        "tools_qrcode_version_auto": False,
+        "tools_qrcode_version_auto": True,
         "tools_qrcode_mask_pattern": 'Auto',
         "tools_qrcode_min_module": 0.15,
         "tools_qrcode_rotation": 0,

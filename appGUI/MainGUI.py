@@ -4661,7 +4661,8 @@ class MainGUI(QtWidgets.QMainWindow):
             elif modifiers == QtCore.Qt.KeyboardModifier.NoModifier:
                 # Escape = Deselect All
                 if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
-                    self.app.qrcode_tool.on_exit()
+                    if self.app.qrcode_tool.armed:
+                        self.app.qrcode_tool.on_exit(cancelled=True)
 
                 # Grid toggle
                 if key == QtCore.Qt.Key.Key_G:

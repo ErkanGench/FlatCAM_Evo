@@ -20,6 +20,7 @@ import os
 from collections import namedtuple
 from copy import deepcopy
 from shapely import box
+from camlib import flatten_shapely_geometry
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -37,8 +38,8 @@ QRPlan = namedtuple('QRPlan', ['modules', 'utility', 'box_poly', 'info', 'text']
 
 class QRCode(AppTool):
 
-    # (plan or None, error message): the geometry job hands its result back to the GUI thread
-    plan_ready = QtCore.pyqtSignal(object, str)
+    # (plan or None, error message, request token): the geometry job hands its result back to the GUI thread
+    plan_ready = QtCore.pyqtSignal(object, str, int)
 
     def __init__(self, app):
         AppTool.__init__(self, app)
@@ -57,6 +58,7 @@ class QRCode(AppTool):
         self.shapes = self.app.sel_shapes
         self.old_back_color = ''
         self.pending_params = None
+        self.request_id = 0
 
         self.preview_timer = QtCore.QTimer(self)
         self.preview_timer.setSingleShot(True)
@@ -296,33 +298,39 @@ class QRCode(AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("Cancelled. There is no QRCode Data in the text box."))
             return
         obj = self.target_object()
-        if obj is None:
+        if obj is None and params['output'] != 'new':
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("There is no Gerber object loaded ..."))
             return
         if self.app.call_source not in ('app', 'qrcode_tool'):
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Close the running tool or editor first."))
             return
         self.grb_object = obj
-        self.grb_name = name = obj.obj_options['name']
+        self.grb_name = name = obj.obj_options['name'] if obj is not None else ''
+        if obj is not None and obj.obj_options.get('pcbdoc_import', False):
+            # the objects of a PCB document stay in their own units (see appIO)
+            params['units'] = str(obj.units).upper()
         self.pending_params = params
         serial = self.serial
+        token = self.request_id
 
         def job_thread_qr():
             with self.app.proc_container.new('%s...' % _("Working")) as self.proc:
                 try:
                     plan = self.plan_for(params, serial, name)
                 except (ValueError, QRCodeGen.QRDataOverflow) as err:
-                    self.plan_ready.emit(None, str(err))
+                    self.plan_ready.emit(None, str(err), token)
                     return
                 except Exception as err:
                     log.error("QRCode.execute() --> %s" % str(err))
-                    self.plan_ready.emit(None, str(err))
+                    self.plan_ready.emit(None, str(err), token)
                     return
-            self.plan_ready.emit(plan, '')
+            self.plan_ready.emit(plan, '', token)
         self.app.worker_task.emit({'fcn': job_thread_qr, 'params': []})
 
-    def on_plan_ready(self, plan, message):
+    def on_plan_ready(self, plan, message, token):
         """GUI thread: the geometry is ready (or failed). Arm the canvas, or insert at the given coordinates."""
+        if token != self.request_id:
+            return      # a Reset, a close or a newer Insert came in the meantime
         if plan is None:
             self.app.inform.emit('[ERROR_NOTCL] %s' % (message or _("The QRCode could not be created.")))
             return
@@ -348,7 +356,6 @@ class QRCode(AppTool):
         canvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
         canvas.graph_event_connect('mouse_move', self.on_mouse_move)
         canvas.graph_event_connect('mouse_release', self.on_mouse_release)
-        canvas.graph_event_connect('key_release', self.on_key_release)
         self.handlers_connected = True
         self.armed = True
         self.app.inform.emit(_("Click on the DESTINATION point ..."))
@@ -366,15 +373,20 @@ class QRCode(AppTool):
         self.preview_timer.stop()
         if self.armed:
             self.on_exit(cancelled=True)
+        else:
+            self.request_id += 1
+            self.pending_params = None
 
     def on_exit(self, cancelled=False):
         """End the placement: events, preview shapes and the call_source go back to what they were."""
         was_armed = self.armed
+        # a result of the geometry job that is still on its way is stale from here on
+        self.request_id += 1
+        self.pending_params = None
         if self.handlers_connected:
             canvas = self.app.plotcanvas
             canvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
             canvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-            canvas.graph_event_disconnect('key_release', self.on_key_release)
             canvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
             canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
             self.handlers_connected = False
@@ -430,9 +442,6 @@ class QRCode(AppTool):
         elif event.button == 2:
             self.on_exit(cancelled=True)
 
-    def on_key_release(self, event):
-        pass
-
     # ------------------------------------------------------------------------------------------------------------
     # insert
     # ------------------------------------------------------------------------------------------------------------
@@ -451,18 +460,18 @@ class QRCode(AppTool):
         return obj
 
     def make(self, pos):
-        obj = self.valid_target()
-        if obj is None:
+        params = self.pending_params
+        plan = self.plan
+        if params is None or plan is None:
             self.on_exit()
             return
-        params = self.get_params()
+        obj = None
+        if self.grb_object is not None or params['output'] != 'new':
+            obj = self.valid_target()
+            if obj is None:
+                self.on_exit()
+                return
         name = self.grb_name
-        try:
-            plan = self.plan_for(params, self.serial, name)
-        except (ValueError, QRCodeGen.QRDataOverflow) as err:
-            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
-            self.on_exit()
-            return
 
         mask_obj = None
         if params['mask_opening']:
@@ -470,20 +479,33 @@ class QRCode(AppTool):
             if mask_obj is None or mask_obj.kind != 'gerber':
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("The soldermask Gerber was not found. Skipped."))
                 mask_obj = None
+            elif mask_obj is obj:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("The soldermask Gerber is the target object. Skipped."))
+                mask_obj = None
 
-        if params['output'] == 'new':
-            self.write_new_object(obj, plan, pos, params)
-            changed = [mask_obj] if mask_obj is not None else []
-        else:
-            changed = [obj] + ([mask_obj] if mask_obj is not None and mask_obj is not obj else [])
-        if changed:
-            with history_of(self.app).snapshot(_("QRCode"), changed):
+        try:
+            if params['output'] == 'new':
+                self.write_new_object(obj, plan, pos, params)
+                changed = [mask_obj] if mask_obj is not None else []
+            else:
+                changed = [obj] + ([mask_obj] if mask_obj is not None else [])
+            if changed:
+                # everything is computed first: no object changes when one of the computations fails
+                results = []
                 if params['output'] != 'new':
-                    self.write_qrcode(obj, plan, pos, params)
+                    results.append((obj, self.qrcode_result(obj, plan, pos, params)))
                 if mask_obj is not None:
-                    self.write_opening(mask_obj, plan, pos, params)
-            for changed_obj in changed:
-                self.refresh_object(changed_obj)
+                    results.append((mask_obj, self.opening_result(mask_obj, plan, pos, params)))
+                with history_of(self.app).snapshot(_("QRCode"), changed):
+                    for changed_obj, result in results:
+                        self.apply_result(changed_obj, *result)
+                for changed_obj in changed:
+                    self.refresh_object(changed_obj)
+        except Exception as err:
+            log.error("QRCode.make() --> %s" % str(err))
+            self.app.inform.emit('[ERROR_NOTCL] %s' % str(err))
+            self.on_exit()
+            return
 
         self.serial += params['serial_step']
         self.app.inform.emit('[success] %s' % _("QRCode Tool done."))
@@ -497,28 +519,31 @@ class QRCode(AppTool):
         else:
             self.on_exit()
 
-    def write_qrcode(self, obj, plan, pos, params):
-        """Apply the model output to the Gerber (within the history snapshot) and regenerate its source."""
+    def qrcode_result(self, obj, plan, pos, params):
+        """(solid geometry, tools, follow geometry) of the Gerber with the QRCode inserted. The object is not changed."""
         solid_geometry, tools = QRCodeGen.insert_geometry(
             obj.solid_geometry, obj.tools, plan.modules, plan.utility, pos, params['border'], params['box_size'],
             params['rounded'], params['polarity'], units=params['units'], margin=params['margin'])
-        obj.solid_geometry = solid_geometry
-        obj.tools = tools
-        if params['polarity'] == 'pos' and obj.follow_geometry:
-            obj.follow_geometry = list(obj.follow_geometry) + \
+        follow = obj.follow_geometry
+        if params['polarity'] == 'pos' and follow:
+            follow = flatten_shapely_geometry(follow) + \
                 [geo.centroid for geo in QRCodeGen.plan_insertion(
                     plan.modules, plan.utility, pos, params['border'], params['box_size'], params['rounded'],
                     params['polarity'], params['units'], params['margin']).modules]
-        self.update_bounds(obj)
-        obj.regenerate_source()
+        return solid_geometry, tools, follow
 
-    def write_opening(self, obj, plan, pos, params):
-        """Add the clearance opening of the QRCode to a (soldermask) Gerber."""
+    def opening_result(self, obj, plan, pos, params):
+        """(solid geometry, tools, follow geometry) of a (soldermask) Gerber with the clearance opening added."""
         opening = QRCodeGen.mask_opening(plan.utility, pos, params['border'], params['box_size'], params['rounded'],
                                          params['units'], params['margin'])
         solid_geometry, tools = QRCodeGen.add_region(obj.solid_geometry, obj.tools, opening)
+        return solid_geometry, tools, obj.follow_geometry
+
+    def apply_result(self, obj, solid_geometry, tools, follow_geometry):
+        """Apply a computed result to the Gerber (within the history snapshot) and regenerate its source."""
         obj.solid_geometry = solid_geometry
         obj.tools = tools
+        obj.follow_geometry = follow_geometry
         self.update_bounds(obj)
         obj.regenerate_source()
 
@@ -530,14 +555,16 @@ class QRCode(AppTool):
         follow = []
         if params['polarity'] == 'pos':
             follow = [geo['follow'] for apr in tools.values() for geo in apr['geometry'] if 'follow' in geo]
-        outname = '%s_%s' % (str(src.obj_options['name']), 'qrcode')
+        outname = '%s_%s' % (str(src.obj_options['name']), 'qrcode') if src is not None else 'qrcode'
 
         def initialize(grb_obj, app_obj):
-            grb_obj.obj_options = LoudDict()
-            for opt in src.obj_options:
-                if opt != 'name':
-                    grb_obj.obj_options[opt] = deepcopy(src.obj_options[opt])
+            if src is not None:
+                grb_obj.obj_options = LoudDict()
+                for opt in src.obj_options:
+                    if opt != 'name':
+                        grb_obj.obj_options[opt] = deepcopy(src.obj_options[opt])
             grb_obj.obj_options['name'] = outname
+            grb_obj.units = params['units']
             grb_obj.multitool = False
             grb_obj.multigeo = False
             grb_obj.follow = False
@@ -611,20 +638,20 @@ class QRCode(AppTool):
             ui.preview_label.clear()
             return
         try:
-            info = QRCodeGen.qr_info(text, params['version'], params['error'], params['mask_pattern'])
-            side = (info['modules'] + 2 * params['border']) * module
+            # one encoding for the info and the picture; the picture border is capped (the info keeps the real one)
+            qr, img = QRCodeGen.build_qr(text, params['version'], params['error'], 4, min(params['border'], 8),
+                                         'png', '#000000', '#FFFFFF', params['mask_pattern'])
+            modules = qr.modules_count
+            side = (modules + 2 * params['border']) * module
             ui.info_label.setText(_("Version %d, %dx%d modules, %.*f x %.*f %s") % (
-                info['version'], info['modules'], info['modules'], self.decimals, side, self.decimals, side,
-                units.lower()))
-            img = QRCodeGen.make_qr_image(text, params['version'], params['error'], 4, params['border'], 'png',
-                                          '#000000', '#FFFFFF', params['mask_pattern'])
+                qr.version, modules, modules, self.decimals, side, self.decimals, side, units.lower()))
             img = getattr(img, 'get_image', lambda: img)().convert('RGBA')
             qimage = QtGui.QImage(img.tobytes(), img.width, img.height, 4 * img.width,
                                   QtGui.QImage.Format.Format_RGBA8888).copy()
             pixmap = QtGui.QPixmap.fromImage(qimage)
             ui.preview_label.setPixmap(pixmap.scaled(
                 160, 160, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.FastTransformation))
-        except (ValueError, QRCodeGen.QRDataOverflow) as err:
+        except (ValueError, QRCodeGen.QRDataOverflow, MemoryError) as err:
             ui.info_label.setText(str(err))
             ui.preview_label.clear()
 
