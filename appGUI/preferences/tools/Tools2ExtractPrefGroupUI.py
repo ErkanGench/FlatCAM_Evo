@@ -80,6 +80,15 @@ class Tools2EDrillsPrefGroupUI(OptionsGroupUI):
 
         param_grid.addWidget(self.other_cb, 7, 0, 1, 2)
 
+        # All selected Gerbers
+        self.all_selected_cb = FCCheckBox('%s' % _("All selected Gerbers"))
+        self.all_selected_cb.setToolTip(
+            _("Also process the other Gerber objects selected in the project tree.\n"
+              "Their apertures are all used (the pad type filters still apply).")
+        )
+
+        param_grid.addWidget(self.all_selected_cb, 8, 0, 1, 2)
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
@@ -112,6 +121,13 @@ class Tools2EDrillsPrefGroupUI(OptionsGroupUI):
         met_grid.addWidget(self.method_label, 0, 0)
         met_grid.addWidget(self.method_radio, 0, 1)
 
+        # Slots for oblong pads
+        self.oblong_slots_cb = FCCheckBox('%s' % _("Slots for oblong pads"))
+        self.oblong_slots_cb.setToolTip(
+            _("An oblong pad gives a slot instead of a round hole.")
+        )
+        met_grid.addWidget(self.oblong_slots_cb, 2, 0, 1, 2)
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
@@ -132,7 +148,7 @@ class Tools2EDrillsPrefGroupUI(OptionsGroupUI):
         # Diameter value
         self.dia_entry = FCDoubleSpinner()
         self.dia_entry.set_precision(self.decimals)
-        self.dia_entry.set_range(0.0000, 10000.0000)
+        self.dia_entry.set_range(0.0001, 10000.0000)
 
         self.dia_label = FCLabel('%s:' % _("Value"))
         self.dia_label.setToolTip(
@@ -239,7 +255,7 @@ class Tools2EDrillsPrefGroupUI(OptionsGroupUI):
         # Factor value
         self.factor_entry = FCDoubleSpinner(suffix='%')
         self.factor_entry.set_precision(self.decimals)
-        self.factor_entry.set_range(0.0000, 100.0000)
+        self.factor_entry.set_range(0.01, 100.0000)
         self.factor_entry.setSingleStep(0.1)
 
         self.factor_label = FCLabel('%s:' % _("Factor"))
@@ -279,6 +295,13 @@ class Tools2EDrillsPrefGroupUI(OptionsGroupUI):
         solder_grid.addWidget(self.clearance_label, 0, 0)
         solder_grid.addWidget(self.clearance_entry, 0, 1)
 
+        # Include regions
+        self.include_regions_cb = FCCheckBox('%s' % _("Include regions"))
+        self.include_regions_cb.setToolTip(
+            _("Also extract the copper regions (G36 areas) into the soldermask.")
+        )
+        solder_grid.addWidget(self.include_regions_cb, 2, 0, 1, 2)
+
         # #############################################################################################################
         # Extract CutOut Frame
         # #############################################################################################################
@@ -314,12 +337,24 @@ class Tools2EDrillsPrefGroupUI(OptionsGroupUI):
             _("The thickness of the line that makes the cutout geometry.")
         )
         self.thick_cut_entry = FCDoubleSpinner()
-        self.thick_cut_entry.set_range(0.0000, 10000.0000)
+        self.thick_cut_entry.set_range(0.0001, 10000.0000)
         self.thick_cut_entry.set_precision(self.decimals)
         self.thick_cut_entry.setSingleStep(0.1)
 
         ecut_grid.addWidget(self.thick_cut_label, 2, 0)
         ecut_grid.addWidget(self.thick_cut_entry, 2, 1)
+
+        # Cutout shape
+        self.cut_shape_label = FCLabel('%s:' % _("Shape"))
+        self.cut_shape_label.setToolTip(
+            _("Rectangular: the bounding box of the Gerber.\n"
+              "Convex: the convex hull of the Gerber.")
+        )
+        self.cut_shape_radio = RadioSet(
+            [{'label': _("Rectangular"), 'value': 'rect'}, {'label': _("Convex"), 'value': 'convex'}],
+            compact=True)
+        ecut_grid.addWidget(self.cut_shape_label, 4, 0)
+        ecut_grid.addWidget(self.cut_shape_radio, 4, 1)
 
         GLay.set_common_column_size(
             [param_grid, ring_grid, fix_grid, prop_grid, met_grid, solder_grid, ecut_grid], 0)

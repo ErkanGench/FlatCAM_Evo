@@ -8,12 +8,13 @@
 from PyQt6 import QtWidgets, QtCore
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea, FCCheckBox
+from appObjects.ProjectContext import unique_name
 from defaults import AppDefaults
 from appPlugins.ToolExtract.ExtractUI import ExtractUI
 from appPlugins.ToolExtract import ExtractGen
 
 import logging
-from copy import deepcopy
+import traceback
 
 import gettext
 import appTranslation as fcTranslate
@@ -27,6 +28,14 @@ log = logging.getLogger('base')
 
 
 class ToolExtract(AppTool):
+    """
+    Threads: the widgets, the object collection and the messages are used in the GUI thread only. A click reads all the
+    values and puts ONE job on the app worker (the ExtractGen work). The job ends with one job_done signal; the new
+    object is created in on_job_done(), in the GUI thread, so the Undo step is recorded as for any other object.
+    """
+
+    # (kind, payload): 'result' (params, ExtractResult) | 'error' text
+    job_done = QtCore.pyqtSignal(str, object)
 
     def __init__(self, app):
         AppTool.__init__(self, app)
@@ -36,39 +45,61 @@ class ToolExtract(AppTool):
 
         # store here the old object name
         self.old_name = ''
+        self._busy = False
+        self._loading = False
+        # the name of the Gerber that the table shows
+        self._table_name = ''
 
-        # #############################################################################
-        # ######################### Tool GUI ##########################################
-        # #############################################################################
+        # #############################################################################################################
+        # ######################### Tool GUI ##########################################################################
+        # #############################################################################################################
         self.ui = ExtractUI(layout=self.layout, app=self.app)
         self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
-    def on_object_combo_changed(self):
-        extract_plugin_found = False
-        for idx in range(self.app.ui.notebook.count()):
-            if self.app.ui.notebook.tabText(idx) == _("Extract"):
-                extract_plugin_found = True
-                break
+        # connected ONCE; the widgets are connected each time the UI is built
+        self.job_done.connect(self.on_job_done)
 
-        if extract_plugin_found is False:
-            return
+    def _opt(self, key):
+        return self.app.options.get(key, AppDefaults.factory_defaults.get(key))
 
-        # get the Gerber file who is the source of the punched Gerber
+    def _is_open(self):
+        try:
+            return self.app.ui.plugin_scroll_area.widget() is self
+        except (AttributeError, RuntimeError):
+            return False
+
+    def _combo_object(self):
+        """The object of the source combo (any kind), or None."""
         selection_index = self.ui.gerber_object_combo.currentIndex()
         model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-
         try:
-            grb_obj = model_index.internalPointer().obj
+            return model_index.internalPointer().obj
         except Exception:
-            return
+            return None
 
+    def _combo_gerber(self):
+        """The Gerber of the source combo, or None."""
+        obj = self._combo_object()
+        return obj if obj is not None and getattr(obj, 'kind', None) == 'gerber' else None
+
+    def on_object_combo_changed(self, *args):
+        if self._loading or not self._is_open():
+            return
+        self.select_source()
+
+    def select_source(self):
+        """The source Gerber changed: clear the marks of the old one, enable the marks of the new, build the table."""
+        grb_obj = self._combo_gerber()
+
+        # the old marks first
         if self.old_name != '':
             old_obj = self.app.collection.get_by_name(self.old_name)
             if old_obj:
                 old_obj.clear_plot_apertures()
                 old_obj.mark_shapes.enabled = False
+            self.old_name = ''
 
         # enable mark shapes
         if grb_obj:
@@ -137,203 +168,149 @@ class ToolExtract(AppTool):
 
         super().run()
         self.set_tool_ui()
-        self.build_tool_ui()
-
-        # trigger this once at plugin launch
-        self.on_object_combo_changed()
 
     def connect_signals_at_init(self):
         # ## Signals
-        self.ui.method_radio.activated_custom.connect(self.on_extract_drills_method_changed)
+        ui = self.ui
+        ui.method_radio.activated_custom.connect(self.on_extract_drills_method_changed)
 
-        self.ui.circular_cb.stateChanged.connect(
-            lambda state:
-            self.ui.circular_ring_entry.setDisabled(False) if state else self.ui.circular_ring_entry.setDisabled(True)
-        )
+        for cb in ui.pad_boxes + (ui.include_regions_cb,):
+            cb.stateChanged.connect(self.on_type_changed)
 
-        self.ui.oblong_cb.stateChanged.connect(
-            lambda state:
-            self.ui.oblong_ring_entry.setDisabled(False) if state else self.ui.oblong_ring_entry.setDisabled(True)
-        )
+        ui.e_drills_button.clicked.connect(self.on_extract_drills_click)
+        ui.e_sm_button.clicked.connect(self.on_extract_soldermask_click)
+        ui.e_cut_button.clicked.connect(self.on_extract_cutout_click)
+        ui.reset_button.clicked.connect(self.set_tool_ui)
 
-        self.ui.square_cb.stateChanged.connect(
-            lambda state:
-            self.ui.square_ring_entry.setDisabled(False) if state else self.ui.square_ring_entry.setDisabled(True)
-        )
+        ui.apertures_table.itemSelectionChanged.connect(self.update_preview)
+        ui.all_selected_cb.stateChanged.connect(self.update_preview)
+        ui.gerber_object_combo.currentIndexChanged.connect(self.on_object_combo_changed)
 
-        self.ui.rectangular_cb.stateChanged.connect(
-            lambda state:
-            self.ui.rectangular_ring_entry.setDisabled(False) if state else
-            self.ui.rectangular_ring_entry.setDisabled(True)
-        )
+    def update_ring_entries(self):
+        for cb, entry in zip(self.ui.pad_boxes, self.ui.ring_entries):
+            entry.setEnabled(cb.get_value())
 
-        self.ui.other_cb.stateChanged.connect(
-            lambda state:
-            self.ui.other_ring_entry.setDisabled(False) if state else self.ui.other_ring_entry.setDisabled(True)
-        )
+    def on_type_changed(self, *args):
+        """A pad type (or Include regions) was toggled: the table is rebuilt once, the selection is kept."""
+        self.update_ring_entries()
+        if self._loading:
+            return
+        self.build_tool_ui()
 
-        self.ui.e_drills_button.clicked.connect(self.on_extract_drills_click)
-        self.ui.e_sm_button.clicked.connect(self.on_extract_soldermask_click)
-        self.ui.e_cut_button.clicked.connect(self.on_extract_cutout_click)
-        self.ui.reset_button.clicked.connect(self.set_tool_ui)
+    def set_tool_ui(self, *args):
+        self._loading = True
+        try:
+            self.clear_ui(self.layout)
+            self.ui = ExtractUI(layout=self.layout, app=self.app)
+            self.add_object_creation_controls()
+            self.pluginName = self.ui.pluginName
+            self.connect_signals_at_init()
+            self._set_busy(self._busy)
 
-        self.ui.circular_cb.stateChanged.connect(self.build_tool_ui)
-        self.ui.oblong_cb.stateChanged.connect(self.build_tool_ui)
-        self.ui.square_cb.stateChanged.connect(self.build_tool_ui)
-        self.ui.rectangular_cb.stateChanged.connect(self.build_tool_ui)
-        self.ui.other_cb.stateChanged.connect(self.build_tool_ui)
+            ui = self.ui
+            ui.method_radio.set_value(self._opt("tools_extract_hole_type"))
+            ui.dia_entry.set_value(float(self._opt("tools_extract_hole_fixed_dia")))
+            ui.circular_ring_entry.set_value(float(self._opt("tools_extract_circular_ring")))
+            ui.oblong_ring_entry.set_value(float(self._opt("tools_extract_oblong_ring")))
+            ui.square_ring_entry.set_value(float(self._opt("tools_extract_square_ring")))
+            ui.rectangular_ring_entry.set_value(float(self._opt("tools_extract_rectangular_ring")))
+            ui.other_ring_entry.set_value(float(self._opt("tools_extract_others_ring")))
 
-        self.ui.gerber_object_combo.currentIndexChanged.connect(self.on_object_combo_changed)
+            ui.circular_cb.set_value(self._opt("tools_extract_circular"))
+            ui.oblong_cb.set_value(self._opt("tools_extract_oblong"))
+            ui.square_cb.set_value(self._opt("tools_extract_square"))
+            ui.rectangular_cb.set_value(self._opt("tools_extract_rectangular"))
+            ui.other_cb.set_value(self._opt("tools_extract_others"))
+            ui.all_selected_cb.set_value(bool(self._opt("tools_extract_all_selected")))
 
-    def set_tool_ui(self):
-        self.clear_ui(self.layout)
-        self.ui = ExtractUI(layout=self.layout, app=self.app)
-        self.add_object_creation_controls()
-        self.pluginName = self.ui.pluginName
-        self.connect_signals_at_init()
+            ui.factor_entry.set_value(float(self._opt("tools_extract_hole_prop_factor")))
+            ui.oblong_slots_cb.set_value(bool(self._opt("tools_extract_oblong_slots")))
 
-        self.reset_fields()
+            # Extract Soldermask
+            ui.clearance_entry.set_value(float(self._opt("tools_extract_sm_clearance")))
+            ui.include_regions_cb.set_value(bool(self._opt("tools_extract_include_regions")))
 
-        self.ui_disconnect()
-        self.ui_connect()
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        self.ui.method_radio.set_value(self.app.options.get(
-            "tools_extract_hole_type",
-            app_defaults.get("tools_extract_hole_type", AppDefaults.factory_defaults.get("tools_extract_hole_type"))
-        ))
+            # Extract Cutout
+            ui.margin_cut_entry.set_value(float(self._opt("tools_extract_cut_margin")))
+            ui.thick_cut_entry.set_value(float(self._opt("tools_extract_cut_thickness")))
+            ui.cut_shape_radio.set_value(self._opt("tools_extract_cut_shape"))
 
-        self.ui.dia_entry.set_value(float(self.app.options.get(
-            "tools_extract_hole_fixed_dia",
-            app_defaults.get("tools_extract_hole_fixed_dia", AppDefaults.factory_defaults.get("tools_extract_hole_fixed_dia"))
-        )))
+            ui.set_drill_method(ui.method_radio.get_value())
+            self.update_ring_entries()
 
-        self.ui.circular_ring_entry.set_value(float(self.app.options.get(
-            "tools_extract_circular_ring",
-            app_defaults.get("tools_extract_circular_ring", AppDefaults.factory_defaults.get("tools_extract_circular_ring"))
-        )))
-        self.ui.oblong_ring_entry.set_value(float(self.app.options.get(
-            "tools_extract_oblong_ring",
-            app_defaults.get("tools_extract_oblong_ring", AppDefaults.factory_defaults.get("tools_extract_oblong_ring"))
-        )))
-        self.ui.square_ring_entry.set_value(float(self.app.options.get(
-            "tools_extract_square_ring",
-            app_defaults.get("tools_extract_square_ring", AppDefaults.factory_defaults.get("tools_extract_square_ring"))
-        )))
-        self.ui.rectangular_ring_entry.set_value(float(self.app.options.get(
-            "tools_extract_rectangular_ring",
-            app_defaults.get("tools_extract_rectangular_ring", AppDefaults.factory_defaults.get("tools_extract_rectangular_ring"))
-        )))
-        self.ui.other_ring_entry.set_value(float(self.app.options.get(
-            "tools_extract_others_ring",
-            app_defaults.get("tools_extract_others_ring", AppDefaults.factory_defaults.get("tools_extract_others_ring"))
-        )))
-
-        self.ui.circular_cb.set_value(self.app.options.get(
-            "tools_extract_circular",
-            app_defaults.get("tools_extract_circular", AppDefaults.factory_defaults.get("tools_extract_circular"))
-        ))
-        self.ui.oblong_cb.set_value(self.app.options.get(
-            "tools_extract_oblong",
-            app_defaults.get("tools_extract_oblong", AppDefaults.factory_defaults.get("tools_extract_oblong"))
-        ))
-        self.ui.square_cb.set_value(self.app.options.get(
-            "tools_extract_square",
-            app_defaults.get("tools_extract_square", AppDefaults.factory_defaults.get("tools_extract_square"))
-        ))
-        self.ui.rectangular_cb.set_value(self.app.options.get(
-            "tools_extract_rectangular",
-            app_defaults.get("tools_extract_rectangular", AppDefaults.factory_defaults.get("tools_extract_rectangular"))
-        ))
-        self.ui.other_cb.set_value(self.app.options.get(
-            "tools_extract_others",
-            app_defaults.get("tools_extract_others", AppDefaults.factory_defaults.get("tools_extract_others"))
-        ))
-
-        self.ui.factor_entry.set_value(float(self.app.options.get(
-            "tools_extract_hole_prop_factor",
-            app_defaults.get("tools_extract_hole_prop_factor", AppDefaults.factory_defaults.get("tools_extract_hole_prop_factor"))
-        )))
-
-        # Extract Soldermask
-        self.ui.clearance_entry.set_value(float(self.app.options.get(
-            "tools_extract_sm_clearance",
-            app_defaults.get("tools_extract_sm_clearance", AppDefaults.factory_defaults.get("tools_extract_sm_clearance"))
-        )))
-
-        # Extract Cutout
-        self.ui.margin_cut_entry.set_value(float(self.app.options.get(
-            "tools_extract_cut_margin",
-            app_defaults.get("tools_extract_cut_margin", AppDefaults.factory_defaults.get("tools_extract_cut_margin"))
-        )))
-        self.ui.thick_cut_entry.set_value(float(self.app.options.get(
-            "tools_extract_cut_thickness",
-            app_defaults.get("tools_extract_cut_thickness", AppDefaults.factory_defaults.get("tools_extract_cut_thickness"))
-        )))
-
-        # SELECT THE CURRENT OBJECT
-        obj = self.app.collection.get_active()
-        if obj:
-            if obj.kind == 'gerber':
-                obj_name = obj.obj_options['name']
-                self.ui.gerber_object_combo.set_value(obj_name)
-        else:
-            # take first available Gerber file, if any
-            available_gerber_list = [o for o in self.app.collection.get_list() if o.kind == 'gerber']
-            if available_gerber_list:
-                obj_name = available_gerber_list[0].obj_options['name']
-                self.ui.gerber_object_combo.set_value(obj_name)
+            # SELECT THE CURRENT OBJECT
+            self.reset_fields()
+            obj = self.app.collection.get_active()
+            if obj:
+                if obj.kind == 'gerber':
+                    ui.gerber_object_combo.set_value(obj.obj_options['name'])
+            else:
+                # take first available Gerber file, if any
+                available_gerber_list = [o for o in self.app.collection.get_list() if o.kind == 'gerber']
+                if available_gerber_list:
+                    ui.gerber_object_combo.set_value(available_gerber_list[0].obj_options['name'])
+        finally:
+            self._loading = False
 
         self.app.ui.notebook.setTabText(2, _("Extract"))
 
+        # the ONE table build of a launch / reset
+        self._table_name = ''
+        self.select_source()
+
+    def table_codes(self):
+        """(listed codes, selected codes) of the table."""
+        table = self.ui.apertures_table
+        listed, selected = [], []
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item is None:
+                continue
+            code = int(item.text())
+            listed.append(code)
+            if item.isSelected():
+                selected.append(code)
+        return listed, selected
+
     def build_tool_ui(self):
+        """Rebuild the table once. The selected codes are kept when the table shows the same Gerber."""
         self.ui_disconnect()
-
-        # reset table
-        # self.ui.apertures_table.clear()   # this deletes the headers/tooltips too ... not nice!
-        self.ui.apertures_table.setRowCount(0)
-
-        # get the Gerber file who is the source of the punched Gerber
-        selection_index = self.ui.gerber_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-        obj = None
-
+        table = self.ui.apertures_table
+        obj = self._combo_gerber()
+        table.blockSignals(True)
         try:
-            obj = model_index.internalPointer().obj
-            sort = [int(k) for k in obj.tools.keys()]
-            sorted_apertures = sorted(sort)
-        except Exception:
-            # no object loaded
-            sorted_apertures = []
+            tools = obj.tools if obj is not None else {}
+            sorted_apertures = sorted(int(k) for k in tools.keys())
 
-        self.ui.populate_apertures(obj.tools if obj is not None else {}, sorted_apertures)
+            name = obj.obj_options['name'] if obj is not None else ''
+            selected = None
+            if name != '' and name == self._table_name:
+                prev_listed, prev_selected = self.table_codes()
+                prev_listed, prev_selected = set(prev_listed), set(prev_selected)
+                # a code that was not listed before is new: it starts selected
+                selected = {c for c in sorted_apertures if c in prev_selected or c not in prev_listed}
+            self._table_name = name
 
-        # make sure you clear the Gerber aperture markings when the table is rebuilt
-        # get the Gerber file who is the source of the punched Gerber
-        selection_index = self.ui.gerber_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-        try:
-            grb_obj = model_index.internalPointer().obj
-        except Exception:
-            self.ui_connect()
-            return
-        grb_obj.clear_plot_apertures()
+            table.setRowCount(0)
+            self.ui.populate_apertures(tools, sorted_apertures, selected)
+        finally:
+            table.blockSignals(False)
+
+        # the marks belong to the old rows
+        if obj is not None:
+            obj.clear_plot_apertures()
 
         self.ui_connect()
+        self.update_preview()
 
     def ui_connect(self):
         self.ui.all_cb.stateChanged.connect(self.on_select_all)
 
         # Mark Checkboxes
         for row in range(self.ui.apertures_table.rowCount()):
-            try:
-                wdg = self.ui.apertures_table.cellWidget(row, 3)
-                assert isinstance(wdg, FCCheckBox)
-                wdg.clicked.disconnect()
-            except (TypeError, AttributeError):
-                pass
             wdg = self.ui.apertures_table.cellWidget(row, 3)
-            assert isinstance(wdg, FCCheckBox)
-            wdg.stateChanged.connect(self.on_mark_cb_click_table)
+            if isinstance(wdg, FCCheckBox):
+                wdg.stateChanged.connect(self.on_mark_cb_click_table)
 
     def ui_disconnect(self):
         try:
@@ -343,206 +320,237 @@ class ToolExtract(AppTool):
 
         # Mark Checkboxes
         for row in range(self.ui.apertures_table.rowCount()):
-            try:
-                wdg = self.ui.apertures_table.cellWidget(row, 3)
-                assert isinstance(wdg, FCCheckBox)
-                wdg.stateChanged.disconnect()
-            except (TypeError, AttributeError):
-                pass
+            wdg = self.ui.apertures_table.cellWidget(row, 3)
+            if isinstance(wdg, FCCheckBox):
+                try:
+                    wdg.stateChanged.disconnect()
+                except (TypeError, AttributeError):
+                    pass
 
     def on_select_all(self, state):
-        self.ui_disconnect()
-        if state:
-            self.ui.circular_cb.setChecked(True)
-            self.ui.oblong_cb.setChecked(True)
-            self.ui.square_cb.setChecked(True)
-            self.ui.rectangular_cb.setChecked(True)
-            self.ui.other_cb.setChecked(True)
+        boxes = self.ui.pad_boxes
+        for cb in boxes:
+            cb.blockSignals(True)
+        try:
+            for cb in boxes:
+                cb.setChecked(bool(state))
+        finally:
+            for cb in boxes:
+                cb.blockSignals(False)
+        self.update_ring_entries()
+        self.build_tool_ui()
+
+    def update_preview(self, *args):
+        """Pads: N, the number of pads that the drills would use."""
+        ui = self.ui
+        try:
+            obj = self._combo_gerber()
+            _listed, codes = self.table_codes()
+            kinds = ui.enabled_kinds()
+            count = sum(ExtractGen.count_pads(tools, sel, self.decimals, kinds)
+                        for tools, sel in self.sources(obj, codes))
+            ui.pads_label.setText('%s: %d' % (_("Pads"), count))
+        except RuntimeError:
+            pass
+
+    def sources(self, obj, codes):
+        """[(tools, codes)] for the Gerber of the combo (the table selection) and the other selected Gerbers."""
+        sources = []
+        if obj is not None and codes:
+            sources.append((obj.tools, codes))
+        sources.extend((other.tools, None) for other in self.other_gerbers(obj))
+        return sources
+
+    def other_gerbers(self, obj):
+        """The other Gerbers selected in the project tree, when "All selected Gerbers" is on."""
+        if not self.ui.all_selected_cb.get_value():
+            return []
+        return [other for other in self.app.collection.get_selected() if other.kind == 'gerber' and other is not obj]
+
+    # ------------------------------------------------------------------------------------------------------------
+    # the click: read the values (GUI thread)
+    # ------------------------------------------------------------------------------------------------------------
+    def _set_busy(self, busy):
+        self._busy = busy
+        try:
+            for button in (self.ui.e_drills_button, self.ui.e_sm_button, self.ui.e_cut_button):
+                button.setEnabled(not busy)
+        except RuntimeError:
+            pass
+
+    def _error(self, text):
+        self.app.inform.emit('[ERROR_NOTCL] %s' % text)
+
+    def _warning(self, text):
+        self.app.inform.emit('[WARNING_NOTCL] %s' % text)
+
+    def collect(self, task):
+        """The source Gerber and the values for a task. Returns a dict, or None after a message."""
+        if self._busy:
+            self._warning(_("Another Extract run is still working."))
+            return None
+        obj = self._combo_object()
+        if obj is None:
+            self._warning(_("No object is selected."))
+            return None
+        if getattr(obj, 'kind', None) != 'gerber':
+            self._warning(_("The source object is not a Gerber."))
+            return None
+
+        ui = self.ui
+        params = {'task': task, 'obj': obj, 'name': obj.obj_options['name']}
+        if task == 'cutout':
+            params['margin'] = float(ui.margin_cut_entry.get_value())
+            params['thickness'] = float(ui.thick_cut_entry.get_value())
+            params['shape'] = ui.cut_shape_radio.get_value()
+            params['geometry'] = [obj.solid_geometry] + [o.solid_geometry for o in self.other_gerbers(obj)]
+            params['outname'] = ExtractGen.out_name(params['name'], 'ecut')
+            return params
+
+        _listed, codes = self.table_codes()
+        sources = self.sources(obj, codes)
+        if not sources:
+            self._warning(_("Select one or more apertures in the table."))
+            return None
+        params['sources'] = sources
+        params['kinds'] = ui.enabled_kinds()
+        if not params['kinds']:
+            self._warning(_("Enable at least one pad type."))
+            return None
+
+        if task == 'drills':
+            params['mode'] = ui.method_radio.get_value()
+            params['fixed_dia'] = float(ui.dia_entry.get_value())
+            params['rings'] = {kind: float(entry.get_value()) for kind, entry in zip(ExtractGen.KINDS, ui.ring_entries)}
+            params['factor'] = float(ui.factor_entry.get_value()) / 100.0
+            params['oblong_slots'] = bool(ui.oblong_slots_cb.get_value())
+            params['outname'] = ExtractGen.out_name(params['name'], 'extracted')
         else:
-            self.ui.circular_cb.setChecked(False)
-            self.ui.oblong_cb.setChecked(False)
-            self.ui.square_cb.setChecked(False)
-            self.ui.rectangular_cb.setChecked(False)
-            self.ui.other_cb.setChecked(False)
+            params['clearance'] = float(ui.clearance_entry.get_value())
+            params['include_regions'] = bool(ui.include_regions_cb.get_value())
+            params['outname'] = ExtractGen.out_name(params['name'], 'esm')
+        return params
+
+    def _start(self, task):
+        params = self.collect(task)
+        if params is None:
+            return
+        self._set_busy(True)
+        self.app.inform.emit('%s' % _("Working..."))
+        self.app.worker_task.emit({'fcn': self.worker_job, 'params': [params]})
 
     def on_extract_drills_click(self):
-        selection_index = self.ui.gerber_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-
-        try:
-            fcobj = model_index.internalPointer().obj
-        except Exception:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-        outname = "%s_%s" % (fcobj.obj_options['name'].rpartition('.')[0], _("extracted"))
-
-        # selected codes in the apertures UI table
-        sel_g_tools = [int(it.text()) for it in self.ui.apertures_table.selectedItems()]
-
-        mode = self.ui.method_radio.get_value()
-        if mode == 'fixed':
-            tools = self.fixed_dia_mode(gerber_tools=fcobj.tools, sel_tools=sel_g_tools)
-        elif mode == 'ring':
-            tools = self.ring_mode(gerber_tools=fcobj.tools, sel_tools=sel_g_tools)
-        else:   # proportional
-            tools = self.proportional_mode(gerber_tools=fcobj.tools, sel_tools=sel_g_tools)
-
-        if not tools:
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-            return
-
-        def obj_init(obj_inst, app_inst):
-            obj_inst.tools = deepcopy(tools)
-            obj_inst.create_geometry()
-            obj_inst.regenerate_source(name=outname)
-
-        with self.app.proc_container.new('%s...' % _("Working")):
-            self.clear_aperture_marking()
-
-            try:
-                self.new_object("excellon", outname, obj_init, source=fcobj, autoselected=False)
-            except Exception as e:
-                self.app.log.error("Error on Extracted Excellon object creation: %s" % str(e))
-                return
-
-    def fixed_dia_mode(self, gerber_tools, sel_tools):
-        tools = ExtractGen.fixed_drills(
-            gerber_tools, sel_tools, self.ui.dia_entry.get_value(), self.decimals,
-            self.ui.circular_cb.get_value(), self.ui.oblong_cb.get_value(), self.ui.square_cb.get_value(),
-            self.ui.rectangular_cb.get_value(), self.ui.other_cb.get_value())
-        if not tools:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No drills extracted. Try different parameters."))
-            return
-        return tools
-
-    def ring_mode(self, gerber_tools, sel_tools):
-        tools = ExtractGen.sized_drills(
-            gerber_tools, sel_tools, 'ring', self.decimals, self.app.dec_format,
-            (self.ui.circular_cb.get_value(), self.ui.oblong_cb.get_value(), self.ui.square_cb.get_value(),
-             self.ui.rectangular_cb.get_value(), self.ui.other_cb.get_value()),
-            (self.ui.circular_ring_entry.get_value(), self.ui.oblong_ring_entry.get_value(),
-             self.ui.square_ring_entry.get_value(), self.ui.rectangular_ring_entry.get_value(),
-             self.ui.other_ring_entry.get_value()))
-        if not tools:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No drills extracted. Try different parameters."))
-            return
-        return tools
-
-    def proportional_mode(self, gerber_tools, sel_tools):
-        tools = ExtractGen.sized_drills(
-            gerber_tools, sel_tools, 'prop', self.decimals, self.app.dec_format,
-            (self.ui.circular_cb.get_value(), self.ui.oblong_cb.get_value(), self.ui.square_cb.get_value(),
-             self.ui.rectangular_cb.get_value(), self.ui.other_cb.get_value()),
-            self.ui.factor_entry.get_value() / 100.0)
-        if not tools:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No drills extracted. Try different parameters."))
-            return
-        return tools
+        self._start('drills')
 
     def on_extract_soldermask_click(self):
-        clearance = self.ui.clearance_entry.get_value()
-
-        circ = self.ui.circular_cb.get_value()
-        oblong = self.ui.oblong_cb.get_value()
-        square = self.ui.square_cb.get_value()
-        rect = self.ui.rectangular_cb.get_value()
-        other = self.ui.other_cb.get_value()
-
-        allowed_apertures = []
-        if circ:
-            allowed_apertures.append('C')
-        if oblong:
-            allowed_apertures.append('O')
-        if square or rect:
-            allowed_apertures.append('R')
-        if other:
-            allowed_apertures.append('AM')
-            allowed_apertures.append('P')
-
-        selection_index = self.ui.gerber_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-
-        try:
-            obj = model_index.internalPointer().obj
-        except Exception:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-        outname = '%s_esm' % obj.obj_options['name'].rpartition('.')[0]
-
-        selected = [int(it.text()) for it in self.ui.apertures_table.selectedItems()]
-        result = ExtractGen.soldermask(
-            obj.tools, selected, allowed_apertures, square, rect, clearance, self.decimals)
-        if result is None:
-            self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No soldermask extracted.")))
-            return
-        new_apertures, new_solid_geometry, new_follow_geometry = result
-
-        def obj_init(new_obj, app_obj):
-            new_obj.multitool = False
-            new_obj.multigeo = False
-            new_obj.follow = False
-            new_obj.tools = deepcopy(new_apertures)
-            new_obj.solid_geometry = deepcopy(new_solid_geometry)
-            new_obj.follow_geometry = deepcopy(new_follow_geometry)
-
-            try:
-                new_obj.regenerate_source(name=outname)
-            except (AttributeError, TypeError):
-                pass
-
-        with self.app.proc_container.new('%s...' % _("Working")):
-            try:
-                self.new_object("gerber", outname, obj_init, source=obj, autoselected=False)
-            except Exception as e:
-                self.app.log.error("Error on Extracted Soldermask Gerber object creation: %s" % str(e))
-                return
+        self._start('soldermask')
 
     def on_extract_cutout_click(self):
-        margin = self.ui.margin_cut_entry.get_value()
-        thickness = self.ui.thick_cut_entry.get_value()
+        self._start('cutout')
 
-        selection_index = self.ui.gerber_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-
+    # ------------------------------------------------------------------------------------------------------------
+    # the job (worker thread): ExtractGen only, no widgets, no collection changes
+    # ------------------------------------------------------------------------------------------------------------
+    def worker_job(self, params):
+        kind, payload = 'error', ''
         try:
-            obj = model_index.internalPointer().obj
-        except Exception:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No object is selected."))
-            return
-
-        outname = '%s_ecut' % obj.obj_options['name'].rpartition('.')[0]
-
-        try:
-            result = ExtractGen.cutout(obj.solid_geometry, margin, thickness)
+            with self.app.proc_container.new('%s...' % _("Working")):
+                task = params['task']
+                if task == 'drills':
+                    res = ExtractGen.extract_drills(
+                        params['sources'], params['mode'], params['kinds'], self.decimals,
+                        fixed_dia=params['fixed_dia'], rings=params['rings'], factor=params['factor'],
+                        oblong_slots=params['oblong_slots'])
+                elif task == 'soldermask':
+                    res = ExtractGen.extract_soldermask(
+                        params['sources'], params['kinds'], params['clearance'], self.decimals,
+                        include_regions=params['include_regions'])
+                else:
+                    res = ExtractGen.extract_cutout(
+                        params['geometry'], params['margin'], params['thickness'], shape=params['shape'])
+                kind, payload = 'result', (params, res)
         except Exception as e:
-            self.app.log.error("ToolExtrct.on_extrct_cutout_click() -> %s" % str(e))
-            self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No cutout extracted.")))
+            log.error("ToolExtract.worker_job() --> %s\n%s" % (str(e), traceback.format_exc()))
+            kind, payload = 'error', str(e)
+        self.job_done.emit(kind, payload)
+
+    # ------------------------------------------------------------------------------------------------------------
+    # the end of the job (GUI thread)
+    # ------------------------------------------------------------------------------------------------------------
+    def on_job_done(self, kind, payload):
+        self._set_busy(False)
+        try:
+            if kind == 'result':
+                self.finish(*payload)
+            else:
+                self._error('%s: %s' % (_("Extract failed"), payload))
+        except Exception as e:
+            log.error("ToolExtract.on_job_done() --> %s\n%s" % (str(e), traceback.format_exc()))
+            self._error('%s: %s' % (_("Extract failed"), str(e)))
+
+    @staticmethod
+    def error_text(code):
+        return {
+            ExtractGen.ERR_NO_APERTURES: _("No aperture matches the selected pad types."),
+            ExtractGen.ERR_NO_PADS: _("The selected apertures have no pads to extract."),
+            ExtractGen.ERR_BAD_DIAMETER: _("The fixed diameter must be above zero."),
+            ExtractGen.ERR_BAD_THICKNESS: _("The thickness must be above zero."),
+            ExtractGen.ERR_NO_GEOMETRY: _("The source object has no geometry."),
+            ExtractGen.ERR_EMPTY_SHAPE: _("The cutout shape is empty. Try a different margin."),
+        }.get(code, code)
+
+    @staticmethod
+    def skipped_text(skipped):
+        texts = {
+            ExtractGen.SKIP_NON_POSITIVE: _("pads skipped because the hole diameter is not above zero"),
+            ExtractGen.SKIP_UNKNOWN_SIZE: _("pads skipped because their size is unknown"),
+            ExtractGen.SKIP_DUPLICATE: _("duplicate holes removed"),
+            ExtractGen.SKIP_EMPTY: _("empty shapes skipped"),
+        }
+        return ', '.join('%d %s' % (count, texts.get(reason, reason)) for reason, count in skipped.items() if count)
+
+    def finish(self, params, res):
+        skipped = self.skipped_text(res.skipped)
+        if res.error:
+            text = self.error_text(res.error)
+            self._warning('%s %s' % (text, skipped + '.' if skipped else ''))
             return
 
-        if result is None:
-            self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No cutout extracted.")))
+        outname = unique_name(params['outname'], self.app.collection.get_names())
+
+        if params['task'] == 'drills':
+            def obj_init(obj_inst, app_inst):
+                obj_inst.tools = res.tools
+                # create_geometry() builds the per-tool 'solid_geometry' itself
+                if obj_inst.create_geometry() == 'fail':
+                    return 'fail'
+                obj_inst.regenerate_source(name=outname)
+            kind = 'excellon'
+        else:
+            def obj_init(new_obj, app_obj):
+                ExtractGen.apply_result(new_obj, res)
+
+                try:
+                    new_obj.regenerate_source(name=outname)
+                except (AttributeError, TypeError):
+                    pass
+            kind = 'gerber'
+
+        self.clear_aperture_marking()
+        try:
+            ret = self.new_object(kind, outname, obj_init, source=params['obj'], autoselected=False)
+        except Exception as e:
+            log.error("ToolExtract.finish() --> %s\n%s" % (str(e), traceback.format_exc()))
+            self._error('%s: %s' % (_("Generating new object failed"), str(e)))
             return
-        new_apertures, new_geo_solid, new_geo_follow = result
+        if ret is None or (isinstance(ret, str) and ret == 'fail'):
+            self._error(_("Generating new object failed."))
+            return
 
-        def obj_init(new_obj, app_obj):
-            new_obj.multitool = False
-            new_obj.multigeo = False
-            new_obj.follow = False
-            new_obj.tools = deepcopy(new_apertures)
-            new_obj.solid_geometry = [deepcopy(new_geo_solid)]
-            new_obj.follow_geometry = [deepcopy(new_geo_follow)]
-
-            try:
-                new_obj.regenerate_source(name=outname)
-            except (AttributeError, TypeError):
-                pass
-
-        with self.app.proc_container.new('%s...' % _("Working")):
-            try:
-                self.new_object("gerber", outname, obj_init, source=obj)
-            except Exception as e:
-                self.app.log.error("Error on Extracted Cutout Gerber object creation: %s" % str(e))
-                return
+        text = '%s: %s' % (_("Created"), outname)
+        if skipped:
+            text = '%s. %s.' % (text, skipped)
+        self.app.inform.emit('[success] %s' % text)
 
     def on_extract_drills_method_changed(self, val):
         ExtractUI.set_drill_method(self.ui, val)
@@ -567,35 +575,42 @@ class ToolExtract(AppTool):
         except AttributeError:
             return
 
-        # get the Gerber file who is the source of the punched Gerber
-        selection_index = self.ui.gerber_object_combo.currentIndex()
-        model_index = self.app.collection.index(selection_index, 0, self.ui.gerber_object_combo.rootModelIndex())
-
-        try:
-            grb_obj = model_index.internalPointer().obj
-        except Exception:
+        grb_obj = self._combo_gerber()
+        if grb_obj is None:
             return
 
         wdg = self.ui.apertures_table.cellWidget(cw_row, 3)
-        assert isinstance(wdg, FCCheckBox)
+        if not isinstance(wdg, FCCheckBox):
+            return
         if wdg.isChecked():
-            # self.plot_aperture(color='#2d4606bf', marked_aperture=aperture, visible=True)
-            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-            color = self.app.options.get(
-                'global_sel_draw_color',
-                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))
-            )
+            color = self._opt('global_sel_draw_color')
             color = (color + 'AA') if len(color) == 7 else (color[:-2] + 'AA')
             grb_obj.plot_aperture(color=color, marked_aperture=aperture, visible=True, run_thread=True)
         else:
             grb_obj.clear_plot_apertures(aperture=aperture)
 
     def on_plugin_cleanup(self):
-        self.reset_fields()
+        self._loading = True
+        try:
+            self.clear_aperture_marking()
+            names = {self.old_name}
+            obj = self._combo_gerber()
+            if obj is not None:
+                names.add(obj.obj_options['name'])
+            for name in names:
+                grb_obj = self.app.collection.get_by_name(name) if name else None
+                if grb_obj is not None and getattr(grb_obj, 'kind', None) == 'gerber':
+                    grb_obj.clear_plot_apertures()
+                    grb_obj.mark_shapes.enabled = False
+            self.old_name = ''
+            self._table_name = ''
+            self.reset_fields()
+        finally:
+            self._loading = False
 
     def clear_aperture_marking(self):
         """
-        Will clear all aperture markings after creating an Excellon object with extracted drill holes
+        Will clear all aperture markings after creating an object from the extracted data
 
         :return:
         :rtype:
@@ -603,10 +618,9 @@ class ToolExtract(AppTool):
 
         for row in range(self.ui.apertures_table.rowCount()):
             wdg = self.ui.apertures_table.cellWidget(row, 3)
-            assert isinstance(wdg, FCCheckBox)
-            wdg.set_value(False)
+            if isinstance(wdg, FCCheckBox):
+                wdg.set_value(False)
 
     def reset_fields(self):
         self.ui.gerber_object_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
         self.ui.gerber_object_combo.setCurrentIndex(0)
-        self.clear_aperture_marking()

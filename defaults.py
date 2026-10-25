@@ -985,6 +985,10 @@ class AppDefaults:
         "tools_extract_sm_clearance": 0.1,
         "tools_extract_cut_margin": 0.1,
         "tools_extract_cut_thickness": 0.1,
+        "tools_extract_oblong_slots": False,
+        "tools_extract_include_regions": False,
+        "tools_extract_cut_shape": 'rect',
+        "tools_extract_all_selected": False,
 
         # Punch Gerber Tool
         "tools_punch_hole_type": 'exc',

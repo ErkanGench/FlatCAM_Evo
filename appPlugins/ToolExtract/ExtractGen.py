@@ -1,131 +1,314 @@
-"""Explicit-input drill, soldermask and cutout extraction."""
+"""Extract plugin core: drills, soldermask and cutout from Gerber data. Qt-free, no app import."""
 
-from copy import deepcopy
+import math
+import os
+from dataclasses import dataclass, field
 
-from shapely import MultiPolygon, Point, Polygon, box
+from shapely import GeometryCollection, LineString, Point, Polygon, box
+from shapely.geometry.base import BaseGeometry
+
+KINDS = ('circular', 'oblong', 'square', 'rectangular', 'other')
+_SCALAR_TYPES = (int, float, str, bool, type(None))
+
+# result codes (ExtractResult.error)
+ERR_NO_APERTURES = 'no_apertures'
+ERR_NO_PADS = 'no_pads'
+ERR_BAD_DIAMETER = 'bad_diameter'
+ERR_BAD_THICKNESS = 'bad_thickness'
+ERR_NO_GEOMETRY = 'no_geometry'
+ERR_EMPTY_SHAPE = 'empty_shape'
+
+# skip reasons (ExtractResult.skipped)
+SKIP_NON_POSITIVE = 'non_positive'
+SKIP_UNKNOWN_SIZE = 'unknown_size'
+SKIP_DUPLICATE = 'duplicate'
+SKIP_EMPTY = 'empty'
 
 
-def fixed_drills(gerber_tools, sel_tools, drill_dia, decimals, circular, oblong, square, rectangular, other):
-    tools = {1: {'tooldia': drill_dia, 'drills': [], 'slots': []}}
-    for apid, aperture in gerber_tools.items():
-        if apid not in sel_tools:
+@dataclass
+class ExtractResult:
+    """Outcome of one extraction; `error` is '' on success, else a code."""
+    kind: str
+    tools: dict = field(default_factory=dict)
+    solid_geometry: list = field(default_factory=list)
+    follow_geometry: list = field(default_factory=list)
+    skipped: dict = field(default_factory=dict)
+    error: str = ''
+
+
+def _skip(skipped, reason, count=1):
+    skipped[reason] = skipped.get(reason, 0) + count
+
+
+def _flat(geometry):
+    """Yield the non-empty shapely geometries of a geometry or a nested list of them."""
+    if isinstance(geometry, BaseGeometry):
+        if not geometry.is_empty:
+            yield geometry
+    elif isinstance(geometry, (list, tuple)):
+        for item in geometry:
+            yield from _flat(item)
+
+
+def is_square(width, height, decimals):
+    """The one square rule: sides equal after rounding."""
+    return round(float(width), decimals) == round(float(height), decimals)
+
+
+def aperture_kind(aperture, decimals):
+    """Kind name of an aperture: circular, oblong, square, rectangular, other or region."""
+    ap_type = aperture.get('type')
+    if ap_type == 'REG':
+        return 'region'
+    if ap_type == 'C':
+        return 'circular'
+    if ap_type == 'O':
+        return 'oblong'
+    if ap_type == 'R':
+        try:
+            return 'square' if is_square(aperture['width'], aperture['height'], decimals) else 'rectangular'
+        except (KeyError, TypeError, ValueError):
+            return 'rectangular'
+    return 'other'
+
+
+def pad_size(aperture):
+    """Characteristic pad size, or None when it is unknown."""
+    try:
+        ap_type = aperture.get('type')
+        if ap_type in ('O', 'R'):
+            return min(float(aperture['width']), float(aperture['height']))
+        if ap_type in ('C', 'P'):
+            return float(aperture['size'])
+        if ap_type == 'AM':
+            sizes = []
+            for geo_el in aperture.get('geometry') or []:
+                solid = geo_el.get('solid')
+                if isinstance(solid, BaseGeometry) and not solid.is_empty and not geo_el.get('clear'):
+                    sizes.append(solid)
+            if not sizes:
+                return None
+            x0 = min(s.bounds[0] for s in sizes)
+            y0 = min(s.bounds[1] for s in sizes)
+            x1 = max(s.bounds[2] for s in sizes)
+            y1 = max(s.bounds[3] for s in sizes)
+            return min(x1 - x0, y1 - y0)
+        return None
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def dark_flashes(aperture):
+    """Geometry elements of an aperture that are dark flashes (Point follow, solid, no clear)."""
+    out = []
+    for geo_el in aperture.get('geometry') or []:
+        if (isinstance(geo_el, dict) and isinstance(geo_el.get('follow'), Point) and geo_el.get('solid') is not None
+                and not geo_el.get('clear')):
+            out.append(geo_el)
+    return out
+
+
+def _selected(gerber_tools, codes, decimals, kinds):
+    """Yield (code, aperture, kind) of the apertures that pass the code and kind filters (no regions)."""
+    for code, aperture in (gerber_tools or {}).items():
+        if codes is not None and code not in codes:
             continue
-        ap_type = aperture['type']
-        if ap_type == 'C' and circular is False:
+        if not isinstance(aperture, dict):
             continue
-        elif ap_type == 'O' and oblong is False:
-            continue
-        elif ap_type == 'R':
-            if round(float(aperture['width']), decimals) == round(float(aperture['height']), decimals):
-                if square is False:
-                    continue
-            elif rectangular is False:
+        kind = aperture_kind(aperture, decimals)
+        if kind in kinds:
+            yield code, aperture, kind
+
+
+def count_pads(gerber_tools, codes, decimals, kinds):
+    """Number of dark flashes the drills would use."""
+    kinds = set(kinds)
+    return sum(len(dark_flashes(ap)) for _, ap, _ in _selected(gerber_tools, codes, decimals, kinds))
+
+
+def out_name(source_name, suffix):
+    """Output object name: the last extension of the source is dropped."""
+    base = source_name
+    if os.path.splitext(source_name)[1]:
+        base = os.path.splitext(source_name)[0]
+    return f"{base}_{suffix}"
+
+
+def extract_drills(sources, mode, kinds, decimals, fixed_dia=0.0, rings=None, factor=1.0, oblong_slots=False):
+    """Drill/slot tools from Gerber flashes; sources = [(gerber_tools, codes or None)]."""
+    res = ExtractResult('excellon')
+    kinds = set(kinds)
+    rings = rings or {}
+    if mode == 'fixed' and not fixed_dia > 0:
+        res.error = ERR_BAD_DIAMETER
+        return res
+
+    found_aperture = False
+    entries = {}        # rounded (x, y) -> [dia, start, stop, drill_point]
+    for gerber_tools, codes in sources:
+        for _, aperture, kind in _selected(gerber_tools, codes, decimals, kinds):
+            found_aperture = True
+            flashes = dark_flashes(aperture)
+            if not flashes:
                 continue
-        elif ap_type not in ['C', 'R', 'O'] and other is False:
-            continue
-        for geo_el in aperture['geometry']:
-            if 'follow' in geo_el and isinstance(geo_el['follow'], Point):
-                tools[1]['drills'].append(geo_el['follow'])
-                tools[1].setdefault('solid_geometry', []).append(geo_el['follow'])
-    return tools if tools[1].get('solid_geometry') else None
-
-
-def sized_drills(gerber_tools, sel_tools, mode, decimals, dec_format, allowed, values):
-    circular, oblong, square, rectangular, other = allowed
-    tools = {}
-    for apid, aperture in gerber_tools.items():
-        if apid not in sel_tools:
-            continue
-        ap_type = aperture['type']
-        size = None
-        ring_index = 4
-        if ap_type == 'C' and circular:
-            size = float(aperture['size'])
-            ring_index = 0
-        elif ap_type == 'O' and oblong:
-            size = min(float(aperture['width']), float(aperture['height']))
-            ring_index = 1
-        elif ap_type == 'R':
-            width, height = float(aperture['width']), float(aperture['height'])
-            if abs(dec_format(width, decimals) - dec_format(height, decimals)) < 10 ** -decimals:
-                if square:
-                    size = height
-                    ring_index = 2
-            elif rectangular:
-                size = min(width, height)
-                ring_index = 3
-        elif other:
-            try:
-                size = float(aperture['size'])
-            except KeyError:
-                if ap_type == 'AM':
-                    x0, y0, x1, y1 = aperture['geometry'][0]['solid'].bounds
-                    size = min(x1 - x0, y1 - y0)
-        if size is None:
-            continue
-        dia = size - 2 * values[ring_index] if mode == 'ring' else size * values
-        tool_in_drills = False
-        for tool, tool_val in tools.items():
-            if abs(dec_format(tool_val['tooldia']) - dec_format(dia, decimals)) < 10 ** -decimals:
-                tool_in_drills = tool
-        if tool_in_drills is False:
-            tool_in_drills = max([int(t) for t in tools]) + 1 if tools else 1
-        for geo_el in aperture['geometry']:
-            if 'follow' in geo_el and isinstance(geo_el['follow'], Point):
-                if tool_in_drills not in tools:
-                    tools[tool_in_drills] = {'tooldia': dia, 'drills': [], 'slots': []}
-                tools[tool_in_drills]['drills'].append(geo_el['follow'])
-                tools[tool_in_drills].setdefault('solid_geometry', []).append(geo_el['follow'])
-    return tools or None
-
-
-def soldermask(gerber_tools, selected, allowed_apertures, square, rect, clearance, decimals):
-    apertures = {apid: deepcopy(gerber_tools[apid]) for apid in selected}
-    solids, follows = [], []
-    for apid, aperture in gerber_tools.items():
-        if apid not in selected:
-            continue
-        ap_type = aperture['type']
-        if ap_type not in allowed_apertures:
-            apertures.pop(apid, None)
-            continue
-        if ap_type == 'R':
-            if round(float(aperture['width']), decimals) == round(float(aperture['height']), decimals):
-                if square is False:
-                    apertures.pop(apid, None)
-                    continue
-            elif rect is False:
-                apertures.pop(apid, None)
+            size = pad_size(aperture)
+            if mode == 'fixed':
+                dia = float(fixed_dia)
+            elif size is None:
+                _skip(res.skipped, SKIP_UNKNOWN_SIZE, len(flashes))
                 continue
-        if 'geometry' in aperture:
-            records = []
-            for geo_el in aperture['geometry']:
-                if 'follow' in geo_el and isinstance(geo_el['follow'], Point) and (
-                        'clear' not in geo_el or not geo_el['clear']):
-                    follows.append(geo_el['follow'])
-                    if 'solid' in geo_el:
-                        solid = geo_el['solid'].buffer(clearance)
-                        records.append(deepcopy({'solid': solid, 'follow': geo_el['follow']}))
-                        solids.append(solid)
-            apertures[apid]['geometry'] = deepcopy(records)
-    has_geometry = False
-    for apid in list(apertures):
-        if 'geometry' in apertures[apid]:
-            if apertures[apid]['geometry']:
-                has_geometry = True
+            elif mode == 'ring':
+                dia = size - 2 * rings.get(kind, 0.0)
             else:
-                apertures.pop(apid, None)
-    return (apertures, solids, follows) if has_geometry else None
+                dia = size * factor
+            dia = round(dia, decimals)
+            if dia <= 0:
+                _skip(res.skipped, SKIP_NON_POSITIVE, len(flashes))
+                continue
+            half = 0.0
+            if oblong_slots and aperture.get('type') == 'O':
+                width, height = float(aperture['width']), float(aperture['height'])
+                if round(max(width, height), decimals) > round(min(width, height), decimals):
+                    half = abs(width - height) / 2.0
+                    along_x = width > height
+            for geo_el in flashes:
+                point = geo_el['follow']
+                key = (round(point.x, decimals), round(point.y, decimals))
+                old = entries.get(key)
+                if old is not None:
+                    _skip(res.skipped, SKIP_DUPLICATE)
+                    if old[0] >= dia:
+                        continue
+                if half:
+                    if along_x:
+                        start, stop = Point(point.x - half, point.y), Point(point.x + half, point.y)
+                    else:
+                        start, stop = Point(point.x, point.y - half), Point(point.x, point.y + half)
+                    entries[key] = [dia, start, stop, None]
+                else:
+                    entries[key] = [dia, None, None, point]
+
+    if not entries:
+        res.error = ERR_NO_PADS if found_aperture else ERR_NO_APERTURES
+        return res
+    by_dia = {}
+    for dia, start, stop, point in entries.values():
+        tool = by_dia.setdefault(dia, {'tooldia': dia, 'drills': [], 'slots': []})
+        if point is not None:
+            tool['drills'].append(point)
+        else:
+            tool['slots'].append((start, stop))
+    res.tools = {num: by_dia[dia] for num, dia in enumerate(sorted(by_dia), 1)}
+    return res
 
 
-def cutout(solid_geometry, margin, thickness):
-    geometry = MultiPolygon(solid_geometry) if isinstance(solid_geometry, list) else solid_geometry
-    if not isinstance(geometry, (MultiPolygon, Polygon)):
-        return None
-    follow = box(*geometry.bounds).buffer(margin).exterior
+def _grown(aperture, clearance):
+    """New aperture dict with the scalar keys of the source, sizes grown by 2*clearance."""
+    new = {k: v for k, v in aperture.items() if isinstance(v, _SCALAR_TYPES)}
+    if clearance:
+        for key in ('size', 'width', 'height'):
+            val = new.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool) and val > 0:
+                new[key] = val + 2 * clearance
+    return new
+
+
+def _region_follow(solid):
+    if isinstance(solid, Polygon):
+        return LineString(solid.exterior.coords)
+    return solid.boundary
+
+
+def extract_soldermask(sources, kinds, clearance, decimals, include_regions=False):
+    """Soldermask apertures: dark flashes (and optionally regions) grown by clearance."""
+    res = ExtractResult('gerber')
+    kinds = set(kinds)
+    next_code = 10
+    for gerber_tools, codes in sources:
+        for code, aperture in (gerber_tools or {}).items():
+            if codes is not None and code not in codes:
+                continue
+            if not isinstance(aperture, dict):
+                continue
+            kind = aperture_kind(aperture, decimals)
+            if kind == 'region':
+                if not include_regions:
+                    continue
+                elements = [e for e in (aperture.get('geometry') or [])
+                            if isinstance(e, dict) and e.get('solid') is not None and not e.get('clear')]
+            elif kind in kinds:
+                elements = dark_flashes(aperture)
+            else:
+                continue
+            records = []
+            for geo_el in elements:
+                solid = geo_el['solid']
+                if clearance:
+                    solid = solid.buffer(clearance)
+                if solid.is_empty:
+                    _skip(res.skipped, SKIP_EMPTY)
+                    continue
+                follow = geo_el.get('follow')
+                if follow is None:
+                    follow = _region_follow(geo_el['solid'])
+                records.append({'solid': solid, 'follow': follow})
+                res.solid_geometry.append(solid)
+                res.follow_geometry.append(follow)
+            if not records:
+                continue
+            if kind == 'region':
+                out_code = 0
+            else:
+                out_code = next_code
+                next_code += 1
+            target = res.tools.get(out_code)
+            if target is None:
+                target = _grown(aperture, clearance)
+                target['geometry'] = []
+                res.tools[out_code] = target
+            target['geometry'].extend(records)
+    if not res.tools:
+        res.error = ERR_NO_PADS
+    return res
+
+
+def extract_cutout(geometry, margin, thickness, shape='rect'):
+    """Cutout outline around the geometry: its bounding box ('rect') or its convex hull ('convex'), grown by margin."""
+    res = ExtractResult('gerber')
+    if not thickness > 0:
+        res.error = ERR_BAD_THICKNESS
+        return res
+    parts = list(_flat(geometry))
+    if not parts:
+        res.error = ERR_NO_GEOMETRY
+        return res
+    if shape == 'convex':
+        base = GeometryCollection(parts).convex_hull
+    else:
+        all_bounds = [p.bounds for p in parts]
+        xs0, ys0, xs1, ys1 = zip(*all_bounds)
+        vals = (min(xs0), min(ys0), max(xs1), max(ys1))
+        if not all(math.isfinite(v) for v in vals):
+            res.error = ERR_NO_GEOMETRY
+            return res
+        base = box(*vals)
+    poly = base.buffer(margin, join_style='mitre')
+    if poly.is_empty or not isinstance(poly, Polygon):
+        res.error = ERR_EMPTY_SHAPE
+        return res
+    follow = LineString(poly.exterior.coords)
     solid = follow.buffer(thickness / 2.0)
-    if not solid.is_valid or solid.is_empty:
-        return None
-    apertures = {10: {'type': 'C', 'size': thickness,
-                      'geometry': [{'solid': deepcopy(solid), 'follow': deepcopy(follow)}]}}
-    return apertures, solid, follow
+    res.tools = {10: {'type': 'C', 'size': thickness, 'geometry': [{'solid': solid, 'follow': follow}]}}
+    res.solid_geometry = [solid]
+    res.follow_geometry = [follow]
+    return res
+
+
+def apply_result(obj, res):
+    """Fill a new Gerber object from a non-excellon ExtractResult."""
+    obj.multitool = False
+    obj.multigeo = False
+    obj.follow = False
+    obj.tools = res.tools
+    obj.solid_geometry = res.solid_geometry
+    obj.follow_geometry = res.follow_geometry

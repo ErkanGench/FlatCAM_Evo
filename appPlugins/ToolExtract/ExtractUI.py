@@ -1,6 +1,7 @@
 from PyQt6 import QtWidgets, QtCore, QtGui
 from appGUI.GUIElements import FCLabel, FCButton, FCFrame, GLay, FCComboBox, FCCheckBox, \
     RadioSet, FCDoubleSpinner, FCTable
+from appPlugins.ToolExtract import ExtractGen
 
 import gettext
 import appTranslation as fcTranslate
@@ -75,6 +76,15 @@ class ExtractUI:
         self.other_cb = FCCheckBox('%s' % _("Others"))
         self.other_cb.setToolTip(_("Process pads not in the categories above."))
         pad_grid.addWidget(self.other_cb, 5, 0)
+        self.pad_boxes = (self.circular_cb, self.oblong_cb, self.square_cb, self.rectangular_cb, self.other_cb)
+        self.all_selected_cb = FCCheckBox('%s' % _("All selected Gerbers"))
+        self.all_selected_cb.setToolTip(
+            _("Also process the other Gerber objects selected in the project tree.\n"
+              "Their apertures are all used (the pad type filters still apply).\n"
+              "The source object above uses the apertures selected in the table.\n"
+              "The cutout goes around all of them.")
+        )
+        pad_grid.addWidget(self.all_selected_cb, 6, 0)
         self.apertures_table = FCTable()
         pad_all_grid.addWidget(self.apertures_table, 0, 1)
         self.apertures_table.setColumnCount(4)
@@ -91,6 +101,9 @@ class ExtractUI:
                                            QtWidgets.QSizePolicy.Policy.Preferred)
         self.apertures_table.setSizePolicy(sizePolicy)
         self.apertures_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
+        self.pads_label = FCLabel('%s: 0' % _("Pads"))
+        self.pads_label.setToolTip(_("The number of pads that Extract Drills will use."))
+        pad_all_grid.addWidget(self.pads_label, 1, 0, 1, 2)
 
         # Drills
         self.extract_drills_label = FCLabel('%s' % _("Extract Drills"), color='brown', bold=True)
@@ -112,6 +125,9 @@ class ExtractUI:
              {'label': _("Proportional"), 'value': 'prop'},
              {'label': _("Fixed Annular Ring"), 'value': 'ring'}], orientation='vertical', compact=True)
         grid1.addWidget(self.method_radio, 4, 0, 1, 2)
+        self.oblong_slots_cb = FCCheckBox('%s' % _("Slots for oblong pads"))
+        self.oblong_slots_cb.setToolTip(_("An oblong pad gives a slot instead of a round hole."))
+        grid1.addWidget(self.oblong_slots_cb, 5, 0, 1, 2)
         separator_line = QtWidgets.QFrame()
         separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
@@ -169,6 +185,8 @@ class ExtractUI:
         self.other_ring_entry.set_range(0.0000, 10000.0000)
         ring_grid.addWidget(self.other_ring_label, 10, 0)
         ring_grid.addWidget(self.other_ring_entry, 10, 1)
+        self.ring_entries = (self.circular_ring_entry, self.oblong_ring_entry, self.square_ring_entry,
+                             self.rectangular_ring_entry, self.other_ring_entry)
 
         # Fixed diameter
         self.fix_frame = QtWidgets.QFrame()
@@ -181,7 +199,7 @@ class ExtractUI:
         fixed_grid.addWidget(self.fixed_label, 2, 0, 1, 2)
         self.dia_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.dia_entry.set_precision(self.decimals)
-        self.dia_entry.set_range(0.0000, 10000.0000)
+        self.dia_entry.set_range(0.0001, 10000.0000)
         self.dia_label = FCLabel('%s:' % _("Value"))
         self.dia_label.setToolTip(_("Fixed hole diameter."))
         fixed_grid.addWidget(self.dia_label, 4, 0)
@@ -198,7 +216,7 @@ class ExtractUI:
         prop_grid.addWidget(self.prop_label, 0, 0, 1, 2)
         self.factor_entry = FCDoubleSpinner(callback=self.confirmation_message, suffix='%')
         self.factor_entry.set_precision(self.decimals)
-        self.factor_entry.set_range(0.0000, 100.0000)
+        self.factor_entry.set_range(0.01, 100.0000)
         self.factor_entry.setSingleStep(0.1)
         self.factor_label = FCLabel('%s:' % _("Value"))
         self.factor_label.setToolTip(
@@ -231,6 +249,9 @@ class ExtractUI:
         self.clearance_entry.setSingleStep(0.1)
         es_grid.addWidget(self.clearance_label, 0, 0)
         es_grid.addWidget(self.clearance_entry, 0, 1)
+        self.include_regions_cb = FCCheckBox('%s' % _("Include regions"))
+        self.include_regions_cb.setToolTip(_("Also extract the copper regions (G36 areas) into the soldermask."))
+        es_grid.addWidget(self.include_regions_cb, 1, 0, 1, 2)
         self.e_sm_button = FCButton(_("Extract Soldermask"))
         self.e_sm_button.setIcon(QtGui.QIcon(self.app.resource_location + '/extract32.png'))
         self.e_sm_button.setToolTip(_("Extract soldermask from a given Gerber file."))
@@ -260,11 +281,21 @@ class ExtractUI:
         self.thick_cut_label = FCLabel('%s:' % _("Thickness"))
         self.thick_cut_label.setToolTip(_("The thickness of the line that makes the cutout geometry."))
         self.thick_cut_entry = FCDoubleSpinner(callback=self.confirmation_message)
-        self.thick_cut_entry.set_range(0.0000, 10000.0000)
+        self.thick_cut_entry.set_range(0.0001, 10000.0000)
         self.thick_cut_entry.set_precision(self.decimals)
         self.thick_cut_entry.setSingleStep(0.1)
         ec_grid.addWidget(self.thick_cut_label, 2, 0)
         ec_grid.addWidget(self.thick_cut_entry, 2, 1)
+        self.cut_shape_label = FCLabel('%s:' % _("Shape"))
+        self.cut_shape_label.setToolTip(
+            _("Rectangular: the bounding box of the Gerber.\n"
+              "Convex: the convex hull of the Gerber.")
+        )
+        self.cut_shape_radio = RadioSet(
+            [{'label': _("Rectangular"), 'value': 'rect'}, {'label': _("Convex"), 'value': 'convex'}],
+            compact=True)
+        ec_grid.addWidget(self.cut_shape_label, 4, 0)
+        ec_grid.addWidget(self.cut_shape_radio, 4, 1)
         GLay.set_common_column_size(
             [grid1, grid_lay, ring_grid, ec_grid, prop_grid, fixed_grid, ring_grid, es_grid, pad_all_grid, pad_grid], 0)
         self.e_cut_button = FCButton(_("Extract Cutout"))
@@ -294,11 +325,8 @@ class ExtractUI:
             self.fix_frame.hide()
             self.ring_label.show()
             self.ring_frame.show()
-            self.circular_ring_entry.setEnabled(self.circular_cb.get_value())
-            self.oblong_ring_entry.setEnabled(self.oblong_cb.get_value())
-            self.square_ring_entry.setEnabled(self.square_cb.get_value())
-            self.rectangular_ring_entry.setEnabled(self.rectangular_cb.get_value())
-            self.other_ring_entry.setEnabled(self.other_cb.get_value())
+            for cb, entry in zip(self.pad_boxes, self.ring_entries):
+                entry.setEnabled(cb.get_value())
             self.prop_label.hide()
             self.prop_frame.hide()
         elif val == "prop":
@@ -309,44 +337,27 @@ class ExtractUI:
             self.prop_label.show()
             self.prop_frame.show()
 
-    def populate_apertures(self, tools, sorted_apertures):
-        n = 0
+    def enabled_kinds(self):
+        """The pad kinds whose checkbox is on."""
+        return [kind for kind, box in zip(ExtractGen.KINDS, self.pad_boxes) if box.get_value()]
+
+    def populate_apertures(self, tools, sorted_apertures, selected=None):
+        """Fill the table with the apertures of the enabled kinds. selected: codes to select (None: all)."""
+        kinds = set(self.enabled_kinds())
+        include_regions = self.include_regions_cb.get_value()
+        listed = []
         for ap_code in sorted_apertures:
-            ap_type = tools[ap_code]['type']
-            if ap_type == 'C' and self.circular_cb.get_value() is True:
-                n += 1
-            if ap_type == 'R':
-                if self.square_cb.get_value() is True:
-                    n += 1
-                elif self.rectangular_cb.get_value() is True:
-                    n += 1
-            if ap_type == 'O' and self.oblong_cb.get_value() is True:
-                n += 1
-            if ap_type not in ['C', 'R', 'O'] and self.other_cb.get_value() is True:
-                n += 1
-        self.apertures_table.setRowCount(n)
+            kind = ExtractGen.aperture_kind(tools[ap_code], self.decimals)
+            if kind == 'region':
+                if include_regions:
+                    listed.append(ap_code)
+            elif kind in kinds:
+                listed.append(ap_code)
+        self.apertures_table.setRowCount(len(listed))
 
         row = 0
-        for ap_code in sorted_apertures:
-            ap_type = tools[ap_code]['type']
-            if ap_type == 'C':
-                if self.circular_cb.get_value() is False:
-                    continue
-            elif ap_type == 'R':
-                if self.square_cb.get_value() is True:
-                    pass
-                elif self.rectangular_cb.get_value() is True:
-                    pass
-                else:
-                    continue
-            elif ap_type == 'O':
-                if self.oblong_cb.get_value() is False:
-                    continue
-            elif self.other_cb.get_value() is True:
-                pass
-            else:
-                continue
-
+        for ap_code in listed:
+            ap_type = tools[ap_code].get('type', '')
             ap_code_item = QtWidgets.QTableWidgetItem(str(ap_code))
             ap_code_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
             ap_type_item = QtWidgets.QTableWidgetItem(str(ap_type))
@@ -357,7 +368,7 @@ class ExtractUI:
                     ap_size_item = QtWidgets.QTableWidgetItem(str(size_val))
                 else:
                     ap_size_item = QtWidgets.QTableWidgetItem('')
-            except KeyError:
+            except (KeyError, TypeError, ValueError):
                 ap_size_item = QtWidgets.QTableWidgetItem('')
             ap_size_item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
 
@@ -373,7 +384,8 @@ class ExtractUI:
             self.apertures_table.setCellWidget(row, 3, mark_item)
             row += 1
 
-        self.apertures_table.selectColumn(0)
+        for row in range(self.apertures_table.rowCount()):
+            self.apertures_table.item(row, 0).setSelected(selected is None or listed[row] in selected)
         self.apertures_table.resizeColumnsToContents()
         self.apertures_table.resizeRowsToContents()
         vertical_header = self.apertures_table.verticalHeader()

@@ -802,6 +802,10 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_extract_sm_clearance": self.ui.plugin2_pref_form.tools2_edrills_group.clearance_entry,
             "tools_extract_cut_margin": self.ui.plugin2_pref_form.tools2_edrills_group.margin_cut_entry,
             "tools_extract_cut_thickness": self.ui.plugin2_pref_form.tools2_edrills_group.thick_cut_entry,
+            "tools_extract_oblong_slots": self.ui.plugin2_pref_form.tools2_edrills_group.oblong_slots_cb,
+            "tools_extract_include_regions": self.ui.plugin2_pref_form.tools2_edrills_group.include_regions_cb,
+            "tools_extract_cut_shape": self.ui.plugin2_pref_form.tools2_edrills_group.cut_shape_radio,
+            "tools_extract_all_selected": self.ui.plugin2_pref_form.tools2_edrills_group.all_selected_cb,
 
             # Punch Gerber Tool
             "tools_punch_hole_type": self.ui.plugin2_pref_form.tools2_punch_group.hole_size_radio,

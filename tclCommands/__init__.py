@@ -29,6 +29,7 @@ import tclCommands.TclCommandExportExcellon
 import tclCommands.TclCommandExportGerber
 import tclCommands.TclCommandExportGcode
 import tclCommands.TclCommandExportSVG
+import tclCommands.TclCommandExtract
 import tclCommands.TclCommandExteriors
 import tclCommands.TclCommandFollow
 import tclCommands.TclCommandGeoCutout
