@@ -18,7 +18,6 @@ from appObjects.AppObjectTemplate import FlatCAMObj, OffsetUiMixin, PropertiesPa
 
 from camlib import flatten_shapely_geometry, isolation_leftover_paths, clip_paths_to_area, area_outline_paths, \
     boundary_passes_message, milling_orient, pass_covers_area
-from appCommon.SafeEval import safe_eval
 
 from shapely import MultiLineString, LinearRing, MultiPolygon, Polygon, LineString, Point
 from shapely.ops import unary_union
@@ -867,68 +866,6 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 self.app.log.error("GerberObject.isolate().generate_envelope() Error --> %s" % str(e))
                 return 'fail'
         return geom
-
-    def follow_geo(self, outname=None):
-        """
-        Creates a geometry object "following" the gerber paths.
-
-        :return: None
-        """
-
-        if outname is None:
-            follow_name = self.obj_options["name"] + "_follow"
-        else:
-            follow_name = outname
-
-        def follow_init(new_obj, app_obj):
-            tool_dia_default = app_obj.defaults.get(
-                "tools_mill_tooldia",
-                app_obj.defaults.factory_defaults.get("tools_mill_tooldia")
-            )
-            if type(tool_dia_default) == float:
-                tools_list = [tool_dia_default]
-            else:
-                try:
-                    temp_tools = tool_dia_default.split(",")
-                    tools_list = [
-                        float(safe_eval(dia)) for dia in temp_tools if dia != ''
-                    ]
-                except Exception as er:
-                    self.app.log.error("GerberObject.follow_geo -> At least one tool diameter needed. -> %s" % str(er))
-                    return 'fail'
-
-            # Propagate options
-            new_obj.multigeo = True
-            # new_obj.obj_options["tools_mill_tooldia"] = str(self.app.options["tools_iso_tooldia"])
-            new_obj.solid_geometry = deepcopy(self.follow_geometry)
-
-            new_obj.obj_options["tools_mill_tooldia"] = self._app_option("tools_mill_tooldia")
-
-            # store here the default data for Geometry Data
-            default_data = {}
-            for opt_key, opt_val in app_obj.options.items():
-                if opt_key.find('geometry' + "_") == 0:
-                    oname = opt_key[len('geometry') + 1:]
-                    default_data[oname] = self._app_option(opt_key)
-                if opt_key.find('tools_mill' + "_") == 0:
-                    default_data[opt_key] = self._app_option(opt_key)
-
-            new_obj.tools = {
-                1: {
-                    'tooldia':  app_obj.dec_format(float(tools_list[0]), self.decimals),
-                    'data': deepcopy(default_data),
-                    'solid_geometry': new_obj.solid_geometry
-                }
-            }
-
-            new_obj.tools[1]['data']['name'] = follow_name
-
-        try:
-            if self.app.app_obj.new_object("geometry", follow_name, follow_init) == 'fail':
-                return 'fail'
-        except Exception as e:
-            self.app.log.error('Follow operation failed: %s' % str(e))
-            return 'fail'
 
     def on_plot_cb_click(self, *args):
         if self.muted_ui:

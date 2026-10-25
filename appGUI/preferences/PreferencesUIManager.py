@@ -668,6 +668,16 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_sub_margin": self.ui.plugin_pref_form.tools_sub_group.margin_entry,
             "tools_sub_suffix": self.ui.plugin_pref_form.tools_sub_group.suffix_entry,
 
+            # Follow Plugin
+            "tools_follow_simplification": self.ui.plugin_pref_form.tools_follow_group.simplification_cb,
+            "tools_follow_tolerance": self.ui.plugin_pref_form.tools_follow_group.tolerance_entry,
+            "tools_follow_union": self.ui.plugin_pref_form.tools_follow_group.union_cb,
+            "tools_follow_merge": self.ui.plugin_pref_form.tools_follow_group.merge_cb,
+            "tools_follow_select": self.ui.plugin_pref_form.tools_follow_group.select_radio,
+            "tools_follow_area_shape": self.ui.plugin_pref_form.tools_follow_group.area_shape_radio,
+            "tools_follow_dia_mode": self.ui.plugin_pref_form.tools_follow_group.dia_mode_radio,
+            "tools_follow_suffix": self.ui.plugin_pref_form.tools_follow_group.suffix_entry,
+
             # Corner Markers Tool
             "tools_markers_type": self.ui.plugin_pref_form.tools_markers_group.type_radio,
             "tools_markers_thickness": self.ui.plugin_pref_form.tools_markers_group.thick_entry,

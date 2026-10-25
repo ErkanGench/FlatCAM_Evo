@@ -3527,6 +3527,11 @@ class MainGUI(QtWidgets.QMainWindow):
                     self.app.cutout_tool.run(toggle=True)
                     return
 
+                # Follow Tool
+                if key == QtCore.Qt.Key.Key_Y:
+                    self.app.follow_tool.run(toggle=True)
+                    return
+
                 # Panelize Tool
                 if key == QtCore.Qt.Key.Key_Z:
                     self.app.panelize_tool.run(toggle=True)
@@ -5348,6 +5353,10 @@ class ShortcutsTab(QtWidgets.QWidget):
                         <td>&nbsp;%s</td>
                     </tr>
                     <tr height="20">
+                        <td height="20"><strong>%s</strong></td>
+                        <td>&nbsp;%s</td>
+                    </tr>
+                    <tr height="20">
                         <td height="20"><strong>&#39;%s&#39;</strong></td>
                         <td>&nbsp;%s</td>
                     </tr>
@@ -5398,6 +5407,7 @@ class ShortcutsTab(QtWidgets.QWidget):
             _('Alt+U'), _("2-Sided PCB"),
             _('Alt+W'), _("Subtract"),
             _('Alt+X'), _("Cutout PCB"),
+            _('Alt+Y'), _("Follow"),
             _('Alt+Z'), _("Panelize PCB"),
             _('Alt+1'), _("Enable all"),
             _('Alt+2'), _("Disable all"),

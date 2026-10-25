@@ -2,6 +2,7 @@
 from PyQt6 import QtWidgets
 
 from appGUI.preferences.tools.ToolsSubPrefGroupUI import ToolsSubPrefGroupUI
+from appGUI.preferences.tools.ToolsFollowPrefGroupUI import ToolsFollowPrefGroupUI
 from appGUI.preferences.tools.ToolsSolderpastePrefGroupUI import ToolsSolderpastePrefGroupUI
 from appGUI.preferences.tools.ToolsMarkersPrefGroupUI import ToolsMarkersPrefGroupUI
 
@@ -63,11 +64,15 @@ class PluginsPreferencesUI(QtWidgets.QWidget):
         self.tools_sub_group = ToolsSubPrefGroupUI(app=app)
         self.tools_sub_group.setMinimumWidth(250)
 
+        self.tools_follow_group = ToolsFollowPrefGroupUI(app=app)
+        self.tools_follow_group.setMinimumWidth(250)
+
         self.vlay = QtWidgets.QVBoxLayout()
         self.vlay.addWidget(self.tools_drill_group)
 
         self.vlay1 = QtWidgets.QVBoxLayout()
         self.vlay1.addWidget(self.tools_mill_group)
+        self.vlay1.addWidget(self.tools_follow_group)
 
         self.vlay2 = QtWidgets.QVBoxLayout()
         self.vlay2.addWidget(self.tools_cutout_group)

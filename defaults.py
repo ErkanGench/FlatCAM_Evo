@@ -481,6 +481,11 @@ class AppDefaults:
         "tools_follow_simplification": False,
         "tools_follow_tolerance": 0.01,
         "tools_follow_union": False,
+        "tools_follow_merge": True,
+        "tools_follow_select": 'all',
+        "tools_follow_area_shape": 'square',
+        "tools_follow_dia_mode": 'default',
+        "tools_follow_suffix": '_follow',
 
         # Isolation Routing Plugin
         "tools_iso_tooldia": "0.1",
