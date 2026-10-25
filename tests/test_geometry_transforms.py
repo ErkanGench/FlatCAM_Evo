@@ -7,10 +7,13 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
 
 import shapely
 from shapely import affinity
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
+from shapely.geometry import LinearRing, LineString, MultiPolygon, Point, Polygon, box
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -61,6 +64,17 @@ def build(multigeo):
         geo.tools = {1: {'solid_geometry': sample(), 'data': {}}, 2: {'solid_geometry': box(1, 1, 3, 3)},
                      3: {'solid_geometry': []}}
     return geo
+
+
+class AbortAfterOneRead:
+    """False on the first read, True on the next: the abort arrives while the batch runs."""
+
+    def __init__(self):
+        self.reads = 0
+
+    def __bool__(self):
+        self.reads += 1
+        return self.reads > 1
 
 
 OPS = {
@@ -126,12 +140,146 @@ class TestGeometryTransforms(unittest.TestCase):
                 geoms = [LineString([(0, 0), (3, 4)]), box(1, 1, 2, 2), Point(2, 2)]
                 job = SimpleNamespace(
                     app=make_app(), gcode_parsed=[{'geom': g, 'kind': ['C', 'F']} for g in geoms],
-                    create_geometry=lambda: None, _affine_gcode_parsed=CNCjob._affine_gcode_parsed)
+                    create_geometry=lambda: None, _affine_gcode_parsed=CNCjob._affine_gcode_parsed,
+                    tools={}, multitool=False, gcode='', steps_per_circle=16)
+                job._transform = lambda matrix, j=job: CNCjob._transform(j, matrix)
+                job._transform_native = lambda matrix, j=job: CNCjob._transform_native(j, matrix)
                 method(job)
                 for d, g in zip(job.gcode_parsed, geoms):
                     same(self, ref(g), d['geom'])
                     self.assertEqual(d['kind'], ['C', 'F'])
 
 
-if __name__ == '__main__':
-    unittest.main()
+# ------------------------------------------------------------------------------------------------------------
+# CNCJob: the G-code text follows the geometry
+# ------------------------------------------------------------------------------------------------------------
+
+def _imported_job(tmp_path, units='MM'):
+    from tests.test_cncjob_export_gcode import _open_gcode, MILL_FILE
+    return _open_gcode(tmp_path, MILL_FILE, units=units)[1], MILL_FILE
+
+
+def _native_job(gcode='G00 X10.0000 Y0.0000\nG01 X10.0000 Y5.0000\n'):
+    from unittest.mock import patch
+    from appObjects.CNCJobObject import CNCJobObject
+
+    geo = [{'geom': LineString([(10, 0), (10, 5)]), 'kind': ['C', 'S']}]
+    with patch('appObjects.AppObjectTemplate.ShapeCollection', Mock()):
+        job = CNCJobObject('job', make_app())
+    job.multitool = True
+    job.obj_options['type'] = 'Geometry'
+    job.tools = {1: {'gcode': gcode, 'gcode_parsed': geo, 'solid_geometry': [],
+                     'data': {'tools_mill_ppname_g': 'default'}}}
+    job.gcode_parsed = geo
+    return job
+
+
+def test_offset_of_an_imported_job_moves_the_text_and_the_plot_together(tmp_path):
+    from appParsers.ParseGCode import parse_gcode
+
+    job, original = _imported_job(tmp_path)
+
+    job.offset((5.0, 2.0))
+
+    # X10 has no decimal point and still moves; the line endings and the order of the lines are kept
+    assert 'G1 X15.0000 Y3.0000 F200\r\n' in job.gcode
+    assert job.gcode.count('\r\n') == original.count('\r\n')
+    assert job.tools[1]['gcode'] + job.tools[2]['gcode'] == job.gcode
+    assert job.gcode_parsed == job.tools[1]['gcode_parsed'] + job.tools[2]['gcode_parsed']
+    reparsed = parse_gcode(job.gcode)['tools'][1]['solid_geometry']
+    assert shapely.unary_union(reparsed).bounds == shapely.unary_union(job.tools[1]['solid_geometry']).bounds
+    # the cutting moves of the file (1, 1)-(10, 1) and (3, 3)-(3, 9), moved
+    plotted = shapely.unary_union([g['geom'] for g in job.gcode_parsed if g['kind'][0] == 'C']).bounds
+    assert plotted == pytest.approx((1 + 5, 1 + 2, 10 + 5, 9 + 2))
+
+
+def test_rotate_of_a_native_job_changes_the_exported_gcode_and_the_plot():
+    job = _native_job()
+
+    job.rotate(90, (0, 0))
+
+    text = job.export_gcode(to_file=True).getvalue()
+    assert 'G00 X0.0000 Y10.0000' in text and 'G01 X-5.0000 Y10.0000' in text
+    assert job.gcode_parsed[0]['geom'].coords[:] == pytest.approx([(0, 10), (-5, 10)])
+    assert shapely.get_coordinates(job.solid_geometry[0]).ravel().tolist() == pytest.approx([0, 10, -5, 10])
+
+
+def test_imported_job_with_a_subprogram_is_not_moved_and_tells_the_user(tmp_path):
+    job, _ = _imported_job(tmp_path)
+    job.gcode = job.gcode + 'M98 P1000\r\n'
+    text, plotted = job.gcode, [g['geom'].wkt for g in job.gcode_parsed]
+    job.app.inform.reset_mock()
+
+    job.rotate(90, (0, 0))
+    job.offset((5.0, 0.0))
+
+    # the text and the plot stay together, unchanged
+    assert job.gcode == text and [g['geom'].wkt for g in job.gcode_parsed] == plotted
+    errors = [c.args[0] for c in job.app.inform.emit.call_args_list if c.args[0].startswith('[ERROR_NOTCL]')]
+    assert len(errors) == 2 and 'subprograms' in errors[0]
+
+
+@pytest.mark.parametrize('imported', [False, True])
+def test_regenerate_source_after_a_move_gives_the_moved_coordinates(tmp_path, imported):
+    job = _imported_job(tmp_path)[0] if imported else _native_job()
+    job.source_file = 'old'
+
+    job.offset((5.0, 2.0))
+    text = job.regenerate_source(store=False)
+    assert job.source_file == 'old'
+    assert job.regenerate_source() is True
+    assert job.source_file == text
+    assert ('G1 X15.0000 Y3.0000' if imported else 'G01 X15.0000 Y7.0000') in text
+    if imported:
+        assert text == job.gcode
+
+
+
+def test_an_erosion_that_removes_everything_fails_without_a_change():
+    geo = Geometry(make_app())
+    geo.kind, geo.multigeo = 'geometry', False
+    geo.geo_steps_per_circle = 64
+    geo.solid_geometry = box(0, 0, 1, 1)
+    assert geo.buffer(-1, 2, None) == 'fail'
+    assert shapely.unary_union(geo.solid_geometry).area == pytest.approx(1.0)
+
+
+
+
+def test_multigeo_buffer_fails_atomically_when_one_tool_erodes_away():
+    geo = Geometry(make_app())
+    geo.kind, geo.multigeo = 'geometry', True
+    geo.geo_steps_per_circle = 64
+    geo.solid_geometry = box(0, 0, 10, 10)
+    geo.tools = {1: {'solid_geometry': [box(0, 0, 10, 10)], 'data': {}},
+                 2: {'solid_geometry': [box(20, 20, 21, 21)], 'data': {}}}
+    aggregate, tool = geo.solid_geometry, geo.tools[1]['solid_geometry'][0]
+    assert geo.buffer(-1, 'mitre', None) == 'fail'
+    assert geo.solid_geometry is aggregate
+    assert geo.tools[1]['solid_geometry'][0] is tool
+    assert geo.tools[2]['solid_geometry'][0].equals(box(20, 20, 21, 21))
+
+
+def test_a_closed_contour_erosion_that_splits_keeps_every_piece():
+    geo = Geometry(make_app())
+    geo.kind, geo.multigeo = 'geometry', False
+    geo.geo_steps_per_circle = 64
+    geo.solid_geometry = LinearRing([(0, 0), (4, 0), (4, 1), (6, 1), (6, 0), (10, 0), (10, 4),
+                                     (6, 4), (6, 3), (4, 3), (4, 4), (0, 4)])
+    assert geo.buffer(-1, 'mitre', None) is None
+    assert len(geo.solid_geometry) == 2
+    assert all(isinstance(part, LinearRing) for part in geo.solid_geometry)
+    assert sorted(Polygon(part).area for part in geo.solid_geometry) == pytest.approx([4.0, 4.0])
+
+
+
+
+def test_factor_buffer_scales_each_element_about_its_own_center():
+    geo = Geometry(make_app())
+    geo.kind, geo.multigeo = 'geometry', False
+    geo.geo_steps_per_circle = 64
+    geo.solid_geometry = [box(0, 0, 2, 2), box(10, 0, 12, 2)]
+    assert geo.buffer(2, 'mitre', True) is None
+    assert [part.bounds for part in geo.solid_geometry] == pytest.approx([(-1, -1, 3, 3), (9, -1, 13, 3)])
+
+

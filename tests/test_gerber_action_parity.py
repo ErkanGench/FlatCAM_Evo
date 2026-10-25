@@ -7,6 +7,7 @@ import pytest
 from PyQt6 import QtCore, QtGui, QtWidgets
 from shapely.geometry import box, MultiPolygon
 from shapely.ops import unary_union
+from camlib import gerber_quad_segs
 
 from appEditors import appGerberEditor as module
 from appEditors.grb_plugins.GrbCommon import DrawToolShape
@@ -79,7 +80,7 @@ def test_arc_modes_preview_commit_and_history(mode, points):
     assert follow.coords[0] == pytest.approx((1, 0))
     assert follow.coords[-1] == pytest.approx((0, 1))
     assert all(math.hypot(x, y) == pytest.approx(1) for x, y in follow.coords)
-    assert tool.geometry.geo['solid'].equals(follow.buffer(0.1 / 1.999, quad_segs=16))
+    assert tool.geometry.geo['solid'].equals(follow.buffer(0.05, quad_segs=gerber_quad_segs(editor.app.options, 0.05, editor.app.app_units)))
     editor.on_grb_shape_complete()
     assert len(editor.storage_dict[10]['geometry']) == 1
     assert not editor.loaded_as_regions
@@ -91,7 +92,8 @@ def test_arc_modes_preview_commit_and_history(mode, points):
 @pytest.mark.parametrize('operation,steps,direction', [('arc', 16, 'cw'), ('arc', 64, 'ccw'), ('difference_keep', 16, 'cw')])
 def test_new_actions_native_export_reparse(app, tmp_path, operation, steps, direction):
     editor = make_editor({10: aperture([])})
-    editor.app.options['gerber_circle_steps'] = steps
+    for options in (editor.app.options, app.options):
+        options.update(gerber_circle_steps_mode='fixed', gerber_circle_steps=steps)
     if operation == 'arc':
         tool = arc_tool(editor)
         tool.direction = direction

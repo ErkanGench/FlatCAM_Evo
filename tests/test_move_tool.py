@@ -12,12 +12,14 @@ from shapely import Point, LineString, Polygon, affinity
 from appParsers.ParseGerber import Gerber
 from appParsers.ParseExcellon import Excellon
 from appPlugins.ToolMove import ToolMove
+from appPlugins.ToolMove.MoveGen import selection_shape
 from camlib import translate_geometry
 
 
 def make_gerber(count=500):
     elements = [
         {'solid': Point(index, 2).buffer(0.2), 'follow': Point(index, 2),
+
          'clear': LineString([(index, 1), (index, 3)])}
         for index in range(count)
     ]
@@ -44,7 +46,7 @@ def test_gerber_offset_batches_apertures_and_preserves_all_geometry():
 
 
 def make_excellon(count=500):
-    obj = SimpleNamespace(app=Mock(), excellon_circle_steps=32, tools={
+    obj = SimpleNamespace(app=Mock(), circle_steps=lambda radius: 32, tools={
         1: {'tooldia': 0.8, 'drills': [Point(index, 2) for index in range(count)],
             'slots': [(Point(1, 3), Point(4, 3))]},
         2: {'tooldia': 1.2, 'drills': [Point(5, 6)], 'slots': []}})
@@ -148,4 +150,70 @@ def test_move_failure_is_reported_and_moved_geometry_is_replotted(tool, failure)
     assert any('[ERROR_NOTCL]' in call.args[0] for call in tool.app.inform.emit.call_args_list)
     assert not any('[success]' in call.args[0] for call in tool.app.inform.emit.call_args_list)
     layer.plot.assert_called_once()
+    # a failed move releases the in-flight state too
+    calls = tool.app.worker_task.emit.call_count
+    tool.move_handler((1, 2), objects=[layer])
+    assert tool.app.worker_task.emit.call_count == calls + 1
+    run_worker(tool)
+    QtTest.QTest.qWait(20)
+
+
+@pytest.mark.parametrize('offset', [(float('nan'), 2), (1, 2, 3)])
+def test_invalid_move_offset_is_rejected_before_any_change(tool, offset):
+    layer = make_layer([], [])
+    assert tool.move_handler(offset, objects=[layer]) == 'fail'
+    layer.offset.assert_not_called()
+    tool.app.worker_task.emit.assert_not_called()
+    assert any('[ERROR_NOTCL]' in call.args[0] for call in tool.app.inform.emit.call_args_list)
+
+
+
+
+def test_overlapping_move_is_rejected_until_the_gui_completion(tool):
+    layer = make_layer([], [])
+    offset_fn = layer.offset.side_effect
+    started, release = threading.Event(), threading.Event()
+
+    def blocked_offset(vector):
+        started.set()
+        assert release.wait(5)
+        offset_fn(vector)
+
+    layer.offset.side_effect = blocked_offset
+    tool.move_handler((3, 0), objects=[layer])
+    task = tool.app.worker_task.emit.call_args.args[0]
+    worker = threading.Thread(target=lambda: task['fcn'](*task['params']))
+    worker.start()
+    try:
+        assert started.wait(5)
+
+        calls = tool.app.worker_task.emit.call_count
+        assert tool.move_handler((0, 5), objects=[layer]) == 'fail'
+        assert tool.app.worker_task.emit.call_count == calls
+        assert layer.geometry.equals(Point(10, 20))
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    QtTest.QTest.qWait(20)
+    assert layer.geometry.equals(Point(13, 20))
+
+    # the first move is complete: a later move is accepted again
+    calls = tool.app.worker_task.emit.call_count
+    tool.move_handler((0, 5), objects=[layer])
+    assert tool.app.worker_task.emit.call_count == calls + 1
+    run_worker(tool)
+    QtTest.QTest.qWait(20)
+    assert layer.geometry.equals(Point(13, 25))
+
+
+@pytest.mark.parametrize('units, box', [
+    ('MM', Polygon([(0, 0), (10, 0), (10, 0.1), (0, 0.1)])),
+    ('MM', Polygon([(0, 0), (10, 0), (10, 0), (0, 0)])),
+])
+def test_selection_shape_keeps_thin_boxes_visible(units, box):
+    preview = selection_shape(box, units, False)
+    assert not preview.is_empty and preview.area > 0
+    line = selection_shape(box, units, True)
+    assert line.geom_type == 'LinearRing' and not line.is_empty
 

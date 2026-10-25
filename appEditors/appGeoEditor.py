@@ -23,7 +23,7 @@ from weakref import WeakKeyDictionary, WeakSet, ref
 
 from camlib import distance, arc, three_point_circle, Geometry, AppRTreeStorage, flatten_shapely_geometry, \
     translate_geometry, affine_translate_matrix, affine_rotate_matrix, affine_scale_matrix, affine_skew_matrix, \
-    affine_mirror_matrix
+    affine_mirror_matrix, affine_geometry_many, object_circle_steps, object_quad_segs
 from appGUI.GUIElements import FCLabel, GLay, FCDoubleSpinner, FCTree, FCButton, FCFrame, FCCheckBox, FCEntry, \
     FCTextEdit
 from appGUI.VisPyVisuals import ShapeCollection
@@ -39,7 +39,7 @@ from appEditors.geo_plugins.GeoCirclePlugin import CircleEditorTool
 from appEditors.geo_plugins.GeoCopyPlugin import CopyEditorTool
 from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message, BEND_MODE_FREE
 from appEditors.vertex_ops import (vertex_address, edit_vertex, check_vertex_result, parts_of, rings_of,
-                                   SUPPORTED_TYPES, DEFAULT_CIRCLE_STEPS)
+                                   SUPPORTED_TYPES)
 from appEditors.vertex_grips import VertexGrips
 from appEditors.cursor_text import show_cursor_text, hide_cursor_text
 
@@ -991,8 +991,10 @@ class AppGeoEditor(QtCore.QObject):
             shape = AppGeoEditor.vertex_edit_target(self, target)
             geometry = shape.geo
             address = vertex_address(geometry, index)
-            steps = self.app.options.get('geometry_circle_steps', DEFAULT_CIRCLE_STEPS)
-            result_geo = edit_vertex(geometry, action, address, point, on_segment=on_segment, steps=steps)
+            # the steps of an arc follow the preference "Circles" and the radius of the arc
+            result_geo = edit_vertex(geometry, action, address, point, on_segment=on_segment,
+                                     steps=lambda radius: object_circle_steps(self.app.options, 'geometry', radius,
+                                                                              self.app.app_units))
             check_vertex_result(result_geo, address)
         except (ValueError, TypeError, OverflowError, shapely.errors.GEOSException) as err:
             self.app.inform.emit('[WARNING_NOTCL] %s' % str(err))
@@ -2850,12 +2852,49 @@ class AppGeoEditor(QtCore.QObject):
         """Transform the selection, then update storage, tree and canvas once."""
         selected = list(self.get_selected())
         transformed = []
+        parameters = list(args) + list(kwargs.values())
+        while parameters:
+            value = parameters.pop()
+            if isinstance(value, (tuple, list)):
+                parameters.extend(value)
+            elif value is not None and not isinstance(value, str) and not math.isfinite(value):
+                raise ValueError(_('Transformation parameters must be finite.'))
+        if transform == 'skew':
+            angles = [args[i] if len(args) > i else kwargs[name]
+                      for i, name in enumerate(('angle_x', 'angle_y'))]
+            if any(math.isclose(float(angle) % 180, 90, abs_tol=1e-12) for angle in angles):
+                raise ValueError(_('Invalid skew angle.'))
+        if transform == 'buffer':
+            value = args[0] if args else kwargs['value']
+            factor = args[2] if len(args) > 2 else kwargs.get('factor')
+            if not math.isfinite(float(value)) or (factor and float(value) <= 0):
+                raise ValueError(_('Invalid buffer value.'))
         matrix = AppGeoEditor.transform_matrix(transform, *args, **kwargs)
-        for shape in selected:
+        if matrix is not None:
+            if not all(math.isfinite(value) for value in matrix):
+                raise ValueError(_('Transformation matrix must be finite.'))
+            a, b, d, e = matrix[:4]
+            if transform == 'scale':
+                if a == 0 or e == 0:
+                    raise ValueError(_('Transformation matrix is singular.'))
+            else:
+                magnitude = max(abs(a), abs(b), abs(d), abs(e))
+                if magnitude == 0 or abs((a / magnitude) * (e / magnitude) -
+                                         (b / magnitude) * (d / magnitude)) <= 1e-12:
+                    raise ValueError(_('Transformation matrix is singular.'))
+            with np.errstate(over='ignore', invalid='ignore'):
+                geometries = affine_geometry_many([shape.geo for shape in selected], matrix)
+            if (not shapely.is_valid(geometries).all() or shapely.is_empty(geometries).any() or
+                    not np.isfinite(shapely.get_coordinates(geometries)).all()):
+                raise ValueError(_('Invalid transformed geometry.'))
+        else:
+            geometries = [shape.geo for shape in selected]
+        for shape, geometry in zip(selected, geometries):
             # Keep the indexed geometry unchanged until replace() removes its old points.
-            result = DrawToolShape(shape.geo)
-            result.data = shape.data.copy()
-            getattr(result, transform)(*args, **kwargs)
+            result = DrawToolShape(geometry)
+            result.data = deepcopy(shape.data)
+            if matrix is None:
+                getattr(result, transform)(*args, **kwargs)
             result.data['bounds'] = result.bounds()
             self._collect_shape(result, transformed)
             if matrix is not None:
@@ -4753,13 +4792,14 @@ class DrawToolShape(object):
         except AttributeError:
             log.debug("DrawToolShape.scale() --> Failed to scale. No shape selected")
 
-    def buffer(self, value, join=None, factor=None):
+    def buffer(self, value, join=None, factor=None, quad_segs=32):
         """
         Create a buffered geometry
 
         :param value:   the distance to which to buffer
         :param join:    the type of connections between nearby buffer lines
         :param factor:  a scaling factor which will do a "sort of" buffer
+        :param quad_segs:   the segments of a quarter circle of a round join
         :return:        None
         """
 
@@ -4773,7 +4813,7 @@ class DrawToolShape(object):
                 if factor:
                     return scale(geom, xfact=value, yfact=value, origin='center')
                 else:
-                    return geom.buffer(value, quad_segs=32, join_style=join)
+                    return geom.buffer(value, quad_segs=quad_segs, join_style=join)
 
         try:
             self.geo = buffer_recursion(self.geo)
@@ -4952,6 +4992,14 @@ class FCShapeTool(DrawTool):
 
         self.name = None
 
+    def steps(self, radius):
+        """The segments of a full circle of this radius, as the preference "Circles" of Geometry sets them."""
+        return object_circle_steps(self.draw_app.app.options, 'geometry', radius, self.draw_app.app.app_units)
+
+    def quad_segs(self, radius):
+        """The Shapely buffer quad_segs of a circle of this radius."""
+        return object_quad_segs(self.draw_app.app.options, 'geometry', radius, self.draw_app.app.app_units)
+
     def make(self):
         pass
 
@@ -4990,13 +5038,6 @@ class FCCircle(FCShapeTool):
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
         self.draw_app.app.inform.emit(_("Click on Center point ..."))
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "geometry_circle_steps",
-            self.draw_app.app.defaults.get(
-                "geometry_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-            )
-        )
 
     def click(self, point):
         try:
@@ -5071,7 +5112,7 @@ class FCCircle(FCShapeTool):
 
                 radius = np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
                 self.ui.radius_x_entry.set_value(radius)
-                util_geo = Point(p1).buffer(radius, int(self.steps_per_circ))
+                util_geo = Point(p1).buffer(radius, self.quad_segs(radius))
                 self.util_geo = util_geo
                 return DrawToolUtilityShape(util_geo)
         else:  # ellipse
@@ -5098,7 +5139,7 @@ class FCCircle(FCShapeTool):
             else:
                 return
 
-            circle_geo = Point((p1[0], p1[1])).buffer(1)
+            circle_geo = Point((p1[0], p1[1])).buffer(1, self.quad_segs(max(radius, axis_min_radius)))
             util_geo = scale(circle_geo, radius, axis_min_radius)
             if angle != 0:
                 util_geo = rotate(util_geo, angle)
@@ -5188,8 +5229,9 @@ class FCCircle(FCShapeTool):
                 valid = False
             if not valid:
                 return _("Enter positive finite radii and finite center coordinates and angle.")
-            self.util_geo = Point((x, y)).buffer(new_radius_x, int(self.steps_per_circ)) if linked else \
-                rotate(scale(Point((x, y)).buffer(1), new_radius_x, new_radius_y), angle)
+            self.util_geo = Point((x, y)).buffer(new_radius_x, self.quad_segs(new_radius_x)) if linked else \
+                rotate(scale(Point((x, y)).buffer(1, self.quad_segs(max(new_radius_x, new_radius_y))),
+                             new_radius_x, new_radius_y), angle)
             if self.make() == 'fail':
                 return 'fail'
             if self.draw_app.on_shape_complete() == 'fail':
@@ -5209,7 +5251,6 @@ class FCCircle(FCShapeTool):
         # p1 = self.points[0]
         # p2 = self.points[1]
         # radius = distance(p1, p2)
-        # circle_shape = Point(p1).buffer(radius, int(self.steps_per_circ / 4)).exterior
 
         if self.util_geo is None or self.util_geo.is_empty or not self.util_geo.is_valid or \
                 not math.isfinite(self.util_geo.area) or self.util_geo.area == 0:
@@ -5273,13 +5314,6 @@ class FCArc(FCShapeTool):
 
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "geometry_circle_steps",
-            self.draw_app.app.defaults.get(
-                "geometry_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-            )
-        )
 
     def click(self, point):
         try:
@@ -5358,7 +5392,7 @@ class FCArc(FCShapeTool):
                 stopangle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
 
                 return DrawToolUtilityShape([LineString(arc(center, radius, startangle, stopangle,
-                                                            self.direction, self.steps_per_circ)),
+                                                            self.direction, self.steps(radius))),
                                              Point(center)])
 
             elif self.mode == '132':
@@ -5377,7 +5411,7 @@ class FCArc(FCShapeTool):
                 stopangle = np.arctan2(p3[1] - center[1], p3[0] - center[0])
 
                 return DrawToolUtilityShape([LineString(arc(center, radius, startangle, stopangle,
-                                                            direction, self.steps_per_circ)),
+                                                            direction, self.steps(radius))),
                                              Point(center), Point(p1), Point(p3)])
 
             else:  # '12c'
@@ -5410,7 +5444,7 @@ class FCArc(FCShapeTool):
                 stopangle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
 
                 return DrawToolUtilityShape([LineString(arc(center, radius, startangle, stopangle,
-                                                            self.direction, self.steps_per_circ)),
+                                                            self.direction, self.steps(radius))),
                                              Point(center)])
 
         return None
@@ -5426,7 +5460,7 @@ class FCArc(FCShapeTool):
             startangle = np.arctan2(p1[1] - center[1], p1[0] - center[0])
             stopangle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
             self.geometry = DrawToolShape(LineString(arc(center, radius, startangle, stopangle,
-                                                         self.direction, self.steps_per_circ)))
+                                                         self.direction, self.steps(radius))))
 
         elif self.mode == '132':
             p1 = np.array(self.points[0])
@@ -5440,7 +5474,7 @@ class FCArc(FCShapeTool):
             stopangle = np.arctan2(p3[1] - center[1], p3[0] - center[0])
 
             self.geometry = DrawToolShape(LineString(arc(center, radius, startangle, stopangle,
-                                                         direction, self.steps_per_circ)))
+                                                         direction, self.steps(radius))))
 
         else:  # self.mode == '12c'
             p1 = np.array(self.points[0])
@@ -5473,7 +5507,7 @@ class FCArc(FCShapeTool):
             stopangle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
 
             self.geometry = DrawToolShape(LineString(arc(center, radius, startangle, stopangle,
-                                                         self.direction, self.steps_per_circ)))
+                                                         self.direction, self.steps(radius))))
         self.complete = True
 
         self.draw_app.app.jump_signal.disconnect()
@@ -5606,23 +5640,11 @@ class FCRectangle(FCShapeTool):
             if corner_type == 'r':
                 util_geo = box(minx, miny, maxx, maxy).buffer(
                     corner_radius, join_style=base.JOIN_STYLE.round,
-                    quad_segs=self.draw_app.app.options.get(
-                        "geometry_circle_steps",
-                        self.draw_app.app.defaults.get(
-                            "geometry_circle_steps",
-                            self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-                        )
-                    )).exterior
+                    quad_segs=self.quad_segs(corner_radius)).exterior
             elif corner_type == 'b':
                 util_geo = box(minx, miny, maxx, maxy).buffer(
                     corner_radius, join_style=base.JOIN_STYLE.bevel,
-                    quad_segs=self.draw_app.app.options.get(
-                        "geometry_circle_steps",
-                        self.draw_app.app.defaults.get(
-                            "geometry_circle_steps",
-                            self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-                        )
-                    )).exterior
+                    quad_segs=self.quad_segs(corner_radius)).exterior
             else:  # 's' - square
                 util_geo = base_util_geo.exterior
 
@@ -6820,6 +6842,10 @@ class FCCopy(FCShapeTool):
             if self.copy_tool.ui.array_type_radio.get_value() == 'circular':
                 geometry = geometry[:-1]
         self.geometry = [DrawToolShape(shp) for shp in geometry]
+        selected = list(self.draw_app.get_selected())
+        for i, result in enumerate(self.geometry):
+            result.data = deepcopy(selected[i % len(selected)].data)
+            result.data['bounds'] = result.bounds()
 
         self.complete = True
         self.origin = None
@@ -7033,7 +7059,9 @@ class FCCopy(FCShapeTool):
                 x = radius * math.cos(angle_radians + ini_angle)
                 y = radius * math.sin(angle_radians + ini_angle)
 
-            for geo_sol in translate_geometry(geo_source, x, y):
+            rotation = -angle * i if direction == 'CW' else angle * i
+            rotated = affine_geometry_many(geo_source, affine_rotate_matrix(rotation, self.origin))
+            for geo_sol in translate_geometry(rotated, x, y):
                 circular_geo.append(DrawToolShape(geo_sol))
 
         return circular_geo

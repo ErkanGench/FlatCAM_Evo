@@ -25,6 +25,7 @@ from appEditors.vertex_ops import SUPPORTED_TYPES, DEFAULT_CIRCLE_STEPS, vertex_
     edit_vertex, check_vertex_result, contrast_color
 from appEditors.segment_drag import SegmentDrag, CLICK_DRAG_THRESHOLD_PX
 import appTranslation as fcTranslate
+from camlib import object_circle_steps
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -47,11 +48,12 @@ def xy(pos):
 
 class VertexGrips:
 
-    def __init__(self, editor, geometry=None, steps_option='geometry_circle_steps', snapshot=None):
+    def __init__(self, editor, geometry=None, steps_option=None, snapshot=None):
         """
         :param geometry:     callable(shape) -> the shapely geometry to edit, None for a shape without grips. It may
                              raise ValueError (the message is shown). Default: shape.geo.
-        :param steps_option: the application option with the circle steps of new arcs
+        :param steps_option: a function of the radius that gives the circle steps of new arcs, or the application
+                             option with them. Default: the Geometry preference "Circles" (adaptive or fixed)
         :param snapshot:     callable() -> the state of the editor storage. If it changed between show() and a press,
                              or between a press and the release, the grips are rebuilt and nothing is committed.
         """
@@ -80,6 +82,11 @@ class VertexGrips:
         return self.editor.canvas.pixel_size()
 
     def steps(self):
+        if callable(self.steps_option):
+            return self.steps_option
+        if self.steps_option is None:
+            app = self.editor.app
+            return lambda radius: object_circle_steps(app.options, 'geometry', radius, app.app_units)
         return self.editor.app.options.get(self.steps_option, DEFAULT_CIRCLE_STEPS)
 
     def grid_step(self):

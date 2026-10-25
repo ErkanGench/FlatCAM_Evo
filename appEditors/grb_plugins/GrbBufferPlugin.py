@@ -1,7 +1,7 @@
 
 from PyQt6 import QtWidgets
 from appTool import AppToolEditor
-from appEditors.grb_plugins.GrbHistory import gerber_operation
+from appEditors.grb_plugins.GrbCommon import gerber_quad
 from appEditors.grb_plugins.GrbTransformationPlugin import buffer_selection
 import math
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCDoubleSpinner, FCComboBox
@@ -85,7 +85,7 @@ class BufferEditorTool(AppToolEditor):
         self.draw_app.select_tool("select")
         self.app.ui.notebook.callback_on_close = lambda: None
 
-    def on_buffer(self):
+    def on_buffer(self, on_commit=None):
         try:
             buffer_distance = float(self.ui.buffer_distance_entry.get_value())
         except ValueError:
@@ -100,7 +100,7 @@ class BufferEditorTool(AppToolEditor):
         # the cb index start from 0 but the join styles for the buffer start from 1 therefore the adjustment
         # I populated the combobox such that the index coincide with the join styles value (which is really an INT)
         join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}[self.ui.buffer_corner_cb.currentIndex() + 1]
-        self.buffer(buffer_distance, join_style)
+        return self.buffer(buffer_distance, join_style, on_commit=on_commit)
 
     # def on_buffer_int(self):
     #     try:
@@ -136,13 +136,16 @@ class BufferEditorTool(AppToolEditor):
     #     join_style = self.ui.buffer_corner_cb.currentIndex() + 1
     #     self.buffer_ext(buffer_distance, join_style)
 
-    @gerber_operation(_('Buffer'))
-    def buffer(self, buff_value, join_style):
+    def buffer(self, buff_value, join_style, on_commit=None):
         self.app.log.debug("AppGerberEditor.BufferEditorTool.buffer()")
         if not math.isfinite(float(buff_value)):
+            if self.draw_app.history.depth:
+                self.draw_app.history.failed = True
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Buffer distance must be finite."))
             return 'fail'
         if not self.draw_app.ui.apertures_table.selectedItems():
+            if self.draw_app.history.depth:
+                self.draw_app.history.failed = True
             self.app.inform.emit('[WARNING_NOTCL] %s' %
                                  _("No aperture to buffer. Select at least one aperture and try again."))
             return 'fail'
@@ -152,12 +155,14 @@ class BufferEditorTool(AppToolEditor):
         shapes = list(dict.fromkeys(shape for key, aperture in self.draw_app.storage_dict.items()
                                     if str(key) in codes for shape in aperture.get('geometry', ()) if shape in selected))
         if not shapes:
+            if self.draw_app.history.depth:
+                self.draw_app.history.failed = True
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
             return 'fail'
-        steps = int(self.app.options.get('gerber_circle_steps', 64))
-        buffer_selection(shapes, float(buff_value), join_style, steps)
-        self.draw_app.plot_transformed(shapes)
-        self.app.inform.emit('[success] %s' % _("Done."))
+        quad_segs = gerber_quad(self.app, float(buff_value))
+        return self.draw_app.submit_geometry(
+            _("Buffer"), lambda detached: buffer_selection(detached, float(buff_value), join_style, quad_segs),
+            shapes=shapes, success=_("Done."), on_commit=on_commit)
 
     def hide_tool(self):
         self.ui.buffer_tool_frame.hide()
@@ -204,7 +209,7 @@ class BufferEditorUI:
         # Buffer distance
         self.buffer_distance_entry = FCDoubleSpinner()
         self.buffer_distance_entry.set_precision(self.decimals)
-        self.buffer_distance_entry.set_range(0.0000, 10000.0000)
+        self.buffer_distance_entry.set_range(-10000.0000, 10000.0000)
         param_grid.addWidget(FCLabel('%s:' % _("Buffer distance")), 0, 0)
         param_grid.addWidget(self.buffer_distance_entry, 0, 1)
 

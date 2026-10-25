@@ -73,7 +73,7 @@ def wait_for(predicate):
 
 def test_group_move_keeps_gui_alive_and_finalizes_after_export(qt_app):
     app = make_app()
-    events, threads, tasks, ticks = [], [], [], []
+    events, threads, tasks, gui_events = [], [], [], []
     entered, release = threading.Event(), threading.Event()
     first = Layer(10.0, events, threads, entered, release)
     second = Layer(20.0, events, threads)
@@ -86,21 +86,19 @@ def test_group_move_keeps_gui_alive_and_finalizes_after_export(qt_app):
     ops.on_move2origin()
     app.collection.get_selected.return_value = [outsider]
     gui_thread = QtCore.QThread.currentThread()
-    heartbeat = QtCore.QTimer()
-    heartbeat.setInterval(5)
-    heartbeat.timeout.connect(lambda: ticks.append(1))
-    heartbeat.start()
     worker = threading.Thread(target=lambda: tasks[0]['fcn'](*tasks[0]['params']), daemon=True)
     worker.start()
     try:
         wait_for(entered.is_set)
-        wait_for(lambda: len(ticks) >= 3)
+        # A queued GUI event must run while export is blocked; periodic timer delivery depends on suite load.
+        QtCore.QTimer.singleShot(0, lambda: gui_events.append(QtCore.QThread.currentThread()))
+        wait_for(lambda: bool(gui_events))
+        assert gui_events == [gui_thread] and worker.is_alive()
         assert not any(name == 'ui' or name == 'fit' for name, thread in threads)
         assert not any('Origin set' in event for event in events)
     finally:
         release.set()
         worker.join(3)
-        heartbeat.stop()
     assert not worker.is_alive()
     wait_for(lambda: any('Origin set' in event for event in events))
     assert first.x == 0.0 and second.x == 10.0 and outsider.x == 100.0

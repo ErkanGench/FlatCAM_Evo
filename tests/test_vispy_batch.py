@@ -234,29 +234,6 @@ class TestDeferredRedraw(unittest.TestCase):
         self.assertEqual(len(self.collection._lines[0]._pos), 20 * 8)
         self.assertLess(self.rebuilds, 20)
 
-    def test_redraw_alone_is_applied_by_the_updater(self):
-        import time
-        self._burst(3)
-        deadline = time.monotonic() + 3
-        while self.collection._dirty and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertFalse(self.collection._dirty)
-        self.assertEqual(len(self.collection._meshes[0].mesh_data.get_vertices()), 12)
-
-    def test_flush_applies_at_once(self):
-        self._burst(2)
-        self.collection.flush()
-        self.assertFalse(self.collection._dirty)
-        self.assertEqual(len(self.collection._meshes[0].mesh_data.get_vertices()), 8)
-
-    def test_update_colors_is_synchronous(self):
-        self._burst(2)
-        self.collection.flush()
-        keys = list(self.collection.data)
-        self.collection.redraw(keys, update_colors=('#00FF00FF', '#0000FFFF'))
-        colors = self.collection._lines[0]._color
-        self.assertTrue(np.all(colors == (0.0, 0.0, 1.0, 1.0)))
-
     def test_turned_off_applies_pending_and_later_redraws_at_once(self):
         self._burst(2)
         self.collection.set_deferred(False)

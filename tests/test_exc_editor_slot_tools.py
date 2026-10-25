@@ -194,14 +194,17 @@ def drill_job_gcode(tools):
 
 
 def drills_by_tool_change(gcode):
-    """{tool change message: sorted drill positions after it}"""
-    out, message = {}, None
+    """{tool change message: sorted drill positions after it}; a drill is a rapid X-Y move followed by a plunge"""
+    out, message, rapid = {}, None, None
     for line in gcode.splitlines():
         if line.startswith('(MSG, Change to Tool Dia'):
             message = line
             out[message] = []
         elif message and re.fullmatch(r'G00 X-?\d+\.\d{4} Y-?\d+\.\d{4}', line):
-            out[message].append(line[4:])
+            rapid = line[4:]
+        elif message and rapid and line.startswith('G01 Z'):
+            out[message].append(rapid)
+            rapid = None
     return {msg: sorted(positions) for msg, positions in out.items()}
 
 

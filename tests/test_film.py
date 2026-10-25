@@ -3,6 +3,7 @@ Tests for the Film plugin: the transformations, the SVG documents and the export
 No Qt application is necessary: the plugin is made without its __init__().
 """
 import os
+import struct
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from reportlab.lib.units import mm
 from shapely import box, LineString, Polygon, GeometryCollection, MultiPolygon
 from shapely.ops import unary_union
 
@@ -52,9 +54,9 @@ class Value:
         return self.value
 
 
-def make_film(objects, boundary=0.0):
+def make_film(objects, boundary=0.0, screen_dpi=96.0):
     film = Film.__new__(Film)
-    screen = SimpleNamespace(logicalDotsPerInch=lambda: 96.0)
+    screen = SimpleNamespace(logicalDotsPerInch=lambda: screen_dpi)
     film.app = SimpleNamespace(
         log=logging.getLogger('test_film'),
         options={'global_open_style': True},
@@ -65,6 +67,7 @@ def make_film(objects, boundary=0.0):
     )
     film.units = 'MM'
     film.ui = SimpleNamespace(pagesize_combo=Value('A4'), orientation_radio=Value('p'),
+                              pagesize={'Bounds': None, 'A4': (210 * mm, 297 * mm)},
                               png_dpi_spinner=Value(96), boundary_entry=Value(boundary))
     return film
 
@@ -176,6 +179,58 @@ class TestExportFilm(unittest.TestCase):
                 filename = os.path.join(tmp, 'film.' + ftype)
                 film.export_negative_handler('part', 'part', filename, 1.0, use_thread=False, ftype=ftype)
                 self.assertGreater(os.path.getsize(filename), 0, ftype)
+
+    def png_size(self, filename):
+        with open(filename, 'rb') as f:
+            header = f.read(24)
+        return struct.unpack('>II', header[16:24])
+
+    def test_png_renders_the_requested_dpi_with_the_border(self):
+        part = FakeObject('part', box(0, 0, 100, 100))
+        for dpi, expected in ((96, 454), (192, 907)):
+            film = make_film({'part': part}, boundary=10.0)
+            film.ui.png_dpi_spinner = Value(dpi)
+            with tempfile.TemporaryDirectory() as tmp:
+                filename = os.path.join(tmp, 'film.png')
+                film.export_positive_handler('part', 'part', filename, use_thread=False, ftype='png')
+                width, height = self.png_size(filename)
+            self.assertAlmostEqual(width, expected, delta=2, msg='%s DPI width' % dpi)
+            self.assertEqual(width, height, '%s DPI is square' % dpi)
+
+    def test_png_rejects_an_invalid_dpi(self):
+        part = FakeObject('part', box(0, 0, 10, 10))
+        film = make_film({'part': part}, boundary=1.0)
+        film.ui.png_dpi_spinner = Value(0)
+        with tempfile.TemporaryDirectory() as tmp:
+            filename = os.path.join(tmp, 'film.png')
+            film.export_positive_handler('part', 'part', filename, use_thread=False, ftype='png')
+            self.assertFalse(os.path.exists(filename))
+        self.assertEqual(film.app.file_saved.calls, [])
+        self.assertTrue(any('ERROR' in call[0] for call in film.app.inform.calls))
+
+    def test_pdf_validation_uses_the_transformed_artwork(self):
+        part = FakeObject('part', box(10, 10, 20, 20))
+        frame = FakeObject('frame', box(0, 0, 100, 100))
+        film = make_film({'part': part, 'frame': frame})
+        with tempfile.TemporaryDirectory() as tmp:
+            filename = os.path.join(tmp, 'film.pdf')
+            film.export_positive_handler('part', 'frame', filename, use_thread=False, ftype='pdf',
+                                         scale_factor_x=2.0, scale_factor_y=2.0, scale_type=1)
+            self.assertFalse(os.path.exists(filename))
+        self.assertEqual(film.app.file_saved.calls, [])
+        self.assertTrue(any('ERROR' in call[0] for call in film.app.inform.calls))
+
+    def test_pdf_accepts_artwork_transformed_onto_the_page(self):
+        part = FakeObject('part', box(230, 10, 240, 20))
+        frame = FakeObject('frame', box(0, 0, 100, 100))
+        film = make_film({'part': part, 'frame': frame})
+        with tempfile.TemporaryDirectory() as tmp:
+            filename = os.path.join(tmp, 'film.pdf')
+            film.export_positive_handler('part', 'frame', filename, use_thread=False, ftype='pdf',
+                                         scale_factor_x=0.5, scale_factor_y=0.5, scale_type=1)
+            self.assertGreater(os.path.getsize(filename), 0)
+        self.assertEqual(film.app.file_saved.calls, [('SVG', filename)])
+
 
     def test_missing_object_returns_a_message(self):
         film = make_film({})

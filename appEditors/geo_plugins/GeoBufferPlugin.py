@@ -4,6 +4,8 @@ from appTool import AppToolEditor
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCDoubleSpinner, FCComboBox
 
 from shapely import Polygon
+from camlib import object_quad_segs, flatten_shapely_geometry
+from math import isfinite
 
 import gettext
 import appTranslation as fcTranslate
@@ -130,11 +132,27 @@ class BufferSelectionTool(AppToolEditor):
         join_style = {1: 'round', 2: 'mitre', 3: 'bevel'}.get(self.ui.buffer_corner_cb.currentIndex() + 1)
         self.buffer_ext(buffer_distance, join_style)
 
+    @staticmethod
+    def buffer_contours(geometry, distance, quad_segs, join_style):
+        contours = []
+        for geo in flatten_shapely_geometry(geometry):
+            if geo.is_valid and geo.geom_type in ('Polygon', 'LineString', 'LinearRing'):
+                if geo.geom_type != 'Polygon' and geo.is_ring:
+                    geo = Polygon(geo)
+                for part in flatten_shapely_geometry(geo.buffer(
+                        distance, quad_segs=quad_segs, join_style=join_style)):
+                    if part.geom_type == 'Polygon':
+                        contours.extend([part.exterior, *part.interiors])
+        return contours
+
     def buffer(self, buf_distance, join_style):
         def work_task(geo_editor):
             with geo_editor.app.proc_container.new(_("Working...")):
                 selected = geo_editor.get_selected()
 
+                if not isinstance(buf_distance, (int, float)) or not isfinite(buf_distance):
+                    geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Invalid distance."))
+                    return 'fail'
                 if buf_distance < 0:
                     msg = '[ERROR_NOTCL] %s' % _("Negative buffer value is not accepted. "
                                                  "Use Buffer interior to generate an 'inside' shape")
@@ -149,59 +167,21 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Nothing selected."))
                     return 'fail'
 
-                if not isinstance(buf_distance, float):
-                    geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Invalid distance."))
-
-                    # deselect everything
-                    geo_editor.selected = []
-                    geo_editor.plot_all()
-                    return 'fail'
-
+                # the round joins have the radius of the buffer distance
+                quad_segs = object_quad_segs(geo_editor.app.options, 'geometry', buf_distance, geo_editor.app.app_units)
                 results = []
-                usable_resolution = int(int(geo_editor.app.options.get(
-                    "geometry_circle_steps",
-                    geo_editor.app.defaults.get(
-                        "geometry_circle_steps",
-                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                    )
-                )) / 4)
                 for t in selected:
-                    if not t.geo.is_empty and t.geo.is_valid:
-                        if t.geo.geom_type == 'Polygon':
-                            results.append(
-                                t.geo.exterior.buffer(
-                                    buf_distance - 1e-10,
-                                    quad_segs=usable_resolution,
-                                    join_style=join_style)
-                            )
-                        elif t.geo.geom_type == 'MultiLineString':
-                            for line in t.geo.geoms:
-                                if line.is_ring:
-                                    b_geo = Polygon(line)
-                                else:
-                                    b_geo = line
-                                results.append(b_geo.buffer(
-                                    buf_distance - 1e-10,
-                                    quad_segs=usable_resolution,
-                                    join_style=join_style).exterior)
-                                results.append(b_geo.buffer(
-                                    -buf_distance + 1e-10,
-                                    quad_segs=usable_resolution,
-                                    join_style=join_style).exterior)
-                        elif t.geo.geom_type in ['LineString', 'LinearRing']:
-                            if t.geo.is_ring:
-                                b_geo = Polygon(t.geo)
-                            else:
-                                b_geo = t.geo
-                            results.append(b_geo.buffer(
-                                buf_distance - 1e-10,
-                                quad_segs=usable_resolution,
-                                join_style=join_style).exterior)
-                            results.append(b_geo.buffer(
-                                -buf_distance + 1e-10,
-                                quad_segs=usable_resolution,
-                                join_style=join_style).exterior
-                                           )
+                    for geo in flatten_shapely_geometry(t.geo):
+                        if not geo.is_valid:
+                            continue
+                        if geo.geom_type == 'Polygon':
+                            results.extend(flatten_shapely_geometry(geo.boundary.buffer(
+                                buf_distance, quad_segs=quad_segs, join_style=join_style)))
+                        else:
+                            results.extend(BufferSelectionTool.buffer_contours(
+                                geo, buf_distance, quad_segs, join_style))
+                            results.extend(BufferSelectionTool.buffer_contours(
+                                geo, -buf_distance, quad_segs, join_style))
 
                 if not results:
                     geo_editor.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed, the result is empty."))
@@ -210,7 +190,8 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.plot_all()
                     return 'fail'
 
-                geo_editor.add_shape(results)
+                if geo_editor.add_shape(results) == 'fail':
+                    return 'fail'
                 geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
@@ -221,6 +202,9 @@ class BufferSelectionTool(AppToolEditor):
             with geo_editor.app.proc_container.new(_("Working...")):
                 selected = geo_editor.get_selected()
 
+                if not isinstance(buf_distance, (int, float)) or not isfinite(buf_distance):
+                    geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Invalid distance."))
+                    return 'fail'
                 if buf_distance < 0:
                     geo_editor.app.inform.emit('[ERROR_NOTCL] %s' % _("Negative buffer value is not accepted."))
                     # deselect everything
@@ -232,61 +216,12 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Nothing selected."))
                     return 'fail'
 
-                if not isinstance(buf_distance, float):
-                    geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Invalid distance."))
-                    # deselect everything
-                    geo_editor.selected = []
-                    geo_editor.plot_all()
-                    return 'fail'
-
+                # the round joins have the radius of the buffer distance
+                quad_segs = object_quad_segs(geo_editor.app.options, 'geometry', buf_distance, geo_editor.app.app_units)
                 results = []
                 for t in selected:
-                    if not t.geo.is_empty and t.geo.is_valid:
-                        if t.geo.geom_type == 'Polygon':
-                            results.append(t.geo.exterior.buffer(
-                                -buf_distance + 1e-10,
-                                quad_segs=int(int(geo_editor.app.options.get(
-                                    "geometry_circle_steps",
-                                    geo_editor.app.defaults.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                    )
-                                )) / 4),
-                                join_style=join_style).exterior
-                                           )
-                        elif t.geo.geom_type == 'MultiLineString':
-                            for line in t.geo.geoms:
-                                if line.is_ring:
-                                    b_geo = Polygon(line)
-                                else:
-                                    b_geo = line
-                                results.append(b_geo.buffer(
-                                    -buf_distance + 1e-10,
-                                    quad_segs=int(int(geo_editor.app.options.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.get(
-                                            "geometry_circle_steps",
-                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                        )
-                                    )) / 4),
-                                    join_style=join_style).exterior
-                                               )
-                        elif t.geo.geom_type in ['LineString', 'LinearRing']:
-                            if t.geo.is_ring:
-                                b_geo = Polygon(t.geo)
-                            else:
-                                b_geo = t.geo
-                            results.append(b_geo.buffer(
-                                -buf_distance + 1e-10,
-                                quad_segs=int(int(geo_editor.app.options.get(
-                                    "geometry_circle_steps",
-                                    geo_editor.app.defaults.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                    )
-                                )) / 4),
-                                join_style=join_style).exterior
-                                           )
+                    results.extend(BufferSelectionTool.buffer_contours(
+                        t.geo, -buf_distance, quad_segs, join_style))
 
                 if not results:
                     geo_editor.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed, the result is empty."))
@@ -295,7 +230,8 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.plot_all()
                     return 'fail'
 
-                geo_editor.add_shape(results)
+                if geo_editor.add_shape(results) == 'fail':
+                    return 'fail'
                 geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 
@@ -306,6 +242,9 @@ class BufferSelectionTool(AppToolEditor):
             with geo_editor.app.proc_container.new(_("Working...")):
                 selected = geo_editor.get_selected()
 
+                if not isinstance(buf_distance, (int, float)) or not isfinite(buf_distance):
+                    geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Invalid distance."))
+                    return 'fail'
                 if buf_distance < 0:
                     msg = '[ERROR_NOTCL] %s' % _("Negative buffer value is not accepted. "
                                                  "Use Buffer interior to generate an 'inside' shape")
@@ -313,67 +252,18 @@ class BufferSelectionTool(AppToolEditor):
                     # deselect everything
                     geo_editor.selected = []
                     geo_editor.plot_all()
-                    return
+                    return 'fail'
 
                 if len(selected) == 0:
                     geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Nothing selected."))
-                    return
+                    return 'fail'
 
-                if not isinstance(buf_distance, float):
-                    geo_editor.app.inform.emit('[WARNING_NOTCL] %s' % _("Invalid distance."))
-                    # deselect everything
-                    geo_editor.selected = []
-                    geo_editor.plot_all()
-                    return
-
+                # the round joins have the radius of the buffer distance
+                quad_segs = object_quad_segs(geo_editor.app.options, 'geometry', buf_distance, geo_editor.app.app_units)
                 results = []
                 for t in selected:
-                    if not t.geo.is_empty and t.geo.is_valid:
-                        if t.geo.geom_type == 'Polygon':
-                            results.append(t.geo.exterior.buffer(
-                                buf_distance - 1e-10,
-                                quad_segs=int(int(geo_editor.app.options.get(
-                                    "geometry_circle_steps",
-                                    geo_editor.app.defaults.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                    )
-                                )) / 4),
-                                join_style=join_style).exterior
-                                           )
-                        elif t.geo.geom_type == 'MultiLineString':
-                            for line in t.geo.geoms:
-                                if line.is_ring:
-                                    b_geo = Polygon(line)
-                                else:
-                                    b_geo = line
-                                results.append(b_geo.buffer(
-                                    buf_distance - 1e-10,
-                                    quad_segs=int(int(geo_editor.app.options.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.get(
-                                            "geometry_circle_steps",
-                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                        )
-                                    )) / 4),
-                                    join_style=join_style).exterior
-                                               )
-                        elif t.geo.geom_type in ['LineString', 'LinearRing']:
-                            if t.geo.is_ring:
-                                b_geo = Polygon(t.geo)
-                            else:
-                                b_geo = t.geo
-                            results.append(b_geo.buffer(
-                                buf_distance - 1e-10,
-                                quad_segs=int(int(geo_editor.app.options.get(
-                                    "geometry_circle_steps",
-                                    geo_editor.app.defaults.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                    )
-                                )) / 4),
-                                join_style=join_style).exterior
-                                           )
+                    results.extend(BufferSelectionTool.buffer_contours(
+                        t.geo, buf_distance, quad_segs, join_style))
 
                 if not results:
                     geo_editor.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed, the result is empty."))
@@ -382,7 +272,8 @@ class BufferSelectionTool(AppToolEditor):
                     geo_editor.plot_all()
                     return 'fail'
 
-                geo_editor.add_shape(results)
+                if geo_editor.add_shape(results) == 'fail':
+                    return 'fail'
                 geo_editor.plot_changes()
                 geo_editor.app.inform.emit('[success] %s' % _("Done."))
 

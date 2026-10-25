@@ -11,11 +11,12 @@ from appHandlers.appHistory import HistoryManager, state_size
 _ = builtins.__dict__.get('_', gettext.gettext)
 
 
-def excellon_operation(label, generic=False):
+def excellon_operation(label, generic=False, selected=False):
     """Group the changes of the decorated method in one undo step.
 
     :param label:   label of the step; pass a literal wrapped in _() at the decoration site, so it is extractable
     :param generic: True for a wrapper operation: a nested operation gives its own label to the step
+    :param selected: Capture only source/target tools of a native selected-feature transform.
     """
     def decorate(method):
         @wraps(method)
@@ -24,7 +25,18 @@ def excellon_operation(label, generic=False):
             history = getattr(editor, 'history', None)
             if not isinstance(history, ExcellonHistory) or history.suspended:
                 return method(self, *args, **kwargs)
-            with history.operation(label, generic) as accepted:
+            scope = None
+            if selected and not history.depth:
+                scope = {key for key, storage in editor.storage_dict.items()
+                         if any(id(shape) in storage.indexes and
+                                storage.objects[storage.indexes[id(shape)]] is shape for shape in editor.selected)}
+                if (args[0] if args else kwargs.get('operation')) == 'scale':
+                    try:
+                        factor = float(args[1] if len(args) > 1 else kwargs.get('value', 1.0))
+                        scope.update(key * factor for key in tuple(scope))
+                    except (ValueError, TypeError, OverflowError):
+                        pass  # the native transform reports invalid input without changing storage
+            with history.operation(label, generic, scope=scope) as accepted:
                 if not accepted:
                     return 'fail'
                 result = method(self, *args, **kwargs)
@@ -134,12 +146,13 @@ class ExcellonHistory:
                 'modified': editor.is_modified, 'order': tuple(editor.storage_dict),
                 'aliases': dict(editor.olddia_newdia), 'tools': dict(editor.tool2tooldia)}
 
-    def counters(self):
-        return {name: {key: tuple(values) for key, values in getattr(self.editor, name).items()}
+    def counters(self, scope=None):
+        return {name: {key: tuple(values) for key, values in getattr(self.editor, name).items()
+                       if scope is None or key in scope}
                 for name in ('points_edit', 'slot_points_edit')}
 
     @contextmanager
-    def operation(self, label, generic=False):
+    def operation(self, label, generic=False, scope=None):
         if not self.ready() or self.pending is not None:
             yield False
             return
@@ -155,10 +168,11 @@ class ExcellonHistory:
         before, counters, storages, records = {}, {}, {}, {}
         if outer:
             before = self.state()
-            counters = self.counters()
+            counters = self.counters(scope)
             # Transient references only. Retained steps below contain only changed records;
             # immutable Shapely values aren't copied or serialized for every board edit.
-            storages = dict(self.editor.storage_dict)
+            storages = {key: storage for key, storage in self.editor.storage_dict.items()
+                        if scope is None or key in scope}
             records = {key: tuple((shape, shape.geo) for shape in storage.get_objects())
                        for key, storage in storages.items()}
             self.failed = False
@@ -171,7 +185,7 @@ class ExcellonHistory:
         finally:
             self.depth -= 1
             if outer:
-                step = self.delta(self.step_label, before, counters, records)
+                step = self.delta(self.step_label, before, counters, records, scope)
                 if self.failed:
                     for key in step['tools']:
                         if key in storages:
@@ -206,10 +220,10 @@ class ExcellonHistory:
                         self.editor.is_modified = before['modified']
                 self.notify()
 
-    def delta(self, label, before, counters, records):
+    def delta(self, label, before, counters, records, scope=None):
         tools = {}
         editor = self.editor
-        for key in set(records) | set(editor.storage_dict):
+        for key in (set(records) | set(editor.storage_dict) if scope is None else scope):
             old = records.get(key, ())
             new = tuple((shape, shape.geo) for shape in editor.storage_dict[key].get_objects()) \
                 if key in editor.storage_dict else ()
@@ -226,7 +240,7 @@ class ExcellonHistory:
             if removed or inserted or changed or (key in records) != (key in editor.storage_dict):
                 tools[key] = (key in records, key in editor.storage_dict, removed, inserted, changed)
         counter_delta = {}
-        for name, values in self.counters().items():
+        for name, values in self.counters(scope).items():
             for key in set(counters[name]) | set(values):
                 old, new = counters[name].get(key), values.get(key)
                 if old != new:

@@ -185,6 +185,165 @@ def test_dblsided_generated_holes_preserve_coincident_user_drills(fc, no_plot):
     assert exc.source_file
 
 
+def _drill_count(obj):
+    return sum(len(tool.get('drills') or ()) for tool in obj.tools.values())
+
+
+def _dbl_editor_save(drills, prepare=None):
+    """An Excellon editor round trip, committed with the tool reconstruction of the real save worker."""
+    from unittest.mock import Mock
+    from test_exc_editor_defects import qt_editor
+    from appEditors.appExcEditor import tools_with_data
+
+    _, editor = qt_editor(drills.units)
+    editor.edit_fcexcellon(drills)
+    if prepare is not None:
+        prepare(editor)
+    editor._save_excellon_in_place = Mock()
+    editor.update_fcexcellon(drills, in_place=True)
+    drills.tools = tools_with_data(drills.tools, editor.new_tools, editor.olddia_newdia,
+                                   editor.data_defaults, editor.decimals)
+    drills.create_geometry()
+    drills.regenerate_source()
+    return editor
+
+
+def test_dblsided_editor_round_trip_keeps_generated_holes_owned(fc, no_plot):
+    from appPlugins.ToolDblSided import DblSidedGen as gen
+
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_editor')
+    tool.ui.auto_align_cb.set_value(False)
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    tool.on_process()
+    assert _drill_count(drills) == 43
+    user = pads + (7, -3)
+    holes = _hole_xy([p for tool_dict in drills.tools.values() for p in tool_dict['drills']])
+    generated = [p for p in holes if _nearest(np.asarray([p]), user)[0] > 1e-6]
+    assert len(generated) == 3
+
+    # A user drill exactly on one of our holes is a separate feature; a save must keep both.
+    next(iter(drills.tools.values()))['drills'].append(Point(*generated[0]))
+    drills.create_geometry()
+    assert drills.regenerate_source()
+    assert _drill_count(drills) == 44
+    user = np.vstack([user, generated[0]])
+
+    _dbl_editor_save(drills)
+    tool.on_process()
+    holes = _hole_xy([p for tool_dict in drills.tools.values() for p in tool_dict['drills']])
+    assert len(holes) == 44
+    # only our 3 holes are regenerated; the 41 user drills (1 of them coincident) are kept
+    assert _drill_count(gen.source_view(drills)) == 41
+    assert _nearest(user, holes) == pytest.approx(np.zeros(len(user)))
+    generated = [p for p in holes if _nearest(np.asarray([p]), user)[0] > 1e-6]
+    assert len(generated) == 3
+
+    # Deleting 1 generated hole renumbers the others and moving another must not slide the ownership
+    # onto a user drill.
+    def remove_and_move(editor):
+        storage = next(iter(editor.storage_dict.values()))
+        removed = next(shape for shape in storage.get_objects()
+                       if np.allclose(shape.geo.centroid.coords[0], generated[1]))
+        storage.replace(removed=[removed], inserted=[])
+        moved_shape = next(shape for shape in storage.get_objects()
+                           if np.allclose(shape.geo.centroid.coords[0], generated[2]))
+        editor.selected = [moved_shape]
+        assert editor.transform_features('rotate', 90) != 'fail'
+
+    editor = _dbl_editor_save(drills, remove_and_move)
+    moved = editor.selected[0].geo.centroid.coords[0]
+    tool.on_process()
+    holes = _hole_xy([p for tool_dict in drills.tools.values() for p in tool_dict['drills']])
+    assert len(holes) == 44
+    assert not any(np.allclose(hole, moved) for hole in holes)
+    assert _nearest(user, holes) == pytest.approx(np.zeros(len(user)))
+    assert _drill_count(gen.source_view(drills)) == 41
+
+
+def test_dblsided_failed_separate_generation_restores_retired_holes(fc, no_plot, monkeypatch):
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_switch_fail')
+    tool.ui.auto_align_cb.set_value(False)
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    tool.on_process()
+    assert _drill_count(drills) == 43
+
+    tool.ui.append_drills_cb.set_value(False)
+    before = appHistory.object_state(drills)
+    collection = list(fc.collection.get_list())
+    monkeypatch.setattr(DblSidedTool, 'new_object', lambda *args, **kwargs: None)
+    tool.on_process()
+    assert appHistory.states_equal(before, appHistory.object_state(drills))
+    assert fc.collection.get_list() == collection
+
+
+@pytest.mark.parametrize('addition', ['none', 'slot'])
+def test_dblsided_switching_back_to_append_retires_the_separate_output(fc, no_plot, addition):
+    tool, top, bottom, drills, pads = _dbl_sources(fc, 'dbl_switch_back_' + addition)
+    tool.ui.auto_align_cb.set_value(False)
+    tool.ui.generate_cb.set_value(True)
+    tool.ui.append_drills_cb.set_value(True)
+    tool.ui.basic_drill_dia.set_value(0.8)
+    tool.on_process()
+    before = list(fc.collection.get_list())
+    tool.ui.append_drills_cb.set_value(False)
+    tool.ui.offset_entry.set_value(4)
+    tool.on_process()
+    output = next(obj for obj in fc.collection.get_list() if obj not in before)
+    uid = output.history_uid
+    assert _drill_count(output) == 3 and _drill_count(drills) == 40
+
+    # A user feature of the output belongs to the object, not to the plugin.
+    added_drills = int(addition == 'drill')
+    added_slots = int(addition == 'slot')
+    if added_drills or added_slots:
+        values = next(iter(output.tools.values()))
+        if added_drills:
+            values['drills'].append(Point(-60, -60))
+        else:
+            values['slots'].append((Point(-60, -60), Point(-50, -60)))
+        output.create_geometry()
+        assert output.regenerate_source()
+
+    # Back to append: only our holes leave the output, the user feature stays with it.
+    tool.ui.append_drills_cb.set_value(True)
+    tool.on_process()
+    assert _drill_count(drills) == 43
+    if not added_drills and not added_slots:
+        # it held only our holes, so it has nothing left to drill
+        assert fc.history.find(uid) is None
+    else:
+        assert fc.history.find(uid) is output
+        assert _drill_count(output) == added_drills
+        assert sum(len(t.get('slots') or ()) for t in output.tools.values()) == added_slots
+        # the exported text is the retained user geometry, not the retired holes
+        assert output.source_file
+        assert sum(line.startswith('X') for line in output.source_file.splitlines()) == added_drills
+        assert sum(line.startswith('G00X') for line in output.source_file.splitlines()) == added_slots
+
+    # One undo restores both outputs, one redo retires the output holes again.
+    _settle(fc)
+    assert fc.history.undo()
+    assert _drill_count(drills) == 40
+    if not added_drills and not added_slots:
+        restored = fc.history.find(uid)
+        assert restored is not None and _drill_count(restored) == 3
+    else:
+        assert _drill_count(output) == 3 + added_drills
+        assert sum(len(t.get('slots') or ()) for t in output.tools.values()) == added_slots
+    _settle(fc)
+    assert fc.history.redo()
+    assert _drill_count(drills) == 43
+    if not added_drills and not added_slots:
+        assert fc.history.find(uid) is None
+    else:
+        assert _drill_count(output) == added_drills
+        assert sum(len(t.get('slots') or ()) for t in output.tools.values()) == added_slots
+
+
 @pytest.mark.parametrize('diameter,holes', [(0, '(1,2)'), (1, '(1,2,3)'), (1, 'bad(')])
 def test_dblsided_invalid_holes_do_not_create(diameter, holes):
     from unittest.mock import Mock

@@ -63,7 +63,7 @@ def test_copy_2d_array_uses_relative_offsets():
 def test_buffer_accepts_multiline_sources():
     shape = DrawToolShape(MultiLineString([[(0, 0), (1, 0)], [(0, 2), (1, 2)]]))
     editor = batch_editor([shape], selected=[shape])
-    editor.app.options['geometry_circle_steps'] = 32
+    editor.app.options.update({'geometry_circle_steps_mode': 'fixed', 'geometry_circle_steps': 32})
 
     BufferSelectionTool.buffer(SimpleNamespace(app=editor.app, draw_app=editor), 0.1, 'round')
 
@@ -101,3 +101,17 @@ def test_batch_translation_preserves_mixed_dimensions_and_none():
     assert list(translate_geometry(line_3d, 2, 3).coords) == [(2, 3, 7), (3, 4, 8)]
 
 
+
+
+def test_buffer_follows_the_adaptive_circle_preference():
+    counts = {}
+    for mode, distance in (('adaptive', 0.05), ('adaptive', 5.0), ('fixed', 0.05), ('fixed', 5.0)):
+        shape = DrawToolShape(LineString([(0, 0), (1, 0)]))
+        editor = batch_editor([shape], selected=[shape])
+        editor.app.options.update({'geometry_circle_steps_mode': mode, 'geometry_circle_steps': 32})
+        BufferSelectionTool.buffer(SimpleNamespace(app=editor.app, draw_app=editor), distance, 'round')
+        counts[(mode, distance)] = max(len(s.geo.coords) for s in editor.storage.get_objects()
+                                       if s.geo.geom_type in ('LinearRing', 'LineString'))
+
+    assert counts[('adaptive', 0.05)] < counts[('adaptive', 5.0)]
+    assert counts[('fixed', 0.05)] == counts[('fixed', 5.0)]

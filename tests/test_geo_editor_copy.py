@@ -2,6 +2,8 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
+import pytest
+from shapely.affinity import rotate, translate
 
 from shapely.geometry import LineString, box
 
@@ -58,6 +60,47 @@ class TestGeoEditorCopy(unittest.TestCase):
         tool.click((1.0, 0.0))
         self.assertEqual([shp.geo.bounds[0] for shp in tool.geometry], [1.0, 11.0, 21.0])
 
+
+
+@pytest.mark.parametrize('mode,array_type', [('a', 'circular')])
+def test_copy_preserves_independent_metadata(mode, array_type):
+    sources = [DrawToolShape(box(0, 0, 1, 1)), DrawToolShape(LineString([(2, 0), (3, 1)]))]
+    for i, source in enumerate(sources):
+        source.data.update(custom={'name': str(i)}, keeps_direction=True)
+    tool = copy_tool(sources, mode)
+    ui = tool.copy_tool.ui
+    ui.array_type_radio = radio(array_type)
+    ui.array_dir_radio, ui.angle_entry = radio('CCW'), radio(90)
+    ui.placement_radio, ui.rows, ui.columns = radio('o'), radio(2), radio(2)
+    ui.spacing_rows = ui.spacing_columns = radio(1)
+    ui.offsetx_entry = ui.offsety_entry = radio(4)
+    tool.click((0, 0))
+    tool.click((5, 0))
+    for i, result in enumerate(tool.geometry):
+        assert result.data['custom'] == sources[i % 2].data['custom']
+        assert result.data['keeps_direction'] is True
+        assert result.data['bounds'] == result.bounds()
+        result.data['custom']['name'] = 'changed'
+    assert [source.data['custom']['name'] for source in sources] == ['0', '1']
+
+
+@pytest.mark.parametrize('direction,sign', [('CW', -1)])
+def test_circular_copy_rotates_radially_at_final_destination(direction, sign):
+    source = DrawToolShape(LineString([(2, 3), (4, 3)]))
+    tool = copy_tool([source], 'a')
+    ui = tool.copy_tool.ui
+    ui.array_type_radio = radio('circular')
+    ui.array_dir_radio, ui.angle_entry = radio(direction), radio(90)
+    tool.click((2, 3))
+    tool.util_geo = DrawToolShape(box(100, 100, 101, 101))
+    tool.click((7, 3))
+    for i, result in enumerate(tool.geometry):
+        import math
+        angle = sign * 90 * i
+        expected = translate(rotate(source.geo, angle, origin=(2, 3)),
+                             5 * math.cos(math.radians(angle)), 5 * math.sin(math.radians(angle)))
+        assert result.geo.equals_exact(expected, 1e-12)
+    assert list(source.geo.coords) == [(2, 3), (4, 3)]
 
 
 if __name__ == '__main__':

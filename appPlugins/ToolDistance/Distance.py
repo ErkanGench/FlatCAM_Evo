@@ -5,16 +5,15 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from PyQt6 import QtWidgets
+from PyQt6 import QtWidgets, QtCore
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea
 from camlib import AppRTreeStorage
-from appParsers.feature_access import iter_features
 from appEditors.appGeoEditor import DrawToolShape
 from defaults import AppDefaults
 from appPlugins.ToolDistance.DistanceUI import DistanceUI
 from appPlugins.ToolDistance.DistanceGen import (
-    point_distance, point_deltas, measurement_angle, app_snap_centers, closest_center, exc_snap_position)
+    point_distance, point_deltas, measurement_angle, closest_center, app_snap_index, editor_snap_index)
 
 import logging
 from copy import copy
@@ -74,6 +73,7 @@ class Distance(AppTool):
         self.snap_toggled = None
 
         self.mouse_is_dragging = False
+        self._snap_cache = {}
 
         # store here the cursor color
         self.cursor_color_memory = None
@@ -149,22 +149,23 @@ class Distance(AppTool):
             if self.app.ui.splitter.sizes()[0] == 0:
                 self.app.ui.splitter.setSizes([1, 1])
 
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        self.old_cursor_type = self.app.options.get(
-            "global_cursor_type",
-            app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
-
         self.on_start_measuring() if self.active is False else self.on_exit()
 
     def init_plugin(self):
+        self.reset_measurement()
+        self.original_call_source = copy(self.app.call_source)
+        self.units = self.app.app_units.lower()
+
+    def reset_measurement(self):
         self.points[:] = []
         self.tool_done = False
         self.last_shape = None
         self.total_distance = 0.0
-
         self.clicked_meas = 0
-        self.original_call_source = copy(self.app.call_source)
-        self.units = self.app.app_units.lower()
+        self.mouse_is_dragging = False
+        self.invalidate_snap_cache()
+        self.delete_all_shapes()
+        self.initial_view()
 
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='Ctrl+M', **kwargs)
@@ -235,9 +236,9 @@ class Distance(AppTool):
         # initial view of the layout
         self.initial_view()
 
-        self.cursor_color_memory = self.app.plotcanvas.cursor_color
-        if self.ui.big_cursor_cb.get_value():
-            self.app.on_cursor_type(val="big", control_cursor=True)
+        big_cursor = self.ui.big_cursor_cb.get_value()
+        self.app.on_cursor_type(val="big" if big_cursor else "small", control_cursor=True)
+        if big_cursor:
             self.app.app_cursor.enabled = True
 
         self.app.call_source = 'measurement'
@@ -249,12 +250,19 @@ class Distance(AppTool):
 
     def on_snap_toggled(self, state):
         self.app.options['tools_dist_snap_center'] = state
-        if state:
+        if state and self.active:
             # disengage the grid snapping since it will be hard to find the drills or pads on grid
             if self.app.ui.grid_snap_btn.isChecked():
                 self.app.ui.grid_snap_btn.trigger()
 
     def on_start_measuring(self):
+        if self.active:
+            self.on_exit()
+        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        self.old_cursor_type = self.app.options.get(
+            "global_cursor_type",
+            app_defaults.get("global_cursor_type", AppDefaults.factory_defaults.get("global_cursor_type")))
+        self.cursor_color_memory = self.app.plotcanvas.cursor_color
         # ENABLE the Measuring TOOL
         self.active = True
 
@@ -269,6 +277,7 @@ class Distance(AppTool):
         self.app.inform.emit(_("MEASURING: Click on the Start point ..."))
 
     def ui_connect(self):
+        self.app.app_obj.object_changed.connect(self.invalidate_snap_cache)
         # we can connect the app mouse events to the measurement tool
         # NEVER DISCONNECT THOSE before connecting some other handlers; it breaks something in VisPy
         self.canvas.graph_event_connect('mouse_move', self.on_mouse_move)
@@ -296,22 +305,24 @@ class Distance(AppTool):
             self.canvas.graph_event_disconnect('mouse_release', self.app.grb_editor.on_canvas_click_release)
 
     def ui_disconnect(self):
-        if self.original_call_source == 'app':
+        self.app.app_obj.object_changed.disconnect(self.invalidate_snap_cache)
+        source = self.original_call_source if self.app.call_source == 'measurement' else None
+        if source == 'app':
             self.canvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
             self.canvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
             self.canvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-        elif self.original_call_source == 'geo_editor':
+        elif source == 'geo_editor':
             self.canvas.graph_event_connect('mouse_move', self.app.geo_editor.on_canvas_move)
             self.canvas.graph_event_connect('mouse_press', self.app.geo_editor.on_canvas_click)
             self.canvas.graph_event_connect('mouse_release', self.app.geo_editor.on_canvas_click_release)
 
-        elif self.original_call_source == 'exc_editor':
+        elif source == 'exc_editor':
             self.canvas.graph_event_connect('mouse_move', self.app.exc_editor.on_canvas_move)
             self.canvas.graph_event_connect('mouse_press', self.app.exc_editor.on_canvas_click)
             self.canvas.graph_event_connect('mouse_release', self.app.exc_editor.on_exc_click_release)
 
-        elif self.original_call_source == 'grb_editor':
+        elif source == 'grb_editor':
             self.canvas.graph_event_connect('mouse_move', self.app.grb_editor.on_canvas_move)
             self.canvas.graph_event_connect('mouse_press', self.app.grb_editor.on_canvas_click)
             self.canvas.graph_event_connect('mouse_release', self.app.grb_editor.on_canvas_click_release)
@@ -321,24 +332,30 @@ class Distance(AppTool):
         self.canvas.graph_event_disconnect('mouse_release', self.on_mouse_click_release)
 
     def on_exit(self):
+        if not self.active:
+            return
+        owns_interaction = self.app.call_source == 'measurement'
         # DISABLE the Measuring TOOL
         self.active = False
         self.points = []
         self.last_shape = None
         self.total_distance = 0.0
+        self.mouse_is_dragging = False
+        self.invalidate_snap_cache()
 
         # enable the measuring button
         self.ui.measure_btn.setDisabled(False)
         self.ui.measure_btn.setText(_("Measure"))
 
-        self.app.call_source = copy(self.original_call_source)
-
         self.ui_disconnect()
-
-        self.app.command_active = None
 
         # delete the measuring line
         self.delete_all_shapes()
+
+        if not owns_interaction:
+            return
+        self.app.call_source = copy(self.original_call_source)
+        self.app.command_active = None
 
         # restore cursor
         self.app.on_cursor_type(val=self.old_cursor_type, control_cursor=False)
@@ -354,111 +371,103 @@ class Distance(AppTool):
             self.app.inform.emit('%s' % _("Done."))
 
     def calculate_distance(self, pos):
-        multipoint = self.ui.multipoint_cb.get_value()
-
-        if multipoint is False:
+        if not self.points:
+            return
+        if len(self.points) > 1:
+            self.total_distance += point_distance(self.points[-1], self.points[-2])
+        self.display_committed_results()
+        if not self.ui.multipoint_cb.get_value():
             if len(self.points) == 1:
-                self.ui.start_entry.set_value("(%.*f, %.*f)" % (self.decimals, pos[0], self.decimals, pos[1]))
                 self.app.inform.emit(_("Click on the DESTINATION point ..."))
-                return
-
-            if len(self.points) == 2:
-                self.ui.stop_entry.set_value("(%.*f, %.*f)" % (self.decimals, pos[0], self.decimals, pos[1]))
-
-                d = point_distance(self.points[1], self.points[0])
-                self.ui.total_distance_entry.set_value('%.*f' % (self.decimals, abs(d)))
-
-                self.app.ui.update_location_labels(pos[0], pos[1], pos[0], pos[1])
-
+            else:
                 self.tool_done = True
                 self.on_exit()
                 self.app.inform.emit("[success] %s" % _("Done."))
-        else:
-            # update utility geometry
-            if not self.points:
-                self.add_utility_shape(pos)
-            else:
-                # update utility geometry
-                # delete last shape and redd it correctly when using the snap and multipoint
-                self.delete_utility_shape(self.last_shape)
-                try:
-                    self.add_utility_shape(start_pos=self.points[-2], end_pos=self.points[-1])
-                except IndexError:
-                    pass
-                self.add_utility_shape(start_pos=self.points[-1], end_pos=pos)
+            return
+        self.delete_utility_shape(self.last_shape)
+        self.last_shape = None
+        if len(self.points) > 1:
+            self.add_utility_shape(self.points[-2], self.points[-1])
+            # last_shape identifies only the uncommitted preview, never a saved segment.
+            self.last_shape = None
+        self.app.inform.emit(_("Click to add next point or right click to finish. Backspace removes the last point."))
 
-            if len(self.points) == 1:
-                # update start point
-                self.ui.start_entry.set_value("(%.*f, %.*f)" % (self.decimals, pos[0], self.decimals, pos[1]))
-            elif len(self.points) > 1:
-                # update the distance
-                self.total_distance += self.update_distance(pos, self.points[-2])
-            else:
-                self.total_distance += self.update_distance(pos)
-            self.display_distance(self.total_distance)
-            self.app.inform.emit('%s' % _("Click to add next point or right click to finish."))
+    def display_committed_results(self):
+        start = self.points[0] if self.points else (0.0, 0.0)
+        end = self.points[-1] if self.points else start
+        dx, dy = point_deltas(end, start)
+        self.display_start(self.update_end_point(start))
+        self.display_end(self.update_end_point(end))
+        self.display_deltas(dx, dy)
+        self.display_angle(self.update_angle(dx, dy))
+        self.display_distance(self.total_distance)
+        segment = point_distance(self.points[-1], self.points[-2]) if len(self.points) > 1 else 0.0
+        DistanceUI.display_feedback(self.ui, segment, len(self.points), self.decimals)
+        self.app.ui.update_location_labels(dx=dx, dy=dy, x=end[0], y=end[1])
+
+    def undo_last_point(self):
+        if not self.active or not self.ui.multipoint_cb.get_value() or not self.points:
+            return
+        self.points.pop()
+        self.total_distance = sum(point_distance(b, a) for a, b in zip(self.points, self.points[1:]))
+        self.delete_all_shapes()
+        self.last_shape = None
+        for start, end in zip(self.points, self.points[1:]):
+            self.add_utility_shape(start, end)
+        self.last_shape = None
+        self.display_committed_results()
+
+    def invalidate_snap_cache(self, *args):
+        self._snap_cache = {}
+
+    def resolve_snap(self, pos):
+        current_pt = Point(pos)
+        cache = self._snap_cache
+        centers = []
+        source = self.original_call_source
+        if source == 'app':
+            objects = self.app.collection.get_list()
+            for obj in objects:
+                if obj.kind not in ('gerber', 'excellon') or not obj.obj_options.get('plot', True):
+                    continue
+                key = id(obj)
+                cached = cache.get(key)
+                if cached is None or cached[0] is not obj.tools or cached[1] is not obj.solid_geometry:
+                    cached = cache[key] = (obj.tools, obj.solid_geometry, app_snap_index(obj))
+                center = cached[2].closest(current_pt)
+                if center is not None:
+                    centers.append(center)
+        elif source in ('exc_editor', 'grb_editor'):
+            editor = self.app.exc_editor if source == 'exc_editor' else self.app.grb_editor
+            storage = editor.storage_dict
+            # Existing editor revisions include in-place edits, worker commits and
+            # undo/redo; list identity and length alone miss same-count changes.
+            revision = editor.history.revision if source == 'exc_editor' else editor.geometry_revision
+            key = (source, id(storage), editor.history.session, revision, tuple(
+                (k, id(s), id(s.objects), len(s.objects)) if source == 'exc_editor' else
+                (k, id(s.get('geometry')), len(s.get('geometry', ()))) for k, s in storage.items()))
+            if key not in cache:
+                cache.clear()
+                cache[key] = editor_snap_index(source, storage)
+            center = cache[key].closest(current_pt)
+            if center is not None:
+                centers.append(center)
+        if not centers:
+            return pos
+        center = closest_center(centers, current_pt)
+        return center.x, center.y
 
     def snap_handler(self, pos):
-        current_pt = Point(pos)
-        shapes_storage = self.make_storage()
-
-        if self.original_call_source == 'exc_editor':
-            for storage in self.app.exc_editor.storage_dict:
-                __, st_closest_shape = self.app.exc_editor.storage_dict[storage].nearest(pos)
-                shapes_storage.insert(st_closest_shape)
-
-            __, closest_shape = shapes_storage.nearest(pos)
-
-            pos = exc_snap_position(closest_shape.geo, pos)
-
-        elif self.original_call_source == 'grb_editor':
-            clicked_pads = []
-            for storage in self.app.grb_editor.storage_dict:
-                try:
-                    for shape_stored in self.app.grb_editor.storage_dict[storage]['geometry']:
-                        if 'solid' in shape_stored.geo:
-                            geometric_data = shape_stored.geo['solid']
-                            if current_pt.within(geometric_data):
-                                if isinstance(shape_stored.geo['follow'], Point):
-                                    clicked_pads.append(shape_stored.geo['follow'])
-                except KeyError:
-                    pass
-
-            if len(clicked_pads) > 1:
-                self.tool_done = True
-                self.on_exit()
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Pads overlapped. Aborting."))
-                return
-
-            if clicked_pads:
-                pos = (clicked_pads[0].x, clicked_pads[0].y)
-
-        elif self.original_call_source == 'app':
-            loaded_obj_list = self.app.collection.get_list()
-            snapable_obj_list = [o for o in loaded_obj_list if o.kind == 'excellon' or o.kind == 'gerber']
-            if not snapable_obj_list:
-                return pos
-
-            clicked_geo = []
-            for obj in snapable_obj_list:
-                clicked_geo.extend(app_snap_centers(obj.kind, iter_features(obj), current_pt))
-
-            if clicked_geo:
-                # search for 'pad within pad' or 'drill within drill' situation and choose the closest geo center
-                closest_pt = closest_center(clicked_geo, current_pt)
-                # snap to the closest geometry in the clicked_geo list
-                pos = (closest_pt.x, closest_pt.y)
-            else:
-                return pos
-        else:
+        snapped = self.resolve_snap(pos)
+        if snapped == pos:
             return pos
-
+        pos = snapped
         self.app.on_jump_to(custom_location=pos, fit_center=False)
-        # Update cursor
-        self.app.app_cursor.enabled = True
-        if self.ui.big_cursor_cb.get_value():
-            self.app.on_cursor_type(val="big", control_cursor=True)
+        self.update_cursor(pos)
+        return pos
 
+    def update_cursor(self, pos):
+        self.app.app_cursor.enabled = True
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         self.app.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
                                      symbol='++', edge_color=self.app.plotcanvas.cursor_color,
@@ -470,59 +479,34 @@ class Distance(AppTool):
                                          "global_cursor_size",
                                          app_defaults.get("global_cursor_size",
                                                           AppDefaults.factory_defaults.get("global_cursor_size"))))
-        return pos
 
     def on_multipoint_measurement_changed(self, val):
         DistanceUI.on_multipoint_measurement_changed(self.ui, val)
+        if self.active:
+            self.reset_measurement()
+            self.app.inform.emit(_("MEASURING: Click on the Start point ..."))
 
     def on_cursor_change(self, val):
+        self.app.options['tools_dist_big_cursor'] = bool(val)
+        if not self.active:
+            return
         if val:
-            self.app.options['tools_dist_big_cursor'] = True
             self.app.on_cursor_type(val="big", control_cursor=True)
         else:
-            self.app.options['tools_dist_big_cursor'] = False
             self.app.on_cursor_type(val="small", control_cursor=True)
 
     def update_position_info(self, pos_canvas):
-        big_cursor_state = self.ui.big_cursor_cb.get_value()
-        grid_snap_state = self.app.grid_status()
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-
-        if big_cursor_state is False:
-            if grid_snap_state:
-                pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
-                # Update cursor
-                self.app.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
-                                             symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                             edge_width=self.app.options.get(
-                                                 "global_cursor_width",
-                                                 app_defaults.get("global_cursor_width",
-                                                                  AppDefaults.factory_defaults.get("global_cursor_width"))),
-                                             size=self.app.options.get(
-                                                 "global_cursor_size",
-                                                 app_defaults.get("global_cursor_size",
-                                                                  AppDefaults.factory_defaults.get("global_cursor_size"))))
-            else:
-                pos = (pos_canvas[0], pos_canvas[1])
+        pos = (pos_canvas[0], pos_canvas[1])
+        snap_center = self.ui.snap_center_cb.get_value()
+        grid = self.app.grid_status() and not snap_center
+        if snap_center:
+            pos = self.resolve_snap(pos)
+        elif grid:
+            pos = self.app.geo_editor.snap(*pos)
+        if self.ui.big_cursor_cb.get_value() or grid or pos != tuple(pos_canvas):
+            self.update_cursor(pos)
         else:
-            if grid_snap_state:
-                pos = self.app.geo_editor.snap(pos_canvas[0], pos_canvas[1])
-            else:
-                if self.app.app_cursor.enabled is False:
-                    self.app.app_cursor.enabled = True
-                pos = (pos_canvas[0], pos_canvas[1])
-            # Update cursor
-            self.app.app_cursor.set_data(np.asarray([(pos[0], pos[1])]),
-                                         symbol='++', edge_color=self.app.plotcanvas.cursor_color,
-                                         edge_width=self.app.options.get(
-                                             "global_cursor_width",
-                                             app_defaults.get("global_cursor_width",
-                                                              AppDefaults.factory_defaults.get("global_cursor_width"))),
-                                         size=self.app.options.get(
-                                             "global_cursor_size",
-                                             app_defaults.get("global_cursor_size",
-                                                              AppDefaults.factory_defaults.get("global_cursor_size"))))
-
+            self.app.app_cursor.enabled = False
         return pos
 
     def on_mouse_click_release(self, event):
@@ -531,12 +515,34 @@ class Distance(AppTool):
         # are used for panning on the canvas
         # log.debug("Distance Tool --> mouse click release")
 
+        if not self.active:
+            return
+        if self.app.call_source != 'measurement':
+            self.on_exit()
+            return
+        press = getattr(event, 'press_event', None)
+        if press is not None:
+            # VisPy's release is_dragging means "has a press", even for a click.
+            dragging = self.mouse_is_dragging or not np.array_equal(event.pos, press.pos)
+        else:
+            dragging = self.mouse_is_dragging or bool(getattr(event, 'is_dragging', False))
+        self.mouse_is_dragging = False
+        if dragging:
+            return
+        if event.button == 2:
+            if self.ui.multipoint_cb.get_value():
+                self.display_committed_results()
+                self.tool_done = True
+                self.app.inform.emit("[success] %s" % _("Done."))
+            else:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+            self.on_exit()
+            return
+        if event.button != 1:
+            return
         snap_enabled = self.ui.snap_center_cb.get_value()
-        multipoint = self.ui.multipoint_cb.get_value()
 
         event_pos = event.pos
-        right_button = 2
-        event_is_dragging = self.mouse_is_dragging
 
         pos_canvas = self.canvas.translate_coords(event_pos)
         if snap_enabled is False:
@@ -548,27 +554,20 @@ class Distance(AppTool):
         else:
             pos = self.snap_handler(pos=(pos_canvas[0], pos_canvas[1]))
 
-        if event.button == 1:
+        if pos is not None and self.active:
             # Reset here the relative coordinates so there is a new reference on the click position
             if len(self.points) == 1:
                 self.app.ui.update_location_labels(0.0, 0.0, pos[0], pos[1])
 
             self.points.append(pos)
             self.calculate_distance(pos=pos)
-        elif event.button == right_button and event_is_dragging is False:
-            if multipoint is False:
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
-            else:
-                # update end point
-                try:
-                    end_val = self.update_end_point(self.points[-1])
-                except IndexError:
-                    end_val = self.update_end_point((0.0, 0.0))
-                self.display_end(end_val)
-                self.app.inform.emit("[success] %s" % _("Done."))
-            self.on_exit()
 
     def on_mouse_move(self, event):
+        if not self.active:
+            return
+        if self.app.call_source != 'measurement':
+            self.on_exit()
+            return
         multipoint = self.ui.multipoint_cb.get_value()
 
         try:  # May fail in case mouse not within axes
@@ -625,13 +624,17 @@ class Distance(AppTool):
                     # update distance
                     dist_val = self.update_distance(pos=pos)
                     self.display_distance(dist_val)
+                    DistanceUI.display_feedback(self.ui, dist_val, len(self.points), self.decimals)
             else:
                 # update utility geometry
                 if self.points:
                     if self.last_shape is not None:
                         self.sel_shapes.remove(self.last_shape, update=False)
                     self.add_utility_shape(start_pos=self.points[-1], end_pos=pos)
-                    self.display_distance(self.total_distance + self.update_distance(pos, prev_pos=self.points[-1]))
+                    segment = self.update_distance(pos, prev_pos=self.points[-1])
+                    self.display_distance(self.total_distance + segment)
+                    self.display_end(self.update_end_point(pos))
+                    DistanceUI.display_feedback(self.ui, segment, len(self.points), self.decimals)
                 else:
                     self.delete_utility_shape(self.last_shape)
         except Exception as e:
@@ -700,3 +703,13 @@ class Distance(AppTool):
 
     def on_plugin_cleanup(self):
         self.on_exit()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        # takeWidget() also runs while refreshing this plugin. Check ownership
+        # after the replacement has been installed, not in the middle of that swap.
+        QtCore.QTimer.singleShot(0, self.on_plugin_hidden)
+
+    def on_plugin_hidden(self):
+        if self.active and self.app.ui.plugin_scroll_area.widget() is not self:
+            self.on_exit()

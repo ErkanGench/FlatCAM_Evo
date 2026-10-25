@@ -725,7 +725,7 @@ class TestGerberParse:
 
     def test_composed_solid_geometry_applies_polarity(self, gerber):
         union = polygon_union(gerber.solid_geometry)
-        assert union.area == pytest.approx(271.2704, rel=1e-4)
+        assert union.area == pytest.approx(271.1690, rel=1e-4)
         # dark -> clear -> dark: the clear track cuts the wide dark track, the later flash fills part of the cut
         assert union.contains(Point(5, 35))
         assert union.contains(Point(24, 35))
@@ -740,7 +740,7 @@ class TestGerberParse:
         assert not union.contains(Point(30.0, 5.0))
 
     def test_bounds(self, gerber):
-        assert gerber.bounds() == pytest.approx((-0.5002501250625312, 4.0, 31.0, 38.001500750375186))
+        assert gerber.bounds() == pytest.approx((-0.5, 4.0, 31.0, 38.0))
 
 
 @pytest.mark.parametrize('name', TRANSFORM_NAMES)

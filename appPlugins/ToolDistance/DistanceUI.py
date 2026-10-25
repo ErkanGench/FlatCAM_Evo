@@ -33,13 +33,15 @@ class DistanceUI:
 
         self.snap_center_cb = FCCheckBox(_("Snap to center"))
         self.snap_center_cb.setToolTip(
-            _("Mouse cursor will snap to the center of the pad/drill\n"
-              "when it is hovering over the geometry of the pad/drill.")
+            _("Preview and measure at the center of the visible pad/drill under the cursor,\n"
+              "including its boundary. Hovering doesn't move the mouse pointer.")
         )
         param_grid.addWidget(self.snap_center_cb, 0, 0, 1, 2)
         self.multipoint_cb = FCCheckBox(_("Multi-Point"))
         self.multipoint_cb.setToolTip(
-            _("Make a measurement over multiple distance segments.")
+            _("Make a measurement over multiple distance segments.\n"
+              "Right click to finish; Backspace removes the last point.\n"
+              "Changing this mode restarts the measurement.")
         )
         param_grid.addWidget(self.multipoint_cb, 2, 0, 1, 2)
         self.big_cursor_cb = FCCheckBox('%s' % _("Big cursor"))
@@ -139,6 +141,24 @@ class DistanceUI:
         res_grid.addWidget(self.total_distance_entry, 10, 1)
         res_grid.addWidget(FCLabel("%s" % self.units), 10, 2)
 
+        self.segment_distance_label = FCLabel('%s:' % _("Segment"))
+        self.segment_distance_entry = FCEntry()
+        self.segment_distance_entry.setReadOnly(True)
+        self.segment_distance_entry.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight |
+                                                 QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.segment_distance_entry.setToolTip(_("Current preview segment, or last committed segment when finished."))
+        res_grid.addWidget(self.segment_distance_label, 12, 0)
+        res_grid.addWidget(self.segment_distance_entry, 12, 1)
+        res_grid.addWidget(FCLabel("%s" % self.units), 12, 2)
+        self.point_count_label = FCLabel('%s:' % _("Points"))
+        self.point_count_entry = FCEntry()
+        self.point_count_entry.setReadOnly(True)
+        self.point_count_entry.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight |
+                                            QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.point_count_entry.setToolTip(_("Number of committed measurement points."))
+        res_grid.addWidget(self.point_count_label, 14, 0)
+        res_grid.addWidget(self.point_count_entry, 14, 1)
+
         self.measure_btn = FCButton(_("Measure"))
         self.layout.addWidget(self.measure_btn)
         GLay.set_common_column_size([param_grid, coords_grid, res_grid], 0)
@@ -169,6 +189,8 @@ class DistanceUI:
         self.distance_x_entry.set_value('%.*f' % (decimals, 0.0))
         self.distance_y_entry.set_value('%.*f' % (decimals, 0.0))
         self.total_distance_entry.set_value('%.*f' % (decimals, 0.0))
+        self.segment_distance_entry.set_value('%.*f' % (decimals, 0.0))
+        self.point_count_entry.set_value('0')
 
     def on_multipoint_measurement_changed(self, val):
         if val:
@@ -211,14 +233,18 @@ class DistanceUI:
             self.stop_entry.set_value(str(val))
 
     def display_deltas(self, dx, dy, dec_format, decimals):
-        if dx:
+        if dx is not None:
             self.distance_x_entry.set_value(str(dec_format(abs(dx), decimals)))
-        if dy:
+        if dy is not None:
             self.distance_y_entry.set_value(str(dec_format(abs(dy), decimals)))
 
     def display_distance(self, val, decimals):
-        if val:
+        if val is not None:
             self.total_distance_entry.set_value('%.*f' % (decimals, abs(val)))
+
+    def display_feedback(self, segment, count, decimals):
+        self.segment_distance_entry.set_value('%.*f' % (decimals, abs(segment)))
+        self.point_count_entry.set_value(str(count))
 
     def confirmation_message(self, accepted, minval, maxval):
         if accepted is False:

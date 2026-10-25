@@ -217,7 +217,7 @@ def test_native_save_reparse_after_operation_undo_redo(app, operation):
         result = app.custom_signal.emit.call_args.args[0]
         assert 'error' not in result
         assert 'G36' not in result['obj'].source_file
-        parsed = Gerber(app, steps_per_circle=16)
+        parsed = Gerber(app, steps_per_circle=64)
         assert parsed.parse_lines(result['obj'].source_file.splitlines()) is None
         assert unary_union(parsed.solid_geometry).hausdorff_distance(footprint(editor)) < 0.002
 

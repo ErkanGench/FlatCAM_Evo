@@ -13,6 +13,7 @@ from appEditors.geo_plugins.GeoCirclePlugin import CircleEditorTool
 from appEditors.geo_plugins.GeoPathPlugin import PathEditorTool
 from appEditors.geo_plugins.GeoCopyPlugin import CopyEditorTool
 from appEditors.geo_plugins.GeoRectanglePlugin import RectangleEditorTool
+from appEditors.geo_plugins.GeoTextPlugin import TextInputTool
 from appGUI.GUIElements import FCDoubleSpinner, NumericalEvalEntry
 from appGUI.MainGUI import MainGUI
 from tests.test_geo_editor_history import editor_with_history, run_worker
@@ -280,3 +281,120 @@ def test_cursor_text_avoids_the_drawn_shape_and_the_shapes_under_it(ref, obstacl
     assert text.text == 'X:   0.0 [mm]\nY:   0.0 [mm]\n\nL:   %s [mm]' % length
     hide_cursor_text(draw_app.app)
     assert text.parent is None
+
+
+def text_tool(bold=False, italic=False, size='12', parser=None):
+    app = SimpleNamespace(app_units='MM', inform=Mock(), log=Mock())
+    tool = SimpleNamespace(app=app, font_bold=bold, font_italic=italic, font_name='Arial', text_path=None,
+                           f_parse=SimpleNamespace(
+                               font_to_geometry=parser or (lambda **kwargs: box(0, 0, 2, 1))),
+                           ui=SimpleNamespace(text_input_entry=value('A'), font_size_cb=value(size),
+                                              bitmap_smoothing_entry=value(0.5)))
+    tool._valid_font_size = lambda: TextInputTool._valid_font_size(tool)
+    return tool
+
+
+STYLE_GEOMETRY = {'regular': box(0, 0, 1, 1), 'bold': box(0, 0, 2, 1),
+                  'italic': box(0, 0, 1, 2), 'bi': box(0, 0, 2, 2)}
+
+
+@pytest.mark.parametrize('bold, italic, style', [(True, False, 'bold')])
+def test_geo_text_apply_renders_the_selected_style(bold, italic, style):
+    tool = text_tool(bold=bold, italic=italic,
+                     parser=lambda **kwargs: STYLE_GEOMETRY[kwargs['font_type']])
+    TextInputTool.on_apply_button(tool)
+    assert tool.text_path.equals(STYLE_GEOMETRY[style])
+
+
+@pytest.mark.parametrize('smoothing, height', [(0.5, 1.5)])
+def test_geo_text_apply_passes_the_bitmap_smoothing(smoothing, height):
+    tool = text_tool(parser=lambda **kwargs: box(0, 0, 2, 1 + kwargs['bitmap_smoothing']))
+    tool.ui.bitmap_smoothing_entry = value(smoothing)
+    TextInputTool.on_apply_button(tool)
+    assert tool.text_path.bounds == (0, 0, 2, height)
+
+
+def test_geo_text_apply_clears_the_previous_geometry_on_failure():
+    def parser(**kwargs):
+        raise ValueError('bad size')
+
+    tool = text_tool(parser=parser)
+    tool.text_path = box(0, 0, 9, 9)
+    TextInputTool.on_apply_button(tool)
+    assert tool.text_path is None
+    assert tool.app.inform.emit.called
+
+
+def transformation_tool():
+    from appEditors.geo_plugins.GeoTransformationPlugin import TransformEditorTool
+    shape = DrawToolShape(box(2, 3, 6, 9))
+    editor = editor_with_history([shape], [shape])
+    editor.transform_shapes = lambda *a, **kw: AppGeoEditor.transform_shapes(editor, *a, **kw)
+    editor.app.decimals, editor.app.app_units = 4, 'MM'
+    editor.app.options = {'tools_transform_reference': 'Point', 'tools_transform_ref_point': '(10, 20)'}
+    defaults = __import__('defaults').AppDefaults()
+    editor.app.defaults = defaults
+    editor.app.ui = QtWidgets.QWidget()
+    editor.app.resource_location = ''
+    tool = TransformEditorTool(editor.app, editor)
+    return editor, tool, shape
+
+
+@pytest.mark.parametrize('method', ['on_offy_key'])
+def test_transform_y_shortcut_changes_y_only_after_worker(method, monkeypatch):
+    import appEditors.geo_plugins.GeoTransformationPlugin as plugin
+    editor, tool, shape = transformation_tool()
+    monkeypatch.setattr(plugin, 'FCInputDoubleSpinner', lambda **kw: SimpleNamespace(
+        set_icon=lambda icon: None, get_value=lambda: (10.0, True)))
+    editor.app.call_source, editor.app.geo_editor = 'geo_editor', editor
+    editor.app.collection = Mock()
+    editor.transform_tool = tool
+    monkeypatch.setattr(QtWidgets.QApplication, 'keyboardModifiers', staticmethod(lambda:
+        QtCore.Qt.KeyboardModifier.AltModifier if method == 'on_offy_key'
+        else QtCore.Qt.KeyboardModifier.ShiftModifier))
+    MainGUI.keyPressEvent(SimpleNamespace(app=editor.app), SimpleNamespace(key='Y', native=SimpleNamespace()))
+    assert not any('[success]' in c.args[0] for c in editor.app.inform.emit.call_args_list)
+    run_worker(editor)
+    changed = editor.selected[0].geo
+    assert changed.bounds[0::2] == pytest.approx(shape.geo.bounds[0::2])
+    assert changed.bounds[1::2] != shape.geo.bounds[1::2]
+    assert any('[success]' in c.args[0] for c in editor.app.inform.emit.call_args_list)
+    assert editor.undo() and editor.selected == [shape]
+
+
+def test_transform_reference_origin_corners_and_point_visibility():
+    editor, tool, shape = transformation_tool()
+    assert not tool.ui.point_entry.isHidden()
+    assert tool.on_calculate_reference(ref_index=0) == (0, 0)
+    assert tool.ui.ref_combo.count() == 7
+    for index, point in [(3, (2, 3)), (4, (6, 3)), (5, (6, 9)), (6, (2, 9))]:
+        tool.ui.ref_combo.setCurrentIndex(index)
+        assert tool.ui.point_entry.isHidden()
+        assert tool.on_calculate_reference() == point
+    tool.ui.ref_combo.setCurrentIndex(2)
+    assert not tool.ui.point_entry.isHidden()
+
+
+@pytest.mark.parametrize('action,args,failure', [
+    ('on_rotate_action', (20, (0, 0)), 'fail')])
+def test_transform_rejection_never_announces_success(action, args, failure):
+    editor, tool, shape = transformation_tool()
+    def reject(*args, **kwargs):
+        if failure == 'exception':
+            raise ValueError('Rejected')
+        return 'fail'
+    editor.transform_shapes = reject
+    assert getattr(tool, action)(*args) == 'fail'
+    assert not any('[success]' in c.args[0] for c in editor.app.inform.emit.call_args_list)
+    assert editor.selected == [shape]
+
+
+@pytest.mark.parametrize('method,expected', [('on_rotate', (3, -6, 9, -2))])
+def test_transform_rotation_is_clockwise_and_mirror_reflects_opposite_coordinate(method, expected):
+    editor, tool, shape = transformation_tool()
+    if method == 'on_rotate':
+        tool.on_rotate(val=90, ref=0)
+    else:
+        getattr(tool, method)(ref=0)
+    run_worker(editor)
+    assert editor.selected[0].geo.bounds == pytest.approx(expected)

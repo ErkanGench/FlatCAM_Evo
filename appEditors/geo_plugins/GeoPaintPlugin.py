@@ -3,7 +3,7 @@ from PyQt6 import QtWidgets
 from appTool import AppToolEditor
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCFrame, FCButton, GLay, FCDoubleSpinner, FCComboBox, \
     FCCheckBox
-from camlib import Geometry, flatten_shapely_geometry
+from camlib import Geometry, flatten_shapely_geometry, object_circle_steps
 
 from shapely import Polygon
 from shapely.ops import unary_union
@@ -209,6 +209,9 @@ class PaintOptionsTool(AppToolEditor):
                         param_name = [k for k, v in locals().items() if v is param][0]
                         geo_editor.app.inform.emit('[WARNING] %s: %s' % (_("Invalid value for"), str(param)))
 
+                # the tool path arcs have the radius of the tool
+                steps_per_circle = object_circle_steps(geo_editor.app.options, 'geometry', tooldia / 2,
+                                                       geo_editor.app.app_units)
                 results = []
 
                 for geo in selected:
@@ -224,35 +227,17 @@ class PaintOptionsTool(AppToolEditor):
                             if method == _("Seed"):
                                 cp = Geometry.clear_polygon_seed(
                                     geo_editor, polygon_to_clear=poly_buf, tooldia=tooldia,
-                                    steps_per_circle=geo_editor.app.options.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.get(
-                                            "geometry_circle_steps",
-                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                        )
-                                    ),
+                                    steps_per_circle=steps_per_circle,
                                     overlap=overlap, contour=contour, connect=connect)
                             elif method == _("Lines"):
                                 cp = Geometry.clear_polygon_lines(
                                     geo_editor, polygon=poly_buf, tooldia=tooldia,
-                                    steps_per_circle=geo_editor.app.options.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.get(
-                                            "geometry_circle_steps",
-                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                        )
-                                    ),
+                                    steps_per_circle=steps_per_circle,
                                     overlap=overlap, contour=contour, connect=connect)
                             else:
                                 cp = Geometry.clear_polygon_shrink(
                                     geo_editor, polygon=poly_buf, tooldia=tooldia,
-                                    steps_per_circle=geo_editor.app.options.get(
-                                        "geometry_circle_steps",
-                                        geo_editor.app.defaults.get(
-                                            "geometry_circle_steps",
-                                            geo_editor.app.defaults.factory_defaults.get("geometry_circle_steps")
-                                        )
-                                    ),
+                                    steps_per_circle=steps_per_circle,
                                     overlap=overlap, contour=contour, connect=connect)
 
                             if cp is not None:

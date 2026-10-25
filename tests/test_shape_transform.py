@@ -17,6 +17,7 @@ from shapely import affinity
 from shapely.geometry import Polygon, LineString
 
 from appGUI.VisPyVisuals import ShapeCollectionVisual, ShapeGroup
+from tests.helpers_objects import make_app, make_same_diameter_excellon
 
 OPTS = {"global_graphic_engine_3d_no_mp": True, "global_backface_culling": True}
 
@@ -110,6 +111,30 @@ class TestTransformKeys(unittest.TestCase):
         self.assertTrue(g.transform(self.MATRICES['offset']))
         np.testing.assert_array_equal(c.data[other[0]]['line_pts'], before)
         self.assertGreater(c.data[keys[0]]['line_pts'][:, 0].min(), 99.0)
+
+    def test_excellon_scale_replots_round_holes_in_the_cached_shapes(self):
+        # the cached plot of a scaled Excellon must be made again from the rebuilt geometry, not mapped:
+        # a 1 mm hole at x=10 keeps the 9.5 .. 10.5 bounds instead of becoming 9 .. 11
+        app = make_app()
+        obj = make_same_diameter_excellon(app)
+        collection = new_collection()
+        obj.shapes = ShapeGroup(collection)
+
+        obj.scale(2, 1, point=(0, 0))
+        self.assertFalse(obj.plot_transformed((2.0, 0.0, 0.0, 1.0, 0.0, 0.0)))
+
+        hole = collection.data[0]['line_pts']
+        self.assertAlmostEqual(float(hole[:, 0].min()), 9.5, delta=0.02)
+        self.assertAlmostEqual(float(hole[:, 0].max()), 10.5, delta=0.02)
+        self.assertAlmostEqual(float(hole[:, 1].min()), 4.5, delta=0.02)
+        self.assertAlmostEqual(float(hole[:, 1].max()), 5.5, delta=0.02)
+
+        slot = collection.data[3]['line_pts']
+        self.assertAlmostEqual(float(slot[:, 0].min()), 39.5, delta=0.02)
+        self.assertAlmostEqual(float(slot[:, 0].max()), 52.5, delta=0.02)
+        self.assertAlmostEqual(float(slot[:, 1].min()), 4.5, delta=0.02)
+        self.assertAlmostEqual(float(slot[:, 1].max()), 5.5, delta=0.02)
+
 
 if __name__ == '__main__':
     unittest.main()

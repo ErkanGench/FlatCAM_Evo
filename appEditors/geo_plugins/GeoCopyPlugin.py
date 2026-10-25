@@ -426,7 +426,8 @@ class CopyEditorUI:
 
         # Array Angle
         self.array_angle_lbl = FCLabel('%s:' % _('Angle'))
-        self.array_angle_lbl.setToolTip(_("Angle at which each element in circular array is placed."))
+        self.array_angle_lbl.setToolTip(_("Angle at which each element in circular array is placed.\n"
+                                         "Each copy rotates radially around the reference point in the selected direction."))
 
         self.angle_entry = FCDoubleSpinner(policy=False)
         self.angle_entry.set_precision(self.decimals)

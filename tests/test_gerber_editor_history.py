@@ -25,7 +25,7 @@ from test_editor_save_modes import gerber_stand_in, gerber_storage
 from test_gerber_editor_size_simplify import simplify_tool, run_job
 from test_gerber_track_bend import editor_for, start, release, track
 from test_grb_editor_transform import Host
-from tests.helpers_objects import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401,E402
+from tests.helpers_objects import app, _headless_qt, make_gerber, NATIVE_GBR, export_gerber_text  # noqa: F401,E402
 
 
 def scene():
@@ -55,12 +55,14 @@ def test_delete_is_one_step_and_restores_identity_selection_and_order():
 def test_nested_mutations_group_and_capture_immutable_geometry_values():
     editor, first, second = scene()
     editor.selected = [first]
+    editor.sync_aperture_rows({10})
     old = dict(first.geo)
     with editor.history.operation('Move then copy') as accepted:
         assert accepted
         first.geo['solid'] = translate(first.geo['solid'], xoff=2)
         first.geo['follow'] = translate(first.geo['follow'], xoff=2)
         editor.touch_geometry()
+        BufferEditorTool.buffer(SimpleNamespace(draw_app=editor, app=editor.app), 0.1, 1)
         added = DrawToolShape({'solid': box(5, 5, 6, 6)})
         editor.add_gerber_shape(added, editor.storage_dict[10]['geometry'])
     assert len(editor.history.undo_stack) == 1
@@ -71,6 +73,7 @@ def test_nested_mutations_group_and_capture_immutable_geometry_values():
     assert editor.redo()
     assert editor.storage_dict[10]['geometry'] == [first, added]
     assert first.geo['follow'].equals(Point(2.5, 0.5))
+    assert first.geo['solid'].bounds == pytest.approx((1.9, -0.1, 3.1, 1.1))
 
 
 def test_transaction_rolls_back_geometry_apertures_flags_and_selection_on_exception():
@@ -150,7 +153,7 @@ def test_mutation_family_round_trip_is_one_step(family):
         tool = TrackEditorGrb.__new__(TrackEditorGrb)
         tool.draw_app, tool.app = editor, editor.app
         tool.points, tool.temp_points, tool.click_shapes = [], [(0, 0), (3, 0), (3, 3)], []
-        tool.buf_val, tool.steps_per_circle = 1, 16
+        tool.buf_val, tool.quad_segs = 1, 16
         tool.track_tool = SimpleNamespace(length=1)
         editor.snap_x, editor.snap_y = 3, 3
         tool.ui = SimpleNamespace(x_entry=MagicMock(), y_entry=MagicMock())
@@ -173,6 +176,7 @@ def test_mutation_family_round_trip_is_one_step(family):
         editor.delete_marked_polygons()
     elif family == 'buffer':
         BufferEditorTool.buffer(SimpleNamespace(draw_app=editor, app=editor.app), 0.1, 1)
+        run_job(editor)
     elif family == 'scale':
         editor.ui.scale_factor_entry.set_value(1.2)
         editor.on_scale()
@@ -239,6 +243,7 @@ def test_legacy_buffer_keeps_follow_and_records_region_export_requirement():
     editor.sync_aperture_rows({10})
     follow = first.geo['follow']
     BufferEditorTool.buffer(SimpleNamespace(draw_app=editor, app=editor.app), 0.1, 1)
+    run_job(editor)
     assert first.geo['follow'] is follow
     assert editor.loaded_as_regions
     assert editor.undo()
@@ -293,14 +298,21 @@ def test_invalid_buffer_and_failed_nested_action_do_not_leave_partial_edits():
     assert editor.history.undo_stack == []
 
 
-def test_buffer_undo_redo_save_reparse_preserves_material_and_export_mode(app):
+@pytest.mark.parametrize('distance,standalone,keep_other', [(0.3, True, True), (-2, True, False), (-2, False, True)])
+def test_buffer_undo_redo_save_reparse_preserves_material_and_export_mode(app, distance, standalone, keep_other):
 
     source = make_gerber(app, NATIVE_GBR, name='board')
     first = DrawToolShape({'solid': Point(4, 4).buffer(1, 16), 'follow': Point(4, 4)})
-    editor = make_editor({10: {'type': 'C', 'size': 2, 'geometry': [first]}})
+    other = DrawToolShape({'solid': Point(10, 4).buffer(1, 16), 'follow': Point(10, 4)})
+    editor = make_editor({10: {'type': 'C', 'size': 2, 'geometry': [first, other] if keep_other else [first]}})
     editor.selected = [first]
     editor.sync_aperture_rows({10})
-    BufferEditorTool.buffer(SimpleNamespace(draw_app=editor, app=editor.app), 0.3, 1)
+    if standalone:
+        BufferEditorTool.buffer(SimpleNamespace(draw_app=editor, app=editor.app), distance, 1)
+        if editor.history.pending is not None:
+            run_job(editor)
+    else:
+        Host(editor).on_buffer_action(distance, 1)
     for mode in ('buffered', 'undo', 'redo'):
         if mode == 'undo':
             assert editor.undo()
@@ -313,12 +325,34 @@ def test_buffer_undo_redo_save_reparse_preserves_material_and_export_mode(app):
         assert 'error' not in result
         saved = result['obj']
         assert saved.export_as_regions is (mode != 'undo')
-        parsed = Gerber(app, steps_per_circle=16)
-        assert parsed.parse_lines(saved.source_file.splitlines()) is None
-        actual = unary_union(parsed.solid_geometry)
         expected = unary_union([shape.geo['solid'] for aperture in editor.storage_dict.values()
                                 for shape in aperture.get('geometry', ())])
-        assert actual.hausdorff_distance(expected) < 0.001
+        for text in (saved.source_file, export_gerber_text(app, saved)):
+            parsed = Gerber(app, steps_per_circle=64)
+            # The importer refuses empty boards by design; it must still contain no resurrected copper.
+            assert parsed.parse_lines(text.splitlines()) == ('fail' if expected.is_empty else None)
+            actual = unary_union(parsed.solid_geometry)
+            if expected.is_empty:
+                assert actual.is_empty
+            else:
+                assert actual.hausdorff_distance(expected) < 0.001
+
+
+def test_save_empty_solid_keeps_clear_data_without_flashing_stale_follow(app):
+    source = make_gerber(app, NATIVE_GBR, name='board')
+    clear = Point(2, 2).buffer(0.2)
+    erased = DrawToolShape({'solid': Polygon(), 'follow': Point(2, 2), 'clear': clear})
+    other = DrawToolShape({'solid': Point(10, 2).buffer(1, 16), 'follow': Point(10, 2)})
+    storage = {10: {'type': 'C', 'size': 2, 'geometry': [erased, other]}}
+    stand_in = gerber_stand_in(app, source, storage)
+    AppGerberEditor.build_edited_gerber(stand_in, 'board', storage)
+    saved = app.custom_signal.emit.call_args.args[0]['obj']
+    assert saved.tools[10]['geometry'][0]['clear'].equals(clear)
+    parsed = Gerber(app, steps_per_circle=64)
+    assert parsed.parse_lines(saved.source_file.splitlines()) is None
+    actual = unary_union(parsed.solid_geometry)
+    assert not actual.contains(Point(2, 2))
+    assert actual.hausdorff_distance(other.geo['solid']) < 0.001
 
 
 def test_save_as_new_detached_build_commits_reparseable_copy_without_changing_source(app):
@@ -347,7 +381,7 @@ def test_save_as_new_detached_build_commits_reparseable_copy_without_changing_so
     assert saved.history_uid != source.history_uid
     assert source.tools is tools_before and source.solid_geometry is solid_before
     assert source.source_file == source_before
-    parsed = Gerber(app, steps_per_circle=16)
+    parsed = Gerber(app, steps_per_circle=64)
     assert parsed.parse_lines(saved.source_file.splitlines()) is None
     assert parsed.solid_geometry
     editor.deactivate_grb_editor.assert_called_once()

@@ -7,6 +7,7 @@ A region edits the vertices of its 'solid'. A track (circular aperture, FOLLOW l
 
 import gettext
 import builtins
+from functools import partial
 
 from PyQt6 import QtWidgets
 from shapely import LineString, LinearRing, Polygon
@@ -14,7 +15,7 @@ from shapely.errors import GEOSException
 
 from appEditors.vertex_ops import vertex_address, edit_vertex, check_vertex_result, parts_of, rings_of, \
     DEFAULT_CIRCLE_STEPS
-from appEditors.grb_plugins.GrbCommon import DrawToolShape
+from appEditors.grb_plugins.GrbCommon import DrawToolShape, gerber_steps
 from appEditors.grb_plugins.GrbHistory import gerber_operation
 from appEditors.grb_plugins.GrbFollowPlugin import selected_entries, commit, edit_state
 from appEditors.grb_plugins.GrbTrackBend import scene_state, sweep_parameters
@@ -106,7 +107,7 @@ def apply_vertex_edit(editor, action, index, point=None, target=None, on_segment
             raise ValueError(_("A flashed pad has no vertices. Use Move to move it."))
         kind, geometry, parameters = plan
         address = vertex_address(geometry, index)
-        steps = editor.app.options.get('gerber_circle_steps', DEFAULT_CIRCLE_STEPS)
+        steps = partial(gerber_steps, editor.app)
         result_geo = edit_vertex(geometry, action, address, point, on_segment=on_segment, steps=steps)
         check_vertex_result(result_geo, address)
         if result_geo.equals_exact(geometry, 0.0):

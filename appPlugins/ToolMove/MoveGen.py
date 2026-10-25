@@ -17,7 +17,9 @@ def translated_box(coords, offset):
 
 def selection_shape(shape, units, as_line):
     if units.upper() == 'MM':
-        shape = shape.buffer(-0.1).buffer(0.2)
+        groove = shape.buffer(-0.1)
+        shape = groove.buffer(0.2) if not groove.is_empty else shape.buffer(0.2)
     else:
-        shape = shape.buffer(-0.00393).buffer(0.00787)
+        groove = shape.buffer(-0.00393)
+        shape = groove.buffer(0.00787) if not groove.is_empty else shape.buffer(0.00787)
     return shape.exterior if as_line else shape

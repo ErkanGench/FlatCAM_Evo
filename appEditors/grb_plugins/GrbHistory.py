@@ -9,7 +9,7 @@ import builtins
 import gettext
 
 from appHandlers.appHistory import HistoryManager, geometry_sizes, is_rigid
-from appEditors.grb_plugins.GrbCommon import DrawToolShape
+from appEditors.grb_plugins.GrbCommon import DrawToolShape, stored_quad_candidates
 import appTranslation as fcTranslate
 
 fcTranslate.apply_language('strings')
@@ -235,7 +235,11 @@ class GerberHistory:
                 if getattr(editor, 'loaded_as_regions', False):
                     break
                 follow, solid = geo.get('follow'), geo.get('solid')
-                if solid is None or solid.is_empty:
+                if solid is None:
+                    continue
+                if solid.is_empty:
+                    if follow is not None and not follow.is_empty:
+                        editor.loaded_as_regions = True
                     continue
                 if follow is None:
                     editor.loaded_as_regions = True
@@ -256,8 +260,8 @@ class GerberHistory:
                     editor.loaded_as_regions = True
                     continue
                 # Compare spatial footprints, not polygon vertex ordering or circle tessellation count.
-                errors = [solid.hausdorff_distance(follow.buffer(width / divisor,
-                           int(editor.app.options.get('gerber_circle_steps', 64)))) for divisor in (2, 1.999)]
+                errors = [solid.hausdorff_distance(follow.buffer(width / divisor, quad))
+                          for divisor in (2, 1.999) for quad in stored_quad_candidates(editor, width / divisor)]
                 if min(errors) > max(width * 0.005, 1e-8):
                     editor.loaded_as_regions = True
         return {'label': label, 'apertures': deltas, 'before': self.before, 'after': self.state()}
@@ -410,18 +414,35 @@ class GerberHistory:
         self.notify()
         return self.pending
 
-    def submit(self, label, compute, matrix=None):
-        shapes = list(dict.fromkeys(self.editor.selected))
+    def submit(self, label, compute, matrix=None, shapes=None, success=None, on_commit=None):
+        shapes = list(dict.fromkeys(self.editor.selected if shapes is None else shapes))
         if not shapes:
             self.editor.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
             return 'fail'
+        # An existing transaction must stay atomic; only standalone actions go to the worker queue.
+        if self.depth:
+            with self.operation(label) as accepted:
+                if not accepted:
+                    return 'fail'
+                selected = set(shapes)
+                keys = [key for key, aperture in self.editor.storage_dict.items()
+                        if any(shape in selected for shape in aperture.get('geometry', ()))]
+                self.capture(keys, shapes)
+                compute(shapes)
+                if matrix is not None and is_rigid(matrix):
+                    self.native_shapes.update(shapes)
+                    if is_translation(matrix):
+                        self.translated_shapes.update(shapes)
+                self.editor.plot_transformed(shapes, matrix)
+            return
         pending = self.reserve()
         if pending is None:
             return 'fail'
         clones = [DrawToolShape(dict(shape.geo)) for shape in shapes]
 
         def work():
-            result = {'pending': pending, 'shapes': shapes, 'label': label, 'matrix': matrix}
+            result = {'pending': pending, 'shapes': shapes, 'label': label, 'matrix': matrix,
+                      'success': success, 'on_commit': on_commit}
             try:
                 compute(clones)
                 result['geometry'] = [dict(shape.geo) for shape in clones]
@@ -463,5 +484,9 @@ class GerberHistory:
                     for shape, geo in zip(shapes, result['geometry']):
                         shape.geo = geo
                     self.editor.plot_transformed(shapes, result['matrix'])
+            if accepted and result.get('success') and self.editor.geometry_revision != pending[2]:
+                self.editor.app.inform.emit('[success] %s' % result['success'])
+            if accepted and result.get('on_commit'):
+                result['on_commit']()
         finally:
             self.notify()

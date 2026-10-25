@@ -3,9 +3,11 @@ old per-shape shapely.affinity algorithm, the plot count, the selection and the 
 class; the application and the shape collection are stand-ins. Everything is headless."""
 
 import os
+import sys
 import time
 import statistics
 import unittest
+import pytest
 from unittest.mock import MagicMock, patch
 
 from PyQt6 import QtWidgets
@@ -14,13 +16,13 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import numpy as np
 from shapely.affinity import rotate, scale, skew, translate
-from shapely.geometry import Point
+from shapely.geometry import Point, box
 
 from appEditors import appGerberEditor
 from appEditors.appGerberEditor import AppGerberEditor
 from appEditors.grb_plugins.GrbCommon import DrawToolShape
 from appEditors.grb_plugins import GrbTransformationPlugin
-from appEditors.grb_plugins.GrbTransformationPlugin import TransformEditorTool, queue_transform, selection_bounds
+from appEditors.grb_plugins.GrbTransformationPlugin import TransformEditorTool, queue_transform
 from test_gerber_editor_pick import aperture, make_editor, pad, trace
 
 KEYS = ('solid', 'follow', 'clear')
@@ -216,6 +218,137 @@ class TransformCase(unittest.TestCase):
         old = shapes[0].geo['solid']
         host.on_offset('X', 1.0)
         same_geo(self, shapes[0].geo['solid'], translate(old, 1.0, 0))
+
+
+@pytest.mark.parametrize('kind,params', [
+    ('skew', ['X', 90, 0, (0, 0)]),
+    ('rotate', [float('inf'), (0, 0)]),
+])
+def test_invalid_transform_preserves_selection_and_history(kind, params):
+    host, editor, shapes = build()
+    before, selected = snapshot(shapes), list(editor.selected)
+    assert queue_transform(host, kind, params) == 'fail'
+    assert snapshot(shapes) == before
+    assert editor.selected == selected
+    assert not editor.history.undo_stack
+    assert editor.history.pending is None
+
+
+def test_scaling_eroded_pad_keeps_empty_solid_and_finite_follow():
+    host, editor, shapes = build()
+    editor.selected = [shapes[0]]
+    host.on_buffer_action(-2, 1)
+    host.on_buffer_action(1.2, 1, True)
+    assert shapes[0].geo['solid'].is_empty
+    assert shapes[0].geo['follow'].equals(Point(0, 0))
+
+
+@pytest.mark.parametrize('kind,params', [
+    ('offset', ['X', sys.float_info.max]),
+    ('buffer', [sys.float_info.max, 1, True]),
+])
+def test_unrepresentable_worker_output_preserves_board_and_history(kind, params):
+    host, editor, shapes = build()
+    editor.selected = [shapes[-1]]
+    host.on_offset('X', 1)
+    assert editor.undo()
+    before = snapshot(shapes)
+    state = editor.history.state()
+    revision = editor.geometry_revision
+    undo, redo = list(editor.history.undo_stack), list(editor.history.redo_stack)
+    host.messages.clear()
+    results = []
+    editor.geometry_result.disconnect()
+    editor.geometry_result.connect(results.append)
+    assert queue_transform(host, kind, params) != 'fail'
+    job = editor.app.worker_task.emit.call_args.args[0]
+    job['fcn'](*job['params'])
+    QtWidgets.QApplication.processEvents()
+    # Don't pass corrupt geometry into GEOS history/export checks while reproducing the failure.
+    assert 'error' in results[0]
+    editor.history.apply_result(results[0])
+    assert snapshot(shapes) == before
+    assert editor.history.state() == state
+    assert editor.geometry_revision == revision
+    assert editor.history.undo_stack == undo and editor.history.redo_stack == redo
+    assert host.messages and not any(message.startswith('[success]') for message in host.messages)
+
+
+def test_affine_validates_all_keys_before_assigning_any_result():
+    shape = DrawToolShape({'solid': box(0, 0, 1, 1), 'follow': Point(sys.float_info.max, 0)})
+    before = dict(shape.geo)
+    with pytest.raises(ValueError):
+        GrbTransformationPlugin.affine_selection([shape], (2, 0, 0, 2, 0, 0))
+    assert shape.geo == before
+
+
+
+
+def transformation_tool(editor):
+    from defaults import AppDefaults
+    editor.app.defaults = AppDefaults()
+    return TransformEditorTool(editor.app, editor)
+
+
+@pytest.mark.parametrize('outcome', ['failure', 'stale'])
+def test_rejected_queued_result_never_reports_success(outcome):
+    host, editor, shapes = build()
+    tool = transformation_tool(editor)
+    before = snapshot(shapes)
+    tool.on_rotate(val=20, ref=0)
+    job = editor.app.worker_task.emit.call_args.args[0]
+    if outcome == 'failure':
+        with patch.object(GrbTransformationPlugin, 'affine_selection', side_effect=ValueError('failed')):
+            job['fcn'](*job['params'])
+    else:
+        editor.touch_geometry()
+        job['fcn'](*job['params'])
+    QtWidgets.QApplication.processEvents()
+    assert snapshot(shapes) == before
+    assert not editor.history.undo_stack
+    assert host.messages and not any(message.startswith('[success]') for message in host.messages)
+
+
+@pytest.mark.parametrize('kind', ['scale', 'buffer'])
+def test_standalone_tool_finishes_after_commit_without_losing_targets(kind):
+    from appEditors.appGerberEditor import ScaleEditorGrb, BufferEditorGrb
+    from appEditors.grb_plugins.GrbBufferPlugin import BufferEditorTool
+    from defaults import AppDefaults
+    host, editor, shapes = build()
+    editor.selected = [shapes[0]]
+    editor.sync_aperture_rows({10})
+    editor.ui.scale_factor_entry.set_value(2)
+    if kind == 'scale':
+        tool = ScaleEditorGrb(editor)
+        action = tool.on_scale_click
+    else:
+        editor.app.defaults = AppDefaults()
+        tool = BufferEditorGrb.__new__(BufferEditorGrb)
+        tool.draw_app, tool.app, tool.name = editor, editor.app, 'buffer'
+        tool.buff_tool = BufferEditorTool(editor.app, editor)
+        tool.buff_tool.ui.buffer_distance_entry.set_value(0.2)
+        action = tool.on_buffer_clicked
+    editor.active_tool = tool
+    editor.shapes.visible = True
+    editor.select_tool = AppGerberEditor.select_tool.__get__(editor)
+    results = []
+    editor.geometry_result.disconnect()
+    editor.geometry_result.connect(results.append)
+    before = shapes[0].geo['solid']
+    action()
+    assert shapes[0].geo['solid'] is before
+    job = editor.app.worker_task.emit.call_args.args[0]
+    job['fcn'](*job['params'])
+    QtWidgets.QApplication.processEvents()
+    editor.history.apply_result(results[0])
+    if kind == 'scale':
+        assert shapes[0].geo['solid'].area == pytest.approx(before.area * 4)
+    else:
+        assert shapes[0].geo['solid'].area == pytest.approx(before.buffer(0.2, quad_segs=16).area)
+    assert editor.active_tool.name == 'select'
+    assert not any('Wait for' in message for message in host.messages)
+
+
 
 
 if __name__ == '__main__':

@@ -12,6 +12,7 @@ from shapely.affinity import rotate, translate
 from appEditors.appExcEditor import (AppExcEditor, AppExcEditorUI, MoveEditorExc, ResizeEditorExc,
                                      DrillArray, SlotArray)
 from appEditors.appGeoEditor import AppGeoEditor, DrawToolShape
+from camlib import circle_quad_segs, object_circle_steps
 from appEditors.exc_plugins.ExcHistory import ExcellonHistory
 from appGUI.MainGUI import MainGUI
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -31,7 +32,7 @@ def scene():
         olddia_newdia={1.0: 1.0}, tool2tooldia={1: 1.0}, last_tool_selected=1,
         is_modified=False, decimals=4, active_tool=None, in_action=False, tool_shape=Mock(),
         build_ui=Mock(), replot=Mock(), select_tool=Mock(),
-        app=SimpleNamespace(options={}, inform=Mock(), log=Mock(), jump_signal=Mock()),
+        app=SimpleNamespace(options={'excellon_circle_steps_mode': 'fixed', 'excellon_circle_steps': 64}, inform=Mock(), log=Mock(), jump_signal=Mock()),
         history_changed=Mock())
     for name in ('_collect_exc_shape', 'add_exc_shape', 'delete_shape', 'delete_selected',
                  'get_selected', 'undo', 'redo', 'resize_features', 'refresh_feature_table',
@@ -126,8 +127,10 @@ def test_diagnostics_are_read_only_and_do_not_report_open_drill_crosses():
     assert selected['slots'] == 0
 
 
-def test_selected_resize_preserves_native_slot_endpoints_and_unselected_drill():
+@pytest.mark.parametrize('mode', ['fixed', 'adaptive'])
+def test_selected_resize_preserves_native_slot_endpoints_and_unselected_drill(mode):
     editor, first, second = scene()
+    editor.app.options['excellon_circle_steps_mode'] = mode
     second.exc_slot = ((4.0, 0.0), (6.0, 1.0))
     second.exc_slot_geometry = second.geo
     editor.selected = [second]
@@ -140,7 +143,9 @@ def test_selected_resize_preserves_native_slot_endpoints_and_unselected_drill():
     assert list(editor.storage_dict[1.0].get_objects()) == [first]
     resized = list(editor.storage_dict[2.0].get_objects())[0]
     assert resized.exc_slot == second.exc_slot
-    assert resized.geo.equals(LineString(second.exc_slot).buffer(1.0))
+    # the new slot ends have the segments that the Excellon object gives to a hole of this tool
+    quad_segs = circle_quad_segs(object_circle_steps(editor.app.options, 'excellon', 1.0, 'MM'))
+    assert resized.geo.equals(LineString(second.exc_slot).buffer(1.0, quad_segs))
     assert len(editor.history.undo_stack) == 1
     assert editor.undo()
     assert list(editor.storage_dict) == [1.0]
@@ -151,19 +156,22 @@ def test_selected_resize_preserves_native_slot_endpoints_and_unselected_drill():
 
 
 def test_tool_edit_resizes_all_features_atomically_and_is_one_history_step():
+    qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     editor, first, second = scene()
-    editor.ui = SimpleNamespace(tools_table_exc=MagicMock())
-    editor.ui.tools_table_exc.currentItem().text.return_value = '2.0'
-    editor.ui.tools_table_exc.currentRow.return_value = 0
+    editor.ui = SimpleNamespace(tools_table_exc=QtWidgets.QTableWidget(1, 2))
+    diameter = QtWidgets.QTableWidgetItem('2.0')
+    diameter.setData(QtCore.Qt.ItemDataRole.UserRole, 1.0)
+    editor.ui.tools_table_exc.setItem(0, 1, diameter)
     second.exc_slot = ((4.0, 0.0), (6.0, 1.0))
     second.exc_slot_geometry = second.geo
-    AppExcEditor.on_tool_edit(editor, Mock())
+    AppExcEditor.on_tool_edit(editor, diameter)
     assert list(editor.storage_dict) == [2.0]
     assert len(list(editor.storage_dict[2.0].get_objects())) == 2
     assert len(editor.history.undo_stack) == 1
     assert editor.undo()
     assert list(editor.storage_dict[1.0].get_objects()) == [first, second]
     assert editor.tool2tooldia == {1: 1.0}
+    assert qapp is not None
 
 
 def test_tool_add_delete_and_slot_conversion_restore_counts_and_selection():

@@ -73,7 +73,8 @@ def aperture(shapes, kind='C'):
 
 def make_editor(storage=None, pixel=0.05, grid=False):
     app = MagicMock()
-    app.options = {'global_mselect_key': 'Control', 'gerber_circle_steps': 16}
+    app.options = {'global_mselect_key': 'Control', 'gerber_circle_steps_mode': 'fixed',
+                   'gerber_circle_steps': 64}
     app.decimals = 4
     app.app_units = 'MM'
     app.resource_location = ASSETS
@@ -387,8 +388,14 @@ class TestEditorOperations(PickCase):
         ed.sync_aperture_rows({10})
         plugin = SimpleNamespace(app=ed.app, draw_app=ed)
         BufferEditorTool.buffer(plugin, 1, 'round')
+        job = ed.app.worker_task.emit.call_args.args[0]
+        job['fcn'](*job['params'])
+        QtWidgets.QApplication.processEvents()
         first_area = ed.storage_dict[10]['geometry'][0].geo['solid'].area
         BufferEditorTool.buffer(plugin, 1, 'round')
+        job = ed.app.worker_task.emit.call_args.args[0]
+        job['fcn'](*job['params'])
+        QtWidgets.QApplication.processEvents()
         self.assertIn(ed.selected[0], ed.storage_dict[10]['geometry'])
         self.assertGreater(ed.storage_dict[10]['geometry'][0].geo['solid'].area, first_area)
         self.assertIs(ed.storage_dict[10]['geometry'][1], other)
@@ -408,6 +415,9 @@ class TestEditorOperations(PickCase):
                 ed.ui.scale_factor_entry.set_value(2)
                 area = shape.geo['solid'].area
                 ed.on_scale()
+                job = ed.app.worker_task.emit.call_args.args[0]
+                job['fcn'](*job['params'])
+                QtWidgets.QApplication.processEvents()
                 scaled = ed.storage_dict[key]['geometry'][0]
                 self.assertAlmostEqual(scaled.geo['solid'].area, area * 4)
                 self.assertIn(ed.selected[0], ed.storage_dict[key]['geometry'])

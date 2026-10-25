@@ -344,6 +344,56 @@ def test_subtraction_uses_areas_while_cutpath_uses_outlines(operation, target_ki
 
 
 
+@pytest.mark.parametrize('transform,args,kwargs', [
+    ('skew', (90, 0, (0, 0)), {}),
+])
+def test_invalid_transform_preserves_selection_storage_and_history(transform, args, kwargs):
+    shape = DrawToolShape(box(0, 0, 2, 2))
+    editor = editor_with_history([shape], [shape])
+    with pytest.raises(ValueError):
+        AppGeoEditor.transform_shapes(editor, transform, *args, **kwargs)
+    assert list(editor.storage.get_objects()) == [shape]
+    assert editor.selected == [shape]
+    assert not editor._history_undo
+    assert editor.storage.nearest((0, 0))[1] is shape
+
+
+@pytest.mark.parametrize('transform,args,kwargs,expected', [
+    ('scale', (-2, 1), {}, (-4, 0, 0, 2)),
+    ('buffer', (-0.25,), {'join': 2}, (0.25, 0.25, 1.75, 1.75)),
+])
+def test_transform_reflection_and_erosion_preserve_metadata_and_replay(transform, args, kwargs, expected):
+    shape = DrawToolShape(box(0, 0, 2, 2))
+    shape.data['custom'] = {'name': 'source'}
+    editor = editor_with_history([shape], [shape])
+    AppGeoEditor.transform_shapes(editor, transform, *args, **kwargs)
+    result = editor.selected[0]
+    assert result.geo.is_valid and not result.geo.is_empty
+    assert result.geo.bounds == expected
+    assert result.data['bounds'] == result.bounds()
+    assert result.data['custom'] == shape.data['custom']
+    assert editor.storage.nearest(expected[:2])[1] is result
+    assert len(editor._history_undo) == 1
+    assert editor.undo()
+    assert editor.selected == [shape]
+    assert shape.geo.bounds == (0, 0, 2, 2)
+    assert list(editor.storage.get_objects()) == [shape]
+    assert editor.redo()
+    assert editor.selected[0].geo.bounds == expected
+
+
+@pytest.mark.filterwarnings('error::RuntimeWarning')
+def test_affine_overflow_keeps_all_originals_atomically():
+    shapes = [DrawToolShape(LineString([(0, 0), (1, 1)])),
+              DrawToolShape(LineString([(1e308, 0), (1e308, 1)]))]
+    editor = editor_with_history(shapes, shapes)
+    with pytest.raises(ValueError):
+        AppGeoEditor.transform_shapes(editor, 'scale', 2, 2)
+    assert list(editor.storage.get_objects()) == shapes
+    assert editor.selected == shapes
+    assert not editor._history_undo
+
+
 def test_transform_and_replay_plot_only_changed_shapes():
     shapes = [DrawToolShape(LineString([(x, 0), (x, 1)])) for x in range(100)]
     editor = editor_with_history(shapes, [shapes[0]])

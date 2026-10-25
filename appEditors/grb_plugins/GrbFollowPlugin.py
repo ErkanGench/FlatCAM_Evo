@@ -8,7 +8,8 @@ from shapely import LineString, Point, STRtree
 from shapely.errors import GEOSException
 from shapely.ops import linemerge, substring, unary_union
 
-from appEditors.grb_plugins.GrbCommon import DrawTool, DrawToolShape, numeric_aperture_codes
+from appEditors.grb_plugins.GrbCommon import DrawTool, DrawToolShape, numeric_aperture_codes, gerber_quad, \
+    stored_quad_candidates
 from appEditors.grb_plugins.GrbHistory import gerber_operation, metadata
 from appEditors.grb_plugins.GrbTrackBend import scene_state, sweep_parameters
 import appTranslation as fcTranslate
@@ -260,11 +261,10 @@ def apply_resize_circles(editor, diameter):
                     solid is None or solid.is_empty or not solid.is_valid or
                     not getattr(shape.geo.get('clear'), 'is_empty', True)):
                 raise ValueError(_("Select unmodified circular flashes without clear geometry."))
-            resolutions = [editor.app.options.get('gerber_circle_steps', 64),
-                           getattr(editor.gerber_obj, 'steps_per_circle', None)]
-            steps = next((steps for steps in resolutions if isinstance(steps, int) and not isinstance(steps, bool)
-                          and 1 <= steps <= 4096 and solid.equals_exact(follow.buffer(width / 2, steps),
-                              max(1e-10, width * 1e-8), normalize=True)), None)
+            # the circle of the solid has the steps of the preference now or of the preference when it was made
+            steps = next((quad for quad in stored_quad_candidates(editor, width / 2)
+                          if solid.equals_exact(follow.buffer(width / 2, quad),
+                                                max(1e-10, width * 1e-8), normalize=True)), None)
             if steps is None:
                 raise ValueError(_("The flash solid does not match a plain circular aperture. Resize cancelled."))
             if diameter == width:
@@ -277,7 +277,7 @@ def apply_resize_circles(editor, diameter):
                 target = next_code
                 next_code += 1
                 new_apertures[target] = dict(target_meta, geometry=[])
-            result = DrawToolShape(dict(shape.geo, solid=follow.buffer(diameter / 2, steps)))
+            result = DrawToolShape(dict(shape.geo, solid=follow.buffer(diameter / 2, gerber_quad(editor.app, diameter / 2))))
             if result.geo['solid'].is_empty or not result.geo['solid'].is_valid:
                 raise ValueError(_("The new diameter produces invalid circular geometry."))
             replacements.setdefault(apid, {})[index] = []

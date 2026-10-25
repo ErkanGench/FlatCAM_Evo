@@ -156,7 +156,7 @@ def test_filtered_delete_save_reparse_after_undo_redo(app):
         AppGerberEditor.build_edited_gerber(stand_in, 'board', editor.storage_dict)
         result = app.custom_signal.emit.call_args.args[0]
         assert 'error' not in result
-        parsed = Gerber(app, steps_per_circle=16)
+        parsed = Gerber(app, steps_per_circle=64)
         assert parsed.parse_lines(result['obj'].source_file.splitlines()) is None
         expected = unary_union([shape.geo['solid'] for shape in editor.storage_dict[10]['geometry']])
         assert unary_union(parsed.solid_geometry).hausdorff_distance(expected) < 0.001

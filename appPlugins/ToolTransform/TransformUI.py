@@ -57,6 +57,7 @@ class TransformUI:
         ref_label = FCLabel('%s:' % _("Reference"))
         ref_label.setToolTip(
             _("The reference point for Rotate, Skew, Scale, Mirror.\n"
+              "Offset does not use a reference point.\n"
               "Can be:\n"
               "- Origin -> it is the 0, 0 point\n"
               "- Selection -> the center of the bounding box of the selected objects\n"
@@ -150,9 +151,8 @@ class TransformUI:
 
         self.rotate_button = FCButton(_("Rotate"))
         self.rotate_button.setToolTip(
-            _("Rotate the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects.")
+            _("Rotate the selected object(s) around the\n"
+              "reference point selected above.")
         )
         self.rotate_button.setMinimumWidth(90)
 
@@ -175,7 +175,8 @@ class TransformUI:
         self.skew_link_cb = FCCheckBox()
         self.skew_link_cb.setText(_("Link"))
         self.skew_link_cb.setToolTip(
-            _("Link the Y entry to X entry and copy its content.")
+            _("Use the X angle for both axes.\n"
+              "The Y entry is ignored while linked and kept for when the link is off.")
         )
 
         s_t_lay.addWidget(self.skew_link_cb)
@@ -198,9 +199,8 @@ class TransformUI:
 
         self.skewx_button = FCButton(_("Skew X"))
         self.skewx_button.setToolTip(
-            _("Skew/shear the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects."))
+            _("Skew/shear the selected object(s) on X around the\n"
+              "reference point selected above."))
         self.skewx_button.setMinimumWidth(90)
 
         skew_grid.addWidget(self.skewx_label, 0, 0)
@@ -219,14 +219,21 @@ class TransformUI:
 
         self.skewy_button = FCButton(_("Skew Y"))
         self.skewy_button.setToolTip(
-            _("Skew/shear the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects."))
+            _("Skew/shear the selected object(s) on Y around the\n"
+              "reference point selected above."))
         self.skewy_button.setMinimumWidth(90)
 
         skew_grid.addWidget(self.skewy_label, 2, 0)
         skew_grid.addWidget(self.skewy_entry, 2, 1)
         skew_grid.addWidget(self.skewy_button, 2, 2)
+
+        self.skewxy_button = FCButton(_("Skew X/Y"))
+        self.skewxy_button.setToolTip(
+            _("Skew/shear the selected object(s) using both the X and Y angles\n"
+              "around the reference point selected above.\n"
+              "When Link is checked the X angle is used for both."))
+        self.skewxy_button.setMinimumWidth(90)
+        skew_grid.addWidget(self.skewxy_button, 4, 0, 1, 3)
 
         self.ois_sk = OptionalInputSection(self.skew_link_cb, [self.skewy_label, self.skewy_entry, self.skewy_button],
                                            logic=False)
@@ -245,7 +252,8 @@ class TransformUI:
         # ## Link Scale factors
         self.scale_link_cb = FCCheckBox(_("Link"))
         self.scale_link_cb.setToolTip(
-            _("Link the Y entry to X entry and copy its content.")
+            _("Use the X factor for both axes.\n"
+              "The Y entry is ignored while linked and kept for when the link is off.")
         )
         sc_t_lay.addWidget(self.scale_link_cb)
 
@@ -262,13 +270,12 @@ class TransformUI:
         self.scalex_entry = FCDoubleSpinner(callback=self.confirmation_message)
         # self.scalex_entry.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.scalex_entry.set_precision(self.decimals)
-        self.scalex_entry.setMinimum(-1e6)
+        self.scalex_entry.set_range(-1e6, 1e6)
 
         self.scalex_button = FCButton(_("Scale X"))
         self.scalex_button.setToolTip(
-            _("Scale the selected object(s).\n"
-              "The point of reference depends on \n"
-              "the Scale reference checkbox state."))
+            _("Scale the selected object(s) on X around the\n"
+              "reference point selected above."))
         self.scalex_button.setMinimumWidth(90)
 
         scale_grid.addWidget(self.scalex_label, 0, 0)
@@ -282,18 +289,25 @@ class TransformUI:
         self.scaley_entry = FCDoubleSpinner(callback=self.confirmation_message)
         # self.scaley_entry.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.scaley_entry.set_precision(self.decimals)
-        self.scaley_entry.setMinimum(-1e6)
+        self.scaley_entry.set_range(-1e6, 1e6)
 
         self.scaley_button = FCButton(_("Scale Y"))
         self.scaley_button.setToolTip(
-            _("Scale the selected object(s).\n"
-              "The point of reference depends on \n"
-              "the Scale reference checkbox state."))
+            _("Scale the selected object(s) on Y around the\n"
+              "reference point selected above."))
         self.scaley_button.setMinimumWidth(90)
 
         scale_grid.addWidget(self.scaley_label, 2, 0)
         scale_grid.addWidget(self.scaley_entry, 2, 1)
         scale_grid.addWidget(self.scaley_button, 2, 2)
+
+        self.scalexy_button = FCButton(_("Scale X/Y"))
+        self.scalexy_button.setToolTip(
+            _("Scale the selected object(s) using both the X and Y factors\n"
+              "around the reference point selected above.\n"
+              "When Link is checked the X factor is used for both."))
+        self.scalexy_button.setMinimumWidth(90)
+        scale_grid.addWidget(self.scalexy_button, 4, 0, 1, 3)
 
         self.ois_s = OptionalInputSection(self.scale_link_cb,
                                           [
@@ -314,14 +328,14 @@ class TransformUI:
         mirror_grid = GLay(v_spacing=5, h_spacing=3)
         mirror_frame.setLayout(mirror_grid)
 
-        self.flipx_button = FCButton(_("Flip on X"))
+        self.flipx_button = FCButton(_("Flip X"))
         self.flipx_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
+            _("Mirror the X coordinate of the selected object(s)\nover the Y axis.")
         )
 
-        self.flipy_button = FCButton(_("Flip on Y"))
+        self.flipy_button = FCButton(_("Flip Y"))
         self.flipy_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
+            _("Mirror the Y coordinate of the selected object(s)\nover the X axis.")
         )
 
         hlay0 = QtWidgets.QHBoxLayout()
@@ -349,13 +363,12 @@ class TransformUI:
         self.offx_entry = FCDoubleSpinner(callback=self.confirmation_message)
         # self.offx_entry.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.offx_entry.set_precision(self.decimals)
-        self.offx_entry.setMinimum(-1e6)
+        self.offx_entry.set_range(-1e6, 1e6)
 
         self.offx_button = FCButton(_("Offset X"))
         self.offx_button.setToolTip(
-            _("Offset the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects.\n"))
+            _("Offset the selected object(s) by the X value.\n"
+              "Offset does not use the reference point."))
         self.offx_button.setMinimumWidth(90)
 
         off_grid.addWidget(self.offx_label, 0, 0)
@@ -369,18 +382,24 @@ class TransformUI:
         self.offy_entry = FCDoubleSpinner(callback=self.confirmation_message)
         # self.offy_entry.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.offy_entry.set_precision(self.decimals)
-        self.offy_entry.setMinimum(-1e6)
+        self.offy_entry.set_range(-1e6, 1e6)
 
         self.offy_button = FCButton(_("Offset Y"))
         self.offy_button.setToolTip(
-            _("Offset the selected object(s).\n"
-              "The point of reference is the middle of\n"
-              "the bounding box for all selected objects.\n"))
+            _("Offset the selected object(s) by the Y value.\n"
+              "Offset does not use the reference point."))
         self.offy_button.setMinimumWidth(90)
 
         off_grid.addWidget(self.offy_label, 2, 0)
         off_grid.addWidget(self.offy_entry, 2, 1)
         off_grid.addWidget(self.offy_button, 2, 2)
+
+        self.offsetxy_button = FCButton(_("Offset X/Y"))
+        self.offsetxy_button.setToolTip(
+            _("Offset the selected object(s) by both the X and Y values.\n"
+              "Offset does not use the reference point."))
+        self.offsetxy_button.setMinimumWidth(90)
+        off_grid.addWidget(self.offsetxy_button, 4, 0, 1, 3)
 
         # #############################################################################################################
         # Buffer Frame

@@ -10,7 +10,37 @@ import numpy as np
 
 import logging
 
+from camlib import gerber_circle_steps, gerber_quad_segs, circle_quad_segs
+
 log = logging.getLogger('base')
+
+
+def gerber_steps(app, radius):
+    """The segments of a full circle of this radius (in app units), as the Gerber circle preferences set them."""
+    return gerber_circle_steps(app.options, radius, app.app_units)
+
+
+def gerber_quad(app, radius):
+    """The Shapely quad_segs of a circle of this radius (in app units), as the Gerber circle preferences set them."""
+    return gerber_quad_segs(app.options, radius, app.app_units)
+
+
+def stored_quad_candidates(editor, radius):
+    """
+    The quad_segs that a stored Gerber circle of this radius can have, to recognise it: the ones of the preference
+    now (the first), of the other mode of the preference and of the object (the file may have been loaded with
+    other preferences).
+    """
+    app = editor.app
+    units = app.app_units
+    options = app.options
+    found = [gerber_quad_segs(options, radius, units)]
+    for mode in ('fixed', 'adaptive'):
+        found.append(gerber_quad_segs(dict(options, gerber_circle_steps_mode=mode), radius, units))
+    object_steps = getattr(getattr(editor, 'gerber_obj', None), 'steps_per_circle', None)
+    if isinstance(object_steps, int) and not isinstance(object_steps, bool) and object_steps > 0:
+        found.append(circle_quad_segs(object_steps))
+    return list(dict.fromkeys(found))
 
 
 def numeric_aperture_codes(keys):

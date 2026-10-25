@@ -85,8 +85,8 @@ def grb_tool(cls, mode, points, snap=True):
     tool.dont_execute = False
     tool.draw_app = SimpleNamespace(bend_mode=mode, app=SimpleNamespace(ui=grb_ui(snap)))
     tool.points = list(points)
-    tool.steps_per_circle = 8
     tool.buf_val = 0.001
+    tool.quad_segs = 2
     tool.gridx_size = tool.gridy_size = 1.0
     tool.temp_points = []
     tool.inter_point = None

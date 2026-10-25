@@ -81,13 +81,15 @@ def arc_middle(begin, through, end):
 
 def arc_points(begin, through, end, steps):
     """The points of the arc from begin through `through` to end, begin and end included. steps count the full
-    circle. 3 points on 1 line give the straight segment [begin, end]. The segment count keeps the arc findable by
+    circle; it can be a function of the radius of the arc. 3 points on 1 line give the straight segment [begin, end]. The segment count keeps the arc findable by
     find_arcs: at least ARC_MIN_SEGMENTS, and a turn of at most ARC_MAX_TURN at each vertex."""
     center = circle_center(begin, through, end)
     if center is None:
         return [tuple(begin), tuple(end)]
     a0, sweep = _sweep(begin, through, end, center)
     radius = math.dist(center, begin)
+    if callable(steps):
+        steps = steps(radius)
     count = max(ARC_MIN_SEGMENTS, round(steps * abs(sweep) / (2 * math.pi)), math.ceil(abs(sweep) / ARC_MAX_TURN))
     inner = [(center[0] + radius * math.cos(a0 + sweep * i / count),
               center[1] + radius * math.sin(a0 + sweep * i / count)) for i in range(1, count)]

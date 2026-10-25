@@ -13,6 +13,7 @@ from appPlugins.ToolMove.MoveGen import selection_corners, translated_box, selec
 from appPlugins.ToolMove.MoveUI import MoveUI
 
 import logging
+import math
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -45,6 +46,7 @@ class ToolMove(AppTool):
         self.ui = MoveUI(self)
 
         self.clicked_move = 0
+        self._move_in_progress = False
 
         self.point1 = None
         self.point2 = None
@@ -181,9 +183,23 @@ class ToolMove(AppTool):
         :rtype:
         """
 
-        dx, dy = offset
+        try:
+            dx, dy = offset
+            dx = float(dx)
+            dy = float(dy)
+        except (TypeError, ValueError, OverflowError):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Invalid move offset."))
+            return "fail"
+        if not (math.isfinite(dx) and math.isfinite(dy)):
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Invalid move offset."))
+            return "fail"
         if dx == 0 and dy == 0:
             return
+
+        if self._move_in_progress:
+            self.app.inform.emit('[WARNING_NOTCL] %s' %
+                                 _("A move is already in progress. Wait for it to finish, then retry."))
+            return "fail"
 
         if objects is None:
             # move only the objects selected and plotted and visible
@@ -220,63 +236,74 @@ class ToolMove(AppTool):
             return bounds, error
 
         def job_move(app_obj):
-            with self.app.proc_container.new('%s...' % _("Moving")):
-                # The vectorized Shapely calls of offset() release the GIL, so the objects move in parallel.
-                # Each object owns its geometry; plot() stays sequential because the canvas is not thread-safe.
-                # The move is 1 Undo / Redo step: a matrix for the objects that have a matrix path, a snapshot
-                # for the others (CNCJob).
-                history = history_of(self.app)
-                label = _("Move")
-                no_matrix = [obj for obj in obj_list if not supports_matrix(obj)]
-                before = {id(obj): transform_metadata(obj) if history.is_recording() else {}
-                          for obj in obj_list if supports_matrix(obj)}
-                t_start = time.perf_counter()
-                with history.group(label), history.snapshot(label, no_matrix):
-                    if len(obj_list) == 1:
-                        offset_results = [offset_one(obj_list[0])]
-                    else:
-                        workers = min(len(obj_list), os.cpu_count() or 1)
-                        with ThreadPoolExecutor(max_workers=workers) as executor:
-                            offset_results = list(executor.map(offset_one, obj_list))
-                    # an object that failed is left out: its state is not known
-                    history.record_matrix(label, [
-                        (obj, affine_translate_matrix(dx, dy), before[id(obj)])
-                        for obj, (_bounds, error) in zip(obj_list, offset_results)
-                        if error is None and supports_matrix(obj)])
-                t_offset = time.perf_counter() - t_start
+            try:
+                with self.app.proc_container.new('%s...' % _("Moving")):
+                    # The vectorized Shapely calls of offset() release the GIL, so the objects move in parallel.
+                    # Each object owns its geometry; plot() stays sequential because the canvas is not thread-safe.
+                    # The move is 1 Undo / Redo step: a matrix for the objects that have a matrix path, a snapshot
+                    # for the others (CNCJob).
+                    history = history_of(self.app)
+                    label = _("Move")
+                    no_matrix = [obj for obj in obj_list if not supports_matrix(obj)]
+                    before = {id(obj): transform_metadata(obj) if history.is_recording() else {}
+                              for obj in obj_list if supports_matrix(obj)}
+                    t_start = time.perf_counter()
+                    with history.group(label), history.snapshot(label, no_matrix):
+                        if len(obj_list) == 1:
+                            offset_results = [offset_one(obj_list[0])]
+                        else:
+                            workers = min(len(obj_list), os.cpu_count() or 1)
+                            with ThreadPoolExecutor(max_workers=workers) as executor:
+                                offset_results = list(executor.map(offset_one, obj_list))
+                        # an object that failed is left out: its state is not known
+                        history.record_matrix(label, [
+                            (obj, affine_translate_matrix(dx, dy), before[id(obj)])
+                            for obj, (_bounds, error) in zip(obj_list, offset_results)
+                            if error is None and supports_matrix(obj)])
+                    t_offset = time.perf_counter() - t_start
 
-                for sel_obj, (bounds, error) in zip(obj_list, offset_results):
-                    if bounds is not None:
-                        result['updates'].append((sel_obj, bounds))
-                    if error is not None and result['error'] is None:
-                        result['error'] = error
+                    for sel_obj, (bounds, error) in zip(obj_list, offset_results):
+                        if bounds is not None:
+                            result['updates'].append((sel_obj, bounds))
+                        if error is not None and result['error'] is None:
+                            result['error'] = error
 
-                # Plot before exporting, and refresh even a partially moved object on failure.
-                t_plot = t_source = 0.0
-                for sel_obj in obj_list:
-                    try:
-                        t_start = time.perf_counter()
-                        sel_obj.plot()
-                        t_plot += time.perf_counter() - t_start
-                        if sel_obj.kind in ('gerber', 'excellon'):
+                    # Plot before exporting, and refresh even a partially moved object on failure.
+                    t_plot = t_source = 0.0
+                    for sel_obj in obj_list:
+                        try:
                             t_start = time.perf_counter()
-                            regenerated = sel_obj.regenerate_source()
-                            t_source += time.perf_counter() - t_start
-                            if regenerated is False:
-                                raise ValueError('Source regeneration failed')
-                    except Exception as err:
-                        app_obj.app.log.exception('ToolMove.move_handler() refresh')
-                        result['error'] = str(err)
+                            sel_obj.plot()
+                            t_plot += time.perf_counter() - t_start
+                            if sel_obj.kind in ('gerber', 'excellon'):
+                                t_start = time.perf_counter()
+                                regenerated = sel_obj.regenerate_source()
+                                t_source += time.perf_counter() - t_start
+                                if regenerated is False:
+                                    raise ValueError('Source regeneration failed')
+                        except Exception as err:
+                            app_obj.app.log.exception('ToolMove.move_handler() refresh')
+                            result['error'] = str(err)
 
-                app_obj.app.log.debug("ToolMove.move_handler() %d objects: offset %.3fs, plot %.3fs, source %.3fs" %
-                                      (len(obj_list), t_offset, t_plot, t_source))
-
-            app_obj.move_finished.emit(result)
+                    app_obj.app.log.debug("ToolMove.move_handler() %d objects: offset %.3fs, plot %.3fs, source %.3fs" %
+                                          (len(obj_list), t_offset, t_plot, t_source))
+            except Exception as err:
+                app_obj.app.log.exception('ToolMove.move_handler()')
+                result['error'] = str(err)
+            finally:
+                # always reach the GUI: the in-flight state is released there
+                app_obj.move_finished.emit(result)
 
         self.app.should_we_save = True
-        self.app.worker_task.emit({'fcn': job_move, 'params': [self]})
+        self._move_in_progress = True
+        try:
+            self.app.worker_task.emit({'fcn': job_move, 'params': [self]})
+        except Exception:
+            self._move_in_progress = False
+            raise
 
     def _on_move_finished(self, result):
+        self._move_in_progress = False
         try:
             for obj, bounds in result['updates']:
                 for key, value in zip(('xmin', 'ymin', 'xmax', 'ymax'), bounds):

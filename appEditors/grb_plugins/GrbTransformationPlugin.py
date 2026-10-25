@@ -1,6 +1,7 @@
 
 from PyQt6 import QtGui, QtWidgets
 from appTool import AppToolEditor, AppTool
+from appEditors.grb_plugins.GrbCommon import gerber_quad
 from appCommon.SafeEval import safe_eval
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, FCDoubleSpinner, \
     FCInputDoubleSpinner, FCComboBox, NumericalEvalTupleEntry, FCCheckBox, OptionalInputSection
@@ -41,6 +42,24 @@ def selection_bounds(shapes):
     return tuple(float(v) for v in bounds)
 
 
+def _apply_geometry_updates(updates, allow_empty=False):
+    """Validate the whole result before assigning any solid, follow or clear geometry."""
+    for key, owners, new_geos in updates:
+        if not np.all(np.isfinite(shapely.get_coordinates(new_geos))):
+            raise ValueError(_("Transformation produced nonfinite coordinates."))
+        z_geos = [geo for geo in new_geos if shapely.has_z(geo)]
+        if z_geos and not np.all(np.isfinite(shapely.get_coordinates(z_geos, include_z=True))):
+            raise ValueError(_("Transformation produced nonfinite coordinates."))
+        if not np.all(shapely.is_valid(new_geos)):
+            raise ValueError(_("Transformation produced invalid geometry."))
+        if not allow_empty and any(geo.is_empty and not shape.geo[key].is_empty
+                                   for shape, geo in zip(owners, new_geos)):
+            raise ValueError(_("Transformation collapsed the geometry."))
+    for key, owners, new_geos in updates:
+        for shape, geo in zip(owners, new_geos):
+            shape.geo[key] = geo
+
+
 def affine_selection(shapes, matrix):
     """
     Applies 1 affine matrix to the 'solid', 'follow' and 'clear' of all the shapes. 1 vectorized call per key. The
@@ -50,11 +69,10 @@ def affine_selection(shapes, matrix):
     for key in GEO_KEYS:
         owners = [shape for shape in shapes if shape.geo.get(key) is not None]
         if owners:
-            new_geos = affine_geometry_many([shape.geo[key] for shape in owners], matrix)
+            with np.errstate(over='ignore', invalid='ignore'):
+                new_geos = affine_geometry_many([shape.geo[key] for shape in owners], matrix)
             updates.append((key, owners, new_geos))
-    for key, owners, new_geos in updates:
-        for shape, geo in zip(owners, new_geos):
-            shape.geo[key] = geo
+    _apply_geometry_updates(updates)
 
 
 def scale_selection_about_centers(shapes, factor):
@@ -70,18 +88,21 @@ def scale_selection_about_centers(shapes, factor):
         geos = np.empty(len(owners), dtype=object)
         geos[:] = [shape.geo[key] for shape in owners]
         solids = np.empty(len(owners), dtype=object)
-        solids[:] = [shape.geo['solid'] if shape.geo.get('solid') is not None else shape.geo[key] for shape in owners]
+        solids[:] = [next((shape.geo[name] for name in GEO_KEYS
+                           if shape.geo.get(name) is not None and not shape.geo[name].is_empty), shape.geo[key])
+                     for shape in owners]
         bounds = shapely.bounds(solids)
-        centers = np.column_stack(((bounds[:, 0] + bounds[:, 2]) * 0.5, (bounds[:, 1] + bounds[:, 3]) * 0.5))
+        centers = bounds[:, :2] * 0.5 + bounds[:, 2:] * 0.5
         coords, index = shapely.get_coordinates(geos, return_index=True)
-        new_coords = centers[index] + (coords - centers[index]) * factor
+        with np.errstate(over='ignore', invalid='ignore'):
+            new_coords = centers[index] + (coords - centers[index]) * factor
+        if not np.all(np.isfinite(new_coords)):
+            raise ValueError(_("Transformation produced nonfinite coordinates."))
         updates.append((key, owners, shapely.set_coordinates(geos.copy(), new_coords)))
-    for key, owners, new_geos in updates:
-        for shape, geo in zip(owners, new_geos):
-            shape.geo[key] = geo
+    _apply_geometry_updates(updates)
 
 
-def buffer_selection(shapes, value, join, steps):
+def buffer_selection(shapes, value, join, quad_segs):
     """Buffers the 'solid' and the 'clear' of the shapes (the 'follow' is not changed), 1 vectorized call per key."""
     updates = []
     for key in ('solid', 'clear'):
@@ -89,14 +110,38 @@ def buffer_selection(shapes, value, join, steps):
         if owners:
             geos = np.empty(len(owners), dtype=object)
             geos[:] = [shape.geo[key] for shape in owners]
-            updates.append((key, owners, shapely.buffer(geos, value, quad_segs=steps, join_style=join)))
-    for key, owners, new_geos in updates:
-        for shape, geo in zip(owners, new_geos):
-            shape.geo[key] = geo
+            updates.append((key, owners, shapely.buffer(geos, value, quad_segs=quad_segs, join_style=join)))
+    _apply_geometry_updates(updates, allow_empty=value < 0)
 
 
 def queue_transform(tool, kind, params):
     """Capture the selection on the GUI thread; workers only change detached wrappers."""
+    if kind in ('rotate', 'flip', 'skew', 'scale', 'offset'):
+        try:
+            params = list(params)
+            if kind != 'offset':
+                params[-1] = tuple(float(value) for value in params[-1])
+                if len(params[-1]) != 2:
+                    raise ValueError
+            if kind == 'rotate':
+                params[0] = float(params[0])
+            elif kind in ('skew', 'scale'):
+                params[1:3] = [float(value) for value in params[1:3]]
+            elif kind == 'offset':
+                params[1] = float(params[1])
+            values = params if kind == 'rotate' else params[1:]
+            numbers = [float(v) for value in values for v in
+                       (value if isinstance(value, (tuple, list)) else (value,))]
+            if not all(math.isfinite(value) for value in numbers):
+                raise ValueError
+            if kind == 'skew' and any(abs(math.cos(math.radians(float(value)))) < 1e-12
+                                      for value in params[1:3]):
+                raise ValueError
+            if kind == 'scale' and (params[1] == 0 or params[2] == 0):
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            tool.app.inform.emit('[WARNING_NOTCL] %s' % _("Transform values and reference must be finite and nonsingular."))
+            return 'fail'
     if kind == 'rotate':
         value, point = params
         matrix = affine_rotate_matrix(-value, point)
@@ -121,16 +166,29 @@ def queue_transform(tool, kind, params):
         if factor and float(value) <= 0:
             tool.app.inform.emit('[WARNING_NOTCL] %s' % _("Buffer factor must be greater than -100%."))
             return 'fail'
-        steps = int(tool.app.options.get('gerber_circle_steps', 64))
+        quad_segs = gerber_quad(tool.app, value)
 
         def compute(shapes):
             if factor:
                 scale_selection_about_centers(shapes, value)
             else:
-                buffer_selection(shapes, value, join, steps)
+                buffer_selection(shapes, value, join, quad_segs)
 
-        return tool.draw_app.submit_geometry(_("Buffer"), compute)
-    return tool.draw_app.submit_geometry(_(kind.capitalize()), lambda shapes: affine_selection(shapes, matrix), matrix)
+        success = _("Done.") if isinstance(tool, TransformEditorTool) else None
+        return tool.draw_app.submit_geometry(_("Buffer"), compute, success=success)
+    a, b, d, e = matrix[:4]
+    if b == 0 and d == 0:
+        nonsingular = a != 0 and e != 0
+    else:
+        xnorm, ynorm = max(abs(a), abs(b)), max(abs(d), abs(e))
+        nonsingular = xnorm > 0 and ynorm > 0 and abs((a / xnorm) * (e / ynorm) -
+                                                     (b / xnorm) * (d / ynorm)) > 1e-12
+    if not all(math.isfinite(v) for v in matrix) or not nonsingular:
+        tool.app.inform.emit('[WARNING_NOTCL] %s' % _("Transform matrix must be finite and nonsingular."))
+        return 'fail'
+    success = _("Done.") if isinstance(tool, TransformEditorTool) else None
+    return tool.draw_app.submit_geometry(_(kind.capitalize()), lambda shapes: affine_selection(shapes, matrix), matrix,
+                                         success=success)
 
 
 class TransformEditorTool(AppToolEditor):
@@ -237,6 +295,8 @@ class TransformEditorTool(AppToolEditor):
         )
         if ref_val == _("Object"):
             ref_val = _("Selection")
+        elif ref_val == _("Minimum"):
+            ref_val = _("Minimum (lower left)")
         self.ui.ref_combo.set_value(ref_val)
         self.ui.point_entry.set_value(self.app.options.get(
             "tools_transform_ref_point",
@@ -334,10 +394,7 @@ class TransformEditorTool(AppToolEditor):
             )
         ))
 
-        # initial state is hidden
-        self.ui.point_label.hide()
-        self.ui.point_entry.hide()
-        self.ui.point_button.hide()
+        self.ui.on_reference_changed(self.ui.ref_combo.currentIndex())
 
     def template(self):
         if not self.draw_app.selected:
@@ -351,7 +408,7 @@ class TransformEditorTool(AppToolEditor):
         self.app.ui.splitter.setSizes([0, 1])
 
     def on_calculate_reference(self, ref_index=None):
-        if ref_index:
+        if ref_index is not None:
             ref_val = ref_index
         else:
             ref_val = self.ui.ref_combo.currentIndex()
@@ -360,7 +417,7 @@ class TransformEditorTool(AppToolEditor):
             return 0, 0
         elif ref_val == 1:  # "Selection" reference
             sel_list = self.draw_app.selected
-            if sel_list:
+            if sel_list and self.alt_bounds(sel_list) is not None:
                 xmin, ymin, xmax, ymax = self.alt_bounds(sel_list)
                 px = (xmax + xmin) * 0.5
                 py = (ymax + ymin) * 0.5
@@ -371,14 +428,16 @@ class TransformEditorTool(AppToolEditor):
         elif ref_val == 2:  # "Point" reference
             point_val = self.ui.point_entry.get_value()
             try:
-                px, py = safe_eval('{}'.format(point_val))
+                px, py = (float(value) for value in safe_eval('{}'.format(point_val)))
+                if not all(math.isfinite(value) for value in (px, py)):
+                    raise ValueError
                 return px, py
             except Exception:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("Incorrect format for Point value. Needs format X,Y"))
                 return "fail"
         else:
             sel_list = self.draw_app.selected
-            if sel_list:
+            if sel_list and self.alt_bounds(sel_list) is not None:
                 xmin, ymin, xmax, ymax = self.alt_bounds(sel_list)
                 if ref_val == 3:
                     return xmin, ymin  # lower left corner
@@ -517,7 +576,7 @@ class TransformEditorTool(AppToolEditor):
 
     def on_rotate_key(self):
         val_box = FCInputDoubleSpinner(title=_("Rotate ..."),
-                                       text='%s:' % _('Enter an Angle Value (degrees)'),
+                                       text='%s:' % _('Enter an Angle Value (degrees, CW)'),
                                        min=-359.9999, max=360.0000, decimals=self.decimals,
                                        init_val=float(self.app.options.get(
                                            'tools_transform_rotate',
@@ -532,7 +591,6 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_rotate(val=val, ref=1)
-            self.app.inform.emit('[success] %s...' % _("Rotate done"))
             return
         else:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Rotate cancelled"))
@@ -556,7 +614,6 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_offx(val=val)
-            self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
             return
         else:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Offset X cancelled"))
@@ -580,10 +637,9 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_offy(val=val)
-            self.app.inform.emit('[success] %s...' % _("Offset on Y axis done"))
             return
         else:
-            self.app.inform.emit('[success] %s...' % _("Offset on the Y axis canceled"))
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Offset on the Y axis canceled"))
 
     def on_skewx_key(self):
         val_box = FCInputDoubleSpinner(title=_("Skew on X axis ..."),
@@ -602,10 +658,9 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_skewx(val=val, ref=3)
-            self.app.inform.emit('[success] %s...' % _("Skew on X axis done"))
             return
         else:
-            self.app.inform.emit('[success] %s...' % _("Skew on X axis canceled"))
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Skew on X axis canceled"))
 
     def on_skewy_key(self):
         val_box = FCInputDoubleSpinner(title=_("Skew on Y axis ..."),
@@ -624,10 +679,9 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_skewy(val=val, ref=3)
-            self.app.inform.emit('[success] %s...' % _("Skew on Y axis done"))
             return
         else:
-            self.app.inform.emit('[success] %s...' % _("Skew on Y axis canceled"))
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Skew on Y axis canceled"))
 
     @staticmethod
     def alt_bounds(shapelist):
@@ -681,7 +735,9 @@ class TransformationEditorUI:
               "- Min Selection -> the point (minx, miny) of the bounding box of the selection")
         )
         self.ref_combo = FCComboBox()
-        self.ref_items = [_("Origin"), _("Selection"), _("Point"), _("Minimum")]
+        self.ref_items = [_("Origin"), _("Selection"), _("Point"), _("Minimum (lower left)"),
+                          _("Lower right"), _("Upper right"), _("Upper left")]
+        self.ref_combo.setToolTip(_("Minimum is the lower-left selection corner. Other corners use the selection bounds."))
         self.ref_combo.addItems(self.ref_items)
 
         ref_grid.addWidget(ref_label, 0, 0)
@@ -723,7 +779,7 @@ class TransformationEditorUI:
         rotate_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.rotateName)
         rot_grid.addWidget(rotate_title_label, 0, 0, 1, 3)
 
-        self.rotate_label = FCLabel('%s:' % _("Angle"))
+        self.rotate_label = FCLabel('%s:' % _("Angle (CW)"))
         self.rotate_label.setToolTip(
             _("Angle, in degrees.\n"
               "Float number between -360 and 359.\n"
@@ -905,15 +961,13 @@ class TransformationEditorUI:
         mirror_grid = GLay(v_spacing=5, h_spacing=3)
         mirror_frame.setLayout(mirror_grid)
 
-        self.flipx_button = FCButton(_("Flip on X"))
+        self.flipx_button = FCButton(_("Mirror X coordinates"))
         self.flipx_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
-        )
+            _("Reverse X coordinates across the vertical line through the reference point."))
 
-        self.flipy_button = FCButton(_("Flip on Y"))
+        self.flipy_button = FCButton(_("Mirror Y coordinates"))
         self.flipy_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
-        )
+            _("Reverse Y coordinates across the horizontal line through the reference point."))
 
         hlay0 = QtWidgets.QHBoxLayout()
         mirror_grid.addLayout(hlay0, 0, 0, 1, 3)
@@ -1059,7 +1113,7 @@ class TransformationEditorUI:
         self.ref_combo.currentIndexChanged.connect(self.on_reference_changed)
 
     def on_reference_changed(self, index):
-        if index == 0 or index == 1:  # "Origin" or "Selection" reference
+        if index != 2:  # Only Point needs custom coordinates.
             self.point_label.hide()
             self.point_entry.hide()
             self.point_button.hide()

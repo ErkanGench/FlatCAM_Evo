@@ -11,7 +11,6 @@ from defaults import AppDefaults
 from appGUI.GUIElements import VerticalScrollArea, FCFileSaveDialog
 from appPlugins.ToolFilm.FilmUI import FilmUI
 from appPlugins.ToolFilm import FilmGen
-from shapely.affinity import scale
 from shapely.ops import unary_union
 from reportlab.lib.units import inch, mm
 from reportlab.lib.pagesizes import landscape, portrait
@@ -38,7 +37,6 @@ class Film(AppTool):
         self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
-        self.screen_dpi = 96
 
     def app_option(self, key):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
@@ -348,13 +346,26 @@ class Film(AppTool):
             'skew_reference': skew_reference, 'skew_type': skew_type, 'mirror': mirror
         }
 
-        def make_document(svg_geo, box_geo, color, svg_units):
-            return self.create_negative_svg(svg_geo=svg_geo, box_bounds=box_geo.bounds, r_box=rounded_box,
-                                            box_geo=box_geo, c_hull=use_convex_hull, margin=boundary,
-                                            color=color, opacity=opacity_val, svg_units=svg_units)
+        def make_document(svg_geo, box_geo, color, svg_units, source_geo):
+            document = self.create_negative_svg(svg_geo=svg_geo, box_bounds=box_geo.bounds, r_box=rounded_box,
+                                                box_geo=box_geo, c_hull=use_convex_hull, margin=boundary,
+                                                color=color, opacity=opacity_val, svg_units=svg_units)
+            background = FilmGen.negative_background_geometry(box_geo, rounded_box, use_convex_hull, boundary)
+            trace_bounds = source_geo.bounds
+            background_bounds = background.bounds
+            if source_geo.is_empty:
+                visible_bounds = background_bounds
+            elif background.is_empty:
+                visible_bounds = trace_bounds
+            else:
+                visible_bounds = (min(trace_bounds[0], background_bounds[0]),
+                                  min(trace_bounds[1], background_bounds[1]),
+                                  max(trace_bounds[2], background_bounds[2]),
+                                  max(trace_bounds[3], background_bounds[3]))
+            return document, visible_bounds
 
         return self.export_film(obj_name, box_name, filename, make_document, scale_stroke_factor, transform,
-                                use_thread, ftype)
+                                use_thread, ftype, margin=boundary)
 
     def export_positive_handler(self, obj_name, box_name, filename,
                                 scale_stroke_factor=0.00,
@@ -371,15 +382,16 @@ class Film(AppTool):
         }
         margin = self.ui.boundary_entry.get_value() or 0
 
-        def make_document(svg_geo, box_geo, color, svg_units):
-            return self.create_positive_svg(svg_geo=svg_geo, box_bounds=box_geo.bounds, margin=margin, color=color,
-                                            opacity=opacity_val, svg_units=svg_units)
+        def make_document(svg_geo, box_geo, color, svg_units, source_geo):
+            document = self.create_positive_svg(svg_geo=svg_geo, box_bounds=box_geo.bounds, margin=margin, color=color,
+                                                opacity=opacity_val, svg_units=svg_units)
+            return document, source_geo.bounds
 
         return self.export_film(obj_name, box_name, filename, make_document, scale_stroke_factor, transform,
-                                use_thread, ftype)
+                                use_thread, ftype, margin=margin)
 
     def export_film(self, obj_name, box_name, filename, make_document, scale_stroke_factor, transform,
-                    use_thread, ftype):
+                    use_thread, ftype, margin=0.0):
         if filename is None:
             filename = self.app_option("global_last_save_folder")
         obj = self.app.collection.get_by_name(str(obj_name))
@@ -392,9 +404,10 @@ class Film(AppTool):
         p_size = self.ui.pagesize_combo.get_value()
         orientation = self.ui.orientation_radio.get_value()
         color = obj.obj_options.get('tools_film_color') or self.app_option('tools_film_color') or '#000000'
-        self.screen_dpi = self.app.qapp.screens()[0].logicalDotsPerInch()
-        screen_dpi = self.screen_dpi
-        dpi_rate = self.ui.png_dpi_spinner.get_value() / screen_dpi
+        png_dpi = self.ui.png_dpi_spinner.get_value() if ftype == 'png' else 0
+        if ftype == 'png' and png_dpi <= 0:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed. Invalid PNG DPI value."))
+            return 'fail'
         open_style = self.app_option("global_open_style")
 
         def make_film():
@@ -405,15 +418,11 @@ class Film(AppTool):
             else:
                 box_geo, transformed_obj_geo = self.transform_geometry(
                     [self.get_film_geometry(box_obj), obj_geo], **transform)
-            if ftype == 'png' and dpi_rate != 1:
-                box_geo = scale(box_geo, dpi_rate, dpi_rate, origin=(0, 0))
-                transformed_obj_geo = box_geo if box_obj is obj else \
-                    scale(transformed_obj_geo, dpi_rate, dpi_rate, origin=(0, 0))
             svg_geo = self.create_svg_geometry(transformed_obj_geo, scale_stroke_factor=scale_stroke_factor)
-            doc_final = make_document(svg_geo, box_geo, color, obj.units.lower())
+            doc_final, source_bounds = make_document(svg_geo, box_geo, color, obj.units.lower(), transformed_obj_geo)
             ret = self.write_output_file(content2save=doc_final, filename=filename, file_type=ftype, p_size=p_size,
-                                         orientation=orientation, source_bounds=obj.bounds(),
-                                         box_bounds=box_geo.bounds, dpi=screen_dpi)
+                                         orientation=orientation, source_bounds=source_bounds,
+                                         box_bounds=box_geo.bounds, dpi=png_dpi, margin=margin)
             if ret == 'fail':
                 return 'fail'
             if open_style is False:
@@ -449,21 +458,32 @@ class Film(AppTool):
         return FilmGen.create_positive_svg(svg_geo, box_bounds, margin, color, opacity, svg_units)
 
     def write_output_file(self, content2save, filename, file_type, p_size, orientation, source_bounds, box_bounds,
-                          dpi=72):
+                          dpi=72, margin=0.0):
         try:
             page_size = None
             if file_type not in ('svg', 'png'):
                 unit = inch if self.units == 'IN' else mm
+                xmin, ymin, xmax, ymax = source_bounds
                 if p_size != 'Bounds':
                     page_size = portrait(self.ui.pagesize[p_size]) if orientation == 'p' else \
                         landscape(self.ui.pagesize[p_size])
-                xmin, ymin, xmax, ymax = source_bounds
-                page_xmax, page_ymax = (page_size[0] / unit, page_size[1] / unit) if page_size else (xmax, ymax)
+                    page_xmax, page_ymax = page_size[0] / unit, page_size[1] / unit
+                    # the rendered document starts at box_bounds[0], box_bounds[1] and already
+                    # contains the border, so the artwork lands 'margin' from its original position
+                    xmin, xmax = xmin + margin, xmax + margin
+                    ymin, ymax = ymin + margin, ymax + margin
+                else:
+                    # 'Bounds' page is the drawing itself: origin at the box minimum minus the border,
+                    # size is the box plus a border on each side
+                    page_xmax = (box_bounds[2] - box_bounds[0]) + 2 * margin
+                    page_ymax = (box_bounds[3] - box_bounds[1]) + 2 * margin
+                    xmin, xmax = xmin - box_bounds[0] + margin, xmax - box_bounds[0] + margin
+                    ymin, ymax = ymin - box_bounds[1] + margin, ymax - box_bounds[1] + margin
                 if xmax < 0 or ymax < 0 or xmin > page_xmax or ymin > page_ymax:
                     self.app.inform.emit('[ERROR_NOTCL] %s %s' % (
                         _("Failed."),
-                        _("The artwork has to be within the selected page size in order to be visible.\n"
-                          "For 'Bounds' page size, it needs to be in the first quadrant.")))
+                        _("The artwork has to intersect the selected page size in order to be visible.\n"
+                          "For 'Bounds' page size, it has to intersect the box plus border.")))
                     return 'fail'
             FilmGen.write_output_file(content2save, filename, file_type, page_size, self.units, box_bounds, dpi)
         except PermissionError:

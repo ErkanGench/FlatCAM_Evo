@@ -180,6 +180,9 @@ class AppTextEditor(QtWidgets.QWidget):
         self.entryFind.returnPressed.connect(self.handleFindGCode)
         self.buttonReplace.clicked.connect(self.handleReplaceGCode)
 
+        self._find_timer = QtCore.QTimer(self)
+        self._find_timer.setSingleShot(True)
+        self._find_timer.timeout.connect(self.highlight_find_text)
         self.entryFind.textChanged.connect(self.on_text_changed)
 
         # self.button_copy_all.clicked.connect(self.handleCopyAll)
@@ -212,15 +215,12 @@ class AppTextEditor(QtWidgets.QWidget):
 
     def load_text(self, text, move_to_start=False, move_to_end=False, clear_text=True, as_html=False):
         try:
-            self.code_editor.textChanged.disconnect()
+            self.code_editor.textChanged.disconnect(self.handleTextChanged)
         except (AttributeError, TypeError):
             pass
-        if clear_text:
-            # first clear previous text in text editor (if any)
-            self.code_editor.clear()
-
-        self.code_editor.setReadOnly(False)
         try:
+            # setPlainText/setHtml replace the text; clearing first notifies source observers twice.
+            self.code_editor.setReadOnly(False)
             if as_html is False:
                 self.code_editor.setPlainText(text)
             else:
@@ -230,13 +230,15 @@ class AppTextEditor(QtWidgets.QWidget):
                     self.code_editor.setPlainText(text)
         except Exception as err:
             self.app.log.error("AppTextEditor.load_text() --> %s." % str(err))
-            self.code_editor.textChanged.connect(self.handleTextChanged)
             return
+        finally:
+            self.code_editor.textChanged.connect(self.handleTextChanged)
+        if self.plain_text:
+            self.editor_class.number_bar.adjustWidth(self.code_editor.blockCount())
         if move_to_start:
             self.code_editor.moveCursor(QtGui.QTextCursor.MoveOperation.Start)
         elif move_to_end:
             self.code_editor.moveCursor(QtGui.QTextCursor.MoveOperation.End)
-        self.code_editor.textChanged.connect(self.handleTextChanged)
 
     def handleOpen(self, filt=None):
         self.app.defaults.report_usage("handleOpen()")
@@ -251,6 +253,19 @@ class AppTextEditor(QtWidgets.QWidget):
             caption=_('Open file'), directory=self.app.get_last_folder(), filter=_filter_)
 
         if path:
+            owner = getattr(self, 'script_owner', None)
+            if owner is not None:
+                try:
+                    with open(path, 'r', encoding='utf-8-sig') as file:
+                        text = file.read()
+                except (OSError, UnicodeError) as error:
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % error)
+                    return 'fail'
+                self.code_editor.setPlainText(text)
+                owner.script_filename = path
+                owner.mark_project_dirty()
+                self.app.file_opened.emit('script', path)
+                return
             file = QtCore.QFile(path)
             if file.open(QtCore.QIODevice.OpenModeFlag.ReadOnly):
                 stream = QtCore.QTextStream(file)
@@ -267,7 +282,10 @@ class AppTextEditor(QtWidgets.QWidget):
             _filter_ = "G-Code Files (*.nc);; G-Code Files (*.txt);; G-Code Files (*.tap);; G-Code Files (*.cnc);; " \
                        "PDF Files (*.pdf);;All Files (*.*)"
 
-        if name:
+        owner = getattr(self, 'script_owner', None)
+        if owner is not None:
+            obj_name = owner.obj_options['name']
+        elif name:
             obj_name = name
         else:
             try:
@@ -300,7 +318,11 @@ class AppTextEditor(QtWidgets.QWidget):
         else:
             try:
                 my_gcode = self.code_editor.toPlainText()
-                if filename.rpartition('.')[2].lower() == 'pdf':
+                if owner is not None:
+                    owner.on_source_changed()
+                    if owner.save_file(filename) == 'fail':
+                        return 'fail'
+                elif filename.rpartition('.')[2].lower() == 'pdf':
                     page_size = (
                         self.app.plotcanvas.pagesize_dict[self.app.options.get(
                             'global_workspaceT',
@@ -401,8 +423,7 @@ class AppTextEditor(QtWidgets.QWidget):
                     )
                 else:
                     with open(filename, 'w') as f:
-                        for line in my_gcode:
-                            f.write(line)
+                        f.write(my_gcode)
                 self.buttonSave.setStyleSheet("")
                 self.buttonSave.setIcon(QtGui.QIcon(self.app.resource_location + '/save_as.png'))
             except FileNotFoundError:
@@ -421,8 +442,8 @@ class AppTextEditor(QtWidgets.QWidget):
                     "global_open_style",
                     self.app.defaults.factory_defaults.get("global_open_style")
                 )) is False:
-            self.app.file_opened.emit("cncjob", filename)
-        self.app.file_saved.emit("cncjob", filename)
+            self.app.file_opened.emit('script' if owner is not None else 'cncjob', filename)
+        self.app.file_saved.emit('script' if owner is not None else 'cncjob', filename)
         self.app.inform.emit('%s: %s' % (_("Saved to"), str(filename)))
 
         if callback is not None:
@@ -487,19 +508,25 @@ class AppTextEditor(QtWidgets.QWidget):
             cursor.endEditBlock()
 
     def on_text_changed(self, txt):
+        self._find_timer.start(150)
+
+    def highlight_find_text(self):
         extra_sel_list = []
         flags = QtGui.QTextDocument.FindFlag.FindCaseSensitively
-        self.code_editor.moveCursor(QtGui.QTextCursor.MoveOperation.Start)
-
-        while self.code_editor.find(str(txt), flags):
-            extra_sel = QtWidgets.QTextEdit.ExtraSelection()
-            extra_sel.cursor = self.code_editor.textCursor()
-            fmt = QtGui.QTextCharFormat()
-            fmt.setBackground(QtCore.Qt.GlobalColor.yellow)
-            extra_sel.format = fmt
-            extra_sel_list.append(extra_sel)
-
-        self.code_editor.moveCursor(QtGui.QTextCursor.MoveOperation.Start)
+        txt = self.entryFind.get_value()
+        document = self.code_editor.document()
+        cursor = QtGui.QTextCursor(document)
+        fmt = QtGui.QTextCharFormat()
+        fmt.setBackground(QtCore.Qt.GlobalColor.yellow)
+        if txt:
+            while True:
+                cursor = document.find(str(txt), cursor, flags)
+                if cursor.isNull():
+                    break
+                extra_sel = QtWidgets.QTextEdit.ExtraSelection()
+                extra_sel.cursor = cursor
+                extra_sel.format = fmt
+                extra_sel_list.append(extra_sel)
         self.code_editor.setExtraSelections(extra_sel_list)
 
     # def handleCopyAll(self):

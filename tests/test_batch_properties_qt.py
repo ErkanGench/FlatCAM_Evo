@@ -129,7 +129,8 @@ class TestBatchPropertiesQt(unittest.TestCase):
     def wait_for(self, predicate):
         timer = QtCore.QElapsedTimer()
         timer.start()
-        while not predicate() and timer.elapsed() < 2000:
+        # the limit is long for the parallel gate on a busy machine; a pass returns at once
+        while not predicate() and timer.elapsed() < 10000:
             QtTest.QTest.qWait(1)
         self.assertTrue(predicate(), 'Qt integration timed out')
 

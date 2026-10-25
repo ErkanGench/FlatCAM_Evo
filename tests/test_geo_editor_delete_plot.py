@@ -66,7 +66,7 @@ def make_editor(shapes, selected=(), utility=()):
         storage.insert(shp)
     app = SimpleNamespace(
         options={'global_draw_color': '#112233FF', 'global_sel_draw_color': '#AABBCCFF', 'global_theme': 'default'},
-        defaults=SimpleNamespace(get=lambda k, d=None: d, factory_defaults={}), log=Mock())
+        app_units='MM', defaults=SimpleNamespace(get=lambda k, d=None: d, factory_defaults={}), log=Mock())
     editor = SimpleNamespace(
         app=app, storage=storage, selected=list(selected), utility=list(utility),
         shapes=FakeCollection(), sel_shapes=FakeCollection(),

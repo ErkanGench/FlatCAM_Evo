@@ -106,7 +106,7 @@ def get_complementary(color_param):
     return "#%06X" % (0xFFFFFF ^ int(color_param[1:], 16))
 
 
-def create_negative_svg(svg_geo, box_bounds, r_box, box_geo, c_hull, margin, color, opacity, svg_units):
+def negative_background_geometry(box_geo, r_box, c_hull, margin):
     join_s = "round" if r_box else "mitre"
     if isinstance(box_geo, (LineString, LinearRing)):
         neg_geo = Polygon(box_geo)
@@ -118,6 +118,11 @@ def create_negative_svg(svg_geo, box_bounds, r_box, box_geo, c_hull, margin, col
         neg_geo = box_geo.envelope
     if margin:
         neg_geo = neg_geo.buffer(margin, join_style=join_s)
+    return neg_geo
+
+
+def create_negative_svg(svg_geo, box_bounds, r_box, box_geo, c_hull, margin, color, opacity, svg_units):
+    neg_geo = negative_background_geometry(box_geo, r_box, c_hull, margin)
     points_container = ' '.join('%s, %s' % (x, y) for x, y in neg_geo.exterior.coords[:])
     background = '<polygon points="%s" id="neg_rect" style="fill:%s;opacity:1.0;stroke-width:0.0"/>\n' % \
                  (points_container, color)

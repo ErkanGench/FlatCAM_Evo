@@ -6,7 +6,7 @@
 # ##########################################################
 
 from appHandlers.appHistory import history_of
-from appEditors.grb_plugins.GrbCommon import (DrawToolUtilityShape, DrawToolShape, DrawTool, ShapeToolEditorGrb,
+from appEditors.grb_plugins.GrbCommon import (gerber_steps, gerber_quad, DrawToolUtilityShape, DrawToolShape, DrawTool, ShapeToolEditorGrb,
                                                    numeric_aperture_codes)
 
 from camlib import distance, arc, three_point_circle, flatten_shapely_geometry, translate_geometry
@@ -29,7 +29,7 @@ from appEditors.grb_plugins.GrbVertices import (grip_geometry, grip_state, apply
 from appEditors.vertex_grips import VertexGrips
 from appEditors.cursor_text import show_cursor_text, hide_cursor_text
 from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message
-from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingDialog
+from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingPanel
 from appParsers.ParseGerber import Gerber
 
 # import inspect
@@ -128,13 +128,6 @@ class PadEditorGrb(ShapeToolEditorGrb):
             self.dont_execute = False
 
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "geometry_circle_steps",
-            self.draw_app.app.defaults.get(
-                "geometry_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-            )
-        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -206,13 +199,6 @@ class PadEditorGrb(ShapeToolEditorGrb):
         # updating values here allows us to change the aperture on the fly, after the Tool has been started
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
         self.radius = float(self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['size']) / 2
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "geometry_circle_steps",
-            self.draw_app.app.defaults.get(
-                "geometry_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-            )
-        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -235,7 +221,7 @@ class PadEditorGrb(ShapeToolEditorGrb):
             new_geo_el = {}
 
             center = Point([point_x, point_y])
-            new_geo_el['solid'] = center.buffer(self.radius)
+            new_geo_el['solid'] = center.buffer(self.radius, quad_segs=gerber_quad(self.draw_app.app, self.radius))
             new_geo_el['follow'] = center
             return new_geo_el
         elif ap_type == 'R':
@@ -262,12 +248,12 @@ class PadEditorGrb(ShapeToolEditorGrb):
                 down_center = [point_x, point_y - self.half_height + self.half_width]
                 d_start_angle = np.pi
                 d_stop_angle = 0.0
-                down_arc = arc(down_center, self.half_width, d_start_angle, d_stop_angle, 'ccw', self.steps_per_circ)
+                down_arc = arc(down_center, self.half_width, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
 
                 up_center = [point_x, point_y + self.half_height - self.half_width]
                 u_start_angle = 0.0
                 u_stop_angle = np.pi
-                up_arc = arc(up_center, self.half_width, u_start_angle, u_stop_angle, 'ccw', self.steps_per_circ)
+                up_arc = arc(up_center, self.half_width, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
 
                 geo.append(p1)
                 for pt in down_arc:
@@ -291,12 +277,12 @@ class PadEditorGrb(ShapeToolEditorGrb):
                 left_center = [point_x - self.half_width + self.half_height, point_y]
                 d_start_angle = np.pi / 2
                 d_stop_angle = 1.5 * np.pi
-                left_arc = arc(left_center, self.half_height, d_start_angle, d_stop_angle, 'ccw', self.steps_per_circ)
+                left_arc = arc(left_center, self.half_height, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
 
                 right_center = [point_x + self.half_width - self.half_height, point_y]
                 u_start_angle = 1.5 * np.pi
                 u_stop_angle = np.pi / 2
-                right_arc = arc(right_center, self.half_height, u_start_angle, u_stop_angle, 'ccw', self.steps_per_circ)
+                right_arc = arc(right_center, self.half_height, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
 
                 geo.append(p1)
                 geo.append(p2)
@@ -458,13 +444,6 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         QtGui.QGuiApplication.setOverrideCursor(self.cursor)
 
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "geometry_circle_steps",
-            self.draw_app.app.defaults.get(
-                "geometry_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-            )
-        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -698,13 +677,6 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
         # updating values here allows us to change the aperture on the fly, after the Tool has been started
         self.storage_obj = self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['geometry']
         self.radius = float(self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['size']) / 2
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "geometry_circle_steps",
-            self.draw_app.app.defaults.get(
-                "geometry_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-            )
-        )
 
         # if those cause KeyError exception it means that the aperture type is not 'R'. Only 'R' type has those keys
         try:
@@ -728,7 +700,7 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
             new_geo_el = {}
 
             center = Point([point_x, point_y])
-            new_geo_el['solid'] = center.buffer(self.radius)
+            new_geo_el['solid'] = center.buffer(self.radius, quad_segs=gerber_quad(self.draw_app.app, self.radius))
             new_geo_el['follow'] = center
             return new_geo_el
         elif ap_type == 'R':
@@ -754,12 +726,12 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
                 down_center = [point_x, point_y - self.half_height + self.half_width]
                 d_start_angle = np.pi
                 d_stop_angle = 0.0
-                down_arc = arc(down_center, self.half_width, d_start_angle, d_stop_angle, 'ccw', self.steps_per_circ)
+                down_arc = arc(down_center, self.half_width, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
 
                 up_center = [point_x, point_y + self.half_height - self.half_width]
                 u_start_angle = 0.0
                 u_stop_angle = np.pi
-                up_arc = arc(up_center, self.half_width, u_start_angle, u_stop_angle, 'ccw', self.steps_per_circ)
+                up_arc = arc(up_center, self.half_width, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_width))
 
                 geo.append(p1)
                 for pt in down_arc:
@@ -783,12 +755,12 @@ class PadArrayEditorGrb(ShapeToolEditorGrb):
                 left_center = [point_x - self.half_width + self.half_height, point_y]
                 d_start_angle = np.pi / 2
                 d_stop_angle = 1.5 * np.pi
-                left_arc = arc(left_center, self.half_height, d_start_angle, d_stop_angle, 'ccw', self.steps_per_circ)
+                left_arc = arc(left_center, self.half_height, d_start_angle, d_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
 
                 right_center = [point_x + self.half_width - self.half_height, point_y]
                 u_start_angle = 1.5 * np.pi
                 u_stop_angle = np.pi / 2
-                right_arc = arc(right_center, self.half_height, u_start_angle, u_stop_angle, 'ccw', self.steps_per_circ)
+                right_arc = arc(right_center, self.half_height, u_start_angle, u_stop_angle, 'ccw', gerber_steps(self.draw_app.app, self.half_height))
 
                 geo.append(p1)
                 geo.append(p2)
@@ -1067,17 +1039,11 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         self.app = self.draw_app.app
         self.dont_execute = False
 
-        self.steps_per_circle = self.draw_app.app.options.get(
-            "gerber_circle_steps",
-            self.draw_app.app.defaults.get(
-                "gerber_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
-            )
-        )
 
         # Aperture 0 is created only when the region is committed, not by opening a drawing tool.
 
         self.buf_val = 0.0000001    # so we can see something on the screen
+        self.quad_segs = gerber_quad(self.app, self.buf_val)
 
         self.gridx_size = float(self.draw_app.app.ui.grid_gap_x_entry.get_value())
         self.gridy_size = float(self.draw_app.app.ui.grid_gap_y_entry.get_value())
@@ -1154,7 +1120,7 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         y = data[1]
 
         if len(self.points) == 0:
-            new_geo_el['solid'] = Point((x, y)).buffer(self.buf_val, quad_segs=int(self.steps_per_circle))
+            new_geo_el['solid'] = Point((x, y)).buffer(self.buf_val, quad_segs=self.quad_segs)
             return DrawToolUtilityShape(new_geo_el)
 
         else:
@@ -1175,7 +1141,7 @@ class RegionEditorGrb(ShapeToolEditorGrb):
                 if len(self.temp_points) > 1:
                     try:
                         geo_sol = LineString(self.temp_points)
-                        geo_sol = geo_sol.buffer(self.buf_val, int(self.steps_per_circle), join_style="round")
+                        geo_sol = geo_sol.buffer(self.buf_val, self.quad_segs, join_style="round")
                         new_geo_el = {
                             'solid': geo_sol
                         }
@@ -1183,7 +1149,7 @@ class RegionEditorGrb(ShapeToolEditorGrb):
                     except Exception as e:
                         log.error("AppGerberEditor.RegionEditorGrb.utility_geometry() --> %s" % str(e))
                 else:
-                    geo_sol = Point(self.temp_points).buffer(self.buf_val, quad_segs=int(self.steps_per_circle))
+                    geo_sol = Point(self.temp_points).buffer(self.buf_val, quad_segs=self.quad_segs)
                     new_geo_el = {
                         'solid': geo_sol
                     }
@@ -1191,7 +1157,7 @@ class RegionEditorGrb(ShapeToolEditorGrb):
             else:
                 # create the geometry
                 geo_line = LinearRing(self.temp_points)
-                geo_sol = geo_line.buffer(self.buf_val, int(self.steps_per_circle), join_style="round")
+                geo_sol = geo_line.buffer(self.buf_val, self.quad_segs, join_style="round")
                 new_geo_el = {
                     'solid': geo_sol,
                     'follow': geo_line
@@ -1206,7 +1172,7 @@ class RegionEditorGrb(ShapeToolEditorGrb):
         if len(self.points) > 2:
 
             new_geo_el = {
-                'solid': Polygon(self.points).buffer(self.buf_val, int(self.steps_per_circle), join_style="mitre"),
+                'solid': Polygon(self.points).buffer(self.buf_val, self.quad_segs, join_style="mitre"),
                 'follow': Polygon(self.points).exterior
             }
 
@@ -1343,14 +1309,6 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         self.app = self.draw_app.app
         self.dont_execute = False
 
-        self.steps_per_circle = self.draw_app.app.options.get(
-            "gerber_circle_steps",
-            self.draw_app.app.defaults.get(
-                "gerber_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
-            )
-        )
-
         try:
             self.size_ap = float(self.draw_app.storage_dict[self.draw_app.last_aperture_selected]['size'])
         except KeyError:
@@ -1367,6 +1325,7 @@ class TrackEditorGrb(ShapeToolEditorGrb):
             return
 
         self.buf_val = (self.size_ap / 2) if self.size_ap > 0 else 0.0000001
+        self.quad_segs = gerber_quad(self.app, self.buf_val)
 
         self.gridx_size = float(self.draw_app.app.ui.grid_gap_x_entry.get_value())
         self.gridy_size = float(self.draw_app.app.ui.grid_gap_y_entry.get_value())
@@ -1445,13 +1404,13 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         if len(self.temp_points) == 1:
             point_geo = Point(self.temp_points[0])
             new_geo_el = {
-                'solid': point_geo.buffer(self.buf_val, int(self.steps_per_circle)),
+                'solid': point_geo.buffer(self.buf_val, self.quad_segs),
                 'follow': point_geo
             }
         else:
             line_geo = LineString(self.temp_points)
             new_geo_el = {
-                'solid': line_geo.buffer(self.buf_val, int(self.steps_per_circle)),
+                'solid': line_geo.buffer(self.buf_val, self.quad_segs),
                 'follow': line_geo
             }
 
@@ -1480,7 +1439,7 @@ class TrackEditorGrb(ShapeToolEditorGrb):
 
         if not self.points:
             new_geo_el = {
-                'solid': Point(data).buffer(self.buf_val, int(self.steps_per_circle))
+                'solid': Point(data).buffer(self.buf_val, self.quad_segs)
             }
             return DrawToolUtilityShape(new_geo_el)
         else:
@@ -1499,11 +1458,11 @@ class TrackEditorGrb(ShapeToolEditorGrb):
 
             if len(self.temp_points) == 1:
                 new_geo_el = {
-                    'solid': Point(self.temp_points[0]).buffer(self.buf_val, int(self.steps_per_circle))
+                    'solid': Point(self.temp_points[0]).buffer(self.buf_val, self.quad_segs)
                 }
             else:
                 new_geo_el = {
-                    'solid': LineString(self.temp_points).buffer(self.buf_val, int(self.steps_per_circle))
+                    'solid': LineString(self.temp_points).buffer(self.buf_val, self.quad_segs)
                 }
 
             return DrawToolUtilityShape(new_geo_el)
@@ -1522,7 +1481,7 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         if not coords:
             coords = list(self.points[:1])
         follow_geo = Point(coords[0]) if len(coords) == 1 else LineString(coords)
-        solid_geo = follow_geo.buffer(self.buf_val, int(self.steps_per_circle))
+        solid_geo = follow_geo.buffer(self.buf_val, self.quad_segs)
 
         new_geo_el = {
             'solid': solid_geo,
@@ -1718,13 +1677,6 @@ class DiscEditorGrb(ShapeToolEditorGrb):
 
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "gerber_circle_steps",
-            self.draw_app.app.defaults.get(
-                "gerber_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
-            )
-        )
 
     def click(self, point):
         self.points.append(point)
@@ -1749,7 +1701,8 @@ class DiscEditorGrb(ShapeToolEditorGrb):
             p1 = self.points[0]
             p2 = data
             radius = math.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
-            new_geo_el['solid'] = Point(p1).buffer((radius + self.buf_val / 2), int(self.steps_per_circ / 4))
+            disc_radius = radius + self.buf_val / 2
+            new_geo_el['solid'] = Point(p1).buffer(disc_radius, gerber_quad(self.draw_app.app, disc_radius))
             return DrawToolUtilityShape(new_geo_el)
 
         return None
@@ -1767,9 +1720,10 @@ class DiscEditorGrb(ShapeToolEditorGrb):
         p1 = self.points[0]
         p2 = self.points[1]
         radius = distance(p1, p2)
+        disc_radius = radius + self.buf_val / 2
 
-        new_geo_el['solid'] = Point(p1).buffer((radius + self.buf_val / 2), int(self.steps_per_circ / 4))
-        new_geo_el['follow'] = Point(p1).buffer((radius + self.buf_val / 2), int(self.steps_per_circ / 4)).exterior
+        new_geo_el['solid'] = Point(p1).buffer(disc_radius, gerber_quad(self.draw_app.app, disc_radius))
+        new_geo_el['follow'] = Point(p1).buffer(disc_radius, gerber_quad(self.draw_app.app, disc_radius)).exterior
         self.geometry = DrawToolShape(new_geo_el)
 
         self.draw_app.in_action = False
@@ -1836,13 +1790,6 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
 
         self.storage_obj = self.draw_app.storage_dict.get(0, {}).get('geometry', [])
 
-        self.steps_per_circ = self.draw_app.app.options.get(
-            "gerber_circle_steps",
-            self.draw_app.app.defaults.get(
-                "gerber_circle_steps",
-                self.draw_app.app.defaults.factory_defaults.get("gerber_circle_steps")
-            )
-        )
         self.draw_app.app.jump_signal.connect(lambda x: self.draw_app.update_utility_geometry(data=x))
 
     def click(self, point):
@@ -1925,7 +1872,7 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
                 stopangle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
 
                 new_geo_el['solid'] = LineString(
-                    arc(center, radius, startangle, stopangle, self.direction, self.steps_per_circ))
+                    arc(center, radius, startangle, stopangle, self.direction, gerber_steps(self.draw_app.app, radius)))
                 new_geo_el_pt1['solid'] = Point(center)
                 return DrawToolUtilityShape([new_geo_el, new_geo_el_pt1])
 
@@ -1946,7 +1893,7 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
                 stopangle = np.arctan2(p3[1] - center[1], p3[0] - center[0])
 
                 new_geo_el['solid'] = LineString(
-                    arc(center, radius, startangle, stopangle, direction, self.steps_per_circ))
+                    arc(center, radius, startangle, stopangle, direction, gerber_steps(self.draw_app.app, radius)))
                 new_geo_el_pt2['solid'] = Point(center)
                 new_geo_el_pt1['solid'] = Point(p1)
                 new_geo_el_pt3['solid'] = Point(p3)
@@ -1982,7 +1929,7 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
                 stopangle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
 
                 new_geo_el['solid'] = LineString(
-                    arc(center, radius, startangle, stopangle, self.direction, self.steps_per_circ))
+                    arc(center, radius, startangle, stopangle, self.direction, gerber_steps(self.draw_app.app, radius)))
                 new_geo_el_pt2['solid'] = Point(center)
 
                 return DrawToolUtilityShape([new_geo_el, new_geo_el_pt2])
@@ -2002,9 +1949,9 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
             start_angle = np.arctan2(p1[1] - center[1], p1[0] - center[0])
             stop_angle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
             new_geo_el['solid'] = Polygon(
-                arc(center, radius, start_angle, stop_angle, self.direction, self.steps_per_circ))
+                arc(center, radius, start_angle, stop_angle, self.direction, gerber_steps(self.draw_app.app, radius)))
             new_geo_el['follow'] = Polygon(
-                arc(center, radius, start_angle, stop_angle, self.direction, self.steps_per_circ)).exterior
+                arc(center, radius, start_angle, stop_angle, self.direction, gerber_steps(self.draw_app.app, radius))).exterior
             self.geometry = DrawToolShape(new_geo_el)
 
         elif self.mode == '132':
@@ -2019,9 +1966,9 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
             start_angle = np.arctan2(p1[1] - center[1], p1[0] - center[0])
             stop_angle = np.arctan2(p3[1] - center[1], p3[0] - center[0])
 
-            new_geo_el['solid'] = Polygon(arc(center, radius, start_angle, stop_angle, direction, self.steps_per_circ))
+            new_geo_el['solid'] = Polygon(arc(center, radius, start_angle, stop_angle, direction, gerber_steps(self.draw_app.app, radius)))
             new_geo_el['follow'] = Polygon(
-                arc(center, radius, start_angle, stop_angle, direction, self.steps_per_circ)).exterior
+                arc(center, radius, start_angle, stop_angle, direction, gerber_steps(self.draw_app.app, radius))).exterior
             self.geometry = DrawToolShape(new_geo_el)
 
         else:  # self.mode == '12c'
@@ -2055,9 +2002,9 @@ class DiscSemiEditorGrb(ShapeToolEditorGrb):
             stop_angle = np.arctan2(p2[1] - center[1], p2[0] - center[0])
 
             new_geo_el['solid'] = Polygon(
-                arc(center, radius, start_angle, stop_angle, self.direction, self.steps_per_circ))
+                arc(center, radius, start_angle, stop_angle, self.direction, gerber_steps(self.draw_app.app, radius)))
             new_geo_el['follow'] = Polygon(
-                arc(center, radius, start_angle, stop_angle, self.direction, self.steps_per_circ)).exterior
+                arc(center, radius, start_angle, stop_angle, self.direction, gerber_steps(self.draw_app.app, radius))).exterior
             self.geometry = DrawToolShape(new_geo_el)
 
         self.draw_app.in_action = False
@@ -2095,9 +2042,6 @@ class ArcEditorGrb(DiscSemiEditorGrb):
             aperture = draw_app.storage_dict[self.aperture_id]
             self.width = circular_aperture(aperture)
             self.aperture_metadata = metadata(aperture)
-            self.steps_per_circ = draw_app.app.options.get('gerber_circle_steps', 64)
-            if type(self.steps_per_circ) is not int or not 4 <= self.steps_per_circ <= 4096:
-                raise ValueError(_("Circle resolution must be an integer between 4 and 4096."))
         except (KeyError, ValueError, TypeError, OverflowError) as error:
             self.dont_execute = self.complete = True
             draw_app.app.inform.emit('[WARNING_NOTCL] %s' % str(error))
@@ -2126,8 +2070,8 @@ class ArcEditorGrb(DiscSemiEditorGrb):
             preview = super().utility_geometry(data)
             if len(self.points) == 2 and preview is not None:
                 follow = preview.geo[0]['solid']
-                # Match the native Gerber parser's circular D01 sweep convention.
-                solid = follow.buffer(self.width / 1.999, quad_segs=self.steps_per_circ)
+                # Match the native Gerber parser: the radius is half the width, the circle steps follow the preferences.
+                solid = follow.buffer(self.width / 2.0, quad_segs=gerber_quad(self.draw_app.app, self.width / 2.0))
                 if follow.length <= 0 or not follow.is_valid or solid.is_empty or not solid.is_valid:
                     return
                 return DrawToolUtilityShape({'solid': solid, 'follow': follow})
@@ -2215,8 +2159,7 @@ class ScaleEditorGrb(ShapeToolEditorGrb):
         self.draw_app.hide_tool(self.name)
 
     def on_scale_click(self, *signal_args):
-        self.draw_app.on_scale()
-        self.deactivate_scale()
+        self.draw_app.on_scale(on_commit=self.deactivate_scale)
 
     def clean_up(self):
         self.disconnect_scale()
@@ -2252,8 +2195,7 @@ class BufferEditorGrb(ShapeToolEditorGrb):
         self.buff_tool.ui.buffer_button.clicked.connect(self.on_buffer_clicked)
 
     def on_buffer_clicked(self):
-        self.buff_tool.on_buffer()
-        self.deactivate()
+        self.buff_tool.on_buffer(on_commit=self.deactivate)
 
     def deactivate(self):
         try:
@@ -3655,6 +3597,8 @@ class AppGerberEditor(QtCore.QObject):
 
         # # ## Data
         self.active_tool = None
+        # numeric rectangle/text drawing panel hosted in the Properties tab
+        self.region_drawing_panel = None
 
         self.storage_dict = {}
         self.current_storage = []
@@ -3717,7 +3661,7 @@ class AppGerberEditor(QtCore.QObject):
         self.ma_annotation = self.canvas.new_text_group()
         # grips to drag the vertices of 1 selected region or track in the Select tool
         self.vertex_grips = VertexGrips(self, geometry=lambda shape: grip_geometry(self, shape),
-                                        steps_option='gerber_circle_steps', snapshot=lambda: grip_state(self))
+                                        steps_option=lambda radius: gerber_steps(self.app, radius), snapshot=lambda: grip_state(self))
 
         # Remove from scene
         self.shapes.enabled = False
@@ -3980,8 +3924,8 @@ class AppGerberEditor(QtCore.QObject):
                 return False
         return True
 
-    def submit_geometry(self, label, compute, matrix=None):
-        return self.history.submit(label, compute, matrix)
+    def submit_geometry(self, label, compute, matrix=None, shapes=None, success=None, on_commit=None):
+        return self.history.submit(label, compute, matrix, shapes=shapes, success=success, on_commit=on_commit)
 
     @QtCore.pyqtSlot(object)
     def apply_geometry_result(self, result):
@@ -4686,6 +4630,7 @@ class AppGerberEditor(QtCore.QObject):
             old_size = float(self.storage_dict[ap_code_old]['size'])
             new_size = float(val_edited)
             adjust_size = (new_size - old_size) / 2
+            quad_segs = gerber_quad(self.app, new_size / 2.0)
             geometry = []
             for geo_el in self.storage_dict[ap_code_old]['geometry']:
                 g_data = geo_el.geo
@@ -4693,11 +4638,11 @@ class AppGerberEditor(QtCore.QObject):
                 if 'solid' in g_data:
                     if 'follow' in g_data:
                         if isinstance(g_data['follow'], Point):
-                            new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(adjust_size))
+                            new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(adjust_size, quad_segs=quad_segs))
                         else:
                             new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(adjust_size, join_style="mitre"))
                     else:
-                        new_geo_el['solid'] = g_data['solid'].buffer(adjust_size)
+                        new_geo_el['solid'] = g_data['solid'].buffer(adjust_size, quad_segs=quad_segs)
                 if 'follow' in g_data:
                     new_geo_el['follow'] = deepcopy(g_data['follow'])
                 if 'clear' in g_data:
@@ -4740,7 +4685,7 @@ class AppGerberEditor(QtCore.QObject):
                                 geo = box(xmin=minx, ymin=miny, xmax=maxx, ymax=maxy)
                                 new_geo_el['solid'] = deepcopy(geo)
                             else:
-                                new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(buff_val_lines))
+                                new_geo_el['solid'] = deepcopy(g_data['solid'].buffer(buff_val_lines, quad_segs=gerber_quad(self.app, buff_val_lines)))
                     if 'follow' in g_data:
                         new_geo_el['follow'] = deepcopy(g_data['follow'])
                     if 'clear' in g_data:
@@ -4776,7 +4721,7 @@ class AppGerberEditor(QtCore.QObject):
                         self.app.inform.emit('[WARNING_NOTCL] %s' % _("Oblong dimension editing supports flashes only."))
                         return 'fail'
                     geo['solid'] = Gerber.create_flash_geometry(
-                        self, geo['follow'], new_meta, int(self.app.options.get('gerber_circle_steps', 64)))
+                        self, geo['follow'], new_meta, gerber_steps(self.app, min(val_edited) / 2.0))
                     geometry.append(DrawToolShape(geo))
                 replacements = dict(zip(self.storage_dict[ap_code_old]['geometry'], geometry))
                 self.selected = [replacements.get(shape, shape) for shape in self.selected]
@@ -5163,6 +5108,7 @@ class AppGerberEditor(QtCore.QObject):
         # except Exception as erp:
         #     self.app.log.error("AppGerberEditor.clear() -> %s" % str(erp))
 
+        self.close_region_drawing(return_to_select=False)
         if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb)):
             self.active_tool.clean_up()
         self.vertex_grips.hide()
@@ -5656,6 +5602,11 @@ class AppGerberEditor(QtCore.QObject):
                     grb_obj.tools[storage_apcode][k] = []
                     for geo_el in val:
                         geometric_data = geo_el.geo
+                        # An explicit empty solid is not a native flash/track, even if its old follow remains.
+                        # Keep clear-only data; never recreate copper from the stale follow.
+                        if geometric_data.get('solid') is not None and geometric_data['solid'].is_empty:
+                            geometric_data = {key: value for key, value in geometric_data.items()
+                                              if key not in ('solid', 'follow')}
                         new_geo_el = {}
                         if 'solid' in geometric_data:
                             new_geo_el['solid'] = geometric_data['solid']
@@ -5740,9 +5691,13 @@ class AppGerberEditor(QtCore.QObject):
             return 'fail'
         current_tool = tool
         self.vertex_grips.cancel()
+        # switching toolbar tools ends the numeric drawing session
+        self.close_region_drawing(return_to_select=False)
 
         self.app.log.debug("on_tool_select('%s')" % tool)
 
+        if isinstance(self.active_tool, ScaleEditorGrb):
+            self.active_tool.disconnect_scale()
         if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb)):
             self.active_tool.clean_up()
 
@@ -6845,7 +6800,7 @@ class AppGerberEditor(QtCore.QObject):
             # I make an exception for RegionEditorGrb and TrackEditorGrb because clicking and dragging while making 
             # regions can create strange issues like missing a point in a track/region
             if isinstance(self.active_tool, (RegionEditorGrb, TrackEditorGrb, TrackBendEditorGrb,
-                                             FollowSplitEditorGrb, ArcEditorGrb)):
+                                             FollowSplitEditorGrb, ArcEditorGrb, RegionDrawingPanel)):
                 self.app.selection_type = None
             elif self._is_click_not_drag((pos_canvas[0], pos_canvas[1])):
                 self.app.selection_type = None
@@ -6883,6 +6838,9 @@ class AppGerberEditor(QtCore.QObject):
             # Remove any previous utility shape
             self.tool_shape.clear(update=False)
             self.draw_utility_geometry(geo_shape=geo)
+        elif getattr(self.active_tool, 'clear_utility_on_none', False):
+            # an invalid drawing input must not leave the last valid preview on the canvas
+            self.tool_shape.clear(update=True)
 
     def draw_utility_geometry(self, geo_shape):
         # it's a DrawToolShape therefore it stores his geometry in the geo attribute
@@ -7336,13 +7294,33 @@ class AppGerberEditor(QtCore.QObject):
         self.select_tool('poligonize')
 
     def on_region_drawing(self, kind):
-        if self.history.ready():
-            self.select_tool('select')
-            dialog = RegionDrawingDialog(self, kind)
-            try:
-                dialog.exec()
-            finally:
-                dialog.deleteLater()
+        if not self.history.ready():
+            return
+        self.close_region_drawing()
+        self.select_tool('select')
+        # the panel is not a toolbar tool: leave the Select action unchecked so MainGUI forwards keys to it
+        self.tools_gerber['select']['button'].setChecked(False)
+        if self.app.ui.properties_scroll_area.widget() is not self.ui.grb_edit_widget:
+            self.app.ui.properties_scroll_area.takeWidget()
+            self.app.ui.properties_scroll_area.setWidget(self.ui.grb_edit_widget)
+        self.region_drawing_panel = RegionDrawingPanel(self, kind)
+        self.ui.custom_box.insertWidget(0, self.region_drawing_panel)
+        self.active_tool = self.region_drawing_panel
+        self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
+
+    def close_region_drawing(self, return_to_select=True):
+        panel = getattr(self, 'region_drawing_panel', None)
+        if panel is None:
+            return
+        self.region_drawing_panel = None
+        self.ui.custom_box.removeWidget(panel)
+        panel.hide()
+        panel.deleteLater()
+        self.delete_utility_geometry()
+        if self.active_tool is panel:
+            self.active_tool = None
+            if return_to_select:
+                self.select_tool('select')
 
     @gerber_operation(_('Draw regions'))
     def add_region_geometry(self, geometry):
@@ -7450,8 +7428,7 @@ class AppGerberEditor(QtCore.QObject):
     def on_simplification(self):
         self.select_tool('simplify')
 
-    @gerber_operation(_('Scale'))
-    def on_scale(self, *signal_args):
+    def on_scale(self, *signal_args, on_commit=None):
         scale_factor = 1.0
         self.app.log.debug("AppGerberEditor.on_scale()")
 
@@ -7465,15 +7442,21 @@ class AppGerberEditor(QtCore.QObject):
             except ValueError:
                 self.app.inform.emit('[WARNING_NOTCL] %s' %
                                      _("Scale factor value is missing or wrong format. Add it and retry."))
+                if self.history.depth:
+                    self.history.failed = True
                 return 'fail'
 
         if not math.isfinite(scale_factor) or scale_factor <= 0:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Scale factor must be finite and positive."))
+            if self.history.depth:
+                self.history.failed = True
             return 'fail'
 
         if not self.ui.apertures_table.selectedItems():
             self.app.inform.emit('[WARNING_NOTCL] %s' %
                                  _("No aperture to scale. Select at least one aperture and try again."))
+            if self.history.depth:
+                self.history.failed = True
             return 'fail'
 
         selection = set(self.selected)
@@ -7483,10 +7466,11 @@ class AppGerberEditor(QtCore.QObject):
                                     for shape in aperture.get('geometry', ()) if shape in selection))
         if not shapes:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
+            if self.history.depth:
+                self.history.failed = True
             return 'fail'
-        scale_selection_about_centers(shapes, scale_factor)
-        self.plot_transformed(shapes)
-        self.app.inform.emit('[success] %s' % _("Done."))
+        return self.submit_geometry(_("Scale"), lambda detached: scale_selection_about_centers(detached, scale_factor),
+                                    shapes=shapes, success=_("Done."), on_commit=on_commit)
 
     def on_markarea(self):
         # clear previous marking
@@ -7631,7 +7615,9 @@ class AppGerberEditorUI:
         history_grid = GLay(v_spacing=5, h_spacing=3)
         history_frame.setLayout(history_grid)
         self.history_positions = QtWidgets.QComboBox()
-        history_grid.addWidget(self.history_positions, 0, 0)
+        self.history_positions.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                             QtWidgets.QSizePolicy.Policy.Fixed)
+        history_grid.addWidget(self.history_positions, 0, 0, 1, 2)
 
         # Box for custom widgets
         # This gets populated in offspring implementations.

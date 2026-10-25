@@ -8,25 +8,38 @@ def bounds_center(bounds):
     return (xmax + xmin) * 0.5, (ymax + ymin) * 0.5
 
 
+SUPPORTED_KINDS = ('gerber', 'excellon', 'geometry')
+
+
 def alt_bounds(obj_list):
-    """Return recursive bounds, skipping CNC jobs and non-finite geometry bounds."""
+    """Return the bounds of the supported objects, skipping deleted objects, CNC jobs and objects without
+    finite geometry."""
     def bounds_rec(lst):
         minx = np.inf
         miny = np.inf
         maxx = -np.inf
         maxy = -np.inf
-        try:
-            for obj in lst:
-                if obj.kind != 'cncjob':
-                    minx_, miny_, maxx_, maxy_ = bounds_rec(obj)
-                    if not all(np.isfinite((minx_, miny_, maxx_, maxy_))):
-                        continue
-                    minx = min(minx, minx_)
-                    miny = min(miny, miny_)
-                    maxx = max(maxx, maxx_)
-                    maxy = max(maxy, maxy_)
-            return minx, miny, maxx, maxy
-        except TypeError:
-            return lst.bounds()
+        for obj in lst:
+            if isinstance(obj, (list, tuple)):
+                minx_, miny_, maxx_, maxy_ = bounds_rec(obj)
+            elif getattr(obj, 'deleted', False):
+                continue
+            elif str(getattr(obj, 'kind', '')).lower() in SUPPORTED_KINDS:
+                try:
+                    minx_, miny_, maxx_, maxy_ = obj.bounds()
+                except Exception:
+                    continue
+            else:
+                continue
+            try:
+                if not all(np.isfinite((minx_, miny_, maxx_, maxy_))):
+                    continue
+            except TypeError:
+                continue
+            minx = min(minx, minx_)
+            miny = min(miny, miny_)
+            maxx = max(maxx, maxx_)
+            maxy = max(maxy, maxy_)
+        return minx, miny, maxx, maxy
 
     return bounds_rec(obj_list)

@@ -44,7 +44,7 @@ def grb_tool(cls, mode, points, snap=True):
                                     in_action=False, last_length=0, snap_x=0.0, snap_y=0.0,
                                     tool_shape=Mock(), draw_utility_geometry=Mock())
     tool.points = list(points)
-    tool.steps_per_circle = 8
+    tool.quad_segs = 2
     tool.buf_val = 0.001
     tool.gridx_size = tool.gridy_size = 1.0
     tool.temp_points = []

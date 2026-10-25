@@ -1,20 +1,27 @@
 """ToolTransform actions: the matrix given to plot_transformed, bounds computed once, failures isolated."""
+import ast
 import os
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from shapely.geometry import Polygon  # noqa: E402
 from shapely.affinity import affine_transform  # noqa: E402
+from PyQt6 import QtWidgets  # noqa: E402
+from PyQt6.QtGui import QStandardItemModel  # noqa: E402
 
 import camlib  # noqa: E402
 from camlib import Geometry  # noqa: E402
 from appPlugins.ToolTransform import ToolTransform  # noqa: E402
 from appObjects.AppObject import AppObject  # noqa: E402
+from appObjects.GeometryObject import GeometryObject  # noqa: E402
 from appHandlers.appHistory import HistoryManager  # noqa: E402
+from tests.helpers_objects import make_app_0b  # noqa: E402
 
 
 def make_app(selected):
@@ -28,7 +35,7 @@ def make_app(selected):
         yield
 
     app.proc_container = SimpleNamespace(new=new, new_text='', update_view_text=lambda *a: None)
-    app.app_obj = SimpleNamespace(object_changed=MagicMock())
+    app.app_obj = SimpleNamespace(object_changed=MagicMock(), object_transform_done=MagicMock())
     return app
 
 
@@ -42,6 +49,7 @@ class FakeObj:
         self.geo.multigeo = False
         self.geo.solid_geometry = [Polygon([(0, 0), (4, 0), (4, 2), (1, 3)])]
         self.obj_options = {'name': name}
+        self.tools = {}
         self.history_uid = name
         self.ser_attrs = ['solid_geometry', 'obj_options']
         self.bounds_calls = 0
@@ -103,7 +111,7 @@ class FakeObj:
 
     def set_offset_values(self, bounds=None):
         if bounds is None:
-            self.bounds()
+            bounds = self.bounds()
         self.offset_bounds.append(bounds)
 
     def plot_transformed(self, matrix, kind=None):
@@ -116,6 +124,73 @@ class FakeObj:
 
 def reference(poly, matrix):
     return affine_transform(poly, matrix)
+
+
+class SelectedCollection(QStandardItemModel):
+    """The Qt collection model plus the selection API the tool reads on the GUI thread."""
+
+    def __init__(self, objects=()):
+        super().__init__()
+        self.objects = list(objects)
+
+    def get_selected(self):
+        return list(self.objects)
+
+    def get_list(self):
+        return list(self.objects)
+
+    def get_by_name(self, name):
+        for obj in self.objects:
+            if obj.obj_options.get('name') == name:
+                return obj
+        return None
+
+
+class Worker:
+    """Synchronous stand-in for app.worker_task; ``run=False`` keeps the payload pending like a real worker."""
+
+    def __init__(self, run=True):
+        self.run = run
+        self.payloads = []
+
+    def emit(self, payload):
+        self.payloads.append(payload)
+        if self.run:
+            payload['fcn'](*payload['params'])
+
+
+class RecordingEntry:
+    """A form widget that records the thread that wrote it."""
+
+    def __init__(self):
+        self.values = []
+
+    def set_value(self, value):
+        self.values.append((value, threading.get_ident()))
+
+
+class ThreadWorker:
+    """Runs the queued payload on a Python thread and signals when the action has finished."""
+
+    def __init__(self):
+        self.payloads = []
+        self.errors = []
+        self.done = threading.Event()
+        self.thread = None
+
+    def emit(self, payload):
+        self.payloads.append(payload)
+
+        def run():
+            try:
+                payload['fcn'](*payload['params'])
+            except Exception as e:
+                self.errors.append(e)
+            finally:
+                self.done.set()
+
+        self.thread = threading.Thread(target=run, daemon=True)
+        self.thread.start()
 
 
 class TransformTest(unittest.TestCase):
@@ -150,8 +225,10 @@ class TransformTest(unittest.TestCase):
             ('on_skew', ('X', 10.0, 5.0, (1.0, 2.0))),
             ('on_scale', ('X', 2.0, 3.0, (1.0, 2.0))),
             ('on_scale', ('X', 2.0, 3.0, None)),
+            ('on_skew', ('XY', 10.0, 5.0, (1.0, 2.0))),
             ('on_offset', ('X', 5.0)),
             ('on_offset', ('Y', -3.0)),
+            ('on_offsetxy_action', (5.0, -3.0)),
         ]
         for name, args in cases:
             with self.subTest(name=name, args=args):
@@ -163,10 +240,14 @@ class TransformTest(unittest.TestCase):
         objs = [FakeObj(None, 'a'), FakeObj(None, 'b')]
         tool, app = self.tool(objs)
         app.app_obj.object_changed.emit.side_effect = lambda obj: AppObject.on_object_changed(tool, obj)
+        app.app_obj.object_transform_done.emit.side_effect = \
+            lambda obj, set_offset: AppObject.on_object_transform_done(tool, obj, set_offset)
         ToolTransform.on_rotate_action(tool, 30.0, (0.0, 0.0))
+        expected = {o: o.geo.solid_geometry[0].bounds for o in objs}
         for o in objs:
-            self.assertEqual(o.bounds_calls, 2)
-            self.assertEqual(o.offset_bounds, [o.geo.solid_geometry[0].bounds])
+            # the bounds are computed once by on_object_changed and reused by the transform completion
+            self.assertEqual(o.bounds_calls, 1)
+            self.assertEqual(o.offset_bounds, [expected[o]])
         self.assertEqual(app.app_obj.object_changed.emit.call_count, 2)
         # one final message
         # the plugin emits one final message (the camlib methods emit their own per object)
@@ -204,6 +285,194 @@ class TransformTest(unittest.TestCase):
     def test_no_selection(self):
         app = self.run_action('on_offset', [], 'X', 2.0)
         self.assertIn('WARNING_NOTCL', app.inform.emit.call_args.args[0])
+
+
+    def test_singular_skew_and_uninvertible_matrices_change_nothing(self):
+        cases = [
+            ('on_skew', ('X', -90.0, 0.0, (0.0, 0.0))),
+            ('on_skew', ('X', 270.0, 0.0, (0.0, 0.0))),
+            ('on_skew', ('X', 45.0, 45.0, (0.0, 0.0))),
+            ('on_scale', ('X', 1e-13, 1.0, (0.0, 0.0))),
+        ]
+        for name, args in cases:
+            with self.subTest(name=name, args=args):
+                obj = FakeObj(None)
+                original = obj.solid_geometry[0]
+                tool, app = self.tool([obj])
+                getattr(ToolTransform, name)(tool, *args)
+                self.assertTrue(obj.solid_geometry[0].equals_exact(original, 0))
+                self.assertEqual(obj.matrices, [])
+                self.assertTrue(any('not executed' in call.args[0] or 'NOTCL' in call.args[0]
+                                    for call in app.inform.emit.call_args_list))
+
+    def test_worker_uses_the_selection_captured_at_the_click(self):
+        first, second = FakeObj(None, 'first'), FakeObj(None, 'second')
+        tool, app = self.tool([first])
+        captured = ToolTransform._selected_objects(tool)
+        # the user selects another object before the worker starts
+        app.collection.get_selected.return_value = [second]
+        ToolTransform.on_rotate_action(tool, 30.0, (0.0, 0.0), captured)
+        self.assertFalse(first.solid_geometry[0].equals_exact(
+            Polygon([(0, 0), (4, 0), (4, 2), (1, 3)]), 1e-9))
+        self.assertTrue(second.solid_geometry[0].equals_exact(
+            Polygon([(0, 0), (4, 0), (4, 2), (1, 3)]), 0))
+
+    def test_affine_change_regenerates_the_source_and_a_failure_rolls_back(self):
+        for succeeds in (True, False):
+            with self.subTest(succeeds=succeeds):
+                obj = FakeObj(None, kind='gerber')
+                original = obj.solid_geometry[0]
+                obj.regenerate_source = MagicMock(return_value=succeeds)
+                tool, app = self.tool([obj])
+                ToolTransform.on_offset(tool, 'X', 5.0)
+                obj.regenerate_source.assert_called_once()
+                if succeeds:
+                    self.assertEqual(len(obj.matrices), 1)
+                    self.assertFalse(obj.solid_geometry[0].equals_exact(original, 0))
+                else:
+                    self.assertEqual(obj.matrices, [])
+                    self.assertTrue(obj.solid_geometry[0].equals_exact(original, 0))
+                    self.assertTrue(any('not executed' in call.args[0].lower()
+                                        for call in app.inform.emit.call_args_list))
+
+
+class TransformUiTest(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def make_real_app(self):
+        app = make_app_0b()
+        app.resource_location = ''
+        app.collection = SelectedCollection()
+        app.delete_selection_shape = MagicMock()
+        app.should_we_save = False
+        app.headless = False
+        app.call_source = 'app'
+        app.projects = SimpleNamespace(is_busy=lambda: False)
+        app.history_changed = MagicMock()
+        app.on_plots_updated = MagicMock()
+        app.dec_format = lambda value, dec=None: float('%.*f' % (dec if dec is not None else app.decimals,
+                                                                  float(value)))
+        app.worker_task = Worker(run=True)
+        app.app_obj = AppObject(app)
+        history = HistoryManager(app, app.collection)
+        app.history = history
+        return app, history
+
+    def make_tool_for(self, app):
+        tool = ToolTransform(app)
+        tool.show()
+        return tool
+
+    def make_real_tool(self, objects, worker=None):
+        app, history = self.make_real_app()
+        app.collection.objects = list(objects)
+        app.worker_task = worker or Worker(run=True)
+        return self.make_tool_for(app), app, history
+
+
+    def test_threaded_completion_writes_only_on_the_gui_thread(self):
+        with patch('appObjects.AppObjectTemplate.ShapeCollection', MagicMock()):
+            app, _history = self.make_real_app()
+            obj = GeometryObject('real', app)
+            obj.solid_geometry = [Polygon([(0, 0), (4, 0), (4, 2), (1, 3)])]
+            obj.plot_transformed = MagicMock(return_value=True)
+            form_entry = RecordingEntry()
+            offset_entry = RecordingEntry()
+            obj.form_fields['xmin'] = form_entry
+            obj.ui = SimpleNamespace(offsetvector_entry=offset_entry)
+
+            callback_threads = []
+            original_callback = obj.obj_options.callback
+
+            def callback(key):
+                callback_threads.append((key, threading.get_ident()))
+                original_callback(key)
+
+            obj.obj_options.set_change_callback(callback)
+
+            read_threads = []
+
+            def get_selected():
+                read_threads.append(threading.get_ident())
+                return [obj]
+
+            app.collection.get_selected = get_selected
+            worker = ThreadWorker()
+            app.worker_task = worker
+            tool = self.make_tool_for(app)
+            tool.ui.offx_entry.set_value(2)
+            tool.ui.offy_entry.set_value(-3)
+
+            ToolTransform.on_offsetxy(tool)
+
+            self.assertTrue(worker.done.wait(5))
+            if worker.thread is not None:
+                worker.thread.join(1)
+            self.assertEqual(worker.errors, [])
+
+            qapp = QtWidgets.QApplication.instance()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and not offset_entry.values:
+                qapp.processEvents()
+                time.sleep(0.01)
+            qapp.processEvents()
+
+            main = threading.get_ident()
+            self.assertEqual(read_threads, [main])
+            self.assertTrue(callback_threads)
+            self.assertTrue(all(thread == main for _key, thread in callback_threads))
+            self.assertTrue(form_entry.values)
+            self.assertTrue(all(thread == main for _value, thread in form_entry.values))
+            self.assertTrue(offset_entry.values)
+            self.assertTrue(all(thread == main for _value, thread in offset_entry.values))
+
+            expected = (2.0, -3.0, 6.0, 0.0)
+            self.assertTrue(obj.solid_geometry[0].equals_exact(
+                Polygon([(2, -3), (6, -3), (6, -1), (3, 0)]), 1e-9))
+            self.assertEqual(obj.solid_geometry[0].bounds, expected)
+            self.assertEqual(obj.bounds(), expected)
+            self.assertEqual((obj.obj_options['xmin'], obj.obj_options['ymin'],
+                              obj.obj_options['xmax'], obj.obj_options['ymax']), expected)
+            self.assertEqual(ast.literal_eval(offset_entry.values[-1][0]), (4.0, -1.5))
+            self.assertEqual(obj.obj_options.callback, callback)
+            obj.plot_transformed.assert_called()
+
+    def test_combined_scale_uses_both_entries_and_is_one_undo_step(self):
+        branches = (
+            (False, (0.0, 0.0, 8.0, 9.0)),   # X factor 2, Y factor 3
+            (True, (0.0, 0.0, 8.0, 6.0)),    # linked: the X factor 2 is used for both
+        )
+        for linked, expected in branches:
+            with self.subTest(linked=linked), patch('appObjects.AppObjectTemplate.ShapeCollection', MagicMock()):
+                app, history = self.make_real_app()
+                obj = GeometryObject('real', app)
+                obj.solid_geometry = [Polygon([(0, 0), (4, 0), (4, 2), (1, 3)])]
+                obj.plot_transformed = MagicMock(return_value=True)
+                original = obj.bounds()
+                callback = obj.obj_options.callback
+                app.collection.objects = [obj]
+                tool = self.make_tool_for(app)
+
+                tool.ui.ref_combo.set_value('Origin')
+                tool.ui.scalex_entry.set_value(2)
+                tool.ui.scaley_entry.set_value(3)
+                tool.ui.scale_link_cb.set_value(linked)
+
+                ToolTransform.on_scalexy(tool)
+
+                self.assertEqual(obj.bounds(), expected)
+                self.assertTrue(history.can_undo())
+                self.assertTrue(history.undo())
+                self.assertEqual(obj.bounds(), original)
+                # exactly one step: a second undo has nothing to do
+                self.assertFalse(history.undo())
+                self.assertTrue(history.redo())
+                self.assertEqual(obj.bounds(), expected)
+                self.assertEqual(obj.obj_options.callback, callback)
+
 
 if __name__ == '__main__':
     unittest.main()

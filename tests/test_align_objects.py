@@ -28,7 +28,7 @@ class FakeObj:
         self.tools = tools or {}
         self.solid_geometry = solid_geometry
         self.multigeo = multigeo
-        self.excellon_circle_steps = 64
+        self.circle_steps = lambda radius: 64
 
 
 class TestSolvers(unittest.TestCase):

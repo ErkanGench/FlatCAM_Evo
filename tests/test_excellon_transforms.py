@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -11,7 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from PyQt6 import QtWidgets  # noqa: E402
 from shapely import Point, LineString, affinity  # noqa: E402
 
-from appHandlers.appHistory import apply_matrix_to_object  # noqa: E402
+from defaults import AppDefaults  # noqa: E402
+from appHandlers.appHistory import HistoryManager, apply_matrix_to_object, transform_metadata  # noqa: E402
+from appHandlers.appIO import appIO  # noqa: E402
 from appObjects.ExcellonObject import ExcellonObject  # noqa: E402
 from tests.helpers_objects import (  # noqa: F401,E402
     AFFINE_TRANSFORMS, app, apply_to, assert_poly_equiv, assert_xy_close, drill_xy, excellon, export_excellon_text,
@@ -24,7 +27,7 @@ from tclCommands.TclCommandBuffer import TclCommandBuffer
 
 _QAPP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-STEPS = 16
+STEPS = int(AppDefaults().defaults["excellon_circle_steps"])
 
 
 def _make(app):
@@ -48,7 +51,7 @@ def _reference(obj, op, tooldia_fn=lambda d: d):
         r = tooldia_fn(tool['tooldia']) / 2.0
         drills = [op(p) for p in tool['drills']]
         slots = [(op(a), op(b)) for a, b in tool.get('slots', [])]
-        geo = [p.buffer(r, STEPS) for p in drills] + [LineString([a, b]).buffer(r, STEPS) for a, b in slots]
+        geo = [p.buffer(r, STEPS // 4) for p in drills] + [LineString([a, b]).buffer(r, STEPS // 4) for a, b in slots]
         out[key] = (drills, slots, geo)
     return out
 
@@ -59,6 +62,7 @@ class ExcellonTransformsTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.app = make_app()
+        self.app.options['excellon_circle_steps_mode'] = 'fixed'     # STEPS segments for every hole
         self.obj = _make(self.app)
 
     def check(self, ref):
@@ -118,7 +122,7 @@ class ExcellonTransformsTest(unittest.TestCase):
         matrix = (0, -1, 1, 0, 4, 7)
         apply_matrix_to_object(self.obj, matrix)
         for got, original in zip(self.obj.solid_geometry, before):
-            self.assertTrue(got.equals_exact(affinity.affine_transform(original, matrix), 1e-9))
+            self.assertLess(got.hausdorff_distance(affinity.affine_transform(original, matrix)), 1e-9)
         total = [g for tool in self.obj.tools.values() for g in tool['solid_geometry']]
         for aggregate, pertool in zip(self.obj.solid_geometry, total):
             self.assertTrue(aggregate.equals_exact(pertool, 1e-9))
@@ -332,3 +336,134 @@ class TestGuardsAlreadyPassing_0B:
         g = make_gerber_0b(GERBER_C_FLASH)
         g.buffer(2, 'round', True)
         assert g.tools[10]['size'] == pytest.approx(2.0)
+
+def test_buffer_factor_of_zero_is_rejected(app):
+    obj = make_same_diameter_excellon(app)
+    before = {key: tool['tooldia'] for key, tool in obj.tools.items()}
+    assert obj.buffer(0, 1, True) == 'fail'
+    assert {key: tool['tooldia'] for key, tool in obj.tools.items()} == before
+
+
+class _RecordingShapes:
+    """The ShapeGroup API used by ExcellonObject.plot(), keeping the shapes it was given."""
+
+    def __init__(self):
+        self.data = {}
+        self._indexes = []
+        self._collection = self
+        self.visible = True
+
+    def add(self, shape, **kwargs):
+        key = len(self._indexes)
+        self._indexes.append(key)
+        self.data[key] = shape
+        return key
+
+    def add_batch(self, shapes_data, **kwargs):
+        return [self.add(item['shape']) for item in shapes_data]
+
+    def transform(self, matrix, update=True):
+        for key in self._indexes:
+            self.data[key] = affinity.affine_transform(self.data[key], matrix)
+        return True
+
+    def redraw(self, *args, **kwargs):
+        pass
+
+    def clear(self, update=False):
+        self.data.clear()
+        del self._indexes[:]
+
+
+
+
+def test_matrix_undo_redo_keeps_excellon_source_and_plot_in_sync(app, tmp_path):
+    obj = make_same_diameter_excellon(app)
+    app.f_handlers = appIO(app)
+    obj.shapes = _RecordingShapes()
+    obj.plot()
+
+    before_tools = snapshot_excellon(obj)
+    assert obj.regenerate_source() is True
+
+    matrix = (2, 0, 0, 1, 0, 0)
+    before_meta = transform_metadata(obj)
+    obj.scale(2, 1, point=(0, 0))
+    obj.regenerate_source()
+    scaled_tools = snapshot_excellon(obj)
+
+    history = HistoryManager(app, SimpleNamespace(get_list=lambda: [obj]))
+    app.history = history
+    history.record_matrix('Scale', [(obj, matrix, before_meta)])
+
+    assert history.undo() is True
+    undone = reparse_excellon(app, obj.source_file, tmp_path, 'undone')
+    assert pts(undone.tools[1]['drills']) == pytest.approx(pts(before_tools[1]['drills']), abs=1e-9)
+    assert slot_coords(undone.tools[2]['slots']) == pytest.approx(
+        slot_coords(before_tools[2]['slots']), abs=1e-9)
+    assert obj.shapes.data[0].bounds == pytest.approx((4.5, 4.5, 5.5, 5.5), abs=1e-6)
+
+    assert history.redo() is True
+    redone = reparse_excellon(app, obj.source_file, tmp_path, 'redone')
+    assert pts(redone.tools[1]['drills']) == pytest.approx(pts(scaled_tools[1]['drills']), abs=1e-9)
+    assert slot_coords(redone.tools[2]['slots']) == pytest.approx(
+        slot_coords(scaled_tools[2]['slots']), abs=1e-9)
+    assert obj.shapes.data[0].bounds == pytest.approx((9.5, 4.5, 10.5, 5.5), abs=1e-6)
+
+
+def _buffer_state(obj):
+    return ({key: tool['tooldia'] for key, tool in obj.tools.items()},
+            list(obj.solid_geometry),
+            {key: list(tool['solid_geometry']) for key, tool in obj.tools.items()},
+            {key: dict(tool['data']) for key, tool in obj.tools.items()})
+
+
+def _assert_buffer_state(obj, state):
+    diameters, geometry, tool_geometry, data = state
+    assert {key: tool['tooldia'] for key, tool in obj.tools.items()} == diameters
+    assert obj.solid_geometry == geometry
+    for key, tool in obj.tools.items():
+        assert tool['solid_geometry'] == tool_geometry[key]
+        assert tool['data'] == data[key]
+
+
+def test_buffer_create_geometry_exception_restores_the_exact_state(app, monkeypatch):
+    obj = make_same_diameter_excellon(app)
+    before = _buffer_state(obj)
+
+    def raise_after_mutation():
+        obj.solid_geometry = []
+        for tool in obj.tools.values():
+            tool['solid_geometry'] = []
+        raise RuntimeError('create_geometry failed')
+
+    monkeypatch.setattr(obj, 'create_geometry', raise_after_mutation)
+    assert obj.buffer(0.25, 'round', False) == 'fail'
+    _assert_buffer_state(obj, before)
+
+
+def test_buffer_validates_every_tool_before_changing_any(app):
+    obj = _make(app)
+    before = _buffer_state(obj)
+    # tool 1 (0.8 mm) would become negative, tools 2 and 3 would stay valid
+    assert obj.buffer(-0.5, 'round', None) == 'fail'
+    _assert_buffer_state(obj, before)
+
+
+@pytest.mark.parametrize('distance,factor', [
+    ('x', None), (float('nan'), True),
+])
+def test_buffer_rejects_a_malformed_distance(app, distance, factor):
+    obj = make_same_diameter_excellon(app)
+    before = _buffer_state(obj)
+    assert obj.buffer(distance, 'round', factor) == 'fail'
+    _assert_buffer_state(obj, before)
+
+
+@pytest.mark.parametrize('tooldia', ['x'])
+def test_buffer_rejects_a_malformed_tool_diameter(app, tooldia):
+    obj = make_same_diameter_excellon(app)
+    obj.tools[1]['tooldia'] = tooldia
+    before = _buffer_state(obj)
+    assert obj.buffer(0.1, 'round', False) == 'fail'
+    _assert_buffer_state(obj, before)

@@ -9,7 +9,7 @@ from shapely import LineString, Point
 from shapely.errors import GEOSException
 from shapely.ops import unary_union
 
-from appEditors.grb_plugins.GrbCommon import DrawTool, DrawToolShape, DrawToolUtilityShape
+from appEditors.grb_plugins.GrbCommon import DrawTool, DrawToolShape, DrawToolUtilityShape, stored_quad_candidates
 from appEditors.grb_plugins.GrbHistory import gerber_operation
 import appTranslation as fcTranslate
 
@@ -78,13 +78,10 @@ def sweep_parameters(editor, aperture, shape):
     if (not all(len(coord) == 2 and all(math.isfinite(value) for value in coord) for coord in coords) or
             any(a == b for a, b in zip(coords, coords[1:]))):
         raise ValueError(_("The track contains invalid coordinates or zero-length segments."))
-    resolutions = [editor.app.options.get('gerber_circle_steps', 64),
-                   getattr(editor.gerber_obj, 'steps_per_circle', None)]
-    for steps in resolutions:
-        if not isinstance(steps, int) or isinstance(steps, bool) or not 1 <= steps <= 4096:
-            continue
-        for divisor in (2.0, 1.999):
-            radius = width / divisor
+    for divisor in (2.0, 1.999):
+        radius = width / divisor
+        # the circle of the solid has the steps of the preference now or of the preference when it was made
+        for steps in stored_quad_candidates(editor, radius):
             candidate = follow.buffer(radius, steps)
             # Joining native records can retain redundant collinear boundary vertices.
             if (solid.equals_exact(candidate, max(1e-10, width * 1e-8), normalize=True) or

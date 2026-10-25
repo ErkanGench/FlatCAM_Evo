@@ -44,7 +44,7 @@ def test_internal_bend_stretches_runs_preserves_width_and_fixed_bends(divisor, s
     coords = [(0, 0), (2, 0), (4, 0), (4, 2), (4, 4), (8, 4)]
     original = track(coords, divisor=divisor, steps=steps)
     editor = editor_for([original])
-    editor.gerber_obj = SimpleNamespace(steps_per_circle=steps)
+    editor.gerber_obj = SimpleNamespace(steps_per_circle=steps * 4)
     editor.selected = [original]
     revision = editor.geometry_revision
     tool = start(editor, (4, 0))
@@ -150,7 +150,7 @@ def test_edit_rejects_stale_geometry_after_press():
 
 def test_bend_export_reparses_as_original_circular_aperture():
 
-    shape = track([(0, 0), (4, 0), (4, 4)], divisor=1.999)
+    shape = track([(0, 0), (4, 0), (4, 4)])
     editor = editor_for([shape])
     start(editor, (4, 0))
     release(editor, (5, 1))
@@ -159,7 +159,7 @@ def test_bend_export_reparses_as_original_circular_aperture():
     body = GerberObject.export_gerber(saved, 3, 6)
     assert 'G36' not in body
     source = '%FSLAX36Y36*%\n%MOMM*%\n%ADD10C,0.4*%\nG01*\n' + body + 'M02*\n'
-    parsed = Gerber(editor.app, steps_per_circle=16)
+    parsed = Gerber(editor.app, steps_per_circle=64)
     parsed.units = 'MM'
     assert parsed.parse_lines(source.splitlines()) is None
     record = parsed.tools[10]['geometry'][0]
@@ -193,7 +193,7 @@ def test_real_editor_save_build_reparses_without_region_conversion(app):
 
     source = make_gerber(app, NATIVE_GBR, name='board')
     original_tools = source.tools
-    shape = track([(0, 0), (4, 0), (4, 4)], divisor=1.999)
+    shape = track([(0, 0), (4, 0), (4, 4)])
     editor = editor_for([shape])
     start(editor, (4, 0))
     release(editor, (5, 1))
@@ -206,7 +206,7 @@ def test_real_editor_save_build_reparses_without_region_conversion(app):
     assert not saved.export_as_regions
     assert 'G36*' not in saved.source_file
     assert source.tools is original_tools
-    parsed = Gerber(app, steps_per_circle=16)
+    parsed = Gerber(app, steps_per_circle=64)
     assert parsed.parse_lines(saved.source_file.splitlines()) is None
     record = parsed.tools[10]['geometry'][0]
     assert record['follow'].coords[:] == [(0, 0), (5, 1), (4, 4)]

@@ -210,3 +210,51 @@ def test_affine_reuse_follows_selection_changes_and_multistep_history(monkeypatc
     assert editor._rendered[id(second)][4] == []
     assert editor.shapes.data[key]['visible']
     editor.plot_shape.assert_not_called()
+
+
+@pytest.mark.parametrize('method,kind', [('buffer_int', 'polygon'), ('buffer_int', 'open')])
+def test_buffer_adds_all_usable_contours_and_keeps_original(method, kind):
+    from appEditors.geo_plugins.GeoBufferPlugin import BufferSelectionTool
+    from camlib import flatten_shapely_geometry
+    from shapely import MultiLineString
+    dumbbell = box(0, 0, 4, 4).union(box(6, 0, 10, 4)).union(box(3, 1.8, 7, 2.2))
+    geo = {'polygon': dumbbell, 'ring': dumbbell.exterior,
+           'multipart': MultiLineString([dumbbell.exterior]),
+           'split_multipart': dumbbell.buffer(-0.3, join_style='mitre'),
+           'open': LineString([(0, 0), (4, 0)])}[kind]
+    shape = DrawToolShape(geo)
+    editor = editor_with_history([shape], [shape])
+    editor.app.app_units = 'MM'
+    tool = BufferSelectionTool.__new__(BufferSelectionTool)
+    tool.draw_app = editor
+    getattr(tool, method)(0.5, 'mitre')
+    run_worker(editor)
+    added = [part for s in editor.storage.get_objects() if s is not shape
+             for part in flatten_shapely_geometry(s.geo)]
+    assert shape in list(editor.storage.get_objects())
+    if kind == 'open' and method == 'buffer_int':
+        assert not added
+        assert not any('[success]' in c.args[0] for c in editor.app.inform.emit.call_args_list)
+        assert not editor.undo()
+    else:
+        assert added and all(not part.is_empty for part in added)
+        if method == 'buffer_int':
+            assert len(added) == 2
+            assert all(dumbbell.covers(part) for part in added)
+        assert editor.undo()
+        assert list(editor.storage.get_objects()) == [shape]
+
+
+@pytest.mark.parametrize('method,distance', [('buffer_int', 10.0)])
+def test_buffer_without_usable_result_never_reports_done_or_adds_history(method, distance):
+    from appEditors.geo_plugins.GeoBufferPlugin import BufferSelectionTool
+    shape = DrawToolShape(box(0, 0, 2, 2))
+    editor = editor_with_history([shape], [shape])
+    editor.app.app_units = 'MM'
+    tool = BufferSelectionTool.__new__(BufferSelectionTool)
+    tool.draw_app = editor
+    getattr(tool, method)(distance, 'mitre')
+    assert run_worker(editor) == 'fail'
+    assert list(editor.storage.get_objects()) == [shape]
+    assert not any('[success]' in c.args[0] for c in editor.app.inform.emit.call_args_list)
+    assert not editor.undo()

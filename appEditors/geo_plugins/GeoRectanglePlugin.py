@@ -5,6 +5,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, GLay, FCFr
     RadioSet, NumericalEvalEntry
 
 from shapely import box
+from camlib import object_quad_segs
 from shapely.geometry import base
 
 import gettext
@@ -151,23 +152,13 @@ class RectangleEditorTool(AppToolEditor):
         if corner_type == 'r':
             geo = box(minx, miny, maxx, maxy).buffer(
                 corner_radius, join_style=base.JOIN_STYLE.round,
-                quad_segs=self.draw_app.app.options.get(
-                    "geometry_circle_steps",
-                    self.draw_app.app.defaults.get(
-                        "geometry_circle_steps",
-                        self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-                    )
-                )).exterior
+                quad_segs=object_quad_segs(
+                    self.draw_app.app.options, 'geometry', corner_radius, self.draw_app.app.app_units)).exterior
         elif corner_type == 'b':
             geo = box(minx, miny, maxx, maxy).buffer(
                 corner_radius, join_style=base.JOIN_STYLE.bevel,
-                quad_segs=self.draw_app.app.options.get(
-                    "geometry_circle_steps",
-                    self.draw_app.app.defaults.get(
-                        "geometry_circle_steps",
-                        self.draw_app.app.defaults.factory_defaults.get("geometry_circle_steps")
-                    )
-                )).exterior
+                quad_segs=object_quad_segs(
+                    self.draw_app.app.options, 'geometry', corner_radius, self.draw_app.app.app_units)).exterior
         else:   # 's' - square
             geo = box(minx, miny, maxx, maxy).exterior
 

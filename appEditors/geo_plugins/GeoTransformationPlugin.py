@@ -214,10 +214,7 @@ class TransformEditorTool(AppToolEditor):
             )
         ))
 
-        # initial state is hidden
-        self.ui.point_label.hide()
-        self.ui.point_entry.hide()
-        self.ui.point_button.hide()
+        self.ui.on_reference_changed(self.ui.ref_combo.currentIndex())
 
     def template(self):
         if not self.draw_app.selected:
@@ -231,7 +228,7 @@ class TransformEditorTool(AppToolEditor):
         self.app.ui.splitter.setSizes([0, 1])
 
     def on_calculate_reference(self, ref_index=None):
-        if ref_index:
+        if ref_index is not None:
             ref_val = ref_index
         else:
             ref_val = self.ui.ref_combo.currentIndex()
@@ -406,19 +403,20 @@ class TransformEditorTool(AppToolEditor):
 
         with self.app.proc_container.new('%s...' % _("Rotating")):
             shape_list = self.draw_app.selected
-            px, py = point
 
             if not shape_list:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-                return
+                return 'fail'
 
             try:
-                self.draw_app.transform_shapes('rotate', -val, point=(px, py))
+                px, py = point
+                if self.draw_app.transform_shapes('rotate', -val, point=(px, py)) == 'fail':
+                    return 'fail'
 
                 self.app.inform.emit('[success] %s' % _("Done."))
             except Exception as e:
                 self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
+                return 'fail'
 
     def on_flip(self, axis, point):
         """
@@ -433,21 +431,22 @@ class TransformEditorTool(AppToolEditor):
 
         if not shape_list:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
+            return 'fail'
 
         with self.app.proc_container.new('%s...' % _("Flipping")):
             try:
                 px, py = point
 
-                self.draw_app.transform_shapes('mirror', axis, (px, py))
+                if self.draw_app.transform_shapes('mirror', axis, (px, py)) == 'fail':
+                    return 'fail'
                 if axis == 'X':
-                    self.app.inform.emit('[success] %s...' % _('Flip on Y axis done'))
+                    self.app.inform.emit('[success] %s...' % _('Reflected Y coordinates across X axis'))
                 elif axis == 'Y':
-                    self.app.inform.emit('[success] %s' % _('Flip on X axis done'))
+                    self.app.inform.emit('[success] %s' % _('Reflected X coordinates across Y axis'))
 
             except Exception as e:
                 self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
+                return 'fail'
 
     def on_skew(self, axis, xval, yval, point):
         """
@@ -464,12 +463,13 @@ class TransformEditorTool(AppToolEditor):
 
         if not shape_list:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
+            return 'fail'
 
         with self.app.proc_container.new('%s...' % _("Skewing")):
             try:
                 px, py = point
-                self.draw_app.transform_shapes('skew', xval, yval, point=(px, py))
+                if self.draw_app.transform_shapes('skew', xval, yval, point=(px, py)) == 'fail':
+                    return 'fail'
 
                 if axis == 'X':
                     self.app.inform.emit('[success] %s...' % _('Skew on the X axis done'))
@@ -478,7 +478,7 @@ class TransformEditorTool(AppToolEditor):
 
             except Exception as e:
                 self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
+                return 'fail'
 
     def on_scale(self, axis, xfactor, yfactor, point=None):
         """
@@ -496,13 +496,14 @@ class TransformEditorTool(AppToolEditor):
 
         if not shape_list:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
+            return 'fail'
 
         with self.app.proc_container.new('%s...' % _("Scaling")):
             try:
                 px, py = point
 
-                self.draw_app.transform_shapes('scale', xfactor, yfactor, point=(px, py))
+                if self.draw_app.transform_shapes('scale', xfactor, yfactor, point=(px, py)) == 'fail':
+                    return 'fail'
 
                 if str(axis) == 'X':
                     self.app.inform.emit('[success] %s...' % _('Scale on the X axis done'))
@@ -510,7 +511,7 @@ class TransformEditorTool(AppToolEditor):
                     self.app.inform.emit('[success] %s...' % _('Scale on the Y axis done'))
             except Exception as e:
                 self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
+                return 'fail'
 
     def on_offset(self, axis, num):
         """
@@ -525,11 +526,12 @@ class TransformEditorTool(AppToolEditor):
 
         if not shape_list:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
+            return 'fail'
 
         with self.app.proc_container.new('%s...' % _("Offsetting")):
             try:
-                self.draw_app.transform_shapes('offset', (num, 0) if axis == 'X' else (0, num))
+                if self.draw_app.transform_shapes('offset', (num, 0) if axis == 'X' else (0, num)) == 'fail':
+                    return 'fail'
 
                 if axis == 'X':
                     self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
@@ -538,29 +540,30 @@ class TransformEditorTool(AppToolEditor):
 
             except Exception as e:
                 self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                return
+                return 'fail'
 
     def on_buffer_action(self, value, join, factor=None):
         shape_list = self.draw_app.selected
 
         if not shape_list:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("No shape selected."))
-            return
+            return 'fail'
         else:
             with self.app.proc_container.new('%s...' % _("Buffering")):
                 try:
-                    self.draw_app.transform_shapes('buffer', value, join, factor)
+                    if self.draw_app.transform_shapes('buffer', value, join, factor) == 'fail':
+                        return 'fail'
 
                     self.app.inform.emit('[success] %s...' % _('Buffer done'))
 
                 except Exception as e:
                     self.app.log.error("TransformEditorTool.on_buffer_action() --> %s" % str(e))
                     self.app.inform.emit('[ERROR_NOTCL] %s: %s.' % (_("Action was not executed"), str(e)))
-                    return
+                    return 'fail'
 
     def on_rotate_key(self):
         val_box = FCInputDoubleSpinner(title=_("Rotate ..."),
-                                       text='%s:' % _('Enter an Angle Value (degrees)'),
+                                       text='%s:' % _('Enter an Angle Value (degrees, positive CW)'),
                                        min=-359.9999, max=360.0000, decimals=self.decimals,
                                        init_val=float(self.app.options.get(
                                            'tools_transform_rotate',
@@ -575,7 +578,6 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_rotate(val=val, ref=1)
-            self.app.inform.emit('[success] %s...' % _("Rotate done"))
             return
         else:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Rotate cancelled"))
@@ -599,7 +601,6 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_offx(val=val)
-            self.app.inform.emit('[success] %s %s' % (_('Offset on the X axis.'), _("Done.")))
             return
         else:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Offset X cancelled"))
@@ -622,11 +623,10 @@ class TransformEditorTool(AppToolEditor):
 
         val, ok = val_box.get_value()
         if ok:
-            self.on_offx(val=val)
-            self.app.inform.emit('[success] %s...' % _("Offset on Y axis done"))
+            self.on_offy(val=val)
             return
         else:
-            self.app.inform.emit('[success] %s...' % _("Offset on the Y axis canceled"))
+            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Offset on the Y axis canceled"))
 
     def on_skewx_key(self):
         val_box = FCInputDoubleSpinner(title=_("Skew on X axis ..."),
@@ -645,10 +645,9 @@ class TransformEditorTool(AppToolEditor):
         val, ok = val_box.get_value()
         if ok:
             self.on_skewx(val=val, ref=3)
-            self.app.inform.emit('[success] %s...' % _("Skew on X axis done"))
             return
         else:
-            self.app.inform.emit('[success] %s...' % _("Skew on X axis canceled"))
+            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Skew on X axis canceled"))
 
     def on_skewy_key(self):
         val_box = FCInputDoubleSpinner(title=_("Skew on Y axis ..."),
@@ -666,11 +665,10 @@ class TransformEditorTool(AppToolEditor):
 
         val, ok = val_box.get_value()
         if ok:
-            self.on_skewx(val=val, ref=3)
-            self.app.inform.emit('[success] %s...' % _("Skew on Y axis done"))
+            self.on_skewy(val=val, ref=3)
             return
         else:
-            self.app.inform.emit('[success] %s...' % _("Skew on Y axis canceled"))
+            self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Skew on Y axis canceled"))
 
     @staticmethod
     def alt_bounds(shapelist):
@@ -740,10 +738,12 @@ class TransformationEditorUI:
               "- Origin -> it is the 0, 0 point\n"
               "- Selection -> the center of the bounding box of the selected objects\n"
               "- Point -> a custom point defined by X,Y coordinates\n"
-              "- Min Selection -> the point (minx, miny) of the bounding box of the selection")
+              "- Minimum -> lower left corner of the selection bounds\n"
+              "- Lower Right, Upper Right, Upper Left -> other corners of the selection bounds")
         )
         self.ref_combo = FCComboBox()
-        self.ref_items = [_("Origin"), _("Selection"), _("Point"), _("Minimum")]
+        self.ref_items = [_("Origin"), _("Selection"), _("Point"), _("Minimum"),
+                          _("Lower Right"), _("Upper Right"), _("Upper Left")]
         self.ref_combo.addItems(self.ref_items)
 
         ref_grid.addWidget(ref_label, 0, 0)
@@ -785,7 +785,7 @@ class TransformationEditorUI:
         rotate_title_label = FCLabel("<font size=3><b>%s</b></font>" % self.rotateName)
         rot_grid.addWidget(rotate_title_label, 0, 0, 1, 3)
 
-        self.rotate_label = FCLabel('%s:' % _("Angle"))
+        self.rotate_label = FCLabel('%s:' % _("Angle (CW)"))
         self.rotate_label.setToolTip(
             _("Angle, in degrees.\n"
               "Float number between -360 and 359.\n"
@@ -967,14 +967,14 @@ class TransformationEditorUI:
         mirror_grid = GLay(v_spacing=5, h_spacing=3)
         mirror_frame.setLayout(mirror_grid)
 
-        self.flipx_button = FCButton(_("Flip on X"))
+        self.flipx_button = FCButton(_("Reflect X (across Y)"))
         self.flipx_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
+            _("Reflect X coordinates across the vertical Y axis through the reference point; Y is unchanged.")
         )
 
-        self.flipy_button = FCButton(_("Flip on Y"))
+        self.flipy_button = FCButton(_("Reflect Y (across X)"))
         self.flipy_button.setToolTip(
-            _("Flip the selected object(s) over the X axis.")
+            _("Reflect Y coordinates across the horizontal X axis through the reference point; X is unchanged.")
         )
 
         hlay0 = QtWidgets.QHBoxLayout()
@@ -1121,11 +1121,6 @@ class TransformationEditorUI:
         self.ref_combo.currentIndexChanged.connect(self.on_reference_changed)
 
     def on_reference_changed(self, index):
-        if index == 0 or index == 1:  # "Origin" or "Selection" reference
-            self.point_label.hide()
-            self.point_entry.hide()
-            self.point_button.hide()
-        elif index == 2:  # "Point" reference
-            self.point_label.show()
-            self.point_entry.show()
-            self.point_button.show()
+        self.point_label.setVisible(index == 2)
+        self.point_entry.setVisible(index == 2)
+        self.point_button.setVisible(index == 2)
