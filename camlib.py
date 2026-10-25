@@ -666,7 +666,7 @@ class Geometry(object):
         if self.solid_geometry is None:
             self.solid_geometry = []
 
-        new_circle = Point(origin).buffer(radius, int(self.geo_steps_per_circle))
+        new_circle = Point(origin).buffer(radius, circle_quad_segs(self.geo_steps_per_circle))
         if not new_circle.is_valid:
             return "fail"
 
@@ -2786,7 +2786,7 @@ class Geometry(object):
                 try:
                     if factor is None or factor is False or factor == 0:
                         if distance >= 0:
-                            new_obj = obj.buffer(distance, quad_segs=self.geo_steps_per_circle, join_style=join)
+                            new_obj = obj.buffer(distance, quad_segs=circle_quad_segs(self.geo_steps_per_circle), join_style=join)
                             if isinstance(obj, (LinearRing, LineString)) and only_exterior is True:
                                 new_obj = new_obj.exterior
                         else:
@@ -2794,11 +2794,13 @@ class Geometry(object):
                                 if not obj.is_closed:
                                     obj = Polygon(obj).exterior
 
-                            new_obj = obj.buffer(abs(distance*2), quad_segs=self.geo_steps_per_circle, join_style=join)
+                            new_obj = obj.buffer(abs(distance*2), quad_segs=circle_quad_segs(self.geo_steps_per_circle),
+                                                 join_style=join)
                             new_obj_ints = new_obj.interiors
                             new_obj_union = unary_union(new_obj_ints)
                             new_obj = new_obj_union.buffer(
-                                abs(distance), quad_segs=self.geo_steps_per_circle, join_style=join).exterior
+                                abs(distance), quad_segs=circle_quad_segs(self.geo_steps_per_circle),
+                                join_style=join).exterior
 
                     else:
                         new_obj = affinity.scale(obj, xfact=distance, yfact=distance, origin='center')
@@ -4619,14 +4621,14 @@ class CNCjob(Geometry):
             if drill_no:
                 drill_arr = np.empty(drill_no, dtype=object)
                 drill_arr[:] = drills
-                sol_geo = list(shapely.buffer(drill_arr, radius, quad_segs=self.geo_steps_per_circle))
+                sol_geo = list(shapely.buffer(drill_arr, radius, quad_segs=circle_quad_segs(self.geo_steps_per_circle)))
 
             slots = exobj.tools[to_ol].get('slots') or []
             slot_no = len(slots)
             for slot in slots:
                 start = (slot[0].x, slot[0].y)
                 stop = (slot[1].x, slot[1].y)
-                sol_geo.append(LineString([start, stop]).buffer(radius, quad_segs=self.geo_steps_per_circle))
+                sol_geo.append(LineString([start, stop]).buffer(radius, quad_segs=circle_quad_segs(self.geo_steps_per_circle)))
 
             default_data = {}
             for k, v in list(self.obj_options.items()):
@@ -4751,7 +4753,7 @@ class CNCjob(Geometry):
                     'gcode_parsed':     [],
                     'last_point':       (0, 0),
                     'solid_geometry':   list(shapely.buffer(spot_points, spot['tooldia'] / 2.0,
-                                                            quad_segs=self.geo_steps_per_circle))
+                                                            quad_segs=circle_quad_segs(self.geo_steps_per_circle)))
                 }
                 tools = [spot_id] + tools
                 self.spot_tool_id = spot_id
@@ -6864,7 +6866,7 @@ class CNCjob(Geometry):
                         try:
                             # if the geos are travel lines
                             if geo['kind'][0] == 'T':   # noqa
-                                poly = geo['geom'].buffer((tooldia / 1.99999999), self.steps_per_circle)
+                                poly = geo['geom'].buffer((tooldia / 1.99999999), circle_quad_segs(self.steps_per_circle))
                             else:
                                 poly = Polygon(geo['geom'])     # noqa
 
@@ -6903,7 +6905,7 @@ class CNCjob(Geometry):
                         chunk = batch[start:start + 1024]
                         polygons = shapely.buffer(
                             [item['shape'] for item in chunk], tooldia / 1.99999999,
-                            quad_segs=self.steps_per_circle)
+                            quad_segs=circle_quad_segs(self.steps_per_circle))
                         polygons = shapely.simplify(polygons, tool_tolerance)
                         for item, polygon in zip(chunk, polygons):
                             item['shape'] = polygon

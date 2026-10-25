@@ -157,6 +157,18 @@ class TestLocalizedGeometryFixes(unittest.TestCase):
             self.assertTrue(unary_union(result).equals(target.difference(mask)))
         multi = MultiLineString([target, LineString([(-2, 0.5), (2, 0.5)])])
         self.assertTrue(unary_union(self.cut(multi, mask.exterior)).equals(multi.difference(mask)))
+    def test_circle_steps_count_the_whole_circle(self):
+        steps = 32
+        geo = Geometry(make_app(), geo_steps_per_circle=steps)
+        geo.tools = {1: {'solid_geometry': []}}
+        geo.add_circle((0, 0), 1.0)
+        self.assertAlmostEqual(len(geo.solid_geometry[0].exterior.coords) - 1, steps, delta=2)
+
+        geo.solid_geometry = [LineString([(0, 0), (4, 0)])]
+        geo.multigeo = False
+        geo.buffer(1.0, 'round', None)
+        # a buffered line is two round caps: about one full circle of vertices, not four
+        self.assertLessEqual(len(geo.solid_geometry[0].exterior.coords) - 1, steps + 4)
 
 if __name__ == '__main__':
     unittest.main()
