@@ -258,6 +258,21 @@ class ToolsPaintPrefGroupUI(OptionsGroupUI):
         )
         gen_grid.addWidget(self.rest_cb, 0, 0, 1, 2)
 
+        # Rest Offset
+        self.rest_offset_label = FCLabel('%s:' % _('Rest Offset'))
+        self.rest_offset_label.setToolTip(
+            _("Distance by which to avoid\n"
+              "the edges of the polygon to\n"
+              "be painted.")
+        )
+        self.rest_offset_entry = FCDoubleSpinner()
+        self.rest_offset_entry.set_precision(self.decimals)
+        self.rest_offset_entry.set_range(-10000.0000, 10000.0000)
+        self.rest_offset_entry.setSingleStep(0.1)
+
+        gen_grid.addWidget(self.rest_offset_label, 1, 0)
+        gen_grid.addWidget(self.rest_offset_entry, 1, 1)
+
         # Polygon selection
         selectlabel = FCLabel('%s:' % _('Selection'))
         selectlabel.setToolTip(
@@ -327,6 +342,23 @@ class ToolsPaintPrefGroupUI(OptionsGroupUI):
         self.simplification_entry.setToolTip(simplification_label.toolTip())
         gen_grid.addWidget(simplification_label, 10, 0)
         gen_grid.addWidget(self.simplification_entry, 10, 1)
+
+        self.valid_cb = FCCheckBox(label=_('Check validity'))
+        self.valid_cb.setObjectName("p_check")
+        self.valid_cb.setToolTip(
+            _("If checked then the tools diameters are verified against the smallest\n"
+              "gap between the copper features of a Gerber source object.\n"
+              "The run stops if no selected tool fits; it only warns if some tools are too big.")
+        )
+        gen_grid.addWidget(self.valid_cb, 12, 0, 1, 2)
+
+        self.multi_objects_cb = FCCheckBox(_("Selected objects"))
+        self.multi_objects_cb.setObjectName("p_multi_objects")
+        self.multi_objects_cb.setToolTip(
+            _("Paint all the Geometry and Gerber objects selected in the Project tab, each with the same tools.\n"
+              "Not used by 'Polygon Selection', which paints the object in the combobox.")
+        )
+        gen_grid.addWidget(self.multi_objects_cb, 14, 0, 1, 2)
 
         GLay.set_common_column_size([tool_grid, param_grid, gen_grid], 0)
 

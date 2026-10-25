@@ -3,7 +3,9 @@
 import logging
 from copy import deepcopy
 
-from shapely import LineString, LinearRing, MultiLineString, MultiPolygon, Point, Polygon
+import numpy as np
+import shapely
+from shapely import LineString, LinearRing, MultiLineString, Point, Polygon, STRtree, make_valid
 from shapely.geometry import base
 from shapely.ops import linemerge, unary_union
 
@@ -12,14 +14,70 @@ from camlib import AppRTreeStorage, flatten_shapely_geometry, grace
 log = logging.getLogger('base')
 
 
+def polygon_parts(geometry):
+    """Polygonal parts of any geometry; invalid parts are repaired instead of dropped."""
+    parts = []
+    for part in flatten_shapely_geometry(geometry):
+        if not part.is_valid:
+            part = make_valid(part)
+        parts.extend(sub for sub in flatten_shapely_geometry(part)
+                     if isinstance(sub, Polygon) and not sub.is_empty)
+    return parts
+
+
+def merge_overlapping(geometry):
+    """Union the source polygons whose interiors overlap; disjoint polygons are returned untouched.
+
+    Overlapping sources (DXF/SVG) would otherwise be painted twice, giving duplicate toolpaths.
+    """
+    items = []
+    for part in flatten_shapely_geometry(geometry):
+        if isinstance(part, Polygon) and not part.is_valid:
+            items.extend(polygon_parts(part))
+        else:
+            items.append(part)
+    polygons = [(index, item) for index, item in enumerate(items) if isinstance(item, Polygon)]
+    if len(polygons) < 2:
+        return items
+    geoms = [item for _index, item in polygons]
+    root = list(range(len(geoms)))
+
+    def find(i):
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    first, second = STRtree(geoms).query(geoms, predicate='intersects')
+    for i, j in zip(first.tolist(), second.tolist()):
+        if i < j and find(i) != find(j) and geoms[i].relate_pattern(geoms[j], '2********'):
+            root[find(j)] = find(i)
+    groups = {}
+    for i in range(len(geoms)):
+        groups.setdefault(find(i), []).append(i)
+    if all(len(members) == 1 for members in groups.values()):
+        return items
+    merged, dropped = {}, set()
+    for members in groups.values():
+        if len(members) > 1:
+            merged[polygons[members[0]][0]] = polygon_parts(unary_union([geoms[i] for i in members]))
+            dropped.update(polygons[i][0] for i in members[1:])
+    result = []
+    for index, item in enumerate(items):
+        if index in merged:
+            result.extend(merged[index])
+        elif index not in dropped:
+            result.append(item)
+    return result
+
+
 def generate_paint(geometry, tools_storage, diameters, ordering, simplification, decimals,
                    process_polygon, check_abort=None, progress=None, tool_started=None,
                    find_uid=None, get_params=None, buffer=None, simplify=None):
     """Generate independent tool passes without publishing or changing caller-owned tools."""
-    tools = deepcopy(tools_storage)
-    for tool in tools.values():
-        tool.pop('paint_cleanup_start', None)
-        tool['solid_geometry'] = []
+    tools = {uid: {**{key: value for key, value in tool.items() if key != 'paint_cleanup_start'},
+                   'data': deepcopy(tool.get('data', {})), 'solid_geometry': []}
+             for uid, tool in tools_storage.items()}
     diameters = list(diameters)
     if ordering in (1, 2):
         diameters.sort(reverse=ordering == 2)
@@ -28,8 +86,9 @@ def generate_paint(geometry, tools_storage, diameters, ordering, simplification,
     buffer = buffer or buffer_geometry
     simplify = simplify or simplify_geometry
     warnings = []
-    old_progress = 0
     last_diameter = None
+    source = merge_overlapping(geometry)
+    buffered = {}
     for diameter in diameters:
         last_diameter = diameter
         if check_abort is not None:
@@ -37,18 +96,21 @@ def generate_paint(geometry, tools_storage, diameters, ordering, simplification,
         if tool_started is not None:
             tool_started(diameter)
         uid = find_uid(diameter, tools)
-        if not uid:
+        if uid is None:
             return 'fail'
         settings = get_params(uid, tools)
-        polygons = buffer(geometry, settings['offset'])
+        if settings['offset'] not in buffered:
+            buffered[settings['offset']] = buffer(source, settings['offset'])
+        polygons = buffered[settings['offset']]
         if not polygons:
             warnings.append(('empty', None))
             continue
-        try:
-            cleared = []
-            for number, polygon in enumerate(polygons, 1):
-                if check_abort is not None:
-                    check_abort()
+        old_progress = 0
+        cleared = []
+        for number, polygon in enumerate(polygons, 1):
+            if check_abort is not None:
+                check_abort()
+            try:
                 result = process_polygon(polygon, diameter, settings)
                 if result == 'fail':
                     # One polygon that cannot be painted must not discard the whole job.
@@ -56,117 +118,124 @@ def generate_paint(geometry, tools_storage, diameters, ordering, simplification,
                     result = None
                 if result:
                     cleared.extend(simplify(result.get_objects(), simplification))
-                if progress is not None:
-                    old_progress = progress(number, len(polygons), old_progress)
-        except grace:
-            raise
-        except Exception as err:
-            warnings.append(('normal', str(err)))
-            continue
+            except grace:
+                raise
+            except Exception as err:
+                warnings.append(('normal', str(err)))
+            if progress is not None:
+                old_progress = progress(number, len(polygons), old_progress)
         tools[uid]['solid_geometry'] = [path for path in cleared if path and not path.is_empty]
     if check_abort is not None:
         check_abort()
-    return {'tools': tools, 'paths': [path for tool in tools.values() for path in tool['solid_geometry']],
-            'warnings': warnings, 'last_diameter': last_diameter}
+    return {'tools': tools, 'warnings': warnings, 'last_diameter': last_diameter}
 
 
-def generate_rest_paint(geometry, tools_storage, diameters, ordering, simplification, decimals,
+def rest_sweep(polygon, diameter, settings, process_polygon, simplify, simplification, keep_stock):
+    """Paint one rest polygon: (status, elements, swept, remainder_parts); status is ok, skipped or failed."""
+    left, bottom, right, top = polygon.bounds
+    if right - left < diameter or top - bottom < diameter:
+        return 'skipped', [], None, []
+    check_buff = polygon.buffer(-diameter / 2.0)
+    if not check_buff or check_buff.is_empty:
+        return 'skipped', [], None, []
+    result = process_polygon(polygon, diameter, settings)
+    if result == 'fail':
+        # Not swept, so the polygon stays in the stock handed to the next tool.
+        return 'failed', [], None, []
+    elements = simplify(result.get_objects(), simplification) if result else []
+    swept, remaining = None, []
+    if keep_stock:
+        swept = unary_union(elements).buffer(diameter / 2.0)
+        left_over = polygon.difference(swept)
+        if left_over:
+            remaining = polygon_parts(left_over)
+    return 'ok', elements, swept, remaining
+
+
+def generate_rest_paint(geometry, tools_storage, diameters, simplification, decimals,
                         process_polygon, check_abort=None, progress=None, tool_started=None,
                         rest_offset=0, find_uid=None, get_params=None, buffer=None, simplify=None):
-    """Rest passes retain both local and global intermediate stock subtractions."""
-    tools = deepcopy(tools_storage)
-    for tool in tools.values():
-        tool.pop('paint_cleanup_start', None)
-        tool['solid_geometry'] = []
+    """Rest passes: the stock left for the next tool is what the swept paths of this tool did not cover.
+
+    Tools always run from the largest diameter to the smallest.
+    """
+    tools = {uid: {**{key: value for key, value in tool.items() if key != 'paint_cleanup_start'},
+                   'data': deepcopy(tool.get('data', {})), 'solid_geometry': []}
+             for uid, tool in tools_storage.items()}
     diameters = sorted(diameters, reverse=True)
     find_uid = find_uid or (lambda dia, storage: find_tool_uid(dia, storage, decimals))
     get_params = get_params or tool_params
+    buffer = buffer or buffer_geometry
     simplify = simplify or simplify_geometry
     if check_abort is not None:
         check_abort()
-    polygons = flatten_shapely_geometry(unary_union(buffer_geometry(geometry, rest_offset)))
+    polygons = polygon_parts(unary_union(buffer(merge_overlapping(geometry), rest_offset)))
     warnings = []
     output_tools = {}
-    old_progress = 0
-    last_diameter = None
-    geo_len = len(polygons)
     if not polygons:
-        return {'tools': tools, 'output_tools': output_tools, 'paths': [],
-                'warnings': [('empty', None)], 'last_diameter': None}
+        return {'tools': tools, 'output_tools': output_tools, 'warnings': [('empty', None)]}
     for tool_index, diameter in enumerate(diameters):
-        last_diameter = diameter
         has_next_tool = tool_index + 1 < len(diameters)
         if check_abort is not None:
             check_abort()
         if tool_started is not None:
             tool_started(diameter)
         uid = find_uid(diameter, tools)
-        if not uid:
+        if uid is None:
             return 'fail'
         settings = get_params(uid, tools)
-        rest_list, cleared = [], []
-        number = 0
-        try:
-            for polygon in polygons:
-                if check_abort is not None:
-                    check_abort()
-                left, bottom, right, top = polygon.bounds
-                if right - left < diameter or top - bottom < diameter:
-                    continue
-                check_buff = polygon.buffer(-diameter / 2.0)
-                if not check_buff or check_buff.is_empty:
-                    continue
-                result = process_polygon(polygon, diameter, settings)
-                if result == 'fail':
-                    # Not swept, so the polygon stays in the stock handed to the next tool.
+        rest_list, cleared, swept_parts, unswept = [], [], [], []
+        old_progress = 0
+        geo_len = len(polygons)
+        for number, polygon in enumerate(polygons, 1):
+            if check_abort is not None:
+                check_abort()
+            try:
+                status, elements, swept, remaining = rest_sweep(
+                    polygon, diameter, settings, process_polygon, simplify, simplification, has_next_tool)
+            except grace:
+                raise
+            except Exception as err:
+                warnings.append(('rest', str(err)))
+                status = 'error'
+            if status == 'ok':
+                cleared += elements
+                rest_list.extend(remaining)
+                if swept is not None and not swept.is_empty:
+                    swept_parts.append(swept)
+            else:
+                unswept.append(polygon)
+                if status == 'failed':
                     warnings.append(('skipped', diameter))
-                    continue
-                elements = simplify(result.get_objects(), simplification) if result else []
-                if has_next_tool:
-                    swept = unary_union(elements).buffer(diameter / 2.0)
-                    remaining = polygon.difference(swept)
-                    if remaining:
-                        rest_list.extend(part for part in flatten_shapely_geometry(remaining)
-                                         if part.is_valid and not part.is_empty)
-                if result:
-                    cleared += elements
-                number += 1
-                if progress is not None:
-                    old_progress = progress(number, geo_len, old_progress)
-        except grace:
-            raise
-        except Exception as err:
-            warnings.append(('rest', str(err)))
-            continue
+            if progress is not None:
+                old_progress = progress(number, geo_len, old_progress)
         if cleared:
-            tools[uid]['solid_geometry'] = deepcopy(cleared)
+            tools[uid]['solid_geometry'] = list(cleared)
             output_tools[uid] = dict(tools[uid])
         if not has_next_tool:
             break
-        # Keep this separate from the per-polygon subtraction above: legacy stock
-        # arithmetic intentionally combines the two results before repairing them.
-        swept = unary_union(cleared).buffer(diameter / 2.0)
-        polygons = flatten_shapely_geometry(MultiPolygon(polygons).difference(swept))
-        remaining = [part for part in polygons if part.is_valid] + rest_list
-        polygons = MultiPolygon(remaining)
-        if not polygons.is_valid:
-            polygons = unary_union(remaining)
-        if not polygons or polygons.is_empty or not polygons.is_valid:
+        # Stock for the next tool: the remainders of the swept polygons plus the polygons that were
+        # not painted (too narrow, failed), minus what the swept area of this tool covers of them.
+        stock = list(rest_list)
+        if unswept:
+            left_over = unary_union(unswept)
+            if swept_parts:
+                left_over = left_over.difference(unary_union(swept_parts))
+            stock.extend(polygon_parts(left_over))
+        polygons = polygon_parts(unary_union(stock)) if stock else []
+        if not polygons:
             break
-        polygons = flatten_shapely_geometry(polygons)
     if check_abort is not None:
         check_abort()
-    return {'tools': tools, 'output_tools': output_tools,
-            'paths': [path for tool in output_tools.values() for path in tool['solid_geometry']],
-            'warnings': warnings, 'last_diameter': last_diameter}
+    return {'tools': tools, 'output_tools': output_tools, 'warnings': warnings}
 
 
 def final_cleanup(geometry, tools_storage, output_tools, diameters, decimals, process_polygon,
                   cleanup, rest_offset=None, check_abort=None, find_uid=None, get_params=None,
                   buffer=None):
     """Select one final tool and return physical cleanup paths and residual stock."""
-    tools = deepcopy(tools_storage)
-    output_tools = deepcopy(output_tools)
+    tools = {uid: dict(tool) for uid, tool in tools_storage.items()}
+    output_tools = {uid: dict(tool) for uid, tool in output_tools.items()}
     find_uid = find_uid or (lambda dia, storage: find_tool_uid(dia, storage, decimals))
     get_params = get_params or tool_params
     buffer = buffer or buffer_geometry
@@ -188,7 +257,14 @@ def final_cleanup(geometry, tools_storage, output_tools, diameters, decimals, pr
                 settings = get_params(uid, tools)
 
                 def generate_paths(polygon, diameter):
-                    result = process_polygon(polygon, diameter, settings)
+                    try:
+                        result = process_polygon(polygon, diameter, settings)
+                    except grace:
+                        raise
+                    except Exception as err:
+                        # One polygon that cannot be painted is left to the residual.
+                        warnings.append(('normal', str(err)))
+                        return 'fail'
                     if result == 'fail':
                         return 'fail'
                     return list(result.get_objects()) if result else []
@@ -205,7 +281,7 @@ def final_cleanup(geometry, tools_storage, output_tools, diameters, decimals, pr
                     tools[uid] = tools.pop(uid)
                     output_tools.pop(uid, None)
                     output_tools[uid] = dict(tool)
-                if not residual.is_empty:
+                if residual is not None and not residual.is_empty:
                     warnings.append(('cleanup', None))
                 break
     return {'tools': tools, 'output_tools': output_tools, 'residual': residual, 'warnings': warnings,
@@ -213,8 +289,9 @@ def final_cleanup(geometry, tools_storage, output_tools, diameters, decimals, pr
 
 
 def find_tool_uid(tool_dia, tools_storage, decimals):
+    wanted = float('%.*f' % (decimals, float(tool_dia)))
     for uid, tool in tools_storage.items():
-        if float('%.*f' % (decimals, tool['tooldia'])) == float('%.*f' % (decimals, tool_dia)):
+        if float('%.*f' % (decimals, float(tool['tooldia']))) == wanted:
             return int(uid)
     return None
 
@@ -230,12 +307,40 @@ def tool_params(tool_uid, tools_storage):
 
 
 def buffer_geometry(geometry, offset):
+    """Buffer every polygon by -offset; a neck or dumbbell that splits in two yields two polygons."""
     buffered = []
     for polygon in flatten_shapely_geometry(geometry):
         result = polygon.buffer(-offset)
         if result and not result.is_empty:
-            buffered.append(result)
+            buffered.extend(part for part in flatten_shapely_geometry(result)
+                            if isinstance(part, Polygon) and not part.is_empty)
     return buffered
+
+
+def check_tools_fit(geometry, diameters, offsets=None):
+    """
+    The Check validity test of Paint: a tool paints inside a polygon only if it fits inside it (after the offset).
+    Returns (level, narrow, unused): level 'ok', 'warning' (the run goes on) or 'error' (no tool fits inside any
+    polygon); narrow is the number of polygons that no tool fits inside; unused lists the tools that fit nowhere.
+    """
+    parts = polygon_parts(geometry)
+    if not parts or not diameters:
+        return 'ok', 0, []
+    offsets = offsets or {}
+    fits = {}
+    for dia in diameters:
+        reach = float(dia) / 2.0 + float(offsets.get(dia, 0.0))
+        row = []
+        for part in parts:
+            left, bottom, right, top = part.bounds
+            # the bounds check avoids the buffer for the polygons that are clearly too narrow
+            row.append(min(right - left, top - bottom) > 2 * reach and not part.buffer(-reach).is_empty)
+        fits[dia] = row
+    narrow = sum(1 for index in range(len(parts)) if not any(fits[dia][index] for dia in diameters))
+    unused = [dia for dia in diameters if not any(fits[dia])]
+    if narrow == len(parts):
+        return 'error', narrow, unused
+    return ('warning' if narrow or unused else 'ok'), narrow, unused
 
 
 def simplify_geometry(geometry, tolerance):
@@ -252,7 +357,7 @@ def selection_geometry(geometry, check_abort=None, expand_multi=False):
         return None
     result = []
     try:
-        parts = geometry.geoms if expand_multi and isinstance(geometry, (MultiPolygon, MultiLineString)) else geometry
+        parts = geometry.geoms if expand_multi and isinstance(geometry, base.BaseMultipartGeometry) else geometry
         for part in parts:
             if part and (isinstance(part, list) or not part.is_empty):
                 result.extend(selection_geometry(part, check_abort, expand_multi))
@@ -261,79 +366,119 @@ def selection_geometry(geometry, check_abort=None, expand_multi=False):
     return result
 
 
-def select_polygon(geometry, point):
-    try:
+def _selectable_parts(geometry, out):
+    if isinstance(geometry, (list, tuple)):
         for part in geometry:
-            selected = select_polygon(part, point)
-            if selected is not None:
-                return selected
-    except TypeError:
-        if isinstance(geometry, LinearRing):
-            geometry = Polygon(geometry)
-        try:
-            if geometry.contains(Point(point)):
-                return geometry
-        except AttributeError:
-            return None
+            _selectable_parts(part, out)
+    elif isinstance(geometry, LinearRing):
+        out.append(Polygon(geometry))
+    elif isinstance(geometry, base.BaseGeometry):
+        out.append(geometry)
+
+
+def select_polygon(geometry, point):
+    parts = []
+    _selectable_parts(geometry, parts)
+    if not parts:
+        return None
+    x, y = point[0], point[1]
+    # Bounds prefilter: only the few candidates around the click get the exact test.
+    bounds = _bounds_of(parts)
+    candidates = np.nonzero((bounds[:, 0] <= x) & (x <= bounds[:, 2]) &
+                            (bounds[:, 1] <= y) & (y <= bounds[:, 3]))[0]
+    click = Point(x, y)
+    for index in candidates.tolist():
+        if parts[index].contains(click):
+            return parts[index]
     return None
 
 
+def _bounds_of(geometries):
+    array = np.empty(len(geometries), dtype=object)
+    array[:] = geometries
+    return shapely.bounds(array)
+
+
 def reference_area(geometry):
-    if isinstance(geometry, MultiPolygon):
-        envelope = geometry.convex_hull
-    elif isinstance(geometry, list) and len(geometry) == 1 and isinstance(geometry[0], Polygon):
-        envelope = unary_union(geometry)
-    else:
-        envelope = unary_union(geometry).convex_hull
-    return envelope.buffer(distance=0.0000001, join_style=base.JOIN_STYLE.mitre)
+    """Exact union of the reference polygons, grown by a hair so edge-touching shapes stay inside."""
+    polygons = [part for part in selection_geometry(geometry, expand_multi=True) or []
+                if isinstance(part, Polygon) and not part.is_empty]
+    return unary_union(polygons).buffer(distance=0.0000001, join_style=base.JOIN_STYLE.mitre)
 
 
 def area_intersection(target, areas, check_abort=None):
-    if isinstance(areas, list):
-        areas = unary_union(areas)
-    painted_area = selection_geometry(target.intersection(areas), check_abort, expand_multi=True)
+    """Polygons of target inside areas; touching points/lines are not areas and are dropped."""
+    if isinstance(areas, (list, tuple)):
+        areas = unary_union(polygon_parts(areas))
     try:
-        painted_area = linemerge(painted_area)
+        common = target.intersection(areas)
     except Exception:
-        pass
-    if isinstance(painted_area, (MultiPolygon, MultiLineString)):
-        painted_area = painted_area.geoms
-    try:
-        parts = iter(painted_area)
-    except TypeError:
-        parts = iter([painted_area])
-    polygons = []
-    for part in parts:
-        if part.is_empty:
-            continue
+        try:
+            common = make_valid(target).intersection(make_valid(areas))
+        except Exception as err:
+            log.error('ToolPaint area_intersection --> %s' % str(err))
+            return []
+    polygons, rings = [], []
+    for part in selection_geometry(common, check_abort, expand_multi=True) or []:
         if isinstance(part, Polygon):
-            polygons.append(part)
-        elif isinstance(part, (LinearRing, LineString)):
-            coords = list(part.coords)
-            if not part.is_closed:
-                coords.append(coords[0])
-            polygons.append(Polygon(coords))
+            if not part.is_empty and part.area > 0:
+                polygons.append(part)
+        elif isinstance(part, (LinearRing, LineString)) and not part.is_empty:
+            rings.append(part)
+    if rings:
+        # Pieces of a closed outline may arrive split; only rings that really close enclose an area.
+        try:
+            merged = linemerge(rings)
+            for line in (merged.geoms if isinstance(merged, MultiLineString) else [merged]):
+                if line.is_closed and len(line.coords) >= 4:
+                    polygon = Polygon(line)
+                    if not polygon.is_empty and polygon.area > 0:
+                        polygons.append(polygon if polygon.is_valid else make_valid(polygon))
+        except Exception as err:
+            log.error('ToolPaint area_intersection --> %s' % str(err))
     return polygons
 
 
-def classify_apertures(poly_g, apertures, flashes, traces):
-    for aperture in apertures.values():
-        for element in aperture['geometry']:
-            if 'size' in aperture and aperture['size'] == 0.0:
-                traces.setdefault(aperture['size'], []).append(element)
-            if 'follow' in element and element['follow'].within(poly_g):
-                if isinstance(element['follow'], Point):
-                    if aperture['type'] in ('C', 'O', 'R'):
-                        flashes.setdefault(aperture['type'], []).append(element)
-                else:
-                    traces.setdefault(aperture['size'], []).append(element)
+class ApertureIndex:
+    """Gerber aperture elements indexed by their 'follow' geometry (built once per job)."""
+
+    def __init__(self, apertures):
+        self.entries = []
+        follows = []
+        for aperture in (apertures or {}).values():
+            for element in aperture.get('geometry', ()):
+                follow = element.get('follow') if hasattr(element, 'get') else None
+                if isinstance(follow, base.BaseGeometry) and not follow.is_empty:
+                    self.entries.append((aperture, element))
+                    follows.append(follow)
+        self.tree = STRtree(follows)
+
+    def inside(self, poly_g):
+        """(aperture, element) pairs whose follow lies within poly_g, in aperture order, each once."""
+        return [self.entries[i] for i in sorted(self.tree.query(poly_g, predicate='contains').tolist())]
+
+
+def aperture_index(apertures):
+    return ApertureIndex(apertures)
+
+
+def classify_apertures(poly_g, apertures, flashes, traces, index=None):
+    if index is None:
+        index = aperture_index(apertures)
+    for aperture, element in index.inside(poly_g):
+        follow = element['follow']
+        if isinstance(follow, Point):
+            if aperture.get('type') in ('C', 'O', 'R'):
+                flashes.setdefault(aperture['type'], []).append(element)
+        else:
+            traces.setdefault(aperture.get('size', 0.0), []).append(element)
 
 
 def laser_lines(poly_g, tool_diameter, over, conn, cont, prog_plot, circle_steps,
-                geometry_circle_steps, apertures, clear_seed, clear_lines, fill_lines):
+                geometry_circle_steps, apertures, clear_seed, clear_lines, fill_lines, index=None):
     flashes, traces = {}, {}
     try:
-        classify_apertures(poly_g, apertures, flashes, traces)
+        classify_apertures(poly_g, apertures, flashes, traces, index)
     except grace:
         return 'fail'
     except Exception as err:
@@ -371,10 +516,16 @@ def laser_lines(poly_g, tool_diameter, over, conn, cont, prog_plot, circle_steps
         return 'fail'
     except Exception as err:
         log.error('ToolPaint.paint_polygon_worker() Laser Lines -> Process traces--> %s' % str(err))
-    merged = linemerge(unary_union(copper))
-    lines = merged.geoms if isinstance(merged, MultiLineString) else [merged]
+    lines = []
+    if copper:
+        try:
+            lines = flatten_shapely_geometry(linemerge(unary_union(copper)))
+        except Exception as err:
+            log.error('ToolPaint.paint_polygon_worker() Laser Lines -> Merge traces--> %s' % str(err))
+            lines = list(copper)
+    lines = [line for line in lines if line and isinstance(line, LineString)]
     try:
-        result.insert_many([line for line in lines if line])
+        result.insert_many(lines)
     except TypeError:
         result.insert(lines)
     return result
@@ -382,29 +533,31 @@ def laser_lines(poly_g, tool_diameter, over, conn, cont, prog_plot, circle_steps
 
 def paint_polygon(poly_g, tool_diameter, paint_method, over, conn, cont, prog_plot, circle_steps,
                   clear_shrink, clear_seed, clear_lines, apertures=None, geometry_circle_steps=64,
-                  fill_lines=None, progress=None):
+                  fill_lines=None, progress=None, index=None):
     result = None
     if paint_method == 3:
         result = laser_lines(poly_g, tool_diameter, over, conn, cont, prog_plot, circle_steps,
-                             geometry_circle_steps, apertures, clear_seed, clear_lines, fill_lines)
+                             geometry_circle_steps, apertures, clear_seed, clear_lines, fill_lines, index)
         if result == 'fail':
             return result
     else:
         methods = {0: clear_shrink, 1: clear_seed, 2: clear_lines}
         sequence = (2, 1, 0) if paint_method == 4 else (paint_method,)
-        try:
-            for method in sequence:
-                if method not in methods:
-                    break
-                if paint_method == 4 and progress is not None:
-                    progress(method)
+        for method in sequence:
+            if method not in methods:
+                break
+            if paint_method == 4 and progress is not None:
+                progress(method)
+            try:
                 result = methods[method](poly_g, tooldia=tool_diameter, steps_per_circle=circle_steps,
                                          overlap=over, contour=cont, connect=conn, prog_plot=prog_plot)
-                if result and result.objects:
-                    break
-        except grace:
-            return 'fail'
-        except Exception as err:
-            name = {0: 'Standard', 1: 'Seed', 2: 'Lines', 4: 'Combo'}.get(paint_method, '')
-            log.error('ToolPaint.paint_polygon_worker() %s --> %s' % (name, str(err)))
+            except grace:
+                return 'fail'
+            except Exception as err:
+                name = {0: 'Standard', 1: 'Seed', 2: 'Lines'}.get(method, '')
+                log.error('ToolPaint.paint_polygon_worker() %s --> %s' % (name, str(err)))
+                result = None
+                continue
+            if result and result.objects:
+                break
     return result if result and result.objects else None

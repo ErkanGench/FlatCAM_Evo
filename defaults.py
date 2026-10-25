@@ -725,7 +725,10 @@ class AppDefaults:
         "tools_paint_final_cleanup": False,
         "tools_paint_plotting": 'normal',
         "tools_paint_rest": False,
+        "tools_paint_rest_offset": 0.0,
         "tools_paint_simplification": 0.01,  # millimetres, like global_tolerance
+        "tools_paint_multi_objects": False,
+        "tools_paint_check_valid": False,
         "tools_paint_cutz": -0.05,
         "tools_paint_tipdia": 0.1,
         "tools_paint_tipangle": 30,

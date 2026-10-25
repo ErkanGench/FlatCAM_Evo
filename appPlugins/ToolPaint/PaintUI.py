@@ -127,6 +127,15 @@ class PaintUI:
 
         obj_grid.addWidget(self.obj_combo, 2, 0, 1, 2)
 
+        # Paint all the Geometry / Gerber objects selected in the Project tab
+        self.multi_objects_cb = FCCheckBox(_("Selected objects"))
+        self.multi_objects_cb.setObjectName("p_multi_objects")
+        self.multi_objects_cb.setToolTip(
+            _("Paint all the Geometry and Gerber objects selected in the Project tab, each with the same tools.\n"
+              "Not used by 'Polygon Selection', which paints the object in the combobox.")
+        )
+        obj_grid.addWidget(self.multi_objects_cb, 4, 0, 1, 2)
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
@@ -223,7 +232,7 @@ class PaintUI:
         )
         self.new_tooldia_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.new_tooldia_entry.set_precision(self.decimals)
-        self.new_tooldia_entry.set_range(-10000.0000, 10000.0000)
+        self.new_tooldia_entry.set_range(0.0001, 10000.0000)
         self.new_tooldia_entry.setObjectName('p_tool_dia')
 
         new_tool_grid.addWidget(self.new_tooldia_lbl, 4, 0)
@@ -485,7 +494,27 @@ class PaintUI:
         self.area_shape_label.hide()
         self.area_shape_radio.hide()
 
+        # Check Tool validity
+        self.valid_cb = FCCheckBox(label=_('Check validity'))
+        self.valid_cb.setObjectName("p_check")
+        self.valid_cb.setToolTip(
+            _("If checked then the tools diameters are verified against the smallest\n"
+              "gap between the copper features of a Gerber source object.\n"
+              "The run stops if no selected tool fits; it only warns if some tools are too big.")
+        )
+        gen_grid.addWidget(self.valid_cb, 12, 0, 1, 2)
+
         GLay.set_common_column_size([obj_grid, tool_grid, new_tool_grid, param_grid, gen_grid], 0)
+
+        # #############################################################################################################
+        # Preview Button
+        self.preview_button = FCButton(_("Preview"), bold=True)
+        self.preview_button.setToolTip(
+            _("Draw the area that would be painted on the canvas.\n"
+              "Nothing is created. For Polygon Selection and Area Selection\n"
+              "the polygons or zones of the last Generate are used.")
+        )
+        self.tools_box.addWidget(self.preview_button)
 
         # #############################################################################################################
         # Generate Paint Geometry Button
@@ -554,10 +583,15 @@ class PaintUI:
             self.area_shape_label.show()
             self.area_shape_radio.show()
         else:   # All = index 0 in combobox
-            self.new_tooldia_entry.setDisabled(False)
-            self.search_and_add_btn.setDisabled(False)
-            self.deltool_btn.setDisabled(False)
-            self.tools_table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+            # Beginner level hides the tool editing controls and has no tool table context menu
+            if self.level.isChecked():
+                self.new_tooldia_entry.setDisabled(False)
+                self.search_and_add_btn.setDisabled(False)
+                self.deltool_btn.setDisabled(False)
+                if sel_combo == 1:  # no tool table context menu for the Polygon Selection method
+                    self.tools_table.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+                else:
+                    self.tools_table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
 
             self.area_shape_label.hide()
             self.area_shape_radio.hide()

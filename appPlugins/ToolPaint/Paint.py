@@ -21,10 +21,10 @@ from appGUI.GUIElements import (
 )
 
 
-import logging
+from contextlib import contextmanager
 from copy import deepcopy
+import math
 import numpy as np
-import sys
 from numpy import inf as Inf    # noqa
 
 from shapely import Polygon
@@ -39,6 +39,7 @@ from defaults import AppDefaults
 from appCommon.SafeEval import safe_eval
 from camlib import (
     Geometry,
+    grace,
     flatten_shapely_geometry,
 )
 
@@ -46,10 +47,45 @@ fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
-log = logging.getLogger('base')
+
+@contextmanager
+def _signals_blocked(obj):
+    """Block the signals of obj and restore them on every exit path."""
+    obj.blockSignals(True)
+    try:
+        yield
+    finally:
+        obj.blockSignals(False)
+
+
+def _valid_tooldia(value):
+    """Return the value as a float if it is a usable tool diameter (finite and > 0), else None."""
+    try:
+        dia = float(value)
+    except (TypeError, ValueError):
+        return None
+    return dia if math.isfinite(dia) and dia > 0 else None
+
+
+def tool_rows_order(paint_tools, order, decimals):
+    """
+    The tool uids in the order they are shown in the Tools table.
+
+    :param paint_tools: the tools dict, keys are the tool uids
+    :param order:       0 = Default (uid order), 1 = Forward (small to large), 2 = Reverse
+    :param decimals:    diameters are compared rounded to this many decimals
+    """
+    uids = sorted(paint_tools, key=int)
+    if order in (1, 2):
+        uids.sort(key=lambda uid: float('%.*f' % (decimals, float(paint_tools[uid]['tooldia']))),
+                  reverse=(order == 2))
+    return uids
 
 
 class ToolPaint(Geometry, AppTool):
+
+    # (job token, result): the preview job hands the area to paint (or an error text) to the GUI thread
+    preview_done_sig = QtCore.pyqtSignal(int, object)
 
     def __init__(self, app):
         self.app = app
@@ -100,6 +136,16 @@ class ToolPaint(Geometry, AppTool):
 
         # dict to store the polygons selected for painting; key is the shape added to be plotted and value is the poly
         self.poly_dict = {}
+
+        # the zones of the last Area Selection run and the polygons of the last Polygon Selection run:
+        # the Preview of these modes uses them
+        self.last_zones: list[Polygon] = []
+        self.last_polygons: list[Polygon] = []
+        # the shape collection of the preview, made on the first use
+        self._preview_shapes = None
+        self._preview_drawn = False
+        # a preview result is drawn only if no clear_preview() happened since its job started
+        self._preview_token = 0
 
         # store here the default data for Geometry Data
         self.default_data = {}
@@ -174,6 +220,10 @@ class ToolPaint(Geometry, AppTool):
     def run(self, toggle=True):
         self.app.defaults.report_usage("ToolPaint()")
 
+        # AppTool.run() does nothing while the Plugin tab is locked; do not touch the tabs or the UI either
+        if self.app.plugin_tab_locked is True:
+            return
+
         if toggle:
             # if the splitter is hidden, display it
             if self.app.ui.splitter.sizes()[0] == 0:
@@ -228,6 +278,7 @@ class ToolPaint(Geometry, AppTool):
 
         # all the tools are selected by default
         self.ui.tools_table.selectAll()
+        self.update_ui()
 
         self.app.ui.notebook.setTabText(2, _("Paint"))
 
@@ -240,7 +291,7 @@ class ToolPaint(Geometry, AppTool):
             _("Add"), self.on_add_tool_by_key, icon=QtGui.QIcon(self.app.resource_location + "/plus16.png")
         )
         self.ui.tools_table.addContextMenu(
-            _("Add from DB"), self.on_add_tool_by_key, icon=QtGui.QIcon(self.app.resource_location + "/plus16.png")
+            _("Add from DB"), self.on_paint_tool_add_from_db_clicked, icon=QtGui.QIcon(self.app.resource_location + "/plus16.png")
         )
         self.ui.tools_table.addContextMenu(
             _("Delete"), lambda:
@@ -331,8 +382,25 @@ class ToolPaint(Geometry, AppTool):
         # Cleanup on Graceful exit (CTRL+ALT+X combo key)
         self.app.cleanup.connect(self.set_tool_ui)
 
+        for signal, slot in (
+                (self.ui.preview_button.clicked, self.on_preview),
+                (self.ui.obj_combo.currentIndexChanged, self.on_source_changed),
+                (self.ui.select_method_combo.currentIndexChanged, self.clear_preview),
+                (self.ui.multi_objects_cb.stateChanged, self.clear_preview),
+                (self.preview_done_sig, self.on_preview_done)):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError, AttributeError):
+                pass
+            signal.connect(slot)
+
     def set_tool_ui(self):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+        # a Reset drops the preview and the zones / polygons of the last run
+        self.clear_preview()
+        self.last_zones = []
+        self.last_polygons = []
+
         self.clear_ui(self.layout)
         self.ui = PaintUI(layout=self.layout, app=self.app)
         self.add_object_creation_controls()
@@ -443,6 +511,15 @@ class ToolPaint(Geometry, AppTool):
             "tools_paint_newdia", app_defaults.get("tools_paint_newdia", AppDefaults.factory_defaults.get("tools_paint_newdia"))))
         self.ui.rest_cb.set_value(self.app.options.get(
             "tools_paint_rest", app_defaults.get("tools_paint_rest", AppDefaults.factory_defaults.get("tools_paint_rest"))))
+        self.ui.rest_offset_entry.set_value(self.app.options.get(
+            "tools_paint_rest_offset",
+            app_defaults.get("tools_paint_rest_offset", AppDefaults.factory_defaults.get("tools_paint_rest_offset"))))
+        self.ui.multi_objects_cb.set_value(self.app.options.get(
+            "tools_paint_multi_objects",
+            app_defaults.get("tools_paint_multi_objects", AppDefaults.factory_defaults.get("tools_paint_multi_objects"))))
+        self.ui.valid_cb.set_value(self.app.options.get(
+            "tools_paint_check_valid",
+            app_defaults.get("tools_paint_check_valid", AppDefaults.factory_defaults.get("tools_paint_check_valid"))))
 
         # # make the default object type, "Geometry"
         # self.type_obj_radio.set_value("geometry")
@@ -485,23 +562,14 @@ class ToolPaint(Geometry, AppTool):
 
         if not diameters:
             self.app.log.error(
-                "At least one tool diameter needed. Verify in Edit -> Preferences -> Plugins -> NCC Tools.")
+                "At least one tool diameter needed. Verify in Edit -> Preferences -> Plugins -> Paint Tools.")
             self.build_ui()
-
-            # if the Paint Method is "Single" disable the tool table context menu
-            if self.default_data["tools_paint_selectmethod"] == "single":
-                self.ui.tools_table.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-            return
-
-        for dia in diameters:
-            self.on_tool_add(custom_dia=dia)
+        else:
+            for dia in diameters:
+                self.on_tool_add(custom_dia=dia)
 
         self.ui.on_rest_machining_check(state=self.app.options.get(
             "tools_paint_rest", app_defaults.get("tools_paint_rest", AppDefaults.factory_defaults.get("tools_paint_rest"))))
-
-        # if the Paint Method is "Polygon Selection" disable the tool table context menu
-        if self.default_data.get("tools_paint_selectmethod") == 1:
-            self.ui.tools_table.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
         # make sure that we can't get selection of Laser Lines for Geometry even if it's set in the Preferences
         # because we don't select the default object type in Preferences but here
@@ -517,6 +585,16 @@ class ToolPaint(Geometry, AppTool):
         app_mode = self.app.options.get(
             "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
         self.change_level(app_mode)
+
+        # if the Paint Method is "Polygon Selection" disable the tool table context menu
+        # (done after the level is applied because the Advanced level restores the menu)
+        if self.default_data.get("tools_paint_selectmethod") == 1:
+            self.ui.tools_table.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+        # forget any half-made selection of the previous session
+        self.reset_selection_state()
+        self.poly_dict.clear()
+        self.area_to_paint_list = []
 
         self.ui.tools_table.drag_drop_sig.connect(self.rebuild_ui)
 
@@ -553,13 +631,13 @@ class ToolPaint(Geometry, AppTool):
             # Add Tool section
             self.ui.add_tool_frame.hide()
 
-            # Tool parameters section
-            if self.paint_tools:
-                for tool in self.paint_tools:
-                    tool_data = self.paint_tools[tool]['data']
-                    tool_data['tools_paint_rest'] = False
-
+            # Tool parameters section: the generator reads the checkbox, so Beginner must not leave it checked
+            self.ui.rest_cb.set_value(False)
             self.ui.rest_cb.hide()
+
+            # the generator reads the checkbox, so Beginner must not leave it checked
+            self.ui.valid_cb.set_value(False)
+            self.ui.valid_cb.hide()
 
             # All param section
             self.ui.apply_param_to_all.hide()
@@ -578,15 +656,17 @@ class ToolPaint(Geometry, AppTool):
             # Add Tool section
             self.ui.add_tool_frame.show()
 
-            # Tool parameters section
-            if self.paint_tools:
-                app_defaults = self.app.options
-                for tool in self.paint_tools:
-                    tool_data = self.paint_tools[tool]['data']
-
-                    tool_data['tools_paint_rest'] = app_defaults['tools_paint_rest']
-
+            # Tool parameters section: restore the app option for the checkbox
+            app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+            self.ui.rest_cb.set_value(self.app.options.get(
+                "tools_paint_rest",
+                app_defaults.get("tools_paint_rest", AppDefaults.factory_defaults.get("tools_paint_rest"))))
             self.ui.rest_cb.show()
+
+            self.ui.valid_cb.set_value(self.app.options.get(
+                "tools_paint_check_valid",
+                app_defaults.get("tools_paint_check_valid", AppDefaults.factory_defaults.get("tools_paint_check_valid"))))
+            self.ui.valid_cb.show()
 
             # All param section
             self.ui.apply_param_to_all.show()
@@ -653,56 +733,51 @@ class ToolPaint(Geometry, AppTool):
                 pass
 
     def update_ui(self):
-        self.blockSignals(True)
+        with _signals_blocked(self):
+            sel_rows = set()
+            table_items = self.ui.tools_table.selectedItems()
+            if table_items:
+                for it in table_items:
+                    sel_rows.add(it.row())
 
-        sel_rows = set()
-        table_items = self.ui.tools_table.selectedItems()
-        if table_items:
-            for it in table_items:
-                sel_rows.add(it.row())
-            # sel_rows = sorted(set(index.row() for index in self.ui.tools_table.selectedIndexes()))
-
-        if not sel_rows or len(sel_rows) == 0:
-            self.ui.generate_button.setDisabled(True)
-            self.ui.tool_data_label.setText(
-                "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("No Tool Selected"))
-            )
-            self.blockSignals(False)
-            return
-        else:
-            self.ui.generate_button.setDisabled(False)
-
-        for current_row in sel_rows:
-            # populate the form with the data from the tool associated with the row parameter
-            try:
-                item = self.ui.tools_table.item(current_row, 3)
-                if item is None:
-                    return 'fail'
-                tooluid = int(item.text())
-            except Exception as e:
-                self.app.log.error("Tool missing. Add a tool in the Tool Table. %s" % str(e))
+            if not sel_rows:
+                self.ui.generate_button.setDisabled(True)
+                self.ui.tool_data_label.setText(
+                    "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("No Tool Selected"))
+                )
                 return
-
-            # update the QLabel that shows for which Tool we have the parameters in the UI form
-            if len(sel_rows) == 1:
-                cr = self.ui.tools_table.item(current_row, 0).text()
-                self.ui.tool_data_label.setText(
-                    "<b>%s: <font color='#0000FF'>%s %s</font></b>" % (_('Parameters for'), _("Tool"), cr)
-                )
-
-                try:
-                    # set the form with data from the newly selected tool
-                    for tooluid_key, tooluid_value in list(self.paint_tools.items()):
-                        if int(tooluid_key) == tooluid:
-                            self.storage_to_form(tooluid_value['data'])
-                except Exception as e:
-                    self.app.log.error("ToolPaint ---> update_ui() " + str(e))
             else:
-                self.ui.tool_data_label.setText(
-                    "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("Multiple Tools"))
-                )
+                self.ui.generate_button.setDisabled(False)
 
-        self.blockSignals(False)
+            for current_row in sel_rows:
+                # populate the form with the data from the tool associated with the row parameter
+                try:
+                    item = self.ui.tools_table.item(current_row, 3)
+                    if item is None:
+                        return 'fail'
+                    tooluid = int(item.text())
+                except Exception as e:
+                    self.app.log.error("Tool missing. Add a tool in the Tool Table. %s" % str(e))
+                    return
+
+                # update the QLabel that shows for which Tool we have the parameters in the UI form
+                if len(sel_rows) == 1:
+                    cr = self.ui.tools_table.item(current_row, 0).text()
+                    self.ui.tool_data_label.setText(
+                        "<b>%s: <font color='#0000FF'>%s %s</font></b>" % (_('Parameters for'), _("Tool"), cr)
+                    )
+
+                    try:
+                        # set the form with data from the newly selected tool
+                        for tooluid_key, tooluid_value in list(self.paint_tools.items()):
+                            if int(tooluid_key) == tooluid:
+                                self.storage_to_form(tooluid_value['data'])
+                    except Exception as e:
+                        self.app.log.error("ToolPaint ---> update_ui() " + str(e))
+                else:
+                    self.ui.tool_data_label.setText(
+                        "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("Multiple Tools"))
+                    )
 
     def storage_to_form(self, dict_storage):
         dict_storage.setdefault('tools_paint_final_cleanup', False)
@@ -717,28 +792,24 @@ class ToolPaint(Geometry, AppTool):
             # there is no tool in tool table, so we can't save the GUI elements values to storage
             return
 
-        self.blockSignals(True)
+        with _signals_blocked(self):
+            widget_changed = self.sender()
+            wdg_objname = widget_changed.objectName()
+            option_changed = self.name2option[wdg_objname]
 
-        widget_changed = self.sender()
-        wdg_objname = widget_changed.objectName()
-        option_changed = self.name2option[wdg_objname]
+            rows = sorted(set(index.row() for index in self.ui.tools_table.selectedIndexes()))
+            for row in rows:
+                if row < 0:
+                    row = 0
+                tooluid_item = int(self.ui.tools_table.item(row, 3).text())
 
-        # row = self.ui.tools_table.currentRow()
-        rows = sorted(set(index.row() for index in self.ui.tools_table.selectedIndexes()))
-        for row in rows:
-            if row < 0:
-                row = 0
-            tooluid_item = int(self.ui.tools_table.item(row, 3).text())
-
-            for tooluid_key, tooluid_val in self.paint_tools.items():
-                if int(tooluid_key) == tooluid_item:
-                    new_option_value = self.form_fields[option_changed].get_value()
-                    if option_changed in tooluid_val:
-                        tooluid_val[option_changed] = new_option_value
-                    if option_changed in tooluid_val['data']:
-                        tooluid_val['data'][option_changed] = new_option_value
-
-        self.blockSignals(False)
+                for tooluid_key, tooluid_val in self.paint_tools.items():
+                    if int(tooluid_key) == tooluid_item:
+                        new_option_value = self.form_fields[option_changed].get_value()
+                        if option_changed in tooluid_val:
+                            tooluid_val[option_changed] = new_option_value
+                        if option_changed in tooluid_val['data']:
+                            tooluid_val['data'][option_changed] = new_option_value
 
     def on_apply_param_to_all_clicked(self):
         if self.ui.tools_table.rowCount() == 0:
@@ -746,28 +817,29 @@ class ToolPaint(Geometry, AppTool):
             self.app.log.debug("ToolPaint.on_apply_param_to_all_clicked() --> no tool in Tools Table, aborting.")
             return
 
-        self.blockSignals(True)
+        with _signals_blocked(self):
+            # the form shows the parameters of the selected row
+            sel_rows = sorted({it.row() for it in self.ui.tools_table.selectedItems()})
+            row = sel_rows[0] if sel_rows else self.ui.tools_table.currentRow()
+            if row < 0:
+                row = 0
 
-        row = self.ui.tools_table.currentRow()
-        if row < 0:
-            row = 0
+            tooluid_item = int(self.ui.tools_table.item(row, 3).text())
+            source_data = None
+            for tooluid_key, tooluid_val in self.paint_tools.items():
+                if int(tooluid_key) == tooluid_item:
+                    source_data = tooluid_val['data']
+                    break
+            if source_data is None:
+                return
 
-        tooluid_item = int(self.ui.tools_table.item(row, 3).text())
-        temp_tool_data = {}
+            # copy only the parameters edited in the form, not the tool shape or the DB-derived keys
+            params = {key: deepcopy(source_data[key]) for key in self.form_fields if key in source_data}
+            for tooluid_val in self.paint_tools.values():
+                tooluid_val['data'].update(deepcopy(params))
 
-        for tooluid_key, tooluid_val in self.paint_tools.items():
-            if int(tooluid_key) == tooluid_item:
-                # this will hold the 'data' key of the self.tools[tool] dictionary that corresponds to
-                # the current row in the tool table
-                temp_tool_data = tooluid_val['data']
-                break
-
-        for tooluid_key, tooluid_val in self.paint_tools.items():
-            tooluid_val['data'] = deepcopy(temp_tool_data)
-
+        self.build_ui()
         self.app.inform.emit('[success] %s' % _("Current Tool parameters were applied to all tools."))
-
-        self.blockSignals(False)
 
     def on_add_tool_by_key(self):
         tool_add_popup = FCInputDoubleSpinner(title='%s...' % _("New Tool"),
@@ -799,7 +871,7 @@ class ToolPaint(Geometry, AppTool):
         current_uid = int(self.ui.tools_table.item(cw_row, 3).text())
 
         # if the sender is in the column with index 2 then we update the tool_type key
-        if cw_col == 2:
+        if cw_col == 2 and current_uid in self.paint_tools:
             tt = cw.currentText()
             typ = 'Iso' if tt == 'V' else 'Rough'
 
@@ -807,10 +879,11 @@ class ToolPaint(Geometry, AppTool):
                 'type': typ,
                 'tool_type': tt,
             })
+            # build_ui() and the output read the tool shape from the tool data
+            self.paint_tools[current_uid]['data']['tools_mill_tool_shape'] = cw.currentIndex()
 
     def on_order_changed(self, order):
-        if order != 0:  # Default order
-            self.build_ui()
+        self.build_ui()
 
     def rebuild_ui(self):
         # read the table tools uid
@@ -826,7 +899,9 @@ class ToolPaint(Geometry, AppTool):
             new_tools[new_uid] = deepcopy(self.paint_tools[current_uid])
             new_uid += 1
 
-        self.paint_tools = new_tools
+        # keep the same dict object: PaintGen shares it
+        self.paint_tools.clear()
+        self.paint_tools.update(new_tools)
 
         # the tools table changed therefore we need to rebuild it
         QtCore.QTimer.singleShot(20, self.build_ui)
@@ -837,19 +912,10 @@ class ToolPaint(Geometry, AppTool):
         # updated units
         self.units = self.app.app_units.upper()
 
-        sorted_tools = []
-        for k, v in self.paint_tools.items():
-            sorted_tools.append(float('%.*f' % (self.decimals, float(v['tooldia']))))
-
         order = self.ui.order_combo.get_value()
-        if order == 1:  # "Forward"
-            sorted_tools.sort(reverse=False)
-        elif order == 2:    # "Reverse"
-            sorted_tools.sort(reverse=True)
-        else:
-            pass
+        uid_order = tool_rows_order(self.paint_tools, order, self.decimals)
 
-        n = len(sorted_tools)
+        n = len(uid_order)
         self.ui.tools_table.setRowCount(n)
         tool_id = 0
 
@@ -861,31 +927,29 @@ class ToolPaint(Geometry, AppTool):
                 | QtCore.Qt.ItemFlag.ItemIsEnabled
         )
 
-        for tool_sorted in sorted_tools:
-            for tooluid_key, tooluid_value in self.paint_tools.items():
-                if float('%.*f' % (self.decimals, tooluid_value['tooldia'])) == tool_sorted:
-                    tool_id += 1
+        for tooluid_key in uid_order:
+            tooluid_value = self.paint_tools[tooluid_key]
+            tool_id += 1
 
-                    id_item = QtWidgets.QTableWidgetItem('%d' % int(tool_id))
-                    id_item.setFlags(selected_enabled_flag)
-                    row_no = tool_id - 1
-                    self.ui.tools_table.setItem(row_no, 0, id_item)  # Tool name/id
+            id_item = QtWidgets.QTableWidgetItem('%d' % int(tool_id))
+            id_item.setFlags(selected_enabled_flag)
+            row_no = tool_id - 1
+            self.ui.tools_table.setItem(row_no, 0, id_item)  # Tool name/id
 
-                    dia = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, tooluid_value['tooldia']))
-                    dia.setFlags(enabled_flag)
-                    self.ui.tools_table.setItem(row_no, 1, dia)  # Diameter
+            dia = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, tooluid_value['tooldia']))
+            dia.setFlags(enabled_flag)
+            self.ui.tools_table.setItem(row_no, 1, dia)  # Diameter
 
-                    tool_type_item = FCComboBox()
-                    for item in self.tool_type_item_options:
-                        tool_type_item.addItem(item)
-                        # tool_type_item.setStyleSheet('background-color: rgb(255,255,255)')
-                    idx = int(tooluid_value['data']['tools_mill_tool_shape'])
-                    tool_type_item.setCurrentIndex(idx)
+            tool_type_item = FCComboBox()
+            for item in self.tool_type_item_options:
+                tool_type_item.addItem(item)
+            idx = int(tooluid_value['data'].get('tools_mill_tool_shape', 0))
+            tool_type_item.setCurrentIndex(idx)
 
-                    tool_uid_item = QtWidgets.QTableWidgetItem(str(int(tooluid_key)))
-                    self.ui.tools_table.setCellWidget(row_no, 2, tool_type_item)
-                    # ## REMEMBER: THIS COLUMN IS HIDDEN IN OBJECTUI.PY # ##
-                    self.ui.tools_table.setItem(row_no, 3, tool_uid_item)  # Tool unique ID
+            tool_uid_item = QtWidgets.QTableWidgetItem(str(int(tooluid_key)))
+            self.ui.tools_table.setCellWidget(row_no, 2, tool_type_item)
+            # ## REMEMBER: THIS COLUMN IS HIDDEN IN OBJECTUI.PY # ##
+            self.ui.tools_table.setItem(row_no, 3, tool_uid_item)  # Tool unique ID
 
         # make the diameter column editable
         for row in range(tool_id):
@@ -927,14 +991,12 @@ class ToolPaint(Geometry, AppTool):
             )
 
     def on_tool_add(self, custom_dia=None):
-        self.blockSignals(True)
-
         filename = self.app.tools_database_path()
 
         new_tools_dict = deepcopy(self.default_data)
         updated_tooldia = None
 
-        # construct a list of all 'tooluid' in the self.iso_tools
+        # construct a list of all 'tooluid' in the self.paint_tools
         tool_uid_list = [int(tooluid_key) for tooluid_key in self.paint_tools]
 
         # find maximum from the temp_uid, add 1 and this is the new 'tooluid'
@@ -949,83 +1011,79 @@ class ToolPaint(Geometry, AppTool):
 
         # determine the new tool diameter
         if custom_dia is None:
-            tool_dia = self.ui.new_tooldia_entry.get_value()
+            tool_dia = _valid_tooldia(self.ui.new_tooldia_entry.get_value())
         else:
-            tool_dia = custom_dia
-        if tool_dia is None or tool_dia == 0:
+            tool_dia = _valid_tooldia(custom_dia)
+        if tool_dia is None:
             self.build_ui()
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, "
                                                           "in Float format."))
-            self.blockSignals(False)
             return
         truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
 
         # if new tool diameter already in the Tool List then abort
         if truncated_tooldia in tool_dias:
             self.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Cancelled."), _("Tool already in Tool Table.")))
-            self.blockSignals(False)
             return
 
-        try:
-            tools_db_dict = load_tools_database(filename, self.app.options, target=4,
-                                               diameter=truncated_tooldia,
-                                               units=getattr(self.app, 'app_units', None))
-        except (OSError, TypeError, ValueError) as error:
-            self.app.log.error("Could not load tools DB file.")
-            self.app.log.error(str(error))
-            self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
-            self.blockSignals(False)
+        add_default_tool = False
+        with _signals_blocked(self):
+            try:
+                tools_db_dict = load_tools_database(filename, self.app.options, target=4,
+                                                   diameter=truncated_tooldia,
+                                                   units=getattr(self.app, 'app_units', None))
+            except (OSError, TypeError, ValueError) as error:
+                self.app.log.error("Could not load tools DB file.")
+                self.app.log.error(str(error))
+                self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
+                tools_db_dict = {}
+                add_default_tool = True
+
+            if not add_default_tool:
+                tool_found = len(tools_db_dict)
+
+                offset = 'Path'
+                offset_val = 0.0
+
+                # look in database tools
+                for db_tool, db_tool_val in tools_db_dict.items():
+                    db_tooldia = db_tool_val['tooldia']
+                    updated_tooldia = db_tooldia if db_tooldia != truncated_tooldia else None
+                    offset = deepcopy(db_tool_val['data']['tools_mill_offset_type'])
+                    offset_val = deepcopy(db_tool_val['data']['tools_mill_offset_value'])
+                    for d in db_tool_val['data']:
+                        if not d.startswith('tools_') or d.startswith(('tools_paint_', 'tools_mill_')):
+                            new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
+
+                # test we found a suitable tool in Tools Database or if multiple ones
+                if tool_found == 0:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("Tool not in Tools Database. Adding a default tool."))
+                    add_default_tool = True
+                elif tool_found > 1:
+                    self.app.inform.emit(
+                        '[WARNING_NOTCL] %s' % _("Cancelled.\n"
+                                                 "Multiple tools for one tool diameter found in Tools Database."))
+                    return
+                # if new tool diameter found in Tools Database already in the Tool List then abort
+                elif updated_tooldia is not None and updated_tooldia in tool_dias:
+                    self.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Cancelled."), _("Tool already in Tool Table.")))
+                    return
+                else:
+                    new_tdia = deepcopy(updated_tooldia) if updated_tooldia is not None else deepcopy(truncated_tooldia)
+                    self.paint_tools.update({
+                        tooluid: {
+                            'tooldia':          new_tdia,
+                            'offset':           deepcopy(offset),
+                            'offset_value':     deepcopy(offset_val),
+                            'data':             deepcopy(new_tools_dict),
+                            'solid_geometry':   []
+                        }
+                    })
+
+        if add_default_tool:
             self.on_tool_default_add(dia=tool_dia)
             return
 
-        tool_found = len(tools_db_dict)
-
-        offset = 'Path'
-        offset_val = 0.0
-
-        # look in database tools
-        if tools_db_dict:
-            for db_tool, db_tool_val in tools_db_dict.items():
-                db_tooldia = db_tool_val['tooldia']
-                updated_tooldia = db_tooldia if db_tooldia != truncated_tooldia else None
-                offset = deepcopy(db_tool_val['data']['tools_mill_offset_type'])
-                offset_val = deepcopy(db_tool_val['data']['tools_mill_offset_value'])
-                for d in db_tool_val['data']:
-                    if not d.startswith('tools_') or d.startswith(('tools_paint_', 'tools_mill_')):
-                        new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
-
-        # test we found a suitable tool in Tools Database or if multiple ones
-        if tool_found == 0:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Tool not in Tools Database. Adding a default tool."))
-            self.on_tool_default_add(dia=tool_dia)
-
-            self.blockSignals(False)
-            return
-
-        if tool_found > 1:
-            self.app.inform.emit(
-                '[WARNING_NOTCL] %s' % _("Cancelled.\n"
-                                         "Multiple tools for one tool diameter found in Tools Database."))
-            self.blockSignals(False)
-            return
-
-        # if new tool diameter found in Tools Database already in the Tool List then abort
-        if updated_tooldia is not None and updated_tooldia in tool_dias:
-            self.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Cancelled."), _("Tool already in Tool Table.")))
-            self.blockSignals(False)
-            return
-
-        new_tdia = deepcopy(updated_tooldia) if updated_tooldia is not None else deepcopy(truncated_tooldia)
-        self.paint_tools.update({
-            tooluid: {
-                'tooldia':          new_tdia,
-                'offset':           deepcopy(offset),
-                'offset_value':     deepcopy(offset_val),
-                'data':             deepcopy(new_tools_dict),
-                'solid_geometry':   []
-            }
-        })
-        self.blockSignals(False)
         self.build_ui()
 
         # select the tool just added
@@ -1040,19 +1098,13 @@ class ToolPaint(Geometry, AppTool):
         self.app.inform.emit('[success] %s' % _("New tool added to Tool Table from Tools Database."))
 
     def on_tool_default_add(self, dia=None, muted=None):
-        self.blockSignals(True)
         self.units = self.app.app_units.upper()
 
-        if dia:
-            tool_dia = dia
-        else:
-            tool_dia = self.ui.new_tooldia_entry.get_value()
-
-        if tool_dia is None or tool_dia == 0:
+        tool_dia = _valid_tooldia(dia if dia is not None else self.ui.new_tooldia_entry.get_value())
+        if tool_dia is None:
             self.build_ui()
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, "
                                                           "in Float format."))
-            self.blockSignals(False)
             return
 
         # construct a list of all 'tooluid' in the self.tools
@@ -1072,18 +1124,17 @@ class ToolPaint(Geometry, AppTool):
         if truncated_tooldia in tool_dias:
             if muted is None:
                 self.app.inform.emit('[WARNING_NOTCL] %s %s' % (_("Cancelled."), _("Tool already in Tool Table.")))
-            self.blockSignals(False)
             return
 
-        self.paint_tools.update({
-            int(self.tooluid): {
-                'tooldia':          truncated_tooldia,
-                'data':             deepcopy(self.default_data),
-                'solid_geometry':   []
-            }
-        })
+        with _signals_blocked(self):
+            self.paint_tools.update({
+                int(self.tooluid): {
+                    'tooldia':          truncated_tooldia,
+                    'data':             deepcopy(self.default_data),
+                    'solid_geometry':   []
+                }
+            })
 
-        self.blockSignals(False)
         self.build_ui()
 
         # select the tool just added
@@ -1099,99 +1150,82 @@ class ToolPaint(Geometry, AppTool):
             self.app.inform.emit('[success] %s' % _("Default tool added to Tool Table."))
 
     def on_tool_edit(self, item):
-        self.blockSignals(True)
-
         edited_row = item.row()
         editeduid = int(self.ui.tools_table.item(edited_row, 3).text())
-        tool_dias = []
 
-        try:
-            new_tool_dia = float(self.ui.tools_table.item(edited_row, 1).text())
-        except ValueError:
-            # try to convert comma to decimal point. if it's still not working error message and return
+        with _signals_blocked(self):
+            text = self.ui.tools_table.item(edited_row, 1).text()
             try:
-                new_tool_dia = float(self.ui.tools_table.item(edited_row, 1).text().replace(',', '.'))
+                new_tool_dia = float(text)
             except ValueError:
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
-                return
+                # try to convert comma to decimal point. if it's still not working error message and return
+                try:
+                    new_tool_dia = float(text.replace(',', '.'))
+                except ValueError:
+                    new_tool_dia = None
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
 
-        for k, v in self.paint_tools.items():
-            tool_dias = [float('%.*f' % (self.decimals, v[tool_v])) for tool_v in v.keys() if tool_v == 'tooldia']
+            if new_tool_dia is not None:
+                if _valid_tooldia(new_tool_dia) is None:
+                    new_tool_dia = None
+                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, "
+                                                                "in Float format."))
+                else:
+                    new_tool_dia = float('%.*f' % (self.decimals, new_tool_dia))
+                    # the diameters of all the other tools
+                    other_dias = [float('%.*f' % (self.decimals, float(v['tooldia'])))
+                                  for k, v in self.paint_tools.items() if int(k) != editeduid]
+                    if new_tool_dia in other_dias:
+                        new_tool_dia = None
+                        self.app.inform.emit(
+                            '[WARNING_NOTCL] %s' % _("Cancelled. New diameter value is already in the Tool Table."))
 
-        # identify the tool that was edited and get it's tooluid
-        if new_tool_dia not in tool_dias:
-            self.paint_tools[editeduid]['tooldia'] = new_tool_dia
-            self.app.inform.emit('[success] %s' % _("Tool from Tool Table was edited."))
-            self.blockSignals(False)
-            self.build_ui()
-            return
+            if new_tool_dia is not None and editeduid in self.paint_tools:
+                self.paint_tools[editeduid]['tooldia'] = new_tool_dia
+                self.app.inform.emit('[success] %s' % _("Tool from Tool Table was edited."))
 
-        # identify the old tool_dia and restore the text in tool table
-        for k, v in self.paint_tools.items():
-            if k == editeduid:
-                old_tool_dia = v['tooldia']
-                restore_dia_item = self.ui.tools_table.item(edited_row, 1)
-                restore_dia_item.setText(str(old_tool_dia))
-                break
-
-        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. New diameter value is already in the Tool Table."))
-        self.blockSignals(False)
+        # rebuilding the table also restores the old diameter in the cell when the edit was rejected
         self.build_ui()
 
     def on_tool_delete(self, rows_to_delete=None, all_tools=None):
         """
         Will delete a tool in the tool table
 
-        :param rows_to_delete:  which rows to delete; can be a list
+        :param rows_to_delete:  which rows to delete; a row number or a list of row numbers
         :param all_tools:       delete all tools in the tool table
         :return:
         """
-        self.blockSignals(True)
-
         deleted_tools_list = []
 
-        if all_tools:
-            self.paint_tools.clear()
-            self.blockSignals(False)
-            self.build_ui()
-            return
+        with _signals_blocked(self):
+            if all_tools:
+                self.paint_tools.clear()
+            else:
+                if rows_to_delete is not None and not isinstance(rows_to_delete, bool):
+                    if isinstance(rows_to_delete, (int, np.integer)):
+                        rows_to_delete = [rows_to_delete]
+                    rows = list(rows_to_delete)
+                else:
+                    # clicked() passes a bool here, the context menu passes None: use the selected rows
+                    rows = sorted({it.row() for it in self.ui.tools_table.selectedItems()})
 
-        if rows_to_delete:
-            try:
-                for row in rows_to_delete:
-                    tooluid_del = int(self.ui.tools_table.item(row, 3).text())
-                    deleted_tools_list.append(tooluid_del)
-            except TypeError:
-                deleted_tools_list.append(rows_to_delete)
-
-            for t in deleted_tools_list:
-                self.paint_tools.pop(t, None)
-
-            self.blockSignals(False)
-            self.build_ui()
-            return
-
-        try:
-            if self.ui.tools_table.selectedItems():
-                for row_sel in self.ui.tools_table.selectedItems():
-                    row = row_sel.row()
-                    if row < 0:
+                for row in rows:
+                    if row is None or row < 0:
                         continue
-                    tooluid_del = int(self.ui.tools_table.item(row, 3).text())
-                    deleted_tools_list.append(tooluid_del)
+                    try:
+                        deleted_tools_list.append(int(self.ui.tools_table.item(row, 3).text()))
+                    except (AttributeError, ValueError):
+                        continue
+
+                if not deleted_tools_list:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("Delete failed. Select a tool to delete."))
+                    return
 
                 for t in deleted_tools_list:
                     self.paint_tools.pop(t, None)
 
-        except AttributeError:
-            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Delete failed. Select a tool to delete."))
-            self.blockSignals(False)
-            return
-        except Exception as e:
-            self.app.log.error(str(e))
-
-        self.app.inform.emit('[success] %s' % _("Tools deleted from Tool Table."))
-        self.blockSignals(False)
+        if not all_tools:
+            self.app.inform.emit('[success] %s' % _("Tools deleted from Tool Table."))
         self.build_ui()
 
     # To be called after clicking on the plot.
@@ -1212,9 +1246,8 @@ class ToolPaint(Geometry, AppTool):
 
         # do paint single only for left mouse clicks
         if event.button == 1:
-            if isinstance(self.paint_obj, Geometry):
-                paint_geo = self.paint_obj.solid_geometry
-            elif isinstance(self.paint_obj, Gerber):
+            # Gerber is a Geometry subclass, so both kinds are flattened: a MultiPolygon is many polygons
+            if isinstance(self.paint_obj, (Gerber, Geometry)):
                 paint_geo = flatten_shapely_geometry(self.paint_obj.solid_geometry)
             else:
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _("The selected object is not a Gerber or Geometry object."))
@@ -1279,6 +1312,7 @@ class ToolPaint(Geometry, AppTool):
 
             if self.poly_dict:
                 poly_list = deepcopy(list(self.poly_dict.values()))
+                self.last_polygons = list(poly_list)
                 self.gen.paint_poly(self.paint_obj, inside_pt=(curr_pos[0], curr_pos[1]), poly_list=poly_list,
                                 tooldia=self.tooldia_list)
                 self.poly_dict.clear()
@@ -1374,11 +1408,13 @@ class ToolPaint(Geometry, AppTool):
                             self.app.inform.emit(
                                 _("Zone added. Click to start adding next zone or right click to finish."))
 
-                    self.points = []
+                    self.points.clear()
                     self.poly_drawn = False
                     return
 
-            self.delete_tool_selection_shape()
+            # the selection is finished (or abandoned with a single point): clear the rubber band, the zone
+            # outlines and the click state
+            self.reset_selection_state()
 
             self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
             self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
@@ -1398,6 +1434,7 @@ class ToolPaint(Geometry, AppTool):
             if len(self.area_to_paint_list) == 0:
                 return
 
+            self.last_zones = list(self.area_to_paint_list)
             self.gen.paint_area_selection_option(self.area_to_paint_list)
 
     # called on mouse move
@@ -1480,51 +1517,198 @@ class ToolPaint(Geometry, AppTool):
             key = event.key
 
         if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
-            if self.area_sel_disconnect_flag is True:
-                try:
-                    self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-                    self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-                    self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-                except Exception as e:
-                    self.app.log.error("ToolPaint.on_key_press() _1 --> %s" % str(e))
+            self.end_selection()
 
-                self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                                      self.app.on_mouse_click_over_plot)
-                self.app.plotcanvas.graph_event_connect('mouse_move',
-                                                                      self.app.on_mouse_move_over_plot)
-                self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                      self.app.on_mouse_click_release_over_plot)
+    def end_selection(self):
+        """
+        Leave the area / polygon selection mode: give the canvas back to the app, enable the panel and forget the
+        half-made selection. Used by the Escape key and when the plugin closes.
+        """
+        if self.area_sel_disconnect_flag is True:
+            try:
+                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+                self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+            except Exception as e:
+                self.app.log.error("ToolPaint.end_selection() _1 --> %s" % str(e))
 
-                self.area_sel_disconnect_flag = False
-                self.app.ui.notebook.setDisabled(False)
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
 
-            if self.poly_sel_disconnect_flag is True:
-                try:
-                    # restore the Grid snapping if it was active before
-                    if self.grid_status_memory is True:
-                        self.app.ui.grid_snap_btn.trigger()
+            self.area_sel_disconnect_flag = False
+            self.app.ui.notebook.setDisabled(False)
 
-                    self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_single_poly_mouse_release)
-                    self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+        if self.poly_sel_disconnect_flag is True:
+            try:
+                # restore the Grid snapping if it was active before
+                if self.grid_status_memory is True:
+                    self.app.ui.grid_snap_btn.trigger()
 
-                    self.app.tool_shapes.clear(update=True)
-                except Exception as e:
-                    self.app.log.error("ToolPaint.on_key_press() _2 --> %s" % str(e))
+                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_single_poly_mouse_release)
+                self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
 
-                self.app.plotcanvas.graph_event_connect('mouse_release',
-                                                                      self.app.on_mouse_click_release_over_plot)
-                self.app.plotcanvas.graph_event_connect('mouse_press',
-                                                                      self.app.on_mouse_click_over_plot)
-                self.app.ui.notebook.setDisabled(False)
+                self.app.tool_shapes.clear(update=True)
+            except Exception as e:
+                self.app.log.error("ToolPaint.end_selection() _2 --> %s" % str(e))
 
-                self.poly_sel_disconnect_flag = False
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.ui.notebook.setDisabled(False)
 
-            self.points = []
-            self.poly_drawn = False
-            self.poly_dict.clear()
+            self.poly_sel_disconnect_flag = False
 
-            self.delete_moving_selection_shape()
-            self.delete_tool_selection_shape()
+        self.poly_dict.clear()
+        self.reset_selection_state()
+
+    def on_plugin_cleanup(self):
+        """The plugin is closing: do not leave the canvas in the selection mode, take the preview off the canvas."""
+        self.end_selection()
+        self.clear_preview()
+
+    # ------------------------------------------------------------------------------------------------------------
+    # the preview of the area to paint
+    # ------------------------------------------------------------------------------------------------------------
+    def selected_tool_uids(self):
+        """The uids of the tools selected in the Tools table."""
+        uids = []
+        for row in sorted({item.row() for item in self.ui.tools_table.selectedItems()}):
+            try:
+                uid = int(self.ui.tools_table.item(row, 3).text())
+            except (AttributeError, ValueError):
+                continue
+            if uid in self.paint_tools:
+                uids.append(uid)
+        return uids
+
+    def on_preview(self):
+        """Compute the area that would be painted (in the worker) and draw it on the canvas."""
+        self.clear_preview()
+        uids = self.selected_tool_uids()
+        if not uids:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
+            return
+        obj_name = self.ui.obj_combo.currentText()
+        try:
+            source = self.app.collection.get_by_name(obj_name)
+        except Exception:
+            source = None
+        if source is None:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
+            return
+
+        mode = self.ui.select_method_combo.get_value()
+        objects = [source]
+        if self.ui.multi_objects_cb.get_value() and mode in (0, 2, 3):
+            objects = [obj for obj in self.app.collection.get_selected() if obj.kind in ('geometry', 'gerber')]
+            if not objects:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Select Geometry or Gerber objects in the Project tab."))
+                return
+
+        reference = None
+        if mode == 1 and not self.last_polygons:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "No polygon is selected yet. Click Generate to select the polygons, then use Preview."))
+            return
+        if mode == 2 and not self.last_zones:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "No area is drawn yet. Click Generate to draw the zones of the Area Selection, then use Preview."))
+            return
+        if mode == 3:
+            ref_name = self.ui.reference_combo.currentText()
+            try:
+                reference = self.app.collection.get_by_name(ref_name)
+            except Exception:
+                reference = None
+            if reference is None:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(ref_name)))
+                return
+
+        if self.ui.rest_cb.get_value():
+            # rest machining shrinks the selection once, by the rest offset
+            offsets = {float(self.ui.rest_offset_entry.get_value())}
+        else:
+            # every selected tool may have its own offset: the preview shows the union of the areas
+            offsets = {float(self.paint_tools[uid]['data'].get('tools_paint_offset', 0.0)) for uid in uids}
+
+        params = dict(objects=objects, mode=mode, offsets=sorted(offsets), reference=reference,
+                      zones=list(self.last_zones), polygons=list(self.last_polygons), token=self._preview_token)
+        self.app.inform.emit(_("Computing the area to paint ..."))
+        self.app.worker_task.emit({'fcn': self.preview_job, 'params': [params]})
+
+    def preview_job(self, params):
+        """Worker: the area to paint. No toolpaths, no Qt widgets."""
+        area, error = None, ''
+        try:
+            with self.app.proc_container.new('%s...' % _("Preview")):
+                area = self.gen.preview_area(
+                    params['objects'], params['mode'], params['offsets'], reference=params['reference'],
+                    zones=params['zones'], polygons=params['polygons'])
+        except grace:
+            error = _("Aborted. The preview was not computed.")
+        except Exception as e:
+            self.app.log.error("ToolPaint.preview_job() --> %s" % str(e))
+            error = _("The preview failed.")
+        self.preview_done_sig.emit(params['token'], (area, error))
+
+    def on_preview_done(self, token, result):
+        """GUI thread: draw the area, unless the preview was cleared while the job was running."""
+        if token != self._preview_token:
+            return
+        area, error = result
+        if error:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % error)
+            return
+        polygons = [p for p in flatten_shapely_geometry(area) if not p.is_empty] if area is not None else []
+        if not polygons:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The area to paint is empty."))
+            return
+        store = self._preview_store()
+        if store is None:
+            return
+        store.clear(update=False)
+        for poly in polygons:
+            store.add(poly, color='#00AA00FF', face_color='#00AA0055', update=False, layer=0, tolerance=None)
+        store.redraw()
+        self._preview_drawn = True
+        self.app.inform.emit('[success] %s' % _("Preview of the area to paint."))
+
+    def _preview_store(self):
+        """The shape collection of the preview, created on the first use (None without a canvas)."""
+        if self._preview_shapes is None:
+            try:
+                self._preview_shapes = self.app.plotcanvas.new_shape_collection(layers=1)
+            except Exception as e:
+                self.app.log.error("ToolPaint._preview_store() --> %s" % str(e))
+                return None
+        return self._preview_shapes
+
+    def on_source_changed(self, *args):
+        """The object to paint changed: its preview and the zones / polygons of the last run do not apply any more."""
+        self.last_zones = []
+        self.last_polygons = []
+        self.clear_preview()
+
+    def clear_preview(self, *args):
+        """Remove the preview from the canvas; a job still running will not draw its result."""
+        self._preview_token += 1
+        if self._preview_drawn and self._preview_shapes is not None:
+            self._preview_shapes.clear(update=True)
+        self._preview_drawn = False
+
+    def reset_selection_state(self):
+        """
+        Forget a half-made area/polygon selection: click state, cursor position, drag flag, polygon points and the
+        rubber band / zone outlines on the canvas. The lists are cleared in place because PaintGen shares them.
+        """
+        self.first_click = False
+        self.cursor_pos = None
+        self.mouse_is_dragging = False
+        self.points.clear()
+        self.poly_drawn = False
+
+        self.delete_moving_selection_shape()
+        self.delete_tool_selection_shape()
 
     # noinspection PyUnresolvedReferences
     def ui_connect(self):
@@ -1626,7 +1810,7 @@ class ToolPaint(Geometry, AppTool):
                     pass
             elif isinstance(current_widget, FCComboBox):
                 try:
-                    current_widget.currentIndexChanged.connect(self.form_to_storage)
+                    current_widget.currentIndexChanged.disconnect(self.form_to_storage)
                 except (TypeError, ValueError):
                     pass
 
@@ -1731,10 +1915,16 @@ class ToolPaint(Geometry, AppTool):
             self.ui_connect()
             return 'fail'
 
+        # merge the DB data over the defaults so the tools_paint_* and tools_mill_tool_shape keys always exist
+        new_data = deepcopy(self.default_data)
+        for d, value in tool['data'].items():
+            if not d.startswith('tools_') or d.startswith(('tools_paint_', 'tools_mill_')):
+                new_data[d] = deepcopy(value)
+
         self.paint_tools.update({
             tooluid: {
                 'tooldia': float('%.*f' % (self.decimals, tooldia)),
-                'data': deepcopy(tool['data']),
+                'data': new_data,
                 'solid_geometry': []
             }
         })

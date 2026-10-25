@@ -24,7 +24,7 @@ class TestPaintSimplification(unittest.TestCase):
                         worker, initial = rest_worker(SimpleNamespace(app=app), [scale])
                         worker.obj_name = 'paint'
                         worker.paint_tools = initial.tools_storage
-                        params = worker._create_params(0, 2, rest, 'paint', None, False)
+                        params = worker._create_params(0, 2, rest, 'paint', None)
                         self.assertAlmostEqual(params.simplification_value, tolerance * scale)
                         path = LineString([(scale, scale), (2 * scale, 1.01 * scale),
                                            (3 * scale, scale)])
