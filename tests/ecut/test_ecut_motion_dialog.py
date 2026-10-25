@@ -11,7 +11,7 @@ import pytest
 
 @pytest.fixture
 def module():
-    return importlib.import_module('appPlugins.ToolGrblSender.SenderMotion')
+    return importlib.import_module('appPlugins.ToolGcodeSender.SenderMotion')
 
 
 @pytest.fixture
@@ -257,7 +257,7 @@ def test_optional_hardware_tabs_follow_settings_and_forward_signals(module, snap
         def io_idle(self):
             return False
 
-    monkeypatch.setitem(sys.modules, 'appPlugins.ToolGrblSender.SenderEcutIO',
+    monkeypatch.setitem(sys.modules, 'appPlugins.ToolGcodeSender.SenderEcutIO',
                         SimpleNamespace(EcutHardwareTabs=Hardware))
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = deepcopy(snapshot)

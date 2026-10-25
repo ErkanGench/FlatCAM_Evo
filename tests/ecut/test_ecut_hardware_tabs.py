@@ -21,7 +21,7 @@ def hardware():
 @pytest.fixture
 def tabs(hardware):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    module = importlib.import_module('appPlugins.ToolGrblSender.SenderEcutIO')
+    module = importlib.import_module('appPlugins.ToolGcodeSender.SenderEcutIO')
     widget = module.EcutHardwareTabs(hardware)
     yield widget
     widget.close()

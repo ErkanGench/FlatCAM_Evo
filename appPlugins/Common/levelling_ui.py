@@ -31,7 +31,7 @@ def build_probe_points_ui(ui, app, parent_box, connect_preferences=True):
     al_columns_entry, al_columns_label, al_rows_entry, al_rows_label,
     al_add_button, import_heights_button, tool_grid, param_grid.
 
-    :param ui:         the UI object (LevelUI or GrblSenderUI); it needs ui.decimals.
+    :param ui:         the UI object (LevelUI or GcodeSenderUI); it needs ui.decimals.
     :param app:        the App.
     :param parent_box: the layout that gets al_frame.
     :param connect_preferences: keep the legacy preference hookups unless the controller owns them.

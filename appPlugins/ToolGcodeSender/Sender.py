@@ -30,12 +30,12 @@ from appPlugins.Common.grbl.grbl_protocol import (
     parse_grbl_status_report, work_position, grbl_report_scale)
 from appPlugins.Common.gcode_segment import split_long_moves, parse_toolpath, _words, _g_key
 from appPlugins.Common.levelling_interp import build_bilinear_grid
-from appPlugins.ToolGrblSender import SenderGen
+from appPlugins.ToolGcodeSender import SenderGen
 from appPlugins.Common.grbl.grbl_client import (
     GrblClientMixin, STATUS_POLL, is_controller_banner, stream_lines, validate_stream_lines)
-from appPlugins.ToolGrblSender.SenderUI import GrblSenderUI
-from appPlugins.ToolGrblSender.SenderSimulation import SimulationDialog, VirtualGrbl
-from appPlugins.ToolGrblSender.SenderView3d import SenderView3d, TOOL_COLOR
+from appPlugins.ToolGcodeSender.SenderUI import GcodeSenderUI
+from appPlugins.ToolGcodeSender.SenderSimulation import SimulationDialog, VirtualGrbl
+from appPlugins.ToolGcodeSender.SenderView3d import SenderView3d, TOOL_COLOR
 
 import gettext
 import appTranslation as fcTranslate
@@ -287,7 +287,7 @@ class _StartRequest:
     """1 levelled Start: the live frame result is valid only for this request."""
 
     def __init__(self, seq, al_ctx, target_obj, map_frame, map_imported, safety_generation, check_mode):
-        self.seq = seq                          # value of ToolGrblSender._start_seq at the request
+        self.seq = seq                          # value of ToolGcodeSender._start_seq at the request
         self.al_ctx = al_ctx                    # _al_capture_context(): map generation, target, units
         self.target_obj = target_obj
         self.map_frame = map_frame              # _al_map_frame at the request
@@ -297,7 +297,7 @@ class _StartRequest:
         self.start_line = None
 
 
-class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
+class ToolGCodeSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     grbl_port_closed_sig = QtCore.pyqtSignal()
     # (request, {'frame': ...} or {'error': ...}) from the frame worker; emitted after the port is released
     frame_ready_sig = QtCore.pyqtSignal(object, object)
@@ -339,7 +339,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         try:
             stop()
         except Exception:
-            log.exception('ToolGrblSender._on_plugin_destroyed() -> the controller did not stop')
+            log.exception('ToolGcodeSender._on_plugin_destroyed() -> the controller did not stop')
         MachineSafety.unregister(stop)
 
     def __init__(self, app):
@@ -378,7 +378,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self._simulation = None
         self._controller_state = 'Idle'
 
-        self.ui = GrblSenderUI(layout=self.layout, app=self.app)
+        self.ui = GcodeSenderUI(layout=self.layout, app=self.app)
         self.ui.spindle_button.setChecked(self.__dict__.get('_spindle_on', False))
         self.pluginName = self.ui.pluginName
         self._continuous_jog = None
@@ -411,9 +411,12 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         AppTool.install(self, icon, separator, shortcut='', **kwargs)
 
     def run(self, toggle=True):
+        self.app.inform.emit("[WARNING_NOTCL] Cancelled. This tool is not ready yet. ")
+        return # TODO re-enable after it is finished
+
         if self.app.plugin_tab_locked is True:
             return
-        self.app.defaults.report_usage("ToolGrblSender()")
+        self.app.defaults.report_usage("ToolGcodeSender()")
 
         if toggle:
             # if the splitter is hidden, display it
@@ -606,7 +609,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.al_heights_valid = bool(getattr(self, 'al_heights_valid', False)) and \
             self._height_map_is_complete()
         self.clear_ui(self.layout)
-        self.ui = GrblSenderUI(layout=self.layout, app=self.app)
+        self.ui = GcodeSenderUI(layout=self.layout, app=self.app)
         self.ui.spindle_button.setChecked(self.__dict__.get('_spindle_on', False))
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
@@ -946,7 +949,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             try:
                 port.close()
             except Exception as err:
-                self.app.log.debug("ToolGrblSender._close_ecut_port_async() -> %s" % str(err))
+                self.app.log.debug("ToolGcodeSender._close_ecut_port_async() -> %s" % str(err))
 
         self.app.worker_task.emit({'fcn': close_port, 'params': []})
 
@@ -955,7 +958,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         port_name, attempt, port, error = response
         if error is not None:
             if self._grbl_connect_attempt is attempt:
-                self.app.log.error("ToolGrblSender._on_ecut_connect_result() -> %s" % str(error))
+                self.app.log.error("ToolGcodeSender._on_ecut_connect_result() -> %s" % str(error))
                 self._grbl_close_port(attempt=attempt)
                 self.app.inform.emit("[ERROR_NOTCL] %s: %s" % (_("Could not connect to port"), port_name))
             return
@@ -978,7 +981,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             # The HID adapter has initialized RAM and queued its verified connection banner.
             port.write("\r\n\r\n".encode('utf-8'))
         except (serial.SerialException, OSError, ValueError) as err:
-            self.app.log.error("ToolGrblSender._on_ecut_connect_result() -> %s" % str(err))
+            self.app.log.error("ToolGcodeSender._on_ecut_connect_result() -> %s" % str(err))
             self._grbl_close_port(attempt=attempt)
             self.app.inform.emit("[ERROR_NOTCL] %s: %s" % (_("Could not connect to port"), port_name))
             return
@@ -1202,7 +1205,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 self.app.inform.emit('[WARNING_NOTCL] %s: %s' % (_("E-Cut settings"), error))
             return
         if action == 'load':
-            from appPlugins.ToolGrblSender.SenderMotion import EcutMotionDialog
+            from appPlugins.ToolGcodeSender.SenderMotion import EcutMotionDialog
             try:
                 dialog = EcutMotionDialog(result, parent=self)
             except (ValueError, TypeError, KeyError, OverflowError) as failure:
@@ -2255,12 +2258,12 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
             try:
                 result = self._grbl_frame_run(op, units_cmd)
             except (serial.SerialException, OSError) as err:
-                self.app.log.error("ToolGrblSender._start_levelled() -> %s" % str(err))
+                self.app.log.error("ToolGcodeSender._start_levelled() -> %s" % str(err))
                 with self._grbl_op_lock:
                     self._grbl_failure_locked(op, 'port_error')
                 result = {'error': '%s: %s' % (_("The serial port failed"), str(err))}
             except Exception as err:
-                self.app.log.error("ToolGrblSender._start_levelled() -> %s" % str(err))
+                self.app.log.error("ToolGcodeSender._start_levelled() -> %s" % str(err))
             finally:
                 # the GUI hears about it only after the port is free
                 self._grbl_release(op)
@@ -2384,10 +2387,10 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 how = self._grbl_stream_run(op, lines, numbers, check_mode, poll_ms / 1000.0, req,
                                             restart=restart)
             except (serial.SerialException, OSError) as err:
-                self.app.log.error("ToolGrblSender.on_start() -> %s" % str(err))
+                self.app.log.error("ToolGcodeSender.on_start() -> %s" % str(err))
                 how = self._grbl_stream_crashed(op, 'port_error')
             except Exception as err:
-                self.app.log.error("ToolGrblSender.on_start() -> %s" % str(err))
+                self.app.log.error("ToolGcodeSender.on_start() -> %s" % str(err))
                 how = self._grbl_stream_crashed(op, 'error')
             finally:
                 # the operation is released after the status map; the GUI hears about it after the release
@@ -2436,7 +2439,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 try:
                     count = op.port.write(data)
                 except (serial.SerialException, OSError) as err:
-                    self.app.log.error("ToolGrblSender.write() -> %s" % str(err))
+                    self.app.log.error("ToolGcodeSender.write() -> %s" % str(err))
                     return 'port_error'
                 # a short write is a transport failure, never 'stale'
                 if count is not None and count != len(data):
@@ -3209,7 +3212,7 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
                 result.update(prepared=SenderView3d.prepare_toolpath(segments, chords),
                               lines=job_lines, numbers=numbers)
             except Exception as err:
-                app.log.error("ToolGrblSender.on_show_3d() -> %s" % str(err))
+                app.log.error("ToolGcodeSender.on_show_3d() -> %s" % str(err))
                 result['error'] = str(err)
             self.preview_ready_sig.emit(result)
 

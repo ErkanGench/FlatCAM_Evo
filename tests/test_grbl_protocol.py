@@ -150,7 +150,7 @@ import os
 import unittest
 from types import SimpleNamespace
 
-from appPlugins.ToolGrblSender import SenderGen
+from appPlugins.ToolGcodeSender import SenderGen
 
 
 class TestCleanLines(unittest.TestCase):

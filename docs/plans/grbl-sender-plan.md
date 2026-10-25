@@ -382,7 +382,7 @@ class _StartRequest:
     """1 levelled Start: the live frame result is valid only for this request."""
 
     def __init__(self, seq, al_ctx, target_obj, map_frame, map_imported, safety_generation, check_mode):
-        self.seq = seq                          # value of ToolGrblSender._start_seq at the request
+        self.seq = seq                          # value of ToolGcodeSender._start_seq at the request
         self.al_ctx = al_ctx                    # _al_capture_context(): map generation, target, units
         self.target_obj = target_obj
         self.map_frame = map_frame              # _al_map_frame at the request
@@ -1399,11 +1399,11 @@ class ToolGrblSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='', **kwargs)
 
-    # <- run(): copy ToolLevelling.run (312-365). Change "ToolLevelling()" to "ToolGrblSender()"
+    # <- run(): copy ToolLevelling.run (312-365). Change "ToolLevelling()" to "ToolGcodeSender()"
     #    and _("Levelling") to _("GRBL Sender"). At the end add: self.show_console_if_wanted()
 
     # <- connect_signals_at_init(): see step 6
-    # <- set_tool_ui(): copy ToolLevelling.set_tool_ui (438-459), with LevelUI replaced by GrblSenderUI
+    # <- set_tool_ui(): copy ToolLevelling.set_tool_ui (438-459), with LevelUI replaced by GcodeSenderUI
     # <- _populate_tool_ui(): see step 7
     # <- on_object_changed(): copy ToolLevelling.on_object_changed (599-630), with
     #    self._is_supported_al_target(target_obj) replaced by self._is_supported_target(target_obj)

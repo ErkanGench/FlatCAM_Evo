@@ -359,7 +359,7 @@ import sys
 import unittest
 from unittest.mock import MagicMock
 
-from appPlugins.ToolGrblSender import SenderGen
+from appPlugins.ToolGcodeSender import SenderGen
 
 
 PROGRAM = ['G21', 'G90', 'G17', 'G54', 'F100', 'M3 S12000', 'G0 Z3',
@@ -457,7 +457,7 @@ class TestStartDialog(unittest.TestCase):
 
     def test_ok_and_cancel_return_the_selected_line_or_none(self):
         from PyQt6 import QtCore, QtWidgets
-        from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+        from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
         from tests.grbl_stream_helpers import CheckFake, make_stream_tool
         tool = make_stream_tool(CheckFake())
         tool.app.ui = QtWidgets.QMainWindow()
@@ -473,7 +473,7 @@ class TestStartDialog(unittest.TestCase):
                     dialog.accept()
 
             QtCore.QTimer.singleShot(0, finish)
-            self.assertEqual(ToolGrblSender._choose_start_line(tool, 10), expected)
+            self.assertEqual(ToolGCodeSender._choose_start_line(tool, 10), expected)
 
 
 class TestSenderRestart(unittest.TestCase):
@@ -489,7 +489,7 @@ class TestSenderRestart(unittest.TestCase):
 
     def test_restart_streams_preamble_and_selected_arc_with_original_console_numbering(self):
         from PyQt6 import QtWidgets
-        from appPlugins.ToolGrblSender.Sender import GrblConsole
+        from appPlugins.ToolGcodeSender.Sender import GrblConsole
         tool, fake = self.make_tool()
         dock = QtWidgets.QDockWidget()
         console = GrblConsole(tool)

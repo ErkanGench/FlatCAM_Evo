@@ -22,7 +22,7 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 
-class GrblSenderUI:
+class GcodeSenderUI:
     pluginName = _("GCode sender")
 
     def __init__(self, layout, app):

@@ -70,7 +70,7 @@ def test_connect_creates_the_port_in_a_worker_and_finishes_on_the_result(tool):
     module = SimpleNamespace(EcutSenderPort=factory)
     with patch.dict(sys.modules, {'appPlugins.Common.ecut.ecut_sender_port': module}), \
             patch('appPlugins.Common.ecut.ecut_protocol.find_boards', return_value=[{'path': b'p'}]), \
-            patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot') as timer:
+            patch('appPlugins.ToolGcodeSender.Sender.QtCore.QTimer.singleShot') as timer:
         tool.on_grbl_connect()
         factory.assert_not_called()  # the GUI thread does not create the port
         assert tool.grbl_ser_port is None
@@ -97,7 +97,7 @@ def test_stale_connect_result_is_closed_and_ignored(tool):
     port = MagicMock()
     old_attempt = object()
     tool._grbl_connect_attempt = object()  # a newer Connect or a Disconnect replaced it
-    with patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot') as timer:
+    with patch('appPlugins.ToolGcodeSender.Sender.QtCore.QTimer.singleShot') as timer:
         tool._on_ecut_connect_result((PORT_NAME, old_attempt, port, None))
     assert tool.grbl_ser_port is None
     port.write.assert_not_called()

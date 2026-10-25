@@ -25,7 +25,7 @@ from tests import test_levelling_audit as audit
 from tests import test_levelling_journey as journey
 from tests.test_levelling_audit import FakeGrbl, make_audit_tool, tl_module
 from appPlugins.ToolLevelling import ToolLevelling
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 import appPlugins.Common.levelling_core as lc_module
 
 PLANE = journey.make_plane(0.01, 0.02, 0.0)       # z = 0.01*x + 0.02*y
@@ -160,7 +160,7 @@ class Env:
         self.tool.on_object_changed()
         ui.al_method_radio.get_value.return_value = method
         self.tool.on_method_radio(method)
-        if isinstance(self.tool, ToolGrblSender):
+        if isinstance(self.tool, ToolGCodeSender):
             # the sender is always GRBL: it has no controller combo
             return
         ui.al_controller_combo.get_value.return_value = controller
@@ -230,7 +230,7 @@ def env(tmp_path, monkeypatch):
 
 @pytest.fixture
 def sender_env(tmp_path, monkeypatch):
-    return Env(tmp_path, monkeypatch, cls=ToolGrblSender)
+    return Env(tmp_path, monkeypatch, cls=ToolGCodeSender)
 
 
 # --------------------------------------------------------------------------------------

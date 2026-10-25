@@ -28,7 +28,7 @@ def snapshot():
 @pytest.fixture
 def make(snapshot):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    module = importlib.import_module('appPlugins.ToolGrblSender.SenderMotion')
+    module = importlib.import_module('appPlugins.ToolGcodeSender.SenderMotion')
     created = []
 
     def factory(settings=None):

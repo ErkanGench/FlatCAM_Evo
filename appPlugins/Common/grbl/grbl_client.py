@@ -927,7 +927,7 @@ class GrblClientMixin:
         try:
             op.port.write(b'!')
         except (serial.SerialException, OSError) as err:
-            self.app.log.error("ToolGrblSender._grbl_abort_stream_locked() -> %s" % str(err))
+            self.app.log.error("ToolGcodeSender._grbl_abort_stream_locked() -> %s" % str(err))
         self._grbl_recovery = 'needs_reset'
         self._grbl_reset_pending = False
         self._grbl_safety_generation += 1
@@ -959,7 +959,7 @@ class GrblClientMixin:
         try:
             port.reset_input_buffer()
         except (serial.SerialException, OSError) as err:
-            self.app.log.error("ToolGrblSender._grbl_begin_reset_epoch_locked() -> %s" % str(err))
+            self.app.log.error("ToolGcodeSender._grbl_begin_reset_epoch_locked() -> %s" % str(err))
             return False
         return True
 
@@ -979,7 +979,7 @@ class GrblClientMixin:
             try:
                 port.write(b'?')
             except (serial.SerialException, OSError) as err:
-                self.app.log.error("ToolGrblSender._grbl_post_reset_state() -> %s" % str(err))
+                self.app.log.error("ToolGcodeSender._grbl_post_reset_state() -> %s" % str(err))
                 self._grbl_failure_locked(op, 'port_error')
                 return None
 
@@ -991,7 +991,7 @@ class GrblClientMixin:
             try:
                 chunk = b'' if b'\n' in self._grbl_rx_buffer else port.readline()
             except (serial.SerialException, OSError) as err:
-                self.app.log.error("ToolGrblSender._grbl_post_reset_state() -> %s" % str(err))
+                self.app.log.error("ToolGcodeSender._grbl_post_reset_state() -> %s" % str(err))
                 with self._grbl_op_lock:
                     self._grbl_failure_locked(op, 'port_error')
                 return None
@@ -1037,7 +1037,7 @@ class GrblClientMixin:
             try:
                 port.write(b'$C\n')
             except (serial.SerialException, OSError) as err:
-                self.app.log.error("ToolGrblSender._grbl_exit_check_mode() -> %s" % str(err))
+                self.app.log.error("ToolGcodeSender._grbl_exit_check_mode() -> %s" % str(err))
                 self._grbl_failure_locked(op, 'port_error')
                 return 'failed'
 

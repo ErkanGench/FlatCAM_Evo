@@ -2150,7 +2150,7 @@ class App(QtCore.QObject):
         self.levelling_tool.install(icon=QtGui.QIcon(self.resource_location + '/level32.png'),
                                     pos=self.ui.menuoptions_experimental, separator=True)
 
-        self.grbl_sender_tool = ToolGrblSender(self)
+        self.grbl_sender_tool = ToolGCodeSender(self)
         self.grbl_sender_tool.install(icon=QtGui.QIcon(self.resource_location + '/level32.png'),
                                       pos=self.ui.menu_plugins, before=self.sub_tool.menuAction, separator=True)
 

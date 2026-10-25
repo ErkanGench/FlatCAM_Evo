@@ -18,7 +18,7 @@ def gcode(count):
 
 
 def make_stream_tool(fake, source=None, check_mode=False):
-    """A ToolGrblSender (make_audit_tool) on the fake port. The stream worker runs inline in on_start()."""
+    """A ToolGcodeSender (make_audit_tool) on the fake port. The stream worker runs inline in on_start()."""
     tool = make_audit_tool()
     tool.grbl_ser_port = fake
     tool._grbl_connected = True
@@ -123,7 +123,7 @@ def make_job_target(text, segmented=True):
 
 def make_levelled_stream_tool(fake, text=JOB, frame=FRAME, imported=False, check_mode=False):
     """
-    A ToolGrblSender on the fake port with a height map (probed in `frame`, or imported and not bound),
+    A ToolGcodeSender on the fake port with a height map (probed in `frame`, or imported and not bound),
     'Level the G-code' on, and the workers and the frame signal running inline.
 
     The dialog of an imported map is a MagicMock that answers Yes (`tool._confirm_imported_frame`).

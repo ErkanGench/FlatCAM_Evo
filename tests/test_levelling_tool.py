@@ -24,7 +24,7 @@ from shapely import Point, box
 from shapely.ops import unary_union
 
 from appPlugins.ToolLevelling import ToolLevelling
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 from appPlugins.Common.grbl.grbl_protocol import parse_grbl_probe_output
 from appPlugins.Common.levelling_interp import parse_height_map_line
 
@@ -515,7 +515,7 @@ class TestSendGrblCommand(unittest.TestCase):
             tool._grbl_release(op)
 
     def _tool(self, replies=None):
-        tool = make_tool(cls=ToolGrblSender)
+        tool = make_tool(cls=ToolGCodeSender)
         tool.app.inform_shell = MagicMock()
         tool._grbl_connected = True
         tool._grbl_op_lock = threading.Lock()

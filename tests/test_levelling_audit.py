@@ -27,16 +27,16 @@ import appPlugins.ToolLevelling  # noqa: F401
 # so take the module itself from sys.modules
 tl_module = sys.modules['appPlugins.ToolLevelling']
 from appPlugins.ToolLevelling import ToolLevelling
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 import appPlugins.Common.grbl.grbl_client  # noqa: F401
-# appPlugins/__init__.py also shadows the package name with the class ToolGrblSender
+# appPlugins/__init__.py also shadows the package name with the class ToolGcodeSender
 sg_module = sys.modules['appPlugins.Common.grbl.grbl_client']
 from appPlugins.Common import levelling_interp as li
 from appPlugins.Common.grbl import grbl_protocol as gp
 
 
 def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
-    tool = (cls or ToolGrblSender).__new__(cls or ToolGrblSender)
+    tool = (cls or ToolGCodeSender).__new__(cls or ToolGCodeSender)
     tool.app = MagicMock()
     tool.app.decimals = 4
     tool.app.app_units = units
@@ -94,10 +94,10 @@ def make_audit_tool(units='MM', storage=None, heights_valid=False, cls=None):
     tool._preview_generation = 0
     tool._probe_start_op = None
     tool.preview_ready_sig = MagicMock()
-    if isinstance(tool, ToolGrblSender):
+    if isinstance(tool, ToolGCodeSender):
         tool.preview_ready_sig.emit.side_effect = tool._on_preview_ready
     tool.probe_finished_sig = MagicMock()
-    if isinstance(tool, ToolGrblSender):
+    if isinstance(tool, ToolGCodeSender):
         tool.probe_finished_sig.emit.side_effect = tool._on_probe_finished
     tool.stream_progress_sig = MagicMock()
     tool.status_report_sig = MagicMock()
@@ -1039,7 +1039,7 @@ class TestGrblHoming(unittest.TestCase):
         infos = [SimpleNamespace(device='COM3'), SimpleNamespace(device='COM7')]
         with patch('appPlugins.Common.grbl.grbl_client.serial.tools.list_ports.comports', return_value=infos), \
                 patch('appPlugins.Common.grbl.grbl_client.serial.Serial') as serial_cls:
-            self.assertEqual(ToolGrblSender.on_grbl_list_serial_ports(), ['COM3', 'COM7'])
+            self.assertEqual(ToolGCodeSender.on_grbl_list_serial_ports(), ['COM3', 'COM7'])
         serial_cls.assert_not_called()
 
 
@@ -1334,7 +1334,7 @@ class TestGrblProbeRun(unittest.TestCase):
     def test_timeout_holds_and_needs_recovery(self):
         fake = FakeGrbl(replies={'G38.2': []})
         tool, target = self._tool(fake)
-        with patch('appPlugins.ToolGrblSender.Sender.probe_timeout_s', return_value=0.05):
+        with patch('appPlugins.ToolGcodeSender.Sender.probe_timeout_s', return_value=0.05):
             self._run(tool)
         self._assert_stopped_at_probe(tool, fake)
         self.assertIn('!', fake.commands())
@@ -1352,7 +1352,7 @@ class TestGrblProbeRun(unittest.TestCase):
     def test_timeout_blocks_next_probe_until_reset_and_home(self):
         fake = FakeGrbl(replies={'G38.2': []})
         tool, target = self._tool(fake)
-        with patch('appPlugins.ToolGrblSender.Sender.probe_timeout_s', return_value=0.05):
+        with patch('appPlugins.ToolGcodeSender.Sender.probe_timeout_s', return_value=0.05):
             self._run(tool)
         tool.on_grbl_autolevel()
         self.assertEqual(tool.app.worker_task.emit.call_count, 1)

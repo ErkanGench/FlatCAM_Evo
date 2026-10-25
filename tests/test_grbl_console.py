@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 from PyQt6 import QtGui, QtWidgets
 
-from appPlugins.ToolGrblSender.Sender import GrblConsole
+from appPlugins.ToolGcodeSender.Sender import GrblConsole
 from tests.grbl_stream_helpers import CheckFake, make_stream_tool, make_levelled_stream_tool
 
 

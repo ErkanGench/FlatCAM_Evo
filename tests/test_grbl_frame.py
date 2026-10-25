@@ -19,9 +19,9 @@ from PyQt6 import QtWidgets
 
 from test_levelling_audit import make_audit_tool
 from test_levelling_tool import make_tool
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender, _StartRequest
-from appPlugins.ToolGrblSender import SenderGen
-import appPlugins.ToolGrblSender.Sender  # noqa: F401
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender, _StartRequest
+from appPlugins.ToolGcodeSender import SenderGen
+import appPlugins.ToolGcodeSender.Sender  # noqa: F401
 from tests.test_levelling_audit import emitted
 from tests.test_grbl_job_control import fast_timeouts
 from tests.grbl_stream_helpers import (
@@ -29,12 +29,12 @@ from tests.grbl_stream_helpers import (
     HookFake, spy_reserve, import_map_b)
 
 # appPlugins/__init__.py shadows the package name with the class, so take the module from sys.modules
-sender_module = sys.modules['appPlugins.ToolGrblSender.Sender']
+sender_module = sys.modules['appPlugins.ToolGcodeSender.Sender']
 
 
 def make_sender(text, frame=FRAME, method='b', segmented=True):
     target = make_job_target(text, segmented)
-    tool = make_audit_tool(units='MM', storage=make_storage(), heights_valid=True, cls=ToolGrblSender)
+    tool = make_audit_tool(units='MM', storage=make_storage(), heights_valid=True, cls=ToolGCodeSender)
     tool._al_map_frame = frame
     tool._al_map_imported = frame is None
     tool.ui.autolevel_cb.get_value.return_value = True

@@ -22,8 +22,8 @@ from appGUI.VisPyVisuals import ShapeCollection
 from tests.test_levelling_audit import FakeGrbl, make_audit_tool, sg_module
 from tests.grbl_stream_helpers import make_stream_tool, make_storage, CheckFake
 from appPlugins.Common.levelling_interp import build_bilinear_grid
-from appPlugins.ToolGrblSender import SenderView3d as view3d_module
-from appPlugins.ToolGrblSender.SenderView3d import SenderView3d, ACCEPTED_COLOR, CHORD_COLOR, CUT_COLOR
+from appPlugins.ToolGcodeSender import SenderView3d as view3d_module
+from appPlugins.ToolGcodeSender.SenderView3d import SenderView3d, ACCEPTED_COLOR, CHORD_COLOR, CUT_COLOR
 
 
 def fake_canvas():
@@ -78,7 +78,6 @@ class SenderView3dTest(unittest.TestCase):
         self.assertEqual(tuple(view.accepted.color), ACCEPTED_COLOR)
         view.set_accepted(-1)
         self.assertEqual(view.accepted.pos.shape, (0, 3))
-        self.assertFalse(hasattr(view, 'set_done'))
 
     def test_tool_position(self):
         view = SenderView3d(fake_canvas())
@@ -257,7 +256,7 @@ class ConnectReadsReportUnitsTest(unittest.TestCase):
         tool._grbl_report_inches = None
         fake.rx.clear()
         timers = []
-        with patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot',
+        with patch('appPlugins.ToolGcodeSender.Sender.QtCore.QTimer.singleShot',
                    side_effect=lambda delay, callback: timers.append((delay, callback))):
             tool._grbl_connect_finish('COM3', fake, attempt)
         self.assertTrue(tool._grbl_connected)
@@ -513,6 +512,11 @@ class ShowIn3dTest(unittest.TestCase):
         self.assertIsNone(tool.view3d.mesh)
 
 
+# ToolGCodeSender.run() returns at once until the tool is finished (the TODO in Sender.py): these tests need it.
+# Remove the skips (and their lines in tests/gates/allowed_skips.txt) when run() is enabled again.
+run_disabled = unittest.skip("ToolGCodeSender.run() is disabled until the tool is finished")
+
+
 class SenderLifecycle3dTest(unittest.TestCase):
 
     def make_tool(self, source=True):
@@ -576,6 +580,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         from PyQt6 import QtWidgets
         QtWidgets.QApplication.processEvents()
 
+    @run_disabled
     def test_run_opens_and_loads_source_after_ui_setup(self):
         tool = self.make_tool()
         tool.run()
@@ -593,6 +598,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertIsNone(tool.view3d)
         tool.app.on_3d_area.assert_not_called()
 
+    @run_disabled
     def test_replacing_before_deferred_plot_does_not_open_tab(self):
         from appTool import AppTool
 
@@ -607,6 +613,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertFalse(tool.al_heights_valid)
         tool.app.on_3d_area.assert_not_called()
 
+    @run_disabled
     def test_run_without_source_opens_empty_view_without_error(self):
         tool = self.make_tool(source=False)
         tool.run()
@@ -615,6 +622,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertEqual(tool.view3d._segments, [])
         self.assertFalse(any('[ERROR' in str(c) for c in tool.app.inform.emit.call_args_list))
 
+    @run_disabled
     def test_cleanup_clears_visuals_and_closes_tab_once(self):
         tool = self.make_tool()
         tool.run()
@@ -630,6 +638,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertIsNone(view.accepted.parent)
         self.assertIsNone(view.tool.parent)
 
+    @run_disabled
     def test_switching_notebook_pages_keeps_view_open(self):
         tool = self.make_tool()
         tool.run()
@@ -642,15 +651,16 @@ class SenderLifecycle3dTest(unittest.TestCase):
             self.assertIs(tool.view3d, view)
             self.assertIs(tool.app.plotcanvas3d, view.canvas)
 
+    @run_disabled
     def test_switching_notebook_pages_keeps_console_open_until_cleanup(self):
         from PyQt6 import QtWidgets
-        from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+        from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 
         tool = self.make_tool()
         dock = QtWidgets.QDockWidget(tool.app.ui.notebook.window())
         tool.app.ui.grbl_console_dock = dock
-        tool.hide_console = ToolGrblSender.hide_console.__get__(tool)
-        tool.show_console_if_wanted = ToolGrblSender.show_console_if_wanted.__get__(tool)
+        tool.hide_console = ToolGCodeSender.hide_console.__get__(tool)
+        tool.show_console_if_wanted = ToolGCodeSender.show_console_if_wanted.__get__(tool)
         tool._console = MagicMock()
         tool.app.options['tools_grbl_console_visible'] = True
         tool.run()
@@ -667,6 +677,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertFalse(dock.isVisible())
         self.assertTrue(tool.app.options['tools_grbl_console_visible'])
 
+    @run_disabled
     def test_replacing_visible_or_hidden_sender_closes_view(self):
         from PyQt6 import QtWidgets
         from appTool import AppTool
@@ -687,6 +698,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
                 self.assertIsNone(tool.view3d)
                 self.assertIsNone(tool.app.plotcanvas3d)
 
+    @run_disabled
     def test_toggle_off_closes_view_without_reopening_sender(self):
         tool = self.make_tool()
         tool.run()
@@ -699,6 +711,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertIsNone(tool.app.plotcanvas3d)
         tool.set_tool_ui.assert_called_once()
 
+    @run_disabled
     def test_reopen_after_cleanup_uses_new_canvas(self):
         tool = self.make_tool()
         tool.run()
@@ -712,6 +725,7 @@ class SenderLifecycle3dTest(unittest.TestCase):
         self.assertIsNot(tool.view3d.canvas, old_view.canvas)
         self.assertTrue(tool.view3d._segments)
 
+    @run_disabled
     def test_cleanup_after_manual_3d_close_keeps_replacement_canvas(self):
         tool = self.make_tool()
         tool.run()

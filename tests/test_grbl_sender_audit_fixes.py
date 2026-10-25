@@ -13,14 +13,14 @@ from tests.grbl_stream_helpers import (
     CheckFake, FakeGrbl, ended_how, gcode, has_success, make_stream_tool, make_levelled_stream_tool,
 )
 from tests.test_grbl_sender_construct import make_app
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 from appPlugins.Common.grbl.grbl_client import stream_lines
 
 
 class TestResumeBypass(unittest.TestCase):
     @staticmethod
     def make_button_tool():
-        tool = ToolGrblSender(make_app())
+        tool = ToolGCodeSender(make_app())
         fake = FakeGrbl()
         tool.grbl_ser_port = fake
         tool._grbl_connected = True
@@ -83,7 +83,7 @@ class TestUnexpectedReset(unittest.TestCase):
         def short_timeout(*args, **kwargs):
             return stream_lines(*args, **kwargs, stall_timeout=0.02)
 
-        with patch('appPlugins.ToolGrblSender.Sender.stream_lines', side_effect=short_timeout):
+        with patch('appPlugins.ToolGcodeSender.Sender.stream_lines', side_effect=short_timeout):
             tool.on_start()
         self.assertTrue(fake.banner_seen)
         self.assertEqual(fake.writes_after_banner, [])
@@ -181,7 +181,7 @@ class TestStopResets(unittest.TestCase):
         return tool, tool.grbl_ser_port
 
     def stop(self, tool):
-        with patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot', side_effect=lambda _ms, fn: fn()):
+        with patch('appPlugins.ToolGcodeSender.Sender.QtCore.QTimer.singleShot', side_effect=lambda _ms, fn: fn()):
             tool.on_stream_stop()
 
     def test_stop_when_idle_resets_and_keeps_the_position(self):
@@ -196,7 +196,7 @@ class TestStopResets(unittest.TestCase):
         tool, fake = self.make_tool()
         op = tool._grbl_reserve('command', motion=True)
         self.assertIsNotNone(op)
-        with patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot') as timer:
+        with patch('appPlugins.ToolGcodeSender.Sender.QtCore.QTimer.singleShot') as timer:
             tool.on_stream_stop()
         self.assertEqual(timer.call_args.args[0], 500)  # the machine brakes in the feed hold first
         tool._grbl_release(op)
@@ -242,7 +242,7 @@ class TestSpindleButton(unittest.TestCase):
 
     def test_typed_rpm_is_kept(self):
         from PyQt6 import QtCore, QtTest
-        entry = ToolGrblSender(make_app()).ui.spindle_rpm_entry
+        entry = ToolGCodeSender(make_app()).ui.spindle_rpm_entry
         entry.lineEdit().selectAll()
         QtTest.QTest.keyClicks(entry, '15000')
         QtTest.QTest.keyClick(entry, QtCore.Qt.Key.Key_Return)

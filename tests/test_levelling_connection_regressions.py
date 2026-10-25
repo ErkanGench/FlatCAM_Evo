@@ -46,7 +46,7 @@ def connect(tool, port, callbacks):
     tool.ui.com_list_combo.currentText.return_value = 'COM3'
     tool.ui.baudrates_list_combo.currentText.return_value = '115200'
     with patch.object(sg_module.serial, 'serial_for_url', return_value=port) as opened, \
-            patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot',
+            patch('appPlugins.ToolGcodeSender.Sender.QtCore.QTimer.singleShot',
                   side_effect=lambda delay, callback: callbacks.append(callback)):
         tool.on_grbl_connect()
     return opened

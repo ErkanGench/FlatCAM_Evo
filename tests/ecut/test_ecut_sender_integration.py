@@ -7,11 +7,11 @@ from PyQt6 import QtWidgets
 import pytest
 
 from tests.test_grbl_sender_construct import make_app
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 
 
 def make_sender():
-    tool = ToolGrblSender(make_app())
+    tool = ToolGCodeSender(make_app())
     tool._sim_ui_timer.stop()
     return tool
 
@@ -34,8 +34,8 @@ def test_ecut_connection_uses_python_adapter_without_dtr_or_serial_port():
     module = SimpleNamespace(EcutSenderPort=factory)
     with patch.dict(sys.modules, {'appPlugins.Common.ecut.ecut_sender_port': module}), \
             patch('appPlugins.Common.ecut.ecut_protocol.find_boards', return_value=[{'path': b'p'}]), \
-            patch('appPlugins.ToolGrblSender.Sender.serial.serial_for_url') as serial_factory, \
-            patch('appPlugins.ToolGrblSender.Sender.QtCore.QTimer.singleShot'):
+            patch('appPlugins.ToolGcodeSender.Sender.serial.serial_for_url') as serial_factory, \
+            patch('appPlugins.ToolGcodeSender.Sender.QtCore.QTimer.singleShot'):
         tool.on_grbl_connect()
         tool.app.worker_task.emit.call_args.args[0]['fcn']()  # the port is created in a worker
     factory.assert_called_once()
@@ -52,8 +52,8 @@ def test_manual_tool_dialog_confirms_matching_request_or_cancels_job(accept):
                            confirm_tool_change=MagicMock())
     tool = SimpleNamespace(grbl_ser_port=port,app=SimpleNamespace(ui=None),on_grbl_reset=MagicMock())
     result = QtWidgets.QMessageBox.StandardButton.Yes if accept else QtWidgets.QMessageBox.StandardButton.Cancel
-    with patch('appPlugins.ToolGrblSender.Sender.QtWidgets.QMessageBox.question',return_value=result):
-        ToolGrblSender._on_ecut_tool_change(tool,port,2,token)
+    with patch('appPlugins.ToolGcodeSender.Sender.QtWidgets.QMessageBox.question',return_value=result):
+        ToolGCodeSender._on_ecut_tool_change(tool, port, 2, token)
     if accept:
         port.confirm_tool_change.assert_called_once_with(2,token=token)
     else:
@@ -72,8 +72,8 @@ def test_stale_tool_confirmation_cannot_confirm_replacement_connection():
         tool.grbl_ser_port = replacement
         return QtWidgets.QMessageBox.StandardButton.Yes
 
-    with patch('appPlugins.ToolGrblSender.Sender.QtWidgets.QMessageBox.question',side_effect=replace_connection):
-        ToolGrblSender._on_ecut_tool_change(tool,old,2,token)
+    with patch('appPlugins.ToolGcodeSender.Sender.QtWidgets.QMessageBox.question',side_effect=replace_connection):
+        ToolGCodeSender._on_ecut_tool_change(tool, old, 2, token)
     old.confirm_tool_change.assert_not_called()
 import threading
 
@@ -95,8 +95,8 @@ def test_whole_job_preparation_is_only_for_ecut_and_preserves_completion(ecut,ch
                            status_report_sig=MagicMock())
     lines = ['G21','G1 X1 F60','X0']
     response = dict(status='finished',done=3,errors=[],last_text='ok',in_flight=0)
-    with patch('appPlugins.ToolGrblSender.Sender.stream_lines',return_value=response) as stream:
-        result = ToolGrblSender._grbl_stream_run(tool,op,lines,[1,2,3],check_mode,.1)
+    with patch('appPlugins.ToolGcodeSender.Sender.stream_lines',return_value=response) as stream:
+        result = ToolGCodeSender._grbl_stream_run(tool, op, lines, [1, 2, 3], check_mode, .1)
     assert result == 'finished'
     tool._grbl_stream_finish.assert_called_once_with(op,response,check_mode)
     if ecut and not check_mode:

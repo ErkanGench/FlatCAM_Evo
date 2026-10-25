@@ -14,7 +14,7 @@ from tests.grbl_stream_helpers import make_levelled_stream_tool, spy_reserve, JO
 from tests.test_grbl_sender_construct import make_app
 from tests.test_grbl_view3d import show_tool, fake_canvas, SPLIT_ARC_JOB
 from tests.test_levelling_audit import FakeGrbl
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 
 
 class SenderSelectionTest(unittest.TestCase):
@@ -34,7 +34,7 @@ class SenderSelectionTest(unittest.TestCase):
                 app.collection.get_by_name = objects.get
                 if existing:
                     root.appendRow(QtGui.QStandardItem('drills'))
-                tool = ToolGrblSender(app)
+                tool = ToolGCodeSender(app)
                 tool.ui.avoid_exc_holes_cb.setChecked(True)
                 tool.on_show_3d()
                 shapes = tool.view3d.excellon_shapes
@@ -75,7 +75,7 @@ class SenderSelectionTest(unittest.TestCase):
                 root = app.collection.item(1)
                 if existing:
                     root.appendRow(QtGui.QStandardItem('drills'))
-                tool = ToolGrblSender(app)
+                tool = ToolGCodeSender(app)
                 combo = tool.ui.avoid_exc_combo
                 if not existing:
                     root.appendRow(QtGui.QStandardItem('drills'))
@@ -92,7 +92,7 @@ class SenderSelectionTest(unittest.TestCase):
                 self.assertEqual(combo.currentText(), 'new project drills')
 
     def test_reset_and_close_invalidate_map(self):
-        tool = ToolGrblSender(make_app())
+        tool = ToolGCodeSender(make_app())
         for action in ('reset', 'close'):
             with self.subTest(action=action):
                 tool.al_heights_valid = True
@@ -177,8 +177,8 @@ class SenderStartWorkflowTest(unittest.TestCase):
                 box = MagicMock()
                 box.addButton.side_effect = buttons
                 box.clickedButton.return_value = buttons[('new', 'existing', 'cancel').index(choice)]
-                with patch('appPlugins.ToolGrblSender.Sender.FCMessageBox', return_value=box):
-                    self.assertEqual(ToolGrblSender._choose_height_map(tool), choice)
+                with patch('appPlugins.ToolGcodeSender.Sender.FCMessageBox', return_value=box):
+                    self.assertEqual(ToolGCodeSender._choose_height_map(tool), choice)
                 box.setDefaultButton.assert_called_once_with(buttons[2])
 
     def test_source_change_while_choosing_map_cancels_start(self):

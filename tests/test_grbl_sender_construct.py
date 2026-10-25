@@ -18,7 +18,7 @@ from shapely import Point, box
 _qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 from defaults import AppDefaults
-from appPlugins.ToolGrblSender.Sender import ToolGrblSender
+from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
 
 
 class FakeCollection(QtGui.QStandardItemModel):
@@ -65,7 +65,7 @@ class TestGrblSenderConstruct(unittest.TestCase):
         app.collection.setItem(3, QtGui.QStandardItem('CNCJob'))
         app.collection.item(1).appendRow(QtGui.QStandardItem('drills'))
         app.collection.item(3).appendRow(QtGui.QStandardItem('job'))
-        tool = ToolGrblSender(app)
+        tool = ToolGCodeSender(app)
         with patch('appPlugins.Common.levelling_core.ShapeCollection'):
             tool._populate_tool_ui()
         combo = tool.ui.avoid_exc_combo
@@ -80,7 +80,7 @@ class TestGrblSenderConstruct(unittest.TestCase):
     def test_fit_view_state_restores_in_a_new_sender(self):
         app = make_app()
         app.defaults = dict(app.options)
-        tool = ToolGrblSender(app)
+        tool = ToolGCodeSender(app)
         with patch('appPlugins.Common.levelling_core.ShapeCollection'):
             tool._populate_tool_ui()
         self.assertTrue(tool.ui.fit_view_cb.isChecked())
@@ -88,7 +88,7 @@ class TestGrblSenderConstruct(unittest.TestCase):
         self.assertFalse(app.defaults['tools_gcode_fit_view'])
         restarted_app = make_app()
         restarted_app.options.update(app.defaults)
-        restarted = ToolGrblSender(restarted_app)
+        restarted = ToolGCodeSender(restarted_app)
         with patch('appPlugins.Common.levelling_core.ShapeCollection'):
             restarted._populate_tool_ui()
         self.assertFalse(restarted.ui.fit_view_cb.isChecked())
@@ -178,7 +178,7 @@ class TestSelectedExcellonAvoidance(unittest.TestCase):
 class TestBaudratePersists(unittest.TestCase):
 
     def populate(self, app):
-        tool = ToolGrblSender(app)
+        tool = ToolGCodeSender(app)
         with patch('appPlugins.Common.levelling_core.ShapeCollection'):
             tool._populate_tool_ui()
         return tool

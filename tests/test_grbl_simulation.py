@@ -1,6 +1,6 @@
 import unittest
 
-from appPlugins.ToolGrblSender.SenderSimulation import VirtualGrbl, speed_multiplier
+from appPlugins.ToolGcodeSender.SenderSimulation import VirtualGrbl, speed_multiplier
 
 
 class TestVirtualGrbl(unittest.TestCase):
@@ -96,8 +96,8 @@ class TestVirtualGrbl(unittest.TestCase):
 class TestSimulationControls(unittest.TestCase):
     def make_tool(self):
         from tests.test_grbl_sender_construct import make_app
-        from appPlugins.ToolGrblSender.Sender import ToolGrblSender
-        return ToolGrblSender(make_app())
+        from appPlugins.ToolGcodeSender.Sender import ToolGCodeSender
+        return ToolGCodeSender(make_app())
 
     def test_simulated_probing_compensates_without_changing_real_map(self):
         from types import SimpleNamespace
@@ -222,7 +222,7 @@ class TestSimulationControls(unittest.TestCase):
         from unittest.mock import MagicMock, patch
         from shapely import Point
         from tests.test_grbl_view3d import fake_canvas
-        from appPlugins.ToolGrblSender.SenderView3d import SenderView3d
+        from appPlugins.ToolGcodeSender.SenderView3d import SenderView3d
         tool = self.make_tool()
         target = SimpleNamespace(kind='cncjob', units='MM', coords_decimals=6,
                                  obj_options={'name': 'simulation'}, is_segmented_gcode=True,
