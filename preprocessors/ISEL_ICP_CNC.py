@@ -88,7 +88,6 @@ class ISEL_ICP_CNC(PreProc):
                                                     p.decimals, end_coords_xy[1]) + units + '\n'
         else:
             gcode += ';X,Y End: ' + "None" + units + '\n'
-        gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
         gcode += ';Steps per circle: ' + str(p['steps_per_circle']) + '\n'
 
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
@@ -99,78 +98,85 @@ class ISEL_ICP_CNC(PreProc):
         gcode += ';X range: ' + '{: >9s}'.format(xmin) + ' ... ' + '{: >9s}'.format(xmax) + ' ' + units + '\n'
         gcode += ';Y range: ' + '{: >9s}'.format(ymin) + ' ... ' + '{: >9s}'.format(ymax) + ' ' + units + '\n\n'
 
-        gcode += ';Spindle Speed: %s RPM)\n' % str(p['spindlespeed'])
+        gcode += ';Spindle Speed: %s RPM\n' % str(p['spindlespeed'])
 
         return gcode
 
+    @staticmethod
+    def um(p, value):
+        # a value in the job units (mm or inch) as integer micrometres, the unit of the ICP language
+        return int(round(float(value) * (25400 if str(p.units).upper() == 'IN' else 1000)))
+
+    def um_per_s(self, p, feedrate):
+        # a feedrate in job units per minute as integer micrometres per second
+        return int(round(float(feedrate) * (25400 if str(p.units).upper() == 'IN' else 1000) / 60))
+
     def startz_code(self, p):
         if p.startz is not None:
-            return 'FASTABS Z' + str(int(p.startz * 1000))
+            return 'FASTABS Z' + str(self.um(p, p.startz))
         else:
             return ''
 
     def lift_code(self, p):
-        return 'FASTABS Z' + str(int(p.z_move * 1000))
+        return 'FASTABS Z' + str(self.um(p, p.z_move))
 
     def down_code(self, p):
-        return 'MOVEABS Z' + str(int(p.z_cut * 1000))
+        return 'MOVEABS Z' + str(self.um(p, p.z_cut))
 
     def toolchange_code(self, p):
+        z_toolchange = p.z_toolchange
+        toolchangexy = p.xy_toolchange
         f_plunge = p.f_plunge
+
+        if p.startz is not None and p.is_first_tool:
+            z_toolchange = p.startz
 
         toolC_formatted = '%.*f' % (p.decimals, p.toolC)
 
-        if str(p['obj_options']['type']) == 'Excellon':
-            gcode = "GETTOOL {tool}\n; Changed to Tool Dia = {toolC}".format(tool=int(p.tool), toolC=toolC_formatted)
+        gcode = 'SPINDLE OFF\n'
+        if toolchangexy is not None:
+            gcode += 'FASTABS Z' + str(self.um(p, z_toolchange)) + '\n'
+            gcode += 'FASTABS X' + str(self.um(p, toolchangexy[0])) + ' Y' + str(self.um(p, toolchangexy[1])) + '\n'
+        gcode += "GETTOOL {tool}\n; Changed to Tool Dia = {toolC}".format(tool=int(p.tool), toolC=toolC_formatted)
 
-            if f_plunge is True:
-                gcode += '\nFASTABS Z' + str(int(p.z_move * 1000))
-            return gcode
-
-        else:
-            gcode = "GETTOOL {tool}\n; Changed to Tool Dia = {toolC}".format(tool=int(p.tool), toolC=toolC_formatted)
-
-            if f_plunge is True:
-                gcode += '\nFASTABS Z' + str(int(p.z_move * 1000))
-            return gcode
+        if f_plunge is True:
+            gcode += '\nFASTABS Z' + str(self.um(p, p.z_move))
+        return gcode
 
     def up_to_zero_code(self, p):
         return 'MOVEABS Z0'
 
     def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = int((p.x * 1000) + p._bed_offset_x)
-        else:
-            x_pos = int((p.x * 1000) + p._bed_offset_x + (((p.y * 1000) / p._bed_limit_y) * p._bed_skew_x))
-
-        if p._bed_skew_y == 0:
-            y_pos = int((p.y * 1000) + p._bed_offset_y)
-        else:
-            y_pos = int((p.x * 1000) + p._bed_offset_x + (((p.x * 1000) / p._bed_limit_x) * p._bed_skew_y))
-
-        return 'X' + str(x_pos) + ' Y' + str(y_pos)
+        x_pos, y_pos = self.bed_xy(p)
+        return 'X' + str(self.um(p, x_pos)) + ' Y' + str(self.um(p, y_pos))
 
     def rapid_code(self, p):
-        return ('FASTABS ' + self.position_code(p)).format(**p)
+        return 'FASTABS ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('MOVEABS ' + self.position_code(p)).format(**p)
+        return 'MOVEABS ' + self.position_code(p)
 
     def end_code(self, p):
-        gcode = ''
+        # End Z and the end position in workpiece coordinates; the X-Y move is not made below the Travel Z
+        z_first = self.end_xy_move_z(p) if p['xy_end'] else p.z_end
+        gcode = 'FASTABS Z' + str(self.um(p, z_first)) + '\n'
+        if p['xy_end']:
+            gcode += 'FASTABS X' + str(self.um(p, p['xy_end'][0])) + ' Y' + str(self.um(p, p['xy_end'][1])) + '\n'
+            if z_first != p.z_end:
+                gcode += 'FASTABS Z' + str(self.um(p, p.z_end)) + '\n'
         gcode += 'WPCLEAR\n'
-        gcode += 'FASTABS Z0\n'
-        gcode += 'FASTABS X0 Y0\n'
+        if not p['xy_end']:
+            # WPCLEAR clears the workpiece zero: these are machine coordinates, the reference point
+            gcode += 'FASTABS Z0\n'
+            gcode += 'FASTABS X0 Y0\n'
         gcode += 'PROGEND'
         return gcode
 
     def feedrate_code(self, p):
-        return 'VEL ' + str(int(p.feedrate / 60 * 1000))
+        return 'VEL ' + str(self.um_per_s(p, p.feedrate))
 
     def z_feedrate_code(self, p):
-        return 'VEL ' + str(int(p.z_feedrate / 60 * 1000))
+        return 'VEL ' + str(self.um_per_s(p, p.z_feedrate))
 
     def spindle_code(self, p):
         sdir = {'CW': 'SPINDLE CW', 'CCW': 'SPINDLE CCW'}[p.spindledir]

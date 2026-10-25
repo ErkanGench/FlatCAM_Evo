@@ -9,6 +9,11 @@
 from appPreProcessor import PreProc
 
 
+def power_255(value):
+    """M106 takes 0-255."""
+    return max(0, min(255, int(round(float(value)))))
+
+
 class Marlin_laser_FAN_pin(PreProc):
 
     include_header = True
@@ -65,7 +70,7 @@ class Marlin_laser_FAN_pin(PreProc):
     def lift_code(self, p):
         if float(p.laser_min_power) > 0.0:
             # the formatted text: laser OFF must always be like this else the plotting will not be done correctly
-            return 'M106 S%s ;laser OFF\n' % str(p.laser_min_power)
+            return 'M106 S%d ;laser OFF\n' % power_255(p.laser_min_power)
         else:
             gcode = 'M400\n'
             gcode += 'M106 S0'
@@ -73,7 +78,7 @@ class Marlin_laser_FAN_pin(PreProc):
 
     def down_code(self, p):
         if p.spindlespeed:
-            return '%s S%s' % ('M106', str(p.spindlespeed))
+            return 'M106 S%d' % power_255(p.spindlespeed)
         else:
             return 'M106'
 
@@ -83,34 +88,19 @@ class Marlin_laser_FAN_pin(PreProc):
     def up_to_zero_code(self, p):
         return ''
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G0 ' + self.position_code(p)).format(**p) + " " + self.feedrate_rapid_code(p)
+        return 'G0 ' + self.position_code(p) + " " + self.feedrate_rapid_code(p)
 
     def linear_code(self, p):
-        return ('G1 ' + self.position_code(p)).format(**p) + " " + self.inline_feedrate_code(p)
+        return 'G1 ' + self.position_code(p) + " " + self.inline_feedrate_code(p)
 
     def end_code(self, p):
-        coords_xy = p['xy_end']
         gcode = ''
+        coords_xy = p['xy_end']
+        if coords_xy:
+            gcode = 'G0 X' + self.coord(p, coords_xy[0]) + ' Y' + self.coord(p, coords_xy[1]) + " " + \
+                    self.feedrate_rapid_code(p) + "\n"
 
-        if coords_xy and coords_xy != '':
-            gcode += 'G0 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1]) + " " + self.feedrate_rapid_code(p) + "\n"
         return gcode
 
     def feedrate_code(self, p):
@@ -127,7 +117,7 @@ class Marlin_laser_FAN_pin(PreProc):
 
     def spindle_code(self, p):
         if p.spindlespeed:
-            return 'M106 S%s' % str(p.spindlespeed)
+            return 'M106 S%d' % power_255(p.spindlespeed)
         else:
             return 'M106'
 

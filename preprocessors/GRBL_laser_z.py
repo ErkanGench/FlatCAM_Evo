@@ -32,21 +32,29 @@ class GRBL_laser_z(PreProc):
         ymax = '%.*f' % (p.coords_decimals, p['obj_options']['ymax'])
 
         if p['use_ui'] is True and p['multigeo']:
+            def tool_value(val, *keys):
+                # the Milling keys, then the Drilling keys; '-' if the tool has none of them
+                data = val.get('data') or {}
+                for key in keys:
+                    if key in data:
+                        return data[key]
+                return '-'
+
             gcode += '\n(TOOLS DIAMETER: )\n'
             for tool, val in p['tools'].items():
-                gcode += '(Tool: %s -> ' % str(tool) + 'Dia: %s' % str(val["tooldia"]) + ')\n'
+                gcode += '(Tool: %s -> ' % str(tool) + 'Dia: %s' % str(val.get("tooldia", '-')) + ')\n'
             gcode += '\n(FEEDRATE: )\n'
             for tool, val in p['tools'].items():
                 gcode += '(Tool: %s -> ' % str(tool) + 'Feedrate: %s' % \
-                         str(val['data']["tools_mill_feedrate"]) + ')\n'
+                         str(tool_value(val, "tools_mill_feedrate", "tools_drill_feedrate_z")) + ')\n'
             gcode += '\n(Z FOCUS: )\n'
             for tool, val in p['tools'].items():
                 gcode += '(Tool: %s -> ' % str(tool) + 'Z: %s' % \
-                         str(val['data']["tools_mill_travelz"]) + ')\n'
+                         str(tool_value(val, "tools_mill_travelz", "tools_drill_travelz")) + ')\n'
             gcode += '\n(LASER POWER: )\n'
             for tool, val in p['tools'].items():
                 gcode += '(Tool: %s -> ' % str(tool) + 'Power: %s' % \
-                         str(val['data']["tools_mill_spindlespeed"]) + ')\n'
+                         str(tool_value(val, "tools_mill_spindlespeed", "tools_drill_spindlespeed")) + ')\n'
         else:
             gcode += '(Feedrate: ' + str(p['feedrate']) + units + '/min' + ')\n'
             gcode += '(Z Focus: ' + str(p['z_move']) + units + ')\n'
@@ -78,7 +86,7 @@ class GRBL_laser_z(PreProc):
         return gcode
 
     def lift_code(self, p):
-        if float(p.laser_min_power) > 0.0:
+        if float(p.laser_min_power or 0) > 0.0:
             # the formatted text: laser OFF must always be like this else the plotting will not be done correctly
             return '%s S%s (laser OFF)\n' % (str(p.laser_on_code), str(p.laser_min_power))
         else:
@@ -96,28 +104,11 @@ class GRBL_laser_z(PreProc):
     def up_to_zero_code(self, p):
         return ''
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G0 ' + self.position_code(p)).format(**p)
+        return 'G0 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G1 ' + self.position_code(p)).format(**p) + \
-               ' F' + str(self.feedrate_format % (p.fr_decimals, p.feedrate))
+        return 'G1 ' + self.position_code(p) + ' F' + str(self.feedrate_format % (p.fr_decimals, p.feedrate))
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z

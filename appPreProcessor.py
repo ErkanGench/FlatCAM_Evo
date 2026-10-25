@@ -76,6 +76,59 @@ class PreProc(object, metaclass=ABCPreProcRegister):
     def spindle_stop_code(self, p):
         pass
 
+    # the methods below are called by the CNCjob too; a preprocessor that does not have them gets these G-code forms
+    coordinate_format = "%.*f"
+    feedrate_format = '%.*f'
+
+    def startz_code(self, p):
+        if p.startz is not None:
+            return 'G00 Z' + self.coord(p, p.startz)
+        return ''
+
+    def z_feedrate_code(self, p):
+        return 'G01 F' + self.feedrate_format % (p.fr_decimals, p.z_feedrate)
+
+    def dwell_code(self, p):
+        # the dwell time is in seconds
+        if p.dwelltime:
+            return 'G4 P' + str(p.dwelltime)
+        return ''
+
+    def position_code(self, p):
+        x_pos, y_pos = self.bed_xy(p)
+        return 'X' + self.coord(p, x_pos) + ' Y' + self.coord(p, y_pos)
+
+    def coord(self, p, value):
+        """
+        A coordinate as text, with the coordinate decimals of the job.
+
+        :param p:       preprocessor parameters
+        :param value:   the coordinate
+        :return:        str
+        """
+        return self.coordinate_format % (p.coords_decimals, float(value))
+
+    @staticmethod
+    def bed_xy(p, x=None, y=None):
+        """
+        The machine position of a job point: the bed offset added and the bed skew applied. The skew on X moves a point
+        by y / bed_limit_y * skew_x (the tangent of the skew angle), the skew on Y by x / bed_limit_x * skew_y.
+
+        :param p:   preprocessor parameters
+        :param x:   the X of the point; by default p.x
+        :param y:   the Y of the point; by default p.y
+        :return:    (x, y) as floats, in the job units
+        """
+        x = float(p.x if x is None else x)
+        y = float(p.y if y is None else y)
+        x_pos = x + float(p._bed_offset_x)
+        y_pos = y + float(p._bed_offset_y)
+        if p._bed_skew_x:
+            x_pos += (y / float(p._bed_limit_y)) * float(p._bed_skew_x)
+        if p._bed_skew_y:
+            y_pos += (x / float(p._bed_limit_x)) * float(p._bed_skew_y)
+        return x_pos, y_pos
+
     @staticmethod
     def end_xy_move_z(p):
         """
@@ -105,13 +158,13 @@ class PreProc(object, metaclass=ABCPreProcRegister):
         coords_xy = p['xy_end']
 
         if not coords_xy:
-            return z_rapid + ' Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + suffix + "\n"
+            return z_rapid + ' Z' + self.coord(p, p.z_end) + suffix + "\n"
 
         z_xy = self.end_xy_move_z(p)
-        gcode = z_rapid + ' Z' + self.feedrate_format % (p.fr_decimals, z_xy) + suffix + "\n"
-        gcode += '{g} X{x} Y{y}'.format(g=rapid, x=coords_xy[0], y=coords_xy[1]) + suffix + "\n"
+        gcode = z_rapid + ' Z' + self.coord(p, z_xy) + suffix + "\n"
+        gcode += rapid + ' X' + self.coord(p, coords_xy[0]) + ' Y' + self.coord(p, coords_xy[1]) + suffix + "\n"
         if z_xy != p.z_end:
-            gcode += z_rapid + ' Z' + self.feedrate_format % (p.fr_decimals, p.z_end) + suffix + "\n"
+            gcode += z_rapid + ' Z' + self.coord(p, p.z_end) + suffix + "\n"
         return gcode
 
 

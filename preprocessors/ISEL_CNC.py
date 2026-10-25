@@ -89,7 +89,6 @@ class ISEL_CNC(PreProc):
         else:
             gcode += '(X,Y End: ' + "None" + units + ')\n'
         gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
-        gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
 
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
             gcode += '(Preprocessor Excellon: ' + str(p['pp_excellon_name']) + ')\n' + '\n'
@@ -101,7 +100,7 @@ class ISEL_CNC(PreProc):
 
         gcode += '(Spindle Speed: %s RPM)\n' % str(p['spindlespeed'])
 
-        gcode += 'G71\n'
+        gcode += ('G70\n' if p.units.upper() == 'IN' else 'G71\n')
         gcode += 'G90\n'
         gcode += 'G94\n'
 
@@ -120,61 +119,46 @@ class ISEL_CNC(PreProc):
         return 'G01 Z' + self.coordinate_format % (p.coords_decimals, p.z_cut)
 
     def toolchange_code(self, p):
+        z_toolchange = p.z_toolchange
+        toolchangexy = p.xy_toolchange
         f_plunge = p.f_plunge
-        no_drills = 1
+
+        if p.startz is not None and p.is_first_tool:
+            z_toolchange = p.startz
 
         toolC_formatted = '%.*f' % (p.decimals, p.toolC)
 
         if str(p['obj_options']['type']) == 'Excellon':
             no_drills = p['tools'][int(p['tool'])]['nr_drills']
-
-            gcode = """
-M05       
-T{tool}
-M06
-(MSG, Change to Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
-M01""".format(tool=int(p.tool), t_drills=no_drills, toolC=toolC_formatted)
-
-            if f_plunge is True:
-                gcode += '\nG00 Z%.*f' % (p.coords_decimals, p.z_move)
-            return gcode
-
+            message = '(MSG, Change to Tool Dia = %s ||| Total drills for tool T%d = %s)' % \
+                      (toolC_formatted, int(p.tool), no_drills)
         else:
-            gcode = """
-M05
-T{tool}
-M06    
-(MSG, Change to Tool Dia = {toolC})
-M01""".format(tool=int(p.tool), toolC=toolC_formatted)
+            message = '(MSG, Change to Tool Dia = %s)' % toolC_formatted
 
-            if f_plunge is True:
-                gcode += '\nG00 Z%.*f' % (p.coords_decimals, p.z_move)
-            return gcode
+        gcode = '\nM05\nG00 Z' + self.coord(p, z_toolchange) + '\n'
+        if toolchangexy is not None:
+            gcode += 'G00 X' + self.coord(p, toolchangexy[0]) + ' Y' + self.coord(p, toolchangexy[1]) + '\n'
+        gcode += 'T%d\nM06\n%s\n' % (int(p.tool), message)
+        # M00 is a mandatory stop; M01 (optional stop) does not pause a controller that has the optional stop off
+        gcode += 'M00\nG00 Z' + self.coord(p, z_toolchange) + '\n'
+
+        if f_plunge is True:
+            gcode += '\nG00 Z%.*f' % (p.coords_decimals, p.z_move)
+        return gcode
 
     def up_to_zero_code(self, p):
         return 'G01 Z0'
 
     def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
+        x_pos, y_pos = self.bed_xy(p)
         return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
                (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
 
     def rapid_code(self, p):
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G01 ' + self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z

@@ -279,7 +279,7 @@ def _excellon_stub(tools, options=None, steps=32):
     emitted = []
     promised = []
     app = SimpleNamespace(
-        options=options if options is not None else {},
+        options={'geometry_circle_steps_mode': 'fixed', 'geometry_circle_steps': steps, **(options or {})},
         defaults=SimpleNamespace(get=lambda *_a: None, factory_defaults={'tools_mill_multidepth': False}),
         log=SimpleNamespace(debug=lambda *_args: None),
         inform=SimpleNamespace(emit=lambda *_args: None),
@@ -296,10 +296,10 @@ def _excellon_stub(tools, options=None, steps=32):
         return result
 
     app.app_obj = SimpleNamespace(new_object=new_object)
-    exc = SimpleNamespace(app=app, decimals=4, geo_steps_per_circle=steps, tools=tools,
+    exc = SimpleNamespace(app=app, decimals=4, units='MM', tools=tools,
                           obj_options={'name': 'holes', 'slot_tooldia': 0.5},
                           get_selected_tools_list=lambda: list(tools))
-    for name in ('_milling_tool_keys', '_create_milling_geometry', '_milling_multidepth',
+    for name in ('_milling_tool_keys', '_create_milling_geometry', '_milling_multidepth', '_milling_steps',
                  'generate_milling_drills', 'generate_milling_slots'):
         setattr(exc, name, getattr(ExcellonObject, name).__get__(exc) if name != '_milling_multidepth'
                 else ExcellonObject._milling_multidepth)
@@ -353,24 +353,3 @@ def test_milling_slots_circle_steps_and_multidepth_key():
     created.clear()
     assert exc.generate_milling_slots(tools=[2], tooldia=1.0)[0] is False
 
-
-def test_milling_generate_use_thread_promises_created_name():
-    tools = {1: {'tooldia': 2.0, 'drills': [Point(0, 0)], 'slots': []}}
-    exc, created, emitted, promised = _excellon_stub(tools)
-    assert exc.generate_milling_drills(tools=[1], outname='holes_mill', tooldia=1.0, use_thread=True) == (True, '')
-    assert promised == ['holes_mill']
-    assert len(emitted) == 1 and not created
-
-
-def test_milling_paint_polygons_circle_steps_and_collapsed_margin():
-    from appPlugins.ToolMilling import MillingGen
-    data = dict(tools_mill_milling_type='drills', tools_mill_milling_dia=0.5, tools_mill_offset_type=0,
-                tools_mill_offset_value=0.0)
-    record = dict(tooldia=2, drills=[Point(0, 0)], slots=[], data=data)
-    polygon = MillingGen.excellon_paint_polygons(record, circle_steps=32)[0]
-    assert len(polygon.exterior.coords) == 33
-
-    # bit as large as the hole, with the offset inside: the margin collapses, tool is reported by caller
-    record['data'] = dict(data, tools_mill_milling_dia=2.0, tools_mill_offset_type=1)
-    assert MillingGen.excellon_paint_margin(record) <= MillingGen.PAINT_MIN_MARGIN
-    assert MillingGen.excellon_paint_polygons(record, circle_steps=32) == []

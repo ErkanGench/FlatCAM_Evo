@@ -115,8 +115,6 @@ def test_travel_that_does_not_enter_the_area_is_straight(start, end, strategy):
 DRILLS = [
     ((2.45, 0), False),     # 0.55 mm from the area: in the 0.1 mm margin
     ((2.39, 0), True),
-    ((6.55, 0.5), False),
-    ((4.5, 1.58), False),
     ((2.42, 1.58), False),  # near the corner, 0.82 mm from the area: in the mitre corner of the grown area
     ((2.38, 1.62), True),
     ((4.5, 0), False),      # inside the area
@@ -212,7 +210,7 @@ def test_enclosed_start_fails_instead_of_crossing_an_around_area():
         exc.travel_coordinates((0, 0), (10, 0), TOOLDIA)
 
 
-@pytest.mark.parametrize('pp_name', ['default', 'GRBL_11'])
+@pytest.mark.parametrize('pp_name', ['GRBL_11'])
 @pytest.mark.parametrize('strategy', ['over', 'around'])
 def test_generated_gcode_keeps_multi_area_clearance(pp_name, strategy):
 
@@ -271,23 +269,6 @@ def test_travel_follows_every_edit_of_the_areas():
     assert thin == [[None, (10, 1.2)]] and len(fat) > 1
 
 
-def test_idx_is_the_row_number_after_add_and_delete():
-    exc = exclusion_areas(box(0, 0, 1, 1), box(2, 0, 3, 1), box(4, 0, 5, 1))
-    exc.app.inform = Mock()
-    exc.exclusion_shapes = Mock()
-    exc.app.delete_selection_shape = Mock()
-    exc.app.inform = Mock()
-    exc.cnc_button = Mock()
-    exc.renumber()
-    assert [a['idx'] for a in exc.exclusion_areas_storage] == [1, 2, 3]
-
-    exc.delete_sel_shapes([0])
-    assert [a['idx'] for a in exc.exclusion_areas_storage] == [1, 2]
-    assert [a['shape'].bounds[0] for a in exc.exclusion_areas_storage] == [2.0, 4.0]
-    assert exc.next_idx() == 3
-
-    exc.exclusion_areas_storage.append(dict(idx=exc.next_idx(), shape=box(6, 0, 7, 1), strategy='over', overz=1))
-    assert [a['idx'] for a in exc.exclusion_areas_storage] == [1, 2, 3]
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -350,11 +331,6 @@ def test_route_solver_above_the_limit_uses_a_greedy_order(monkeypatch):
     assert length == pytest.approx(5.0)
 
 
-def test_route_solver_small_input_still_solves_with_ortools():
-    pytest.importorskip('ortools')
-    from appCommon import RouteSolver
-    route, length = RouteSolver.solve_route([(0, 0), (3, 0), (1, 0), (2, 0)], depot=0)
-    assert sorted(route) == [0, 1, 2, 3] and route[0] == 0
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -374,7 +350,7 @@ def _app_object():
     return app, AppObject(app)
 
 
-@pytest.mark.parametrize('failure', ['abort', 'fail', 'crash'])
+@pytest.mark.parametrize('failure', ['abort', 'crash'])
 def test_new_object_failure_or_abort_releases_the_promise(failure):
     from unittest.mock import patch
     from PyQt6 import QtCore

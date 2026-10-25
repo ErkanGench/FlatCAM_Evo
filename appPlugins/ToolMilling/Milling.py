@@ -27,7 +27,7 @@ import builtins
 
 from appDatabase import load_tools_database, tools_database_error_message
 from defaults import AppDefaults
-from camlib import Geometry, grace, deepcopy_keep_geometry
+from camlib import Geometry, grace, deepcopy_keep_geometry, object_circle_steps
 from appHandlers.appHistory import history_of, object_state, SnapshotStep, HistoryStep, HistoryError, states_equal, \
     retained_sizes
 from appPlugins.ToolMilling.MillingUI import MillingUI
@@ -315,13 +315,8 @@ class ToolMilling(Geometry, AppTool):
         self.decimals = self.app.decimals
 
         AppTool.__init__(self, app)
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        Geometry.__init__(
-            self,
-            geo_steps_per_circle=int(self.app.options.get(
-                "excellon_circle_steps",
-                app_defaults.get("excellon_circle_steps", AppDefaults.factory_defaults.get("excellon_circle_steps")))),
-            app=app)
+        # no fixed steps: the circles follow the preferences "Circles" of their kind
+        Geometry.__init__(self, app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -378,10 +373,6 @@ class ToolMilling(Geometry, AppTool):
 
         # store here solid_geometry when there are tool with isolation job
         self.solid_geometry = []
-
-        self.circle_steps = int(self.app.options.get(
-            "geometry_circle_steps",
-            app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get("geometry_circle_steps"))))
 
         self.tooldia = None
 
@@ -729,6 +720,7 @@ class ToolMilling(Geometry, AppTool):
             "tools_mill_endxy": self.ui.endxy_entry,
 
             "tools_mill_z_p_depth": self.ui.pdepth_entry,
+            "tools_mill_probe_plate": self.ui.probe_plate_entry,
             "tools_mill_feedrate_probe": self.ui.feedrate_probe_entry,
             "tools_mill_ppname_g": self.ui.pp_geo_name_cb,
             "tools_mill_optimization_type": self.ui.opt_algorithm_radio,
@@ -789,6 +781,7 @@ class ToolMilling(Geometry, AppTool):
             "mill_endxy": "tools_mill_endxy",
 
             "mill_depth_probe": "tools_mill_z_p_depth",
+            "mill_probe_plate": "tools_mill_probe_plate",
             "mill_fr_probe": "tools_mill_feedrate_probe",
             "mill_ppname_g": "tools_mill_ppname_g",
             "mill_opt_type": "tools_mill_optimization_type",
@@ -2856,9 +2849,6 @@ class ToolMilling(Geometry, AppTool):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         source_tools = self.sel_tools if tools_dict is None else tools_dict
         new_obj = self._prepare_excellon_paint_object()
-        circle_steps = self.app.options.get(
-            'geometry_circle_steps', app_defaults.get(
-                'geometry_circle_steps', AppDefaults.factory_defaults.get('geometry_circle_steps')))
         seg_x = self.app.options.get(
             'geometry_seg_x', app_defaults.get('geometry_seg_x', AppDefaults.factory_defaults.get('geometry_seg_x')))
         seg_y = self.app.options.get(
@@ -2880,7 +2870,7 @@ class ToolMilling(Geometry, AppTool):
             """In the job: the paths of every tool; the tools without any are left out (and told)."""
             skipped = []
             for uid, source in source_tools.items():
-                geometry = self._paint_excellon_tool_geometry(source, circle_steps)
+                geometry = self._paint_excellon_tool_geometry(source)
                 if not geometry:
                     skipped.append(str(source['tooldia']))
                     del new_obj.tools[uid]
@@ -2916,12 +2906,21 @@ class ToolMilling(Geometry, AppTool):
                     option, app_defaults.get(option, AppDefaults.factory_defaults.get(option)))
         return new_obj
 
-    def _paint_excellon_tool_geometry(self, tool, circle_steps):
+    def _paint_excellon_tool_geometry(self, tool, circle_steps=None):
+        """
+        :param tool:            the Excellon tool record
+        :param circle_steps:    the segments of a full circle for the holes and the tool paths; None: the preferences
+                                "Circles": Excellon for the radius of the hole, Geometry for the radius of the bit
+        """
         data = tool['data']
         mill_dia = data['tools_mill_milling_dia']
+        hole_steps = path_steps = circle_steps
+        if circle_steps is None:
+            hole_steps = object_circle_steps(self.app.options, 'excellon', tool['tooldia'] / 2, self.units)
+            path_steps = object_circle_steps(self.app.options, 'geometry', mill_dia / 2, self.units)
         over = data['tools_mill_milling_overlap'] / 100
         conn = data['tools_mill_milling_connect']
-        total_paint_geo = MillingGen.excellon_paint_polygons(tool, line_string=LineString, circle_steps=circle_steps)
+        total_paint_geo = MillingGen.excellon_paint_polygons(tool, line_string=LineString, circle_steps=hole_steps)
         if not total_paint_geo:
             return
 
@@ -2933,7 +2932,7 @@ class ToolMilling(Geometry, AppTool):
             if self.app.abort_flag:
                 raise grace
             geo_res = MillingGen.clear_excellon_polygon(
-                pp, mill_dia, over, conn, circle_steps, self.clear_polygon_seed)
+                pp, mill_dia, over, conn, path_steps, self.clear_polygon_seed)
             if geo_res:
                 has_geometry = True
                 # Retain paths, not every feature's RTree index, until the tool finishes.
@@ -3163,6 +3162,7 @@ class ToolMilling(Geometry, AppTool):
                     'tools_mill_toolchangexy': 'toolchangexy_entry',
                     'tools_mill_endz': 'endz_entry', 'tools_mill_endxy': 'endxy_entry',
                     'tools_mill_z_p_depth': 'pdepth_entry', 'tools_mill_feedrate_probe': 'feedrate_probe_entry',
+                    'tools_mill_probe_plate': 'probe_plate_entry',
                     'tools_mill_area_exclusion': 'exclusion_cb', 'tools_mill_area_shape': 'area_shape_radio',
                     'tools_mill_area_strategy': 'strategy_radio', 'tools_mill_area_overz': 'over_z_entry',
                     'tools_mill_ppname_g': 'pp_geo_name_cb'})
@@ -3183,7 +3183,6 @@ class ToolMilling(Geometry, AppTool):
             'seg_x': seg_x, 'seg_y': seg_y, 'toolchange': toolchange,
             'disable_offset': disable_offset, 'from_tcl': from_tcl,
             'overrides': overrides, 'options': options, 'decimals': self.decimals,
-            'circle_steps': getattr(self, 'circle_steps', None),
             'units': self.units,
             'geo_options': self._job_wide_settings(geo_obj, tools_dict, app_defaults)}
 
@@ -3205,11 +3204,12 @@ class ToolMilling(Geometry, AppTool):
 
     def _job_wide_settings(self, geo_obj, tools_dict, app_defaults):
         """
-        The probe depth, the probe feed rate and the path optimization of the job: the value of the object; an
+        The probe depth, the probe plate thickness, the probe feed rate and the path optimization of the job: the value of the object; an
         object made by an older version has none, so the first tool that has it, then the application options.
         """
         settings = {}
-        for key in ('tools_mill_z_p_depth', 'tools_mill_feedrate_probe', 'tools_mill_optimization_type'):
+        for key in ('tools_mill_z_p_depth', 'tools_mill_probe_plate', 'tools_mill_feedrate_probe',
+                    'tools_mill_optimization_type'):
             if key in geo_obj.obj_options:
                 settings[key] = geo_obj.obj_options[key]
                 continue
@@ -3242,6 +3242,7 @@ class ToolMilling(Geometry, AppTool):
         new_cncjob_obj.seg_x = context['seg_x']
         new_cncjob_obj.seg_y = context['seg_y']
         new_cncjob_obj.z_p_depth = float(context['geo_options']['tools_mill_z_p_depth'])
+        new_cncjob_obj.probe_plate = float(context['geo_options'].get('tools_mill_probe_plate', 0.0))
         new_cncjob_obj.feedrate_probe = float(context['geo_options']['tools_mill_feedrate_probe'])
         used_tools = context['used_tools']
         new_cncjob_obj.used_tools = used_tools
@@ -3327,6 +3328,7 @@ class ToolMilling(Geometry, AppTool):
         new_cncjob_obj.seg_x = context['seg_x']
         new_cncjob_obj.seg_y = context['seg_y']
         new_cncjob_obj.z_p_depth = float(context['geo_options']['tools_mill_z_p_depth'])
+        new_cncjob_obj.probe_plate = float(context['geo_options'].get('tools_mill_probe_plate', 0.0))
         new_cncjob_obj.feedrate_probe = float(context['geo_options']['tools_mill_feedrate_probe'])
 
         if not geo_obj.solid_geometry:
@@ -3358,7 +3360,9 @@ class ToolMilling(Geometry, AppTool):
                     if self.app.abort_flag:
                         raise grace
                     paint_geo = MillingGen.polishing_geometry(
-                        bbox, tooldia_val, context['circle_steps'], overlap, paint_method,
+                        bbox, tooldia_val,
+                        object_circle_steps(self.app.options, 'geometry', tooldia_val / 2, context['units']),
+                        overlap, paint_method,
                         self.clear_polygon_shrink, self.clear_polygon_seed, self.clear_polygon_lines)
                     if paint_geo is None:
                         self.app.inform.emit('[ERROR_NOTCL] %s' % _('Geometry could not be painted completely'))

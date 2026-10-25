@@ -62,6 +62,7 @@ class TclCommandDrillcncjob(TclCommandSignaled):
         ('spindledir', str),
         ('offset', float),
         ('pdepth', float),
+        ('pplate', float),
         ('pfeed', float),
         ('dwell', str),
         ('dwell_bottom', str),
@@ -140,6 +141,8 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             ('offset', 'Offset added to the depth of the drill (example: 0.1). The default is the value of each tool.'),
             ('pdepth', 'Probe depth, used by the preprocessors with probing (example: -0.02). The default is the '
                        'value of each tool.'),
+            ('pplate', 'Thickness of the touch plate that the probe touches on top of the material, used by the '
+                       'preprocessors with probing (example: 1.5). The default is the value of each tool.'),
             ('pfeed', 'Probe feed rate, used by the preprocessors with probing. The default is the value of each '
                       'tool.'),
             ('dwell', 'Spindle startup pause on (1) or off (0). The default is the value of each tool.'),
@@ -561,9 +564,12 @@ class TclCommandDrillcncjob(TclCommandSignaled):
             if args.get("offset") is not None:
                 overrides['tools_drill_offset'] = float(args["offset"])
             cnc_job_obj.z_p_depth = self._app_option("tools_drill_z_p_depth")
+            cnc_job_obj.probe_plate = self._app_option("tools_drill_probe_plate", 0.0)
             cnc_job_obj.feedrate_probe = self._app_option("tools_drill_feedrate_probe")
             if args.get("pdepth") is not None:
                 cnc_job_obj.z_p_depth = overrides['tools_drill_z_p_depth'] = float(args["pdepth"])
+            if args.get("pplate") is not None:
+                cnc_job_obj.probe_plate = overrides['tools_drill_probe_plate'] = float(args["pplate"])
             if args.get("pfeed") is not None:
                 cnc_job_obj.feedrate_probe = overrides['tools_drill_feedrate_probe'] = float(args["pfeed"])
             # the slots drilled as holes

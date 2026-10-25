@@ -58,7 +58,7 @@ class GRBL_laser(PreProc):
         return ''
 
     def lift_code(self, p):
-        if float(p.laser_min_power) > 0.0:
+        if float(p.laser_min_power or 0) > 0.0:
             # the formatted text: laser OFF must always be like this else the plotting will not be done correctly
             return '%s S%s (laser OFF)\n' % (str(p.laser_on_code), str(p.laser_min_power))
         else:
@@ -76,35 +76,18 @@ class GRBL_laser(PreProc):
     def up_to_zero_code(self, p):
         return ''
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G0 ' + self.position_code(p)).format(**p)
+        return 'G0 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G1 ' + self.position_code(p)).format(**p) + \
-               ' F' + str(self.feedrate_format % (p.fr_decimals, p.feedrate))
+        return 'G1 ' + self.position_code(p) + ' F' + str(self.feedrate_format % (p.fr_decimals, p.feedrate))
 
     def end_code(self, p):
         coords_xy = p['xy_end']
         gcode = ''
 
         if coords_xy and coords_xy != '':
-            gcode += 'G0 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1]) + "\n"
+            gcode += 'G0 X' + self.coord(p, coords_xy[0]) + ' Y' + self.coord(p, coords_xy[1]) + "\n"
         return gcode
 
     def feedrate_code(self, p):

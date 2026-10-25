@@ -223,32 +223,15 @@ G00 Z{z_toolchange}
         # move inside the material followed by a vertical move outside the material up to the travel (safe) Z height
         return 'G01 Z0'
 
-    def position_code(self, p):
-        # used in for the linear motion
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
         # a fast linear motion using the G0 command which means: "move as fast as the CNC can handle and is set in the
         # CNC controller". It is a horizontal move in the X-Y CNC plane.
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
         # a linear motion using the G1 command which means: "move with a set feedrate (speed)".
         # It is a horizontal move in the X-Y CNC plane.
-        return ('G01 ' + self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         # a final move at the end of the CNC job. First it moves to a safe parking Z height followed by an X-Y move
@@ -277,6 +260,7 @@ G00 Z{z_toolchange}
         # set a pause after the spindle is started allowing the spindle to reach the set spindle spped, before move
         if p.dwelltime:
             return 'G4 P' + str(p.dwelltime)
+        return ''
 
     def spindle_stop_code(self, p):
         # stop the spindle

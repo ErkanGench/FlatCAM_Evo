@@ -90,7 +90,6 @@ class Line_xyz(PreProc):
         else:
             gcode += '(X,Y End: ' + "None" + units + ')\n'
         gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
-        gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
 
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
             gcode += '(Preprocessor Excellon: ' + str(p['pp_excellon_name']) + ')\n' + '\n'
@@ -110,23 +109,17 @@ class Line_xyz(PreProc):
 
     def startz_code(self, p):
         if p.startz is not None:
-            g = 'G00 ' + 'X' + self.coordinate_format % (p.coords_decimals, p.x) + \
-                ' Y' + self.coordinate_format % (p.coords_decimals, p.y) + \
-                ' Z' + self.coordinate_format % (p.coords_decimals, p.startz)
+            g = 'G00 ' + self.position_code(p) + ' Z' + self.coord(p, p.startz)
             return g
         else:
             return ''
 
     def lift_code(self, p):
-        g = 'G00 ' + 'X' + self.coordinate_format % (p.coords_decimals, p.x) + \
-            ' Y' + self.coordinate_format % (p.coords_decimals, p.y) + \
-            ' Z' + self.coordinate_format % (p.coords_decimals, p.z_move)
+        g = 'G00 ' + self.position_code(p) + ' Z' + self.coord(p, p.z_move)
         return g
 
     def down_code(self, p):
-        g = 'G01 ' + 'X' + self.coordinate_format % (p.coords_decimals, p.x) + \
-            ' Y' + self.coordinate_format % (p.coords_decimals, p.y) + \
-            ' Z' + self.coordinate_format % (p.coords_decimals, p.z_cut)
+        g = 'G01 ' + self.position_code(p) + ' Z' + self.coord(p, p.z_cut)
         return g
 
     def toolchange_code(self, p):
@@ -138,12 +131,12 @@ class Line_xyz(PreProc):
             x_toolchange = xy_toolchange[0]
             y_toolchange = xy_toolchange[1]
         else:
-            if str(p['obj_options']['type']) == 'Excellon':
+            if str(p['obj_options']['type']) == 'Excellon' and p.oldx is not None and p.oldy is not None:
                 x_toolchange = p.oldx
                 y_toolchange = p.oldy
             else:
-                x_toolchange = p.x
-                y_toolchange = p.y
+                x_toolchange = p.x if p.x is not None else 0.0
+                y_toolchange = p.y if p.y is not None else 0.0
 
         no_drills = 1
 
@@ -156,8 +149,8 @@ class Line_xyz(PreProc):
             no_drills = p['tools'][int(p['tool'])]['nr_drills']
 
             gcode = """
-M5      
-G00 X{x_toolchange} Y{x_toolchange} Z{z_toolchange}
+M5
+G00 X{x_toolchange} Y{y_toolchange} Z{z_toolchange}
 T{tool}
 M6
 (MSG, Change to Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
@@ -169,7 +162,7 @@ M0""".format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolcha
              toolC=toolC_formatted)
 
             if f_plunge is True:
-                gcode += """\nG00 X{x_toolchange} Y{x_toolchange} Z{z_move}""".format(
+                gcode += """\nG00 X{x_toolchange} Y{y_toolchange} Z{z_move}""".format(
                     x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolchange),
                     y_toolchange=self.coordinate_format % (p.coords_decimals, y_toolchange),
                     z_move=self.coordinate_format % (p.coords_decimals, p.z_move))
@@ -177,9 +170,9 @@ M0""".format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolcha
         else:
             gcode = """
 M5
-G00 X{x_toolchange} Y{x_toolchange} Z{z_toolchange}
+G00 X{x_toolchange} Y{y_toolchange} Z{z_toolchange}
 T{tool}
-M6    
+M6
 (MSG, Change to Tool Dia = {toolC})
 M0""".format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolchange),
              y_toolchange=self.coordinate_format % (p.coords_decimals, y_toolchange),
@@ -188,50 +181,32 @@ M0""".format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolcha
              toolC=toolC_formatted)
 
             if f_plunge is True:
-                gcode += """\nG00 X{x_toolchange} Y{x_toolchange} Z{z_move}""".format(
+                gcode += """\nG00 X{x_toolchange} Y{y_toolchange} Z{z_move}""".format(
                     x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolchange),
                     y_toolchange=self.coordinate_format % (p.coords_decimals, y_toolchange),
                     z_move=self.coordinate_format % (p.coords_decimals, p.z_move))
             return gcode
 
     def up_to_zero_code(self, p):
-        g = 'G01 ' + 'X' + self.coordinate_format % (p.coords_decimals, p.x) + \
-            ' Y' + self.coordinate_format % (p.coords_decimals, p.y) + \
-            ' Z0'
+        g = 'G01 ' + self.position_code(p) + ' Z0'
         return g
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        g = ('G00 ' + self.position_code(p)).format(**p)
+        g = 'G00 ' + self.position_code(p)
         g += ' Z' + self.coordinate_format % (p.coords_decimals, p.z_move)
         return g
 
     def linear_code(self, p):
-        g = ('G01 ' + self.position_code(p)).format(**p)
+        g = 'G01 ' + self.position_code(p)
         g += ' Z' + self.coordinate_format % (p.coords_decimals, p.z_cut)
         return g
 
     def end_code(self, p):
         coords_xy = p['xy_end']
         if coords_xy and coords_xy != '':
-            g = 'G00 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1])
+            g = 'G00 X' + self.coord(p, coords_xy[0]) + ' Y' + self.coord(p, coords_xy[1])
         else:
-            g = ('G00 ' + self.position_code(p)).format(**p)
+            g = 'G00 ' + self.position_code(p)
 
         # with an End Z lower than the Travel Z, the X-Y move is made at the Travel Z and the tool goes down after it
         z_xy = self.end_xy_move_z(p)
@@ -256,6 +231,7 @@ M0""".format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolcha
     def dwell_code(self, p):
         if p.dwelltime:
             return 'G4 P' + str(p.dwelltime)
+        return ''
 
     def spindle_stop_code(self, p):
         return 'M05'

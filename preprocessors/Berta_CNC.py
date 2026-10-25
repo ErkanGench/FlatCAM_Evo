@@ -33,11 +33,6 @@ class Berta_CNC(PreProc):
 
         if str(p['obj_options']['type']) == 'Geometry':
             gcode += '(TOOL DIAMETER: ' + str(p['obj_options']['tool_dia']) + units + ')\n'
-
-        gcode += '(Feedrate: ' + str(p['feedrate']) + units + '/min' + ')\n'
-
-        if str(p['obj_options']['type']) == 'Geometry':
-            gcode += '(TOOL DIAMETER: ' + str(p['obj_options']['tool_dia']) + units + ')\n'
             gcode += '(Feedrate_XY: ' + str(p['feedrate']) + units + '/min' + ')\n'
             gcode += '(Feedrate_Z: ' + str(p['z_feedrate']) + units + '/min' + ')\n'
             gcode += '(Feedrate rapids ' + str(p['feedrate_rapid']) + units + '/min' + ')\n' + '\n'
@@ -98,7 +93,6 @@ class Berta_CNC(PreProc):
                                                     p.decimals, end_coords_xy[1]) + units + ')\n'
         else:
             gcode += '(X,Y End: ' + "None" + units + ')\n'
-        gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
         gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
 
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
@@ -224,27 +218,11 @@ M0""".format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolcha
     def up_to_zero_code(self, p):
         return 'G01 Z0'
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G01 ' + self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z
@@ -272,6 +250,7 @@ M0""".format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolcha
     def dwell_code(self, p):
         if p.dwelltime:
             return 'G4 P' + str(p.dwelltime)
+        return ''
 
     def spindle_stop_code(self, p):
         return 'M05'

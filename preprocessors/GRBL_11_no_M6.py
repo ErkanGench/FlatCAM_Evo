@@ -91,7 +91,6 @@ class GRBL_11_no_M6(PreProc):
         else:
             gcode += '(X,Y End: ' + "None" + units + ')\n'
         gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
-        gcode += '(Steps per circle: ' + str(p['steps_per_circle']) + ')\n'
 
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
             gcode += '(Preprocessor Excellon: ' + str(p['pp_excellon_name']) + ')\n' + '\n'
@@ -210,27 +209,11 @@ G00 Z{z_toolchange}
     def up_to_zero_code(self, p):
         return 'G01 Z0'
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G01 ' + self.position_code(p)).format(**p) + \
+        return 'G01 ' + self.position_code(p) + \
                ' F' + str(self.feedrate_format % (p.fr_decimals, p.feedrate))
 
     def end_code(self, p):
@@ -254,6 +237,7 @@ G00 Z{z_toolchange}
     def dwell_code(self, p):
         if p.dwelltime:
             return 'G4 P' + str(p.dwelltime)
+        return ''
 
     def spindle_stop_code(self, p):
         return 'M05'

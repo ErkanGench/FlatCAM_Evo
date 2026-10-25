@@ -13,7 +13,7 @@ from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, G
     OptionalInputSection, OptionalHideInputSection
 from appDatabase import load_tools_database, tools_database_error_message
 from appCommon.ToolDatabase import matching_tools
-from camlib import Geometry, flatten_shapely_geometry
+from camlib import Geometry, flatten_shapely_geometry, object_quad_segs
 from appCommon.SafeEval import safe_eval
 from appCommon.Common import ExclusionAreas
 from appPlugins.ToolDrilling import DrillingGen
@@ -471,6 +471,7 @@ class ToolDrilling(Geometry, AppTool):
             "tools_drill_holes_selection": self.ui.holes_radio,
 
             "tools_drill_z_p_depth": self.ui.pdepth_entry,
+            "tools_drill_probe_plate": self.ui.probe_plate_entry,
             "tools_drill_feedrate_probe": self.ui.feedrate_probe_entry,
 
             "tools_drill_ppname_e": self.ui.pp_excellon_name_cb,
@@ -532,6 +533,7 @@ class ToolDrilling(Geometry, AppTool):
             "e_holes_selection": "tools_drill_holes_selection",
 
             "e_depth_probe": "tools_drill_z_p_depth",
+            "e_probe_plate": "tools_drill_probe_plate",
             "e_fr_probe": "tools_drill_feedrate_probe",
 
             "e_pp": "tools_drill_ppname_e",
@@ -2348,12 +2350,13 @@ class ToolDrilling(Geometry, AppTool):
                 """The CNCJob tool of tool_id with the geometry of the drills (and slots) of the tools in ids."""
                 tool = gen_tools[tool_id]
                 entry = dict(tool, drills=[], slots=list(tool.get('slots') or []))
-                steps = cnc_job_obj.geo_steps_per_circle
                 geo = []
                 drill_nr = 0
                 slot_nr = 0
                 for t_id in ids:
                     radius = float(gen_tools[t_id]['tooldia']) / 2.0
+                    # the same segments as the circles of the Excellon object for this tool diameter
+                    steps = object_quad_segs(self.app.options, 'excellon', radius, self.units)
                     # the points, not the drills of the tool: slots may have been converted to drills
                     pts = points.get(t_id) or []
                     if pts:

@@ -151,8 +151,7 @@ class Paste_Marlin(AppPreProcTools):
 ;Toolchange: START
 G1 Z{z_toolchange} F{fr_rapids}
 G1 X{x_toolchange} Y{y_toolchange} F{fr_rapids}
-;MSG, Change to Tool with Nozzle Dia = {toolC}
-M0
+M0 Change to tool with nozzle dia {toolC}
 G1 Z{z_toolchange} F{fr_rapids}
 """.format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolchange),
            y_toolchange=self.coordinate_format % (p.coords_decimals, y_toolchange),
@@ -165,8 +164,7 @@ G1 Z{z_toolchange} F{fr_rapids}
             gcode = """
 ;Toolchange: START
 G1 Z{z_toolchange} F{fr_rapids}
-;MSG, Change to Tool with Nozzle Dia = {toolC}
-M0
+M0 Change to tool with nozzle dia {toolC}
 G1 Z{z_toolchange} F{fr_rapids}
 """.format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
            tool=int(int(p.tool)),
@@ -192,21 +190,23 @@ G1 Z{z_toolchange} F{fr_rapids}
                (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
 
     def rapid_code(self, p):
-        return ('G1 ' + self.position_code(p)).format(**p) + ' F%s' % str(p['fr_rapids']) + \
+        return 'G1 ' + self.position_code(p) + ' F%s' % str(p['fr_rapids']) + \
                '\nG1 Z' + self.coordinate_format % (p.coords_decimals, float(p['z_travel'])) + \
                ' F%s' % str(p['fr_rapids'])
 
     def linear_code(self, p):
-        return ('G1 ' + self.position_code(p)).format(**p) + ' F' + \
+        return 'G1 ' + self.position_code(p) + ' F' + \
                str(self.feedrate_format % (p.fr_decimals, float(p['frxy'])))
 
     def end_code(self, p):
         coords_xy = parse_numbers(p['xy_end'], count=2, allow_empty=True)
-        gcode = ('G1 Z' + self.feedrate_format % (p.fr_decimals, float(p['z_toolchange'])) +
-                 'F%s' % str(p['fr_rapids']) + "\n")
+        gcode = ('G1 Z' + self.coordinate_format % (p.coords_decimals, float(p['z_toolchange'])) +
+                 ' F%s' % str(p['fr_rapids']) + "\n")
 
-        if coords_xy and coords_xy != '':
-            gcode += 'G1 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1]) + ' F%s' % str(p['fr_rapids']) + "\n"
+        if coords_xy:
+            gcode += 'G1 X' + self.coordinate_format % (p.coords_decimals, float(coords_xy[0])) + \
+                     ' Y' + self.coordinate_format % (p.coords_decimals, float(coords_xy[1])) + \
+                     ' F%s' % str(p['fr_rapids']) + "\n"
         return gcode
 
     def feedrate_xy_code(self, p):

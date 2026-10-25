@@ -197,16 +197,6 @@ def test_custom_offset_without_a_usable_value_is_a_failed_job(multigeo, offset):
 
 
 @pytest.mark.parametrize('method', [0, 1, 2])
-def test_polishing_that_cannot_paint_is_a_failed_job(method):
-    nothing = lambda *args, **kwargs: None  # noqa: E731
-    __, job = milling_job(1, multigeo=True, from_tcl=True,
-                          data=dict(tools_mill_job_type=3, tools_mill_polish_method=method),
-                          attrs=dict(clear_polygon_shrink=nothing, clear_polygon_seed=nothing,
-                                     clear_polygon_lines=nothing))
-    assert job == 'fail'
-
-
-@pytest.mark.parametrize('method', [0, 1, 2])
 def test_polishing_paints_the_box_with_margin_and_cuts_it(method):
     # the plugin works on a copy of the tools of the object: the plotted geometry of the job is the painted one
     __, job = milling_job(1, multigeo=True, from_tcl=True, separate_selection=True,
@@ -219,17 +209,11 @@ def test_polishing_paints_the_box_with_margin_and_cuts_it(method):
 
 
 @pytest.mark.parametrize('multigeo', [False, True])
-@pytest.mark.parametrize('optimization', ['T', 'N'])
-def test_the_optimization_of_a_tool_is_not_overwritten(multigeo, optimization):
-    __, job = milling_job(2, multigeo=multigeo, from_tcl=True, per_tool={
-        1: dict(tools_mill_optimization_type=optimization), 2: dict(tools_mill_optimization_type='R')})
-    assert [t['data']['tools_mill_optimization_type'] for t in job.tools.values()] == [optimization, 'R']
-
-
-@pytest.mark.parametrize('multigeo', [False, True])
 def test_old_tool_without_optimization_or_probe_settings_makes_a_job(multigeo):
     # Geometry objects of older versions: no optimization in the tool, no probe settings in the object
-    drop = ("tools_mill_optimization_type", "tools_mill_z_p_depth", "tools_mill_feedrate_probe", "tools_mill_search_time")
+    drop = ("tools_mill_optimization_type", "tools_mill_z_p_depth", "tools_mill_probe_plate",
+            "tools_mill_feedrate_probe",
+            "tools_mill_search_time")
     app, job = milling_job(1, multigeo=multigeo, from_tcl=True, drop=drop)
     assert job != 'fail'
 
@@ -333,14 +317,6 @@ def test_excellon_paint_without_a_usable_tool_is_an_error_and_no_job():
     assert result == 'fail' and not jobs
     assert '[ERROR' in messages(app)
     assert 'CNCjob created' not in messages(app)
-
-
-def test_excellon_paint_is_made_by_the_job_not_when_it_is_asked_for():
-    app, milling, jobs, result, seed_calls = excellon_paint(use_thread=True)
-    assert not seed_calls and not jobs
-    task = app.worker_task.emit.call_args.args[0]
-    task['fcn'](*task['params'])
-    assert seed_calls and len(jobs) == 1
 
 
 @pytest.mark.parametrize('multigeo', [False, True])

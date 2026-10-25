@@ -16,6 +16,15 @@ class Marlin_laser_z(PreProc):
     feedrate_format = '%.*f'
     feedrate_rapid_format = feedrate_format
 
+    @staticmethod
+    def tool_value(tool, *keys):
+        """The first of the keys found in the tool data as text; '-' if there is none."""
+        data = tool.get('data', {}) if hasattr(tool, 'get') else {}
+        for key in keys:
+            if key in data:
+                return str(data[key])
+        return '-'
+
     def start_code(self, p):
         units = ' ' + str(p['units']).lower()
         coords_xy = p['xy_toolchange']
@@ -37,27 +46,23 @@ class Marlin_laser_z(PreProc):
             gcode += '\n;FEEDRATE: \n'
             for tool, val in p['tools'].items():
                 gcode += ';Tool: %s -> ' % str(tool) + 'Feedrate: %s' % \
-                         str(val['data']["tools_mill_feedrate"]) + '\n'
+                         self.tool_value(val, 'tools_mill_feedrate', 'tools_drill_feedrate_z') + '\n'
             gcode += '\n;FEEDRATE RAPIDS: \n'
             for tool, val in p['tools'].items():
-                gcode += '(Tool: %s -> ' % str(tool) + 'Feedrate rapids: %s' % \
-                         str(val['data']["tools_mill_feedrate_rapid"]) + '\n'
+                gcode += ';Tool: %s -> ' % str(tool) + 'Feedrate rapids: %s' % \
+                         self.tool_value(val, 'tools_mill_feedrate_rapid', 'tools_drill_feedrate_rapid') + '\n'
             gcode += '\n;Z FOCUS: \n'
             for tool, val in p['tools'].items():
                 gcode += ';Tool: %s -> ' % str(tool) + 'Z: %s' % \
-                         str(val['data']["tools_mill_travelz"]) + '\n'
+                         self.tool_value(val, 'tools_mill_travelz', 'tools_drill_travelz') + '\n'
             gcode += '\n;LASER POWER: \n'
             for tool, val in p['tools'].items():
                 gcode += ';Tool: %s -> ' % str(tool) + 'Power: %s' % \
-                         str(val['data']["tools_mill_spindlespeed"]) + '\n'
+                         self.tool_value(val, 'tools_mill_spindlespeed', 'tools_drill_spindlespeed') + '\n'
             gcode += '\n;LASER MIN POWER: \n'
             for tool, val in p['tools'].items():
-                if str(p['obj_options']['type']) == 'Excellon':
-                    gcode += ';Tool: %s -> ' % str(tool) + 'Power: %s' % \
-                             str(val['data']["tools_drill_min_power"]) + '\n'
-                else:
-                    gcode += ';Tool: %s -> ' % str(tool) + 'Power: %s' % \
-                             str(val['data']["tools_mill_min_power"]) + '\n'
+                gcode += ';Tool: %s -> ' % str(tool) + 'Power: %s' % \
+                         self.tool_value(val, 'tools_mill_min_power', 'tools_drill_min_power') + '\n'
         else:
             gcode += ';Feedrate: %s %s/min\n' % (str(p['feedrate']), units)
             gcode += ';Feedrate rapids: %s %s/min\n\n' % (str(p['feedrate_rapid']), units)
@@ -70,7 +75,7 @@ class Marlin_laser_z(PreProc):
             gcode += ';X,Y Toolchange: ' + "%.*f, %.*f%s\n" % \
                      (p.decimals, coords_xy[0], p.decimals, coords_xy[1], units)
         else:
-            gcode += ';X,Y End: None %s\n' % units
+            gcode += ';X,Y Toolchange: None %s\n' % units
         if end_coords_xy is not None:
             gcode += ';X,Y End: ' + "%.*f, %.*f" % (p.decimals, end_coords_xy[0],
                                                     p.decimals, end_coords_xy[1]) + units + '\n'
@@ -124,27 +129,11 @@ class Marlin_laser_z(PreProc):
             gcode += 'M5'
             return gcode
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G0 ' + self.position_code(p)).format(**p) + " " + self.feedrate_rapid_code(p)
+        return 'G0 ' + self.position_code(p) + " " + self.feedrate_rapid_code(p)
 
     def linear_code(self, p):
-        return ('G1 ' + self.position_code(p)).format(**p) + " " + self.inline_feedrate_code(p)
+        return 'G1 ' + self.position_code(p) + " " + self.inline_feedrate_code(p)
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z

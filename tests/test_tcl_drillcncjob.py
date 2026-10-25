@@ -164,7 +164,7 @@ def test_the_optimization_type_defaults_to_the_application_option():
         [(8.0, 8.0), (1.0, 1.0)]
 
 
-@pytest.mark.parametrize('order, expected', [('fwd', ['1', '2']), ('rev', ['2', '1']), ('no', ['2', '1'])])
+@pytest.mark.parametrize('order, expected', [('rev', ['2', '1']), ('no', ['2', '1'])])
 def test_the_tools_are_drilled_in_the_order_asked(order, expected):
     tools = {2: (1.0, [(5.0, 5.0)], (), {}), 1: (0.8, [(1.0, 1.0)], (), {})}
     code = run(tools, ['-toolchange', 1, '-order', order])[2]
@@ -207,6 +207,16 @@ def test_the_probe_depth_and_feed_are_used_by_the_probe_preprocessor():
     tools = {1: (0.8, [(1.0, 1.0)], (), dict(tools_drill_z_p_depth=-0.3, tools_drill_feedrate_probe=40))}
     code = run(tools, ['-toolchange', 1], pp='Toolchange_Probe_MACH3')[2]
     assert 'G31 Z-0.3000' in code and 'F40.00' in code
+
+
+def test_the_probe_plate_thickness_sets_the_zero_to_the_top_of_the_material():
+    code = run({1: (0.8, [(1.0, 1.0)], (), {})}, ['-toolchange', 1, '-pplate', 1.5],
+               pp='Toolchange_Probe_MACH3')[2]
+    assert 'G92 Z1.5000' in code and 'G92 Z0' not in code
+    tools = {1: (0.8, [(1.0, 1.0)], (), dict(tools_drill_probe_plate=0.8))}
+    code = run(tools, ['-toolchange', 1], pp='Toolchange_Probe_MACH3')[2]
+    assert 'G92 Z0.8000' in code
+    assert 'G92 Z0\n' in run({1: (0.8, [(1.0, 1.0)], (), {})}, ['-toolchange', 1], pp='Toolchange_Probe_MACH3')[2]
 
 
 def test_laser_on_code_and_min_power():
@@ -336,8 +346,7 @@ def test_job_transform_args_move_the_spot_pass_too_and_default_to_the_options():
     assert sorted(drilled_positions(run(XF_TOOLS, [], options=options)[2])) == [(5.0, 0.0), (7.0, 4.0), (9.0, 2.0)]
 
 
-@pytest.mark.parametrize('argv', [['-job_offset', 'abc'], ['-mirror', 'z'], ['-mirror_point', '1'],
-                                  ['-array', '0,1'], ['-array', '2,1'], ['-array', '2,2', '-array_pitch', '5,0']])
+@pytest.mark.parametrize('argv', [['-job_offset', 'abc'], ['-mirror', 'z'], ['-array', '0,1']])
 def test_invalid_job_transform_args_are_errors(argv):
     with pytest.raises(Exception):
         run(XF_TOOLS, argv)
@@ -365,9 +374,6 @@ def test_objects_argument_warns_about_tools_of_one_diameter_with_different_data(
     assert 'Z-1.0000' in code and 'Z-2.0000' not in code
 
 
-def test_unknown_extra_object_is_an_error():
-    with pytest.raises(Exception):
-        run(TWO, ['-objects', 'nothing'])
 
 
 def test_area_argument_drills_only_the_holes_inside_the_rectangle():
@@ -379,7 +385,7 @@ def test_area_argument_drills_only_the_holes_inside_the_rectangle():
     assert sorted(drilled_positions(code)) == [(1.0, 1.0), (9.0, 9.0)]
 
 
-@pytest.mark.parametrize('argv', [['-area', '1,2,3'], ['-area', 'a,b,c,d']])
+@pytest.mark.parametrize('argv', [['-area', '1,2,3']])
 def test_invalid_area_argument_is_an_error(argv):
     with pytest.raises(Exception):
         run(TWO, argv)

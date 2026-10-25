@@ -14,9 +14,34 @@ from appPreProcessor import PreProc
 class Roland_MDX_540(PreProc):
 
     include_header = False
-    coordinate_format = "%.1f"
+    coordinate_format = "%d"
     feedrate_format = '%.1f'
     feedrate_rapid_format = '%.1f'
+
+    # RML-1 unit of the MDX-540 is 0.01mm on all axes (100 units per mm)
+    units_per_mm = 100
+    # valid feedrate for MDX-540 is between 0.1mm/sec and 125mm/sec (6mm/min to 7500mm/min)
+    feed_min = 0.1
+    feed_max = 125.0
+
+    def to_rml(self, p, value):
+        """
+        A length of the job as integer RML-1 units (the job units are converted to mm first).
+        """
+        value = float(value)
+        if p.units.upper() == 'IN':
+            value *= 25.4
+        return int(round(value * self.units_per_mm))
+
+    def feed_code(self, p, feedrate):
+        """
+        The 'V' command: the feedrate of the job (in units per minute) as mm/sec, clamped to the valid range.
+        """
+        fr_mm_min = float(feedrate)
+        if p.units.upper() == 'IN':
+            fr_mm_min *= 25.4
+        fr_sec = min(max(fr_mm_min / 60, self.feed_min), self.feed_max)
+        return 'V' + str(self.feedrate_format % fr_sec) + ';'
 
     def start_code(self, p):
         gcode = ';;^IN;' + '\n'
@@ -27,120 +52,68 @@ class Roland_MDX_540(PreProc):
         return ''
 
     def lift_code(self, p):
-        if p.units.upper() == 'IN':
-            z = p.z_move / 25.4
-        else:
-            z = p.z_move
         gcode = self.feedrate_rapid_code(p) + '\n'
-        gcode += self.position_code(p).format(**p) + ',' + str(float(z * 100.0)) + ';'
+        gcode += self.position_code(p) + ',' + str(self.to_rml(p, p.z_move)) + ';'
         return gcode
 
     def down_code(self, p):
-        if p.units.upper() == 'IN':
-            z = p.z_cut / 25.4
-        else:
-            z = p.z_cut
         gcode = self.feedrate_code(p) + '\n'
-        gcode += self.position_code(p).format(**p) + ',' + str(float(z * 100.0)) + ';'
+        gcode += self.position_code(p) + ',' + str(self.to_rml(p, p.z_cut)) + ';'
         return gcode
 
     def toolchange_code(self, p):
+        # RML-1 has no operator pause (no M0/M6 equivalent), so there is nothing to output
         return ''
 
     def up_to_zero_code(self, p):
         gcode = self.feedrate_code(p) + '\n'
-        gcode += self.position_code(p).format(**p) + ',' + 0 + ';'
+        gcode += self.position_code(p) + ',' + str(self.to_rml(p, 0)) + ';'
         return gcode
 
     def position_code(self, p):
-        if p.units.upper() == 'IN':
-            x = p.x / 25.4
-            y = p.y / 25.4
-        else:
-            x = p.x
-            y = p.y
-
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = x + p._bed_offset_x
-        else:
-            x_pos = (x + p._bed_offset_x) + ((y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = y + p._bed_offset_y
-        else:
-            y_pos = (y + p._bed_offset_y) + ((x / p._bed_limit_x) * p._bed_skew_y)
-
+        # the bed offset and skew are applied in job units, then the result is converted to mm and RML-1 units
+        x, y = self.bed_xy(p)
         return ('Z' + self.coordinate_format + ',' + self.coordinate_format) % (
-            float(x_pos * 100.0), float(y_pos * 100.0))
+            self.to_rml(p, x), self.to_rml(p, y))
 
     def rapid_code(self, p):
-        if p.units.upper() == 'IN':
-            z = p.z_move / 25.4
-        else:
-            z = p.z_move
         gcode = self.feedrate_rapid_code(p) + '\n'
-        gcode += self.position_code(p).format(**p) + ',' + str(float(z * 100.0)) + ';'
+        gcode += self.position_code(p) + ',' + str(self.to_rml(p, p.z_move)) + ';'
         return gcode
 
     def linear_code(self, p):
-        if p.units.upper() == 'IN':
-            z = p.z_cut / 25.4
-        else:
-            z = p.z_cut
         gcode = self.feedrate_code(p) + '\n'
-        gcode += self.position_code(p).format(**p) + ',' + str(float(z * 100.0)) + ';'
+        gcode += self.position_code(p) + ',' + str(self.to_rml(p, p.z_cut)) + ';'
         return gcode
 
     def end_code(self, p):
-        if p.units.upper() == 'IN':
-            z = p.z_end / 25.4
-        else:
-            z = p.z_end
+        # p.x, p.y is the end position passed by the generator
         gcode = self.feedrate_rapid_code(p) + '\n'
-        gcode += self.position_code(p).format(**p) + ',' + str(float(z * 100.0)) + ';'
+        gcode += self.position_code(p) + ',' + str(self.to_rml(p, p.z_end)) + ';'
         return gcode
 
     def feedrate_code(self, p):
-        fr_sec = p.feedrate / 60
-
-        # valid feedrate for MDX20 is between 0.1mm/sec and 15mm/sec (6mm/min to 900mm/min)
-        if p.feedrate >= 900:
-            fr_sec = 15
-        if p.feedrate < 6:
-            fr_sec = 6
-        return 'V' + str(self.feedrate_format % fr_sec) + ';'
+        return self.feed_code(p, p.feedrate)
 
     def z_feedrate_code(self, p):
-        fr_sec = p.z_feedrate / 60
-
-        # valid feedrate for MDX20 is between 0.1mm/sec and 15mm/sec (6mm/min to 900mm/min)
-        if p.z_feedrate >= 900:
-            fr_sec = 15
-        if p.z_feedrate < 6:
-            fr_sec = 6
-        return 'V' + str(self.feedrate_format % fr_sec) + ';'
+        return self.feed_code(p, p.z_feedrate)
 
     def feedrate_rapid_code(self, p):
-        fr_sec = p.feedrate_rapid / 60
-
-        # valid feedrate for MDX20 is between 0.1mm/sec and 15mm/sec (6mm/min to 900mm/min)
-        if p.feedrate_rapid >= 900:
-            fr_sec = 15
-        if p.feedrate_rapid < 6:
-            fr_sec = 6
-        return 'V' + str(self.feedrate_format % fr_sec) + ';'
+        return self.feed_code(p, p.feedrate_rapid)
 
     def spindle_code(self, p):
-        speed = int(p.spindlespeed)
+        gcode = '!MC1;'
+        # without a spindle speed the spindle is only switched on
+        if not p.spindlespeed:
+            return gcode
+
+        speed = int(float(p.spindlespeed))
         if speed > 8388607:
             speed = 8388607
         if speed < 0:
             speed = 0
 
-        gcode = '!MC1;\n'
-        gcode += '!RC%d;' % speed
+        gcode += '\n!RC%d;' % speed
         return gcode
 
     def dwell_code(self, p):

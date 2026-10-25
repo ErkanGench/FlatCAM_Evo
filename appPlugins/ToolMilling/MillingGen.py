@@ -30,18 +30,19 @@ def milling_drills_too_small(tool_records, tools, tooldia, decimals=6):
 def milling_drills_geometry(tool_records, tools, tooldia, steps=64, decimals=6):
     """Return per-drill milling rings in selected tool order.
 
-    steps: circle steps of the whole circle (Shapely quad_segs = steps // 4).
+    steps: circle steps of the whole circle (Shapely quad_segs = steps // 4), or a function of the radius of the
+    milling ring that gives them.
     Holes smaller than the bit (beyond the IN/MM rounding tolerance) are skipped, never an empty ring;
     use milling_drills_too_small() to report them. An equal-size bit gives an almost-zero ring.
     """
     from camlib import circle_quad_segs
-    quad_segs = circle_quad_segs(steps)
     geometry = []
     for tool in tools:
         if milling_bit_too_large(tool_records[tool]['tooldia'], tooldia, decimals):
             continue
         buffer_value = _rounded(tool_records[tool]['tooldia'], decimals) / 2 - _rounded(tooldia, decimals) / 2
         buffer_value = max(buffer_value, ALMOST_ZERO)
+        quad_segs = circle_quad_segs(steps(buffer_value) if callable(steps) else steps)
         for drill in tool_records[tool]['drills']:
             geometry.append(drill.buffer(buffer_value, quad_segs).exterior)
     return geometry
@@ -50,10 +51,10 @@ def milling_drills_geometry(tool_records, tools, tooldia, steps=64, decimals=6):
 def milling_slots_geometry(tool_records, tools, tooldia, decimals, steps_per_circle, line_string=LineString):
     """Return slot milling rings with the existing unit-rounding allowance.
 
-    steps_per_circle: circle steps of the whole circle (Shapely quad_segs = steps // 4).
+    steps_per_circle: circle steps of the whole circle (Shapely quad_segs = steps // 4), or a function of the radius
+    of the milling ring that gives them.
     """
     from camlib import circle_quad_segs
-    quad_segs = circle_quad_segs(steps_per_circle)
     geometry = []
     for tool in tools:
         if not tool_records[tool]['slots'] or milling_bit_too_large(tool_records[tool]['tooldia'], tooldia, decimals):
@@ -61,6 +62,8 @@ def milling_slots_geometry(tool_records, tools, tooldia, decimals, steps_per_cir
         toolstable_tool = _rounded(tooldia, decimals)
         file_tool = _rounded(tool_records[tool]['tooldia'], decimals)
         buffer_value = max(float(file_tool / 2) - float(toolstable_tool / 2) + DIA_TOLERANCE, ALMOST_ZERO)
+        quad_segs = circle_quad_segs(
+            steps_per_circle(buffer_value) if callable(steps_per_circle) else steps_per_circle)
         for start, stop in tool_records[tool]['slots']:
             lines_string = line_string([start, stop])
             geometry.append(lines_string.buffer(buffer_value, quad_segs).exterior)

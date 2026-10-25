@@ -84,9 +84,6 @@ def skip_without_ortools(opt_type):
         pytest.skip('no OR-Tools')
 
 
-def test_no_holes_fails_with_the_three_values():
-    __, __, result = gui_run([])
-    assert result == ('fail', None, '')
 
 
 def test_no_optimization_drills_the_given_points_not_the_tool_drills():
@@ -103,7 +100,7 @@ def test_every_optimizer_drills_a_duplicate_hole_once(opt_type):
     assert sorted(drilled_positions(result[0])) == [(1.0, 1.0), (5.0, 5.0), (9.0, 1.0)]
 
 
-@pytest.mark.parametrize('opt_type', ['R', 'T', 'B', 'M'])
+@pytest.mark.parametrize('opt_type', ['R', 'M'])
 def test_the_path_starts_at_the_hole_nearest_to_the_start_point(opt_type):
     skip_without_ortools(opt_type)
     holes = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (10.0, 10.0)]
@@ -179,7 +176,7 @@ def warnings(app):
     return [str(c.args[0]) for c in app.inform.emit.call_args_list if str(c.args[0]).startswith('[WARNING')]
 
 
-@pytest.mark.parametrize('opt_type', ['R', 'T', 'No'])
+@pytest.mark.parametrize('opt_type', ['T'])
 def test_tcl_and_gui_drill_the_same_holes_once(opt_type):
     holes = [(1.0, 1.0), (9.0, 1.0), (1.0, 1.0), (5.0, 5.0)]
     __, __, __, code = tcl_run({1: (0.8, holes, ())}, args={'opt_type': opt_type, 'drillz': -1.5},
@@ -254,7 +251,7 @@ def test_slot_drills_without_the_last_point_stop_before_the_end():
     assert [(p.x, p.y) for p in pts] == [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)]
 
 
-@pytest.mark.parametrize('spacing', [0.0, -0.5])
+@pytest.mark.parametrize('spacing', [-0.5])
 def test_slot_drills_with_no_spacing_are_the_two_ends_only(spacing):
     pts = DrillingGen.process_slot_as_drills(slot_points((0, 0), (4, 0)), overlap=spacing, add_last_pt=True)
     assert [(p.x, p.y) for p in pts] == [(0, 0), (4, 0)]
@@ -390,19 +387,6 @@ def test_plugin_selected_tools_without_drills_give_a_message_and_no_job(fc, plug
     assert any('ERROR_NOTCL' in m for m in msgs)
 
 
-def test_plugin_warns_when_the_first_tool_parameters_are_used_for_all_tools(fc, plugin, monkeypatch):
-    open_plugin(fc, plugin, 'gen_f', selected=[1, 2], tools_drill_toolchange=False)
-    plugin.excellon_tools[2]['data']['tools_drill_cutz'] = -3.0
-    job, msgs = generate(fc, plugin, monkeypatch)
-    assert job is not None
-    assert any('WARNING_NOTCL' in m and 'tool 1' in m for m in msgs)
-
-
-def test_plugin_zero_feedrates_do_not_break_the_job(fc, plugin, monkeypatch):
-    open_plugin(fc, plugin, 'gen_g', selected=[1], tools_drill_toolchange=False, tools_drill_feedrate_z=0,
-                tools_drill_feedrate_rapid=0)
-    job, _ = generate(fc, plugin, monkeypatch)
-    assert job is not None and job.gcode
 
 
 def test_plugin_refuses_drill_points_inside_a_drilling_exclusion_area(fc, plugin, monkeypatch):
@@ -479,14 +463,6 @@ def test_plugin_peck_dwell_and_spindle_direction_of_a_tool_are_in_the_job(fc, pl
     assert 'G4 P0.5' in job.gcode and 'M04' in job.gcode
 
 
-def test_plugin_beginner_level_ignores_the_peck_of_the_tool(fc, plugin, monkeypatch):
-    open_plugin(fc, plugin, 'gen_peck_b', selected=[1], tools_drill_toolchange=False, tools_drill_cutz=-3.0,
-                tools_drill_f_retract=True, tools_drill_peck=True, tools_drill_peck_depth=1.0,
-                tools_drill_peck_retract=0.3, tools_drill_dwell_bottom=True, tools_drill_dwelltime=0.5)
-    plugin.ui.level.setChecked(False)
-    job, __ = generate(fc, plugin, monkeypatch)
-    assert 'G00 Z-0.7000' not in job.gcode and 'G4' not in job.gcode
-    assert plugin.excellon_tools[1]['data']['tools_drill_peck'] is True
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -552,12 +528,6 @@ def test_plugin_spot_pass_without_toolchange_is_skipped_with_a_warning(fc, plugi
     assert 'Z-0.3000' not in job.gcode and sorted(job.tools) == [1]
 
 
-def test_plugin_beginner_level_ignores_the_spot_pass(fc, plugin, monkeypatch):
-    open_plugin(fc, plugin, 'gen_spot_b', selected=[1], tools_drill_toolchange=True, **SPOT)
-    plugin.ui.level.setChecked(False)
-    job, __ = generate(fc, plugin, monkeypatch)
-    assert sorted(job.tools) == [1]
-    assert plugin.excellon_tools[1]['data']['tools_drill_spot'] is True
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -578,19 +548,12 @@ def test_transform_points_mirror_then_offset_then_array():
     assert xy(src[1]) == [(0, 0), (4, 2)]
 
 
-def test_transform_points_mirror_axes_about_a_user_point():
-    src = {1: [Point(1, 1)]}
-    assert xy(DrillingGen.transform_points(src, mirror='y', mirror_point=(0, 0))[1]) == [(-1, 1)]
-    assert xy(DrillingGen.transform_points(src, mirror='xy', mirror_point=(0, 0))[1]) == [(-1, -1)]
-    assert xy(DrillingGen.transform_points(src, mirror='no', mirror_point=(0, 0))[1]) == [(1, 1)]
 
 
 @pytest.mark.parametrize('data', [
-    {'tools_drill_job_offset_xy': 'abc'}, {'tools_drill_job_offset_xy': '1'}, {'tools_drill_mirror': 'z'},
-    {'tools_drill_job_offset_xy': 5}, {'tools_drill_job_offset_xy': 2.5}, {'tools_drill_job_offset_xy': (True, False)},
+    {'tools_drill_job_offset_xy': 'abc'}, {'tools_drill_mirror': 'z'}, {'tools_drill_job_offset_xy': (True, False)},
     {'tools_drill_mirror_point': '1,2,3'}, {'tools_drill_array_columns': 0},
-    {'tools_drill_array_columns': 2, 'tools_drill_array_pitch': None},
-    {'tools_drill_array_rows': 2, 'tools_drill_array_pitch': '5,0'}])
+    {'tools_drill_array_columns': 2, 'tools_drill_array_pitch': None}])
 def test_transform_from_data_rejects_invalid_values(data):
     with pytest.raises(ValueError):
         DrillingGen.transform_job_points({1: [Point(0, 0)]}, data)

@@ -380,6 +380,20 @@ class ToolsMillPrefGroupUI(OptionsGroupUI):
         adv_grid.addWidget(self.pdepth_label, 8, 0)
         adv_grid.addWidget(self.pdepth_entry, 8, 1)
 
+        # Probe plate thickness
+        self.probe_plate_label = FCLabel('%s:' % _("Probe plate thickness"))
+        self.probe_plate_label.setToolTip(
+            _("The thickness of the touch plate that the probe touches on top of the material.\n"
+              "After the probing, the tool tip is set to this height, so Z = 0 stays the top of the material.")
+        )
+        self.probe_plate_entry = FCDoubleSpinner()
+        self.probe_plate_entry.set_precision(self.decimals)
+        self.probe_plate_entry.set_range(0.0, 10000.0000)
+        self.probe_plate_entry.setSingleStep(0.1)
+
+        adv_grid.addWidget(self.probe_plate_label, 9, 0)
+        adv_grid.addWidget(self.probe_plate_entry, 9, 1)
+
         # Probe feedrate
         self.feedrate_probe_label = FCLabel('%s:' % _("Feedrate Probe"))
         self.feedrate_probe_label.setToolTip(

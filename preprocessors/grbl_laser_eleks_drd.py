@@ -30,7 +30,6 @@ class grbl_laser_eleks_drd(PreProc):
         gcode += '(which helps for centering the drill bit for manual drilling)\n'
         gcode += '(The GRBL Controller has to support G2 commands)\n'
         gcode += '(The moves are only on horizontal plane X-Y. There are no Z moves.)\n'
-        gcode += '(The moves are only on horizontal plane X-Y. There are no Z moves.)\n'
         gcode += '(Assumes manual laser focussing.)\n\n'
 
         xmin = '%.*f' % (p.coords_decimals, p['obj_options']['xmin'])
@@ -61,7 +60,7 @@ class grbl_laser_eleks_drd(PreProc):
             gcode += ' ' + 'S%d' % p.spindlespeed
         else:
             gcode += ' S0'
-        gcode += ';' + p.spindledir
+        gcode += ';' + str(p.spindledir)
         return gcode
 
     def startz_code(self, p):
@@ -75,32 +74,28 @@ class grbl_laser_eleks_drd(PreProc):
         gcode += ' S%d' % (p.spindlespeed or 0)
         gcode += ';down'
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
+            # the hole centre with the bed offset and skew, like the geometry moves
+            x_c, y_c = self.bed_xy(p)
+            small = self.small_radius(p)
+            big = self.big_radius(p)
             gcode += '\n'
             gcode += 'G02 '  # Draw Top Little Arc
-            gcode += ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-                     (p.coords_decimals, p.x + 0.1, p.coords_decimals, p.y)
-            gcode += (' I' + self.coordinate_format + ' J' + self.coordinate_format) % \
-                     (p.coords_decimals, +0.1, p.coords_decimals, 0)
+            gcode += 'X' + self.coord(p, x_c + small) + ' Y' + self.coord(p, y_c)
+            gcode += ' I' + self.coord(p, +small) + ' J' + self.coord(p, 0)
             gcode += '\n'
             gcode += 'G02 '  # Draw Bottom Little Arc
-            gcode += ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-                     (p.coords_decimals, p.x - 0.1, p.coords_decimals, p.y)
-            gcode += (' I' + self.coordinate_format + ' J' + self.coordinate_format) % \
-                     (p.coords_decimals, -0.1, p.coords_decimals, 0)
+            gcode += 'X' + self.coord(p, x_c - small) + ' Y' + self.coord(p, y_c)
+            gcode += ' I' + self.coord(p, -small) + ' J' + self.coord(p, 0)
             gcode += '\n'
-            gcode += 'G00 ' + (self.position_ldob_code(p)).format(**p)
+            gcode += 'G00 ' + self.position_ldob_code(p)
             gcode += '\n'
             gcode += 'G02 '  # Draw Top Bigger Arc
-            gcode += ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-                     (p.coords_decimals, p.x + 0.2, p.coords_decimals, p.y)
-            gcode += (' I' + self.coordinate_format + ' J' + self.coordinate_format) % \
-                     (p.coords_decimals, +0.2, p.coords_decimals, 0)
+            gcode += 'X' + self.coord(p, x_c + big) + ' Y' + self.coord(p, y_c)
+            gcode += ' I' + self.coord(p, +big) + ' J' + self.coord(p, 0)
             gcode += '\n'
             gcode += 'G02 '  # Draw Bottom Bigger Arc
-            gcode += ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-                     (p.coords_decimals, p.x - 0.2, p.coords_decimals, p.y)
-            gcode += (' I' + self.coordinate_format + ' J' + self.coordinate_format) % \
-                     (p.coords_decimals, -0.2, p.coords_decimals, 0)
+            gcode += 'X' + self.coord(p, x_c - big) + ' Y' + self.coord(p, y_c)
+            gcode += ' I' + self.coord(p, -big) + ' J' + self.coord(p, 0)
         return gcode
 
     def toolchange_code(self, p):
@@ -109,46 +104,42 @@ class grbl_laser_eleks_drd(PreProc):
     def up_to_zero_code(self, p):  # Only use for drilling, so no essential need for Laser
         return ';up_to_zero'
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
+    @staticmethod
+    def small_radius(p):
+        # the radius of the smaller drill hole circle: 0.1 mm, in the job units
+        return 0.1 / 25.4 if p.units.upper() == 'IN' else 0.1
 
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
+    @staticmethod
+    def big_radius(p):
+        # the radius of the bigger drill hole circle: 0.2 mm, in the job units
+        return 0.2 / 25.4 if p.units.upper() == 'IN' else 0.2
 
     def position_ldos_code(self, p):
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, p.x-0.1, p.coords_decimals, p.y)  # -0.1 : ArcRadius Offset for smaller DrillHole Arc
+        # the start point of the smaller drill hole circle: the radius to the left of the hole centre
+        x_c, y_c = self.bed_xy(p)
+        return 'X' + self.coord(p, x_c - self.small_radius(p)) + ' Y' + self.coord(p, y_c)
 
     def position_ldob_code(self, p):
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, p.x-0.2, p.coords_decimals, p.y)  # -0.1 : ArcRadius Offset for bigger DrillHole Arc
+        # the start point of the bigger drill hole circle: the radius to the left of the hole centre
+        x_c, y_c = self.bed_xy(p)
+        return 'X' + self.coord(p, x_c - self.big_radius(p)) + ' Y' + self.coord(p, y_c)
 
     def rapid_code(self, p):
         gcode = 'G00 '
         if str(p['obj_options']['type']) == 'Excellon' or str(p['obj_options']['type']) == 'Excellon Geometry':
-            gcode += (self.position_ldos_code(p)).format(**p)
+            gcode += self.position_ldos_code(p)
         else:
-            gcode += (self.position_code(p)).format(**p)
+            gcode += self.position_code(p)
         return gcode
 
     def linear_code(self, p):
-        return 'G01 ' + (self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         gcode = ''
-        coords_xy = p['xy_toolchange']
-        if coords_xy is not None:
-            gcode = 'G00 X{x} Y{y}'.format(x=coords_xy[0], y=coords_xy[1])
+        coords_xy = p['xy_end']
+        if coords_xy:
+            gcode = 'G00 X' + self.coord(p, coords_xy[0]) + ' Y' + self.coord(p, coords_xy[1])
         return gcode
 
     def feedrate_code(self, p):

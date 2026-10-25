@@ -144,9 +144,10 @@ class Repetier(PreProc):
 
             if toolchangexy is not None:
                 gcode = """
+M400
+M107
 G0 Z{z_toolchange}
 G0 X{x_toolchange} Y{y_toolchange}                
-M84
 @pause Change to Tool Dia = {toolC}, Total drills for tool T{tool} = {t_drills}
 G0 Z{z_toolchange}
 """.format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolchange),
@@ -157,8 +158,9 @@ G0 Z{z_toolchange}
            toolC=toolC_formatted)
             else:
                 gcode = """
+M400
+M107
 G0 Z{z_toolchange}
-M84
 @pause Change to Tool Dia = {toolC}, Total drills for tool T{tool} = {t_drills}
 G0 Z{z_toolchange}
 """.format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
@@ -174,9 +176,10 @@ G0 Z{z_toolchange}
         else:
             if toolchangexy is not None:
                 gcode = """
+M400
+M107
 G0 Z{z_toolchange}
 G0 X{x_toolchange} Y{y_toolchange}
-M84
 @pause Change to tool T{tool} with Tool Dia = {toolC}
 G0 Z{z_toolchange}
 """.format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolchange),
@@ -186,8 +189,9 @@ G0 Z{z_toolchange}
            toolC=toolC_formatted)
             else:
                 gcode = """
+M400
+M107
 G0 Z{z_toolchange}
-M84
 @pause Change to tool T{tool} with Tool Dia = {toolC}
 G0 Z{z_toolchange}
 """.format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
@@ -200,29 +204,13 @@ G0 Z{z_toolchange}
             return gcode
 
     def up_to_zero_code(self, p):
-        return 'G1 Z0' + " " + self.feedrate_code(p)
-
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
+        return 'G1 Z0 ' + self.inline_z_feedrate_code(p)
 
     def rapid_code(self, p):
-        return ('G0 ' + self.position_code(p)).format(**p) + " " + self.feedrate_rapid_code(p)
+        return 'G0 ' + self.position_code(p) + " " + self.feedrate_rapid_code(p)
 
     def linear_code(self, p):
-        return ('G1 ' + self.position_code(p)).format(**p) + " " + self.inline_feedrate_code(p)
+        return 'G1 ' + self.position_code(p) + " " + self.inline_feedrate_code(p)
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z
@@ -247,13 +235,19 @@ G0 Z{z_toolchange}
 
     def spindle_code(self, p):
         if p.spindlespeed:
-            return 'M106 S%d' % p.spindlespeed
+            # M106 takes 0-255
+            return 'M106 S%d' % max(0, min(255, int(round(float(p.spindlespeed)))))
         else:
             return 'M106'
 
     def dwell_code(self, p):
-        if p.dwelltime:
-            return 'G4 P' + str(p.dwelltime)
+        # G4 S is seconds, G4 P is milliseconds; the dwell time is in seconds
+        if not p.dwelltime:
+            return ''
+        seconds = float(p.dwelltime)
+        if seconds == int(seconds):
+            return 'G4 S%d' % int(seconds)
+        return 'G4 P%d' % int(round(seconds * 1000))
 
     def spindle_stop_code(self, p):
         return 'M107'

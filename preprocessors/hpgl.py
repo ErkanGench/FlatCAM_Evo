@@ -9,8 +9,7 @@
 from appPreProcessor import PreProc
 
 
-# for Roland Preprocessors it is mandatory for the preprocessor name (python file and class name, both of them must be
-# the same) to contain the following keyword, case-sensitive: 'Roland' without the quotes.
+# HP-GL plotter preprocessor (not a Roland one): the coordinates are integers in plotter units of 0.025mm
 class hpgl(PreProc):
     include_header = True
     coordinate_format = "%.*f"
@@ -38,55 +37,33 @@ class hpgl(PreProc):
         return ''
 
     def position_code(self, p):
-        units = str(p['units']).lower()
+        # the bed offset and skew are applied in job units
+        x, y = self.bed_xy(p)
 
         # we work only with METRIC units because HPGL mention only metric units so if FlatCAM units are INCH we
         # transform them in METRIC
-        if units == 'in':
-            x = p.x * 25.4
-            y = p.y * 25.4
-        else:
-            x = p.x
-            y = p.y
+        if str(p['units']).lower() == 'in':
+            x *= 25.4
+            y *= 25.4
 
-        # we need to have the coordinates as multiples of 0.025mm
+        # HP-GL plotter unit is 0.025mm (40 units per mm), the coordinates are integers
         x = round(x * 40)
         y = round(y * 40)
 
-        # constrain the x and y values within the domain of valid values: [-32767 ... 32768]
-        if x <= -32767:
-            x = -32767
-        if x >= 32768:
-            x = 32768
+        # constrain the x and y values within the domain of valid values: [-32768 ... 32767]
+        x = max(-32768, min(32767, x))
+        y = max(-32768, min(32767, y))
 
-        if y <= -32767:
-            y = -32767
-        if y >= 32768:
-            y = 32768
-
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = x + p._bed_offset_x
-        else:
-            x_pos = (x + p._bed_offset_x) + ((y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = y + p._bed_offset_y
-        else:
-            y_pos = (y + p._bed_offset_y) + ((x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('PA' + self.coordinate_format + ',' + self.coordinate_format + ';') % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
+        return 'PA%d,%d;' % (x, y)
 
     def rapid_code(self, p):
-        return self.position_code(p).format(**p)
+        return self.position_code(p)
 
     def linear_code(self, p):
-        return self.position_code(p).format(**p)
+        return self.position_code(p)
 
     def end_code(self, p):
-        gcode = self.position_code(p).format(**p)
+        gcode = self.position_code(p)
         return gcode
 
     def feedrate_code(self, p):

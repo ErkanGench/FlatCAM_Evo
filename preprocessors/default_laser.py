@@ -55,7 +55,7 @@ class default_laser(PreProc):
         return ''
 
     def lift_code(self, p):
-        if float(p.laser_min_power) > 0.0:
+        if float(p.laser_min_power or 0) > 0.0:
             # the formatted text: laser OFF must always be like this else the plotting will not be done correctly
             return '%s S%s (laser OFF)\n' % (str(p.laser_on_code), str(p.laser_min_power))
         else:
@@ -65,7 +65,7 @@ class default_laser(PreProc):
         if p.spindlespeed:
             return '%s S%s' % (str(p.laser_on_code), str(p.spindlespeed))
         else:
-            return str(p.laser_on_code)
+            return '%s S0' % str(p.laser_on_code)
 
     def toolchange_code(self, p):
         return ''
@@ -73,32 +73,15 @@ class default_laser(PreProc):
     def up_to_zero_code(self, p):
         return ''
 
-    def position_code(self, p):
-        # used in for the linear motion
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
         # a fast linear motion using the G0 command which means: "move as fast as the CNC can handle and is set in the
         # CNC controller". It is a horizontal move in the X-Y CNC plane.
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
         # a linear motion using the G1 command which means: "move with a set feedrate (speed)".
         # It is a horizontal move in the X-Y CNC plane.
-        return ('G01 ' + self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         # a final move at the end of the CNC job. First it moves to a safe parking Z height followed by an X-Y move
@@ -107,7 +90,7 @@ class default_laser(PreProc):
         gcode = ''
 
         if end_coords_xy and end_coords_xy != '':
-            gcode += 'G00 X{x} Y{y}'.format(x=end_coords_xy[0], y=end_coords_xy[1]) + "\n"
+            gcode += 'G00 X' + self.coord(p, end_coords_xy[0]) + ' Y' + self.coord(p, end_coords_xy[1]) + "\n"
         return gcode
 
     def feedrate_code(self, p):
@@ -122,7 +105,7 @@ class default_laser(PreProc):
         if p.spindlespeed:
             return '%s S%s' % (str(p.laser_on_code), str(p.spindlespeed))
         else:
-            return str(p.laser_on_code)
+            return '%s S0' % str(p.laser_on_code)
 
     def dwell_code(self, p):
         return ''

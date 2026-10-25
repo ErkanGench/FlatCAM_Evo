@@ -656,6 +656,24 @@ class DrillingUI:
         self.pdepth_label.hide()
         self.pdepth_entry.setVisible(False)
 
+        # Probe plate thickness
+        self.probe_plate_label = FCLabel('%s:' % _("Probe plate thickness"))
+        self.probe_plate_label.setToolTip(
+            _("The thickness of the touch plate that the probe touches on top of the material.\n"
+              "After the probing, the tool tip is set to this height, so Z = 0 stays the top of the material.")
+        )
+        self.probe_plate_entry = FCDoubleSpinner(callback=self.confirmation_message)
+        self.probe_plate_entry.set_precision(self.decimals)
+        self.probe_plate_entry.set_range(0.0, 10000.0000)
+        self.probe_plate_entry.setSingleStep(0.1)
+        self.probe_plate_entry.setObjectName("e_probe_plate")
+
+        all_par_grid.addWidget(self.probe_plate_label, 11, 0)
+        all_par_grid.addWidget(self.probe_plate_entry, 11, 1)
+
+        self.probe_plate_label.hide()
+        self.probe_plate_entry.setVisible(False)
+
         # Probe feedrate
         self.feedrate_probe_label = FCLabel('%s:' % _("Feedrate Probe"))
         self.feedrate_probe_label.setToolTip(
@@ -971,11 +989,17 @@ class DrillingUI:
             self.pdepth_entry.setVisible(True)
             self.pdepth_label.show()
 
+            self.probe_plate_entry.setVisible(True)
+            self.probe_plate_label.show()
+
             self.feedrate_probe_entry.setVisible(True)
             self.feedrate_probe_label.show()
         else:
             self.pdepth_entry.setVisible(False)
             self.pdepth_label.hide()
+
+            self.probe_plate_entry.setVisible(False)
+            self.probe_plate_label.hide()
 
             self.feedrate_probe_entry.setVisible(False)
             self.feedrate_probe_label.hide()

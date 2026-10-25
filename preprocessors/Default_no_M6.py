@@ -178,7 +178,7 @@ G00 Z{z_toolchange}
 M5
 G00 Z{z_toolchange}
 G00 X{x_toolchange} Y{y_toolchange}
-(MSG, Change to Tool Dia = {toolC})
+(MSG, Change to Tool T{tool} Dia = {toolC})
 M0
 G00 Z{z_toolchange}
         """.format(x_toolchange=self.coordinate_format % (p.coords_decimals, x_toolchange),
@@ -191,7 +191,7 @@ G00 Z{z_toolchange}
                 gcode = """
 M5
 G00 Z{z_toolchange}
-(MSG, Change to Tool Dia = {toolC})
+(MSG, Change to Tool T{tool} Dia = {toolC})
 M0
 G00 Z{z_toolchange}
         """.format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
@@ -205,27 +205,11 @@ G00 Z{z_toolchange}
     def up_to_zero_code(self, p):
         return 'G01 Z0'
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G01 ' + self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z
@@ -248,6 +232,7 @@ G00 Z{z_toolchange}
     def dwell_code(self, p):
         if p.dwelltime:
             return 'G4 P' + str(p.dwelltime)
+        return ''
 
     def spindle_stop_code(self, p):
         return 'M05'

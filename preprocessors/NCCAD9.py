@@ -63,7 +63,7 @@ class NCCAD9(PreProc):
                 gcode += ';Tool: %s -> ' % str(tool) + 'Z_Cut: %s' % str(val['data']["tools_drill_cutz"]) + '\n'
 
             gcode += '\n;Tools Offset: \n'
-            for tool, val in p['exc_cnc_tools'].items():
+            for tool, val in p['tools'].items():
                 gcode += ';Tool: %s -> ' % str(tool) + 'Offset Z: %s' % \
                          str(val['data']["tools_drill_offset"]) + '\n'
 
@@ -108,6 +108,7 @@ class NCCAD9(PreProc):
         gcode += ';Spindle Speed: %s RPM\n' % str(p['spindlespeed'])
 
         gcode += ('G20' if p.units.upper() == 'IN' else 'G21') + "\n"
+        gcode += 'G90\n'
         gcode += 'G76 ;Reference-travel to the endswitches'
 
         return gcode
@@ -147,11 +148,11 @@ class NCCAD9(PreProc):
         if str(p['obj_options']['type']) == 'Excellon':
             no_drills = p['tools'][int(p['tool'])]['nr_drills']
 
-            if toolchangexy is not None and x_toolchange !=0.0 and y_toolchange != 0.0:
+            if toolchangexy is not None:
                 gcode = """
 M10 O6.0 ; Stop spindle
 G00 Z{z_toolchange}
-G00 X{x_toolchange} Y{y_toolchange}                
+G00 X{x_toolchange} Y{y_toolchange}
 M01 Insert tool {tool}
 ; Change to Tool Dia = {toolC}, Total drills for tool T{tool} = {t_drills}
 G76 ; Move to reference point to ensure correct coordinates after tool change
@@ -179,7 +180,7 @@ G76 ; Move to reference point to ensure correct coordinates after tool change
             return gcode
 
         else:
-            if toolchangexy is not None and x_toolchange !=0.0 and y_toolchange != 0.0:
+            if toolchangexy is not None:
                 gcode = """
 M10 O6.0 ; Stop spindle
 G00 Z{z_toolchange}
@@ -209,37 +210,22 @@ G76 ; Move to reference point to ensure correct coordinates after tool change
             return gcode
 
     def up_to_zero_code(self, p):
-        return 'G01 Z0' + " " + self.feedrate_code(p)
+        return 'G01 Z0 ' + self.inline_z_feedrate_code(p)
 
     def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
+        x_pos, y_pos = self.bed_xy(p)
         return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
                (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
 
     def rapid_code(self, p):
-        return ('G00 ' + self.position_code(p)).format(**p) + " " + self.feedrate_rapid_code(p)
+        return 'G00 ' + self.position_code(p) + " " + self.feedrate_rapid_code(p)
 
     def linear_code(self, p):
-        return ('G01 ' + self.position_code(p)).format(**p) + " " + self.inline_feedrate_code(p)
+        return 'G01 ' + self.position_code(p) + " " + self.inline_feedrate_code(p)
 
     def end_code(self, p):
-        gcode = ''
-        coords_xy = p['xy_end']
-
-        if coords_xy and coords_xy != '':
-            # End Z and the end position; the X-Y move is not made below the Travel Z
-            gcode = self.end_moves_code(p, rapid='G0', z_rapid='G00', suffix=" " + self.feedrate_rapid_code(p))
+        # End Z and the end position; the X-Y move is not made below the Travel Z
+        gcode = self.end_moves_code(p, rapid='G0', z_rapid='G00', suffix=" " + self.feedrate_rapid_code(p))
 
         gcode += '''
 G77 ; Move to release position

@@ -109,8 +109,11 @@ class Toolchange_Probe_MACH3(PreProc):
         return gcode
 
     def startz_code(self, p):
-        g = '(MSG, WARNING: Make sure you do zero on all axis. ' \
-            'For Z axis, since it will be probed, make a rough estimate and do a zero.)\n'
+        g = ''
+        if p.startz is not None:
+            g += 'G00 Z' + self.coord(p, p.startz) + '\n'
+        g += '(MSG, WARNING: Make sure you do zero on all axis. ' \
+             'For Z axis, since it will be probed, make a rough estimate and do a zero.)\n'
         g += 'M0'
         return g
 
@@ -139,25 +142,30 @@ class Toolchange_Probe_MACH3(PreProc):
 
         toolC_formatted = '%.*f' % (p.decimals, p.toolC)
 
+        # the thickness of the touch plate that lies on top of the material; old jobs do not have it
+        probe_plate = float(p.get('probe_plate') or 0.0)
+        z_plate = self.coordinate_format % (p.coords_decimals, probe_plate) if probe_plate else '0'
+        plate_msg = ' ||| Plate = %.*f' % (p.decimals, probe_plate) if probe_plate else ''
+
         if str(p['obj_options']['type']) == 'Excellon':
             no_drills = p['tools'][int(p['tool'])]['nr_drills']
 
             if toolchangexy is not None:
-                gcode = """  
-M5             
-T{tool}
-M6
+                gcode = """
+M5
 G00 Z{z_toolchange}
 G00 X{x_toolchange} Y{y_toolchange}
-(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE ||| Drills for this tool = {t_drills})
+T{tool}
+M6
+(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE{plate_msg} ||| Drills for this tool = {t_drills})
 M0
 F{feedrate_probe}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_in_between}
 F{feedrate_probe_slow}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_move}
 (MSG, Remove any clips or other devices used for probing. CNC work is resuming ...)
 M0
@@ -165,39 +173,43 @@ M0
            y_toolchange=self.coordinate_format % (p.coords_decimals, y_toolchange),
            z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
            z_move=self.coordinate_format % (p.coords_decimals, p.z_move),
-           z_in_between=self.coordinate_format % (p.coords_decimals, p.z_move / 2),
+           z_in_between=self.coordinate_format % (p.coords_decimals, probe_plate + p.z_move / 2),
+           z_plate=z_plate,
            feedrate_probe=str(self.feedrate_format % (p.fr_decimals, p.feedrate_probe)),
            feedrate_probe_slow=str(self.feedrate_format % (p.fr_decimals, (p.feedrate_probe / 2))),
            z_p_depth=self.coordinate_format % (p.coords_decimals, p.z_p_depth),
            tool=int(p.tool),
            t_drills=no_drills,
+           plate_msg=plate_msg,
            toolC=toolC_formatted)
             else:
                 gcode = """
 M5
+G00 Z{z_toolchange}
 T{tool}
 M6
-G00 Z{z_toolchange}
-(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE ||| Drills for this tool = {t_drills})
+(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE{plate_msg} ||| Drills for this tool = {t_drills})
 M0
 F{feedrate_probe}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_in_between}
 F{feedrate_probe_slow}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_move}
 (MSG, Remove any clips or other devices used for probing. CNC work is resuming ...)
 M0
 """.format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
            z_move=self.coordinate_format % (p.coords_decimals, p.z_move),
-           z_in_between=self.coordinate_format % (p.coords_decimals, p.z_move / 2),
+           z_in_between=self.coordinate_format % (p.coords_decimals, probe_plate + p.z_move / 2),
+           z_plate=z_plate,
            feedrate_probe=str(self.feedrate_format % (p.fr_decimals, p.feedrate_probe)),
            feedrate_probe_slow=str(self.feedrate_format % (p.fr_decimals, (p.feedrate_probe / 2))),
            z_p_depth=self.coordinate_format % (p.coords_decimals, p.z_p_depth),
            tool=int(p.tool),
            t_drills=no_drills,
+           plate_msg=plate_msg,
            toolC=toolC_formatted)
 
             # if f_plunge is True:
@@ -208,19 +220,19 @@ M0
             if toolchangexy is not None:
                 gcode = """
 M5
-T{tool}
-M6
 G00 Z{z_toolchange}
 G00 X{x_toolchange} Y{y_toolchange}
-(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE)
+T{tool}
+M6
+(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE{plate_msg})
 M0
 F{feedrate_probe}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_in_between}
 F{feedrate_probe_slow}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_move}
 (MSG, Remove any clips or other devices used for probing. CNC work is resuming ...)
 M0
@@ -228,37 +240,41 @@ M0
            y_toolchange=self.coordinate_format % (p.coords_decimals, y_toolchange),
            z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
            z_move=self.coordinate_format % (p.coords_decimals, p.z_move),
-           z_in_between=self.coordinate_format % (p.coords_decimals, p.z_move / 2),
+           z_in_between=self.coordinate_format % (p.coords_decimals, probe_plate + p.z_move / 2),
+           z_plate=z_plate,
            feedrate_probe=str(self.feedrate_format % (p.fr_decimals, p.feedrate_probe)),
            feedrate_probe_slow=str(self.feedrate_format % (p.fr_decimals, (p.feedrate_probe / 2))),
            z_p_depth=self.coordinate_format % (p.coords_decimals, p.z_p_depth),
            tool=int(p.tool),
+           plate_msg=plate_msg,
            toolC=toolC_formatted)
             else:
                 gcode = """
 M5
+G00 Z{z_toolchange}
 T{tool}
 M6
-G00 Z{z_toolchange}
-(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE)
+(MSG, Change to Tool Dia = {toolC} ||| CONNECT THE PROBE{plate_msg})
 M0
 F{feedrate_probe}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_in_between}
 F{feedrate_probe_slow}
 G31 Z{z_p_depth}
-G92 Z0
+G92 Z{z_plate}
 G00 Z{z_move}
 (MSG, Remove any clips or other devices used for probing. CNC work is resuming ...)
 M0
 """.format(z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
            z_move=self.coordinate_format % (p.coords_decimals, p.z_move),
-           z_in_between=self.coordinate_format % (p.coords_decimals, p.z_move / 2),
+           z_in_between=self.coordinate_format % (p.coords_decimals, probe_plate + p.z_move / 2),
+           z_plate=z_plate,
            feedrate_probe=str(self.feedrate_format % (p.fr_decimals, p.feedrate_probe)),
            feedrate_probe_slow=str(self.feedrate_format % (p.fr_decimals, (p.feedrate_probe / 2))),
            z_p_depth=self.coordinate_format % (p.coords_decimals, p.z_p_depth),
            tool=int(p.tool),
+           plate_msg=plate_msg,
            toolC=toolC_formatted)
 
             # if f_plunge is True:
@@ -268,27 +284,11 @@ M0
     def up_to_zero_code(self, p):
         return 'G01 Z0'
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G01 ' + self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z
@@ -311,6 +311,7 @@ M0
     def dwell_code(self, p):
         if p.dwelltime:
             return 'G4 P' + str(p.dwelltime)
+        return ''
 
     def spindle_stop_code(self, p):
         return 'M05'

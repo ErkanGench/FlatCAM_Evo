@@ -147,8 +147,8 @@ class Toolchange_Manual(PreProc):
                 gcode = """
 M5
 G00 Z{z_toolchange}
-T{tool} 
-G00 X{x_toolchange} Y{y_toolchange} 
+T{tool}
+G00 X{x_toolchange} Y{y_toolchange}
 (MSG, Change to Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
 M0
 G01 Z0
@@ -167,9 +167,9 @@ M0
 
             else:
                 gcode = """
-M5 
+M5
 G00 Z{z_toolchange}
-T{tool} 
+T{tool}
 (MSG, Change to Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
 M0
 G01 Z0
@@ -178,7 +178,7 @@ M0
 G00 Z{z_toolchange}
 (MSG, Now the tool can be tightened more securely.)
 M0
-(MSG, Milling with Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
+(MSG, Drilling with Tool Dia = {toolC} ||| Total drills for tool T{tool} = {t_drills})
 """.format(
            z_toolchange=self.coordinate_format % (p.coords_decimals, z_toolchange),
            tool=int(p.tool),
@@ -195,7 +195,7 @@ M0
 M5
 G00 Z{z_toolchange}
 T{tool}
-G00 X{x_toolchange}Y{y_toolchange}    
+G00 X{x_toolchange} Y{y_toolchange}
 (MSG, Change to Tool Dia = {toolC})
 M0
 G01 Z0
@@ -211,7 +211,7 @@ M0
            toolC=toolC_formatted)
             else:
                 gcode = """
-M5  
+M5
 G00 Z{z_toolchange}
 T{tool}
 (MSG, Change to Tool Dia = {toolC})
@@ -232,27 +232,11 @@ M0
     def up_to_zero_code(self, p):
         return 'G01 Z0'
 
-    def position_code(self, p):
-        # formula for skewing on x for example is:
-        # x_fin = x_init + y_init/slope where slope = p._bed_limit_y / p._bed_skew_x (a.k.a tangent)
-        if p._bed_skew_x == 0:
-            x_pos = p.x + p._bed_offset_x
-        else:
-            x_pos = (p.x + p._bed_offset_x) + ((p.y / p._bed_limit_y) * p._bed_skew_x)
-
-        if p._bed_skew_y == 0:
-            y_pos = p.y + p._bed_offset_y
-        else:
-            y_pos = (p.y + p._bed_offset_y) + ((p.x / p._bed_limit_x) * p._bed_skew_y)
-
-        return ('X' + self.coordinate_format + ' Y' + self.coordinate_format) % \
-               (p.coords_decimals, x_pos, p.coords_decimals, y_pos)
-
     def rapid_code(self, p):
-        return ('G00 ' + self.position_code(p)).format(**p)
+        return 'G00 ' + self.position_code(p)
 
     def linear_code(self, p):
-        return ('G01 ' + self.position_code(p)).format(**p)
+        return 'G01 ' + self.position_code(p)
 
     def end_code(self, p):
         # End Z and the end position; the X-Y move is not made below the Travel Z
@@ -275,6 +259,7 @@ M0
     def dwell_code(self, p):
         if p.dwelltime:
             return 'G4 P' + str(p.dwelltime)
+        return ''
 
     def spindle_stop_code(self, p):
         return 'M05'

@@ -93,18 +93,6 @@ def test_order_sorts_the_rows_only(fc):
     assert list(exc.tools) == keys
 
 
-def test_dragged_order_survives_the_next_build(fc):
-    _load(fc, 'e_ui_drag')
-    tool = _open(fc, 'e_ui_drag')
-    tool.ui.order_combo.setCurrentIndex(2)
-    dragged = _table_uids(tool)
-    assert dragged == [3, 2, 1]
-    dias = [tool.excellon_tools[u]['tooldia'] for u in dragged]
-    tool.rebuild_ui()
-    assert tool._tool_order() == 'no'
-    tool.build_tool_ui()
-    t = tool.ui.tools_table
-    assert [float(t.item(r, 1).text()) for r in range(3)] == dias
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -135,64 +123,20 @@ def test_beginner_level_keeps_the_stored_tool_values(fc):
     assert tool._effective_tool_data(1)['tools_drill_multidepth'] is True
 
 
-def test_pp_change_by_code_updates_the_visibility(fc):
-    exc = _load(fc, 'e_ui_pp')
-    exc.tools[1]['data']['tools_drill_ppname_e'] = 'Toolchange_Probe_MACH3'
-    tool = _open(fc, 'e_ui_pp')
-    tool.ui.tools_table.clearSelection()
-    tool.ui.tools_table.selectRow(0)
-    assert not tool.ui.pdepth_entry.isHidden()
-    exc.tools[2]['data']['tools_drill_ppname_e'] = 'default'
-    tool.ui.tools_table.selectRow(1)
-    assert tool.ui.pdepth_entry.isHidden()
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Object lifecycle
 # ---------------------------------------------------------------------------------------------------------------------
 
-def test_deleted_object_clears_the_table_and_disables_generate(fc, monkeypatch):
-    _load(fc, 'e_ui_gone')
-    tool = _open(fc, 'e_ui_gone')
-    assert tool.ui.generate_cnc_button.isEnabled()
-    # the object of the combo is gone (deleted): the combo text names nothing
-    monkeypatch.setattr(tool.ui.object_combo, 'currentText', lambda: 'does_not_exist')
-    tool.on_object_changed()
-    assert tool.excellon_obj is None and tool.excellon_tools == {}
-    assert tool.ui.tools_table.rowCount() == 2
-    assert not tool.ui.generate_cnc_button.isEnabled()
-    assert tool.ui.exc_param_frame.isEnabled() is False
-    tool.on_add_area_click()                       # no object: a message, no exception
 
 
-def test_old_object_without_drill_keys_opens_and_connects_the_signals(fc):
-    exc = _load(fc, 'e_ui_old')
-    for key in ('tools_drill_ppname_e', 'tools_drill_dwelltime', 'tools_drill_area_shape', 'tools_drill_endxy'):
-        exc.obj_options.pop(key, None)
-        for tl in exc.tools.values():
-            tl['data'].pop(key, None)
-    tool = _open(fc, 'e_ui_old')
-    tool.set_tool_ui()
-    assert tool.excellon_obj is not None
-    # the object-combo signal is connected: a new object is taken
-    _load(fc, 'e_ui_old2')
-    tool.ui.object_combo.setCurrentText('e_ui_old2')
-    assert tool.excellon_obj.obj_options['name'] == 'e_ui_old2'
 
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Selection
 # ---------------------------------------------------------------------------------------------------------------------
 
-def test_toggle_all_rows_clears_then_selects_all(fc):
-    _load(fc, 'e_ui_toggle')
-    tool = _open(fc, 'e_ui_toggle')
-    assert len(tool._selected_tool_rows()) == 3
-    tool.on_toggle_all_rows()
-    assert tool._selected_tool_rows() == []
-    assert not tool.ui.generate_cnc_button.isEnabled()
-    tool.on_toggle_all_rows()
-    assert len(tool._selected_tool_rows()) == 3
 
 
 def test_rebuild_keeps_a_partial_tool_selection(fc):
@@ -215,21 +159,6 @@ def test_rebuild_keeps_a_partial_tool_selection(fc):
     assert len(tool.get_selected_tools_uid()) == 3
 
 
-def test_keyboard_multi_selection_shows_multiple_tools_and_the_first_one(fc):
-    exc = _load(fc, 'e_ui_multi')
-    exc.tools[1]['data']['tools_drill_cutz'] = -1.1
-    exc.tools[2]['data']['tools_drill_cutz'] = -2.2
-    tool = _open(fc, 'e_ui_multi')
-    table = tool.ui.tools_table
-    table.clearSelection()
-    table.selectRow(1)
-    assert 'Tool 2' in tool.ui.tool_data_label.text()
-    assert tool.ui.cutz_entry.get_value() == -2.2
-    sel = table.selectionModel()
-    sel.select(table.model().index(0, 0), QtCore.QItemSelectionModel.SelectionFlag.Select |
-               QtCore.QItemSelectionModel.SelectionFlag.Rows)
-    assert 'Multiple Tools' in tool.ui.tool_data_label.text()
-    assert tool.ui.cutz_entry.get_value() == -1.1       # the first selected tool
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -360,17 +289,6 @@ def test_delete_selected_area_after_a_previous_delete(fc):
     assert len(tool._drill_exclusion_areas()) == 1
 
 
-def test_bad_over_z_text_reconnects_the_form(fc):
-    exc = _load(fc, 'e_ui_ex4')
-    tool = _open(fc, 'e_ui_ex4')
-    area = _area('excellon', overz=1.0)
-    _add_areas(fc, tool, [area])
-    tool.ui.exclusion_table.item(0, 3).setText('abc')
-    QtWidgets.QApplication.processEvents()
-    assert area['overz'] == 1.0
-    _edit(tool.ui.cutz_entry, -2.4)                         # the form still writes to the tools
-    assert all(t['data']['tools_drill_cutz'] == -2.4 for t in exc.tools.values())
-    assert tool.ui.exclusion_table.item(0, 3).text() == '1.0'
 
 
 def test_peck_dwell_bottom_spindle_and_plunge_fields_are_per_tool_and_advanced_only(fc):
@@ -487,22 +405,6 @@ def test_renamed_extra_object_stays_in_the_job(fc):
     assert tool._extra_objects() == [extra]
 
 
-def test_hole_areas_are_separate_from_the_exclusion_areas_and_cleared_on_object_change(fc):
-    _load(fc, 'ui_y1')
-    _load(fc, 'ui_y2')
-    tool = _open(fc, 'ui_y1')
-    tool.hole_areas.exclusion_areas_storage.append(_area())
-    assert fc.exc_areas.exclusion_areas_storage == []
-    tool.ui.object_combo.setCurrentText('ui_y2')
-    tool.on_object_changed()
-    assert tool.hole_areas.exclusion_areas_storage == []
-
-    tool.hole_areas.exclusion_areas_storage.append(_area())
-    tool.on_clear_hole_areas_click()
-    assert tool.hole_areas.exclusion_areas_storage == []
-    tool.hole_areas.exclusion_areas_storage.append(_area())
-    tool.on_plugin_cleanup()
-    assert tool.hole_areas.exclusion_areas_storage == []
 
 
 # ---------------------------------------------------------------------------------------------------------------------

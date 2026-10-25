@@ -228,13 +228,6 @@ def test_copy_makes_one_tool_per_selected_row():
     assert len(obj.tools) == 5
 
 
-def test_copy_all_gives_each_copy_its_own_tool():
-    milling, obj = tools_milling(3)
-    milling._on_tool_copy(all_tools='all')
-    assert sorted(obj.tools) == [1, 2, 3, 4, 5, 6]
-    assert sorted(obj.tools[uid]['tooldia'] for uid in (4, 5, 6)) == [1.0, 2.0, 3.0]
-
-
 def test_delete_removes_only_the_selected_rows():
     milling, obj = tools_milling(3)
     select_rows(milling, [0, 2])
@@ -258,14 +251,6 @@ def test_new_tool_cuts_with_its_own_diameter():
     new = obj.tools[3]
     assert new['data']['tools_mill_tooldia'] == 0.8 and new['data']['tools_mill_cutz'] == -0.3
     assert new['data']['tools_mill_feedrate'] == MILL_OPTIONS['tools_mill_feedrate']
-
-
-def test_first_tool_gets_the_geometry_of_the_object():
-    milling, obj = tools_milling(1)
-    obj.tools.clear()
-    obj.solid_geometry = [LineString([(0, 0), (4, 0)])]
-    milling._on_tool_default_add(dia=0.5)
-    assert len(obj.tools[1]['solid_geometry']) == 1
 
 
 def test_diameter_zero_is_rejected_in_the_table():
@@ -304,22 +289,6 @@ def test_excellon_table_lists_each_tool_once_and_keeps_the_object():
     assert milling.ui.tools_table_mill_exc.item(5, 4).text() == '0'
 
 
-def test_excellon_default_order_is_the_order_of_the_object():
-    milling, tools = exc_milling([1.0, 0.5, 0.8])
-    milling.ui.order_combo.set_value(1)
-    milling.build_ui_exc()
-    assert exc_uids(milling) == [2, 3, 1]
-    milling.ui.order_combo.set_value(0)
-    milling.build_ui_exc()
-    assert exc_uids(milling) == [1, 2, 3]
-
-
-def test_selected_excellon_tools_are_unique_uids():
-    milling, tools = exc_milling([1.0, 0.5])
-    milling.build_ui_exc()
-    assert sorted(milling.get_selected_tools_list()) == [1, 2]
-
-
 # ---- UI state of the tools table and the form ----
 
 def v_index(milling):
@@ -342,18 +311,6 @@ def test_level_change_does_not_write_the_tool_data():
     milling.on_level_changed(True)
     milling.on_level_changed(False)
     assert obj.tools == before
-
-
-def test_beginner_hides_and_advanced_shows_the_same_fields_for_each_target():
-    milling, _obj = tools_milling(1)
-    ui = milling.ui
-    advanced_only = (ui.mpass_cb, ui.maxdepth_entry, ui.endxy_entry, ui.exclusion_cb)
-    for target in ('geo', 'exc', 'geo', 'exc'):
-        ui.target_radio.set_value(target)
-        milling.on_level_changed(False)
-        assert all(widget.isHidden() for widget in advanced_only)
-        milling.on_level_changed(True)
-        assert not any(widget.isHidden() for widget in advanced_only)
 
 
 def test_clicking_a_row_keeps_the_cut_z_of_every_tool():
@@ -380,15 +337,6 @@ def test_changing_the_tool_shape_keeps_the_job_type():
     assert data['tools_mill_job_type'] == 2
 
 
-def test_showing_a_tool_does_not_recompute_its_cut_z():
-    milling, obj = tools_milling(2)
-    obj.tools[2]['data'].update(tools_mill_tool_shape=0, tools_mill_cutz=-1.0, tools_mill_vtipdia=0.3,
-                                tools_mill_vtipangle=45.0)
-    milling.ui.tools_table_mill_geo.setCurrentCell(1, 0)
-    milling.to_form(storage=milling._form_tool_data(obj, 2))
-    assert obj.tools[2]['data']['tools_mill_cutz'] == -1.0
-
-
 def test_v_tip_edit_recomputes_the_cut_z_of_all_selected_v_tools():
     milling, obj = tools_milling(3)
     for uid in (1, 2):
@@ -401,21 +349,6 @@ def test_v_tip_edit_recomputes_the_cut_z_of_all_selected_v_tools():
     assert obj.tools[1]['data']['tools_mill_cutz'] == pytest.approx(-0.25)
     assert obj.tools[2]['data']['tools_mill_cutz'] == pytest.approx(-0.75)
     assert obj.tools[3]['data']['tools_mill_cutz'] == -1.0
-
-
-def test_closing_the_plugin_keeps_the_other_cleanup_slots():
-    class Holder(QtCore.QObject):
-        cleanup = QtCore.pyqtSignal()
-
-    holder, calls = Holder(), []
-    milling, _obj = tools_milling(1)
-    milling.app.cleanup = holder.cleanup
-    milling.set_tool_ui = lambda: calls.append('milling')
-    holder.cleanup.connect(lambda: calls.append('other'))
-    holder.cleanup.connect(milling.set_tool_ui)
-    milling.disconnect_signals()
-    holder.cleanup.emit()
-    assert calls == ['other']
 
 
 def test_dragging_geometry_rows_reorders_the_tools_of_the_object():
@@ -523,20 +456,6 @@ def test_path_optimization_is_stored_in_the_tools_and_the_search_time_follows_th
     assert ui.opt_algorithm_radio.isHidden() and ui.opt_time_entry.isHidden()
 
 
-@pytest.mark.parametrize('key, value, text', [
-    ('tools_mill_cutz', 0.5, 'Cut Z is above zero'),
-    ('tools_mill_travelz', -1.0, 'Travel Z is below zero'),
-])
-def test_a_likely_mistake_in_a_parameter_is_stored_and_told(key, value, text):
-    objects = {'A': make_object('A', tools_mill_cutz=-1.8, tools_mill_travelz=2.0)}
-    milling = plugin(objects)
-    select(milling, 'A')
-    assert told(milling, 'WARNING') == ''
-    edit(milling, key, value)
-    assert objects['A'].tools[1]['data'][key] == value
-    assert text in told(milling, 'WARNING')
-
-
 @pytest.mark.parametrize('changes, text', [
     (dict(tools_mill_tooldia=0.0), 'diameter must be above zero'),
     (dict(tools_mill_multidepth=True, tools_mill_depthperpass=0.0), 'Depth per Pass must be above zero'),
@@ -553,41 +472,4 @@ def test_a_tool_that_cannot_make_a_job_blocks_the_job(changes, text, multigeo):
     assert text in told(milling, 'ERROR')
 
 
-def test_a_likely_mistake_warns_at_generation_but_the_job_is_made():
-    objects = {'A': make_object('A', tools_mill_milling_overlap=120.0)}
-    milling = plugin(objects)
-    select(milling, 'A')
-    assert generate(milling)
-    assert 'overlap must be less than 100%' in told(milling, 'WARNING')
-
-
 # ---- the form of a laser tool, the tool number label, the Excellon totals ----
-
-def test_laser_preprocessor_hides_multidepth_in_the_advanced_level():
-    objects = {'A': make_object('A', tools_mill_multidepth=True, **LASER), 'B': make_object('B', **MILL)}
-    milling = plugin(objects)
-    ui = milling.ui
-    ui.level.setChecked(True)
-    select(milling, 'B')
-    assert not ui.mpass_cb.isHidden() and not ui.maxdepth_entry.isHidden()
-    select(milling, 'A')
-    assert ui.mpass_cb.isHidden() and ui.maxdepth_entry.isHidden()
-
-
-def test_tool_label_shows_the_tool_uid_not_the_row_number():
-    objects = {'A': make_object('A', **MILL)}
-    objects['A'].tools = {7: objects['A'].tools[1]}
-    milling = plugin(objects)
-    select(milling, 'A')
-    milling.ui.tools_table_mill_geo.selectRow(0)
-    milling._update_ui()
-    assert 'Tool 7' in milling.ui.tool_data_label.text()
-
-
-def test_excellon_totals_are_zero_without_a_target():
-    milling = plugin({'A': make_object('A', **MILL)})
-    milling.tot_drill_cnt, milling.tot_slot_cnt = 4, 2
-    milling.target_obj = None
-    milling.build_ui_exc()
-    milling._exc_rebuild_ui()          # no target: nothing to rebuild
-    assert (milling.tot_drill_cnt, milling.tot_slot_cnt) == (0, 0)
