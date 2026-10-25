@@ -1,20 +1,16 @@
 """Selected native transforms use the real editor transaction and storage paths."""
 
-from concurrent.futures import ThreadPoolExecutor
-from time import perf_counter
 from types import MethodType
-from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock
 
 import pytest
 
-from appEditors.appExcEditor import AppExcEditor, translated_exc_shape
+from appEditors.appExcEditor import AppExcEditor
 from appEditors.exc_plugins.ExcProperties import native_feature_properties
-from shapely.affinity import translate
 from test_exc_editor_history import scene, drill
 from tests.helpers_objects import app, _headless_qt, reparse_excellon  # noqa: F401,E402
 from appHandlers.appIO import appIO
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore
 
 
 def editor_scene():

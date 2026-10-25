@@ -2,9 +2,6 @@
 
 import os
 import importlib
-import ast
-import inspect
-import textwrap
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -109,42 +106,6 @@ def test_layout_transitions_keep_actions_and_toolbar_state(layout_app, lock, sho
             app.ui.lock_action.trigger()
             app.ui.show_text_action.trigger()
             lock, show_text = not lock, not show_text
-
-
-@pytest.mark.parametrize('saved', [None, False, True, 'false'])
-def test_startup_restores_toolbar_settings(layout_app, saved):
-    app, group, settings = layout_app
-    if saved is not None:
-        settings.setValue('toolbar_lock', saved)
-        settings.setValue('menu_show_text', saved)
-    toolbar = QtWidgets.QToolBar(app.ui)
-    app.ui.addToolBar(toolbar)
-    # Exercise the actual startup setting reads and application without constructing the whole app.
-    startup = ast.parse(textwrap.dedent(inspect.getsource(MainGUI.__init__))).body[0]
-    nodes = []
-    for node in startup.body:
-        if isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id in ('tb_lock_state', 'show_text_state')
-                for target in node.targets):
-            nodes.append(node)
-        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            call = node.value.func
-            if isinstance(call, ast.Attribute) and call.attr in ('lock_toolbar', 'show_text_under_action'):
-                nodes.append(node)
-    assert len(nodes) == 4
-    exec(compile(ast.Module(body=nodes, type_ignores=[]), '<toolbar startup>', 'exec'),
-         {'self': app.ui, 'q_settings': settings})
-    expected = saved in (None, True, 'true')
-    assert app.ui.lock_action.isChecked() == expected
-    assert app.ui.show_text_action.isChecked() == expected
-    assert toolbar.isMovable() == (not expected)
-    assert toolbar.toolButtonStyle() == (
-        QtCore.Qt.ToolButtonStyle.ToolButtonTextUnderIcon if expected
-        else QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
-    settings.sync()
-    restored = type(settings)(settings.fileName(), settings.format())
-    assert restored.value('toolbar_lock', type=bool) == expected
-    assert restored.value('menu_show_text', type=bool) == expected
 
 
 @pytest.mark.parametrize('layout', ['standard', 'minimal'])

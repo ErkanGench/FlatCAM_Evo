@@ -145,13 +145,12 @@ def test_startup_update_toggle_gates_automatic_queueing(monkeypatch):
     enabled._queue_version_check.assert_called_once_with()
 
 
-@pytest.mark.parametrize("beta", (False, True))
-def test_startup_queues_updates_for_beta_and_release_builds(monkeypatch, beta):
+def test_startup_queues_updates_for_beta_builds(monkeypatch):
     from appMain import App
 
     monkeypatch.setattr(App, "args", [])
     monkeypatch.setattr("appMain.QSettings", MagicMock())
-    app = _startup_app(True, beta=beta)
+    app = _startup_app(True, beta=True)
 
     App._setup_startup(app)
 

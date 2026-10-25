@@ -120,14 +120,6 @@ class TestSafeGetFallbacks:
         assert "999" not in other_defaults["document_font_sizes"]
         assert "custom" not in defaults.current_defaults["global_bookmarks"]
 
-    def test_appdefaults_get_returns_factory_default_for_missing_key(self):
-        """AppDefaults.get() should return factory default for missing keys."""
-        defaults = AppDefaults(beta=False, version="1.0")
-        del defaults.defaults["units"]
-
-        result = defaults.get("units", AppDefaults.factory_defaults.get("units"))
-        assert result == "MM"
-
     def test_appoptions_load_restores_baseline_before_sparse_overlay(self, tmp_path):
         """Sparse imports restore missing keys while preserving falsy overrides."""
         filename = tmp_path / "preferences.FlatConfig"

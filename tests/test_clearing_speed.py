@@ -119,15 +119,14 @@ class TestSeedBands(unittest.TestCase):
     def test_banded_rings_are_the_rings_cut_one_by_one(self):
         for islands in (False, True):
             polygon = board(islands)
-            for steps in (8, 64):
-                for simplify_tol in (0.0, 0.01):
-                    expected, __ = seed_rings_one_by_one(polygon, 0.4, steps, simplify_tol=simplify_tol)
-                    # the margin cut whole (fewer coordinates than SEED_BAND_MIN_COORDS) and cut in bands
-                    for min_coords in (SEED_BAND_MIN_COORDS, 0):
-                        with self.subTest(islands=islands, steps=steps, simplify_tol=simplify_tol,
-                                          min_coords=min_coords), band_limit(min_coords):
-                            paths = self.seed_paths(polygon, 0.4, steps, simplify_tol)
-                            self.assertEqual([p.wkb for p in paths], [p.wkb for p in expected])
+            for steps, simplify_tol in ((8, 0.0), (64, 0.01)):
+                expected, __ = seed_rings_one_by_one(polygon, 0.4, steps, simplify_tol=simplify_tol)
+                # the margin cut whole (fewer coordinates than SEED_BAND_MIN_COORDS) and cut in bands
+                for min_coords in (SEED_BAND_MIN_COORDS, 0):
+                    with self.subTest(islands=islands, steps=steps, simplify_tol=simplify_tol,
+                                      min_coords=min_coords), band_limit(min_coords):
+                        paths = self.seed_paths(polygon, 0.4, steps, simplify_tol)
+                        self.assertEqual([p.wkb for p in paths], [p.wkb for p in expected])
 
     def test_rings_stop_at_the_first_ring_that_misses_the_margin(self):
         # 2 areas 3 mm apart: the rings grown in the area of the seed stop in the gap, the other area gets no ring

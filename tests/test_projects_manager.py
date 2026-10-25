@@ -205,30 +205,6 @@ class TestProjectManagerLifecycle(unittest.TestCase):
         app, manager = make_manager()
         self.assertIsNone(manager.save_target())
 
-def make_object(kind='gerber', with_ui=True):
-    obj = SimpleNamespace(kind=kind, clear=Mock(), mark_shapes=Mock(), _full_plot_sig=(1, 2, 3),
-                          ui=QtWidgets.QWidget() if with_ui else None, ui_type=Mock(return_value='new-ui'),
-                          set_ui=Mock(), build_ui=Mock())
-    return obj
-
-
-class TestProjectManagerVisuals(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
-    def make(self, objects):
-        from appHandlers.appProjects import ProjectManager
-        app = make_app(FakeCollection(objects))
-        app.setup_default_properties_tab = Mock()
-        app.init_tools = Mock()
-        app.plot_all = Mock()
-        app.plotcanvas = SimpleNamespace(redraw=Mock(), view=SimpleNamespace(camera=SimpleNamespace(rect=None)))
-        app.preferencesUiManager = Mock()
-        app.on_defaults2options = Mock()
-        manager = ProjectManager(app, collection_factory=FakeCollection)
-        return app, manager
-
 class TestProjectManagerDialogs(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

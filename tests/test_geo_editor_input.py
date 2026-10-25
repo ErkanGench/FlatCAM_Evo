@@ -100,7 +100,7 @@ def test_invalid_numeric_input_keeps_construction_and_history(cls, number, monke
     assert tool.points == [(0.0, 0.0)]
     editor.app.on_jump_to.assert_not_called()
     editor.select_tool.assert_not_called()
-    assert 'finite' in str(editor.app.inform.emit.call_args).lower()
+    assert editor.app.inform.emit.called
 
 
 

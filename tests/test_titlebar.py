@@ -83,7 +83,7 @@ class TestTitleBar(unittest.TestCase):
         splash.show()
         splash.finish(window)
         window.show()
-        QtTest.QTest.qWait(300)
+        QtTest.QTest.qWait(100)
         self.assertEqual(QtCore.QRect(300, 200, 900, 500), window.geometry())
 
     def test_existing_actions_and_project_title_are_reused(self):
@@ -349,7 +349,8 @@ class TestTitleBar(unittest.TestCase):
             message = wintypes.MSG(hWnd=handle, message=0x00a0, wParam=9, lParam=positions[9])
             handled, _ = self.window.nativeEvent(b'windows_generic_MSG', sip.voidptr(ctypes.addressof(message)))
             self.assertFalse(handled)  # Windows must keep receiving hover messages for its Snap flyout.
-            QtTest.QTest.qWait(1100)
+            # the first hold outlasts the Windows Snap flyout delay; the second only needs the same checks
+            QtTest.QTest.qWait(1100 if not release_inside else 50)
             self.assertNotEqual(user32.GetCapture(), handle.value)
             self.assertEqual(self.window.geometry(), original)
             if release_inside:
@@ -494,10 +495,6 @@ class TestTitleBarPreferences(unittest.TestCase):
         group.appearance_radio.set_value(defaults['global_appearance'])
         group.dark_canvas_cb.set_value(False)
         return manager
-
-    def test_custom_titlebar_preference_defaults_on(self):
-        with tempfile.TemporaryDirectory() as path:
-            self.make_preferences(path)
 
     def test_custom_titlebar_changes_persist_and_restart_only_after_confirmation(self):
         for current, requested in ((True, False), (False, True)):

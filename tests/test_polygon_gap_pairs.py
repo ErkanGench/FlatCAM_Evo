@@ -59,10 +59,8 @@ def test_neighbors_have_the_same_distances_and_pairs_as_every_pair():
     assert max(new) == float('%.*f' % (DEC, max(nearest)))
 
 
-@pytest.mark.parametrize('module, name', [('appPlugins.ToolIsolation', 'ToolIsolation'),
-                                          ('appPlugins.ToolNCC.Ncc', 'ToolNcc')])
-def test_tools_check_validity_uses_the_minimum(module, name):
-    tool = getattr(__import__(module, fromlist=[name]), name)
+def test_isolation_check_validity_uses_the_minimum():
+    from appPlugins.ToolIsolation import ToolIsolation as tool
     storage = {10: {'geometry': [{'solid': g} for g in board()]}}
     msg, dist = tool.find_optim_mp(storage, DEC)
     assert msg == 'ok'

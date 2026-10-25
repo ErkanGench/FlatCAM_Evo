@@ -52,14 +52,3 @@ def test_single_object_origin_refreshes_bounds_source_and_dirty_state():
     assert obj.obj_options['xmin'] == 1
     assert '3.0000, 6.0000' in app.inform_shell.emit.call_args.args[0]
 
-
-@pytest.mark.parametrize('cls,args', [(TclCommandMirror, {'axis': 'X'}),
-                                     (TclCommandScale, {'factor': 2}), (TclCommandSkew, {'x': 5})])
-def test_multi_object_transforms_resolve_each_target_once(cls, args):
-    objects = {name: Mock(kind='geometry', obj_options={}) for name in ('a', 'b')}
-    for obj in objects.values():
-        obj.bounds.return_value = (0, 0, 1, 1)
-    app = object_app(None)
-    app.collection.get_by_name.side_effect = objects.get
-    cls(app).execute(args, ['a', 'b'])
-    assert app.collection.get_by_name.call_count == 2

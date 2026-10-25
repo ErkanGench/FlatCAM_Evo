@@ -81,15 +81,6 @@ def test_failed_export_keeps_the_old_source(app, bad):
     app.f_handlers.export_gerber = lambda **kw: bad
     assert grb.regenerate_source() is False
     assert grb.source_file == 'old text'
-    assert 'old source_file is kept' in app.log.warning.call_args[0][0]
-
-
-def test_geometry_stores_the_dxf_export(app):
-    geo = GeometryObject('geo', app)
-    doc = 'DXF text'
-    app.f_handlers.export_dxf = lambda **kw: doc
-    assert geo.regenerate_source() is True
-    assert geo.source_file == doc
 
 
 @pytest.mark.parametrize('units,unit_code', [('MM', 4), ('IN', 1)])

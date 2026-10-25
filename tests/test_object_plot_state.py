@@ -181,11 +181,12 @@ def _expected_gerber_batch(obj, settings, line_enable):
     return out
 
 
-@pytest.mark.parametrize('line_enable', [True])
-@pytest.mark.parametrize('follow', [False, True])
-@pytest.mark.parametrize('multicolored', [False, True])
-@pytest.mark.parametrize('solid', [False, True])
-def test_gerber_plot_batch(solid, multicolored, follow, line_enable):
+@pytest.mark.parametrize('solid, multicolored, follow', [
+    (False, False, False), (False, True, False), (True, False, False), (True, True, False),
+    (False, False, True),  # follow only picks the geometry; one case is enough
+])
+def test_gerber_plot_batch(solid, multicolored, follow):
+    line_enable = True
     settings = {'solid': solid, 'multicolored': multicolored, 'follow': follow, 'plot': True}
     obj = _prepare_gerber(settings, line_enable)
     obj.plot(color='#line', face_color='#fill')

@@ -388,21 +388,6 @@ def mark_inner(tool, gaps=False):
     tool.ui.inner_gaps_cb.set_value(gaps)
 
 
-def legacy_gerber_path(obj, margin, radius):
-    """The old expression for a Gerber (band of the fused copper, one board)."""
-    from appParsers.feature_access import fused_solid
-    band = fused_solid(obj)
-    if margin >= 0:
-        return band.buffer(margin + radius).exterior
-    return unary_union(band.buffer(-margin + radius).interiors)
-
-
-def legacy_geometry_path(poly, margin):
-    if margin >= 0:
-        return poly.buffer(margin).exterior
-    return unary_union(poly.buffer(1e-7).exterior.buffer(-margin).interiors)
-
-
 def test_copper_with_clearance_gives_no_slot(cutout_app):
     got = run_case(cutout_app, 'copper_clearance', {}, after_configure=lambda t: t.ui.inner_cb.set_value(True))
     assert got == load_golden('clearance_single')

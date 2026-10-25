@@ -5,12 +5,9 @@
 
 import sys
 import os
-import textwrap
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, MagicMock, patch
-from PyQt6 import QtWidgets
-from PyQt6.QtCore import QTimer
+from unittest.mock import Mock, patch
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -91,16 +88,6 @@ class TestAppShutdownSequence(unittest.TestCase):
     preferencesUiManager.save_defaults() without AttributeError.
     """
     
-    @unittest.skip("Skipped - requires full Qt application context")
-    def test_quit_application_can_save_preferences(self):
-        """
-        GREEN: quit_application() should successfully call save_defaults().
-        
-        This test is skipped because it requires a running Qt application.
-        The fix is verified by other tests that check property access.
-        """
-        pass
-    
     def test_quit_application_with_proper_preferencesUiManager(self):
         """
         GREEN: quit_application() works when preferencesUiManager is properly set.
@@ -164,45 +151,3 @@ class TestAppShutdownSequence(unittest.TestCase):
             self.assertTrue(lifecycle.quit_application(silent=True))
 
         quit_now.assert_called_once_with()
-        single_shot.assert_called_once_with(0, quit_now)
-
-
-def run_all_tests():
-    """Run all tests and report results."""
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    
-    # Add all test classes
-    suite.addTests(loader.loadTestsFromTestCase(TestInitializationOrder))
-    suite.addTests(loader.loadTestsFromTestCase(TestAppLifecycleCaching))
-    suite.addTests(loader.loadTestsFromTestCase(TestAppShutdownSequence))
-    suite.addTests(loader.loadTestsFromTestCase(TestDynamicAppStartup))
-    
-    # Run tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    
-    # Report
-    print("\n" + "=" * 70)
-    print("TEST SUMMARY")
-    print("=" * 70)
-    print(f"Tests run: {result.testsRun}")
-    print(f"Failures: {len(result.failures)}")
-    print(f"Errors: {len(result.errors)}")
-    print(f"Skipped: {len(result.skipped)}")
-    
-    if result.failures:
-        print("\nFAILURES:")
-        for test, traceback in result.failures:
-            print(f"  - {test}: {traceback.split(chr(10))[-2] if chr(10) in traceback else traceback[:100]}")
-    
-    if result.errors:
-        print("\nERRORS:")
-        for test, traceback in result.errors:
-            print(f"  - {test}: {traceback.split(chr(10))[-2] if chr(10) in traceback else traceback[:100]}")
-    
-    return result
-
-
-if __name__ == '__main__':
-    sys.exit(0 if run_all_tests().wasSuccessful() else 1)

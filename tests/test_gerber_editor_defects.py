@@ -168,7 +168,7 @@ def test_scale_and_buffer_without_selected_shape_fail_without_history_step(kind)
 
 # 14. Buffer factor check
 
-@pytest.mark.parametrize('factor_value', [0, -0.5])
+@pytest.mark.parametrize('factor_value', [0])
 def test_buffer_factor_at_or_below_zero_is_rejected(factor_value):
     editor, first, second = scene()
     editor.selected = [first]

@@ -1,7 +1,6 @@
 """Vertex edits with an address and vertex drags go through apply_vertex_edit: 1 drag is 1 Undo step."""
 import math
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 from PyQt6 import QtCore, QtWidgets
@@ -85,16 +84,6 @@ def test_invalid_drag_does_not_change_the_shape():
     assert editor.app.inform.emit.called
 
 
-
-
-
-
-def test_right_button_press_cancels_the_drag():
-    editor, original = drag_editor(box(0, 0, 4, 4))
-    editor.vertex_grips = Mock()
-    editor.app.ui = SimpleNamespace(rel_position_label=Mock(), popMenu=SimpleNamespace(mouse_is_panning=False))
-    AppGeoEditor.on_canvas_click(editor, SimpleNamespace(pos=(4, 0), button=2))
-    editor.vertex_grips.cancel.assert_called_once()
 
 
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import pytest
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtWidgets
 from shapely import LineString, Point
 
 from appPlugins.ToolDrilling import ToolDrilling
@@ -257,56 +257,6 @@ def test_milling_real_cnc_generation_matches_deferred_submission(qapp, multigeo)
         outputs.append(job.source_file)
     assert outputs[0] == outputs[1]
 
-
-class SignalHost(QtCore.QObject):
-    proj_selection_changed = QtCore.pyqtSignal(object, object)
-
-
-class ExclusionHost(QtCore.QObject):
-    e_shape_modified = QtCore.pyqtSignal()
-
-
-class SignalApp:
-    def __init__(self):
-        self._project_host = SignalHost()
-        self.proj_selection_changed = self._project_host.proj_selection_changed
-        self.exc_areas = ExclusionHost()
-
-
-class LifecycleTool:
-    def __init__(self, app):
-        self.app = app
-        self.project_calls = 0
-        self.exclusion_calls = 0
-        self._noop = lambda *_args: None
-        self.ui = self._build_ui()
-        self.form_fields = {}
-        self.general_form_fields = {}
-        self.tool_form_fields = {}
-
-    def _build_ui(self):
-        empty_table = QtWidgets.QTableWidget(0, 5)
-        exclusion_table = QtWidgets.QTableWidget(0, 4)
-        ui = SimpleNamespace(
-            tools_table_mill_geo=empty_table,
-            tools_table_mill_exc=empty_table,
-            tools_table=empty_table,
-            tool_shape_combo=QtWidgets.QComboBox(),
-            order_combo=QtWidgets.QComboBox(),
-            exclusion_table=exclusion_table,
-        )
-        return ui
-
-    def __getattr__(self, name):
-        if name.startswith('on_') or name == 'form_to_storage':
-            return self._noop
-        raise AttributeError(name)
-
-    def on_object_selection_changed(self, *_args):
-        self.project_calls += 1
-
-    def update_exclusion_table(self, *_args):
-        self.exclusion_calls += 1
 
 @pytest.fixture
 def qapp():

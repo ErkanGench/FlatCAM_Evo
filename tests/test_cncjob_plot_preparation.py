@@ -131,7 +131,7 @@ class TestCNCJobPlotPreparation(unittest.TestCase):
                             expected = path['geom']
                             if dia:
                                 expected = (Polygon(expected) if source == 'excellon' and code == 'C'
-                                            else expected.buffer(dia / 1.99999999, 16))
+                                            else expected.buffer(dia / 1.99999999, 16 // 4))
                                 expected = expected.simplify(0.0005)
                                 self.assertEqual(item['face_color'], COLORS[code][0])
                                 self.assertEqual(item['layer'], 1 if code == 'C' else 2)

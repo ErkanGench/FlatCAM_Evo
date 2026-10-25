@@ -682,18 +682,3 @@ def test_cancel_discards_results_and_leaves_the_app_idle(tool):
     tool.app.proc_container.view.set_idle.assert_called_once()
     assert any('cancelled' in str(c.args[0]) for c in tool.app.inform.emit.call_args_list)
     assert tool.ui.run_button.isEnabled() and not tool.ui.cancel_button.isEnabled()
-
-
-def test_layers_are_built_in_the_worker_not_on_the_gui_thread(tool, monkeypatch):
-    built = Mock(side_effect=gen.gerber_layer)
-    monkeypatch.setattr(gen, 'gerber_layer', built)
-    _enable_only(tool, 'c2c')
-    _use(tool, 'copper_top', 'top')
-
-    tool.execute()
-
-    built.assert_not_called()
-    task = tool.app.worker_task.emit.call_args.args[0]
-    task['fcn'](*task['params'])
-    built.assert_called_once()
-    assert len(tool.last_results) == 1

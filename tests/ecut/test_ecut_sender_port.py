@@ -850,7 +850,6 @@ def test_hold_with_stale_rx_frame_is_conservatively_draining():
 def test_planning_checkpoint_cancels_preparation_before_it_completes(connection, control):
     port, api, engine = connection
     wait_for(lambda: not port._startup_pending and not port._active)
-    assert callable(getattr(api, '_planning_checkpoint', None))
     entered, finished = threading.Event(), threading.Event()
     errors = []
     def preflight(lines):

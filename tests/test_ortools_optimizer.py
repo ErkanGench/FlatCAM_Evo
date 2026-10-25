@@ -129,6 +129,6 @@ def test_abort_stops_the_wait_for_the_pool(pool):
     threading.Timer(0.2, lambda: setattr(cnc.app, 'abort_flag', True)).start()
     t0 = time.perf_counter()
     with pytest.raises(GracefulException):
-        cnc.optimized_ortools_meta(locations=_random_locs(300), opt_time=3)
-    assert time.perf_counter() - t0 < 1.5
+        cnc.optimized_ortools_meta(locations=_random_locs(300), opt_time=2)
+    assert time.perf_counter() - t0 < 1.0
     pool.apply(time.sleep, (0,))      # the pool is free again for the next test

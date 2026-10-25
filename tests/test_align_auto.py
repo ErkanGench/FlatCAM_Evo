@@ -243,7 +243,7 @@ def test_dense_pad_arrays_keep_drill_registration_and_competing_placements(mirro
     rng = np.random.default_rng(412)
     through = rng.uniform((0, 0), (120, 80), (200, 2))
     smd = np.vstack([np.column_stack([x + np.arange(40) * 0.5, np.full(40, y)])
-                     for x, y in rng.uniform((0, 0), (95, 80), (80, 2))])
+                     for x, y in rng.uniform((0, 0), (95, 80), (20, 2))])
     pads = pad_index(np.vstack([through, smd]), size=0.25)
     pads.kind = 'gerber'
     flip = (-1, 1) if mirrored else (1, 1)

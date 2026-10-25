@@ -33,14 +33,6 @@ def restore_scheme(qapp):
         qapp.styleHints().unsetColorScheme()
 
 
-class RecordingHints:
-    def __init__(self):
-        self.calls = []
-
-    def setColorScheme(self, scheme):
-        self.calls.append(scheme)
-
-
 class TestApplyColorScheme:
     @needs_color_scheme
     def test_light_themes_give_a_light_window_palette(self, qapp, restore_scheme):

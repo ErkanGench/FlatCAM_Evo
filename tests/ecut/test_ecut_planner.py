@@ -1,7 +1,6 @@
 """Offline lookahead planning; no transport or hardware is involved."""
 
 import importlib
-import importlib.util
 import math
 from dataclasses import FrozenInstanceError
 
@@ -13,9 +12,7 @@ from appPlugins.Common.ecut.ecut_protocol import EcutError
 
 @pytest.fixture
 def planner():
-    name = 'appPlugins.Common.ecut.ecut_planner'
-    assert importlib.util.find_spec(name) is not None, 'The multi-move planner is missing'
-    return importlib.import_module(name)
+    return importlib.import_module('appPlugins.Common.ecut.ecut_planner')
 
 
 def config():

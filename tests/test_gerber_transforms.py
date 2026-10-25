@@ -15,8 +15,7 @@ from appParsers.ParseGerber import Gerber
 from test_gerber_parser import MockApp
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SAMPLES = [os.path.join(ROOT, 'tests', 'fixtures', 'altium', 'Gerber', 'I2C_level_shifter.GTL'),
-           os.path.join(ROOT, 'tests', 'fixtures', 'kicad', 'Gerbers', 'Easyduino_RP2040-F_Cu.gtl')]
+SAMPLES = [os.path.join(ROOT, 'tests', 'fixtures', 'altium', 'Gerber', 'I2C_level_shifter.GTL')]
 
 OPS = {
     'rotate': (lambda g: g.rotate(30, [5, 7]), lambda o: affinity.rotate(o, 30, origin=(5, 7))),

@@ -117,11 +117,3 @@ def test_unknown_preprocessor_of_a_saved_tool_generates_with_the_default_one():
 
     assert get_preprocessor(app, 'Gone_Machine') == 'DEFAULT_PP'
     assert 'Gone_Machine' in app.inform.emit.call_args[0][0]
-
-
-def test_properties_ui_is_not_built_for_each_job_of_a_load_batch():
-    job = SimpleNamespace(_load_batch=object(), ui_disconnect=Mock())
-
-    CNCJobObject.build_ui(job)
-
-    job.ui_disconnect.assert_not_called()

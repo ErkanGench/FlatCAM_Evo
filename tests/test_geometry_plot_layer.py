@@ -35,10 +35,6 @@ def _make_obj(plot=True):
 
 class TestGeometryPlotLayer(unittest.TestCase):
 
-    def test_constant(self):
-        from appObjects.GeometryObject import GeometryObject
-        self.assertEqual(GeometryObject.PLOT_LAYER, 2)
-
     def test_plot_batch_layer(self):
         obj = _make_obj()
         with mock.patch('appObjects.GeometryObject.FlatCAMObj.plot', return_value=True):

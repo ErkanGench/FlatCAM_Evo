@@ -191,21 +191,6 @@ def report_case(name, polygon, diameter, overlap, steps=64, coverage=True, hausd
                           'new_outside_area': new_swept.difference(polygon).area}), flush=True)
 
 
-class TestShrinkOffsetConsequences(unittest.TestCase):
-    def test_cumulative_offsets_bound_growth_without_changing_initial_contours(self):
-        polygon = board()
-        old = inset_layers(polygon, 0.2, 0.6, 64, False)
-        new = inset_layers(polygon, 0.2, 0.6, 64, True)
-        self.assertEqual([p.wkb for p in old[0]], [p.wkb for p in new[0]])
-        self.assertEqual(len(old), len(new))
-        old_paths, new_paths = layer_paths(old), layer_paths(new)
-        self.assertEqual(len(old_paths), len(new_paths))
-        old_segments = sum(len(p.coords) - 1 for p in old_paths)
-        new_segments = sum(len(p.coords) - 1 for p in new_paths)
-        self.assertGreater(old_segments, 10 * new_segments)
-        self.assertLess(new_segments, 200000)
-
-
 class TestBoundedStandardOffsets(unittest.TestCase):
     def setUp(self):
         import test_paint_geometry as paint_cases

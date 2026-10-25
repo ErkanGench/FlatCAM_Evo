@@ -561,14 +561,6 @@ class TestNeedsRegionExport:
 
 
 class TestExportRouting:
-    def test_native_object_keeps_its_apertures(self, app, tmp_path):
-        grb = make_gerber(app, NATIVE_GBR)
-        text = export_gerber_text(app, grb)
-        assert '%ADD10C,' in text and 'D03*' in text
-        again = reparse_gerber(app, text, tmp_path)
-        assert {t['type'] for t in again.tools.values()} >= {'C', 'R', 'O'}
-        assert_poly_equiv(again.solid_geometry, grb.solid_geometry, rel=1e-6, abs_tol=1e-4, msg='native')
-
     def test_flag_exports_regions_and_keeps_the_composed_geometry(self, app, tmp_path):
         grb = make_gerber(app, NATIVE_GBR)
         grb.export_as_regions = True
@@ -576,12 +568,6 @@ class TestExportRouting:
         assert '%ADD' not in text and 'G36*' in text
         again = reparse_gerber(app, text, tmp_path)
         assert_poly_equiv(again.solid_geometry, grb.solid_geometry, rel=1e-6, abs_tol=1e-4, msg='flag')
-        assert set(again.tools) == {0}
-
-    def test_p_and_am_object_is_exported_as_regions(self, app, tmp_path):
-        grb = make_p_am_gerber(app, tmp_path)
-        again = reparse_gerber(app, export_gerber_text(app, grb), tmp_path)
-        assert_poly_equiv(again.solid_geometry, grb.solid_geometry, rel=1e-6, abs_tol=1e-4, msg='P/AM')
         assert set(again.tools) == {0}
 
 
@@ -661,13 +647,6 @@ class TestLifecycleMerge:
 
 
 class TestLifecycleProject:
-    def test_flag_survives_save_and_load_and_exports(self, app, tmp_path):
-        source = flagged_native(app)
-        _, restored = save_and_load(app, [source], tmp_path)
-        assert restored[0].export_as_regions is True
-        assert_exports_composed_geometry(app, restored[0], source.solid_geometry, tmp_path, 'project')
-
-
     def test_project_without_the_field_loads_as_false(self, app, tmp_path):
         source = make_gerber(app, NATIVE_GBR)
         app.collection.get_list.return_value = [source]

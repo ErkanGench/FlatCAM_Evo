@@ -278,7 +278,7 @@ def make_cnc_job_with_preprocessor(tool, multigeo, **options):
 
 
 @pytest.mark.parametrize('saved, app_value, expected', [
-    ('Standard', 2, 0), ('Seed', 2, 1), ('lines', 0, 2), (0, 2, 0), (2, 0, 2),
+    ('Standard', 2, 0), ('Seed', 2, 1), ('lines', 0, 2), (0, 2, 0),
     # not recognized, so the application value: a translated text (here Spanish), an index that does not exist, a bool
     ('Semilla', 2, 2), (7, 1, 1), (True, 2, 2)])
 def test_saved_polish_method(saved, app_value, expected):

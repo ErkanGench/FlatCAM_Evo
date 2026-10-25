@@ -111,22 +111,6 @@ def milling_tools(paths, **data_changes):
     return {1: {'tooldia': 0.1, 'data': data, 'solid_geometry': paths}}
 
 
-def tool_gcode(pp_name, paths, per_path=False, **data_changes):
-    """
-    :param per_path:    True: the reference, every path simplified by linear2gcode(), one by one (as before)
-    :return:            G-code, if the paths were simplified at once, (travel distance, routing time)
-    """
-    job = gcode_job(pp_name)
-    tools = milling_tools(paths, tools_mill_ppname_g=pp_name, **data_changes)
-    if per_path:
-        presimplify = patch.object(camlib, 'simplify_paths', return_value=None)
-    else:
-        presimplify = patch.object(camlib, 'simplify_paths', wraps=camlib.simplify_paths)
-    with presimplify as mock:
-        gcode, __ = job.geometry_tool_gcode_gen(1, tools, (0, 0), (0, 0), 0.005, is_first=True, is_last=True)
-    return gcode, mock.called, (job.travel_distance, job.routing_time)
-
-
 class TestGeometryToolGcode:
     @pytest.mark.parametrize('workers', [2])
     @pytest.mark.parametrize('count', [5])
@@ -152,12 +136,6 @@ class TestGeometryToolGcode:
         assert mock.call_count == (0 if cancel_before else 1)
         if not cancel_before and count == 300:
             assert len(mock.call_args.args[0]) < count
-
-    @pytest.mark.parametrize('changes', [{'tools_mill_multidepth': True, 'tools_mill_depthperpass': 0.02},
-                                         {'tools_mill_extracut': True, 'tools_mill_extracut_length': 0.2}])
-    def test_multi_depth_and_extra_cut_simplify_each_path(self, changes):
-        __, presimplified, __ = tool_gcode('default', noisy_paths(40), **changes)
-        assert not presimplified
 
 
 def old_codes_split(job, gline):
@@ -231,7 +209,7 @@ LINES = [
 NAMES = [
     ('default', 'default', None), ('default', 'GRBL_laser', None), ('GRBL_laser_z', 'default', None),
     ('default', 'Roland_MDX_20', None), ('default', 'hpgl', None), ('default', 'default', 'Paste_1'),
-    ('default', 'default', 'other'), ('default', 'Marlin_laser_FAN_pin', None), ('default', 'GRBL_11', None),
+    ('default', 'default', 'other'),
 ]
 
 

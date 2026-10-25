@@ -182,7 +182,7 @@ class TestKiCadPcbFixtureRoundTrip(unittest.TestCase):
         cls.qapp = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         cls.parsed = _parsed_board()
 
-    def _import(self, units):
+    def _import(self, units, layers):
         app = _app(units)
         io = appIO(app)
         io._register_pcbdoc_outputs = Mock()
@@ -197,26 +197,27 @@ class TestKiCadPcbFixtureRoundTrip(unittest.TestCase):
 
         app.app_obj.new_object.side_effect = create
         app.collection.get_by_name.side_effect = objects.__getitem__
-        result = io.import_pcbdoc_objects(str(self.FIXTURE), self.parsed, self.COPPER, [self.PTH])
+        result = io.import_pcbdoc_objects(str(self.FIXTURE), self.parsed, layers, [self.PTH])
         self.assertIsNone(result)
         return app, io, objects
 
     def test_copper_and_drill_group_survive_import_export_reimport(self):
-        for units in ('MM', 'IN'):
+        # all four layers in millimetres; inches only changes the unit scaling, one layer shows it
+        unions = {}
+        for units, layers in (('MM', self.COPPER), ('IN', ['F.Cu'])):
             with self.subTest(units=units):
-                app, io, objects = self._import(units)
+                app, io, objects = self._import(units, layers)
                 gerbers = {name: obj for name, obj in objects.items() if isinstance(obj, NativeGerberObject)}
                 drills = {name: obj for name, obj in objects.items() if isinstance(obj, NativeExcellonObject)}
-                self.assertEqual(sorted(gerbers), sorted([
-                    'Easyduino_RP2040_F_Cu', 'Easyduino_RP2040_In1_Cu',
-                    'Easyduino_RP2040_In2_Cu', 'Easyduino_RP2040_B_Cu']))
+                self.assertEqual(sorted(gerbers), sorted('Easyduino_RP2040_%s' % layer.replace('.', '_')
+                                                         for layer in layers))
                 self.assertEqual(list(drills), ['Easyduino_RP2040_PTH_F_Cu-B_Cu'])
                 factor = 1 if units == 'MM' else 1 / 25.4
 
                 with tempfile.TemporaryDirectory() as directory:
                     reimported = {}
-                    for layer in self.COPPER:
-                        name = 'Easyduino_RP2040_%s' % layer.replace('.', '_')
+                    for layer in layers:
+                        name ='Easyduino_RP2040_%s' % layer.replace('.', '_')
                         self.assertEqual(gerbers[name].units, units)
                         filename = Path(directory) / ('%s.gbr' % layer.replace('.', '_'))
                         io.export_gerber(name, str(filename), local_use=None, use_thread=False)
@@ -238,9 +239,10 @@ class TestKiCadPcbFixtureRoundTrip(unittest.TestCase):
                     diameters = sorted(round(tool['tooldia'] / factor, 2) for tool in parser.tools.values())
                     self.assertEqual(diameters, [0.3, 0.6, 1.0])
 
-                for layer in self.COPPER:
-                    expected = scale(_union(self.parsed.layers[layer]['solid_geometry']),
-                                     xfact=factor, yfact=factor, origin=(0, 0))
+                for layer in layers:
+                    if layer not in unions:
+                        unions[layer] = _union(self.parsed.layers[layer]['solid_geometry'])
+                    expected = scale(unions[layer], xfact=factor, yfact=factor, origin=(0, 0))
                     actual = reimported[layer]
                     difference = expected.symmetric_difference(actual).area
                     # Gerber export rounds each vertex to 4 decimals of the file unit (1e-4 mm or 1e-4 in).

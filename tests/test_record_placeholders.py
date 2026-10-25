@@ -5,12 +5,9 @@ ToolCopperThieving wrote {'solid': [], 'follow': [], 'clear': []} for missing ke
 reads clear.is_empty on every record, so such an object failed to export; projects saved with these records exist.
 """
 
-import pytest
-from shapely.geometry import Point
 
 from appParsers.feature_access import iter_features
 from appParsers.ParseGerber import Gerber
-from camlib import flatten_shapely_geometry
 from tests.helpers_objects import (  # noqa: F401,E402
     app, assert_poly_equiv, export_gerber_text, _headless_qt, make_gerber, NATIVE_GBR, reparse_gerber,
 )
@@ -48,7 +45,3 @@ def test_iter_features_treats_placeholders_as_missing(app):
     assert all(hasattr(r.solid, 'is_empty') for r in records)
 
 
-def test_flattener_rejects_record_dicts():
-    # the reason ToolFilm iterates the records directly
-    with pytest.raises(NotImplementedError):
-        flatten_shapely_geometry([{'follow': Point(0, 0)}])

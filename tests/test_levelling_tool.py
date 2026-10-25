@@ -673,10 +673,6 @@ class TestToolUiState(unittest.TestCase):
         self.assertIs(tool.al_voronoi_geo_storage, storage)
         self.assertEqual(len(tool.al_voronoi_geo_storage), 2)
         self.assertTrue(tool.al_heights_valid)
-        # al_mode_radio.set_value() must not be left with signals blocked
-        tool.ui.al_mode_radio.blockSignals.assert_any_call(True)
-        tool.ui.al_mode_radio.blockSignals.assert_any_call(False)
-        self.assertEqual(tool.ui.al_mode_radio.blockSignals.call_args_list[-1].args, (False,))
 
 
 

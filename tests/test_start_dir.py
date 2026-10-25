@@ -220,10 +220,14 @@ class TestTclPathArguments:
         assert 'filename' not in named_args
         command.raise_tcl_error.assert_called_once_with("Missing required argument 'filename'.")
 
-class TestShellfileOption:
-    """appMain parses the command line when the class is defined: run it in a new interpreter."""
-
-    CODE = textwrap.dedent("""
+@pytest.fixture(scope='module')
+def command_line_runs(tmp_path_factory):
+    """Three command lines run in new interpreters at the same time: appMain takes seconds to import."""
+    from concurrent.futures import ThreadPoolExecutor
+    folder = tmp_path_factory.mktemp('start_dir_cmdline')
+    (folder / 'job.FlatScript').write_text('# nothing\n')
+    (folder / 'board.gtl').write_text('M02*\n')
+    code = textwrap.dedent("""
         import sys
         sys.path.insert(0, %r)
         import appMain
@@ -231,34 +235,42 @@ class TestShellfileOption:
         print('ARGS=' + repr(appMain.App.args))
     """) % REPO
 
-    def _run(self, cwd, *options):
-        # appMain takes about 10 s to import on Windows
-        return subprocess.run([sys.executable, '-c', self.CODE, *options], cwd=cwd, capture_output=True, text=True,
-                              timeout=300)
+    def run(*options):
+        return subprocess.run([sys.executable, '-c', code, *options], cwd=str(folder), capture_output=True,
+                              text=True, timeout=300)
 
-    def test_relative_name_becomes_absolute(self, tmp_path):
-        (tmp_path / 'job.FlatScript').write_text('# nothing\n')
-        run = self._run(str(tmp_path), '--shellfile=job.FlatScript')
+    with ThreadPoolExecutor(3) as pool:
+        jobs = [pool.submit(run, *options) for options in (('--shellfile=job.FlatScript',),
+                                                           ('--shellfile=missing.FlatScript',),
+                                                           ('board.gtl', 'quit', 'missing.drl'))]
+        return folder, [job.result() for job in jobs]
+
+
+class TestShellfileOption:
+    """appMain parses the command line when the class is defined: run it in a new interpreter."""
+
+    def test_relative_name_becomes_absolute(self, command_line_runs):
+        folder, (run, _, _) = command_line_runs
         assert run.returncode == 0, run.stderr
         shellfile = [line for line in run.stdout.splitlines() if line.startswith('SHELLFILE=')][0]
-        assert os.path.realpath(shellfile[len('SHELLFILE='):]) == os.path.realpath(str(tmp_path / 'job.FlatScript'))
+        assert os.path.realpath(shellfile[len('SHELLFILE='):]) == os.path.realpath(str(folder / 'job.FlatScript'))
         assert os.path.isabs(shellfile[len('SHELLFILE='):])
 
-    def test_missing_file_ends_the_program_before_anything_starts(self, tmp_path):
-        run = self._run(str(tmp_path), '--shellfile=missing.FlatScript')
+    def test_missing_file_ends_the_program_before_anything_starts(self, command_line_runs):
+        _, (_, run, _) = command_line_runs
         assert run.returncode == 2
         assert 'missing.FlatScript' in run.stderr
         assert 'SHELLFILE=' not in run.stdout
 
+
 class TestFileArguments:
     """The files to open that are given as arguments on the command line."""
 
-    def test_relative_file_becomes_absolute_and_keywords_stay(self, tmp_path):
-        (tmp_path / 'board.gtl').write_text('M02*\n')
-        run = TestShellfileOption()._run(str(tmp_path), 'board.gtl', 'quit', 'missing.drl')
+    def test_relative_file_becomes_absolute_and_keywords_stay(self, command_line_runs):
+        folder, (_, _, run) = command_line_runs
         assert run.returncode == 0, run.stderr
         line = [line for line in run.stdout.splitlines() if line.startswith('ARGS=')][0]
         args = eval(line[len('ARGS='):])
-        assert os.path.realpath(args[0]) == os.path.realpath(str(tmp_path / 'board.gtl'))
+        assert os.path.realpath(args[0]) == os.path.realpath(str(folder / 'board.gtl'))
         assert os.path.isabs(args[0])
         assert args[1:] == ['quit', 'missing.drl']

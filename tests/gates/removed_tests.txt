@@ -36,3 +36,103 @@ tests/test_project_save_wkt.py::TestProjectFileWithWktCache::test_format_read_by
 tests/test_app_history_drilling.py::test_order_change_is_one_step  # Removed with the Drilling audit fixes.
 tests/test_app_history_milling.py::test_geo_field_edits_add_no_step  # Removed with the Milling audit fixes.
 tests/test_milling_lifecycle.py::test_milling_drills_preserve_per_tool_buffers_and_equal_diameter_epsilon  # Removed with the Milling audit fixes.
+tests/test_isolation_vbit_dia.py::test_one_edit_runs_handler_once  # call count of an internal handler; double connection is covered by assert_connected_once in the other tests
+tests/test_cncjob_gcode_speed.py::TestGeometryToolGcode::test_multi_depth_and_extra_cut_simplify_each_path[changes0]  # checks that an internal helper was not called, not the G-code
+tests/test_cncjob_gcode_speed.py::TestGeometryToolGcode::test_multi_depth_and_extra_cut_simplify_each_path[changes1]  # same
+tests/test_cncjob_gcode_speed.py::TestCodesSplit::test_same_as_before[names7]  # Marlin_laser_FAN_pin takes the same laser branch as names1/names2
+tests/test_cncjob_gcode_speed.py::TestCodesSplit::test_same_as_before[names8]  # GRBL_11 takes the same default branch as names0
+tests/test_gerber_transform_export.py::TestExportRouting::test_native_object_keeps_its_apertures  # duplicate of TestFileRoundTrip::test_gerber_native_apertures_round_trip (stronger)
+tests/test_gerber_transform_export.py::TestExportRouting::test_p_and_am_object_is_exported_as_regions  # duplicate of TestFileRoundTrip::test_gerber_p_and_macro_flashes_come_back_as_regions (stronger)
+tests/test_gerber_transform_export.py::TestLifecycleProject::test_flag_survives_save_and_load_and_exports  # duplicate of TestProjectSaveLoad::test_flag_set_by_a_transform_survives_and_exports
+tests/test_shrink_offsets.py::TestShrinkOffsetConsequences::test_cumulative_offsets_bound_growth_without_changing_initial_contours  # compares two test-local helper functions, no production code (also 5 s)
+tests/test_layout_changes.py::test_startup_restores_toolbar_settings[None]  # reads MainGUI.__init__ source via ast/inspect
+tests/test_layout_changes.py::test_startup_restores_toolbar_settings[False]  # reads MainGUI.__init__ source via ast/inspect
+tests/test_layout_changes.py::test_startup_restores_toolbar_settings[True]  # reads MainGUI.__init__ source via ast/inspect
+tests/test_layout_changes.py::test_startup_restores_toolbar_settings[false]  # reads MainGUI.__init__ source via ast/inspect
+tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_construct  # constructs and checks plugin name; every other test constructs it
+tests/test_grbl_sender_construct.py::TestGrblSenderConstruct::test_populate  # only 'does not raise'; other tests populate the UI
+tests/test_gerber_editor_defects.py::test_buffer_factor_at_or_below_zero_is_rejected[-0.5]  # same branch as factor 0
+tests/test_gerber_parser.py::TestGerberParserEdgeCases::test_multipolygon_iteration  # tests Shapely MultiPolygon iteration, not the app
+tests/test_gerber_parser.py::TestGerberParserBasic::test_polarity_change  # only 'no error'; test_polarity_change_with_pending_path and the polarity layer tests cover it
+tests/test_gerber_parser.py::TestGerberParserEdgeCases::test_multiple_aperture_changes  # same branch as test_all_aperture_types
+tests/test_gerber_parser.py::TestGerberParserEdgeCases::test_format_specification_variants  # identical input and assertion as test_inches_units/simple line
+tests/test_object_regenerate_source.py::test_geometry_stores_the_dxf_export  # duplicate of the real DXF snapshot test (stubbed exporter)
+tests/test_grbl_job_control.py::TestCheckModeJob::test_stream_runs_in_its_own_thread_not_on_an_app_worker  # thread arrangement; check_passed covers the result
+tests/test_rules_check.py::test_layers_are_built_in_the_worker_not_on_the_gui_thread  # call-order/mock pinning of an internal helper
+tests/test_panelize_tcl_fixes.py::test_use_thread_true_values_start_a_worker_task[True]  # same parse_bool branch as kept cases
+tests/test_panelize_tcl_fixes.py::test_use_thread_true_values_start_a_worker_task[true]  # same parse_bool branch as kept cases
+tests/test_panelize_tcl_fixes.py::test_use_thread_true_values_start_a_worker_task[yes]  # same parse_bool branch as kept cases
+tests/test_panelize_tcl_fixes.py::test_use_thread_true_values_start_a_worker_task[on]  # same parse_bool branch as kept cases
+tests/test_panelize_tcl_fixes.py::test_use_thread_false_values_run_at_once[False]  # same parse_bool branch as kept cases
+tests/test_panelize_tcl_fixes.py::test_use_thread_false_values_run_at_once[false]  # same parse_bool branch as kept cases
+tests/test_panelize_tcl_fixes.py::test_use_thread_false_values_run_at_once[no]  # same parse_bool branch as kept cases
+tests/test_tcl_export_gerber_excellon.py::test_the_handler_gets_the_object_name_as_obj_name[TclCommandExportGerber-export_gerber]  # assert_called_with on internal handler; the real export tests cover it
+tests/test_tcl_export_gerber_excellon.py::test_the_handler_gets_the_object_name_as_obj_name[TclCommandExportExcellon-export_excellon]  # same
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[queued-tray]  # same branch as checking-tray (entry differs only)
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[operation-tray]  # same branch as checking-tray
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[saving-tray]  # same branch as checking-tray
+tests/test_geometry_plot_layer.py::TestGeometryPlotLayer::test_constant  # constant value pin; layer checked by test_plot_batch_layer
+tests/test_object_plot_state.py::test_gerber_plot_batch[False-True-True-True]  # follow=True only picks followed geometry; same branch as follow=True/solid=False/multi=False (ids old order solid-multi-follow-line)
+tests/test_object_plot_state.py::test_gerber_plot_batch[True-False-True-True]  # same
+tests/test_object_plot_state.py::test_gerber_plot_batch[True-True-True-True]  # same
+tests/test_move2origin_gerbers.py::test_selected_gerbers_move_as_group_with_matching_plot_and_source[positions2-False]  # zero-offset axis takes the same branch as positions1
+tests/test_move2origin_gerbers.py::test_selected_gerbers_move_as_group_with_matching_plot_and_source[positions2-True]  # same
+tests/test_gerber_multiplicative_buffer.py::TestTracksAndRegions::test_c_track_is_rebuilt_with_the_scaled_width[0.5]  # scale-down takes same branch; 0.5 stays covered by test_every_supported_record_kind_together
+tests/test_worker_stack_shutdown.py::TestWorkerStackShutdown::test_requests_every_thread_to_stop_before_waiting  # call order on fake threads
+tests/test_gerber_editor_pick.py::TestOverlapAndCycle::test_single_candidate_toggles_as_before  # duplicate of TestModifiers::test_ctrl_adds (ctrl toggle off)
+tests/test_object_copy.py::TestCopyIndependence::test_gerber_copy_matches_and_is_independent  # covered by test_copy_equals_source_on_every_attribute + test_copy_is_independent (gerber)
+tests/test_titlebar.py::TestTitleBarPreferences::test_custom_titlebar_preference_defaults_on  # only runs make_preferences, which the persist/restart test runs again
+tests/test_defaults_persistence.py::TestSafeGetFallbacks::test_appdefaults_get_returns_factory_default_for_missing_key  # tests dict.get with an explicit fallback
+tests/test_tcl_audit_transforms.py::test_multi_object_transforms_resolve_each_target_once[TclCommandMirror-args0]  # get_by_name call count pins implementation
+tests/test_tcl_audit_transforms.py::test_multi_object_transforms_resolve_each_target_once[TclCommandScale-args1]  # get_by_name call count pins implementation
+tests/test_tcl_audit_transforms.py::test_multi_object_transforms_resolve_each_target_once[TclCommandSkew-args2]  # get_by_name call count pins implementation
+tests/test_milling_single_geometry_tools.py::test_each_tool_gcode_holds_only_that_tool[3-default]  # same branch as 2 tools
+tests/test_milling_single_geometry_tools.py::test_each_tool_gcode_holds_only_that_tool[3-GRBL_laser]  # same branch as 2 tools
+tests/test_milling_single_geometry_tools.py::test_the_exported_file_has_every_path_once[3-default]  # same branch as 2 tools
+tests/test_milling_single_geometry_tools.py::test_the_exported_file_has_every_path_once[3-GRBL_laser]  # same branch as 2 tools
+tests/test_milling_single_geometry_tools.py::test_multi_geometry_job_has_every_path_once[3]  # same branch as 2 tools
+tests/test_milling_single_geometry_tools.py::test_custom_offset_without_a_usable_value_is_a_failed_job[0.0-False]  # 0.0 == 0, same branch
+tests/test_milling_single_geometry_tools.py::test_custom_offset_without_a_usable_value_is_a_failed_job[0.0-True]  # 0.0 == 0, same branch
+tests/test_punch_gerber.py::test_circle_steps_option_reaches_punch_geometry  # spies kwargs of an internal call; geometry steps covered by test_steps_control_hole_smoothness
+tests/test_geo_editor_vertex_drag.py::test_right_button_press_cancels_the_drag  # only asserts cancel() was called on a Mock of an internal collaborator
+tests/test_lifecycle_initialization.py::TestAppShutdownSequence::test_quit_application_can_save_preferences  # skipped empty test (pass)
+tests/test_qt_style.py::TestQtStyle::test_preferences_keep_selection_under_stylesheet_and_save_name  # AST/source exec of GeneralGUIPrefGroupUI.py (slow setup)
+tests/test_cncjob_export_gcode.py::test_properties_ui_is_not_built_for_each_job_of_a_load_batch  # asserts an internal ui_disconnect call is not made
+tests/test_record_placeholders.py::test_flattener_rejects_record_dicts  # pins an internal NotImplementedError of the flattener
+tests/test_milling_old_tool_data.py::test_saved_polish_method[2-0-2]  # same branch as [0-2-0] (saved index in range)
+tests/updater/test_updater_integration.py::test_startup_queues_updates_for_beta_and_release_builds[False]  # same branch as test_startup_update_toggle_gates_automatic_queueing (enabled, release); test renamed to ..._for_beta_builds, id [True] gone
+tests/updater/test_updater_integration.py::test_startup_queues_updates_for_beta_and_release_builds[True]  # renamed to test_startup_queues_updates_for_beta_builds (kept)
+tests/test_qt_command_connections.py::test_real_editor_registration_keeps_transform_toggle_default[appGeoEditor.py-geo_transform_menuitem]  # parses the editor source with ast
+tests/test_qt_command_connections.py::test_real_editor_registration_keeps_transform_toggle_default[appGerberEditor.py-grb_transform_menuitem]  # parses the editor source with ast
+tests/test_object_plot_state.py::test_gerber_plot_batch[False-False-False-True]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_object_plot_state.py::test_gerber_plot_batch[False-False-True-True]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_object_plot_state.py::test_gerber_plot_batch[False-True-False-True]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_object_plot_state.py::test_gerber_plot_batch[True-False-False-True]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_object_plot_state.py::test_gerber_plot_batch[True-True-False-True]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[checking-file]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[checking-tray]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[operation-file]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[queued-file]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_shutdown_routing.py::test_user_exit_blocks_before_settings_and_project_prompt[saving-file]  # Case id changed when same-branch cases of this parametrize were removed; the kept cases run under new ids.
+tests/test_polygon_gap_pairs.py::test_tools_check_validity_uses_the_minimum[appPlugins.ToolIsolation-ToolIsolation]  # Split per plugin: the Isolation case runs as test_isolation_check_validity_uses_the_minimum.
+tests/test_polygon_gap_pairs.py::test_tools_check_validity_uses_the_minimum[appPlugins.ToolNCC.Ncc-ToolNcc]  # NCC Check validity moved to the worker (NccModel.check_tools_fit); covered by tests/test_ncc_rest_machining.py::test_check_validity_*.
+tests/test_isolation_optimal_tooldia.py::test_gap_below_the_resolution_gives_no_tool[ToolIsolation]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_gap_below_the_resolution_gives_no_tool[ToolNcc]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_gap_rounded_up_gives_a_tool_below_the_gap[ToolIsolation]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_gap_rounded_up_gives_a_tool_below_the_gap[ToolNcc]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_fits_in_the_smallest_gap[ToolIsolation-0.15996]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_fits_in_the_smallest_gap[ToolIsolation-0.20004]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_fits_in_the_smallest_gap[ToolIsolation-0.30005]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_fits_in_the_smallest_gap[ToolNcc-0.15996]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_fits_in_the_smallest_gap[ToolNcc-0.20004]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_fits_in_the_smallest_gap[ToolNcc-0.30005]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_passes_the_check_validity[ToolIsolation-0.0079945-4-IN]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_passes_the_check_validity[ToolIsolation-0.15996-4-MM]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_passes_the_check_validity[ToolIsolation-0.20000051-6-MM]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_passes_the_check_validity[ToolNcc-0.0079945-4-IN]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_passes_the_check_validity[ToolNcc-0.15996-4-MM]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_optimal_tool_passes_the_check_validity[ToolNcc-0.20000051-6-MM]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_validation_rejects_oversized_tool[ToolIsolation]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_validation_rejects_oversized_tool[ToolNcc]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+tests/test_isolation_optimal_tooldia.py::test_validation_rejects_unrepresentable_gap[ToolIsolation]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
+tests/test_isolation_optimal_tooldia.py::test_validation_rejects_unrepresentable_gap[ToolNcc]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)

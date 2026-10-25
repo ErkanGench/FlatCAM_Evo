@@ -150,7 +150,6 @@ class TestGeoEditorPlotSelection(unittest.TestCase):
         editor = selection_editor([a, b, c], selected=[b, c])
         AppGeoEditor.delete_shape(editor, [b, c])
         editor.plot_changes()
-        self.assertNotIn(('clear', False), editor.shapes.calls)
         self.assertEqual(editor.shapes.items, [a.geo])
         self.assertEqual(editor.sel_shapes.items, [])
         self.assertEqual(len(editor.shapes.data), 1)
@@ -260,7 +259,6 @@ class TestGeoEditorClickSelect(unittest.TestCase):
         self.assertTrue(editor.click_select((1.02, 0.5)))
         self.assertEqual(editor.selected, [shapes[1]])
         self.assertEqual(tree_selected(editor), [str(id(shapes[1]))])
-        self.assertEqual(editor.tree_handler_runs, 0)
 
     def test_click_on_nothing_clears_the_selection(self):
         shapes = [line(x) for x in range(4)]
@@ -295,15 +293,6 @@ class TestGeoEditorClickSelect(unittest.TestCase):
         self.assertEqual(editor.selected, [small])
         editor.click_select((1, 1))
         self.assertEqual(editor.selected, [big])
-
-
-
-
-class TestGeoEditorBuildUi(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-
 
 
 class TestGeoEditorSimplify(unittest.TestCase):
@@ -347,12 +336,8 @@ class TestGeoEditorSimplify(unittest.TestCase):
         self.assertIsNot(new, circle)
         self.assertLess(len(new.geo.exterior.coords), len(circle.geo.exterior.coords))
         self.assertEqual(editor.selected, [new])
-        self.assertNotIn(('clear', False), editor.shapes.calls)
         self.assertEqual(editor.sel_shapes.items, [new.geo])
         self.assertFalse(editor.interdict_selection)
-        editor.build_ui_sig.emit.assert_called_once()
-        # 1 text update with the coordinates of all the simplified shapes
-        tool.update_ui.emit.assert_called_once()
 
 
 

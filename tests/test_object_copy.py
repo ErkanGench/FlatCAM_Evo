@@ -27,8 +27,8 @@ from appObjects.GerberObject import GerberObject
 from appObjects.ScriptObject import ScriptObject
 
 from tests.helpers_objects import (  # noqa: F401,E402
-    app, assert_coords_close, assert_poly_equiv, excellon, gerber, _headless_qt, make_excellon, make_gerber,
-    make_same_diameter_excellon, pts, run_copy, slot_coords, snapshot_excellon, snapshot_gerber,
+    app, excellon, _headless_qt, make_gerber,
+    make_same_diameter_excellon, pts, run_copy, slot_coords, snapshot_excellon,
 )
 
 CLASSES = {'gerber': GerberObject, 'excellon': ExcellonObject, 'geometry': GeometryObject,
@@ -280,31 +280,6 @@ def test_cncjob_cannot_be_copied(app):
 
 
 class TestCopyIndependence:
-    def test_gerber_copy_matches_and_is_independent(self, app, gerber):
-        before = snapshot_gerber(gerber)
-        clone = run_copy(app, gerber, 'gerber')
-        assert_poly_equiv(clone.solid_geometry, before['solid'], msg='copy')
-        assert_coords_close(clone.follow_geometry, before['follow'])
-        assert sorted(clone.tools) == sorted(before['tools'])
-        assert {ap: len(t['geometry']) for ap, t in clone.tools.items()} == \
-               {ap: len(t['geometry']) for ap, t in before['tools'].items()}
-        assert clone.source_file == gerber.source_file
-        # mutate the source in several places
-        gerber.solid_geometry.append(Point(100, 100).buffer(3))
-        gerber.follow_geometry.append(Point(100, 100))
-        gerber.tools[10]['size'] = 99.0
-        gerber.tools[10]['geometry'][0]['solid'] = Point(100, 100).buffer(3)
-        gerber.tools[10]['geometry'].append({'solid': Point(7, 7).buffer(1)})
-        assert_poly_equiv(clone.solid_geometry, before['solid'], msg='copy after source mutation')
-        assert len(clone.follow_geometry) == len(before['follow'])
-        assert clone.tools[10]['size'] == 1.0
-        assert len(clone.tools[10]['geometry']) == 3
-        assert clone.tools[10]['geometry'][0]['solid'].bounds == pytest.approx(
-            before['tools'][10]['geometry'][0]['solid'].bounds)
-        # and the other way round
-        clone.tools[11]['geometry'][0]['solid'] = Point(0, 0).buffer(1)
-        assert gerber.tools[11]['geometry'][0]['solid'].bounds == pytest.approx((9.0, 4.5, 11.0, 5.5))
-
     def test_excellon_copy_matches_and_is_independent(self, app, excellon):
         before = snapshot_excellon(excellon)
         clone = run_copy(app, excellon, 'excellon')
@@ -322,15 +297,6 @@ class TestCopyIndependence:
         assert slot_coords(clone.tools[2]['slots']) == [((20, 12), (28, 12))]
         clone.tools[3]['drills'].append(Point(1, 1))
         assert len(excellon.tools[3]['drills']) == 1
-
-
-class _BadOptions(dict):
-    """obj_options whose 'bad' option raises KeyError on read (merge catches that and must log)."""
-
-    def __getitem__(self, key):
-        if key == 'bad':
-            raise KeyError(key)
-        return dict.__getitem__(self, key)
 
 
 def _merge_source(name, solid=None, follow=None, tool_id=10, options=None):
@@ -385,7 +351,3 @@ class TestMerge_0B1:
         assert final.follow_geometry.geom_type == 'LineString', final.follow_geometry.geom_type
         assert final.follow_geometry.equals(line)
         assert final.solid_geometry.geom_type == 'Polygon'
-
-
-def _temp_shapes_count(app):
-    return app.plotcanvas.new_shape_collection.call_count

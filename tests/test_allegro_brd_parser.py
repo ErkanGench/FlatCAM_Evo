@@ -544,9 +544,15 @@ class TestAllegroUntestedReleases(unittest.TestCase):
                 put(blob, 0, magic, '<I')
                 if reads:
                     parsed = AllegroBrdParser().parse_bytes(bytes(blob))
-                    reference = parsed_sample(path)
                     self.assertEqual(parsed.warnings[0], 'Allegro %s is not tested: check the result against '
                                                          'Gerbers made by Allegro.' % name)
+                    if path != FIXTURE:
+                        # the 1.2 MB board B takes 4 s to parse: no second parse for a reference; the e2e test
+                        # compares the unpatched B with the films
+                        self.assertTrue(all(layer['solid_geometry'] for layer in parsed.layers.values()))
+                        self.assertIn('INNER 1', parsed.layers)
+                        continue
+                    reference = parsed_sample(path)
                     self.assertEqual(parsed.warnings[1:], reference.warnings)
                     self.assertEqual(list(parsed.layers), list(reference.layers))
                     for layer in parsed.layers:
@@ -608,9 +614,9 @@ class TestAllegroRobustness(unittest.TestCase):
                             self.assertTrue(fix_size, 'a truncated file with the old size field was accepted')
 
     def _check_mutated_sample_board_fields(self, loops):
-        # same, with every changed byte inside a block header or field of the real 17.2 board
+        # same, with every changed byte inside a block header or field of a small synthetic board (the real 17.2 board takes\r\n        # 0.5 s per parse)
         rng = random.Random(11)
-        data = FIXTURE.read_bytes()
+        data = self._sample()
         leaked = []
         with warnings.catch_warnings():
             warnings.simplefilter('error', RuntimeWarning)
@@ -627,7 +633,7 @@ class TestAllegroRobustness(unittest.TestCase):
 
     @pytest.mark.slow
     def test_mutated_sample_board_fields_never_leak_internal_errors(self):
-        self._check_mutated_sample_board_fields(12)
+        self._check_mutated_sample_board_fields(60)
 
     def test_giant_counts_do_not_allocate_or_loop(self):
         data = bytearray(self._sample())

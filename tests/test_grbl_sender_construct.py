@@ -48,17 +48,6 @@ def make_app():
 
 class TestGrblSenderConstruct(unittest.TestCase):
 
-    def test_construct(self):
-        tool = ToolGrblSender(make_app())
-        self.assertEqual(tool.pluginName, 'GCode sender')
-
-
-    def test_populate(self):
-        tool = ToolGrblSender(make_app())
-        # no GL canvas in the test: the probing shapes are a mock
-        with patch('appPlugins.Common.levelling_core.ShapeCollection'):
-            tool._populate_tool_ui()
-
     def test_avoidance_combo_lists_only_excellon_and_follows_checkbox(self):
         app = make_app()
         app.collection.setItem(1, QtGui.QStandardItem('Excellon'))

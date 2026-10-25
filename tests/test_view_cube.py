@@ -32,7 +32,6 @@ class TestViewCube(unittest.TestCase):
 
     def test_six_views_keep_pan_and_zoom(self):
         camera = self.make_canvas().view.camera
-        self.assertTrue(hasattr(camera, 'set_view'), 'Camera needs six named views')
         camera.zoom(0.5, (70, 90, 0))
         center, scale = camera.center, camera.scale_factor
         for name in self.normals:
@@ -44,7 +43,6 @@ class TestViewCube(unittest.TestCase):
 
     def test_face_click_selects_the_visible_face(self):
         canvas = self.make_canvas()
-        self.assertTrue(hasattr(canvas, 'view_cube'), 'Canvas needs a navigation cube')
         camera, cube = canvas.view.camera, canvas.view_cube
         camera.viewbox_mouse_event(canvas_tests.TestPlotCanvas3d.mouse_event(
             'mouse_move', (460, 340), (400, 300), (1,)

@@ -1,7 +1,5 @@
 """User Exit actions share the guarded window-close and lifecycle path."""
 
-import ast
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -57,8 +55,8 @@ def shutdown(qt_app, monkeypatch):
     window.deleteLater()
 
 
-@pytest.mark.parametrize('entry', ['file', 'tray'])
-@pytest.mark.parametrize('state', ['checking', 'queued', 'operation', 'saving'])
+@pytest.mark.parametrize('entry, state', [('file', 'checking'), ('file', 'queued'), ('file', 'operation'),
+                                         ('file', 'saving'), ('tray', 'checking')])
 def test_user_exit_blocks_before_settings_and_project_prompt(shutdown, entry, state):
     s = shutdown
     s.final_save.assert_not_called()  # Registration must not call close eagerly.

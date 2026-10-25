@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import os
 import shutil
@@ -19,8 +18,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6 import QtCore, QtWidgets
 
-from defaults import AppDefaults
-from services.updater.github.transport import DEFAULT_REPOSITORY
 
 
 @pytest.fixture
@@ -154,47 +151,6 @@ def test_automatic_manual_offer_is_ignored_but_a_manual_check_shows_it(qapp, tmp
     app._start_update_download.assert_not_called()
 
 
-class RecordingDialog:
-    last = None
-
-    def __init__(self, *args, **kwargs):
-        RecordingDialog.last = self
-        self.range = (0, 100)
-        self.label = ""
-        self.value = 0
-        self.canceled = SimpleNamespace(connect=lambda slot: None)
-        self.visible = False
-
-    def setWindowTitle(self, _title):
-        pass
-
-    def setWindowModality(self, _modality):
-        pass
-
-    def setAutoClose(self, _value):
-        pass
-
-    def setAutoReset(self, _value):
-        pass
-
-    def setRange(self, low, high):
-        self.range = (low, high)
-
-    def maximum(self):
-        return self.range[1]
-
-    def setLabelText(self, text):
-        self.label = text
-
-    def setValue(self, value):
-        self.value = value
-
-    def show(self):
-        self.visible = True
-
-    def close(self):
-        self.visible = False
-
 
 def test_dependency_warning_cancels_before_preflight_and_launch(qapp, monkeypatch, tmp_path):
     from appMain import App
@@ -321,30 +277,6 @@ def test_cancellation_after_worker_success_prevents_the_gui_launch(monkeypatch, 
     assert app._update_cancel_event is None
     assert any("canceled" in emission[0].lower() for emission in app.inform.emissions)
 
-
-def _main_window_close_ignored(app):
-    from appGUI.MainGUI import MainGUI
-
-    class Event:
-        def __init__(self):
-            self.ignore_calls = 0
-
-        def ignore(self):
-            self.ignore_calls += 1
-
-    gui = MainGUI.__new__(MainGUI)
-    gui.app = app
-    gui.final_save = SimpleNamespace(emit=MagicMock())
-    gui.geometry = MagicMock(return_value=SimpleNamespace(x=lambda: 0, y=lambda: 0, width=lambda: 1, height=lambda: 1))
-    gui.lock_action = SimpleNamespace(isChecked=lambda: False)
-    gui.show_text_action = SimpleNamespace(isChecked=lambda: False)
-    gui.isMaximized = lambda: False
-    gui.saveState = lambda *_args: b"state"
-    gui.splitter = SimpleNamespace(sizes=lambda: [1])
-    event = Event()
-    with patch("appGUI.MainGUI.QSettings"):
-        gui.closeEvent(event)
-    return event.ignore_calls == 1 and not gui.final_save.emit.called
 
 
 def test_failed_helper_stays_running_and_removes_the_stage(qapp, monkeypatch, tmp_path):

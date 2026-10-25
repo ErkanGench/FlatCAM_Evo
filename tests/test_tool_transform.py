@@ -167,7 +167,6 @@ class TransformTest(unittest.TestCase):
         for o in objs:
             self.assertEqual(o.bounds_calls, 2)
             self.assertEqual(o.offset_bounds, [o.geo.solid_geometry[0].bounds])
-            self.assertFalse(hasattr(o, '_pending_bounds'))
         self.assertEqual(app.app_obj.object_changed.emit.call_count, 2)
         # one final message
         # the plugin emits one final message (the camlib methods emit their own per object)

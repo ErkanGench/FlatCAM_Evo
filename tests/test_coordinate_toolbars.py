@@ -53,7 +53,6 @@ class TestCoordinateToolbars(unittest.TestCase):
 
     def test_plot_tab_restores_preferences_without_requiring_a_toggle(self):
         window = self.make_window()
-        self.assertTrue(hasattr(MainGUI, 'on_plot_area_tab_changed'))
         window.plot_tab_area.currentChanged.connect(lambda index: MainGUI.on_plot_area_tab_changed(window))
         window.plot_tab_area.setCurrentIndex(1)
         self.assertFalse(window.coords_toolbar.isVisible())

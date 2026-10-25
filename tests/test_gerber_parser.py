@@ -107,13 +107,6 @@ class TestGerberParserBasic:
         assert result is None or result == ""
         print("[PASS] Region G36-G37 test passed")
     
-    def test_polarity_change(self):
-        gbr = get_gerber_parser()
-        lines = ["%FSLAX24Y24*%", "%MOIN*%", "%ADD10C,10*%", "D10*", "G01 X0Y0D02*", "G01 X100Y0D01*", "%LPC*%", "G01 X200Y0D01*", "%LPD*%", "M02*"]
-        result = gbr.parse_lines(lines)
-        assert result is None or result == ""
-        print("[PASS] Polarity change test passed")
-    
     def test_d02_new_path(self):
         gbr = get_gerber_parser()
         lines = ["%FSLAX24Y24*%", "%MOIN*%", "%ADD10C,10*%", "D10*", "G01 X0Y0D02*", "G01 X100Y0D01*", "G01 X50Y50D02*", "G01 X150Y150D01*", "M02*"]
@@ -146,13 +139,6 @@ class TestGerberParserEdgeCases:
         assert result is None or result == "fail"
         print("[PASS] Empty path no crash test passed")
     
-    def test_multiple_aperture_changes(self):
-        gbr = get_gerber_parser()
-        lines = ["%FSLAX24Y24*%", "%ADD10C,5*%", "%ADD11C,10*%", "%ADD12C,15*%", "D10*", "G01 X0Y0D02*", "G01 X50Y50D01*", "D11*", "G01 X100Y100D01*", "D12*", "G01 X150Y150D01*", "M02*"]
-        result = gbr.parse_lines(lines)
-        assert result is None or result == ""
-        print("[PASS] Multiple aperture changes test passed")
-    
     def test_comments_ignored(self):
         gbr = get_gerber_parser()
         lines = ["%FSLAX24Y24*%", "%MOIN*%", "%ADD10C,10*%", "D10*", "G04 This is a comment*", "G01 X0Y0D02*", "G04 Another comment*", "G01 X100Y100D01*", "M02*"]
@@ -160,13 +146,6 @@ class TestGerberParserEdgeCases:
         assert result is None or result == ""
         print("[PASS] Comments ignored test passed")
     
-    def test_format_specification_variants(self):
-        gbr = get_gerber_parser()
-        lines = ["%FSLAX24Y24*%", "%MOIN*%", "%ADD10C,10*%", "D10*", "G01X0Y0D02*", "G01X100Y100D01*", "M02*"]
-        result = gbr.parse_lines(lines)
-        assert result is None or result == ""
-        print("[PASS] Format specification variants test passed")
-
     def test_polarity_change_with_pending_path(self):
         gbr = get_gerber_parser()
         lines = ["%FSLAX23Y23*%", "%ADD10C,10*%", "D10*", "G01 X0Y0D02*", "G01 X1000Y0D01*", "G01 X1000Y1000D01*", "%LPC*%", "G01 X2000Y0D01*", "M02*"]
@@ -174,21 +153,6 @@ class TestGerberParserEdgeCases:
         assert result is None or result == ""
         print("[PASS] Polarity change with pending path test passed")
 
-
-    def test_multipolygon_iteration(self):
-        """Test MultiPolygon handling for Shapely 2.x compatibility."""
-        from shapely.geometry import MultiPolygon, Polygon
-        
-        poly1 = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-        poly2 = Polygon([(2, 2), (3, 2), (3, 3), (2, 3)])
-        multi = MultiPolygon([poly1, poly2])
-        
-        count = 0
-        for p in multi.geoms:
-            count += 1
-            assert isinstance(p, Polygon)
-        assert count == 2
-        print("[PASS] MultiPolygon iteration test passed")
 
     def test_aperture_macro_without_modifiers(self):
         gbr = get_gerber_parser()

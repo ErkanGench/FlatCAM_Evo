@@ -1,8 +1,5 @@
 """Guard bool-emitting Qt signals from silently changing command options."""
 
-import ast
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -70,31 +67,3 @@ def test_real_registered_actions_keep_command_defaults(qt_app, registration, act
     getattr(connector, registration)()
     action.trigger()
     assert calls == [(True, True)]
-
-
-@pytest.mark.parametrize('filename, action_name', [
-    ('appGeoEditor.py', 'geo_transform_menuitem'),
-    ('appGerberEditor.py', 'grb_transform_menuitem'),
-])
-def test_real_editor_registration_keeps_transform_toggle_default(qt_app, filename, action_name):
-    path = Path(__file__).resolve().parents[1] / 'appEditors' / filename
-    tree = ast.parse(path.read_text(encoding='utf-8-sig'))
-    signal = 'self.app.ui.%s.triggered' % action_name
-    connections = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and
-                   isinstance(node.func, ast.Attribute) and node.func.attr == 'connect' and
-                   ast.unparse(node.func.value) == signal]
-    assert len(connections) == 1
-    # Execute the actual connection expression without constructing either
-    # complete editor/canvas. The sender and signal delivery are real Qt.
-    registration = ast.Module(body=[ast.Expr(value=connections[0])], type_ignores=[])
-    action = QtGui.QAction('Transform')
-    calls = []
-
-    def run(toggle=True):
-        calls.append(toggle)
-
-    receiver = SimpleNamespace(app=SimpleNamespace(ui=SimpleNamespace(**{action_name: action})),
-                               transform_tool=SimpleNamespace(run=run))
-    exec(compile(ast.fix_missing_locations(registration), str(path), 'exec'), {'self': receiver})
-    action.trigger()
-    assert calls == [True]

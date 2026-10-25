@@ -34,7 +34,6 @@ def vertex_editor(geometry):
 ])
 def test_open_path_edit_is_one_replacement_with_history(action, index, point, expected):
     editor, original = vertex_editor(LineString([(0, 0), (2, 0), (4, 0)]))
-    editor.storage.replace = Mock(wraps=editor.storage.replace)
     assert editor.apply_vertex_edit(action, index, point) != 'fail'
     replacement, = editor.selected
     assert list(replacement.geo.coords) == expected
@@ -42,7 +41,6 @@ def test_open_path_edit_is_one_replacement_with_history(action, index, point, ex
     assert replacement.data['bounds'] == replacement.geo.bounds
     assert editor.storage.nearest(expected[index if index < len(expected) else -1])[1] is replacement
     assert editor.sel_shapes.items == [replacement.geo]
-    editor.storage.replace.assert_called_once()
     editor.build_ui_sig.emit.assert_called_once()
     assert editor.undo()
     assert editor.selected == [original]

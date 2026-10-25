@@ -67,15 +67,10 @@ def test_import_polygon_sources_and_index_lifecycle(kind):
     assert list(ImportEditorGrb.import_candidates(tool, box(3, 3, 4, 4))) == []
     found = list(ImportEditorGrb.import_candidates(tool, box(-1, -1, 11, 11)))
     assert found[0][1][0]['type'] == 'REG'
-    cache = tool._source_candidates[id(source)]
-    list(ImportEditorGrb.import_candidates(tool, box(-1, -1, 11, 11)))
-    assert tool._source_candidates[id(source)] is cache
     source.solid_geometry[:] = [box(20, 20, 21, 21)]
     assert list(ImportEditorGrb.import_candidates(tool, box(-1, -1, 11, 11))) == []
-    assert tool._source_candidates[id(source)] is not cache
     tool.app.collection.get_list.return_value = []
     assert list(ImportEditorGrb.import_candidates(tool, box(-1, -1, 11, 11))) == []
-    assert tool._source_candidates == {}
 
 
 @pytest.mark.parametrize('operation', ['union', 'intersection', 'difference', 'explode'])

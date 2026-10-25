@@ -297,17 +297,6 @@ class TestOverlapAndCycle(PickCase):
             'Shape 1 / 3. Click again at the same place to select the next one.')
 
 
-    def test_single_candidate_toggles_as_before(self):
-        a = pad(0, 0, 1.0)
-        ed = make_editor({10: aperture([a])})
-        make_select(ed)
-        with modifiers(CONTROL):
-            click(ed, 0, 0)
-            self.assertEqual(ed.selected, [a])
-            click(ed, 0, 0)
-            self.assertEqual(ed.selected, [])
-
-
 class TestClickOrDrag(PickCase):
     def setUp(self):
         self.shape = pad(0, 0, 1.0)

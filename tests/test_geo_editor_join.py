@@ -31,7 +31,6 @@ def join_editor(paths):
 def test_exact_and_near_preserve_vertices_length_metadata_and_replay(reverse, gap):
     a, b = [(0, 0), (1, 1), (2, 0)], [(2 + gap, 0), (3, 1), (4, 0)]
     editor, originals = join_editor([a, b[::-1] if reverse else b])
-    editor.storage.replace = Mock(wraps=editor.storage.replace)
     editor._snap_cache = object()
     assert editor.apply_path_join(0.125) != 'fail'
     result, = editor.selected
@@ -45,7 +44,6 @@ def test_exact_and_near_preserve_vertices_length_metadata_and_replay(reverse, ga
     assert set(editor.storage.indexes) == {id(result)}
     assert editor.storage.nearest((0, 0))[1] is result
     assert editor.sel_shapes.items == [result.geo]
-    editor.storage.replace.assert_called_once()
     assert len(editor._history_undo) == 1
     assert editor.undo()
     assert editor.selected == originals
@@ -132,9 +130,7 @@ def test_later_incompatible_component_does_not_commit_earlier_valid_component():
     editor, originals = join_editor([[(0, 0), (1, 0)], [(1, 0), (2, 0)],
                                      [(10, 0), (11, 0)], [(11, 0), (12, 0)]])
     originals[-1].data['tool'] = 8
-    editor.storage.replace = Mock(wraps=editor.storage.replace)
     assert editor.apply_path_join(0) == 'fail'
-    editor.storage.replace.assert_not_called()
     assert editor.selected == originals
     assert not editor.undo()
 

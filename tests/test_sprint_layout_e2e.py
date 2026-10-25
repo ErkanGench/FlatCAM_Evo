@@ -217,13 +217,14 @@ class TestSprintLayoutFixtureRoundTrip(unittest.TestCase):
                 app, io, objects = self._import(units)
                 gerbers = {name: obj for name, obj in objects.items() if isinstance(obj, NativeGerberObject)}
                 drills = {name: obj for name, obj in objects.items() if isinstance(obj, NativeExcellonObject)}
+                layers = self.COPPER if units == 'MM' else self.COPPER[:1]  # inch only needs one layer: the unit conversion is the same
                 self.assertEqual(sorted(gerbers), ['cata_C1', 'cata_C2'])
                 self.assertEqual(list(drills), ['cata_PTH'])
                 factor = 1 if units == 'MM' else 1 / 25.4
 
                 with tempfile.TemporaryDirectory() as directory:
                     reimported = {}
-                    for layer in self.COPPER:
+                    for layer in layers:
                         name = 'cata_%s' % layer
                         self.assertEqual(gerbers[name].units, units)
                         filename = Path(directory) / ('%s.gbr' % layer)
@@ -245,7 +246,7 @@ class TestSprintLayoutFixtureRoundTrip(unittest.TestCase):
                     diameters = sorted(round(tool['tooldia'] / factor, 2) for tool in parser.tools.values())
                     self.assertEqual(diameters, [0.7, 0.8, 1.0, 1.14, 1.3, 3.0])
 
-                for layer in self.COPPER:
+                for layer in layers:
                     expected = scale(_union(self.parsed.layers[layer]['solid_geometry']),
                                      xfact=factor, yfact=factor, origin=(0, 0))
                     actual = reimported[layer]

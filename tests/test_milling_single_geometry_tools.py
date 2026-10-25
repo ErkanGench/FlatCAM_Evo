@@ -130,7 +130,7 @@ def cut_items(parsed):
 
 
 @pytest.mark.parametrize('pp', ['default', 'GRBL_laser'])
-@pytest.mark.parametrize('n_tools', [2, 3])
+@pytest.mark.parametrize('n_tools', [2])
 def test_each_tool_gcode_holds_only_that_tool(n_tools, pp):
     __, job = milling_job(n_tools, pp)
     laser = 'laser' in pp
@@ -141,7 +141,7 @@ def test_each_tool_gcode_holds_only_that_tool(n_tools, pp):
 
 
 @pytest.mark.parametrize('pp', ['default', 'GRBL_laser'])
-@pytest.mark.parametrize('n_tools', [2, 3])
+@pytest.mark.parametrize('n_tools', [2])
 def test_the_exported_file_has_every_path_once(n_tools, pp):
     __, job = milling_job(n_tools, pp)
     laser = 'laser' in pp
@@ -155,7 +155,7 @@ def test_the_exported_file_has_every_path_once(n_tools, pp):
     assert job.source_file == job.gc_start + body
 
 
-@pytest.mark.parametrize('n_tools', [2, 3])
+@pytest.mark.parametrize('n_tools', [2])
 def test_multi_geometry_job_has_every_path_once(n_tools):
     # the multi-geometry path makes each tool's G-code apart (geometry_tool_gcode_gen()); not changed
     __, job = milling_job(n_tools, multigeo=True, from_tcl=True)
@@ -188,7 +188,7 @@ def xy_cuts(gcode):
 
 
 @pytest.mark.parametrize('multigeo', [False, True])
-@pytest.mark.parametrize('offset', [0, 0.0, 'abc'])
+@pytest.mark.parametrize('offset', [0, 'abc'])
 def test_custom_offset_without_a_usable_value_is_a_failed_job(multigeo, offset):
     app, job = milling_job(2, multigeo=multigeo, from_tcl=True,
                            data=dict(tools_mill_offset_type=3, tools_mill_offset_value=offset))

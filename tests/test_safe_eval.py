@@ -7,12 +7,11 @@ opening a Gerber made by someone else or pasting a text could run any Python cod
     python tests/test_safe_eval.py
 """
 
-import json
 import os
-import subprocess
 import sys
 import tempfile
-import textwrap
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,20 +29,6 @@ ROOT = Path(__file__).resolve().parents[1]
 # text on '*' and ',' and changes 'x' to '*')
 MARKER = 'flatcam_safe_eval_marker'
 CODE = "__import__('sys').modules.setdefault('%s')" % MARKER
-
-# parse_gerber() in a new interpreter: a big integer calculation cannot be interrupted, so a parse that does not end
-# fails the test at the timeout instead of stopping the run. appMain (imported by Gerber()) reads sys.argv when it is
-# imported: no arguments, and it is imported before the clock starts.
-PARSE_IN_NEW_PROCESS = textwrap.dedent("""
-    import json, sys, time
-    sys.path.insert(0, %r)
-    import appMain
-    from test_safe_eval import parse_gerber
-    start = time.perf_counter()
-    result = parse_gerber(%r)[1]
-    print('PARSE_RESULT=' + json.dumps([result, time.perf_counter() - start]))
-""")
-
 
 def parse_gerber(macro):
     """Gerber.parse_file() of a file with the aperture macro M1 flashed 1 time at (1, 2): (the Gerber, the result)"""
@@ -167,19 +152,16 @@ class TestGerberMacro(MarkerCase):
     def test_huge_integer_in_a_macro_fails_quickly(self):
         # ((2**1000)**1000)**1000 has 10**9 bits: without the integer size limit this parse takes 8 s (0.5 GB) on a
         # desktop PC, with 3 instead of 2 more than 5 minutes. With the limit it takes about 0.02 s.
-        code = PARSE_IN_NEW_PROCESS % (str(ROOT / 'tests'), '%AMM1*1,1,((2xx1000)xx1000)xx1000,0,0*%')
-        env = dict(os.environ, QT_QPA_PLATFORM='offscreen')
-        try:
-            # the import of appMain takes 5 to 10 s on Windows
-            run = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=env, capture_output=True, text=True,
-                                 timeout=120)
-        except subprocess.TimeoutExpired:
-            self.fail('the parse did not end in 120 s')
-        self.assertEqual(0, run.returncode, run.stderr[-2000:])
-        result, seconds = json.loads(run.stdout.split('PARSE_RESULT=', 1)[1])
-        self.assertEqual('fail', result)
-        self.assertLess(seconds, 2)
-
+        # A big integer calculation cannot be interrupted: run it in a daemon thread and fail at the timeout.
+        outcome = []
+        worker = threading.Thread(
+            target=lambda: outcome.append(self.parse('%AMM1*1,1,((2xx1000)xx1000)xx1000,0,0*%')[1]), daemon=True)
+        start = time.perf_counter()
+        worker.start()
+        worker.join(20)
+        self.assertFalse(worker.is_alive(), 'the parse did not end in 20 s')
+        self.assertEqual(['fail'], outcome)
+        self.assertLess(time.perf_counter() - start, 2)
     def test_aperture_macro_refuses_code(self):
         from camlib import ApertureMacro
 

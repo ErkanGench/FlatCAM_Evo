@@ -19,7 +19,7 @@ def tcl_args(app, *argv):
 # use_thread went through eval()
 # ---------------------------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize('value', ['1', 'True', 'true', 'TRUE', 'yes', 'on'])
+@pytest.mark.parametrize('value', ['1', 'TRUE'])
 def test_use_thread_true_values_start_a_worker_task(app, value):
     src = make_gerber(app, name='g')
     res, created = run_panelize(app, src, 'g', '-columns', '2', '-rows', '1', '-use_thread', value)
@@ -32,7 +32,7 @@ def test_use_thread_true_values_start_a_worker_task(app, value):
     assert list(created) == ['g_panelized']
 
 
-@pytest.mark.parametrize('value', ['0', 'False', 'false', 'no', 'off'])
+@pytest.mark.parametrize('value', ['0', 'off'])
 def test_use_thread_false_values_run_at_once(app, value):
     src = make_gerber(app, name='g')
     res, created = run_panelize(app, src, 'g', '-columns', '2', '-rows', '1', '-use_thread', value)

@@ -159,12 +159,16 @@ class TestPcbDocE2E(unittest.TestCase):
                 self.assertEqual(len(objects), len(self.LAYERS) + 1)
 
                 reimported = {}
+                # the inch run checks the unit conversion on the layers that the later checks use
+                checked_layers = self.LAYERS if units == 'MM' else (1, 32, 56)
                 with tempfile.TemporaryDirectory() as directory:
                     for layer, (name, obj) in zip(
                             self.LAYERS,
                             [(name, obj) for name, obj in objects.items()
                              if isinstance(obj, NativeGerberObject)]):
                         self.assertEqual(obj.units, units)
+                        if layer not in checked_layers:
+                            continue
                         filename = Path(directory) / ('layer_%s.gbr' % layer)
                         io.export_gerber(name, str(filename), local_use=None, use_thread=False)
                         self.assertTrue(filename.is_file())
@@ -192,20 +196,15 @@ class TestPcbDocE2E(unittest.TestCase):
                     self.assertAlmostEqual(parser.tools[1]['tooldia'], expected_dia, delta=0.0002)
 
                 factor = 1 if units == 'MM' else 1 / 25.4
-                for layer in self.LAYERS:
+                for layer in sorted(reimported):
                     expected = scale(
                         self._union(parsed.layers[layer]['solid_geometry']),
                         xfact=factor, yfact=factor, origin=(0, 0)
                     )
                     actual = reimported[layer]
                     tolerance = max(0.01 * factor, expected.area * 0.0001)
-                    self.assertLessEqual(
-                        expected.symmetric_difference(actual).area,
-                        tolerance,
-                        'layer %s geometry differs by %s' % (
-                            layer, expected.symmetric_difference(actual).area
-                        )
-                    )
+                    difference = expected.symmetric_difference(actual).area
+                    self.assertLessEqual(difference, tolerance, "layer %s geometry differs by %s" % (layer, difference))
 
                 top_geometry = scale(
                     self._union(parsed.layers[1]['solid_geometry']),

@@ -145,15 +145,3 @@ def test_drillcncjob_tcl_command_warns_when_the_laser_off_lines_keep_the_laser_o
     assert ('(laser OFF)' in job.source_file) is bool(min_power)
     assert len(laser_warnings(app)) == (1 if min_power else 0)
 
-
-def laser_warnings_per_tool(app):
-    """The laser Min Power warnings, grouped by the tool whose G-code was being generated."""
-    per_tool = []
-    for c in app.inform.emit.call_args_list:
-        msg = str(c.args[0]) if c.args else ''
-        if msg.startswith('Starting G-Code for tool with diameter'):
-            per_tool.append([])
-        elif msg.startswith('[WARNING]') and 'laser OFF' in msg:
-            per_tool[-1].append(msg)
-    return per_tool
-

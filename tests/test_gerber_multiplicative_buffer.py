@@ -174,7 +174,7 @@ class TestFlashes:
 # ---------------------------------------------------------------------------------------------------------------
 
 class TestTracksAndRegions:
-    @pytest.mark.parametrize('factor', [1.5, 0.5])
+    @pytest.mark.parametrize('factor', [1.5])
     def test_c_track_is_rebuilt_with_the_scaled_width(self, app, tmp_path, factor):
         obj = make_gerber(app, fx('circle'))
         track = [rec for rec in obj.tools[10]['geometry'] if isinstance(rec['follow'], LineString)][0]

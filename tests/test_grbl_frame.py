@@ -228,9 +228,6 @@ class TestStreamJobArcs(unittest.TestCase):
         self.assertIn('Line 4', errors[0])
 
 
-LEVEL_STREAM_TIMEOUT = 2.0
-
-
 def run_limited(case, fn, limit=2.0):
     """Run `fn` in a thread with a time limit: a deadlock fails the test instead of hanging it."""
     errors = []

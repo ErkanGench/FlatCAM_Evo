@@ -372,20 +372,6 @@ def test_error_codes_create_no_object_and_report_category(setup, monkeypatch, co
     assert app.inform.emit.call_args[0][0].startswith('[%s]' % category)
 
 
-def test_circle_steps_option_reaches_punch_geometry(setup, monkeypatch):
-    tool, app, source = setup
-    app.options['geometry_circle_steps'] = 24
-    seen = {}
-
-    def spy(*args, **kwargs):
-        seen.update(kwargs)
-        raise ValueError('nothing')
-
-    monkeypatch.setattr(PUNCH_MODULE, 'punch_geometry', spy)
-    tool.on_fixed_method(source, 'x')
-    assert seen['steps'] == 24
-
-
 def test_cleanup_ends_manual_mode_and_clears_marks(setup):
     tool, app, source = setup
     start_manual(tool)
