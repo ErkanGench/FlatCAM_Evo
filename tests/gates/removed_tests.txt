@@ -136,3 +136,304 @@ tests/test_isolation_optimal_tooldia.py::test_validation_rejects_oversized_tool[
 tests/test_isolation_optimal_tooldia.py::test_validation_rejects_oversized_tool[ToolNcc]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
 tests/test_isolation_optimal_tooldia.py::test_validation_rejects_unrepresentable_gap[ToolIsolation]  # same test without the plugin class parameter (only ToolIsolation is left in tests/test_isolation_optimal_tooldia.py)
 tests/test_isolation_optimal_tooldia.py::test_validation_rejects_unrepresentable_gap[ToolNcc]  # the NCC tool check moved to its own tests with the NCC rework (tests/test_ncc_rest_machining.py: check_validity, optimal)
+
+# 2026-10-25: prune of the TDD tests of the 2026-10-24/25 audits.
+tests/test_drilling_gen.py::test_no_holes_fails_with_the_three_values  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_the_path_starts_at_the_hole_nearest_to_the_start_point[T]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_the_path_starts_at_the_hole_nearest_to_the_start_point[B]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_tcl_and_gui_drill_the_same_holes_once[R]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_tcl_and_gui_drill_the_same_holes_once[No]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_slot_drills_with_no_spacing_are_the_two_ends_only[0.0]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_plugin_warns_when_the_first_tool_parameters_are_used_for_all_tools  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_plugin_zero_feedrates_do_not_break_the_job  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_plugin_beginner_level_ignores_the_peck_of_the_tool  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_plugin_beginner_level_ignores_the_spot_pass  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_transform_points_mirror_axes_about_a_user_point  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_transform_from_data_rejects_invalid_values[data6]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_transform_from_data_rejects_invalid_values[data7]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_transform_from_data_rejects_invalid_values[data8]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_gen.py::test_transform_from_data_rejects_invalid_values[data9]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_dragged_order_survives_the_next_build  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_pp_change_by_code_updates_the_visibility  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_deleted_object_clears_the_table_and_disables_generate  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_old_object_without_drill_keys_opens_and_connects_the_signals  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_toggle_all_rows_clears_then_selects_all  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_keyboard_multi_selection_shows_multiple_tools_and_the_first_one  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_bad_over_z_text_reconnects_the_form  # pruned: duplicate/implementation-pinning (policy)
+tests/test_drilling_ui.py::test_hole_areas_are_separate_from_the_exclusion_areas_and_cleared_on_object_change  # pruned: duplicate/implementation-pinning (policy)
+tests/test_tcl_drillcncjob.py::test_the_tools_are_drilled_in_the_order_asked[fwd-expected0]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_tcl_drillcncjob.py::test_the_tools_are_drilled_in_the_order_asked[rev-expected1]  # Renumbered to [rev-expected0], test kept
+tests/test_tcl_drillcncjob.py::test_the_tools_are_drilled_in_the_order_asked[no-expected2]  # Renumbered to [no-expected1], test kept
+tests/test_tcl_drillcncjob.py::test_invalid_job_transform_args_are_errors[argv3]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_tcl_drillcncjob.py::test_invalid_job_transform_args_are_errors[argv4]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_tcl_drillcncjob.py::test_invalid_job_transform_args_are_errors[argv5]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_tcl_drillcncjob.py::test_unknown_extra_object_is_an_error  # pruned: duplicate/implementation-pinning (policy)
+tests/test_tcl_drillcncjob.py::test_invalid_area_argument_is_an_error[argv1]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_exclusion_area_travel.py::test_drilling_check_uses_the_travel_margin[point3-False]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_exclusion_area_travel.py::test_drilling_check_uses_the_travel_margin[point5-True]  # Renumbered to [point3-True], test kept
+tests/test_exclusion_area_travel.py::test_drilling_check_uses_the_travel_margin[point6-False]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_exclusion_area_travel.py::test_generated_gcode_keeps_multi_area_clearance[over-default]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_exclusion_area_travel.py::test_generated_gcode_keeps_multi_area_clearance[around-default]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_exclusion_area_travel.py::test_idx_is_the_row_number_after_add_and_delete  # pruned: duplicate/implementation-pinning (policy)
+tests/test_exclusion_area_travel.py::test_route_solver_small_input_still_solves_with_ortools  # pruned: duplicate/implementation-pinning (policy)
+tests/test_exclusion_area_travel.py::test_new_object_failure_or_abort_releases_the_promise[fail]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_excellon_merge_contract.py::TestFuseEqualData::test_two_tools_of_one_object_with_equal_data_fuse  # pruned: duplicate/implementation-pinning (policy)
+tests/test_excellon_merge_contract.py::TestKeepDifferentData::test_same_object_tools_with_different_data_stay_separate  # pruned: duplicate/implementation-pinning (policy)
+tests/test_excellon_merge_contract.py::TestIndependenceAndTypes::test_unfused_merge_keeps_ids_and_all_tools  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_single_geometry_travel_starts_at_end_of_previous_path  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_cut_through_exclusion_area_warns_once[True]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_cut_through_exclusion_area_warns_once[False]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_single_geometry_without_usable_path_tells_the_user  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_paths_with_the_same_start_point_are_all_cut[False-T]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_paths_with_the_same_start_point_are_all_cut[False-N]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_paths_with_the_same_start_point_are_all_cut[True-T]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestMillingGcodeFixes::test_paths_with_the_same_start_point_are_all_cut[True-N]  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_gcode_speed.py::TestPathOptimizationArgument::test_events_are_processed_only_in_the_gui_thread  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_export_gcode.py::test_gcode_header_of_drill_job_reads_legacy_ppname_e  # pruned: duplicate/implementation-pinning (policy)
+tests/test_cncjob_export_gcode.py::test_unknown_preprocessor_of_a_saved_tool_generates_with_the_default_one  # pruned: duplicate/implementation-pinning (policy)
+tests/test_ortools_optimizer.py::test_solve_in_the_pool_does_not_stop_the_other_threads  # pruned: duplicate/implementation-pinning (policy)
+tests/test_milling_target_settings.py::test_copy_all_gives_each_copy_its_own_tool  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_first_tool_gets_the_geometry_of_the_object  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_excellon_default_order_is_the_order_of_the_object  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_selected_excellon_tools_are_unique_uids  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_beginner_hides_and_advanced_shows_the_same_fields_for_each_target  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_showing_a_tool_does_not_recompute_its_cut_z  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_closing_the_plugin_keeps_the_other_cleanup_slots  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_a_likely_mistake_in_a_parameter_is_stored_and_told[tools_mill_cutz-0.5-Cut Z is above zero]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_a_likely_mistake_in_a_parameter_is_stored_and_told[tools_mill_travelz--1.0-Travel Z is below zero]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_a_likely_mistake_warns_at_generation_but_the_job_is_made  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_laser_preprocessor_hides_multidepth_in_the_advanced_level  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_tool_label_shows_the_tool_uid_not_the_row_number  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_target_settings.py::test_excellon_totals_are_zero_without_a_target  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_polishing_that_cannot_paint_is_a_failed_job[0]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_polishing_that_cannot_paint_is_a_failed_job[1]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_polishing_that_cannot_paint_is_a_failed_job[2]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_the_optimization_of_a_tool_is_not_overwritten[T-False]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_the_optimization_of_a_tool_is_not_overwritten[T-True]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_the_optimization_of_a_tool_is_not_overwritten[N-False]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_the_optimization_of_a_tool_is_not_overwritten[N-True]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_single_geometry_tools.py::test_excellon_paint_is_made_by_the_job_not_when_it_is_asked_for  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_lifecycle.py::test_milling_generate_use_thread_promises_created_name  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_milling_lifecycle.py::test_milling_paint_polygons_circle_steps_and_collapsed_margin  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_gen_reads_the_table_the_controller_has_now  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_final_cleanup_contour_follows_the_tool_setting  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_check_validity_is_skipped_for_a_geometry_source  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_worker_thread_does_not_process_events_but_still_aborts  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_tool_with_an_invalid_diameter_is_not_added  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_delete_refreshes_the_generate_button  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_unchecking_rest_machining_restores_the_order  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_ending_the_selection_without_zones_enables_the_panel_and_resets_it  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_zones_are_handed_over_once_and_not_for_a_deleted_object  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_self_intersecting_polygon_is_reported  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_exclusion_zones_are_drawn_counted_kept_and_reset  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_preview_draws_the_area_without_the_exclusion_and_is_cleared  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_ncc_rest_machining.py::test_optimal_with_a_failing_measurement_reports_an_error  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_a_tool_too_big_for_the_geometry_says_so_instead_of_failing_silently  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_controller_state_is_read_live_not_copied  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_empty_selection_warns_and_fails  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_paint_all_of_a_multigeo_geometry_takes_every_tool_and_leaves_gerber_alone  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_paint_area_fails_without_overlap_or_when_the_handler_fails  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_progress_restarts_for_every_tool_and_reaches_the_end  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_selected_objects_are_painted_one_job_each_with_their_own_circle_steps  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_selection_kernels_pick_contained_polygon_and_clip_to_area  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_tool_uid_zero_and_string_diameters_are_found  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_unknown_warning_kinds_do_not_break_reporting  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_geometry.py::TestPaintGeometry::test_user_abort_reports_a_cancel_and_failure_reports_failed  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_tool.py::test_rebuild_ui_keeps_the_shared_tool_dict  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_tool.py::test_delete_with_nothing_selected_warns_and_keeps_the_tools  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_tool.py::test_reset_selection_state_clears_a_half_made_selection  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_tool.py::test_beginner_level_unchecks_and_hides_check_validity_advanced_restores_it  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_paint_tool.py::test_closing_the_plugin_mid_selection_gives_the_canvas_back  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_tcl_audit_cutting.py::test_ncc_default_output_name_marks_rest_machining[1-g_ncc_rm]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_tcl_audit_cutting.py::test_ncc_default_output_name_marks_rest_machining[0-g_ncc]  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_tcl_audit_cutting.py::test_ncc_unset_options_are_left_to_the_preferences_and_offset_flag_follows_the_argument  # pruned: design-pinning / duplicate / message-text or mock-call test
+tests/test_rules_check.py::test_within_gap_above_size_passes  # same branch as below-size, covered by no-violation cases
+tests/test_rules_check.py::test_within_layer_with_fewer_than_two_polygons_passes[polygons0-1]  # trivial empty-input branch
+tests/test_rules_check.py::test_within_layer_with_fewer_than_two_polygons_passes[polygons1-0]  # trivial empty-input branch
+tests/test_rules_check.py::test_between_copper_inside_filled_outline_measures_to_boundary  # edge case duplicate of outline ring test
+tests/test_rules_check.py::test_trace_size_flash_only_aperture_is_not_a_trace  # internal skip branch
+tests/test_rules_check.py::test_trace_size_macro_aperture_is_skipped_without_error  # internal skip branch
+tests/test_rules_check.py::test_annular_ring_hole_without_copper_is_skipped  # internal skip branch
+tests/test_rules_check.py::test_annular_ring_checks_second_excellon_layer  # same check as single-layer ring test
+tests/test_rules_check.py::test_annular_ring_multipolygon_copper_is_checked_per_pad  # same check as ring tests
+tests/test_rules_check.py::test_hole_clearance_same_hole_in_two_layers_has_zero_gap  # same branch as hole clearance test
+tests/test_rules_check.py::test_hole_clearance_includes_slots  # same branch as hole clearance test
+tests/test_rules_check.py::test_slot_size_flags_narrow_slot_only  # same branch as hole size test
+tests/test_rules_check.py::test_hole_to_copper_inside_own_pad_passes  # inverse of neighbour pad test
+tests/test_rules_check.py::test_build_jobs_s2sm_runs_both_sides  # same wiring as c2c jobs test
+tests/test_rules_check.py::test_build_jobs_sliver_runs_without_silk_rule  # same wiring as other build_jobs tests
+tests/test_rules_check.py::test_excellon_layer_builds_holes_and_slots  # layer adapter internals, exercised by run tests
+tests/test_rules_check.py::test_results_make_one_document_even_after_reset  # mock call count
+tests/test_rules_check.py::test_invalid_setup_submits_nothing_and_stays_idle  # mock call counts and message text
+tests/test_rules_check.py::test_select_all_follows_children  # checkbox wiring, no output behavior
+tests/test_rules_check.py::test_markers_are_drawn_per_violation_and_cleared_on_reset  # mock call assertions on canvas
+tests/test_qrcode.py::test_module_size_follows_units  # covered by test_qr_geometry_size_in_project_units
+tests/test_qrcode.py::test_qr_geometry_empty_text_raises  # input guard, not user-visible output
+tests/test_qrcode.py::test_border_zero_and_mask_pattern_change_modules  # minor parameter variation
+tests/test_qrcode.py::test_aperture_key_types_and_ids  # aperture id bookkeeping internals
+tests/test_qrcode.py::test_source_inputs_are_not_modified  # internal immutability check
+tests/test_qrcode.py::test_margin_overrides_border_rule  # minor parameter variation
+tests/test_qrcode.py::test_row_merge_large_code_is_fast  # performance/area duplicate of row merge test
+tests/test_qrcode.py::test_preview_rings_under_limit_and_box_over_limit  # preview shape type internals
+tests/test_qrcode.py::test_svg_colors_fill_and_background  # SVG text details
+tests/test_qrcode.py::test_svg_transparent_or_missing_colors_do_not_crash[transparent]  # SVG text details
+tests/test_qrcode.py::test_svg_transparent_or_missing_colors_do_not_crash[None]  # SVG text details
+tests/test_qrcode.py::test_png_and_fixed_version_image  # image size pinning
+tests/test_qrcode.py::test_valid_color  # helper predicate
+tests/test_qrcode.py::test_size_warnings  # warning code list
+tests/test_qrcode.py::test_insert_button_is_visible_in_both_modes[b]  # widget visibility, no behavior
+tests/test_qrcode.py::test_insert_button_is_visible_in_both_modes[a]  # widget visibility, no behavior
+tests/test_qrcode.py::test_reset_disarms_and_restores_the_call_source  # internal state flags
+tests/test_qrcode.py::test_inch_project_inserts_the_qr_in_inches  # covered by test_pcbdoc_object_gets_the_qr_in_its_own_units and unit geometry tests
+tests/test_qrcode.py::test_coordinates_placement_puts_the_anchor_at_the_point  # covered by pcbdoc/inch/undo placement tests
+tests/test_qrcode.py::test_the_target_as_soldermask_adds_no_opening_box  # awkward duplicate of soldermask opening test
+tests/test_qrcode.py::test_new_object_output_works_without_any_gerber  # covered by test_new_object_output_keeps_the_source
+tests/test_fiducials.py::test_circle_steps_are_a_full_circle  # vertex count pinning, covered by exported gerber test
+tests/test_fiducials.py::test_soldermask_without_fiducials_creates_nothing  # message mock assertion
+tests/test_fiducials.py::test_source_follow_geometry_not_a_list[single]  # internal data-shape robustness
+tests/test_fiducials.py::test_source_follow_geometry_not_a_list[none]  # internal data-shape robustness
+tests/test_markers.py::test_gerber_buffer_uses_quarter_steps[False]  # vertex count pinning
+tests/test_markers.py::test_gerber_buffer_uses_quarter_steps[True]  # vertex count pinning
+tests/test_markers.py::test_gerber_non_list_follow_geometry  # internal data-shape robustness
+tests/test_markers.py::test_geometry_other_empty_tools_survive  # internal data-shape robustness
+tests/test_punch_gerber.py::test_aperture_macro_first_record_clear_does_not_crash  # internal record-order robustness
+tests/test_punch_gerber.py::test_empty_tools_and_nothing_to_punch  # error code pinning
+tests/test_punch_gerber.py::test_nested_and_multipolygon_solid_geometry  # internal data-shape robustness
+tests/test_punch_gerber.py::test_steps_control_hole_smoothness  # vertex count pinning
+tests/test_punch_gerber.py::test_exception_in_punch_still_enables_notebook  # mocked internal failure
+tests/test_punch_gerber.py::test_second_click_on_only_pad_removes_highlight  # mock call assertion on canvas shapes
+tests/test_punch_gerber.py::test_error_codes_create_no_object_and_report_category[empty-WARNING_NOTCL]  # message category text
+tests/test_punch_gerber.py::test_error_codes_create_no_object_and_report_category[nothing-WARNING_NOTCL]  # message category text
+tests/test_punch_gerber.py::test_error_codes_create_no_object_and_report_category[size-ERROR_NOTCL]  # message category text
+tests/test_punch_gerber.py::test_error_codes_create_no_object_and_report_category[zero-WARNING_NOTCL]  # message category text
+tests/test_punch_gerber.py::test_cleanup_ends_manual_mode_and_clears_marks  # internal flags and mock calls
+tests/test_copper_thieving.py::test_circle_steps_count_the_whole_circle  # vertex count pinning
+tests/test_copper_thieving.py::test_plating_mask_follows_include_thieving_exteriors  # covered by plating export tests
+tests/test_copper_thieving.py::test_second_add_does_not_connect_handlers_twice  # signal connect counting
+tests/test_copper_thieving.py::test_plating_mask_job_does_not_touch_the_widgets_and_is_not_a_recent_file  # mock-heavy call assertions
+tests/test_follow.py::test_union_then_merge_does_not_leave_lines_split  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_follow_groups_selection_and_empty_groups_dropped  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_tool_dias_accepts[2-expected0]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_tool_dias_accepts[0.1, 0.2-expected1]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_tool_dias_accepts[value2-expected2]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_tool_dias_rejects[]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_tool_dias_rejects[abc]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_geometry_data_copies_only_geometry_and_mill_keys  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_follow_tools_shape  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_inputs_are_not_mutated  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_unusable_tool_diameter_gives_an_error_and_no_job  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_right_click_without_a_zone_gives_a_message_and_no_job  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_escape_ends_the_area_selection_and_restores_the_app_handlers  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_aperture_mode_makes_one_tool_per_aperture_size  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_follow.py::test_unknown_or_non_gerber_object_is_a_tcl_error  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_input_tools_not_mutated  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_existing_aperture_zero_region_can_be_cut  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_margin_grows_the_cut  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_target_in_subtractors_raises  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_units_factor[MM-IN-25.4]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_units_factor[IN-MM-0.03937007874015748]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_units_factor[MM-MM-1.0]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_units_factor[None-IN-1.0]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_units_factor[MM-None-1.0]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_geometry_intersect  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_apply_result_sets_everything_but_name  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_sub.py::test_many_pads_against_many_shapes_is_fast  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_out_name[board.gbr-board_drills]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_out_name[board-board_drills]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_out_name[a.b.gbr-a.b_drills]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_is_square_compares_sides_rounded_to_decimals  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_pad_size_of_am_without_geometry_is_none  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_code_of_disabled_kind_gives_nothing  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_fixed_zero_diameter_is_bad_diameter  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_clear_flashes_give_no_drills  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_two_sources_merge_into_one_result  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_soldermask_without_matching_pads_is_no_pads  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_cutout_walks_nested_lists_with_multipolygon_and_linestring  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_cutout_convex_triangle_gives_closed_outline  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_extract.py::test_count_pads_counts_dark_flashes_of_enabled_kinds_only  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_each_etchant_has_its_own_factor  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_manual_offset_passes_through_negative  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_um_to_units_and_quad_segs  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_inputs_are_not_mutated  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_clear_shrinks_and_solid_grows  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_positive_offset_drops_record_whose_clear_is_gone  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_size_of_other_aperture_types_is_not_grown  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_controller_leaves_the_source_unchanged  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_controller_creates_nothing_for_unusable_offset[ui_values0-[ERROR_NOTCL]]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_controller_creates_nothing_for_unusable_offset[ui_values1-[ERROR_NOTCL]]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_controller_creates_nothing_for_unusable_offset[ui_values2-[WARNING_NOTCL]]  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_etch_compensation.py::test_controller_creates_nothing_when_the_compensated_copper_is_empty  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_invert_gerber.py::test_zero_margin_keeps_the_exact_box  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_invert_gerber.py::test_round_join_uses_a_quarter_of_the_circle_steps  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_invert_gerber.py::test_copper_that_covers_the_area_gives_an_empty_result  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_invert_gerber.py::test_reference_area_converts_units  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_invert_gerber.py::test_apertures_hold_one_region_per_polygon  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::TestTclHelp::test_help_without_a_name_lists_commands_and_the_usage_hint  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::test_open_gerber_missing_filename_reports_error_without_crashing  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::TestTclSetSys::test_unknown_key_is_an_error  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::test_check_rules_unknown_object_and_no_rule_are_tcl_errors  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::test_qrcode_tokens_serial_pad_and_mask_pattern  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::test_qrcode_failure_while_planning_leaves_the_object_unchanged  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::test_qrcode_inch_project_uses_inch_module_size  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::test_subtract_objects_keep_target_0_deletes_it_and_takes_its_name  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_small_commands.py::test_invert_gerber_reference_outline_area_minus_the_copper  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_audit_generation.py::test_cncjob_dia_applies_to_single_tool_object_only  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_tcl_audit_generation.py::test_cncjob_single_geometry_with_milling_options_goes_through_the_milling_tool  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_separate_passes.py::test_the_object_diameter_is_the_one_of_its_largest_tool  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_separate_passes.py::test_square_first_corner_is_the_clicked_point_and_escape_ends_the_selection  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_separate_passes.py::test_area_right_click_isolates_in_the_worker_and_leaves_clean_state  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_separate_passes.py::test_polygon_mode_restores_the_grid_snap_once_whatever_the_generate_clicks  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_vbit_dia.py::test_edit_compares_against_every_tool_and_accepts_negative  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_vbit_dia.py::test_rest_machining_checkbox_follows_the_selection_and_keeps_the_combine_choice  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_vbit_dia.py::test_set_tool_ui_applies_the_preferences_and_resets_the_tools_without_a_diameter  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_boundary.py::test_tcl_names_one_object_per_pass_and_one_per_gerber  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_boundary.py::test_tcl_rest_machining_makes_one_object_with_the_biggest_tool_first  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_rest_index.py::test_rest_accepts_any_polygon_container  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_isolation_optimal_tooldia.py::test_one_polygon_has_no_safe_tool_and_a_multipolygon_solid_is_measured  # design-pinning/duplicate/private-detail/message-text test (policy prune)
+tests/test_startup_args.py::TestFileType::test_every_file_is_opened  # covered by test_objects_wait_for_the_project_before_them
+tests/test_startup_args.py::TestOpenRequests::test_requests_run_one_at_a_time  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_startup_args.py::TestOpenRequests::test_update_check_waits_for_the_files  # call order of internals
+tests/test_startup_args.py::TestPaths::test_filter_takes_a_path_once  # duplicate-filter internals
+tests/test_startup_args.py::TestSingleInstance::test_second_server_does_not_take_the_name  # same delivery as test_files_arrive
+tests/test_startup_args.py::TestSingleInstance::test_no_instance_running  # trivial
+tests/test_file_associations.py::TestFileAssociations::test_first_run_registers_all_types  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_file_associations.py::TestLinuxAssociations::test_apply_one_type_keeps_the_others  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_file_associations.py::TestLinuxAssociations::test_xdg_data_home_and_missing_tools  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_file_associations.py::TestLinuxAssociations::test_unwritable_home_reports_error  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_file_associations.py::TestMacAssociations::test_without_duti_user_is_told_how_to_set_default  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_project_load_cleanup.py::TestProjectLoadCleanup::test_cold_start_open_without_splash  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_project_load_cleanup.py::TestProjectLoadCleanup::test_complete_load_keeps_the_file_name  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_vispy_batch.py::TestDeferredRedraw::test_redraw_alone_is_applied_by_the_updater  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_vispy_batch.py::TestDeferredRedraw::test_flush_applies_at_once  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_vispy_batch.py::TestDeferredRedraw::test_update_colors_is_synchronous  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_collection_update_view.py::TestColorSwatch::test_swatch_click_on_unselected_row_selects_only_that_row  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_collection_update_view.py::TestDragReorder::test_drop_on_category_row_moves_rows_to_the_end  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_tcl_projects.py::TestOpenProject::test_failed_load_is_an_error  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_project_context_menu.py::TestCategoryMenu::test_gerber_category_menu  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_project_context_menu.py::TestCategoryMenu::test_cncjob_has_no_open_and_script_cannot_show_or_hide  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_worker_stack_shutdown.py::TestWorkerStackDispatch::test_low_task_runs_only_after_normal_tasks_and_pending_count  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_worker_stack_shutdown.py::TestWorkerStackDispatch::test_tasks_stay_queued_without_workers  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_plotcanvas3d.py::TestPlotCanvas3d::test_hud_colors_follow_the_options  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_plotcanvas3d.py::TestPlotCanvas3d::test_axis_width_follows_the_option  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_options_split.py::TestNewObjectOptionFill::test_keys_of_the_project_entry_are_not_filled  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_plot_manager_color_action.py::PlotManagerColorActionTests::test_swatch_on_unselected_row_colors_only_that_object  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_projects_manager.py::TestProjectManagerCore::test_editor_handlers_read_the_live_app_units  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_tcl_audit_regressions.py::test_switching_the_active_project_creates_no_new_objects  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/updater/test_provider.py::test_digi_only_widgets_follow_the_update_source  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_shutdown_message_filter.py::TestPoolChildBootstrap::test_pool_child_does_not_load_the_application_and_uses_one_blas_thread  # near-duplicate / internals / label check, behavior covered by a kept test
+tests/test_clipper_fuse.py::TestFallbackWithClipper::test_invalid_assembled_result  # fuse_parts no longer rejects an invalid assembled MultiPolygon (parser audit); the fuse result tests cover the output
+tests/test_exc_editor_history.py::test_selected_resize_preserves_native_slot_endpoints_and_unselected_drill  # split into the [fixed] and [adaptive] circle step cases
+tests/test_gerber_editor_history.py::test_buffer_undo_redo_save_reparse_preserves_material_and_export_mode  # parametrized by distance, standalone and keep_other
+tests/test_gerber_multiplicative_buffer.py::TestFactorMustBePositive::test_a_negative_factor_is_rejected_without_a_change  # merged into TestInvalidInput (factor not positive)
+tests/test_isolation_boundary.py::test_tcl_traced_boundary_is_left_out_of_the_excluded_area[separate]  # same branch as the kept case
+tests/test_isolation_separate_passes.py::test_generate_uses_the_tools_of_the_click[delete]  # same branch as the kept cases
+tests/test_preprocessors_no_swallowed_errors.py::test_no_preprocessor_swallows_an_exception[Berta_CNC]  # one test loops over all preprocessors
+tests/test_preprocessors_no_swallowed_errors.py::test_no_preprocessor_swallows_an_exception[GRBL_11_no_M6]  # one test loops over all preprocessors
+tests/test_preprocessors_no_swallowed_errors.py::test_no_preprocessor_swallows_an_exception[ISEL_ICP_CNC]  # one test loops over all preprocessors
+tests/test_preprocessors_no_swallowed_errors.py::test_no_preprocessor_swallows_an_exception[Marlin_laser_Spindle_pin]  # one test loops over all preprocessors
+tests/test_preprocessors_no_swallowed_errors.py::test_no_preprocessor_swallows_an_exception[Roland_MDX_20]  # one test loops over all preprocessors
+tests/test_preprocessors_no_swallowed_errors.py::test_no_preprocessor_swallows_an_exception[default]  # one test loops over all preprocessors
+tests/test_view_cube.py::TestViewCube::test_cube_drag_rotates_both_views_about_the_resized_grid_center  # flaky under the parallel gate (real mouse drag timing); removed on the owner's request
+tests/test_app_history_keys.py::TestViewKeys::test_view_keys_preserve_text_and_other_windows  # flaky (window activation and focus depend on the desktop); removed on the owner's request
+tests/test_startup_args.py::TestOrderAndErrors::test_load_that_never_ends_does_not_block_the_next_file  # flaky (real timer under load); removed on the owner's request
+tests/test_tcl_audit_regressions.py::test_timeout_is_error_and_late_completion_cannot_replace_new_output  # flaky (order-dependent QTimer dispatch); removed on the owner's request

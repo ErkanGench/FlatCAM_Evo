@@ -31,7 +31,7 @@ class FakeCollection:
 
 def make_grips(geometry, grid=False, snap=None, busy=False):
     shape = SimpleNamespace(geo=geometry)
-    app = SimpleNamespace(grid_status=lambda: grid, inform=SimpleNamespace(emit=Mock()),
+    app = SimpleNamespace(app_units='MM', grid_status=lambda: grid, inform=SimpleNamespace(emit=Mock()),
                           options={'global_sel_line': '#0000ffbf'},
                           plotcanvas=SimpleNamespace(new_shape_collection=lambda layers: FakeCollection()))
     editor = SimpleNamespace(selected=[shape], active_tool=SimpleNamespace(name='select'), app=app,
