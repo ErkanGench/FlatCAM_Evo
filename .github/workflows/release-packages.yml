@@ -1,0 +1,143 @@
+name: Release Linux and macOS packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and upload to
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-packages-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x86_64
+          - os: macos-15
+            platform: macos
+            arch: arm64
+          - os: macos-15-intel
+            platform: macos
+            arch: x86_64
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_REPO: ${{ github.repository }}
+      PACKAGE_PLATFORM: ${{ matrix.platform }}
+      PACKAGE_ARCH: ${{ matrix.arch }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Check release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$RELEASE_TAG" --repo "$GH_REPO"
+
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-xinerama0
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          python-version: '3.11'
+          activate-environment: flatcam-build
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install native and Python dependencies
+        run: |
+          conda install -y gdal rasterio freetype tk pillow 'numpy=1.26.4'
+          python -m pip install -r requirements.txt 'numpy==1.26.4' 'ortools==9.14.6206' 'cx-Freeze==8.7.3'
+          python -m pip check
+          python -c 'import os, platform; assert platform.machine() == os.environ["PACKAGE_ARCH"], platform.machine()'
+
+      - name: Build AppImage
+        if: runner.os == 'Linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: python scripts/freeze_release.py bdist_appimage
+
+      - name: Build macOS app
+        if: runner.os == 'macOS'
+        run: |
+          python scripts/freeze_release.py bdist_mac
+          codesign --force --deep --sign - build/FlatCAM_EVO.app
+          codesign --verify --deep --strict build/FlatCAM_EVO.app
+
+      - name: Check frozen application
+        run: |
+          if [[ "$PACKAGE_PLATFORM" == linux ]]; then
+            image=(dist/*.AppImage)
+            "${image[0]}" --appimage-extract
+            python scripts/check_release.py squashfs-root/AppRun
+          else
+            python scripts/check_release.py build/FlatCAM_EVO.app/Contents/MacOS/FlatCAM
+          fi
+
+      - name: Create DMG from signed app
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p build/dmg
+          cp -R build/FlatCAM_EVO.app build/dmg/
+          ln -s /Applications build/dmg/Applications
+          mkdir -p dist
+          hdiutil create -volname 'FlatCAM EVO' -srcfolder build/dmg -ov -format UDZO dist/FlatCAM_EVO.dmg
+          hdiutil verify dist/FlatCAM_EVO.dmg
+
+      - name: Name release asset
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          suffix = '.AppImage' if os.environ['PACKAGE_PLATFORM'] == 'linux' else '.dmg'
+          packages = list(Path('dist').glob('*' + suffix))
+          if len(packages) != 1:
+              raise RuntimeError(f'Expected exactly one {suffix} package, found {packages}')
+          tag = re.sub(r'[^A-Za-z0-9._-]', '_', os.environ['RELEASE_TAG'])
+          name = f"FlatCAM_EVO-{tag}-{os.environ['PACKAGE_PLATFORM']}-{os.environ['PACKAGE_ARCH']}{suffix}"
+          destination = packages[0].with_name(name)
+          packages[0].rename(destination)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write(f'RELEASE_ASSET={destination.as_posix()}\n')
+          PY
+
+      - name: Save package as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlatCAM_EVO-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ env.RELEASE_ASSET }}
+          if-no-files-found: error
+
+      - name: Attach package to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" --repo "$GH_REPO" --clobber
