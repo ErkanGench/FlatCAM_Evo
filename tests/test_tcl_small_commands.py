@@ -351,3 +351,44 @@ def test_subtract_objects_bad_input_is_a_tcl_error_and_creates_nothing():
             command.execute(args, [])
     app.app_obj.new_object.assert_not_called()
     app.collection.delete_by_name.assert_not_called()
+
+
+# ---- invert_gerber ------------------------------------------------------------------------------------------------
+def make_invert(objects):
+    from tclCommands.TclCommandInvertGerber import TclCommandInvertGerber
+    from test_tcl_audit_regressions import object_app
+    app = object_app(None)
+    app.collection.get_by_name.side_effect = objects.get
+    app.app_obj = Mock()
+    return TclCommandInvertGerber(app), app
+
+
+def invert_source(name, copper, bounds):
+    return SimpleNamespace(kind='gerber', multigeo=False, obj_options={'name': name, 'units': 'MM'},
+                           solid_geometry=[copper], bounds=lambda: bounds)
+
+
+def test_invert_gerber_new_object_is_the_margin_box_minus_the_copper():
+    from shapely import box
+    from shapely.ops import unary_union
+    objects = {'board': invert_source('board', box(2, 2, 8, 8), (0, 0, 10, 10))}
+    command, app = make_invert(objects)
+    command.execute({'name': 'board', 'margin': 1, 'join': 's'}, [])
+    name, new = run_init(app)
+    assert name == 'board_inverted'
+    assert unary_union(new.solid_geometry).area == pytest.approx(144 - 36)  # 12 x 12 box minus 6 x 6 copper
+    new.regenerate_source.assert_called_once()
+    assert objects['board'].solid_geometry[0].area == 36  # the source is untouched
+
+
+def test_invert_gerber_reference_outline_area_minus_the_copper():
+    from shapely import box
+    from shapely.ops import unary_union
+    objects = {'board': invert_source('board', box(2, 2, 8, 8), (0, 0, 10, 10)),
+               'outline': SimpleNamespace(kind='geometry', multigeo=False, obj_options={'name': 'outline',
+                                                                                         'units': 'MM'},
+                                          solid_geometry=[box(-5, -5, 25, 25)], tools={})}
+    command, app = make_invert(objects)
+    command.execute({'name': 'board', 'margin': 0, 'reference': 'outline', 'ref_area': 'box'}, [])
+    name, new = run_init(app)
+    assert unary_union(new.solid_geometry).area == pytest.approx(900 - 36)  # 30 x 30 outline minus the copper

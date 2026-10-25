@@ -39,16 +39,92 @@ class InvertUI:
         self.tools_frame.setLayout(self.tools_box)
 
         # Source Object Frame
-        self.gerber_label = FCLabel('%s' % _("Source Object"), color='darkorange', bold=True)
-        self.gerber_label.setToolTip(_("Gerber object that will be inverted."))
+        self.gerber_label = FCLabel('%s' % _("Source"), color='darkorange', bold=True)
+        self.gerber_label.setToolTip(_("Gerber object(s) that will be inverted."))
         self.tools_box.addWidget(self.gerber_label)
 
+        src_frame = FCFrame()
+        self.tools_box.addWidget(src_frame)
+        src_grid = GLay(v_spacing=5, h_spacing=3)
+        src_frame.setLayout(src_grid)
+
+        self.source_label = FCLabel('%s:' % _("Source"))
+        self.source_label.setToolTip(
+            _("- Object: invert the Gerber object chosen below.\n"
+              "- Selection: invert every selected Gerber object,\n"
+              "each into its own new object."))
+        self.source_radio = RadioSet([
+            {'label': _('Object'), 'value': 'object'},
+            {'label': _('Selection'), 'value': 'selection'}
+        ], compact=True)
+        src_grid.addWidget(self.source_label, 0, 0)
+        src_grid.addWidget(self.source_radio, 0, 1)
+
+        self.gerber_obj_label = FCLabel('%s:' % _("Object"))
         self.gerber_combo = FCComboBox()
         self.gerber_combo.setModel(self.app.collection)
         self.gerber_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
         self.gerber_combo.is_last = True
         self.gerber_combo.obj_type = "Gerber"
-        self.tools_box.addWidget(self.gerber_combo)
+        src_grid.addWidget(self.gerber_obj_label, 2, 0)
+        src_grid.addWidget(self.gerber_combo, 2, 1)
+
+        # Reference Frame
+        self.reference_title = FCLabel('%s' % _("Reference"), color='green', bold=True)
+        self.reference_title.setToolTip(_("The area in which the copper is inverted."))
+        self.tools_box.addWidget(self.reference_title)
+
+        ref_frame = FCFrame()
+        self.tools_box.addWidget(ref_frame)
+        ref_grid = GLay(v_spacing=5, h_spacing=3)
+        ref_frame.setLayout(ref_grid)
+
+        self.reference_label = FCLabel('%s:' % _("Reference"))
+        self.reference_label.setToolTip(
+            _("- Itself: the bounding box of the source object.\n"
+              "- Object: the area of another object."))
+        self.reference_radio = RadioSet([
+            {'label': _('Itself'), 'value': 'itself'},
+            {'label': _('Object'), 'value': 'object'}
+        ], compact=True)
+        ref_grid.addWidget(self.reference_label, 0, 0)
+        ref_grid.addWidget(self.reference_radio, 0, 1)
+
+        self.ref_type_label = FCLabel('%s:' % _("Type"))
+        self.ref_type_label.setToolTip(_("The type of the reference object: Gerber or Geometry."))
+        self.ref_type_combo = FCComboBox()
+        self.ref_type_combo.addItems([_("Gerber"), _("Geometry")])
+        ref_grid.addWidget(self.ref_type_label, 2, 0)
+        ref_grid.addWidget(self.ref_type_combo, 2, 1)
+
+        self.ref_obj_label = FCLabel('%s:' % _("Object"))
+        self.ref_combo = FCComboBox()
+        self.ref_combo.setModel(self.app.collection)
+        self.ref_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
+        self.ref_combo.is_last = True
+        self.ref_combo.obj_type = "Gerber"
+        ref_grid.addWidget(self.ref_obj_label, 4, 0)
+        ref_grid.addWidget(self.ref_combo, 4, 1)
+
+        self.ref_area_label = FCLabel('%s:' % _("Area"))
+        self.ref_area_label.setToolTip(
+            _("- Box: the bounding box of the reference object.\n"
+              "- Exact: the exact shape of the reference object."))
+        self.ref_area_radio = RadioSet([
+            {'label': _('Box'), 'value': 'box'},
+            {'label': _('Exact'), 'value': 'exact'}
+        ], compact=True)
+        ref_grid.addWidget(self.ref_area_label, 6, 0)
+        ref_grid.addWidget(self.ref_area_radio, 6, 1)
+
+        self.ref_widgets = [self.ref_type_label, self.ref_type_combo, self.ref_obj_label, self.ref_combo,
+                            self.ref_area_label, self.ref_area_radio]
+
+        self.source_radio.activated_custom.connect(self.on_source_changed)
+        self.reference_radio.activated_custom.connect(self.on_reference_changed)
+        self.ref_type_combo.currentIndexChanged.connect(self.on_ref_type_changed)
+        self.on_source_changed(self.source_radio.get_value())
+        self.on_reference_changed(self.reference_radio.get_value())
 
         self.param_label = FCLabel('%s' % _("Parameters"), color='blue', bold=True)
         self.param_label.setToolTip('%s.' % _("Parameters for this tool"))
@@ -101,6 +177,23 @@ class InvertUI:
         self.reset_button.setIcon(QtGui.QIcon(self.app.resource_location + '/reset32.png'))
         self.reset_button.setToolTip(_("Will reset the tool parameters."))
         self.tools_box.addWidget(self.reset_button)
+
+    def on_source_changed(self, value):
+        self.gerber_obj_label.setVisible(value == 'object')
+        self.gerber_combo.setVisible(value == 'object')
+
+    def on_reference_changed(self, value):
+        for widget in self.ref_widgets:
+            widget.setVisible(value == 'object')
+
+    def on_ref_type_changed(self, *args):
+        # the project tree roots: 0 Gerber, 1 Excellon, 2 Geometry
+        idx = max(0, min(1, self.ref_type_combo.currentIndex()))
+        row = (0, 2)[idx]
+        self.ref_combo.obj_type = ("Gerber", "Geometry")[idx]
+        self.ref_combo.setRootModelIndex(self.app.collection.index(row, 0, QtCore.QModelIndex()))
+        self.ref_combo.setCurrentIndex(0)
+        self.ref_combo.obj_type = ("Gerber", "Geometry")[row == 2]
 
     def confirmation_message(self, accepted, minval, maxval):
         if accepted is False:

@@ -821,6 +821,9 @@ class PreferencesUIManager(QtCore.QObject):
             # Invert Gerber Tool
             "tools_invert_margin": self.ui.plugin2_pref_form.tools2_invert_group.margin_entry,
             "tools_invert_join_style": self.ui.plugin2_pref_form.tools2_invert_group.join_radio,
+            "tools_invert_source": self.ui.plugin2_pref_form.tools2_invert_group.source_radio,
+            "tools_invert_reference": self.ui.plugin2_pref_form.tools2_invert_group.reference_radio,
+            "tools_invert_ref_area": self.ui.plugin2_pref_form.tools2_invert_group.ref_area_radio,
 
             # Etch Compensation Tool
             "tools_etch_thickness": self.ui.plugin2_pref_form.tools2_etch_group.thickness_entry,

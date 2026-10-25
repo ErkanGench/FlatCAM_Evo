@@ -52,6 +52,41 @@ class Tools2InvertPrefGroupUI(OptionsGroupUI):
         param_grid.addWidget(self.margin_label, 0, 0)
         param_grid.addWidget(self.margin_entry, 0, 1)
 
+        # Source
+        self.source_label = FCLabel('%s:' % _('Source'))
+        self.source_label.setToolTip(
+            _("- Object: invert the chosen Gerber object.\n"
+              "- Selection: invert every selected Gerber object."))
+        self.source_radio = RadioSet([
+            {'label': _('Object'), 'value': 'object'},
+            {'label': _('Selection'), 'value': 'selection'}
+        ], compact=True)
+        param_grid.addWidget(self.source_label, 2, 0)
+        param_grid.addWidget(self.source_radio, 2, 1)
+
+        # Reference
+        self.reference_label = FCLabel('%s:' % _('Reference'))
+        self.reference_label.setToolTip(
+            _("- Itself: the bounding box of the source object.\n"
+              "- Object: the area of another object."))
+        self.reference_radio = RadioSet([
+            {'label': _('Itself'), 'value': 'itself'},
+            {'label': _('Object'), 'value': 'object'}
+        ], compact=True)
+        param_grid.addWidget(self.reference_label, 4, 0)
+        param_grid.addWidget(self.reference_radio, 4, 1)
+
+        self.ref_area_label = FCLabel('%s:' % _('Reference Area'))
+        self.ref_area_label.setToolTip(
+            _("- Box: the bounding box of the reference object.\n"
+              "- Exact: the exact shape of the reference object."))
+        self.ref_area_radio = RadioSet([
+            {'label': _('Box'), 'value': 'box'},
+            {'label': _('Exact'), 'value': 'exact'}
+        ], compact=True)
+        param_grid.addWidget(self.ref_area_label, 6, 0)
+        param_grid.addWidget(self.ref_area_radio, 6, 1)
+
         # #############################################################################################################
         # Line Join Frame
         # #############################################################################################################

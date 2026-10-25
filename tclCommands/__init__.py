@@ -39,6 +39,7 @@ import tclCommands.TclCommandGetPath
 import tclCommands.TclCommandGetSys
 import tclCommands.TclCommandHelp
 import tclCommands.TclCommandInteriors
+import tclCommands.TclCommandInvertGerber
 import tclCommands.TclCommandIsolate
 import tclCommands.TclCommandJoinExcellon
 import tclCommands.TclCommandJoinGeometry

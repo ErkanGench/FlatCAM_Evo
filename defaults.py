@@ -1009,6 +1009,9 @@ class AppDefaults:
         # Invert Gerber Tool
         "tools_invert_margin": 0.1,
         "tools_invert_join_style": 's',
+        "tools_invert_source": 'object',
+        "tools_invert_reference": 'itself',
+        "tools_invert_ref_area": 'box',
 
         # Etch Compensation Tool
         "tools_etch_thickness": 18.0,

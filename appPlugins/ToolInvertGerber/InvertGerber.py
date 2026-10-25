@@ -5,23 +5,25 @@
 # MIT Licence                                              #
 # ##########################################################
 
-from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6 import QtWidgets, QtCore
 from appTool import AppTool
 from appGUI.GUIElements import VerticalScrollArea
-from appPlugins.ToolInvertGerber.InvertGerberUI import InvertUI
-from appPlugins.ToolInvertGerber.InvertGerberGen import invert_geometry
+from appCommon.Common import GracefulException
+from appHandlers.appHistory import history_of
+from appObjects.ProjectContext import unique_name
+from appPlugins.ToolInvertGerber.InvertGerberGen import (
+    InvertError, apertures_from_polygons, invert_geometry, join_style_name, reference_area)
+from appPlugins.ToolSub.SubGen import units_factor
 import appPlugins.ToolInvertGerber as invert_plugin
 
 import logging
+import traceback
 from copy import deepcopy
-
-from shapely import box
 
 import gettext
 import appTranslation as fcTranslate
 import builtins
 
-from camlib import flatten_shapely_geometry
 from defaults import AppDefaults
 
 fcTranslate.apply_language('strings')
@@ -32,12 +34,22 @@ log = logging.getLogger('base')
 
 
 class ToolInvertGerber(AppTool):
+    """
+    The widgets, the collection, the Undo history and the messages are used in the GUI thread only. One click reads
+    the form, puts ONE job on the app worker (the geometry work) and the job ends with one job_done signal, which
+    creates the new objects in the GUI thread as one history group.
+    """
+
+    # (kind, payload): 'result' [(source, polygons)] | 'cancelled' | 'error' text
+    job_done = QtCore.pyqtSignal(str, object)
 
     def __init__(self, app):
         self.app = app
         self.decimals = self.app.decimals
+        self._busy = False
 
         AppTool.__init__(self, app)
+        self.job_done.connect(self.on_job_done)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -66,7 +78,7 @@ class ToolInvertGerber(AppTool):
                     found_idx = idx
                     break
             # show the Tab
-            if not found_idx:
+            if found_idx is None:
                 try:
                     self.app.ui.notebook.addTab(self.app.ui.plugin_tab, _("Plugin"))
                 except RuntimeError:
@@ -83,7 +95,7 @@ class ToolInvertGerber(AppTool):
                 self.app.ui.notebook.setCurrentWidget(self.app.ui.plugin_tab)
 
             try:
-                if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName and found_idx:
+                if self.app.ui.plugin_scroll_area.widget().objectName() == self.pluginName and found_idx is not None:
                     # if the Tool Tab is not focused, focus on it
                     if not self.app.ui.notebook.currentWidget() is self.app.ui.plugin_tab:
                         # focus on Tool Tab
@@ -111,6 +123,9 @@ class ToolInvertGerber(AppTool):
         self.ui.invert_btn.clicked.connect(self.on_grb_invert)
         self.ui.reset_button.clicked.connect(self.set_tool_ui)
 
+    def _opt(self, key):
+        return self.app.options.get(key, AppDefaults.factory_defaults.get(key))
+
     def set_tool_ui(self):
         self.clear_ui(self.layout)
         self.ui = invert_plugin.InvertUI(layout=self.layout, app=self.app)
@@ -118,11 +133,14 @@ class ToolInvertGerber(AppTool):
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
 
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        self.ui.margin_entry.set_value(float(self.app.options.get(
-            "tools_invert_margin", app_defaults.get("tools_invert_margin", AppDefaults.factory_defaults.get("tools_invert_margin")))))
-        self.ui.join_radio.set_value(self.app.options.get(
-            "tools_invert_join_style", app_defaults.get("tools_invert_join_style", AppDefaults.factory_defaults.get("tools_invert_join_style"))))
+        self.ui.margin_entry.set_value(float(self._opt("tools_invert_margin")))
+        self.ui.join_radio.set_value(self._opt("tools_invert_join_style"))
+        self.ui.source_radio.set_value(self._opt("tools_invert_source"))
+        self.ui.reference_radio.set_value(self._opt("tools_invert_reference"))
+        self.ui.ref_area_radio.set_value(self._opt("tools_invert_ref_area"))
+        self.ui.on_source_changed(self.ui.source_radio.get_value())
+        self.ui.on_reference_changed(self.ui.reference_radio.get_value())
+        self._set_busy(self._busy)
 
         # SELECT THE CURRENT OBJECT
         obj = self.app.collection.get_active()
@@ -130,79 +148,157 @@ class ToolInvertGerber(AppTool):
             obj_name = obj.obj_options['name']
             self.ui.gerber_combo.set_value(obj_name)
 
+    def _set_busy(self, busy):
+        self._busy = busy
+        try:
+            self.ui.invert_btn.setEnabled(not busy)
+        except RuntimeError:
+            pass
+
+    def _error(self, text):
+        self.app.inform.emit('[ERROR_NOTCL] %s' % text)
+        return None
+
+    def collect(self):
+        """Read the form (GUI thread) and look the objects up. Returns a dict, or None after a message."""
+        ui = self.ui
+        collection = self.app.collection
+
+        if ui.source_radio.get_value() == 'selection':
+            sources = [o for o in collection.get_selected() if o.kind == 'gerber']
+            if not sources:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("No Gerber object is selected."))
+                return None
+        else:
+            obj_name = ui.gerber_combo.currentText()
+            try:
+                source = collection.get_by_name(obj_name)
+            except Exception as e:
+                log.error("ToolInvertGerber.collect() --> %s" % str(e))
+                source = None
+            if source is None:
+                return self._error('%s: %s' % (_("Object not found"), obj_name if obj_name else 'None'))
+            sources = [source]
+
+        reference = None
+        if ui.reference_radio.get_value() == 'object':
+            ref_name = ui.ref_combo.currentText()
+            reference = collection.get_by_name(ref_name) if ref_name else None
+            if reference is None:
+                return self._error('%s: %s' % (_("Reference object not found"), ref_name if ref_name else 'None'))
+
+        return {
+            'sources': sources,
+            'reference': reference,
+            'ref_area': ui.ref_area_radio.get_value(),
+            'margin': float(ui.margin_entry.get_value()),
+            'join_style': join_style_name(ui.join_radio.get_value()),
+            'steps': int(self._opt("gerber_circle_steps")),
+            'app_units': str(getattr(self.app, 'app_units', None) or ''),
+        }
+
     def on_grb_invert(self):
-        margin = self.ui.margin_entry.get_value()
-        if round(margin, self.decimals) == 0.0:
-            margin = 1E-10
-
-        join_style = {'r': "round", 'b': "bevel", 's': "mitre"}[self.ui.join_radio.get_value()]
-        if join_style is None:
-            join_style = 'round'
-
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        grb_circle_steps = int(self.app.options.get(
-            "gerber_circle_steps", app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))))
-        obj_name = self.ui.gerber_combo.currentText()
-
-        outname = obj_name + "_inverted"
-
-        # Get source object.
-        try:
-            grb_obj = self.app.collection.get_by_name(obj_name)
-        except Exception as e:
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(obj_name)))
-            return "Could not retrieve object: %s with error: %s" % (obj_name, str(e))
-
-        if grb_obj is None:
-            if obj_name == '':
-                obj_name = 'None'
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
+        if self._busy:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Another Invert Gerber run is still working."))
             return
+        params = self.collect()
+        if params is None:
+            return
+        self._set_busy(True)
+        self.app.inform.emit('%s' % _("Working..."))
+        self.app.worker_task.emit({'fcn': self.worker_job, 'params': [params]})
 
-        bounds = grb_obj.bounds()
-        grb_obj.solid_geometry = flatten_shapely_geometry(grb_obj.solid_geometry)
-        new_solid_geometry = flatten_shapely_geometry(invert_geometry(
-            grb_obj.solid_geometry, bounds, margin, grb_circle_steps, join_style))
+    # ------------------------------------------------------------------------------------------------------------
+    # the job (worker thread): geometry only, no widgets, no collection changes
+    # ------------------------------------------------------------------------------------------------------------
+    def check_abort(self):
+        if getattr(self.app, 'abort_flag', False):
+            raise GracefulException()
 
-        new_options = {}
-        for opt in grb_obj.obj_options:
-            new_options[opt] = deepcopy(grb_obj.obj_options[opt])
-
-        new_apertures = {}
-
-        if 0 not in new_apertures:
-            new_apertures[0] = {
-                'type':     'REG',
-                'size':     0.0,
-                'geometry': []
-            }
-
+    def worker_job(self, params):
+        kind, payload = 'error', ''
         try:
-            for poly in new_solid_geometry:
-                new_el = {'solid': poly, 'follow': poly.exterior}
-                new_apertures[0]['geometry'].append(new_el)
-        except TypeError:
-            new_el = {'solid': new_solid_geometry, 'follow': new_solid_geometry.exterior}
-            new_apertures[0]['geometry'].append(new_el)
+            with self.app.proc_container.new('%s...' % _("Working")):
+                results = []
+                for source in params['sources']:
+                    self.check_abort()
+                    units = (source.obj_options or {}).get('units')
+                    margin = params['margin'] * units_factor(units, params['app_units'])
+                    try:
+                        area = None
+                        if params['reference'] is not None:
+                            area = reference_area(params['reference'], params['ref_area'], params['steps'], units)
+                        polys = invert_geometry(source.solid_geometry, source.bounds(), margin, params['steps'],
+                                                params['join_style'], area=area, abort=self.check_abort)
+                    except InvertError:
+                        polys = None
+                    results.append((source, polys))
+                kind, payload = 'result', results
+        except GracefulException:
+            kind, payload = 'cancelled', None
+        except InvertError:
+            kind, payload = 'result', []
+        except Exception as e:
+            log.error("ToolInvertGerber.worker_job() --> %s\n%s" % (str(e), traceback.format_exc()))
+            kind, payload = 'error', str(e)
+        self.job_done.emit(kind, payload)
 
+    # ------------------------------------------------------------------------------------------------------------
+    # the end of the job (GUI thread)
+    # ------------------------------------------------------------------------------------------------------------
+    def on_job_done(self, kind, payload):
+        self._set_busy(False)
+        try:
+            if kind == 'cancelled':
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+            elif kind == 'result':
+                self.finish(payload)
+            else:
+                self._error('%s: %s' % (_("Invert Gerber failed"), payload))
+        except Exception as e:
+            log.error("ToolInvertGerber.on_job_done() --> %s\n%s" % (str(e), traceback.format_exc()))
+            self._error('%s: %s' % (_("Invert Gerber failed"), str(e)))
+
+    def finish(self, results):
+        """Create one object per source, as ONE history group."""
+        collection = self.app.collection
+        done = []
+        history = history_of(self.app)
+        with history.group(self.pluginName):
+            for source, polys in results:
+                if not polys:
+                    continue
+                outname = unique_name(source.obj_options['name'] + "_inverted", collection.get_names())
+                if self._create(source, polys, outname) is None:
+                    return
+                done.append(outname)
+
+        if not done:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                "There is no area to invert, or the copper covers all of it. Nothing was created."))
+        elif len(done) < len(results):
+            self.app.inform.emit('[success] %s: %s. %s' % (
+                _("Created"), ', '.join(done), _("Some objects had no area to invert.")))
+        else:
+            self.app.inform.emit('[success] %s: %s' % (_("Created"), ', '.join(done)))
+
+    def _create(self, source, polys, outname):
         def init_func(new_obj, app_obj):
-            new_obj.obj_options.update(new_options)
+            for key, value in (source.obj_options or {}).items():
+                if key != 'name':
+                    new_obj.obj_options[key] = deepcopy(value)
             new_obj.obj_options['name'] = outname
-            new_obj.fill_color = deepcopy(grb_obj.fill_color)
-            new_obj.outline_color = deepcopy(grb_obj.outline_color)
-
-            new_obj.tools = deepcopy(new_apertures)
-
-            new_obj.solid_geometry = deepcopy(new_solid_geometry)
+            new_obj.fill_color = deepcopy(source.fill_color)
+            new_obj.outline_color = deepcopy(source.outline_color)
+            new_obj.tools = apertures_from_polygons(polys)
+            new_obj.solid_geometry = list(polys)
             new_obj.regenerate_source(name=outname)
 
-        self.new_object('gerber', outname, init_func, source=grb_obj)
+        ret = self.new_object('gerber', outname, init_func, source=source, autoselected=False)
+        if ret is None or (isinstance(ret, str) and ret == 'fail'):
+            self._error(_("Generating new object failed."))
+            return None
+        return outname
 
     def reset_fields(self):
         self.ui.gerber_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
-
-    @staticmethod
-    def poly2rings(poly):
-        return [poly.exterior] + [interior for interior in poly.interiors]
-
-
