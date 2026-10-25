@@ -365,7 +365,8 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
             return False
         obj_options = getattr(target_obj, 'obj_options', None) or {}
         return (
-                bool(getattr(target_obj, 'is_segmented_gcode', False)) and
+                (bool(getattr(target_obj, 'is_segmented_gcode', False)) or
+                 getattr(target_obj, 'gcode_imported', False) is True) and
                 obj_options.get('type') in ('Geometry', 'Excellon')
         )
 
@@ -662,6 +663,9 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
                         # result would silently drop every other tool's geometry
                         total_gcode = ''
                         total_gcode_parsed = []
+                        if getattr(target_obj, 'gcode_imported', False) is True:
+                            self._al_imported_result(new_obj, target_obj, tools_gcode)
+                            return
                         for tooluid, levelled_text in tools_gcode.items():
                             if tooluid not in new_obj.tools:
                                 continue
@@ -698,6 +702,43 @@ class ToolLevelling(LevellingCoreMixin, CNCjob, AppTool):
                 self._al_apply_running = False
 
         self.app.worker_task.emit({'fcn': worker_task, 'params': []})
+
+    @staticmethod
+    def _al_imported_result(new_obj, target_obj, tools_gcode):
+        """
+        Fill the levelled job of an imported G-code file. The text of the blocks is the whole levelled program
+        (the blocks are slices of it, no tool holds the text of another), it is parsed once and the parsed moves are
+        given to the block they come from.
+        """
+        from appParsers.ParseGCode import parse_gcode
+
+        new_obj.gcode_imported = True
+        new_obj.gcode_encoding = getattr(target_obj, 'gcode_encoding', 'utf-8')
+        texts ={key: text for key, text in tools_gcode.items() if key in new_obj.tools}
+        total_gcode = ''.join(texts.values())
+        for key, text in texts.items():
+            new_obj.tools[key]['gcode'] = text
+
+        parsed = parse_gcode(total_gcode, steps_per_circle=new_obj.steps_per_circle,
+                             default_tooldia=float(new_obj.obj_options.get('tooldia') or 0.0),
+                             target_units=str(new_obj.units).upper())
+        blocks = list(parsed['tools'].values())
+        by_order = len(blocks) == len(texts)
+        total_gcode_parsed = []
+        for index, key in enumerate(texts):
+            if by_order:
+                block = blocks[index]
+            else:
+                tool_no = new_obj.tools[key].get('tool')
+                block = next((b for b in blocks if b.get('tool') == tool_no), None)
+            new_obj.tools[key]['gcode_parsed'] = list(block['gcode_parsed']) if block else []
+            total_gcode_parsed += new_obj.tools[key]['gcode_parsed']
+
+        new_obj.gcode = total_gcode
+        new_obj.gcode_parsed = total_gcode_parsed
+        new_obj.travel_distance = target_obj.travel_distance
+        new_obj.routing_time = target_obj.routing_time
+        new_obj.create_geometry()
 
     def ui_connect(self):
         self.ui.al_add_button.clicked.connect(self.on_add_al_probepoints)

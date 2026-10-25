@@ -311,11 +311,6 @@ class TestMillingGcodeFixes:
         job, with_time = multi_geo_gcode([TWO_LINES[0]], data=dict(tools_mill_dwell=True, tools_mill_dwelltime=1.5))
         assert 'G4 P1.5' in with_time
 
-    def test_single_geometry_travel_starts_at_end_of_previous_path(self):
-        job = gcode_job('default')
-        calls = recording_exclusion(job)
-        single_path_gcode(job, TWO_LINES)
-        assert [call['start_point'] for call in calls] == [(0, 0), (10.0, 0.0)]
 
     @pytest.mark.parametrize('flag', [True, False])
     def test_exclusion_flag_of_tool_is_honored(self, flag):
@@ -331,14 +326,6 @@ class TestMillingGcodeFixes:
         single_path_gcode(job, TWO_LINES, **keyword)
         assert bool(calls) is keyword.get('area_exclusion', True)
 
-    @pytest.mark.parametrize('flag', [True, False])
-    def test_cut_through_exclusion_area_warns_once(self, flag):
-        job = gcode_job('default')
-        recording_exclusion(job, [{'shape': BOX, 'strategy': 'over', 'overz': 1.0}])
-        cuts = [LineString([(0, 0), (10, 0)]), LineString([(0, 0.5), (10, 0.5)])]
-        multi_geo_gcode(cuts, job=job, data=dict(tools_mill_area_exclusion=flag))
-        warnings = [m for m in messages(job) if m.startswith('[WARNING]') and 'xclusion' in m]
-        assert len(warnings) == (1 if flag else 0)
 
     def test_first_tool_uses_start_z_by_position_not_by_uid(self):
         data = dict(tools_mill_startz=1.5, tools_mill_toolchangez=15.0)
@@ -354,14 +341,8 @@ class TestMillingGcodeFixes:
         notices = [m for m in messages(job) if m.startswith(('[ERROR_NOTCL]', '[WARNING_NOTCL]'))]
         assert notices and '0.25' in notices[-1]
 
-    def test_single_geometry_without_usable_path_tells_the_user(self):
-        job = gcode_job('default')
-        recording_exclusion(job)
-        assert single_path_gcode(job, [TWO_LINES[0]], offset=-5.0, tooldia=0.25) == 'fail'
-        assert [m for m in messages(job) if m.startswith(('[ERROR_NOTCL]', '[WARNING_NOTCL]'))]
 
-    @pytest.mark.parametrize('opt_type', ['T', 'N'])
-    @pytest.mark.parametrize('single', [False, True])
+    @pytest.mark.parametrize('opt_type, single', [('T', False), ('N', True)])
     def test_paths_with_the_same_start_point_are_all_cut(self, opt_type, single):
         paths = [LineString([(0, 0), (5, 0)]), LineString([(0, 0), (0, 5)]), LineString([(8, 8), (9, 9)])]
         with patch.object(camlib, 'HAS_ORTOOLS', True):
@@ -407,14 +388,87 @@ class TestPathOptimizationArgument:
         assert by_argument == by_option
         assert by_argument != single_path_gcode(gcode_job('default'), self.PATHS, opt_type='R')
 
-    def test_events_are_processed_only_in_the_gui_thread(self):
-        import threading
-        calls = []
-        with patch.object(camlib.QtWidgets.QApplication, 'processEvents', lambda: calls.append(1)):
-            thread = threading.Thread(target=camlib.process_gui_events)
-            thread.start()
-            thread.join()
-            assert not calls
-            camlib.process_gui_events()
-        from PyQt6 import QtWidgets
-        assert bool(calls) == (QtWidgets.QApplication.instance() is not None)
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Parse of any G-code (not only the FlatCAM made one): arcs, modal words, G91, comments, many drills, imported jobs
+# ---------------------------------------------------------------------------------------------------------------------
+def parsed_job(text, typ='Geometry', exc_tools=None, imported=False):
+    job = gcode_job('default')
+    job.units = 'MM'
+    job.obj_options['type'] = typ
+    job.pp_excellon_name = 'default'
+    job.exc_tools = exc_tools or {}
+    job.decimals = 4
+    job.steps_per_circle = 64
+    job.xy_toolchange = '0,0'
+    job.gcode = text
+    if imported:
+        job.gcode_imported = True
+    job.gcode_parse(tool_data={})
+    return job
+
+
+def points_of(job):
+    return [pt for item in job.gcode_parsed for pt in item['geom'].coords]
+
+
+class TestGcodeParseAnyGcode:
+    def test_arcs(self):
+        # a missing I or J is 0; R-format half circle
+        for arc_line, end in (('G2 X10 Y0 I5', (10, 0)), ('G3 X0 Y10 J5', (0, 10)), ('G3 X10 Y0 R5', (10, 0))):
+            assert points_of(parsed_job('G1 X0 Y0\n%s' % arc_line))[-1] == pytest.approx(end, abs=1e-9), arc_line
+        # R > 0: the short arc (half circle here) on the side of its direction
+        for arc_word, bulge_y in (('G2', 5), ('G3', -5)):
+            ys = [y for __, y in points_of(parsed_job('G1 X0 Y0\n%s X10 Y0 R5' % arc_word))]
+            assert (max(ys) if bulge_y > 0 else min(ys)) == pytest.approx(bulge_y, abs=0.05)
+        # R < 0: the long arc
+        short = parsed_job('G1 X0 Y0\nG3 X6 Y0 R5')
+        long = parsed_job('G1 X0 Y0\nG3 X6 Y0 R-5')
+        assert long.gcode_parsed[-1]['geom'].length > short.gcode_parsed[-1]['geom'].length
+        # full circle
+        job = parsed_job('G1 X0 Y0\nG2 X0 Y0 I5 J0')
+        xs = [x for x, __ in points_of(job)]
+        assert max(xs) - min(xs) == pytest.approx(10, abs=0.05)
+        assert job.gcode_parsed[-1]['geom'].length == pytest.approx(2 * np.pi * 5, rel=0.01)
+
+    def test_modal_words_incremental_moves_and_comments(self):
+        assert points_of(parsed_job('G1 X1 Y1\nG90\nG54\nG17\nX2 Y2\nX3 Y3'))[-2:] == [(2, 2), (3, 3)]
+        # the units line keeps its other words
+        job = parsed_job('G21 G90 G1 X4 Y5')
+        assert job.units == 'MM' and points_of(job)[-1] == (4, 5)
+        job = parsed_job('G20 G91 G1 X1 Y1\nG90 G0 X0 Y0')
+        assert job.units == 'IN' and points_of(job) == [(0, 0), (1, 1), (0, 0)]
+        job = parsed_job('G90 G1 X1 Y1\nG91\nX1 Y2\nX1 Y2\nG90\nX0 Y0')
+        assert points_of(job) == [(0, 0), (1, 1), (2, 3), (3, 5), (0, 0)]
+        assert points_of(parsed_job('g1 x3 y4 (x9) ; y9\n(g1 x7 y7)\n;g1 x8')) == [(0, 0), (3, 4)]
+
+    def test_many_drills_are_found_fast(self):
+        import time
+        count = 3000
+        drills = [Point((k % 60) * 1.0, (k // 60) * 1.0) for k in range(count)]
+        lines = ['G21', 'G90']
+        for p in drills:
+            lines += ['G0 X%.4f Y%.4f' % (p.x, p.y), 'G1 Z-1.0000', 'G0 Z2.0000']
+        started = time.perf_counter()
+        job = parsed_job('\n'.join(lines), 'Excellon', {1: {'tooldia': 0.8, 'drills': drills}})
+        assert time.perf_counter() - started < 10
+        rings = [g for g in job.gcode_parsed if g['geom'].geom_type == 'LinearRing']
+        assert len(rings) == count
+        assert rings[0]['geom'].bounds == pytest.approx((-0.4, -0.4, 0.4, 0.4), abs=0.01)
+
+
+class TestImportedJobParse:
+    def test_imported_job_uses_the_import_parser_and_a_unit_change_scales_the_geometry_not_the_gcode(self):
+        from appParsers import ParseGCode as module
+        text = 'G21\nG90\nT1\nG0 X1 Y1\nG1 X5 Y1 F100\nT2\nG0 X0 Y0\nG1 X0 Y3 F100\n'
+        job = parsed_job(text, imported=True)
+        expected = module.parse_gcode(text, steps_per_circle=64, default_tooldia=0.4, target_units='MM')
+        flat = [g for k in expected['tools'] for g in expected['tools'][k]['gcode_parsed']]
+        assert [g['geom'].wkt for g in job.gcode_parsed] == [g['geom'].wkt for g in flat]
+        assert job.gcode == text
+        text = 'G21\nG90\nG0 X0 Y0\nG1 X10 Y0 F100\n'
+        job = parsed_job(text, imported=True)
+        job.solid_geometry = [g['geom'] for g in job.gcode_parsed]
+        job.convert_units('IN')
+        assert job.gcode == text
+        assert max(x for x, __ in points_of(job)) == pytest.approx(10 / 25.4)

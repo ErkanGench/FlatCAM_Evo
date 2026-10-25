@@ -26,6 +26,7 @@ import re
 from io import StringIO
 from datetime import datetime as dt
 from copy import deepcopy
+from shapely import affinity
 
 from appHandlers.appHistory import history_of
 import gettext
@@ -92,7 +93,9 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         self.obj_options.update({
             "plot": True,
-            "tooldia": 0.03937,  # 0.4mm in inches
+            "tooldia": 0.4 if str(self.app.app_units).upper() == 'MM' else 0.01575,  # 0.4mm in the app units
+            # the units of the G-code text of an imported file ('' if the file says nothing)
+            "gcode_units": '',
             "append": "",
             "prepend": "",
             "dwell": False,
@@ -216,6 +219,8 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         self.prepend_snippet = ''
         self.append_snippet = ''
+        # the state of the snippets checkbox, as a plain attribute: regenerate_source() runs in worker threads
+        self.snippets_enabled = False
         self.gc_header = ''
         self.gc_start = ''
         self.gc_end = ''
@@ -224,12 +229,17 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         # here we store the used tools so the UI will build only those that were generated
         self.used_tools = []
 
+        # True for a job made from a G-code file (File > Open G-Code): its text is the file, never regenerated
+        self.gcode_imported = False
+        # the encoding of that file: the file is written back with it
+        self.gcode_encoding = 'utf-8'
+
         # Attributes to be included in serialization
         # Always append to it because it carries contents
         # from predecessors.
         self.ser_attrs += [
             'obj_options', 'multitool', 'append_snippet', 'prepend_snippet', 'gc_header', 'gc_start',
-            'multigeo', 'used_tools'
+            'multigeo', 'used_tools', 'gcode_imported', 'gcode_encoding'
         ]
 
         # this is used, so we don't recreate the GCode for loaded objects in set_ui(), it is already there
@@ -264,6 +274,13 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         self.ui_connect()
 
+    def _tool_dia(self, tool):
+        """The diameter of a tool record; a tool without one (an old project) has the diameter of the job."""
+        try:
+            return float(tool['tooldia'])
+        except (KeyError, TypeError, ValueError):
+            return float(self.obj_options.get('tooldia') or 0.0)
+
     def build_cnc_tools_table(self):
         tool_idx = 0
 
@@ -290,7 +307,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                 # There are no tool bits in MM with more than 2 decimals diameter.
                 # For INCH the decimals should be no more than 4. There are no tools under 10mils.
 
-                dia_item = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, float(dia_value['tooldia'])))
+                dia_item = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, self._tool_dia(dia_value)))
 
                 offset_txt = list(str(dia_value['data']['tools_mill_offset_value']))
                 offset_txt[0] = offset_txt[0].upper()
@@ -397,15 +414,13 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         row_no = 0
         for t_id, dia_value in self.tools.items():
             if t_id in self.used_tools:
-                tooldia = self.tools[t_id]['tooldia']
+                tooldia = self._tool_dia(self.tools[t_id])
 
                 try:
-                    offset_val = self.app.dec_format(float(dia_value['offset']), self.decimals) + \
-                                 float(dia_value['data']['tools_drill_cutz'])
-                except KeyError:
-                    offset_val = self.app.dec_format(float(dia_value['offset_z']), self.decimals) + \
-                                 float(dia_value['data']['tools_drill_cutz'])
-                except ValueError:
+                    cut_z = float(dia_value['data'].get('tools_drill_cutz', dia_value.get('z_cut', self.z_cut)))
+                    offset = dia_value['offset'] if 'offset' in dia_value else dia_value.get('offset_z', 0.0)
+                    offset_val = self.app.dec_format(float(offset), self.decimals) + cut_z
+                except (KeyError, TypeError, ValueError):
                     # for older loaded projects
                     offset_val = self.z_cut
 
@@ -450,7 +465,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                 self.ui.exc_cnc_tools_table.setItem(row_no, 4, t_id_item_2)  # Tool unique ID)
                 self.ui.exc_cnc_tools_table.setItem(row_no, 5, cutz_item)
                 # add it only if there is any gcode in the tool storage
-                if dia_value['gcode_parsed']:
+                if dia_value.get('gcode_parsed'):
                     self.ui.exc_cnc_tools_table.setCellWidget(row_no, 6, plot_cnc_exc_item)
 
                 row_no += 1
@@ -596,27 +611,34 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         if self.is_loaded_from_project is False:
             self.prepend_snippet = self._app_option('cncjob_prepend')
             self.append_snippet = self._app_option('cncjob_append')
-            self.gc_header = self.gcode_header()
+            # the file of an imported job has no FlatCAM header
+            self.gc_header = '' if self.gcode_imported else self.gcode_header()
         else:
             # this is dealt when loading the project, the header, prepend and append are already loaded
             # by being 'serr_attrs' attributes
             pass
 
-        gc = self.export_gcode(preamble=self.prepend_snippet, postamble=self.append_snippet, to_file=True,
-                               s_code=self.gc_start)
+        if self.gcode_imported:
+            # the original text; the snippets are added only when the user checks the snippets checkbox
+            self.source_file = self.gcode
+        else:
+            gc = self.export_gcode(preamble=self.prepend_snippet, postamble=self.append_snippet, to_file=True,
+                                   s_code=self.gc_start)
 
-        # set the Source File attribute with the calculated GCode
-        try:
-            # gc is StringIO
-            self.source_file = gc.getvalue()
-        except AttributeError:
-            # gc is text
-            self.source_file = gc
+            # set the Source File attribute with the calculated GCode
+            try:
+                # gc is StringIO
+                self.source_file = gc.getvalue()
+            except AttributeError:
+                # gc is text
+                self.source_file = gc
 
-        if self.append_snippet != '' or self.prepend_snippet != '':
+        if not self.gcode_imported and (self.append_snippet != '' or self.prepend_snippet != ''):
             # the object creation is not a history step of its own
             with history_of(self.app).suspended():
                 self.ui.snippets_cb.set_value(True)
+
+        self.snippets_enabled = bool(self.ui.snippets_cb.get_value())
 
         # Show/Hide Advanced Options
         app_mode = self._app_option("global_app_level")
@@ -750,7 +772,11 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         try:
             force_windows_line_endings = self._app_option('cncjob_line_ending')
-            if force_windows_line_endings and sys.platform != 'win32':
+            if self.gcode_imported:
+                # the text of the file as it is: no translation of the line endings, the encoding of the file
+                with open(filename, 'w', newline='', encoding=self.gcode_encoding, errors='replace') as f:
+                    f.write(self.source_file)
+            elif force_windows_line_endings and sys.platform != 'win32':
                 with open(filename, 'w', newline='\r\n') as f:
                     for line in self.source_file:
                         f.write(line)
@@ -833,21 +859,68 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
 
         self.app.inform.emit('[success] %s...' % _('Loaded Machine Code into Code Editor'))
 
+    def regenerate_source(self, name=None, *, store=True):
+        """
+        Rewrites source_file from the current G-code of the job (after a move, transform or origin change). Same
+        contract as FlatCAMObj.regenerate_source(). It reads no widget, so it can run in a worker thread: the state
+        of the snippets checkbox is the plain attribute snippets_enabled.
+
+        :param name: not used, the G-code has no name in it
+        :param store: False returns the generated text without assigning source_file
+        :return:     True if source_file was rewritten (the text with store=False), False on failure
+        """
+        preamble = self.prepend_snippet if self.snippets_enabled else ''
+        postamble = self.append_snippet if self.snippets_enabled else ''
+        try:
+            if self.gcode_imported:
+                text = self.imported_text(preamble, postamble)
+            else:
+                gco = self.export_gcode(preamble=preamble, postamble=postamble, to_file=True, s_code=self.gc_start)
+                text = gco.getvalue() if hasattr(gco, 'getvalue') else gco
+        except Exception as err:
+            self.app.log.warning("CNCJobObject.regenerate_source() failed, the old source_file is kept: %s" % str(err))
+            return False
+        if not isinstance(text, str) or text == 'fail':
+            self.app.log.warning("CNCJobObject.regenerate_source() failed, the old source_file is kept.")
+            return False
+        if not store:
+            return text
+        self.source_file = text
+        return True
+
     def on_update_source_file(self):
         preamble = ''
         postamble = ''
-        if self.ui.snippets_cb.get_value():
+        self.snippets_enabled = bool(self.ui.snippets_cb.get_value())
+        if self.snippets_enabled:
             preamble = self.prepend_snippet
             postamble = self.append_snippet
 
-        gco = self.export_gcode(preamble=preamble, postamble=postamble, to_file=True)
-        if gco == 'fail':
-            self.app.inform.emit('[ERROR_NOTCL] %s %s...' % (_('Failed.'), _('CNC Machine Code could not be updated')))
-            return
+        if self.gcode_imported:
+            # the original text, with the snippets only when the checkbox is checked
+            text = self.imported_text(preamble, postamble)
         else:
-            with history_of(self.app).snapshot(_("Update Source File"), [self]):
-                self.source_file = gco.getvalue()
-            self.app.inform.emit('[success] %s...' % _('CNC Machine Code was updated'))
+            gco = self.export_gcode(preamble=preamble, postamble=postamble, to_file=True)
+            if gco == 'fail':
+                self.app.inform.emit(
+                    '[ERROR_NOTCL] %s %s...' % (_('Failed.'), _('CNC Machine Code could not be updated')))
+                return
+            text = gco.getvalue()
+        with history_of(self.app).snapshot(_("Update Source File"), [self]):
+            self.source_file = text
+        self.app.inform.emit('[success] %s...' % _('CNC Machine Code was updated'))
+
+    def imported_text(self, preamble='', postamble=''):
+        """
+        The text of a job made from a G-code file: the file as it was read, with the snippets around it only if they
+        are given. No FlatCAM header, no start code, no footer.
+        """
+        text = self.gcode
+        if preamble:
+            text = preamble + '\n' + text
+        if postamble:
+            text = text + '\n' + postamble
+        return text
 
     def gcode_header(self, comment_start_symbol=None, comment_stop_symbol=None):
         """
@@ -985,6 +1058,11 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
         :param glob_gcode:  Passing an object attribute that is used to hold GCode; string
         :return:            None
         """
+
+        if getattr(self, 'gcode_imported', False):
+            # the file as it was read: no header, no start code, no footer and no snippets of the application
+            text = CNCJobObject.imported_text(self, preamble, postamble)
+            return CNCJobObject._write_gcode(self, text, filename, to_file)
 
         global_gcode = self.gcode if glob_gcode == '' else glob_gcode
         start_code = self.gc_start if s_code == '' else s_code
@@ -1163,13 +1241,22 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                 if preamble == '' and postamble == '':
                     g = self.gc_header + start_code + '\n' + gcode + '\n' + end_gcode
 
+        return CNCJobObject._write_gcode(self, g, filename, to_file)
+
+    def _write_gcode(self, g, filename, to_file):
+        """The tail of export_gcode(): write the text to the file, or return it as a StringIO."""
         lines = StringIO(g)
 
         # Write
         if filename is not None:
             try:
                 force_windows_line_endings = self._app_option('cncjob_line_ending')
-                if force_windows_line_endings and sys.platform != 'win32':
+                if getattr(self, 'gcode_imported', False):
+                    # the text of the file as it is: no translation of the line endings, the encoding of the file
+                    with open(filename, 'w', newline='', encoding=getattr(self, 'gcode_encoding', 'utf-8'),
+                              errors='replace') as f:
+                        f.write(g)
+                elif force_windows_line_endings and sys.platform != 'win32':
                     with open(filename, 'w', newline='\r\n') as f:
                         for line in lines:
                             f.write(line)
@@ -1289,14 +1376,14 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                     continue
                 row_dia = float('%.*f' % (self.decimals, float(self.ui.exc_cnc_tools_table.item(r, 1).text())))
                 for tooluid_key in self.tools:
-                    tooldia = float('%.*f' % (self.decimals, float(self.tools[tooluid_key]['tooldia'])))
+                    tooldia = float('%.*f' % (self.decimals, self._tool_dia(self.tools[tooluid_key])))
                     if row_dia == tooldia:
                         gcode_parsed = self.tools[tooluid_key]['gcode_parsed']
                         if row_cb.isChecked():
                             self.plot2(tooldia=tooldia, obj=self, visible=True, gcode_parsed=gcode_parsed, kind=kind)
         else:
             for tooluid_key in self.tools:
-                tooldia = float('%.*f' % (self.decimals, float(self.tools[tooluid_key]['tooldia'])))
+                tooldia = float('%.*f' % (self.decimals, self._tool_dia(self.tools[tooluid_key])))
                 gcode_parsed = self.tools[tooluid_key]['gcode_parsed']
                 # tool_uid = int(self.ui.cnc_tools_table.item(cw_row, 3).text())
 
@@ -1379,7 +1466,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                 if self.obj_options['type'].lower() == "excellon":
                     if self.tools:
                         for toolid_key in self.used_tools:
-                            dia_plot = self.app.dec_format(float(self.tools[toolid_key]['tooldia']), self.decimals)
+                            dia_plot = self.app.dec_format(self._tool_dia(self.tools[toolid_key]), self.decimals)
                             gcode_parsed = self.tools[toolid_key]['gcode_parsed']
                             if not gcode_parsed:
                                 self.app.log.debug("Tool %s has no 'gcode_parsed'." % str(toolid_key))
@@ -1392,7 +1479,7 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                     if self.tools:
                         for tooluid_key in self.used_tools:
                             dia_plot = self.app.dec_format(
-                                float(self.tools[tooluid_key]['tooldia']),
+                                self._tool_dia(self.tools[tooluid_key]),
                                 self.decimals
                             )
                             gcode_parsed = self.tools[tooluid_key]['gcode_parsed']
@@ -1488,6 +1575,14 @@ class CNCJobObject(PropertiesPanelMixin, FlatCAMObj, CNCjob):
                 if dia_key == 'gcode_parsed':
                     tool_dia_copy[dia_key] = dia_value
                 if dia_key == 'solid_geometry':
+                    tool_dia_copy[dia_key] = dia_value
+
+                # the drill positions of an imported Excellon job follow the units
+                if dia_key == 'drills':
+                    tool_dia_copy[dia_key] = [affinity.scale(pt, factor, factor, origin=(0, 0)) for pt in dia_value]
+                # the other entries of the tool (the T number, the drill counts, ...) stay as they are
+                elif dia_key not in ('tooldia', 'offset', 'offset_value', 'type', 'tool_type', 'data', 'gcode',
+                                     'gcode_parsed', 'solid_geometry'):
                     tool_dia_copy[dia_key] = dia_value
 
                 # if dia_key == 'solid_geometry':

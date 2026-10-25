@@ -482,3 +482,71 @@ def test_grbl_failed_probe_makes_no_levelled_job(sender_env):
     env.tool.app.app_obj.new_object.assert_not_called()
     assert not env.tool.al_heights_valid
     assert env.errors(), env.messages()
+
+
+# --------------------------------------------------------------------------------------
+# a job imported from a G-code file
+# --------------------------------------------------------------------------------------
+
+IMPORTED_INCH = ("G20\nG90\nT1\nG0 Z0.1\nG0 X0.5 Y0.5\nG1 Z-0.02 F10\nG1 X1.5 Y0.5\nG1 X1.5 Y1.5\nG0 Z0.1\n"
+                 "T2\nG0 X0.5 Y0.5\nG1 Z-0.02 F10\nG1 X1.0 Y1.0\nG0 Z0.1\n")
+
+
+def _imported_job(env, text, name):
+    from appParsers.ParseGCode import parse_gcode
+
+    job = journey.make_real_cncjob()
+    parsed = parse_gcode(text, target_units='MM')
+    job.obj_options = {'name': name, 'type': 'Geometry', 'gcode_units': parsed['units'], 'tooldia': 1.0}
+    job.kind, job.units, job.gcode_imported, job.is_segmented_gcode = 'cncjob', 'MM', True, False
+    job.coords_decimals, job.fr_decimals = 4, 2
+    job.pp_geometry_name = job.pp_excellon_name = 'default'
+    job.pp_solderpaste_name = None
+    job.exc_tools = {}
+    job.tools = {k: {'tool': t['tool'], 'tooldia': 1.0, 'data': {}, 'gcode': t['gcode'],
+                     'gcode_parsed': t['gcode_parsed'], 'solid_geometry': t['solid_geometry']}
+                 for k, t in parsed['tools'].items()}
+    job.used_tools = list(job.tools)
+    job.gcode = text
+    job.gcode_parsed = [g for t in job.tools.values() for g in t['gcode_parsed']]
+    job.create_geometry()
+    env.objects[name] = job
+    env.source_name = name
+    return job
+
+
+def test_imported_gcode_with_macros_is_not_levelled(env):
+    job = _imported_job(env, IMPORTED_INCH.replace("G1 X1.5 Y0.5\n", "#100=1.5\nG1 X#100 Y0.5\n"), 'job_macro')
+    env.select('job_macro', 'MACH3', 'b')
+    points = env.add_points()
+    hm = env.tmp_path / 'heights.txt'
+    write_height_map(hm, 'MACH3', points)
+    import_through_button(env, hm)
+
+    assert any('macro variables or subprograms' in e for e in env.errors()), env.errors()
+    assert env.levelled_name() not in env.objects
+    assert job.gcode.count('#100') == 2
+
+
+def test_imported_gcode_in_inches_is_levelled_once_in_its_own_units(env):
+    """Metric application, inch file: no duplicated program, the probe heights are written in inches."""
+    job = _imported_job(env, IMPORTED_INCH, 'job_in')
+    assert len(job.tools) == 2 and ''.join(t['gcode'] for t in job.tools.values()) == IMPORTED_INCH
+    env.select('job_in', 'MACH3', 'b')
+    points = env.add_points()
+    hm = env.tmp_path / 'heights.txt'
+    write_height_map(hm, 'MACH3', points)
+    import_through_button(env, hm)
+
+    assert not env.errors(), env.errors()
+    new = env.objects[env.levelled_name()]
+    assert new.gcode_imported is True and new.obj_options['gcode_units'] == 'IN'
+    assert new.gcode.count('T1') == 1 and new.gcode.count('T2') == 1
+    assert ''.join(t['gcode'] for t in new.tools.values()) == new.gcode
+    assert len(new.gcode_parsed) == sum(len(t['gcode_parsed']) for t in new.tools.values()) > 0
+    cuts = [m for m in re.finditer(r'G1 X([-\d.]+) Y([-\d.]+) Z([-\d.]+)', new.gcode)]
+    # the 1 inch moves are not segmented in the file: they are split (1 mm pieces) and levelled between their ends
+    assert len(cuts) > 50
+    for m in cuts:
+        x, y, z = (float(v) for v in m.groups())
+        assert z == pytest.approx(-0.02 + PLANE(x * 25.4, y * 25.4) / 25.4, abs=1e-3)

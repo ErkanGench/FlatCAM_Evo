@@ -1067,10 +1067,19 @@ class LevellingCoreMixin:
 
     def _al_capture_apply_input(self, target_obj, units=None, require_segmented=True):
         """Validate the source/map and freeze points, units and grid tolerance."""
-        if target_obj is None or (require_segmented and target_obj.is_segmented_gcode is not True):
+        # an imported G-code file is levelled as it is: its moves were not made by the application
+        imported = getattr(target_obj, 'gcode_imported', False) is True
+        if target_obj is None or (require_segmented and not imported and target_obj.is_segmented_gcode is not True):
             self.app.inform.emit(
                 '[ERROR_NOTCL] %s' % _("The CNCJob object must be made from segmented G-code.")
             )
+            return None
+        # the words of a program with macros or subprograms run with other values or more than once: the levelled
+        # Z of a word would be right for one run only
+        blocked = target_obj.gcode_flow_blocked('level') \
+            if imported and callable(getattr(target_obj, 'gcode_flow_blocked', None)) else None
+        if blocked:
+            self.app.inform.emit(blocked)
             return None
 
         # level_gcode_line() only understands standard G-code motion; Roland,
@@ -1200,14 +1209,20 @@ class LevellingCoreMixin:
         # the bounds of the probe points: a Z zero after a contact probe inside them
         # re-references the map to the probed point
         map_points = getattr(self, '_al_points', None) or []
+        # the height map and the job are in the app units; the text of an imported file may be in the other ones:
+        # the probe X / Y / Z are converted to the units of the text before they are written into it
+        text_units, text_factor = self._al_text_scale(target_obj)
         map_bounds = None
         if map_points:
-            map_bounds = (min(p[0] for p in map_points), min(p[1] for p in map_points),
-                          max(p[0] for p in map_points), max(p[1] for p in map_points))
-        state = new_levelling_state(arc_segment=self._al_arc_segment(target_obj),
-                                    units=getattr(target_obj, 'units', None),
+            map_bounds = (min(p[0] for p in map_points) / text_factor, min(p[1] for p in map_points) / text_factor,
+                          max(p[0] for p in map_points) / text_factor, max(p[1] for p in map_points) / text_factor)
+        state = new_levelling_state(arc_segment=self._al_arc_segment(target_obj) / text_factor,
+                                    units=text_units if text_factor != 1.0 else getattr(target_obj, 'units', None),
                                     map_bounds=map_bounds, home_wcs=home_wcs)
         state['outside'] = 0
+        if text_factor != 1.0:
+            map_offset_fn = self._al_offset_fn
+            self._al_offset_fn = lambda x, y: map_offset_fn(x * text_factor, y * text_factor) / text_factor
         if map_points:
             tol = snapshot[2] if snapshot is not None else self._al_grid_tolerance()
             if al_method in ('b', 'c') and self._al_grid is not None:
@@ -1219,14 +1234,18 @@ class LevellingCoreMixin:
             offset_fn = self._al_offset_fn
 
             def coverage_offset(x, y):
-                if footprint.distance(Point(x, y)) > tol:
+                if footprint.distance(Point(x * text_factor, y * text_factor)) > tol:
                     state['outside'] += 1
                 return offset_fn(x, y)
 
             state['coverage_offset'] = coverage_offset
+        sources = {tooluid: target_obj.tools[tooluid].get('gcode') or '' for tooluid in target_obj.tools.keys()}
+        if getattr(target_obj, 'gcode_imported', False) is True:
+            # the moves of an imported file are not segmented: split the long G1 moves so that the height map
+            # levels the cut between their ends too
+            sources = self._al_split_imported(sources, state['arc_segment'], self._al_decimals)
         result = {}
-        for tooluid in target_obj.tools.keys():
-            tool_gcode = target_obj.tools[tooluid].get('gcode') or ''
+        for tooluid, tool_gcode in sources.items():
             source_lines = tool_gcode.splitlines()
             trailing_newline = tool_gcode.endswith('\n')
 
@@ -1306,6 +1325,47 @@ class LevellingCoreMixin:
                 diagnostics.append(warning)
 
         return result
+
+    def _al_split_imported(self, sources, max_len, decimals):
+        """
+        Split the long G1 moves of the tool blocks of an imported job. The blocks are slices of 1 program: they are
+        split together (the modal state goes on from a block to the next) and partitioned again by tool.
+
+        :param sources:  {tooluid: G-code text of the block}, in the order of the program
+        :param max_len:  the longest XY length of 1 piece, in the units of the text
+        :param decimals: decimals of the new X/Y/Z words
+        :return:         {tooluid: G-code text}; the sources unchanged if nothing is split
+        """
+        from appParsers.ParseGCode import split_tool_blocks
+        from appPlugins.Common.gcode_segment import split_long_moves
+
+        text = ''.join(sources.values())
+        new_lines, count = split_long_moves(text.splitlines(), max_len, decimals)
+        if count == 0:
+            return sources
+        new_line = '\r\n' if '\r\n' in text else '\n'
+        new_text = new_line.join(new_lines) + (new_line if text.endswith('\n') else '')
+        blocks = split_tool_blocks(new_text)
+        if len(blocks) != len(sources):
+            # a split line can not change the tool words; keep the program as it is if the blocks do not match
+            return sources
+        self.app.inform.emit("%s: %d" % (_("Long moves split into shorter line moves"), count))
+        return {tooluid: block['gcode'] for tooluid, block in zip(sources.keys(), blocks)}
+
+    @staticmethod
+    def _al_text_scale(target_obj):
+        """
+        The units of the G-code text of the job and the factor from them to the units of the job (and of the height
+        map). They differ only for a job imported from a G-code file in the other units than the application's.
+
+        :return: (units of the text, factor); the factor is 1.0 when the text is in the units of the job
+        """
+        units = str(getattr(target_obj, 'units', '') or '').upper()
+        if getattr(target_obj, 'gcode_imported', False) is True:
+            file_units = str((getattr(target_obj, 'obj_options', None) or {}).get('gcode_units') or '').upper()
+            if file_units in ('MM', 'IN') and units in ('MM', 'IN') and file_units != units:
+                return file_units, (25.4 if file_units == 'IN' else 1 / 25.4)
+        return units, 1.0
 
     @staticmethod
     def _al_arc_segment(target_obj):

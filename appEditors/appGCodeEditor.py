@@ -312,11 +312,11 @@ class AppGCodeEditor(QtCore.QObject):
             nr_slots_item = QtWidgets.QTableWidgetItem('%d' % nr_slots)
 
             try:
-                cutz_item = QtWidgets.QTableWidgetItem('%.*f' % (
-                    self.decimals, float(t_value['offset']) + float(t_value['data']['tools_drill_cutz'])))
-            except KeyError:
-                cutz_item = QtWidgets.QTableWidgetItem('%.*f' % (
-                    self.decimals, float(t_value['offset_z']) + float(t_value['data']['tools_drill_cutz'])))
+                offset = t_value['offset'] if 'offset' in t_value else t_value.get('offset_z', 0.0)
+                cut_z = float(offset) + float(t_value['data'].get('tools_drill_cutz', self.gcode_obj.z_cut))
+            except (KeyError, TypeError, ValueError):
+                cut_z = float(self.gcode_obj.z_cut)
+            cutz_item = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, cut_z))
 
             t_id.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
             dia_item.setFlags(QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled)
@@ -431,66 +431,43 @@ class AppGCodeEditor(QtCore.QObject):
             return
 
         if 1 in sel_rows:
-            text_to_be_found = self.gcode_obj.gc_header
-            text_list = [x for x in text_to_be_found.split("\n") if x != '']
-
-            self.edit_area.find(str(text_list[0]), flags)
-            my_text_cursor = self.edit_area.textCursor()
-            start_sel = my_text_cursor.selectionStart()
-
-            end_sel = 0
-            while True:
-                f = self.edit_area.find(str(text_list[-1]), flags)
-                if f is False:
-                    break
-                my_text_cursor = self.edit_area.textCursor()
-                end_sel = my_text_cursor.selectionEnd()
-
-            my_text_cursor.setPosition(start_sel)
-            my_text_cursor.setPosition(end_sel, QtGui.QTextCursor.MoveMode.KeepAnchor)
-            self.edit_area.setTextCursor(my_text_cursor)
+            self._select_block_lines(self.gcode_obj.gc_header, flags)
 
         if 2 in sel_rows:
-            text_to_be_found = self.gcode_obj.gc_start
-            text_list = [x for x in text_to_be_found.split("\n") if x != '']
+            self._select_block_lines(self.gcode_obj.gc_start, flags)
 
-            self.edit_area.find(str(text_list[0]), flags)
-            my_text_cursor = self.edit_area.textCursor()
-            start_sel = my_text_cursor.selectionStart()
-
-            end_sel = 0
-            while True:
-                f = self.edit_area.find(str(text_list[-1]), flags)
-                if f is False:
-                    break
-                my_text_cursor = self.edit_area.textCursor()
-                end_sel = my_text_cursor.selectionEnd()
-
-            my_text_cursor.setPosition(start_sel)
-            my_text_cursor.setPosition(end_sel, QtGui.QTextCursor.MoveMode.KeepAnchor)
-            self.edit_area.setTextCursor(my_text_cursor)
+        # the hidden column of the tool rows holds the key of the tool in the tools dict
+        uid_col = 5 if self.gcode_obj.obj_options['type'].lower() == 'geometry' else 4
 
         sel_list = []
-        for row in sel_rows:
+        for row in sorted(sel_rows):
             # those are special rows treated before so we except them
             if row not in [0, 1, 2]:
-                tool_no = int(t_table.item(row, 0).text())
+                # the first column is the display index of the row, not the key of the tool nor its T number
+                tool_item = t_table.item(row, uid_col)
+                tool_key = self._tool_key(tool_item.text() if tool_item is not None else '')
+                if tool_key is None:
+                    continue
+                text_to_be_found = self.gcode_obj.tools[tool_key].get('gcode')
+                if not text_to_be_found:
+                    continue
+                # the T word of the tool in the G-code
+                tool_no = self.gcode_obj.tools[tool_key].get('tool', tool_key)
+                try:
+                    tool_no = int(tool_no)
+                except (TypeError, ValueError):
+                    tool_no = tool_key
 
-                text_to_be_found = None
-                if self.gcode_obj.obj_options['type'].lower() == 'geometry':
-                    text_to_be_found = self.gcode_obj.tools[tool_no]['gcode']
-                elif self.gcode_obj.obj_options['type'].lower() == 'excellon':
-                    tool_dia = self.app.dec_format(float(t_table.item(row, 1).text()), dec=self.decimals)
-                    for tool_id in self.gcode_obj.tools:
-                        tool_d = self.gcode_obj.tools[tool_id]['tooldia']
-                        if self.app.dec_format(tool_d, dec=self.decimals) == tool_dia:
-                            text_to_be_found = self.gcode_obj.tools[tool_id]['gcode']
-                    if text_to_be_found is None:
-                        continue
-                else:
+                if getattr(self.gcode_obj, 'gcode_imported', False):
+                    # the blocks of an imported job are slices of the text: select the exact one
+                    tool_selection = self._select_imported_block(tool_key)
+                    if tool_selection is not None:
+                        sel_list.append(tool_selection)
                     continue
 
                 text_list = [x for x in text_to_be_found.split("\n") if x != '']
+                if not text_list:
+                    continue
 
                 # self.edit_area.find(str(text_list[0]), flags)
                 # my_text_cursor = self.edit_area.textCursor()
@@ -580,6 +557,66 @@ class AppGCodeEditor(QtCore.QObject):
                     self.edit_area.setTextCursor(my_text_cursor)
 
         self.edit_area.setExtraSelections(sel_list)
+
+    def _select_block_lines(self, text, flags):
+        """Select in the editor the lines of text (the header or the start code): from its first line to its last."""
+        text_list = [x for x in str(text or '').split("\n") if x != '']
+        if not text_list:
+            # nothing to select: the job has no such code
+            return
+
+        self.edit_area.find(str(text_list[0]), flags)
+        my_text_cursor = self.edit_area.textCursor()
+        start_sel = my_text_cursor.selectionStart()
+
+        end_sel = 0
+        while True:
+            f = self.edit_area.find(str(text_list[-1]), flags)
+            if f is False:
+                break
+            my_text_cursor = self.edit_area.textCursor()
+            end_sel = my_text_cursor.selectionEnd()
+
+        my_text_cursor.setPosition(start_sel)
+        my_text_cursor.setPosition(end_sel, QtGui.QTextCursor.MoveMode.KeepAnchor)
+        self.edit_area.setTextCursor(my_text_cursor)
+
+    def _tool_key(self, text):
+        """The key in the tools dict of the tool whose key is written in text; None if there is none."""
+        for key in self.gcode_obj.tools:
+            if str(key) == str(text).strip():
+                return key
+        return None
+
+    def _select_imported_block(self, tool_key):
+        """
+        Select the exact block of an imported job: the blocks are slices of the text, in the order of the tools, so
+        each one is searched after the end of the previous one.
+
+        :return: the underline selection of the block, None if the block is not in the editor any more (edited)
+        """
+        plain = self.edit_area.toPlainText()
+        pos = 0
+        for key, tool in self.gcode_obj.tools.items():
+            block = (tool.get('gcode') or '').replace('\r\n', '\n')
+            if not block:
+                continue
+            found = plain.find(block, pos)
+            if found < 0:
+                if key == tool_key:
+                    return None
+                continue
+            pos = found + len(block)
+            if key == tool_key:
+                cursor = self.edit_area.textCursor()
+                cursor.setPosition(found)
+                cursor.setPosition(pos, QtGui.QTextCursor.MoveMode.KeepAnchor)
+                self.edit_area.setTextCursor(cursor)
+                selection = QtWidgets.QTextEdit.ExtraSelection()
+                selection.cursor = cursor
+                selection.format.setFontUnderline(True)
+                return selection
+        return None
 
     def on_toggle_all_rows(self):
         """
