@@ -6,6 +6,119 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+25.10.2026
+
+Isolation:
+
+- fixed: a run changed the tool table of the plugin: it removed the tools that were not selected and kept the paths of the last run in the table; a run now works on a copy of the selected tools
+- fixed: a new object got the paths of tools from an earlier run (also of another Gerber object), and a CNC job from it cut these old paths
+- fixed: the created objects shared the tool data with the plugin and with each other; a later change in the plugin changed the objects that were already made
+- fixed: an empty selection (for example a Reference Object that covers all the copper) isolated the whole board; it now shows "No geometry to isolate."
+- fixed: the extra pad passes went around all the pads of the board, also when only some polygons were isolated; a clear (LPC) flash crashed the combined run with pad passes
+- fixed: in separate passes, the first pad ring was on the path of its own pass (a double cut) and each pass object had the rings again; the rings now start after the last pass and are only in the last object
+- fixed: rest machining crashed after "Generate Buffer" and with a Reference Object; it now uses the selected tools (largest first) and continues when one tool fails
+- fixed: rest machining did not give a pad with 1 hole to the next, smaller tool when the hole was too small for the tool
+- fixed: the tool check and the isolation ran at the same time; the check now finishes first, in the same job
+- fixed: the circle steps were used as segments for each quarter, so the arcs had 4 times the points
+- fixed: after a tool was added, the table selected an other row, because the sort gave new numbers to the tools; the tools now keep their numbers
+- fixed: the Tools Database insert selected the wrong row and did not merge the default values; the edit of a diameter compared only with the last tool
+- fixed: Rest Machining stayed disabled after Area and then Polygon selection; the V-shape fields stayed hidden for a V tool; the "Selection" preference was not used
+- fixed: the Beginner / Advanced switch overwrote the isolation type of each tool; the signals were connected again at each Reset
+- fixed: in Polygon selection, a rectangle drag selected nothing; Select All added the polygons a second time; the first corner of a Square area was wrong without grid snap
+- fixed: Esc and the right click did not reset the selection, so old polygons went into the next run; the grid snap was not always restored
+- the Area and Polygon selections run the isolation in the worker, so the GUI does not freeze; the selection uses a spatial index and draws all the polygons in one batch (200 clicks on 20000 pads: 0.02 s)
+- the widgets are read when Generate is clicked; the worker gets plain values
+- the paths of a run are not kept in the tool table, so the table is faster to rebuild
+- a running isolation can be stopped
+- new: "Selected objects" isolates all the Gerber objects selected in the Project tab with the same tools
+- the preference key tools_iso_tool_cutz is removed (it was not used)
+- Tcl isolate: new options -milling_type, -pad_passes, -tool_shape, -vtipdia, -vtipangle, -cutz, -simplify, -except_obj and -rest (with a list of diameters); several Gerber objects as a comma separated list; the values are checked; the tool data of the result has the real diameter and the isolation job type
+- Tcl isolate: the default name of an exterior or interior isolation is now <name>_ext_iso or <name>_int_iso; each separate pass has its own name
+
+Non-Copper Clearing:
+
+- fixed: the tool table kept the geometry of an earlier run and a run wrote into the table; an empty boundary did not fail
+- fixed: the V-tip values of the tools did not reach the output tools; the circle steps were used as segments for each quarter
+- the tool check runs in the worker; the Tcl command uses the same code as the GUI
+- new: Preview button, an Exclusion areas section, "All selected objects", a simplification preference
+- Tcl ncc: new options -iso_tooldia, -milling_type, -final_cleanup, -simplification, -area, -exclude and -plot; the output names _ncc and _ncc_rm are fixed
+
+Paint:
+
+- fixed: a job wrote paths into the tool table and removed tools from it; each tool now uses its own method unless the caller (Tcl) sets one
+- the tool check tests that the tool fits inside the selected polygons
+- new: Preview button, "Selected objects" (one job for each selected Geometry or Gerber object), a rest offset and a check preference
+- Tcl paint: new options -rest, -rest_offset, -simplification, -final_cleanup, -ref and -area; a failure gives a Tcl error
+
+Follow:
+
+- the plugin was made again: the work runs in the worker, one Undo removes the result, the names are unique, more than one object can be used, with a preview, an aperture list and Cancel
+- new: Follow preferences (merge, selection, area shape, diameter mode, name suffix); the shortcut Alt+Y opens the plugin
+- Tcl follow uses the same code as the GUI and has all the options
+
+Extract:
+
+- the drills, the soldermask and the cutout are made by one Qt-free core that the GUI and Tcl use; the work runs in the worker
+- the cutout also uses "All selected Gerbers"
+- new: Tcl command extract, and new preferences
+
+Invert Gerber:
+
+- fixed: the source object was changed; an empty or infinite bound crashed the plugin; the circle steps were used as segments for each quarter
+- the inversion is one union and one difference; the work runs in the worker with Stop and one Undo step
+- new: the source can be the object or a selection; the reference can be the object itself or an other object (Box or Exact); the margin is converted to the app units
+- new: Tcl command invert_gerber, and new preferences
+
+Etch Compensation:
+
+- fixed: a record whose clear area made it empty was exported as copper; the result did not keep the follow geometry, the aperture macros and the region export of the source
+- fixed: only the C and P apertures grow by the offset; an empty result shows an error; Reset during a job is refused
+- Tcl etch_compensate: new option -mode etch_list
+
+Drilling:
+
+- fixed: an Excellon object lost the values of its tools when its UI was made again
+- fixed: a wrong number in the toolchange X,Y gave a crash; it now gives an error
+- fixed: the drill travels went around the exclusion areas also when the tool did not use them
+- the tool table keeps the selection when it is made again for the same object
+
+Milling:
+
+- fixed: the form values were applied in the wrong order of level and preprocessor; the tool label showed the wrong column; the Excellon totals were not reset
+- fixed: multi-depth was used for a laser preprocessor; a laser cuts at one height
+- a change in the form is one light Undo step
+
+QR Code:
+
+- fixed: a result of the geometry job that came after Reset, Close or a new Insert was used
+- fixed: a QR code into a new object needed a target object; a PCB document object keeps its own units
+- the soldermask Gerber can not be the target object; the automatic version is now on by default; Esc only cancels an active insert
+
+Punch Gerber:
+
+- the last column of the apertures table fits its contents
+
+G-code Sender:
+
+- the plugin is now named G-code Sender (ToolGcodeSender); it does not open until it is finished
+
+Geometry:
+
+- the circle steps count the whole circle in all the geometry code: the circles, the buffers of the geometry, the drills and slots of an Excellon object and the CNC job buffers have the number of segments that the setting gives (before, 4 times more)
+
+Build:
+
+- the frozen build finds the preprocessors in lib/ next to the executable
+
+Tests:
+
+- the tests that read source code or that only pinned the design are removed; the tests of the new work are in the topical files
+- the lifecycle tests of the G-code Sender are skipped while the plugin is disabled
+
+Translations:
+
+- the new texts of Isolation, Non-Copper Clearing, Paint, Follow, Extract and the other plugins are translated in 9 languages
+
 24.10.2026
 
 Release:
