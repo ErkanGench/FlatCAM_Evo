@@ -559,3 +559,35 @@ def test_a_likely_mistake_warns_at_generation_but_the_job_is_made():
     select(milling, 'A')
     assert generate(milling)
     assert 'overlap must be less than 100%' in told(milling, 'WARNING')
+
+
+# ---- the form of a laser tool, the tool number label, the Excellon totals ----
+
+def test_laser_preprocessor_hides_multidepth_in_the_advanced_level():
+    objects = {'A': make_object('A', tools_mill_multidepth=True, **LASER), 'B': make_object('B', **MILL)}
+    milling = plugin(objects)
+    ui = milling.ui
+    ui.level.setChecked(True)
+    select(milling, 'B')
+    assert not ui.mpass_cb.isHidden() and not ui.maxdepth_entry.isHidden()
+    select(milling, 'A')
+    assert ui.mpass_cb.isHidden() and ui.maxdepth_entry.isHidden()
+
+
+def test_tool_label_shows_the_tool_uid_not_the_row_number():
+    objects = {'A': make_object('A', **MILL)}
+    objects['A'].tools = {7: objects['A'].tools[1]}
+    milling = plugin(objects)
+    select(milling, 'A')
+    milling.ui.tools_table_mill_geo.selectRow(0)
+    milling._update_ui()
+    assert 'Tool 7' in milling.ui.tool_data_label.text()
+
+
+def test_excellon_totals_are_zero_without_a_target():
+    milling = plugin({'A': make_object('A', **MILL)})
+    milling.tot_drill_cnt, milling.tot_slot_cnt = 4, 2
+    milling.target_obj = None
+    milling.build_ui_exc()
+    milling._exc_rebuild_ui()          # no target: nothing to rebuild
+    assert (milling.tot_drill_cnt, milling.tot_slot_cnt) == (0, 0)

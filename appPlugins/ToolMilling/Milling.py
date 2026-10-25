@@ -28,7 +28,8 @@ import builtins
 from appDatabase import load_tools_database, tools_database_error_message
 from defaults import AppDefaults
 from camlib import Geometry, grace, deepcopy_keep_geometry
-from appHandlers.appHistory import history_of, object_state, SnapshotStep
+from appHandlers.appHistory import history_of, object_state, SnapshotStep, HistoryStep, HistoryError, states_equal, \
+    retained_sizes
 from appPlugins.ToolMilling.MillingUI import MillingUI
 from appPlugins.ToolMilling import MillingGen
 
@@ -238,12 +239,51 @@ def tool_setting_problems(data, generation=False):
     return problems
 
 
+class ToolDataStep(HistoryStep):
+    """The data of the tools of 1 object before and after a parameter edit: the edit changes nothing else."""
+
+    def __init__(self, label, uid, before, after):
+        self.label = label
+        self.uid = uid
+        self.states = (before, after)      # ({tool uid: data of the tool}, {tool uid: data of the tool})
+        self._geoms = retained_sizes(before, after)
+        self.size = sum(self._geoms.values())
+
+    def geometry_sizes(self):
+        return self._geoms
+
+    def uids(self):
+        return {self.uid}
+
+    def _run(self, history, state):
+        obj = history.find_or_fail(self.uid)
+        for tooluid, data in state.items():
+            if tooluid not in obj.tools:
+                raise HistoryError(_("The tools of this step do not exist anymore."))
+        for tooluid, data in state.items():
+            obj.tools[tooluid]['data'] = deepcopy_keep_geometry(data)
+        if getattr(obj, 'ui', None) is not None and hasattr(obj, 'to_form'):
+            obj.to_form()
+        history.after_change(obj, None)
+
+    def undo(self, history):
+        self._run(history, self.states[0])
+
+    def redo(self, history):
+        self._run(history, self.states[1])
+
+
+def _tools_data(obj):
+    return {uid: deepcopy_keep_geometry(tool['data']) for uid, tool in obj.tools.items() if 'data' in tool}
+
+
 @contextmanager
-def _history_step(tool, label):
+def _history_step(tool, label, data_only=False):
     """
     1 Undo step with the state of the target object of the plugin before and after the body (none if the body changed
     nothing). A step recorded inside another step is part of it. Only the handlers of a user action use it: building
-    the UI never records.
+    the UI never records. data_only: the body changes only the data of the tools (a parameter edit): the step keeps
+    that, not the whole object.
     """
     obj = tool.target_obj
     history = history_of(tool.app)
@@ -252,18 +292,18 @@ def _history_step(tool, label):
         yield
         return
     tool._history_depth = 1
-    before = object_state(obj)
+    before = _tools_data(obj) if data_only else object_state(obj)
     try:
         yield
     finally:
         tool._history_depth = 0
-        after = object_state(obj)
-        try:
-            same = before == after
-        except Exception:
-            same = False
+        after = _tools_data(obj) if data_only else object_state(obj)
+        same = states_equal(before, after)
         if not same:
-            history.push(SnapshotStep(_("Milling") + ': ' + label, [(obj.history_uid, before, after)]))
+            if data_only:
+                history.push(ToolDataStep(_("Milling") + ': ' + label, obj.history_uid, before, after))
+            else:
+                history.push(SnapshotStep(_("Milling") + ': ' + label, [(obj.history_uid, before, after)]))
 
 
 class ToolMilling(Geometry, AppTool):
@@ -967,6 +1007,9 @@ class ToolMilling(Geometry, AppTool):
             ToolMilling._exc_rebuild_ui(self)
 
     def _exc_rebuild_ui(self):
+        if self.target_obj is None:
+            return
+
         # read the table tools uid
         current_uid_list = []
         # we have (n+2) rows because there are 'n' tools, each a row, plus the last 2 rows for totals.
@@ -1255,6 +1298,8 @@ class ToolMilling(Geometry, AppTool):
         # updated units
         self.units = self.app.app_units.upper()
 
+        self.tot_drill_cnt = 0
+        self.tot_slot_cnt = 0
         if self.target_obj:
             self.ui.param_frame.setDisabled(False)
 
@@ -1264,8 +1309,6 @@ class ToolMilling(Geometry, AppTool):
             if order in (1, 2):     # 'fwd', 'rev'
                 tools.sort(key=lambda uid: self.app.dec_format(float(self.target_obj.tools[uid]['tooldia'])),
                            reverse=(order == 2))
-            self.tot_drill_cnt = 0
-            self.tot_slot_cnt = 0
         else:
             tools = []
 
@@ -1912,7 +1955,7 @@ class ToolMilling(Geometry, AppTool):
 
         if len(sel_rows) == 1:
             # update the QLabel that shows for which Tool we have the parameters in the UI form
-            tooluid = int(plugin_table.item(list(sel_rows)[0], 0).text())
+            tooluid = int(plugin_table.item(list(sel_rows)[0], 3).text())
             self.ui.tool_data_label.setText(
                 "<b>%s: <font color='#0000FF'>%s %d</font></b>" % (_('Parameters for'), _("Tool"), tooluid)
             )
@@ -1971,8 +2014,8 @@ class ToolMilling(Geometry, AppTool):
             try:
                 if 'tools_mill_tool_shape' in storage and self.ui.target_radio.get_value() == 'geo':
                     self._show_v_shape_fields(self.ui.tool_shape_combo.currentText())
-                self.on_pp_changed()
                 self._update_level_visibility(self.ui.level.isChecked())
+                self.on_pp_changed()      # last: a laser preprocessor hides the fields that the level just showed
             except Exception as err:
                 self.app.log.error("ToolMilling.to_form() updating the dependent fields --> %s" % str(err))
         finally:
@@ -2035,7 +2078,7 @@ class ToolMilling(Geometry, AppTool):
 
     def form_to_storage(self):
         """A parameter edited by the user: 1 Undo step. The programmatic loads of the form have their signals off."""
-        with _history_step(self, _("Edit parameter")):
+        with _history_step(self, _("Edit parameter"), data_only=True):
             ToolMilling._form_to_storage(self)
 
     def _form_to_storage(self):
@@ -2838,7 +2881,7 @@ class ToolMilling(Geometry, AppTool):
             skipped = []
             for uid, source in source_tools.items():
                 geometry = self._paint_excellon_tool_geometry(source, circle_steps)
-                if geometry is None:
+                if not geometry:
                     skipped.append(str(source['tooldia']))
                     del new_obj.tools[uid]
                     job_context['used_tools'].remove(uid)
@@ -3242,7 +3285,8 @@ class ToolMilling(Geometry, AppTool):
                 spindle_dir=data.get('tools_mill_spindledir', context['options']['tools_mill_spindledir']),
                 dwell=data['tools_mill_dwell'], dwelltime=data['tools_mill_dwelltime'],
                 laser_min_power=data['tools_mill_min_power'], laser_on_code=data['tools_mill_laser_on'],
-                multidepth=data['tools_mill_multidepth'], depthpercut=data['tools_mill_depthperpass'],
+                multidepth=data['tools_mill_multidepth'] and 'laser' not in str(data['tools_mill_ppname_g']).lower(),
+                depthpercut=data['tools_mill_depthperpass'],
                 extracut=data['tools_mill_extracut'], extracut_length=data['tools_mill_extracut_length'],
                 startz=data['tools_mill_startz'], endz=data['tools_mill_endz'], endxy=data['tools_mill_endxy'],
                 toolchange=data['tools_mill_toolchange'], toolchangez=data['tools_mill_toolchangez'],

@@ -4070,7 +4070,8 @@ class CNCjob(Geometry):
 
         # Depth parameters for the current tool must be loaded before validation.
         self.z_cut = float(tool_dict['tools_mill_cutz']) if tool_dict['tools_mill_cutz'] is not None else None
-        self.multidepth = tool_dict['tools_mill_multidepth']
+        # a laser cuts at one height: multi-depth does not apply (old data can still have it on)
+        self.multidepth = tool_dict['tools_mill_multidepth'] and 'laser' not in str(self.pp_geometry_name).lower()
         self.z_depthpercut = float(tool_dict['tools_mill_depthperpass'])
         self.z_move = float(tool_dict['tools_mill_travelz']) if tool_dict['tools_mill_travelz'] is not None else None
 
