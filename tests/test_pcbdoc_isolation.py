@@ -13,7 +13,8 @@ class TestPcbDocIsolation(unittest.TestCase):
     def isolate(self, entries):
         solid = entries[0]['solid']
         envelope = solid.buffer(0.1).exterior
-        app = SimpleNamespace(options={'gerber_circle_steps': 64}, inform=Mock(), app_obj=Mock())
+        app = SimpleNamespace(options={'gerber_circle_steps': 64}, inform=Mock(), app_obj=Mock(),
+                              abort_flag=False)
         tool = SimpleNamespace(app=app, decimals=4, validation_status=True,
                                generate_envelope=Mock(return_value=[envelope]))
         tool.new_object = lambda *args, **kwargs: AppTool.new_object(tool, *args, **kwargs)
@@ -51,7 +52,8 @@ class TestPcbDocIsolation(unittest.TestCase):
     def test_point_flash_still_receives_extra_pad_geometry(self):
         pad = Point(0, 0).buffer(1)
         actual, envelope, source = self.isolate([{'solid': pad, 'follow': Point(0, 0)}])
-        extra = pad.buffer(0.2 / 2.0000001, 64)
+        # the pad ring starts after the pass (offset of the 2nd pass); 64 steps of the whole circle
+        extra = pad.buffer(0.2 * 3 / 2.0000001, 64 // 4)
         self.assertLess(actual.symmetric_difference(unary_union([envelope, extra])).area, 1e-8)
         self.assertGreater(actual.area, 0)
         self.assertIsInstance(source.tools[0]['geometry'][0]['follow'], Point)

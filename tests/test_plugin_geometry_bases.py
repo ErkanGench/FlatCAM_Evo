@@ -13,4 +13,5 @@ def make_tool_app():
     app.resource_location = "assets/resources"
     app.options = {}
     app.defaults = {}
+    app.abort_flag = False
     return app

@@ -43,7 +43,7 @@ def rest_passes_pairwise(geometry, tooldia, passes, overlap, negative_dia, force
             if any(check_geo.intersects(other) for i, other in enumerate(geometry) if i != idx):
                 continue
             temp_geo = geo.buffer(iso_offset)
-            if nr_pass == 0 and forced_rest is False and len(geo.interiors) > 1:
+            if nr_pass == 0 and forced_rest is False and len(geo.interiors) >= 1:
                 parts = [temp_geo] if isinstance(temp_geo, Polygon) else list(temp_geo.geoms)
                 if len(parts) != 1 or len(parts[0].interiors) != len(geo.interiors):
                     break
@@ -61,9 +61,9 @@ def rest_passes_pairwise(geometry, tooldia, passes, overlap, negative_dia, force
     return isolated, not_isolated
 
 
-def run_rest(geometry, passes, negative_dia=False, forced_rest=False):
+def run_rest(geometry, passes, negative_dia=False, forced_rest=False, tooldia=TOOLDIA):
     tool = SimpleNamespace(app=SimpleNamespace(log=Mock()))
-    return ToolIsolation.generate_rest_geometry(tool, geometry, TOOLDIA, passes, OVERLAP, invert=False,
+    return ToolIsolation.generate_rest_geometry(tool, geometry, tooldia, passes, OVERLAP, invert=False,
                                                 env_iso_type=2, negative_dia=negative_dia, forced_rest=forced_rest)
 
 
@@ -99,3 +99,21 @@ def test_dense_passes_preserve_paths_and_abandoned_polygons(negative_dia, forced
     actual = run_rest(geometry, 3, negative_dia, forced_rest)
     expected = rest_passes_pairwise(geometry, TOOLDIA, 3, OVERLAP, negative_dia, forced_rest)
     assert [[g.wkb for g in part] for part in actual] == [[g.wkb for g in part] for part in expected]
+
+
+def test_pad_with_one_hole_that_the_tool_cannot_enter_goes_to_the_smaller_tool():
+    pad = Polygon(box(0, 0, 3, 3).exterior.coords, [box(1, 1, 1.2, 1.2).exterior.coords])
+    isolated, not_isolated = run_rest([pad], 1, tooldia=0.5)
+    assert isolated == [] and [g.wkb for g in not_isolated] == [pad.wkb]
+
+    isolated, not_isolated = run_rest([pad], 1, tooldia=0.05)
+    assert not_isolated == []
+    assert len(isolated) == 2  # the outside and the hole
+
+
+def test_rest_accepts_any_polygon_container():
+    a, b = box(0, 0, 1, 1), box(5, 0, 6, 1)
+    for geometry, count in [(a, 1), (shapely.MultiPolygon([a, b]), 2), ([[a], b], 2)]:
+        isolated, not_isolated = run_rest(geometry, 1)
+        assert not_isolated == []
+        assert len(isolated) == count

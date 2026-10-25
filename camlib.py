@@ -1180,12 +1180,12 @@ class Geometry(object):
         :return:            the buffered geometry of each pass: PassBuffers.get(pass number)
         :rtype:             PassBuffers
         """
-        if geometry:
-            working_geo = geometry
-        else:
-            working_geo = self.solid_geometry
+        # an empty given geometry gives empty passes, it does not fall back to the whole object
+        working_geo = geometry if geometry is not None else self.solid_geometry
 
-        return PassBuffers(working_geo, offsets, int(self.geo_steps_per_circle), abort=lambda: self.app.abort_flag)
+        # the steps count the whole circle
+        quad_segs = max(1, int(self.geo_steps_per_circle) // 4)
+        return PassBuffers(working_geo, offsets, quad_segs, abort=lambda: self.app.abort_flag)
 
     def isolation_geometry(self, offset, geometry=None, iso_type=2, corner=None, passes=0, prog_plot=False,
                            buffers=None):
@@ -1210,6 +1210,10 @@ class Geometry(object):
             # graceful abort requested by the user
             raise grace
 
+        if iso_type not in (0, 1, 2):
+            self.app.log.debug("Geometry.isolation_geometry() --> Type of isolation not supported")
+            return "fail"
+
         if buffers is not None:
             # this pass is buffered with the next ones, in parallel threads
             self.app.proc_container.update_view_text(' %s %d' % (_("Pass"), int(passes + 1)))
@@ -1217,13 +1221,13 @@ class Geometry(object):
         else:
             geo_iso = []
 
-            if geometry:
-                working_geo = geometry
-            else:
-                working_geo = self.solid_geometry
+            # an empty given geometry gives an empty result, it does not fall back to the whole object
+            working_geo = geometry if geometry is not None else self.solid_geometry
 
             working_geo_shp = flatten_shapely_geometry(working_geo)
             geo_len = len(working_geo_shp)
+            # the steps count the whole circle
+            quad_segs = max(1, int(self.geo_steps_per_circle) // 4) if offset != 0 else 1
 
             old_disp_number = 0
             pol_nr = 0
@@ -1236,7 +1240,7 @@ class Geometry(object):
                     temp_geo = pol
                 else:
                     corner_type = "round" if corner is None else corner
-                    temp_geo = pol.buffer(offset, int(self.geo_steps_per_circle), join_style=corner_type)
+                    temp_geo = pol.buffer(offset, quad_segs, join_style=corner_type)
 
                 geo_iso.append(temp_geo)
 
@@ -1263,9 +1267,6 @@ class Geometry(object):
         elif iso_type == 1:
             self.app.proc_container.update_view_text(' %s' % _("Get Interiors"))
             ret_geo = self.get_interiors(geo_iso)
-        else:
-            self.app.log.debug("Geometry.isolation_geometry() --> Type of isolation not supported")
-            return "fail"
 
         if prog_plot == 'progressive':
             for elem in ret_geo:

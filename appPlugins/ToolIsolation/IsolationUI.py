@@ -76,6 +76,13 @@ class IsoUI:
 
         self.tools_box.addWidget(self.object_combo)
 
+        # Isolate all the Gerber objects selected in the Project tab
+        self.multi_objects_cb = FCCheckBox(_("Selected objects"))
+        self.multi_objects_cb.setToolTip(
+            _("Isolate all the Gerber objects selected in the Project tab, each with the same tools.")
+        )
+        self.tools_box.addWidget(self.multi_objects_cb)
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)

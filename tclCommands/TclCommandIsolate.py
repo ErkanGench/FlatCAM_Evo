@@ -3,6 +3,11 @@ from camlib import outline_area
 
 import collections
 
+# the tool shapes of the Isolation plugin, the index is what is stored in the tool data (tools_mill_tool_shape)
+TOOL_SHAPES = ["C1", "C2", "C3", "C4", "B", "V", "L"]
+V_SHAPE = TOOL_SHAPES.index("V")
+MILLING_TYPES = {'cl': 'cl', 'climb': 'cl', 'cv': 'cv', 'conventional': 'cv'}
+
 
 class TclCommandIsolate(TclCommandSignaled):
     """
@@ -28,7 +33,7 @@ class TclCommandIsolate(TclCommandSignaled):
 
     # dictionary of types from Tcl command, needs to be ordered , this  is  for options  like -optionname value
     option_types = collections.OrderedDict([
-        ('dia', float),
+        ('dia', str),
         ('passes', int),
         ('overlap', float),
         ('combine', str),
@@ -36,8 +41,16 @@ class TclCommandIsolate(TclCommandSignaled):
         ('iso_type', int),
         ('clear_leftovers', str),
         ('boundary', str),
-        ('trace_boundary', str)
-
+        ('trace_boundary', str),
+        ('milling_type', str),
+        ('pad_passes', int),
+        ('tool_shape', str),
+        ('vtipdia', float),
+        ('vtipangle', float),
+        ('cutz', float),
+        ('simplify', float),
+        ('except_obj', str),
+        ('rest', str)
     ])
 
     # array of mandatory options for current Tcl command: required = {'name','outname'}
@@ -47,13 +60,18 @@ class TclCommandIsolate(TclCommandSignaled):
     help = {
         'main': "Creates isolation routing Geometry for the specified Gerber object.",
         'args': collections.OrderedDict([
-            ('name', 'Name of the Gerber source object to be isolated. Required.'),
-            ('dia', 'Tool diameter.'),
-            ('passes', 'Passes of tool width.'),
+            ('name', 'Name of the Gerber source object to be isolated. Required. Several Gerber objects can be '
+                     'given as a comma separated list (no spaces); each one gets its own result.'),
+            ('dia', 'Tool diameter, not 0. A negative diameter isolates inside the copper features (the tool '
+                    'diameter stored in the result is positive). With -rest True a comma separated list of '
+                    'diameters (no spaces), e.g. 0.4,0.2,0.1. It is not used when the tool is V-shaped.'),
+            ('passes', 'Passes of tool width. Integer, at least 1.'),
             ('overlap', 'Percentage of tool diameter to overlap current pass over previous pass. Float [0, 99.9999]\n'
                         'E.g: for a 25% from tool diameter overlap use -overlap 25'),
-            ('combine', 'Combine all passes into one geometry. Can be True (1) or False (0)'),
-            ('outname', 'Name of the resulting Geometry object.'),
+            ('combine', 'Combine all passes into one geometry. Can be True (1) or False (0). With False each pass '
+                        'is a Geometry object of its own, named <outname>_<pass number>.'),
+            ('outname', 'Name of the resulting Geometry object. With several Gerber objects the name of each '
+                        'Gerber is added: <outname>_<gerber name>.'),
             ('iso_type', 'A value of 0 will isolate exteriors, a value of 1 will isolate interiors '
                          'and a value of 2 will do full isolation.'),
             ('clear_leftovers', 'Also add paths that clear the copper left between the passes where the passes of '
@@ -62,12 +80,66 @@ class TclCommandIsolate(TclCommandSignaled):
             ('boundary', 'Name of a Gerber or Geometry object whose outline limits the isolation, e.g. the board '
                          'outline (Edge Cuts). The paths outside it are cut off and the passes stop when one is '
                          'completely outside it.'),
-            ('trace_boundary', 'Also add one path along the boundary outline. Can be True (1) or False (0).')
+            ('trace_boundary', 'Also add one path along the boundary outline. Can be True (1) or False (0).'),
+            ('milling_type', 'cl for climb milling or cv for conventional milling.'),
+            ('pad_passes', 'Number of extra passes around the pads only, after the last pass.'),
+            ('tool_shape', 'Shape of the tool tip: C1, C2, C3, C4, B, V or L. For V the tool diameter is the '
+                           'effective one, computed from -vtipdia, -vtipangle and -cutz.'),
+            ('vtipdia', 'Tip diameter of the V-shaped tool. Giving it selects the V shape.'),
+            ('vtipangle', 'Tip angle of the V-shaped tool in degrees, between 0 and 180.'),
+            ('cutz', 'Cut depth, used with the V-shaped tool to find its effective diameter.'),
+            ('simplify', 'Simplification tolerance of the result paths; 0 switches the simplification off. '
+                         'Default: the Isolation preferences.'),
+            ('except_obj', 'Name of a Gerber or Geometry object whose area is excluded: the isolation paths '
+                           'are cut off inside it.'),
+            ('rest', 'Rest machining: the Gerber is isolated with every tool of the -dia list, the biggest first, '
+                     'and the next tool isolates what the previous one could not. One Geometry object with all '
+                     'the tools results. Can be True (1) or False (0).')
         ]),
         'examples': ['isolate my_gerber -dia 0.1 -passes 2 -overlap 10 -combine True -iso_type 2 -outname out_geo',
                      'isolate my_gerber -dia 0.1 -passes 20 -overlap 10 -clear_leftovers True',
-                     'isolate my_gerber -dia 0.1 -passes 50 -overlap 10 -boundary my_edge_cuts -trace_boundary True']
+                     'isolate my_gerber -dia 0.1 -passes 50 -overlap 10 -boundary my_edge_cuts -trace_boundary True',
+                     'isolate my_gerber -dia 0.4,0.2,0.1 -rest True',
+                     'isolate my_gerber -tool_shape V -vtipdia 0.1 -vtipangle 30 -cutz -0.07 -milling_type cv',
+                     'isolate gerber_top,gerber_bottom -dia 0.1 -pad_passes 2 -except_obj keep_out']
     }
+
+    def _bool(self, args, key, default):
+        """The boolean option as True / False (0, 1, true, false, yes, no ...); a Tcl error for anything else."""
+        if key not in args:
+            return default
+        try:
+            return self.parse_bool(args[key])
+        except ValueError:
+            self.raise_tcl_error("The value of -%s must be True (1) or False (0), got: %s" % (key, args[key]))
+
+    def _object(self, name, kinds):
+        obj = self.app.collection.get_by_name(name)
+        if obj is None:
+            self.raise_tcl_error("Object not found: %s" % name)
+        if obj.kind not in kinds:
+            self.raise_tcl_error('Expected %s, got %s %s.' % (' or '.join(kinds), name, type(obj)))
+        return obj
+
+    def _diameters(self, args, rest):
+        """The tool diameters as a list of floats; None when -dia is not given."""
+        if 'dia' not in args:
+            return None
+        try:
+            dias = [float(item) for item in args['dia'].replace(';', ',').split(',') if item.strip()]
+        except ValueError:
+            self.raise_tcl_error("The diameter must be a number (a comma separated list with -rest True): %s" %
+                                 args['dia'])
+        if not dias:
+            self.raise_tcl_error("The diameter must be a number (a comma separated list with -rest True): %s" %
+                                 args['dia'])
+        if len(dias) > 1 and not rest:
+            self.raise_tcl_error("Several diameters need -rest True.")
+        if any(dia == 0 or dia != dia or abs(dia) == float('inf') for dia in dias):
+            self.raise_tcl_error("The tool diameter cannot be 0.")
+        if len({dia < 0 for dia in dias}) > 1:
+            self.raise_tcl_error("The tool diameters must be all positive or all negative.")
+        return dias
 
     def execute(self, args, unnamed_args):
         """
@@ -79,37 +151,61 @@ class TclCommandIsolate(TclCommandSignaled):
         :return: None or exception
         """
 
-        name = args['name']
-
-        if 'outname' not in args:
-            args['outname'] = name + "_iso"
-
-        # if 'timeout' in args:
-        #     timeout = args['timeout']
-        # else:
-        #     timeout = 10000
+        names = [item.strip() for item in args.pop('name').split(',') if item.strip()]
+        if not names:
+            self.raise_tcl_error("Missing required argument 'name'.")
 
         # evaluate this parameter so True, False, 0 and 1 works
         if 'combine' in args:
-            try:
-                par = args['combine'].capitalize()
-            except AttributeError:
-                par = args['combine']
-            args['combine'] = self.parse_bool(par)
-        else:
-            args['combine'] = self.parse_bool(self._app_option('tools_iso_combine_passes'))
-
+            args['combine'] = self._bool(args, 'combine', None)
+        rest = self._bool(args, 'rest', False)
         if 'clear_leftovers' in args:
-            args['clear_leftovers'] = self.parse_bool(args['clear_leftovers'])
+            args['clear_leftovers'] = self._bool(args, 'clear_leftovers', None)
+        if 'trace_boundary' in args:
+            args['trace_boundary'] = self._bool(args, 'trace_boundary', None)
+        args['rest'] = rest
 
-        obj = self.app.collection.get_by_name(name)
-        if obj is None:
-            self.raise_tcl_error("Object not found: %s" % name)
-            return "fail"
+        if 'passes' in args and args['passes'] < 1:
+            self.raise_tcl_error("The number of passes must be at least 1.")
+        if 'overlap' in args and not 0 <= args['overlap'] < 100:
+            self.raise_tcl_error("The overlap must be in [0, 99.9999] percent.")
+        if 'iso_type' in args and args['iso_type'] not in (0, 1, 2):
+            self.raise_tcl_error("The iso_type must be 0 (exteriors), 1 (interiors) or 2 (full).")
+        if 'pad_passes' in args and args['pad_passes'] < 0:
+            self.raise_tcl_error("The number of pad passes cannot be negative.")
+        if 'simplify' in args and args['simplify'] < 0:
+            self.raise_tcl_error("The simplification tolerance cannot be negative; 0 switches it off.")
+        if 'simplify' not in args:
+            # as in the Isolation plugin
+            enabled = self._app_option('tools_iso_simplification', False)
+            args['simplify'] = float(self._app_option('tools_iso_simplification_tol', 0.001)) if enabled else 0.0
+        if 'milling_type' in args:
+            milling = MILLING_TYPES.get(args['milling_type'].lower())
+            if milling is None:
+                self.raise_tcl_error("The milling_type must be cl (climb) or cv (conventional).")
+            args['milling_type'] = milling
 
-        if obj.kind != 'gerber':
-            self.raise_tcl_error('Expected GerberObject, got %s %s.' % (name, type(obj)))
-            return "fail"
+        use_v = 'vtipdia' in args or 'vtipangle' in args
+        if 'tool_shape' in args:
+            shape = args['tool_shape'].strip().upper()
+            if shape not in TOOL_SHAPES:
+                self.raise_tcl_error("The tool_shape must be one of %s." % ', '.join(TOOL_SHAPES))
+            args['tool_shape'] = TOOL_SHAPES.index(shape)
+            use_v = args['tool_shape'] == V_SHAPE
+        elif use_v:
+            args['tool_shape'] = V_SHAPE
+        if 'vtipdia' in args and args['vtipdia'] <= 0:
+            self.raise_tcl_error("The tip diameter of the V-shaped tool must be positive.")
+        if 'vtipangle' in args and not 0 < args['vtipangle'] < 180:
+            self.raise_tcl_error("The tip angle of the V-shaped tool must be between 0 and 180 degrees.")
+
+        dias = self._diameters(args, rest)
+        if dias is not None:
+            args['dia'] = dias if rest else dias[0]
+        else:
+            args.pop('dia', None)
+
+        objects = [self._object(name, ('gerber',)) for name in names]
 
         if 'boundary' in args:
             boundary_obj = self.app.collection.get_by_name(args['boundary'])
@@ -122,8 +218,16 @@ class TclCommandIsolate(TclCommandSignaled):
                                      boundary_obj.obj_options['name'])
                 return "fail"
 
-        if 'trace_boundary' in args:
-            args['trace_boundary'] = self.parse_bool(args['trace_boundary'])
+        if 'except_obj' in args:
+            args['except_geo'] = self._object(args.pop('except_obj'), ('gerber', 'geometry')).solid_geometry
 
-        args.pop('name', None)
-        return obj.isolate(plot=False, **args)
+        outname = args.pop('outname', None)
+        failed = False
+        for obj in objects:
+            if outname is not None and len(objects) > 1:
+                obj_outname = "%s_%s" % (outname, obj.obj_options['name'])
+            else:
+                obj_outname = outname
+            if obj.isolate(plot=False, outname=obj_outname, **args) == 'fail':
+                failed = True
+        return 'fail' if failed else None

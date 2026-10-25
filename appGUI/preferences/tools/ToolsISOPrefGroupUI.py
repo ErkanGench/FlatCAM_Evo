@@ -73,7 +73,7 @@ class ToolsISOPrefGroupUI(OptionsGroupUI):
             _("The tip diameter for V-Shape Tool"))
         self.tipdia_entry = FCDoubleSpinner()
         self.tipdia_entry.set_precision(self.decimals)
-        self.tipdia_entry.set_range(0, 1000)
+        self.tipdia_entry.set_range(0.00001, 10000.0000)
         self.tipdia_entry.setSingleStep(0.1)
 
         par_grid.addWidget(self.tipdialabel, 4, 0)
@@ -121,7 +121,7 @@ class ToolsISOPrefGroupUI(OptionsGroupUI):
         )
         self.newdia_entry = FCDoubleSpinner()
         self.newdia_entry.set_precision(self.decimals)
-        self.newdia_entry.set_range(0.0001, 10000.0000)
+        self.newdia_entry.set_range(-10000.0000, 10000.0000)
         self.newdia_entry.setSingleStep(0.1)
 
         par_grid.addWidget(self.newdialabel, 10, 0)
@@ -380,6 +380,13 @@ class ToolsISOPrefGroupUI(OptionsGroupUI):
         )
         gen_grid.addWidget(plotting_label, 14, 0)
         gen_grid.addWidget(self.plotting_radio, 14, 1, 1, 2)
+
+        # Isolate all the Gerber objects selected in the Project tab
+        self.multi_objects_cb = FCCheckBox(_("Selected objects"))
+        self.multi_objects_cb.setToolTip(
+            _("Isolate all the Gerber objects selected in the Project tab, each with the same tools.")
+        )
+        gen_grid.addWidget(self.multi_objects_cb, 16, 0, 1, 3)
 
         GLay.set_common_column_size([par_grid, tool_grid, gen_grid], 0)
 

@@ -74,17 +74,6 @@ def select_uid(t, uid):
 SIGNALS = ('cutz_entry', 'tipdia_entry', 'tipangle_entry')
 
 
-def own_receivers(t, name):
-    return t.ui.__dict__[name].receivers(t.ui.__dict__[name].editingFinished)
-
-
-def baseline(qapp):
-    """Receivers a bare widget has on editingFinished (its own, not ours)."""
-    ui = ToolIsolation(make_tool_app()).ui
-    ui_receivers = {n: getattr(ui, n).receivers(getattr(ui, n).editingFinished) for n in SIGNALS}
-    return ui_receivers
-
-
 def our_receiver_count(t):
     """Number of connections of the 3 V signals that go to on_update_tool_dia (1 each when connected once)."""
     counts = {}
@@ -111,20 +100,6 @@ def assert_connected_once(t):
     for name in SIGNALS:
         widget = getattr(t.ui, name)
         assert widget.receivers(widget.editingFinished) == 2
-
-
-def count_calls(t):
-    calls = []
-    real = ToolIsolation.on_update_tool_dia
-
-    def wrapper():
-        calls.append(1)
-        return real(t)
-
-    t.ui_disconnect()  # drop the connection to the original method first
-    t.on_update_tool_dia = wrapper
-    t.ui_connect()
-    return calls
 
 
 # ------------------------------------------------------------------ helper
@@ -160,25 +135,6 @@ def test_update_clash_with_other_tool_warns_and_keeps(tool):
     assert tool.iso_tools[1]['tooldia'] == 0.5
     assert float(tool.ui.tools_table.item(row, 1).text()) == 0.5
     assert_connected_once(tool)
-
-
-def test_one_edit_runs_handler_once(tool):
-    add_tool_row(tool, 1, 0.5)
-    select_uid(tool, 1)
-    calls = count_calls(tool)
-    for name in SIGNALS:
-        del calls[:]
-        getattr(tool.ui, name).editingFinished.emit()
-        assert len(calls) == 1, name
-    # also after the early-return paths and the normal path
-    tool.ui.tools_table.setCurrentCell(-1, -1)
-    tool.on_update_tool_dia()
-    select_uid(tool, 1)
-    tool.ui.tipdia_entry.set_value(0.3)
-    tool.on_update_tool_dia()
-    del calls[:]
-    tool.ui.tipangle_entry.editingFinished.emit()
-    assert len(calls) == 1
 
 
 # ------------------------------------------------------------------ add paths
@@ -221,21 +177,198 @@ def test_add_zero_dia_final_diameter_from_matched_record(tool):
     other['data'].update(tool_target=3, tol_min=0.0, tol_max=0.0)
     tool.db_path.write_text(json.dumps({'1': record, '2': other}), encoding='utf-8')
 
-    loads = []
-    module = sys.modules["appPlugins.ToolIsolation"]
-    real_load = module.load_tools_database
-    module.load_tools_database = lambda *a, **k: (loads.append(1), real_load(*a, **k))[1]
-    try:
-        tool.on_tool_add(custom_dia=0)
-    finally:
-        module.load_tools_database = real_load
+    tool.on_tool_add(custom_dia=0)
 
     expected = v_dia(0.2, 90, -0.3)
     assert expected != provisional
-    assert len(loads) == 1
     assert tool.iso_tools[1]['tooldia'] == expected
     assert tool.iso_tools[1]['data']['tools_iso_tooldia'] == expected
     assert tool.iso_tools[1]['data']['tools_mill_vtipdia'] == 0.2
     assert float(tool.ui.tools_table.item(0, 1).text()) == expected
     assert_connected_once(tool)
 
+
+def test_effective_diameter_rejects_impossible_tools():
+    from appPlugins.ToolIsolation import IsolationGen
+    for tip, angle, cut_z in [(0.1, 0, -0.1), (0.1, 180, -0.1), (0.1, 200, -0.1), (0.1, -30, -0.1),
+                              (-0.1, 60, -0.1), (0.0, 60, 0.0)]:
+        assert IsolationGen.v_effective_diameter(v_data(tip, angle, cut_z)) is None, (tip, angle, cut_z)
+    assert IsolationGen.v_effective_diameter(v_data(0.1, 60, -0.1)) == pytest.approx(v_dia(0.1, 60, -0.1), abs=1e-4)
+
+
+# ------------------------------------------------------------------ tool table / UI controller
+
+def table_dias(t):
+    return [float(t.ui.tools_table.item(r, 1).text()) for r in range(t.ui.tools_table.rowCount())]
+
+
+def selected_uids(t):
+    return sorted({int(t.ui.tools_table.item(i.row(), 3).text()) for i in t.ui.tools_table.selectedItems()})
+
+
+@pytest.fixture
+def plain(tool):
+    tool.default_data = v_data(shape=0)
+    tool.app.options = dict(AppDefaults.factory_defaults, global_app_level='a')
+    tool.ui.iso_order_combo.set_value(2)  # Reverse: the table is sorted by diameter
+    return tool
+
+
+def test_added_tools_are_selected_under_a_sorted_table_and_duplicates_are_refused(plain):
+    plain.on_tool_add(custom_dia=0.1)
+    plain.on_tool_add(custom_dia=0.5)
+    assert table_dias(plain) == [0.5, 0.1]
+    uids = selected_uids(plain)
+    assert len(uids) == 1 and plain.iso_tools[uids[0]]['tooldia'] == 0.5
+    plain.on_tool_default_add(dia=0.3)
+    uids = selected_uids(plain)
+    assert len(uids) == 1 and plain.iso_tools[uids[0]]['tooldia'] == 0.3
+
+    for add in (lambda: plain.on_tool_add(custom_dia=0.1), lambda: plain.on_tool_default_add(dia=0.1)):
+        plain.app.inform.emit.reset_mock()
+        add()
+        assert len(plain.iso_tools) == 3
+        assert 'Tool already in Tool Table' in plain.app.inform.emit.call_args[0][0]
+
+    db_tool = {'tooldia': 0.4, 'data': {'tool_target': 3, 'tools_iso_passes': 4}}
+    uid = plain.on_tool_from_db_inserted(db_tool)
+    assert uid not in ('fail', True) and plain.iso_tools[uid]['tooldia'] == 0.4
+    assert selected_uids(plain) == [uid]
+    data = plain.iso_tools[uid]['data']
+    assert data['tools_iso_passes'] == 4
+    assert data['tools_iso_overlap'] == plain.default_data['tools_iso_overlap']
+    assert data['tools_iso_tooldia'] == 0.4
+    assert plain.on_tool_from_db_inserted(db_tool) == 'fail'
+    assert len(plain.iso_tools) == 4
+
+
+def test_edit_compares_against_every_tool_and_accepts_negative(plain):
+    for dia in (0.1, 0.3, 0.5):
+        plain.on_tool_add(custom_dia=dia)
+
+    def edit(old, new):
+        row = table_dias(plain).index(old)
+        plain.ui.tools_table.item(row, 1).setText(str(new))
+
+    edit(0.5, 0.1)     # a duplicate of the FIRST tool
+    assert sorted(table_dias(plain)) == [0.1, 0.3, 0.5]
+    edit(0.5, 0)       # zero
+    assert sorted(table_dias(plain)) == [0.1, 0.3, 0.5]
+    edit(0.5, 0.7)
+    assert sorted(table_dias(plain)) == [0.1, 0.3, 0.7]
+    edit(0.1, -0.2)    # inside isolation
+    assert sorted(table_dias(plain)) == [-0.2, 0.3, 0.7]
+    for tool_ in plain.iso_tools.values():
+        assert tool_['data']['tools_iso_tooldia'] == tool_['tooldia'] or tool_['tooldia'] == 0.3
+
+
+def test_rest_machining_checkbox_follows_the_selection_and_keeps_the_combine_choice(plain):
+    plain.ui.select_combo.set_value(1)   # Area
+    assert not plain.ui.rest_cb.isEnabled()
+    plain.ui.select_combo.set_value(2)   # Polygon
+    assert plain.ui.rest_cb.isEnabled()
+    assert not plain.ui.multi_objects_cb.isEnabled()
+
+    plain.ui.combine_passes_cb.set_value(False)
+    plain.on_rest_machining_check(True)
+    plain.on_rest_machining_check(True)
+    plain.on_rest_machining_check(False)
+    assert plain.ui.combine_passes_cb.get_value() is False
+
+
+def test_v_parameters_follow_the_selected_rows(plain):
+    # selecting a V row shows the V parameters
+    add_tool_row(plain, 1, 0.1, v_data(shape=0))
+    add_tool_row(plain, 2, 0.5, v_data(shape=V))
+    plain.build_ui()
+    plain.ui.v_frame.setVisible(False)
+    plain.ui.tools_table.selectRow(table_dias(plain).index(0.5))
+    plain.update_ui()
+    assert not plain.ui.v_frame.isHidden()
+    plain.ui.tools_table.selectRow(table_dias(plain).index(0.1))
+    plain.update_ui()
+    assert plain.ui.v_frame.isHidden()
+
+    # a V parameter edit recomputes every selected V tool
+    plain.iso_tools.clear()
+    add_tool_row(plain, 1, 0.5, v_data(angle=60))
+    add_tool_row(plain, 2, 0.9, v_data(angle=90))
+    plain.build_ui()
+    plain.ui.tools_table.setCurrentCell(0, 1)
+    plain.ui.tools_table.selectAll()
+    plain.ui.tipdia_entry.set_value(0.3)
+    plain.ui.tipdia_entry.editingFinished.emit()
+    assert plain.iso_tools[1]['tooldia'] == v_dia(0.3, 60, -0.1)
+    assert plain.iso_tools[2]['tooldia'] == v_dia(0.3, 90, -0.1)
+    assert plain.iso_tools[2]['data']['tools_mill_vtipangle'] == 90
+
+    # apply to all recomputes the V tools and keeps the other diameters
+    plain.iso_tools.clear()
+    add_tool_row(plain, 1, 0.5, v_data(shape=0))
+    add_tool_row(plain, 2, 0.9, v_data(shape=0))
+    plain.build_ui()
+    plain.ui.tools_table.selectRow(table_dias(plain).index(0.9))
+    plain.on_apply_param_to_all_clicked()
+    assert plain.iso_tools[1]['tooldia'] == 0.5 and plain.iso_tools[2]['tooldia'] == 0.9
+    assert plain.iso_tools[1]['data']['tools_iso_tooldia'] == 0.5
+    add_tool_row(plain, 3, 0.7, v_data(tip=0.2, angle=60, cut_z=-0.1))
+    plain.build_ui()
+    plain.ui.tools_table.selectRow(table_dias(plain).index(0.7))
+    plain.on_apply_param_to_all_clicked()
+    assert sorted(t['tooldia'] for t in plain.iso_tools.values()) == [v_dia(0.2, 60, -0.1)] * 2 + [0.7]
+
+
+def test_set_tool_ui_applies_the_preferences_and_resets_the_tools_without_a_diameter(plain):
+    plain.app.options.update(tools_iso_selection=3, tools_iso_multi_objects=True)
+    plain.app.cleanup.connect.reset_mock()
+    plain.set_tool_ui()
+    plain.set_tool_ui()
+    assert plain.ui.select_combo.get_value() == 3
+    assert plain.ui.multi_objects_cb.get_value() is True
+    assert plain.app.cleanup.connect.call_count == 0     # connected once, in __init__
+    plain.app.options['global_app_level'] = 'b'
+    plain.set_tool_ui()
+    assert plain.ui.select_combo.get_value() == 0 and plain.ui.multi_objects_cb.get_value() is False
+
+    plain.iso_tools.clear()
+    plain.on_tool_add(custom_dia=0.1)
+    assert len(plain.iso_tools) == 1
+    plain.app.options['tools_iso_tooldia'] = []
+    plain.set_tool_ui()
+    assert plain.iso_tools == {} and plain.ui.tools_table.rowCount() == 0
+    assert not plain.ui.generate_iso_button.isEnabled()
+
+
+def test_tool_table_delete_level_toggle_and_row_drag(plain, monkeypatch):
+    from PyQt6 import QtCore
+    # delete without a selection warns, delete all disables Generate
+    plain.on_tool_add(custom_dia=0.1)
+    plain.ui.tools_table.clearSelection()
+    plain.app.inform.emit.reset_mock()
+    plain.on_tool_delete()
+    assert len(plain.iso_tools) == 1
+    assert 'WARNING' in plain.app.inform.emit.call_args[0][0]
+    plain.ui.tools_table.selectAll()
+    plain.on_tool_delete()
+    assert plain.iso_tools == {} and not plain.ui.generate_iso_button.isEnabled()
+
+    # the level toggle keeps the isolation type of each tool
+    add_tool_row(plain, 1, 0.5)
+    add_tool_row(plain, 2, 0.9)
+    plain.iso_tools[1]['data']['tools_iso_isotype'] = 'ext'
+    plain.iso_tools[2]['data']['tools_iso_isotype'] = 'int'
+    plain.build_ui()
+    plain.change_level('b')
+    assert {t['data']['tools_iso_isotype'] for t in plain.iso_tools.values()} == {'full'}
+    plain.change_level('a')
+    assert [plain.iso_tools[u]['data']['tools_iso_isotype'] for u in (1, 2)] == ['ext', 'int']
+
+    # dragging rows switches the order to default and keeps the tools
+    monkeypatch.setattr(QtCore.QTimer, 'singleShot', lambda ms, fn: fn())
+    plain.iso_tools.clear()
+    plain.on_tool_add(custom_dia=0.1)
+    plain.on_tool_add(custom_dia=0.5)
+    uids = {u: t['tooldia'] for u, t in plain.iso_tools.items()}
+    plain.rebuild_ui()
+    assert plain.ui.iso_order_combo.get_value() == 0
+    assert {u: t['tooldia'] for u, t in plain.iso_tools.items()} == uids

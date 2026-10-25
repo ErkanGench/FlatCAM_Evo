@@ -9,7 +9,7 @@ from shapely import LineString, MultiLineString, Polygon, MultiPolygon, Point, L
 from shapely.ops import unary_union
 
 from camlib import flatten_shapely_geometry, milling_orient, polygon_gap_pairs, clip_paths_to_area, \
-    pass_covers_area, isolation_leftover_paths
+    pass_covers_area, isolation_leftover_paths, circle_quad_segs
 
 
 def pass_offset(tooldia, nr_pass, overlap, negative_dia=None, denominator=2.0000001):
@@ -18,16 +18,24 @@ def pass_offset(tooldia, nr_pass, overlap, negative_dia=None, denominator=2.0000
     return -offset if negative_dia else offset
 
 
+def quad_segs_of(circle_steps):
+    """Shapely quad_segs of a circle step count (the app counts the steps of the whole circle)."""
+    return circle_quad_segs(circle_steps)
+
+
 def v_effective_diameter(data):
-    """Effective diameter: tip + 2 * |cut_z| * tan(angle / 2)."""
+    """Effective diameter: tip + 2 * |cut_z| * tan(angle / 2); None for an angle outside (0, 180), a negative tip
+    or a diameter that is not positive."""
     try:
         tip = float(data['tools_mill_vtipdia'])
-        half_angle = float(data['tools_mill_vtipangle']) / 2
+        angle = float(data['tools_mill_vtipangle'])
         cut_z = abs(float(data['tools_mill_cutz']))
-        dia = tip + (2 * cut_z * math.tan(math.radians(half_angle)))
+        if not 0 < angle < 180 or tip < 0:
+            return None
+        dia = tip + (2 * cut_z * math.tan(math.radians(angle / 2)))
     except (KeyError, TypeError, ValueError):
         return None
-    return dia if math.isfinite(dia) else None
+    return dia if math.isfinite(dia) and dia > 0 else None
 
 
 def aperture_geometry(aperture_storage, abort=None):
@@ -40,12 +48,20 @@ def aperture_geometry(aperture_storage, abort=None):
                 if 'solid' in geo_el and geo_el['solid'] is not None and geo_el['solid'].is_valid:
                     total_geo.append(geo_el['solid'])
     # Measure the same geometry as Optimal; a positive buffer changes the rounded gap.
-    return flatten_shapely_geometry(MultiPolygon(total_geo).buffer(0))
+    # (unary_union: a solid can be a MultiPolygon)
+    return flatten_shapely_geometry(unary_union(total_geo).buffer(0))
 
 
 def safe_tooldia(geometry, decimals):
-    min_dist = min(polygon_gap_pairs(geometry, decimals))
-    return min_dist - 10 ** -decimals
+    """The largest tool that fits between the polygons, truncated for the rounding of the distances.
+
+    Without a gap to measure (fewer than 2 polygons) no tool is safe: the result is not positive, like for touching
+    polygons, and the callers report 'Could not find a safe tool diameter'.
+    """
+    gaps = polygon_gap_pairs(geometry, decimals)
+    if not gaps:
+        return -10 ** -decimals
+    return min(gaps) - 10 ** -decimals
 
 
 def poly2rings(poly):
@@ -65,7 +81,7 @@ def combined_passes(pass_envelopes, offsets, tooldia, circle_steps, invert, clea
         if clear_leftovers:
             if prev_geo is not None:
                 leftover_geo += isolation_leftover_paths(prev_geo, iso_geo, tooldia / 2.0,
-                                                         int(circle_steps), invert=invert)
+                                                         quad_segs_of(circle_steps), invert=invert)
             prev_geo = iso_geo
 
         if boundary is not None:
@@ -87,11 +103,12 @@ def combined_passes(pass_envelopes, offsets, tooldia, circle_steps, invert, clea
 def pad_passes(pads, envelope_geo, tooldia, first_pass, passes, overlap, circle_steps, negative_dia=None):
     solid_geo_union = unary_union(envelope_geo)
     pad_geo = []
+    pad_array = np.empty(len(pads), dtype=object)
+    pad_array[:] = list(pads)
+    quad_segs = quad_segs_of(circle_steps)
     for nr_pass in range(first_pass, passes + first_pass):
-        pad_pass_geo = []
-        for geo in pads:
-            iso_offset = pass_offset(tooldia, nr_pass, overlap, negative_dia)
-            pad_pass_geo.append(geo.buffer(iso_offset, int(circle_steps)))
+        iso_offset = pass_offset(tooldia, nr_pass, overlap, negative_dia)
+        pad_pass_geo = shapely.buffer(pad_array, iso_offset, quad_segs=quad_segs)
         pad_geo.append(unary_union(pad_pass_geo).difference(solid_geo_union))
     return pad_geo
 
@@ -104,41 +121,49 @@ def poly2ints(poly):
     return [interior for interior in poly.interiors]
 
 
-def area_subtraction(geo, subtraction_geo):
-    new_geometry = []
-    target_geo = flatten_shapely_geometry(geo)
-    sub_union = unary_union(subtraction_geo)
-    for geo_elem in target_geo:
+def _paths_of(geo):
+    """The rings of the polygons and the lines of a geometry, in order."""
+    paths = []
+    for geo_elem in flatten_shapely_geometry(geo):
         if isinstance(geo_elem, Polygon):
-            for ring in poly2rings(geo_elem):
-                new_geo = ring.difference(sub_union)
-                if new_geo and not new_geo.is_empty:
-                    new_geometry.append(new_geo)
-        elif isinstance(geo_elem, LineString) or isinstance(geo_elem, LinearRing):
-            new_geo = geo_elem.difference(sub_union)
-            if new_geo and not new_geo.is_empty:
-                new_geometry.append(new_geo)
-    return new_geometry
+            paths += poly2rings(geo_elem)
+        elif isinstance(geo_elem, LineString):
+            paths.append(geo_elem)
+    path_array = np.empty(len(paths), dtype=object)
+    path_array[:] = paths
+    return path_array
+
+
+def _paths_touching(path_array, mask):
+    """Boolean flags of the paths that intersect the mask (an index query with the mask as the prepared side)."""
+    touching = np.zeros(len(path_array), dtype=bool)
+    if len(path_array) and not mask.is_empty:
+        touching[shapely.STRtree(path_array).query(mask, predicate='intersects')] = True
+    return touching
+
+
+def area_subtraction(geo, subtraction_geo):
+    paths = _paths_of(geo)
+    sub_union = unary_union(subtraction_geo)
+    touching = _paths_touching(paths, sub_union)
+    # a path that does not touch the mask is kept as it is
+    result = paths.copy()
+    result[touching] = shapely.difference(paths[touching], sub_union)
+    return [new_geo for new_geo in result if not new_geo.is_empty]
 
 
 def area_intersection(geo, intersection_geo):
-    new_geometry = []
-    target_geo = flatten_shapely_geometry(geo)
+    paths = _paths_of(geo)
     intersect_union = unary_union(intersection_geo)
-    for geo_elem in target_geo:
-        if isinstance(geo_elem, Polygon):
-            for ring in poly2rings(geo_elem):
-                new_geo = ring.intersection(intersect_union)
-                if new_geo and not new_geo.is_empty:
-                    new_geometry.append(new_geo)
-        elif isinstance(geo_elem, LineString) or isinstance(geo_elem, LinearRing):
-            new_geo = geo_elem.intersection(intersect_union)
-            if new_geo and not new_geo.is_empty:
-                new_geometry.append(new_geo)
-    return new_geometry
+    touching = _paths_touching(paths, intersect_union)
+    # a path that does not touch the mask has no common part with it
+    return [new_geo for new_geo in shapely.intersection(paths[touching], intersect_union) if not new_geo.is_empty]
 
 
 def orient_envelope(geom_shp, invert, debug, error):
+    if isinstance(geom_shp, str):
+        # 'fail' of the envelope: not a geometry to iterate
+        return geom_shp
     if isinstance(geom_shp, (MultiPolygon, MultiLineString)):
         geom = geom_shp.geoms
     else:
@@ -178,9 +203,13 @@ def generate_rest_geometry(geometry, tooldia, passes, overlap, invert, env_iso_t
     not_isolated_geo = []
     work_geo = []
 
+    # a Polygon, a MultiPolygon or a (nested) list of them
+    geometry = [geo for geo in flatten_shapely_geometry(geometry) if isinstance(geo, Polygon)]
     geo_len = len(geometry)
+    if geo_len == 0:
+        return isolated_geo, not_isolated_geo
     geo_array = np.empty(geo_len, dtype=object)
-    geo_array[:] = list(geometry)
+    geo_array[:] = geometry
     # Sparse passes use bulk queries; dense passes stop at the first collision instead of collecting every pair.
     geo_indexes = np.arange(geo_len)
     geo_tree = None
@@ -232,40 +261,45 @@ def generate_rest_geometry(geometry, tooldia, passes, overlap, invert, env_iso_t
         if nr_pass != 0:
             continue
 
-        for idx, geo in enumerate(geometry):
-            # if we had an intersection do nothing, else the geo is isolated in the first pass
-            if intersect_flags[idx]:
-                continue
-
-            temp_geo = geo.buffer(iso_offset)
+        # if we had an intersection do nothing, else the geo is isolated in the first pass
+        free_indexes = np.flatnonzero(~intersect_flags)
+        free_buffers = shapely.buffer(geo_array[free_indexes], iso_offset, quad_segs=16)
+        for idx, temp_geo in zip(free_indexes.tolist(), free_buffers):
+            geo = geometry[idx]
             first_pass_iso[idx] = temp_geo
             # Check interiors on the first pass only; abandon polygons whose holes cannot be isolated.
             if forced_rest is False:
-                if geo.interiors:
-                    len_interiors = len(geo.interiors)
-                    if len_interiors > 1:
-                        total_poly_len = 1 + len_interiors
-                        if isinstance(temp_geo, Polygon):
-                            temp_geo_len = len([1] + list(temp_geo.interiors))
+                len_interiors = len(geo.interiors)
+                if len_interiors >= 1:
+                    total_poly_len = 1 + len_interiors
+                    if isinstance(temp_geo, Polygon):
+                        temp_geo_len = len([1] + list(temp_geo.interiors))
+                        if total_poly_len != temp_geo_len:
+                            abandoned[idx] = True
+                    else:
+                        try:
+                            temp_geo_len = len(temp_geo)
                             if total_poly_len != temp_geo_len:
                                 abandoned[idx] = True
-                        else:
-                            try:
-                                temp_geo_len = len(temp_geo)
-                                if total_poly_len != temp_geo_len:
-                                    abandoned[idx] = True
-                            except TypeError:
-                                abandoned[idx] = True
+                        except TypeError:
+                            abandoned[idx] = True
 
         # the next passes are tested only for the geos that are not abandoned
         geo_indexes = np.flatnonzero(~abandoned)
+
+    # the later passes of the polygons that are not abandoned and have no neighbor in the pass, buffered in bulk
+    later_pass_iso = [None]
+    for nr_pass in range(1, passes):
+        idxs = np.flatnonzero(~pass_intersects[nr_pass] & ~abandoned)
+        buffered = shapely.buffer(geo_array[idxs], pass_offsets[nr_pass], quad_segs=16)
+        later_pass_iso.append(dict(zip(idxs.tolist(), buffered)))
 
     for idx, geo in enumerate(geometry):
         good_pass_iso = []
         if not abandoned[idx]:
             for nr_pass in range(passes):
                 if not pass_intersects[nr_pass][idx]:
-                    temp_geo = first_pass_iso[idx] if nr_pass == 0 else geo.buffer(pass_offsets[nr_pass])
+                    temp_geo = first_pass_iso[idx] if nr_pass == 0 else later_pass_iso[nr_pass][idx]
                     good_pass_iso.append(temp_geo)
                     if plot and prog_plot == 'progressive':
                         prog_plot_handler(temp_geo)
@@ -278,10 +312,14 @@ def generate_rest_geometry(geometry, tooldia, passes, overlap, invert, env_iso_t
     work_geo_shp = flatten_shapely_geometry(work_geo)
     if invert:
         try:
+            is_polygon = [isinstance(p, Polygon) for p in work_geo_shp]
+            polygons = np.empty(sum(is_polygon), dtype=object)
+            polygons[:] = [p for p in work_geo_shp if isinstance(p, Polygon)]
+            oriented = iter(shapely.orient_polygons(polygons, exterior_cw=False))
             pl = []
-            for p in work_geo_shp:
-                if isinstance(p, Polygon):
-                    pl.append(milling_orient(p, conventional=True))
+            for p, polygon in zip(work_geo_shp, is_polygon):
+                if polygon:
+                    pl.append(next(oriented))
                 elif isinstance(p, LinearRing):
                     pl.append(Polygon(p.coords[::-1]))
             work_geo_shp = MultiPolygon(pl)

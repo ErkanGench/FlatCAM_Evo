@@ -328,7 +328,6 @@ class PreferencesUIManager(QtCore.QObject):
             # Isolation Routing Tool
             "tools_iso_tooldia":        self.ui.plugin_eng_pref_form.tools_iso_group.tool_dia_entry,
             "tools_iso_order":          self.ui.plugin_eng_pref_form.tools_iso_group.iso_order_combo,
-            "tools_iso_tool_cutz":      self.ui.plugin_eng_pref_form.tools_iso_group.cutz_entry,
             "tools_iso_newdia":         self.ui.plugin_eng_pref_form.tools_iso_group.newdia_entry,
 
             "tools_iso_tool_shape":     self.ui.plugin_eng_pref_form.tools_iso_group.tool_shape_combo,  # "C1"
@@ -354,6 +353,7 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_iso_simplification":     self.ui.plugin_eng_pref_form.tools_iso_group.simplify_cb,
             "tools_iso_simplification_tol": self.ui.plugin_eng_pref_form.tools_iso_group.sim_tol_entry,
             "tools_iso_plotting":       self.ui.plugin_eng_pref_form.tools_iso_group.plotting_radio,
+            "tools_iso_multi_objects":  self.ui.plugin_eng_pref_form.tools_iso_group.multi_objects_cb,
 
             # #########################################################################################################
             # #########################################################################################################

@@ -15,7 +15,7 @@ from shapely.ops import unary_union
 
 from appCommon.Common import GracefulException
 from appObjects.GeometryObject import GeometryObject
-from appPlugins.ToolIsolation import ToolIsolation
+from appPlugins.ToolIsolation import ToolIsolation, IsolationGen
 from camlib import PassBuffers, flatten_shapely_geometry
 
 from tests.helpers_objects import app, _headless_qt, make_gerber  # noqa: F401,E402
@@ -151,3 +151,27 @@ def test_plugin_combined_passes_are_the_same_as_one_pass_at_a_time(app, three_th
     assert wkb_list(storage[1]['solid_geometry']) == expected
     tool.new_object.assert_called_once()
 
+
+# ---------------------------------------------------------------------------------------------------------------
+# Edge cases of the isolation geometry
+# ---------------------------------------------------------------------------------------------------------------
+
+def test_isolation_geometry_edge_cases(app):
+    gerber = make_gerber(app, name='g')
+    # an empty selection is not the whole object
+    assert gerber.isolation_geometry(0.1, geometry=[]) == []
+    assert gerber.isolation_buffers([0.1], geometry=[]).get(0).is_empty
+    assert gerber.isolation_geometry(0.1, geometry=None)
+    # an unsupported isolation type fails
+    assert gerber.isolation_geometry(0.1, iso_type=7) == 'fail'
+    assert IsolationGen.orient_envelope('fail', True, Mock(), Mock()) == 'fail'
+    # the circle steps count the whole circle
+    for steps in (16, 32):
+        gerber.geo_steps_per_circle = steps
+        pad = [box(0, 0, 0.01, 0.01)]
+        rings = [gerber.isolation_geometry(0.1, geometry=pad, iso_type=0)[0],
+                 gerber.isolation_geometry(0.1, geometry=pad, iso_type=0,
+                                           buffers=gerber.isolation_buffers([0.1], pad))[0]]
+        for ring in rings:
+            # 4 rounded corners of steps / 4 segments, the ring closes on its first point
+            assert len(ring.coords) == 4 * (steps // 4 + 1) + 1

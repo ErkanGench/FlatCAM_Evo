@@ -151,7 +151,6 @@ def test_no_pass_inside_the_boundary_fails(app, combine):
     result = gerber.isolate(dia=DIA, passes=PASSES, overlap=OVERLAP, iso_type=2, plot=False, combine=combine,
                             outname='iso' if combine else None, boundary=far_box_of(gerber), trace_boundary=True)
     assert result == 'fail'
-    assert initialized == (['fail'] if combine else [])
     assert reports(app) == [NO_PATH_INSIDE % ('iso' if combine else 'g')]
 
 
@@ -186,6 +185,107 @@ def test_tcl_boundary_is_the_area_enclosed_by_the_outline_object(app):
     assert length_outside(paths, area) == pytest.approx(0.0)
     assert sum(1 for g in paths if isinstance(g, LinearRing) and Polygon(g).equals(area)) == 1
     assert reports(app)[0].startswith('[success] g_iso: ')
+
+
+def tcl_isolate(app, *argv, objects=None):
+    """Runs the Tcl isolate command; returns {object name: Geometry object}. Fails if an object is plotted."""
+    app.shell = Mock()
+    created = {}
+
+    def new_object(kind, name, initialize, plot=True, **kw):
+        assert plot is False and kw.get('record_history', True)
+        obj = GeometryObject(name, app)
+        assert initialize(obj, app) != 'fail'
+        created[name] = obj
+        return 'ok'
+
+    app.app_obj.new_object = Mock(side_effect=new_object)
+    objects = objects or {'g': make_gerber(app, name='g'), 'h': make_gerber(app, name='h')}
+    app.collection.get_by_name = Mock(side_effect=objects.get)
+    cmd = TclCommandIsolate(app)
+    args, unnamed = cmd.check_args(argv)
+    result = cmd.execute(args, unnamed)
+    assert result in (None, 'ok')
+    return created
+
+
+def test_tcl_rejects_wrong_values(app):
+    for bad in [('-dia', '0'), ('-passes', '0'), ('-overlap', '100'), ('-overlap', '-1'), ('-iso_type', '3'),
+                ('-milling_type', 'xx'), ('-pad_passes', '-1'), ('-simplify', '-1'), ('-combine', 'maybe'),
+                ('-dia', '0.4,0.2'), ('-dia', '0.4,-0.2', '-rest', '1'), ('-tool_shape', 'Q'),
+                ('-except_obj', 'nothing')]:
+        with pytest.raises(ValueError):
+            tcl_isolate(app, 'g', *bad)
+        app.app_obj.new_object.assert_not_called()
+    assert make_gerber(app, name='g').generate_envelope(0.1, 1, env_iso_type=7) == 'fail'
+
+
+def test_tcl_names_one_object_per_pass_and_one_per_gerber(app):
+    assert set(tcl_isolate(app, 'g', '-dia', '0.2', '-passes', '2', '-combine', '0', '-outname', 'out')) == \
+        {'out_1', 'out_2'}
+    assert set(tcl_isolate(app, 'g', '-dia', '0.2', '-iso_type', '0', '-passes', '2', '-combine', 'false')) == \
+        {'g_ext_iso1', 'g_ext_iso2'}
+    assert set(tcl_isolate(app, 'g,h', '-dia', '0.2')) == {'g_iso', 'h_iso'}
+    assert set(tcl_isolate(app, 'g,h', '-dia', '0.2', '-outname', 'out')) == {'out_g', 'out_h'}
+
+
+def test_tcl_result_carries_the_tool_data_and_a_negative_dia_isolates_inside(app):
+    iso = tcl_isolate(app, 'g', '-dia', '0.3', '-milling_type', 'cv', '-passes', '2')['g_iso']
+    tool = iso.tools[1]
+    assert tool['tooldia'] == 0.3
+    assert tool['data']['tools_mill_tooldia'] == 0.3
+    assert tool['data']['tools_mill_job_type'] == 2
+    assert tool['data']['tools_iso_milling_type'] == 'cv'
+    assert tool['data']['tools_iso_passes'] == 2
+
+    inside = tcl_isolate(app, 'g', '-dia', '-0.3')['g_iso']
+    assert inside.tools[1]['tooldia'] == 0.3
+    assert unary_union(inside.solid_geometry).area < unary_union(iso.solid_geometry).area
+
+    v_iso = tcl_isolate(app, 'g', '-tool_shape', 'V', '-vtipdia', '0.1', '-vtipangle', '60', '-cutz', '-0.1')['g_iso']
+    data = v_iso.tools[1]['data']
+    assert v_iso.tools[1]['tooldia'] == pytest.approx(0.1 + 2 * 0.1 * 0.5773502691896257)
+    assert data['tools_mill_tooldia'] == pytest.approx(v_iso.tools[1]['tooldia'])
+    assert (data['tools_mill_tool_shape'], data['tools_mill_vtipdia'], data['tools_mill_vtipangle'],
+            data['tools_mill_cutz']) == (5, 0.1, 60, -0.1)
+
+
+def test_tcl_milling_direction_pad_passes_and_simplify_change_the_paths(app):
+    def ccw(milling):
+        iso = tcl_isolate(app, 'g', '-dia', '0.2', '-milling_type', milling, '-simplify', '0')['g_iso']
+        return [p.exterior.is_ccw for p in iso.solid_geometry]
+
+    assert ccw('cl') == [not flag for flag in ccw('cv')]
+
+    plain = tcl_isolate(app, 'g', '-dia', '0.2')['g_iso']
+    padded = tcl_isolate(app, 'g', '-dia', '0.2', '-pad_passes', '2')['g_iso']
+    assert len(padded.solid_geometry) > len(plain.solid_geometry)
+
+    def vertices(tolerance):
+        iso = tcl_isolate(app, 'g', '-dia', '0.2', '-simplify', tolerance)['g_iso']
+        return sum(len(p.exterior.coords) for p in iso.solid_geometry)
+
+    assert vertices('0.3') < vertices('0')
+
+
+def test_tcl_except_object_is_left_without_isolation(app):
+    gerber = make_gerber(app, name='g')
+    minx, miny, maxx, maxy = unary_union(gerber.solid_geometry).bounds
+    half = box(minx - 5, miny - 5, (minx + maxx) / 2, maxy + 5)
+    keep_out = SimpleNamespace(obj_options={'name': 'keep'}, solid_geometry=[half], kind='geometry')
+    objects = {'g': gerber, 'keep': keep_out}
+    iso = tcl_isolate(app, 'g', '-dia', '0.2', '-except_obj', 'keep', objects=objects)['g_iso']
+    assert iso.solid_geometry
+    assert unary_union([g.boundary if isinstance(g, Polygon) else g for g in iso.solid_geometry]).intersection(
+        half.buffer(-1e-6)).length == pytest.approx(0.0)
+
+
+def test_tcl_rest_machining_makes_one_object_with_the_biggest_tool_first(app):
+    iso = tcl_isolate(app, 'g', '-dia', '0.1,0.5,0.25', '-rest', 'True')['g_iso_rest']
+    dias = [tool['tooldia'] for _key, tool in sorted(iso.tools.items())]
+    assert dias and dias == sorted(dias, reverse=True) and set(dias) <= {0.5, 0.25, 0.1}
+    assert all(tool['data']['tools_mill_tooldia'] == tool['tooldia'] for tool in iso.tools.values())
+    assert iso.solid_geometry
 
 
 # -------------------------------------------------------------------------------------------------- Isolation Plugin

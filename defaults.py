@@ -485,7 +485,6 @@ class AppDefaults:
         # Isolation Routing Plugin
         "tools_iso_tooldia": "0.1",
         "tools_iso_order": 2,   # Reverse
-        "tools_iso_tool_cutz": -0.05,
         "tools_iso_newdia": 0.1,
 
         "tools_iso_tool_shape": 0,  # "C1"
@@ -511,6 +510,7 @@ class AppDefaults:
         "tools_iso_simplification":     True,
         "tools_iso_simplification_tol": 0.001,
         "tools_iso_plotting":       'normal',
+        "tools_iso_multi_objects":  False,
 
         # Drilling Plugin
         "tools_drill_tool_order": 'no',

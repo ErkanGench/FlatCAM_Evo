@@ -43,6 +43,38 @@ if '_' not in builtins.__dict__:
 log = logging.getLogger('base')
 
 
+def pad_solids(gerber_obj, geometry=None):
+    """
+    The solids of the pads (the flashes that have a point to follow) of a Gerber object.
+
+    :param gerber_obj:  the Gerber object
+    :param geometry:    if given, only the pads that touch it: the extra pad passes follow the isolated geometry only
+    :return:            list of Shapely Polygon
+    """
+    pads = [geo['solid'] for aperture in gerber_obj.tools.values() for geo in aperture['geometry']
+            if geo.get('solid') is not None and isinstance(geo.get('follow'), Point)]
+    if geometry is None or not pads:
+        return pads
+    touched = shapely.STRtree(flatten_shapely_geometry(geometry)).query(
+        np.array(pads, dtype=object), predicate='intersects')[0]
+    return [pads[idx] for idx in sorted(set(touched.tolist()))]
+
+
+def tools_for_run(tools_storage, sel_tools):
+    """
+    The selected tools copied for one isolation run: each has its own data and none has the geometry of an earlier run.
+    """
+    return {uid: {key: deepcopy(value) for key, value in tools_storage[uid].items() if key != 'solid_geometry'}
+            for uid in sel_tools}
+
+
+def tools_for_object(run_tools, uids):
+    """
+    The tools of a created object: the ones that made geometry in the run, each with its own copy of the data.
+    """
+    return {uid: {**run_tools[uid], 'data': deepcopy(run_tools[uid]['data'])} for uid in uids}
+
+
 class ToolIsolation(Geometry, AppTool):
     optimal_found_sig = QtCore.pyqtSignal(float)
 
@@ -66,6 +98,12 @@ class ToolIsolation(Geometry, AppTool):
         self.add_object_creation_controls()
         self.pluginName = self.ui.pluginName
         self.connect_signals_at_init()
+
+        # the signals of the app and of the plugin itself: connected once, the UI is rebuilt in set_tool_ui()
+        # Custom Signal
+        self.optimal_found_sig.connect(self.on_optimal_found)
+        # Cleanup on Graceful exit (CTRL+ALT+X combo key)
+        self.app.cleanup.connect(self.set_tool_ui)
 
         self.init_context_menu()
 
@@ -98,6 +136,14 @@ class ToolIsolation(Geometry, AppTool):
 
         # store geometry from Polygon selection
         self.poly_dict = {}
+        # the same selection by geometry: {polygon wkb: shape id}, for the O(1) add / remove of a polygon
+        self._poly_keys = {}
+        # (object, its solid_geometry, number of items, flat polygons, STRtree) of the object in the selection mode
+        self._sel_cache = None
+        # True while the plugin has the grid snapping switched off for the Polygon selection
+        self._grid_disabled = False
+        # (Gerber object, tool diameters) of the tool check that runs when the Area / Polygon selection is finished
+        self.pending_validation = None
 
         self.grid_status_memory = self.app.ui.grid_snap_btn.isChecked()
 
@@ -106,6 +152,9 @@ class ToolIsolation(Geometry, AppTool):
         self.old_combine_state = self.app.options.get(
             "tools_iso_combine_passes",
             app_defaults.get("tools_iso_combine_passes", AppDefaults.factory_defaults.get("tools_iso_combine_passes")))
+
+        # store here the isolation type of each tool (by uid) while the level is Beginner, which isolates 'full'
+        self.advanced_isotype = {}
 
         # store here solid_geometry when there are tool with isolation job
         self.solid_geometry = []
@@ -257,8 +306,6 @@ class ToolIsolation(Geometry, AppTool):
         self.ui.deltool_btn.clicked.connect(self.on_tool_delete)
 
         self.ui.find_optimal_button.clicked.connect(self.on_find_optimal_tooldia)
-        # Custom Signal
-        self.optimal_found_sig.connect(lambda val: self.ui.new_tooldia_entry.set_value(float(val)))
 
         self.ui.reference_combo_type.currentIndexChanged.connect(self.on_reference_combo_changed)
         self.ui.select_combo.currentIndexChanged.connect(self.on_toggle_reference)
@@ -283,8 +330,11 @@ class ToolIsolation(Geometry, AppTool):
         self.ui.sel_all_btn.clicked.connect(self.on_select_all_polygons)
         self.ui.clear_all_btn.clicked.connect(self.on_deselect_all_polygons)
 
-        # Cleanup on Graceful exit (CTRL+ALT+X combo key)
-        self.app.cleanup.connect(self.set_tool_ui)
+        # Drag and drop of the rows of the Tools table
+        self.ui.tools_table.drag_drop_sig.connect(self.rebuild_ui)
+
+    def on_optimal_found(self, val):
+        self.ui.new_tooldia_entry.set_value(float(val))
 
     def on_milling_button_click(self):
         self.app.milling_tool.run()
@@ -327,6 +377,12 @@ class ToolIsolation(Geometry, AppTool):
         return area
 
     def set_tool_ui(self):
+        # leave a running selection mode (canvas handlers, grid snap, shapes) before the UI is rebuilt
+        try:
+            self.end_selection_mode()
+        except AttributeError as err:
+            self.app.log.debug("ToolIsolation.set_tool_ui() end_selection_mode -> %s" % str(err))
+
         self.units = self.app.app_units.upper()
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
@@ -365,11 +421,6 @@ class ToolIsolation(Geometry, AppTool):
                 self.ui.object_combo.setCurrentIndex(0)
         except Exception as ee:
             self.app.log.debug("ToolIsolation.set_tool_ui() Select Gerber object -> %s" % str(ee))
-
-        # Show/Hide Advanced Options
-        app_mode = self.app.options.get(
-            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
-        self.change_level(app_mode)
 
         if self.app.options.get(
                 "gerber_buffering", app_defaults.get("gerber_buffering", AppDefaults.factory_defaults.get("gerber_buffering"))) == 'no':
@@ -437,6 +488,12 @@ class ToolIsolation(Geometry, AppTool):
 
         self.ui.new_tooldia_entry.set_value(self.app.options.get(
             "tools_iso_newdia", app_defaults.get("tools_iso_newdia", AppDefaults.factory_defaults.get("tools_iso_newdia"))))
+
+        self.ui.select_combo.set_value(self.app.options.get(
+            "tools_iso_selection", app_defaults.get("tools_iso_selection", AppDefaults.factory_defaults.get("tools_iso_selection"))))
+        self.ui.multi_objects_cb.set_value(self.app.options.get(
+            "tools_iso_multi_objects",
+            app_defaults.get("tools_iso_multi_objects", AppDefaults.factory_defaults.get("tools_iso_multi_objects"))))
 
         # loaded_obj = self.app.collection.get_by_name(self.ui.object_combo.get_value())
         # if loaded_obj:
@@ -511,14 +568,20 @@ class ToolIsolation(Geometry, AppTool):
             else:
                 dias = tool_dia_option
 
+        # reset the state first: it is clean also when there is no tool diameter in the preferences
+        self.tooluid = 0
+        self.iso_tools.clear()
+        self.advanced_isotype.clear()
+        self.old_combine_state = self.app.options.get(
+            "tools_iso_combine_passes",
+            app_defaults.get("tools_iso_combine_passes", AppDefaults.factory_defaults.get("tools_iso_combine_passes")))
+
         if not dias:
             self.app.log.error(
                 "At least one tool diameter needed. Verify in Edit -> Preferences -> Plugins -> Isolation Tools.")
-            return
+            self.build_ui()
+            self.update_ui()
 
-        self.tooluid = 0
-
-        self.iso_tools.clear()
         for tool_dia in dias:
             self.on_tool_add(custom_dia=tool_dia)
 
@@ -538,10 +601,21 @@ class ToolIsolation(Geometry, AppTool):
 
         self.tool_type_item_options = ["C1", "C2", "C3", "C4", "B", "V", "L"]
 
-        self.on_rest_machining_check(state=self.app.options.get(
+        # the rest machining checkbox shows the preference
+        self.ui.rest_cb.set_value(self.app.options.get(
             "tools_iso_rest", app_defaults.get("tools_iso_rest", AppDefaults.factory_defaults.get("tools_iso_rest"))))
 
-        self.ui.tools_table.drag_drop_sig.connect(self.rebuild_ui)
+        # Show/Hide Advanced Options; the Beginner level has no rest machining and the selection 'All'
+        app_mode = self.app.options.get(
+            "global_app_level", app_defaults.get("global_app_level", AppDefaults.factory_defaults.get("global_app_level")))
+        self.change_level(app_mode)
+
+        self.on_toggle_reference()
+        # the state of the rest machining follows the checkbox that the user sees
+        self.on_rest_machining_check(state=self.ui.rest_cb.get_value())
+
+        # the V-shape parameters are shown when the shape is V
+        self.ui_update_v_shape(self.ui.tool_shape_combo.get_value(), update_dia=False)
 
     def change_level(self, level):
         """
@@ -558,6 +632,22 @@ class ToolIsolation(Geometry, AppTool):
         self.on_level_changed(self.ui.level.isChecked())
 
     def on_level_changed(self, checked):
+        # the widgets are changed here to show the level: that is not a change of the parameters of a tool
+        self.ui_disconnect()
+        old_order = self.ui.iso_order_combo.get_value()
+        try:
+            self.apply_level(checked)
+            self.on_rest_machining_check(self.ui.rest_cb.get_value())
+        finally:
+            self.ui_connect()
+
+        if self.ui.iso_order_combo.get_value() != old_order:
+            self.build_ui()
+        if checked and self.ui.tools_table.selectedItems():
+            # the form shows the isolation type of the selected tool
+            self.update_ui()
+
+    def apply_level(self, checked):
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         if not checked:
@@ -572,12 +662,12 @@ class ToolIsolation(Geometry, AppTool):
             # Add Tool section
             self.ui.add_tool_frame.hide()
 
-            # Tool parameters section
-            if self.iso_tools:
-                for tool in self.iso_tools:
-                    tool_data = self.iso_tools[tool]['data']
-
-                    tool_data['tools_iso_isotype'] = 'full'
+            # Tool parameters section: Beginner isolates 'full'; the isolation type of each tool is kept
+            # and it is back when the level is Advanced
+            for tool_uid, tool in self.iso_tools.items():
+                if tool_uid not in self.advanced_isotype:
+                    self.advanced_isotype[tool_uid] = tool['data'].get('tools_iso_isotype')
+                tool['data']['tools_iso_isotype'] = 'full'
 
             self.ui.milling_type_label.hide()
             self.ui.milling_type_radio.hide()
@@ -602,6 +692,9 @@ class ToolIsolation(Geometry, AppTool):
 
             self.ui.select_label.hide()
             self.ui.select_combo.hide()
+
+            self.ui.multi_objects_cb.set_value(False)
+            self.ui.multi_objects_cb.hide()
 
             # make sure that on hide is selected an option that does not display child widgets
             self.ui.select_combo.set_value(0)
@@ -629,16 +722,11 @@ class ToolIsolation(Geometry, AppTool):
             # Add Tool section
             self.ui.add_tool_frame.show()
 
-            # Tool parameters section
-            if self.iso_tools:
-                for tool in self.iso_tools:
-                    tool_data = self.iso_tools[tool]['data']
-                    tool_data['tools_iso_isotype'] = self.app.options.get(
-                        "tools_iso_isotype", app_defaults.get("tools_iso_isotype", AppDefaults.factory_defaults.get("tools_iso_isotype")))
-                    tool_data['tools_iso_rest'] = self.app.options.get(
-                        "tools_iso_rest", app_defaults.get("tools_iso_rest", AppDefaults.factory_defaults.get("tools_iso_rest")))
-                    tool_data['tools_iso_isoexcept'] = self.app.options.get(
-                        "tools_iso_isoexcept", app_defaults.get("tools_iso_isoexcept", AppDefaults.factory_defaults.get("tools_iso_isoexcept")))
+            # Tool parameters section: the isolation type that each tool had before Beginner
+            for tool_uid, isotype in self.advanced_isotype.items():
+                if tool_uid in self.iso_tools and isotype is not None:
+                    self.iso_tools[tool_uid]['data']['tools_iso_isotype'] = isotype
+            self.advanced_isotype.clear()
 
             self.ui.milling_type_label.show()
             self.ui.milling_type_radio.show()
@@ -667,6 +755,8 @@ class ToolIsolation(Geometry, AppTool):
             self.ui.select_label.show()
             self.ui.select_combo.show()
 
+            self.ui.multi_objects_cb.show()
+
             # Context Menu section
             self.ui.tools_table.setupContextMenu()
 
@@ -677,14 +767,17 @@ class ToolIsolation(Geometry, AppTool):
             uid = int(self.ui.tools_table.item(row, 3).text())
             currenuid_list.append(uid)
 
-        new_tools = {}
-        new_uid = 1
+        # the tools in the order of the rows, each with its own uid
+        new_tools = {currenuid: self.iso_tools[currenuid] for currenuid in currenuid_list}
+        self.iso_tools.clear()
+        self.iso_tools.update(new_tools)
 
-        for currenuid in currenuid_list:
-            new_tools[new_uid] = deepcopy(self.iso_tools[currenuid])
-            new_uid += 1
-
-        self.iso_tools = new_tools
+        # the user ordered the tools by hand: a sort by diameter would undo it
+        # (the order is fixed to Reverse while the rest machining is on)
+        if self.ui.iso_order_combo.isEnabled() and self.ui.iso_order_combo.get_value() != 0:
+            self.ui_disconnect()
+            self.ui.iso_order_combo.set_value(0)  # "Default"
+            self.ui_connect()
 
         # the tools table changed therefore we need to rebuild it
         QtCore.QTimer.singleShot(20, self.build_ui)
@@ -798,15 +891,16 @@ class ToolIsolation(Geometry, AppTool):
 
     def ui_disconnect(self):
 
+        # only our slots are disconnected: the widgets have receivers of their own
         try:
-            self.ui.tool_shape_combo.currentIndexChanged.disconnect()
-        except (TypeError, AttributeError):
+            self.ui.tool_shape_combo.currentIndexChanged.disconnect(self.on_tt_change)
+        except (TypeError, AttributeError, RuntimeError):
             pass
 
         try:
             # if connected, disconnect the signal from the slot on item_changed as it creates issues
-            self.ui.tools_table.itemChanged.disconnect()
-        except (TypeError, AttributeError):
+            self.ui.tools_table.itemChanged.disconnect(self.on_tool_edit)
+        except (TypeError, AttributeError, RuntimeError):
             pass
 
         # V-shape tool parameters changes
@@ -828,12 +922,12 @@ class ToolIsolation(Geometry, AppTool):
 
         # rows selected
         try:
-            self.ui.tools_table.clicked.disconnect()
-        except (TypeError, AttributeError):
+            self.ui.tools_table.clicked.disconnect(self.on_row_selection_change)
+        except (TypeError, AttributeError, RuntimeError):
             pass
         try:
-            self.ui.tools_table.horizontalHeader().sectionClicked.disconnect()
-        except (TypeError, AttributeError):
+            self.ui.tools_table.horizontalHeader().sectionClicked.disconnect(self.on_toggle_all_rows)
+        except (TypeError, AttributeError, RuntimeError):
             pass
 
         # Tool Parameters
@@ -861,12 +955,12 @@ class ToolIsolation(Geometry, AppTool):
                     pass
 
         try:
-            self.ui.rest_cb.stateChanged.disconnect()
-        except (TypeError, ValueError):
+            self.ui.rest_cb.stateChanged.disconnect(self.on_rest_machining_check)
+        except (TypeError, ValueError, RuntimeError):
             pass
         try:
-            self.ui.iso_order_combo.currentIndexChanged.disconnect()
-        except (TypeError, ValueError):
+            self.ui.iso_order_combo.currentIndexChanged.disconnect(self.on_order_changed)
+        except (TypeError, ValueError, RuntimeError):
             pass
 
     def sort_iso_tools(self):
@@ -881,24 +975,26 @@ class ToolIsolation(Geometry, AppTool):
         elif order == 2:  # "Reverse"
             new_tools_list = deepcopy(sorted(self.iso_tools.items(), key=lambda x: x[1]['tooldia'], reverse=True))
 
-        # clear the tools dictionary
+        # recreate the tools dictionary in a ordered fashion; each tool keeps its uid
         self.iso_tools.clear()
-
-        # recreate the tools dictionary in a ordered fashion
-        new_toolid = 0
-        for tool in new_tools_list:
-            new_toolid += 1
-            self.iso_tools[new_toolid] = tool[1]
+        self.iso_tools.update(new_tools_list)
 
     def on_tt_change(self):
         tool_type = self.ui.tool_shape_combo.get_value()
         self.ui_update_v_shape(tool_type)
         self.form_to_storage()
 
-    def ui_update_v_shape(self, tool_type_txt):
-        if tool_type_txt == 5:  # 'V'
+    def ui_update_v_shape(self, tool_type_txt, update_dia=True):
+        """
+        Shows the V-Tip parameters when the tool shape is V, else hides them.
+
+        :param tool_type_txt:   the tool shape as in the Tool Shape combobox
+        :param update_dia:      if True, the diameter of the selected V tools is recomputed
+        """
+        if tool_type_txt == self.V_SHAPE_INDEX:  # 'V'
             self.ui.v_frame.show()
-            self.on_update_tool_dia()
+            if update_dia:
+                self.on_update_tool_dia()
             return
         self.ui.v_frame.hide()
 
@@ -922,41 +1018,74 @@ class ToolIsolation(Geometry, AppTool):
         if not self.ui.v_frame.isVisible():
             return
 
+        # the widget that was edited: only its value is stored in all the selected tools, the other V
+        # parameters of a tool are its own
+        v_entries = {
+            self.ui.tipdia_entry:   'tools_mill_vtipdia',
+            self.ui.tipangle_entry: 'tools_mill_vtipangle',
+            self.ui.cutz_entry:     'tools_mill_cutz',
+        }
+        sender = self.sender()
+        edited_key = v_entries.get(sender) if isinstance(sender, QtCore.QObject) else None
+
+        rows = sorted({item.row() for item in self.ui.tools_table.selectedItems()})
+        current_row = self.ui.tools_table.currentRow()
+        if not rows:
+            rows = [current_row]
+
         self.ui_disconnect()
         try:
-            row = self.ui.tools_table.currentRow()
-            tool_uid_item = self.ui.tools_table.item(row, 3)
-            tool_dia_item = self.ui.tools_table.item(row, 1)
-            if tool_uid_item is None or tool_dia_item is None:
-                return
-            tool_uid = int(tool_uid_item.text())
-            if tool_uid not in self.iso_tools:
-                return
+            tools = []
+            for row in rows:
+                tool_uid_item = self.ui.tools_table.item(row, 3)
+                if tool_uid_item is None:
+                    continue
+                tool_uid = int(tool_uid_item.text())
+                if tool_uid not in self.iso_tools:
+                    continue
+                tools.append((row, tool_uid))
 
-            new_tooldia = self.v_effective_diameter({
+            widget_values = {
                 'tools_mill_vtipdia':   self.ui.tipdia_entry.get_value(),
                 'tools_mill_vtipangle': self.ui.tipangle_entry.get_value(),
                 'tools_mill_cutz':      self.ui.cutz_entry.get_value(),
-            })
-            if new_tooldia is None:
-                return
-            f_new_tool_dia = self.app.dec_format(new_tooldia, self.decimals)
+            }
+            updated_uids = {tool_uid for __, tool_uid in tools}
+            for row, tool_uid in tools:
+                data = self.iso_tools[tool_uid]['data']
+                if edited_key is not None:
+                    data[edited_key] = widget_values[edited_key]
+                elif row == current_row or len(tools) == 1:
+                    data.update(widget_values)
 
-            current_dia = self.iso_tools[tool_uid].get('tooldia')
-            if current_dia is not None and f_new_tool_dia == self.app.dec_format(current_dia, self.decimals):
-                return
-
+            # the tools outside of this change keep their diameter: a new diameter can not be one of them
             other_dias = [
                 self.app.dec_format(v['tooldia'], self.decimals)
-                for uid, v in self.iso_tools.items() if 'tooldia' in v and uid != tool_uid]
-            if f_new_tool_dia in other_dias:
-                # we do not want duplicates: keep the old value
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
-                return
+                for uid, v in self.iso_tools.items() if 'tooldia' in v and uid not in updated_uids]
+            warned = False
+            for row, tool_uid in tools:
+                tool = self.iso_tools[tool_uid]
+                new_tooldia = self.v_effective_diameter(tool['data'])
+                if new_tooldia is None:
+                    continue
+                f_new_tool_dia = self.app.dec_format(new_tooldia, self.decimals)
 
-            self.iso_tools[tool_uid]['tooldia'] = deepcopy(f_new_tool_dia)
-            self.iso_tools[tool_uid]['data']['tools_iso_tooldia'] = deepcopy(f_new_tool_dia)
-            tool_dia_item.setText(str(f_new_tool_dia))
+                current_dia = tool.get('tooldia')
+                if current_dia is not None and f_new_tool_dia == self.app.dec_format(current_dia, self.decimals):
+                    continue
+
+                if f_new_tool_dia in other_dias:
+                    # we do not want duplicates: keep the old value
+                    if not warned:
+                        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
+                        warned = True
+                    continue
+
+                tool['tooldia'] = deepcopy(f_new_tool_dia)
+                tool['data']['tools_iso_tooldia'] = deepcopy(f_new_tool_dia)
+                tool_dia_item = self.ui.tools_table.item(row, 1)
+                if tool_dia_item is not None:
+                    tool_dia_item.setText(str(f_new_tool_dia))
         finally:
             self.ui_connect()
 
@@ -1046,6 +1175,8 @@ class ToolIsolation(Geometry, AppTool):
                             for key, value in tooluid_value.items():
                                 if key == 'data':
                                     self.storage_to_form(tooluid_value['data'])
+                    # the signals are disconnected: show or hide the V parameters for the shape of this tool
+                    self.ui_update_v_shape(self.ui.tool_shape_combo.get_value(), update_dia=False)
                 except Exception as e:
                     self.app.log.error("ToolIsolation ---> update_ui() " + str(e))
             else:
@@ -1093,6 +1224,11 @@ class ToolIsolation(Geometry, AppTool):
 
         self.blockSignals(False)
 
+        # the V-shape parameters decide the diameter of each V tool
+        if option_changed in ('tools_mill_tool_shape', 'tools_mill_vtipdia', 'tools_mill_vtipangle',
+                              'tools_mill_cutz') and self.ui.tool_shape_combo.get_value() == self.V_SHAPE_INDEX:
+            self.on_update_tool_dia()
+
     def on_apply_param_to_all_clicked(self):
         if self.ui.tools_table.rowCount() == 0:
             # there is no tool in tool table so we can't save the GUI elements values to storage
@@ -1101,22 +1237,39 @@ class ToolIsolation(Geometry, AppTool):
 
         self.blockSignals(True)
 
+        # the source: the current row when it is selected, else the first selected row, else the current row
+        sel_rows = sorted({item.row() for item in self.ui.tools_table.selectedItems()})
         row = self.ui.tools_table.currentRow()
+        if sel_rows and row not in sel_rows:
+            row = sel_rows[0]
         if row < 0:
             row = 0
 
         tooluid_item = int(self.ui.tools_table.item(row, 3).text())
-        temp_tool_data = {}
+        if tooluid_item not in self.iso_tools:
+            self.blockSignals(False)
+            return
+        # the 'data' of the tool that corresponds to the source row in the tool table
+        temp_tool_data = self.iso_tools[tooluid_item]['data']
 
+        v_changed = False
         for tooluid_key, tooluid_val in self.iso_tools.items():
             if int(tooluid_key) == tooluid_item:
-                # this will hold the 'data' key of the self.tools[tool] dictionary that corresponds to
-                # the current row in the tool table
-                temp_tool_data = tooluid_val['data']
-                break
-
-        for tooluid_key, tooluid_val in self.iso_tools.items():
+                continue
+            own_dia = tooluid_val['tooldia']
             tooluid_val['data'] = deepcopy(temp_tool_data)
+            if self.is_v_shape_data(tooluid_val['data']):
+                # the diameter of a V tool comes from its V parameters
+                v_dia = self.v_effective_diameter(tooluid_val['data'])
+                if v_dia is not None and v_dia > 0:
+                    own_dia = self.app.dec_format(v_dia, self.decimals)
+                    v_changed = v_changed or own_dia != tooluid_val['tooldia']
+                    tooluid_val['tooldia'] = own_dia
+            # the other tools keep their own diameter
+            tooluid_val['data']['tools_iso_tooldia'] = deepcopy(own_dia)
+
+        if v_changed:
+            self.build_ui()
 
         self.app.inform.emit('[success] %s' % _("Current Tool parameters were applied to all tools."))
         self.blockSignals(False)
@@ -1129,7 +1282,7 @@ class ToolIsolation(Geometry, AppTool):
 
         tool_add_popup = FCInputDialogSpinnerButton(title='%s...' % _("New Tool"),
                                                     text='%s:' % _('Enter a Tool Diameter'),
-                                                    min=0.0001, max=10000.0000, decimals=self.decimals,
+                                                    min=-10000.0000, max=10000.0000, decimals=self.decimals,
                                                     button_icon=btn_icon,
                                                     callback=self.on_find_optimal_tooldia,
                                                     parent=self.app.ui)
@@ -1172,8 +1325,10 @@ class ToolIsolation(Geometry, AppTool):
             self.ui.sel_all_btn.hide()
             self.ui.clear_all_btn.hide()
 
-            # disable rest-machining for area painting
+            # rest-machining is allowed
             self.ui.rest_cb.setDisabled(False)
+            # the Gerber objects selected in the Project tab can be isolated in one run
+            self.ui.multi_objects_cb.setDisabled(False)
         elif val == 1:  # Area Selection
             self.ui.reference_combo.hide()
             self.ui.reference_combo_type.hide()
@@ -1188,6 +1343,8 @@ class ToolIsolation(Geometry, AppTool):
             # disable rest-machining for area isolation
             self.ui.rest_cb.set_value(False)
             self.ui.rest_cb.setDisabled(True)
+            # one object only
+            self.ui.multi_objects_cb.setDisabled(True)
         elif val == 2:  # Polygon Selection
             self.ui.reference_combo.hide()
             self.ui.reference_combo_type.hide()
@@ -1198,6 +1355,10 @@ class ToolIsolation(Geometry, AppTool):
             self.ui.poly_int_cb.show()
             self.ui.sel_all_btn.show()
             self.ui.clear_all_btn.show()
+
+            # the isolation of the selected polygons can use rest machining, but with one object only
+            self.ui.rest_cb.setDisabled(False)
+            self.ui.multi_objects_cb.setDisabled(True)
 
         else:  # Reference Object
             self.ui.reference_combo.show()
@@ -1210,8 +1371,9 @@ class ToolIsolation(Geometry, AppTool):
             self.ui.sel_all_btn.hide()
             self.ui.clear_all_btn.hide()
 
-            # disable rest-machining for area painting
+            # rest-machining is allowed
             self.ui.rest_cb.setDisabled(False)
+            self.ui.multi_objects_cb.setDisabled(False)
 
     def on_order_changed(self):
         self.build_ui()
@@ -1222,7 +1384,9 @@ class ToolIsolation(Geometry, AppTool):
             self.ui.order_label.setDisabled(True)
             self.ui.iso_order_combo.setDisabled(True)
 
-            self.old_combine_state = self.ui.combine_passes_cb.get_value()
+            # the checkbox is disabled when it is already forced: its value is not the one of the user
+            if self.ui.combine_passes_cb.isEnabled():
+                self.old_combine_state = self.ui.combine_passes_cb.get_value()
             self.ui.combine_passes_cb.set_value(True)
             self.ui.combine_passes_cb.setDisabled(True)
 
@@ -1240,9 +1404,9 @@ class ToolIsolation(Geometry, AppTool):
         self.find_safe_tooldia_worker()
 
     @staticmethod
-    def find_optim_mp(aperture_storage, decimals):
+    def find_optim_mp(aperture_storage, decimals, abort=None):
         msg = 'ok'
-        total_geo = IsolationGen.aperture_geometry(aperture_storage)
+        total_geo = IsolationGen.aperture_geometry(aperture_storage, abort=abort)
 
         if len(total_geo) <= 1:
             msg = ('[ERROR_NOTCL] %s' % _("Too few polygons in the Gerber object to determine distances."))
@@ -1255,93 +1419,112 @@ class ToolIsolation(Geometry, AppTool):
 
         return msg, min_dist
 
-    # multiprocessing variant
-    def find_safe_tooldia_multiprocessing(self):
+    def validation_inputs(self, fcobj=None):
+        """
+        The part of the tool validation that reads the GUI: run it in the GUI thread.
+
+        :return:    (the Gerber object, {the uid of each selected tool: its diameter}) or None (the error is reported)
+        """
         tools_available = self.ui.tools_table.rowCount()
         if tools_available == 0:
             self.app.inform.emit(f'[ERROR_NOTCL] {_("There are no tools in the Tool Table.")}')
-            return
+            return None
         if tools_available > 1:
             sel_table_items = self.ui.tools_table.selectedItems()
             if not sel_table_items:
                 self.app.inform.emit(f'[ERROR_NOTCL] {_("There are no tools selected in the Tool Table.")}')
-                return
+                return None
             sel_rows = {t.row() for t in sel_table_items}
             if not sel_rows:
                 self.app.inform.emit(f'[ERROR_NOTCL] {_("There are no tools selected in the Tool Table.")}')
-                return
+                return None
         else:
             sel_rows = {0}
 
         self.units = self.app.app_units.upper()
 
         # Get source object.
-        obj_name = self.ui.object_combo.currentText()
-        try:
-            fcobj = self.app.collection.get_by_name(obj_name)
-            if fcobj is None:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
-                return
-        except Exception:
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(obj_name)))
-            return
+        if fcobj is None:
+            obj_name = self.ui.object_combo.currentText()
+            try:
+                fcobj = self.app.collection.get_by_name(obj_name)
+                if fcobj is None:
+                    self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
+                    return None
+            except Exception:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(obj_name)))
+                return None
 
-        self.app.inform.emit(_("Checking tools for validity."))
-
-        # find the selected tool ID's
-        sorted_tools = []
+        # the selected tool ID's and their diameters; the table diameter of a V-shape tool is its effective
+        # diameter (on_update_tool_dia() keeps it), the same one that the isolation uses
+        tool_dias = {}
         for row in sel_rows:
             tid = int(self.ui.tools_table.item(row, 3).text())
-            sorted_tools.append(tid)
+            tool_dias[tid] = float(self.iso_tools[tid]['tooldia'])
+        return fcobj, tool_dias
+
+    def check_tools_validity(self, fcobj, tool_dias):
+        """
+        Checks that the tools fit in the smallest gap between the copper features of the Gerber object and sets
+        self.validation_status. It runs in the calling (worker) thread, and it finishes before it returns.
+
+        :param fcobj:       the Gerber object
+        :param tool_dias:   {tool uid: tool diameter}
+        :return:            True if all the tools are valid
+        :raises grace:      if the user aborts
+        """
+        self.app.inform.emit(_("Checking tools for validity."))
+
+        def check_abort():
+            if self.app.abort_flag:
+                raise grace
+
+        try:
+            msg, min_dist = self.find_optim_mp(fcobj.tools, self.decimals, abort=check_abort)
+            if msg != 'ok':
+                self.validation_status = False
+                self.app.inform.emit(msg)
+                return False
+
+            self.safe_tooldia = self.app.dec_format(float(min_dist), self.decimals)
+
+            # check if the tools diameters are less then the safe tool diameter
+            for tool_dia in tool_dias.values():
+                if tool_dia > self.safe_tooldia:
+                    msg = _("Incomplete isolation. At least one tool could not do a complete isolation.")
+                    self.app.log.warning(msg)
+                    self.app.inform.emit(f'[WARNING] {_("Incomplete isolation.")}')
+                    self.validation_status = False
+                    return False
+        except grace:
+            raise
+        except Exception as e:
+            self.app.log.error(str(e))
+            self.validation_status = False
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Tool validation failed"), str(e)))
+            return False
+        finally:
+            # reset the value to prepare for another isolation
+            self.safe_tooldia = None
+
+        self.app.inform.emit(_("Tool validation passed."))
+        return True
+
+    def find_safe_tooldia_multiprocessing(self):
+        """
+        The Check validity step alone: runs check_tools_validity() in a worker task. (The distances are measured in
+        the worker thread, there is no process pool.)
+        """
+        validation = self.validation_inputs()
+        if validation is None:
+            return
 
         def job_thread(app_obj):
             with self.app.proc_container.new(_("Checking ...")):
-
-                ap_storage = fcobj.tools
-                p = app_obj.pool.apply_async(self.find_optim_mp, args=(ap_storage, self.decimals))
-                res = p.get()
-
-                if res[0] != 'ok':
-                    self.safe_tooldia = None
-                    self.validation_status = False
-                    app_obj.inform.emit(res[0])
-                    return 'fail'
-
-                min_dist = res[1]
-
                 try:
-                    min_dist_truncated = self.app.dec_format(float(min_dist), self.decimals)
-                    self.safe_tooldia = min_dist_truncated
-
-                    if not sorted_tools:
-                        msg = _("There are no tools selected in the Tool Table.")
-                        self.app.inform.emit('[ERROR_NOTCL] %s' % msg)
-                        return 'fail'
-
-                    if not self.safe_tooldia:
-                        msg = _("Could not find a safe tool diameter.")
-                        self.app.log.error(msg)
-                        self.app.inform.emit(f'[ERROR_NOTCL] {_("Failed.")}')
-                        return 'fail'
-
-                    # check if the tools diameters are less then the safe tool diameter
-                    for tool in sorted_tools:
-                        tool_dia = float(self.iso_tools[tool]['tooldia'])
-                        if tool_dia > self.safe_tooldia:
-                            msg = _("Incomplete isolation. At least one tool could not do a complete isolation.")
-                            self.app.log.warning(msg)
-                            self.app.inform.emit(f'[WARNING] {_("Incomplete isolation.")}')
-                            # reset the value to prepare for another isolation
-                            self.safe_tooldia = None
-                            self.validation_status = False
-                            return
-                except Exception as e:
-                    self.app.log.error(str(e))
-                    return 'fail'
-
-                # reset the value to prepare for another isolation
-                self.safe_tooldia = None
-                self.app.inform.emit("Tool validation passed.")
+                    self.check_tools_validity(*validation)
+                except grace:
+                    app_obj.inform.emit('[WARNING_NOTCL] %s' % _("Tool validation aborted."))
 
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
@@ -1397,11 +1580,26 @@ class ToolIsolation(Geometry, AppTool):
                     app_obj.inform.emit('[success] %s: %s %s' %
                                         (_("Optimal tool diameter found"), str(min_dist_truncated),
                                          self.units.lower()))
+                except grace:
+                    app_obj.inform.emit('[WARNING_NOTCL] %s' % _("Aborted."))
+                    return 'fail'
                 except Exception as ee:
                     self.app.log.error(str(ee))
-                    return
+                    app_obj.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not find a safe tool diameter."), str(ee)))
+                    return 'fail'
 
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
+
+    def tool_dia_in_table(self, tool_dia, except_uid=None):
+        """
+        :param tool_dia:    a tool diameter
+        :param except_uid:  the uid of a tool that is not compared
+        :return:            True if another tool of the Tool Table has this diameter
+        """
+        new_dia = self.app.dec_format(tool_dia, self.decimals)
+        return any(
+            self.app.dec_format(tool['tooldia'], self.decimals) == new_dia
+            for uid, tool in self.iso_tools.items() if 'tooldia' in tool and uid != except_uid)
 
     def on_tool_add(self, custom_dia=None):
         self.ui_disconnect()
@@ -1435,10 +1633,10 @@ class ToolIsolation(Geometry, AppTool):
         truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
 
         # if new tool diameter already in the Tool List then abort
-        # if truncated_tooldia in tool_dias:
-        #     self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
-        #     self.blockSignals(False)
-        #     return
+        if ToolIsolation.tool_dia_in_table(self, truncated_tooldia):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
+            self.ui_connect()
+            return
 
         try:
             # Preserve the former module's database monkeypatch target through the package export.
@@ -1476,12 +1674,6 @@ class ToolIsolation(Geometry, AppTool):
             self.ui_connect()
             return
 
-        # if new tool diameter found in Tools Database already in the Tool List then abort
-        # if updated_tooldia is not None and updated_tooldia in tool_dias:
-        #     self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
-        #     self.blockSignals(False)
-        #     return
-
         new_tdia = deepcopy(updated_tooldia) if updated_tooldia is not None else deepcopy(truncated_tooldia)
         if derive_v_dia and self.is_v_shape_data(new_tools_dict):
             # 4. + 5. the final (merged) data decides the diameter; no 2nd Tools DB lookup
@@ -1489,6 +1681,13 @@ class ToolIsolation(Geometry, AppTool):
             if final_dia is not None and final_dia > 0:
                 new_tdia = self.app.dec_format(final_dia, self.decimals)
                 new_tools_dict['tools_iso_tooldia'] = deepcopy(new_tdia)
+
+        # if the diameter of the tool found in Tools Database is already in the Tool List then abort
+        if ToolIsolation.tool_dia_in_table(self, new_tdia):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
+            self.ui_connect()
+            return
+
         self.iso_tools.update({
             tooluid: {
                 'tooldia':          new_tdia,
@@ -1496,9 +1695,10 @@ class ToolIsolation(Geometry, AppTool):
                 'solid_geometry':   []
             }
         })
+        self.tooluid = tooluid
         self.build_ui()
 
-        # select the tool just added
+        # select the tool just added: the uid of a tool does not change when the table is sorted
         for row in range(self.ui.tools_table.rowCount()):
             if int(self.ui.tools_table.item(row, 3).text()) == tooluid:
                 self.ui.tools_table.selectRow(row)
@@ -1534,13 +1734,12 @@ class ToolIsolation(Geometry, AppTool):
         max_uid = 0 if not tool_uid_list else max(tool_uid_list)
         self.tooluid = int(max_uid + 1)
 
-        tool_dias = []
-        for k, v in self.iso_tools.items():
-            for tool_v in v.keys():
-                if tool_v == 'tooldia':
-                    tool_dias.append(self.app.dec_format(v[tool_v], self.decimals))
-
         truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
+        if self.tool_dia_in_table(truncated_tooldia):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
+            self.ui_connect()
+            return
+
         if derive_v_dia and self.is_v_shape_data(new_data):
             new_data['tools_iso_tooldia'] = deepcopy(truncated_tooldia)
         self.iso_tools.update({
@@ -1570,44 +1769,43 @@ class ToolIsolation(Geometry, AppTool):
         self.ui_disconnect()
 
         edited_row = item.row()
-        editeduid = int(self.ui.tools_table.item(edited_row, 3).text())
-        tool_dias = []
+        uid_item = self.ui.tools_table.item(edited_row, 3)
+        dia_item = self.ui.tools_table.item(edited_row, 1)
+        if item.column() != 1 or uid_item is None or dia_item is None or int(uid_item.text()) not in self.iso_tools:
+            self.ui_connect()
+            return
+        editeduid = int(uid_item.text())
 
         try:
-            new_tool_dia = float(self.ui.tools_table.item(edited_row, 1).text())
+            new_tool_dia = float(dia_item.text())
         except ValueError:
             # try to convert comma to decimal point. if it's still not working error message and return
             try:
-                new_tool_dia = float(self.ui.tools_table.item(edited_row, 1).text().replace(',', '.'))
+                new_tool_dia = float(dia_item.text().replace(',', '.'))
             except ValueError:
                 self.app.inform.emit('[ERROR_NOTCL]  %s' % _("Wrong value format entered, use a number."))
-                self.ui_connect()
+                # restore the old diameter in the table
+                self.build_ui()
                 return
 
-        for v in self.iso_tools.values():
-            tool_dias = [self.app.dec_format(v[tool_v], self.decimals) for tool_v in v.keys() if tool_v == 'tooldia']
-
-        # identify the tool that was edited and get it's tooluid
-        if new_tool_dia not in tool_dias:
-            try:
-                self.iso_tools[editeduid]['tooldia'] = deepcopy(float('%.*f' % (self.decimals, new_tool_dia)))
-            except Exception as err:
-                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
-                self.app.log.error("Failed due: %s" % str(err))
-
-            self.app.inform.emit('[success] %s' % _("Tool from Tool Table was edited."))
+        # the diameter can be negative (isolation inside the features) but not zero
+        if new_tool_dia == 0:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, "
+                                                          "in Float format."))
             self.build_ui()
             return
 
-        # identify the old tool_dia and restore the text in tool table
-        for k, v in self.iso_tools.items():
-            if k == editeduid:
-                old_tool_dia = v['tooldia']
-                restore_dia_item = self.ui.tools_table.item(edited_row, 1)
-                restore_dia_item.setText(str(old_tool_dia))
-                break
+        f_new_tool_dia = self.app.dec_format(new_tool_dia, self.decimals)
+        if self.tool_dia_in_table(f_new_tool_dia, except_uid=editeduid):
+            self.app.inform.emit(
+                '[WARNING_NOTCL] %s' % _("Cancelled. New diameter value is already in the Tool Table."))
+            self.build_ui()
+            return
 
-        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. New diameter value is already in the Tool Table."))
+        self.iso_tools[editeduid]['tooldia'] = deepcopy(f_new_tool_dia)
+        self.iso_tools[editeduid]['data']['tools_iso_tooldia'] = deepcopy(f_new_tool_dia)
+
+        self.app.inform.emit('[success] %s' % _("Tool from Tool Table was edited."))
         self.build_ui()
 
     def on_tool_delete(self, rows_to_delete=None, all_tools=None):
@@ -1624,7 +1822,9 @@ class ToolIsolation(Geometry, AppTool):
 
         if all_tools:
             self.iso_tools.clear()
+            self.advanced_isotype.clear()
             self.build_ui()
+            self.update_ui()
             return
 
         if rows_to_delete:
@@ -1638,8 +1838,10 @@ class ToolIsolation(Geometry, AppTool):
 
             for t in deleted_tools_list:
                 self.iso_tools.pop(t, None)
+                self.advanced_isotype.pop(t, None)
 
             self.build_ui()
+            self.update_ui()
             return
 
         try:
@@ -1649,10 +1851,12 @@ class ToolIsolation(Geometry, AppTool):
                     if row < 0:
                         continue
                     tooluid_del = int(self.ui.tools_table.item(row, 3).text())
-                    deleted_tools_list.append(tooluid_del)
+                    if tooluid_del not in deleted_tools_list:
+                        deleted_tools_list.append(tooluid_del)
 
                 for t in deleted_tools_list:
                     self.iso_tools.pop(t, None)
+                    self.advanced_isotype.pop(t, None)
 
         except AttributeError:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Delete failed. Select a tool to delete."))
@@ -1661,8 +1865,15 @@ class ToolIsolation(Geometry, AppTool):
         except Exception as e:
             self.app.log.error(str(e))
 
+        if not deleted_tools_list:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Delete failed. Select a tool to delete."))
+            self.ui_connect()
+            return
+
         self.app.inform.emit('[success] %s' % _("Tools deleted from Tool Table."))
         self.build_ui()
+        # no tool selected after the delete: the Generate button is disabled
+        self.update_ui()
 
     def on_generate_buffer(self):
         self.app.inform.emit('[WARNING_NOTCL] %s...' % _("Buffering solid geometry"))
@@ -1683,10 +1894,12 @@ class ToolIsolation(Geometry, AppTool):
         def buffer_task(app_obj):
             with app_obj.proc_container.new('%s...' % _("Buffering")):
                 with history_of(app_obj).snapshot(_("Buffer"), [self.grb_obj]):
-                    if isinstance(self.grb_obj.solid_geometry, list):
-                        self.grb_obj.solid_geometry = MultiPolygon(self.grb_obj.solid_geometry)
+                    solid_geometry = self.grb_obj.solid_geometry
+                    if isinstance(solid_geometry, list):
+                        # the list can hold MultiPolygons (and nested lists)
+                        solid_geometry = unary_union(flatten_shapely_geometry(solid_geometry))
 
-                    self.grb_obj.solid_geometry = self.grb_obj.solid_geometry.buffer(0.0000001)
+                    self.grb_obj.solid_geometry = solid_geometry.buffer(0.0000001)
                     self.grb_obj.solid_geometry = self.grb_obj.solid_geometry.buffer(-0.0000001)
                 app_obj.inform.emit('[success] %s' % _("Done."))
                 self.grb_obj.plot_single_object.emit()
@@ -1698,50 +1911,125 @@ class ToolIsolation(Geometry, AppTool):
         # assume that the validation is OK
         self.validation_status = True
 
+        # the Gerber objects selected in the Project tab, when asked and when the isolation is of the whole object
+        selected_objs = []
+        if self.ui.multi_objects_cb.get_value() and self.ui.select_combo.get_value() in (0, 3):
+            selected_objs = [obj for obj in self.app.collection.get_selected() if obj.kind == 'gerber']
+
         self.obj_name = self.ui.object_combo.currentText()
-        # Get source object.
-        try:
-            self.grb_obj = self.app.collection.get_by_name(self.obj_name)
-        except Exception:
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(self.obj_name)))
+        if selected_objs:
+            self.grb_obj = selected_objs[0]
+            self.obj_name = self.grb_obj.obj_options['name']
+        else:
+            # Get source object.
+            try:
+                self.grb_obj = self.app.collection.get_by_name(self.obj_name)
+            except Exception:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(self.obj_name)))
+                return
+
+            if self.grb_obj is None:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(self.obj_name)))
+                return
+        isolated_objs = selected_objs if selected_objs else [self.grb_obj]
+
+        # a selection mode that is still open is ended first: no double connected handlers, no old selection
+        self.end_selection_mode()
+
+        # everything that reads the widgets is read here, in the GUI thread: the worker gets plain values
+        sel_tools = self._selected_tool_ids()
+        if not sel_tools:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
             return
 
-        if self.grb_obj is None:
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(self.obj_name)))
+        # the check reads the tool table: collect its inputs here, in the GUI thread
+        validation = self.validation_inputs(isolated_objs[0]) if use_validation is True else None
+
+        selection = self.ui.select_combo.get_value()
+        if selection in (1, 2):
+            # Area / Polygon Selection: the mode only connects canvas handlers, so it starts here
+            self.grb_obj = isolated_objs[0]
+            # the check runs when the selection is finished, in the same task as the isolation that reads its result
+            self.pending_validation = (isolated_objs[0], validation[1]) if validation is not None else None
+            self.start_selection_mode(self.grb_obj, selection)
             return
 
-        if use_validation is True:
-            self.find_safe_tooldia_multiprocessing()
+        ref_name = self.ui.reference_combo.get_value() if selection == 3 else None
+        settings = self.run_settings()
+        if settings['boundary'] == 'fail':
+            return
 
         def worker_task(iso_class):
             with iso_class.app.proc_container.new('%s ...' % _("Isolating")):
-                iso_class.isolate_handler(iso_class.grb_obj)
+                try:
+                    for isolated_obj in isolated_objs:
+                        iso_class.grb_obj = isolated_obj
+                        # each object has its own check: the isolation reads its result
+                        iso_class.validation_status = True
+                        if validation is not None:
+                            iso_class.check_tools_validity(isolated_obj, validation[1])
+                        iso_class.isolate_handler(isolated_obj, selection, sel_tools, settings, ref_name)
+                except grace:
+                    iso_class.app.inform.emit('[WARNING_NOTCL] %s' % _("Isolation aborted."))
 
         self.app.worker_task.emit({'fcn': worker_task, 'params': [self]})
 
-    def isolate_handler(self, isolated_obj):
+    def run_settings(self):
         """
-        Creates a geometry object with paths around the gerber features.
+        Reads the widgets that a run needs. It runs in the GUI thread: a worker must not read the widgets.
+
+        :return:    the keyword arguments of isolate() (the boundary area included: None, a polygon or 'fail')
+        """
+        return {
+            'combine': self.ui.combine_passes_cb.get_value(),
+            'iso_except': self.ui.except_cb.get_value(),
+            'e_passes': self.ui.pad_passes_entry.get_value(),
+            'area_except': self.ui.except_cb.get_value(),
+            'area_shape': self.ui.area_shape_radio.get_value(),
+            'rest': self.ui.rest_cb.get_value(),
+            'sel_type': self.ui.select_combo.get_value(),
+            'tip_shape': self.ui.tool_shape_combo.get_value(),
+            'iso_simplification': self.ui.simplify_cb.get_value(),
+            'simplification_tol': self.ui.sim_tol_entry.get_value(),
+            'boundary': self.get_boundary_area(),
+            'trace_boundary': self.ui.trace_boundary_cb.get_value(),
+            'forced_rest': self.ui.forced_rest_iso_cb.get_value(),
+            'order': self.ui.iso_order_combo.get_value(),
+            'clear_leftovers': self.ui.clear_leftovers_cb.get_value(),
+            'exc_name': self.ui.exc_obj_combo.currentText(),
+        }
+
+    def isolate_handler(self, isolated_obj, selection, sel_tools, settings, ref_name=None):
+        """
+        Creates a geometry object with paths around the gerber features (selection 0: All, 3: Reference Object).
+        It runs in the worker and it reads no widget: the values come from the GUI thread.
 
         :param isolated_obj:    Gerber object for which to generate the isolating routing geometry
         :type isolated_obj:     AppObjects.FlatCAMGerber.GerberObject
+        :param selection:       the selection mode
+        :param sel_tools:       the uids of the selected tools
+        :param settings:        run_settings()
+        :param ref_name:        the name of the reference object (selection 3)
         :return: None
         """
-
-        sel_tools = []
-        table_items = self.ui.tools_table.selectedItems()
-        sel_rows = {t.row() for t in table_items}
-        for row in sel_rows:
-            tid = int(self.ui.tools_table.item(row, 3).text())
-            sel_tools.append(tid)
-        if not sel_tools:
-            self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
-            return 'fail'
-
-        selection = self.ui.select_combo.get_value()
         if selection == 0:  # ALL
-            self.isolate(isolated_obj=isolated_obj, sel_tools=sel_tools, tools_storage=self.iso_tools)
-        elif selection == 1:  # Area Selection
+            self.isolate(isolated_obj=isolated_obj, sel_tools=sel_tools, tools_storage=self.iso_tools, **settings)
+        elif selection == 3:  # Reference Object
+            ref_obj = self.app.collection.get_by_name(ref_name)
+            if ref_obj is None:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(ref_name)))
+                return 'fail'
+            ref_geo = unary_union(ref_obj.solid_geometry)
+            use_geo = unary_union(isolated_obj.solid_geometry).difference(ref_geo)
+            self.isolate(isolated_obj=isolated_obj, geometry=use_geo, sel_tools=sel_tools,
+                         tools_storage=self.iso_tools, **settings)
+
+    def start_selection_mode(self, isolated_obj, selection):
+        """Starts the Area (1) or Polygon (2) selection mode: canvas handlers, so it runs in the GUI thread."""
+        # a mode that is still open is ended first: no double connected handlers, no old selection
+        self.end_selection_mode()
+
+        if selection == 1:  # Area Selection
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the start point of the area."))
 
             self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
@@ -1755,13 +2043,17 @@ class ToolIsolation(Geometry, AppTool):
             # disconnect flags
             self.area_sel_disconnect_flag = True
 
-        elif selection == 2:  # Polygon Selection
+        else:  # Polygon Selection
             # disengage the grid snapping since it may be hard to click on polygons with grid snapping on
-            if self.app.ui.grid_snap_btn.isChecked():
-                self.grid_status_memory = True
+            # (the state is stored once per session: end_selection_mode() restores it)
+            self.grid_status_memory = self.app.ui.grid_snap_btn.isChecked()
+            if self.grid_status_memory:
                 self.app.ui.grid_snap_btn.trigger()
-            else:
-                self.grid_status_memory = False
+                self._grid_disabled = True
+
+            # the flat polygons and their STRtree are made here, not in the first click
+            self.grb_obj = isolated_obj
+            self._object_polygons()
 
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click on a polygon to isolate it."))
             self.app.plotcanvas.graph_event_connect('mouse_release', self.on_poly_mouse_click_release)
@@ -1772,16 +2064,13 @@ class ToolIsolation(Geometry, AppTool):
             # disconnect flags
             self.poly_sel_disconnect_flag = True
 
-        elif selection == 3:  # Reference Object
-            ref_obj = self.app.collection.get_by_name(self.ui.reference_combo.get_value())
-            ref_geo = unary_union(ref_obj.solid_geometry)
-            use_geo = unary_union(isolated_obj.solid_geometry).difference(ref_geo)
-            self.isolate(isolated_obj=isolated_obj, geometry=use_geo, sel_tools=sel_tools, tools_storage=self.iso_tools)
-
     def isolate(self, isolated_obj, sel_tools, tools_storage, geometry=None, limited_area=None, negative_dia=None,
                 plot=True, **args):
         """
         Creates an isolation routing geometry object in the project.
+
+        The run works on a copy of the selected tools (without the geometry of any earlier run): tools_storage is
+        not changed.
 
         :param isolated_obj:    Gerber object for which to generate the isolating routing geometry
         :type isolated_obj:     AppObjects.FlatCAMGerber.GerberObject
@@ -1789,7 +2078,7 @@ class ToolIsolation(Geometry, AppTool):
         :type sel_tools:        list
         :param tools_storage:   A dictionary that holds the isolation object tools
         :type tools_storage:    dict
-        :param geometry:        specific geometry to isolate
+        :param geometry:        specific geometry to isolate; if it is given but empty nothing is isolated
         :type geometry:         List of Shapely polygon
         :param limited_area:    if not None isolate only this area
         :type limited_area:     Shapely Polygon or a list of them
@@ -1797,7 +2086,9 @@ class ToolIsolation(Geometry, AppTool):
         :type negative_dia:     bool
         :param plot:            if to plot the resulting geometry object
         :type plot:             bool
-        :return: None
+        :return: 'fail' if nothing was isolated (an error was reported), else None
+
+        A worker passes all of run_settings() in **args: a missing one is read from its widget (GUI thread only).
         """
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
@@ -1822,57 +2113,82 @@ class ToolIsolation(Geometry, AppTool):
             self.ui.simplify_cb.get_value()
         simplification_tol = args['simplification_tol'] if 'simplification_tol' in args else \
             self.ui.sim_tol_entry.get_value()
+        # the object of the exclusion areas
+        # (None: area_subtraction() reads the widget)
+        self._exc_name = args.get('exc_name')
         # boundary: None or the area (Polygon / MultiPolygon) the isolation is limited to
         boundary = args['boundary'] if 'boundary' in args else self.get_boundary_area()
         if boundary == 'fail':
             return 'fail'
         trace_boundary = boundary is not None and (
             args['trace_boundary'] if 'trace_boundary' in args else self.ui.trace_boundary_cb.get_value())
+        if use_rest:
+            # rest machining only: isolate the polygons even if their interiors can not be isolated; the order of the tools
+            use_forced_rest = args['forced_rest'] if 'forced_rest' in args else self.ui.forced_rest_iso_cb.get_value()
+            rest_order = args['order'] if 'order' in args else self.ui.iso_order_combo.get_value()
 
-        # update the Common Parameters values in the self.iso_tools
-        for tool_iso in tools_storage:
-            for key in tools_storage[tool_iso]:
-                if key == 'data':
-                    tools_storage[tool_iso][key]["tools_iso_rest"] = use_rest
-                    tools_storage[tool_iso][key]["tools_iso_combine_passes"] = use_combine
-                    tools_storage[tool_iso][key]["tools_iso_simplification"] = use_simplification
-                    tools_storage[tool_iso][key]["tools_iso_simplification_tol"] = simplification_tol
-                    tools_storage[tool_iso][key]["tools_iso_isoexcept"] = use_iso_except
-                    tools_storage[tool_iso][key]["tools_iso_selection"] = selection_type
-                    tools_storage[tool_iso][key]["tools_iso_area_shape"] = sel_area_shape
-                    tools_storage[tool_iso][key]["tools_mill_job_type"] = 2  # _("Isolation")
-                    tools_storage[tool_iso][key]["tools_mill_tool_shape"] = tool_tip_shape
+        if geometry is not None:
+            # a given but empty geometry (e.g. a Reference Object that covers all the copper) is an empty selection:
+            # it must not fall back to the isolation of the whole board
+            geometry = flatten_shapely_geometry(geometry)
+            if not geometry:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("No geometry to isolate."))
+                return 'fail'
 
-        if use_combine:
-            if use_rest:
-                self.combined_rest(iso_obj=isolated_obj, iso2geo=geometry, tools_storage=tools_storage,
-                                   lim_area=limited_area, negative_dia=negative_dia,
-                                   simp_en=use_simplification, simp_tol=simplification_tol, plot=plot,
-                                   boundary=boundary, trace_boundary=trace_boundary)
-            else:
+        # the run uses its own copy of the selected tools, so the plugin tools keep no geometry and no run values
+        run_tools = tools_for_run(tools_storage, sel_tools)
+        for run_tool in run_tools.values():
+            run_tool['data'].update({
+                "tools_iso_rest": use_rest,
+                "tools_iso_combine_passes": use_combine,
+                "tools_iso_simplification": use_simplification,
+                "tools_iso_simplification_tol": simplification_tol,
+                "tools_iso_isoexcept": use_iso_except,
+                "tools_iso_selection": selection_type,
+                "tools_iso_area_shape": sel_area_shape,
+                "tools_mill_job_type": 2,  # _("Isolation")
+                "tools_mill_tool_shape": tool_tip_shape,
+            })
+
+        prog_plot = self.app.options.get(
+            "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting")))
+
+        try:
+            if use_combine:
+                if use_rest:
+                    return self.combined_rest(iso_obj=isolated_obj, iso2geo=geometry, tools_storage=run_tools,
+                                              lim_area=limited_area, sel_tools=sel_tools, iso_except=use_iso_except,
+                                              forced_rest=use_forced_rest, order=rest_order,
+                                              negative_dia=negative_dia, simp_en=use_simplification,
+                                              simp_tol=simplification_tol, plot=plot, boundary=boundary,
+                                              trace_boundary=trace_boundary)
+
                 # use_clear_leftovers: True/False (combined passes only)
                 use_clear_leftovers = args['clear_leftovers'] if 'clear_leftovers' in args else \
                     self.ui.clear_leftovers_cb.get_value()
-                self.combined_normal(iso_obj=isolated_obj, iso2geo=geometry, tools_storage=tools_storage,
-                                     sel_tools=sel_tools, iso_except=use_iso_except, lim_area=limited_area,
-                                     negative_dia=negative_dia, extra_passes=use_extra_passes,
-                                     simp_en=use_simplification, simp_tol=simplification_tol, plot=plot,
-                                     clear_leftovers=use_clear_leftovers, boundary=boundary,
-                                     trace_boundary=trace_boundary)
+                return self.combined_normal(iso_obj=isolated_obj, iso2geo=geometry, tools_storage=run_tools,
+                                            sel_tools=sel_tools, iso_except=use_iso_except, lim_area=limited_area,
+                                            negative_dia=negative_dia, extra_passes=use_extra_passes,
+                                            simp_en=use_simplification, simp_tol=simplification_tol, plot=plot,
+                                            clear_leftovers=use_clear_leftovers, boundary=boundary,
+                                            trace_boundary=trace_boundary)
 
-        else:
-            prog_plot = self.app.options.get(
-                "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting")))
+            circle_steps = self.app.options.get("gerber_circle_steps", app_defaults.get(
+                "gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps")))
+            if geometry is None:
+                # we do isolation over all the geometry of the Gerber object
+                # because it is already fused together
+                work_geo = flatten_shapely_geometry(isolated_obj.solid_geometry)
+            else:
+                work_geo = geometry
+            # the pads that get the extra passes: the same for all the tools and passes
+            pads = None
 
             for tool in sel_tools:
-                tool_data = tools_storage[tool]['data']
+                if self.app.abort_flag:
+                    raise grace
 
-                if geometry is None:
-                    # we do isolation over all the geometry of the Gerber object
-                    # because it is already fused together
-                    work_geo = flatten_shapely_geometry(isolated_obj.solid_geometry)
-                else:
-                    work_geo = flatten_shapely_geometry(geometry)
+                tool_data = run_tools[tool]['data']
 
                 iso_t = {
                     'ext':  0,
@@ -1886,17 +2202,25 @@ class ToolIsolation(Geometry, AppTool):
 
                 milling_type = tool_data['tools_iso_milling_type']
 
-                tool_dia = tools_storage[tool]['tooldia']
+                tool_dia = run_tools[tool]['tooldia']
                 iso_offsets = [IsolationGen.pass_offset(tool_dia, nr, overlap, negative_dia)
                                for nr in range(passes)]
                 # the passes are buffered ahead, in parallel threads
                 buffers = isolated_obj.isolation_buffers(iso_offsets, geometry=work_geo)
-                # the number of passes up to the last one with paths inside the boundary
-                passes_made = 0
-                for i in range(passes):
-                    iso_offset = iso_offsets[i]
+                # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
+                mill_dir = 0 if milling_type == 'cl' else 1
 
-                    outname = "%s_%.*f" % (isolated_obj.obj_options["name"], self.decimals, float(tool_dia))
+                outname = "%s_%.*f" % (isolated_obj.obj_options["name"], self.decimals, float(tool_dia))
+
+                # the passes that made paths: [the pass number, the object name, the paths]
+                made = []
+                # the envelopes of those passes, for the pad passes
+                envelopes = []
+                for i in range(passes):
+                    if self.app.abort_flag:
+                        raise grace
+
+                    iso_offset = iso_offsets[i]
 
                     if passes > 1:
                         iso_name = outname + "_iso" + str(i + 1)
@@ -1910,9 +2234,6 @@ class ToolIsolation(Geometry, AppTool):
                             iso_name = outname + "_ext_iso"
                         elif iso_t == 1:
                             iso_name = outname + "_int_iso"
-
-                    # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
-                    mill_dir = 0 if milling_type == 'cl' else 1
 
                     iso_geo = self.generate_envelope(isolated_obj, iso_offset, mill_dir, geometry=work_geo,
                                                      env_iso_type=iso_t, nr_passes=i, prog_plot=prog_plot,
@@ -1933,40 +2254,35 @@ class ToolIsolation(Geometry, AppTool):
                             # this pass is completely outside the boundary, and so are the next ones
                             break
 
-                    # Extra Pads isolations
-                    pad_geo = []
                     if use_extra_passes > 0:
-                        extra_geo = []
-                        for apid in isolated_obj.tools:
-                            for t_geo_dict in isolated_obj.tools[apid]['geometry']:
-                                # a clear (LPC) flash has no 'solid': it is not a pad
-                                if 'follow' in t_geo_dict and 'solid' in t_geo_dict:
-                                    if isinstance(t_geo_dict['follow'], Point):
-                                        extra_geo.append(t_geo_dict['solid'])
+                        envelopes += flatten_shapely_geometry(envelope_geo)
+                    made.append([i, iso_name, iso_geo])
 
-                        pad_geo = IsolationGen.pad_passes(
-                            extra_geo, envelope_geo, tool_dia, i, use_extra_passes, overlap,
-                            self.app.options.get("gerber_circle_steps", app_defaults.get(
-                                "gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
-                            negative_dia=negative_dia)
+                # the number of passes up to the last one with paths inside the boundary
+                passes_made = made[-1][0] + 1 if made else 0
 
-                    total_geo = []
-                    for p in flatten_shapely_geometry(iso_geo):
-                        total_geo.append(p)
+                # Extra Pads isolations: the rings start after the last pass and are only in its object
+                if made and use_extra_passes > 0:
+                    if pads is None:
+                        pads = pad_solids(isolated_obj, geometry)
+                    if pads:
+                        pad_geo = flatten_shapely_geometry(IsolationGen.pad_passes(
+                            pads, envelopes, tool_dia, passes_made, use_extra_passes, overlap, circle_steps,
+                            negative_dia=negative_dia))
+                        if boundary is not None:
+                            pad_geo = clip_paths_to_area(pad_geo, boundary)
+                        made[-1][2] = flatten_shapely_geometry(made[-1][2]) + pad_geo
 
-                    for p in flatten_shapely_geometry(pad_geo):
-                        total_geo.append(p)
-                    iso_geo = total_geo
+                for n, (__, iso_name, iso_geo) in enumerate(made):
+                    iso_geo = flatten_shapely_geometry(iso_geo)
 
                     if boundary is not None:
-                        iso_geo = clip_paths_to_area(iso_geo, boundary)
                         # the boundary is traced once, with the first pass that has paths inside it
-                        if trace_boundary and passes_made == 0:
+                        if trace_boundary and n == 0:
                             iso_geo += area_outline_paths(boundary)
                         if use_simplification:
                             iso_geo = [g.simplify(tolerance=simplification_tol) for g in iso_geo if not g.is_empty]
                             iso_geo = clip_paths_to_area(iso_geo, boundary)
-                        passes_made = i + 1
 
                     # ############################################################
                     # ########## AREA SUBTRACTION ################################
@@ -1980,46 +2296,39 @@ class ToolIsolation(Geometry, AppTool):
                         iso_geo = self.area_intersection(iso_geo, intersection_geo=limited_area)
 
                     # make sure that no empty geometry element is in the solid_geometry
-                    new_solid_geo = flatten_shapely_geometry(iso_geo)
-                    if use_simplification and boundary is None:
-                        new_solid_geo = [
-                            g.simplify(tolerance=simplification_tol) for g in new_solid_geo if not g.is_empty]
+                    new_solid_geo = flatten_shapely_geometry(
+                        iso_geo, simplify_tolerance=simplification_tol if use_simplification and boundary is None
+                        else 0.0)
 
-                    tool_data.update({
-                        "name": iso_name,
-                    })
+                    # each object has its own data of the tool
+                    obj_data = deepcopy(tool_data)
+                    obj_data.update({"name": iso_name, "tools_mill_tooldia": float(tool_dia)})
 
                     def iso_init(geo_obj, fc_obj):
                         # Propagate options
                         geo_obj.obj_options["tools_mill_tooldia"] = str(tool_dia)
-                        tool_data["tools_mill_tooldia"] = float(tool_dia)
 
-                        geo_obj.solid_geometry = flatten_shapely_geometry(new_solid_geo)
+                        geo_obj.solid_geometry = list(new_solid_geo)
 
                         # ############################################################
                         # ########## AREA SUBTRACTION ################################
                         # ############################################################
-                        if use_area_exception:
+                        # (it is done already with the same exclusion area if use_iso_except)
+                        if use_area_exception and not use_iso_except:
                             self.app.proc_container.update_view_text(' %s' % _("Subtracting Geo"))
-                            geo_obj.solid_geometry = self.area_subtraction(geo_obj.solid_geometry)
+                            geo_obj.solid_geometry = flatten_shapely_geometry(
+                                self.area_subtraction(geo_obj.solid_geometry))
 
                         geo_obj.tools = {
                             1: {
                                 'tooldia':          float(tool_dia),
-                                'data':             tool_data,
-                                'solid_geometry':   flatten_shapely_geometry(geo_obj.solid_geometry)
+                                'data':             obj_data,
+                                'solid_geometry':   list(geo_obj.solid_geometry)
                             }
                         }
 
                         # detect if solid_geometry is empty
-                        empty_cnt = 0
-                        for g in geo_obj.solid_geometry:
-                            if g:
-                                break
-                            else:
-                                empty_cnt += 1
-
-                        if empty_cnt == len(geo_obj.solid_geometry):
+                        if not geo_obj.solid_geometry:
                             msg = '[ERROR_NOTCL] %s: %s' % (_("Empty Geometry in"), geo_obj.obj_options["name"])
                             fc_obj.inform.emit(msg)
                             return 'fail'
@@ -2046,12 +2355,22 @@ class ToolIsolation(Geometry, AppTool):
                     self.temp_shapes.clear(update=True)
                 except Exception as err:
                     self.app.log.debug("ToolIsolation.isolate(). Clear temp_shapes -> %s" % str(err))
+        except grace:
+            # the user stopped the isolation: the objects made until now are kept
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Isolation aborted."))
+            if plot and prog_plot == 'progressive':
+                try:
+                    self.temp_shapes.clear(update=True)
+                except Exception as err:
+                    self.app.log.debug("ToolIsolation.isolate(). Clear temp_shapes -> %s" % str(err))
+            return 'fail'
 
         # Switch notebook to Properties page
         # self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
 
-    def combined_rest(self, iso_obj, iso2geo, tools_storage, lim_area, negative_dia=None,
-                      simp_en=False, simp_tol=0.001, plot=True, boundary=None, trace_boundary=False):
+    def combined_rest(self, iso_obj, iso2geo, tools_storage, lim_area, sel_tools, iso_except=False, forced_rest=False,
+                      order=0, negative_dia=None, simp_en=False, simp_tol=0.001, plot=True, boundary=None,
+                      trace_boundary=False):
         """
         Isolate the provided Gerber object using "rest machining" strategy
 
@@ -2063,6 +2382,16 @@ class ToolIsolation(Geometry, AppTool):
         :type tools_storage:    dict
         :param lim_area:        if not None restrict isolation to this area
         :type lim_area:         Shapely Polygon or a list of them
+        :param sel_tools:       a list of the selected tools (the uids)
+        :type sel_tools:        list
+        :param iso_except:      If True it will isolate except a special area
+        :type iso_except:       bool
+        :param forced_rest:     isolate the polygons even if their interiors can not be isolated
+        :type forced_rest:      bool
+        :param order:           the order of the tools in the Tool Table: 0 default, 1 Forward, 2 Reverse. The rest
+                                machining always goes from the largest tool to the smallest one, the smaller tools
+                                isolate what the larger ones left
+        :type order:            int
         :param negative_dia:    isolate the geometry with a negative value for the tool diameter
         :type negative_dia:     bool
         :param simp_en:         enable simplification of geometry
@@ -2075,198 +2404,149 @@ class ToolIsolation(Geometry, AppTool):
         :type boundary:         Shapely Polygon or MultiPolygon
         :param trace_boundary:  also add the outline of the boundary as a path
         :type trace_boundary:   bool
-        :return:                Isolated solid geometry
-        :rtype:
+        :return:                'fail' if nothing was isolated (an error was reported), else None
         """
 
         self.app.log.debug("ToolIsolation.combine_rest()")
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         total_solid_geometry = []
+        # the tools that made geometry in this run
+        used_tools = []
 
         iso_name = iso_obj.obj_options["name"] + '_iso_rest'
-        work_geo = iso_obj.solid_geometry if iso2geo is None else iso2geo
+        # the rest machining works with polygons (it buffers and tests them one by one)
+        work_geo = [geo for geo in flatten_shapely_geometry(iso_obj.solid_geometry if iso2geo is None else iso2geo)
+                    if isinstance(geo, Polygon)]
+        if not work_geo:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("No geometry to isolate."))
+            return 'fail'
 
-        # sorted_tools = []
-        # for k, v in self.iso_tools.items():
-        #     sorted_tools.append(float('%.*f' % (self.decimals, float(v['tooldia']))))
-
-        sorted_tools = []
-        table_items = self.ui.tools_table.selectedItems()
-        sel_rows = {t.row() for t in table_items}
-        for row in sel_rows:
-            try:
-                tdia = float(self.ui.tools_table.item(row, 1).text())
-            except ValueError:
-                # try to convert comma to decimal point. if it's still not working error message and return
-                try:
-                    tdia = float(self.ui.tools_table.item(row, 1).text().replace(',', '.'))
-                except ValueError:
-                    self.app.inform.emit('[ERROR_NOTCL] %s' % _("Wrong value format entered, use a number."))
-                    continue
-            sorted_tools.append(float('%.*f' % (self.decimals, tdia)))
-
-        if not sorted_tools:
+        if not sel_tools:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
             return 'fail'
 
-        order = self.ui.iso_order_combo.get_value()
+        # the largest tool first, whatever the order in the Tool Table: with the smallest first, it would isolate
+        # everything and there would be nothing left for the other tools
+        sorted_tools = sorted(sel_tools, key=lambda uid: float(tools_storage[uid]['tooldia']), reverse=True)
         if order == 1:  # "Forward"
-            sorted_tools.sort(reverse=False)
-        elif order == 2:  # "Reverse"
-            sorted_tools.sort(reverse=True)
-        else:
-            pass
+            self.app.log.info("ToolIsolation.combined_rest() -> the order Forward is not used with rest machining.")
 
         # decide to use "progressive" or "normal" plotting
         prog_plot = self.app.options.get(
             "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting")))
 
-        for sorted_tool in sorted_tools:
-            for tool in tools_storage:
-                if float('%.*f' % (self.decimals, tools_storage[tool]['tooldia'])) == sorted_tool:
+        for tool in sorted_tools:
+            if self.app.abort_flag:
+                raise grace
 
-                    tool_dia = tools_storage[tool]['tooldia']
-                    tool_data = tools_storage[tool]['data']
+            tool_dia = tools_storage[tool]['tooldia']
+            tool_data = tools_storage[tool]['data']
 
-                    passes = tool_data['tools_iso_passes']
-                    overlap = tool_data['tools_iso_overlap']
-                    overlap /= 100.0
+            passes = tool_data['tools_iso_passes']
+            overlap = tool_data['tools_iso_overlap']
+            overlap /= 100.0
 
-                    milling_type = tool_data['tools_iso_milling_type']
-                    # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
-                    mill_dir = False if milling_type == 'cl' else True
-                    iso_t = {
-                        'ext': 0,
-                        'int': 1,
-                        'full': 2
-                    }[tool_data['tools_iso_isotype']]
+            milling_type = tool_data['tools_iso_milling_type']
+            # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
+            mill_dir = False if milling_type == 'cl' else True
+            iso_t = {
+                'ext': 0,
+                'int': 1,
+                'full': 2
+            }[tool_data['tools_iso_isotype']]
 
-                    forced_rest = self.ui.forced_rest_iso_cb.get_value()
-                    iso_except = self.ui.except_cb.get_value()
+            outname = "%s_%.*f" % (iso_obj.obj_options["name"], self.decimals, float(tool_dia))
+            internal_name = outname + "_iso"
+            if iso_t == 0:
+                internal_name = outname + "_ext_iso"
+            elif iso_t == 1:
+                internal_name = outname + "_int_iso"
 
-                    outname = "%s_%.*f" % (iso_obj.obj_options["name"], self.decimals, float(tool_dia))
-                    internal_name = outname + "_iso"
-                    if iso_t == 0:
-                        internal_name = outname + "_ext_iso"
-                    elif iso_t == 1:
-                        internal_name = outname + "_int_iso"
+            tool_data.update({
+                "name": internal_name,
+            })
 
-                    tool_data.update({
-                        "name": internal_name,
-                    })
+            solid_geo, left_geo = self.generate_rest_geometry(geometry=work_geo, tooldia=tool_dia,
+                                                              passes=passes, overlap=overlap, invert=mill_dir,
+                                                              env_iso_type=iso_t, negative_dia=negative_dia,
+                                                              forced_rest=forced_rest,
+                                                              prog_plot=prog_plot,
+                                                              prog_plot_handler=self.plot_temp_shapes,
+                                                              plot=plot)
+            if isinstance(solid_geo, str):
+                # ('fail', 'fail'): the geometry stays for the next tools
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Isolation geometry could not be generated."))
+                continue
+            work_geo = left_geo
 
-                    solid_geo, work_geo = self.generate_rest_geometry(geometry=work_geo, tooldia=tool_dia,
-                                                                      passes=passes, overlap=overlap, invert=mill_dir,
-                                                                      env_iso_type=iso_t, negative_dia=negative_dia,
-                                                                      forced_rest=forced_rest,
-                                                                      prog_plot=prog_plot,
-                                                                      prog_plot_handler=self.plot_temp_shapes,
-                                                                      plot=plot)
+            if boundary is not None:
+                solid_geo = clip_paths_to_area(solid_geo, boundary)
+                # the boundary is traced once, with the first tool that has paths inside it
+                if trace_boundary and solid_geo and not total_solid_geometry:
+                    solid_geo += area_outline_paths(boundary)
+                if simp_en:
+                    solid_geo = [g.simplify(tolerance=simp_tol) for g in solid_geo if not g.is_empty]
+                    solid_geo = clip_paths_to_area(solid_geo, boundary)
 
-                    if boundary is not None:
-                        solid_geo = clip_paths_to_area(solid_geo, boundary)
-                        # the boundary is traced once, with the first tool that has paths inside it
-                        if trace_boundary and solid_geo and not total_solid_geometry:
-                            solid_geo += area_outline_paths(boundary)
-                        if simp_en:
-                            solid_geo = [g.simplify(tolerance=simp_tol) for g in solid_geo if not g.is_empty]
-                            solid_geo = clip_paths_to_area(solid_geo, boundary)
+            # ############################################################
+            # ########## AREA SUBTRACTION ################################
+            # ############################################################
+            if iso_except:
+                self.app.proc_container.update_view_text(' %s' % _("Subtracting Geo"))
+                solid_geo = self.area_subtraction(solid_geo)
 
-                    # ############################################################
-                    # ########## AREA SUBTRACTION ################################
-                    # ############################################################
-                    if iso_except:
-                        self.app.proc_container.update_view_text(' %s' % _("Subtracting Geo"))
-                        solid_geo = self.area_subtraction(solid_geo)
+            if lim_area:
+                self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
+                solid_geo = self.area_intersection(solid_geo, intersection_geo=lim_area)
 
-                    if lim_area:
-                        self.app.proc_container.update_view_text(' %s' % _("Intersecting Geo"))
-                        solid_geo = self.area_intersection(solid_geo, intersection_geo=lim_area)
+            # make sure that no empty geometry element is in the solid_geometry
+            new_solid_geo = flatten_shapely_geometry(
+                solid_geo, simplify_tolerance=simp_tol if simp_en and boundary is None else 0.0)
 
-                    # make sure that no empty geometry element is in the solid_geometry
-                    new_solid_geo = flatten_shapely_geometry(solid_geo)
+            tool_data['tools_mill_tooldia'] = float(tool_dia)
+            tools_storage[tool] = {
+                'tooldia':          float(tool_dia),
+                'data':             tool_data,
+                'solid_geometry':   new_solid_geo
+            }
+            if new_solid_geo:
+                used_tools.append(tool)
+                total_solid_geometry += new_solid_geo
 
-                    tools_storage.update({
-                        tool: {
-                            'tooldia':          float(tool_dia),
-                            'data':             tool_data,
-                            'solid_geometry':   new_solid_geo
-                        }
-                    })
-                    tools_storage[tool]['data']['tools_mill_tooldia'] = float(tool_dia)
-                    total_solid_geometry += new_solid_geo
-
-                    # if the geometry is all isolated
-                    if not work_geo:
-                        break
-
-        if simp_en and boundary is None:
-            total_solid_geometry = flatten_shapely_geometry(total_solid_geometry, simplify_tolerance=simp_tol)
-        else:
-            total_solid_geometry = flatten_shapely_geometry(total_solid_geometry)
+            # if the geometry is all isolated
+            if not work_geo:
+                break
 
         # clean the progressive plotted shapes if it was used
-        if plot and self.app.options.get(
-                "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting"))) == 'progressive':
-            self.temp_shapes.clear(update=True)
+        if plot and prog_plot == 'progressive':
+            try:
+                self.temp_shapes.clear(update=True)
+            except Exception as err:
+                self.app.log.debug("ToolIsolation.combined_rest(). Progressive plotting -> %s" % str(err))
 
-        # remove tools without geometry
-        for tool, tool_dict in list(tools_storage.items()):
-            if not tool_dict['solid_geometry']:
-                tools_storage.pop(tool, None)
+        if not used_tools:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Empty Geometry in"), iso_name))
+            result = 'fail'
+        else:
+            # the diameter of the object: the one of its largest tool
+            obj_dia = max(float(tools_storage[uid]['tooldia']) for uid in used_tools)
 
-        def iso_init(geo_obj, app_obj):
-            geo_obj.obj_options["tools_mill_tooldia"] = str(tool_dia)
+            def iso_init(geo_obj, app_obj):
+                geo_obj.obj_options["tools_mill_tooldia"] = str(obj_dia)
 
-            geo_obj.tools = dict(tools_storage)
-            geo_obj.solid_geometry = total_solid_geometry
-            # even if combine is checked, one pass is still single-geo
-
-            # remove the tools that have no geometry
-            for geo_tool in list(geo_obj.tools.keys()):
-                if not geo_obj.tools[geo_tool]['solid_geometry']:
-                    geo_obj.tools.pop(geo_tool, None)
-
-            if len(tools_storage) > 1:
+                geo_obj.tools = tools_for_object(tools_storage, used_tools)
+                geo_obj.solid_geometry = total_solid_geometry
+                # even if combine is checked, one pass is still single-geo
                 geo_obj.multigeo = True
-            else:
-                for __ in tools_storage.keys():
-                    # passes_no = float(tools_storage[ky]['data']['tools_iso_passes'])
-                    geo_obj.multigeo = True
-                    break
 
-            # detect if solid_geometry is empty and this require list flattening which is "heavy"
-            # or just looking in the lists (they are one level depth) and if any is not empty
-            # proceed with object creation, if there are empty and the number of them is the length
-            # of the list then we have an empty solid_geometry which should raise a Custom Exception
-            empty_cnt = 0
-            if not isinstance(geo_obj.solid_geometry, list) and \
-                    not isinstance(geo_obj.solid_geometry, MultiPolygon):
-                geo_obj.solid_geometry = [geo_obj.solid_geometry]
-
-            # simplify geometry if enabled
-            if simp_en and boundary is None:
-                for t in geo_obj.tools:
-                    geo_obj.tools[t]['solid_geometry'] = [
-                        g.simplify(tolerance=simp_tol) for g in geo_obj.tools[t]['solid_geometry']]
-
-            for g in geo_obj.solid_geometry:
-                if g:
-                    break
-                else:
-                    empty_cnt += 1
-
-            if empty_cnt == len(geo_obj.solid_geometry):
-                app_obj.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Empty Geometry in"), geo_obj.obj_options["name"]))
-                return 'fail'
-            else:
                 if self.validation_status:
                     mssg = '[success] %s: %s' % (_("Isolation geometry created"), geo_obj.obj_options["name"])
                     app_obj.inform.emit(mssg)
 
-        a_select = True if self.validation_status else False
-        self.new_object("geometry", iso_name, iso_init, source=iso_obj, plot=plot, autoselected=a_select)
+            a_select = True if self.validation_status else False
+            self.new_object("geometry", iso_name, iso_init, source=iso_obj, plot=plot, autoselected=a_select)
+            result = None
 
         # the tools are finished but the isolation is not finished therefore it failed
         if work_geo:
@@ -2281,6 +2561,7 @@ class ToolIsolation(Geometry, AppTool):
                 coords = '(%s, %s), ' % (str(pt.x), str(pt.y))
                 msg += coords
             self.app.inform_shell.emit(msg)
+        return result
 
     def combined_normal(self, iso_obj, iso2geo, tools_storage, lim_area, sel_tools, iso_except, extra_passes=None,
                         negative_dia=None, simp_en=False, simp_tol=0.001, plot=True, prog_plot=None,
@@ -2318,30 +2599,33 @@ class ToolIsolation(Geometry, AppTool):
         :type boundary:         Shapely Polygon or MultiPolygon
         :param trace_boundary:  also add the outline of the boundary as a path
         :type trace_boundary:   bool
-        :return:                Isolated solid geometry
-        :rtype:
+        :return:                'fail' if nothing was isolated (an error was reported), else None
         """
         self.app.log.debug("ToolIsolation.combined_normal()")
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         total_solid_geometry = []
+        # the tools that made geometry in this run
+        used_tools = []
 
         iso_name = iso_obj.obj_options["name"] + '_iso_combined'
         geometry = iso2geo
+        work_geo = iso_obj.solid_geometry if geometry is None else geometry
         if prog_plot is None:
             prog_plot = self.app.options.get(
                 "tools_iso_plotting", app_defaults.get("tools_iso_plotting", AppDefaults.factory_defaults.get("tools_iso_plotting")))
+        # the pads that get the extra passes: the same for all the tools and passes
+        pads = None
 
         for tool in sel_tools:
+            if self.app.abort_flag:
+                raise grace
+
             tool_dia = tools_storage[tool]['tooldia']
             tool_has_offset = tools_storage[tool]['data']['tools_mill_offset_type']
             tool_offset_value = tools_storage[tool]['data']['tools_mill_offset_value']
             tool_type = tools_storage[tool]['data']['tools_mill_tool_shape']
             tool_data = tools_storage[tool]['data']
-
-            work_geo = geometry
-            if work_geo is None:
-                work_geo = iso_obj.solid_geometry
 
             iso_t = {
                 'ext': 0,
@@ -2377,6 +2661,8 @@ class ToolIsolation(Geometry, AppTool):
 
             def pass_envelopes():
                 for nr_pass, iso_offset in enumerate(iso_offsets):
+                    if self.app.abort_flag:
+                        raise grace
                     iso_geo = self.generate_envelope(
                         iso_obj, iso_offset, mill_dir, geometry=work_geo, env_iso_type=iso_t,
                         nr_passes=nr_pass, prog_plot=prog_plot, buffers=buffers)
@@ -2398,28 +2684,21 @@ class ToolIsolation(Geometry, AppTool):
                 self.app.inform.emit(report)
                 if passes_made == 0:
                     # no path of this tool is inside the boundary: no pad passes and no traced boundary either
-                    tools_storage.pop(tool, None)
                     continue
 
             # Extra Pads isolations
-            pad_geo = []
             if extra_passes is not None and extra_passes > 0:
-                extra_geo = []
-                for apid in iso_obj.tools:
-                    for t_geo_dict in iso_obj.tools[apid]['geometry']:
-                        if 'follow' in t_geo_dict:
-                            if isinstance(t_geo_dict['follow'], Point):
-                                extra_geo.append(t_geo_dict['solid'])
+                if pads is None:
+                    pads = pad_solids(iso_obj, geometry)
+                if pads:
+                    # after the last pass made (with a boundary the passes can stop before the requested number)
+                    solid_geo += IsolationGen.pad_passes(
+                        pads, envelopes if boundary is not None else solid_geo,
+                        tool_dia, passes_made, extra_passes, overlap,
+                        self.app.options.get("gerber_circle_steps", app_defaults.get(
+                            "gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
+                        negative_dia=negative_dia)
 
-                # after the last pass made (with a boundary the passes can stop before the requested number)
-                pad_geo = IsolationGen.pad_passes(
-                    extra_geo, envelopes if boundary is not None else solid_geo,
-                    tool_dia, passes_made, extra_passes, overlap,
-                    self.app.options.get("gerber_circle_steps", app_defaults.get(
-                        "gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
-                    negative_dia=negative_dia)
-
-            solid_geo += pad_geo
             solid_geo += leftover_geo
 
             if boundary is not None:
@@ -2442,21 +2721,21 @@ class ToolIsolation(Geometry, AppTool):
                 solid_geo = self.area_intersection(solid_geo, intersection_geo=lim_area)
 
             # make sure that no empty geometry element is in the solid_geometry
-            new_solid_geo = flatten_shapely_geometry(solid_geo)
+            new_solid_geo = flatten_shapely_geometry(
+                solid_geo, simplify_tolerance=simp_tol if simp_en and boundary is None else 0.0)
 
-            tools_storage.update({
-                tool: {
-                    'tooldia':          float(tool_dia),
-                    'offset':           tool_has_offset,
-                    'offset_value':     tool_offset_value,
-                    'tool_type':        tool_type,
-                    'data':             tool_data,
-                    'solid_geometry':   new_solid_geo
-                }
-            })
-            tools_storage[tool]['data']['tools_mill_tooldia'] = float(tool_dia)
-
-            total_solid_geometry += new_solid_geo
+            tool_data['tools_mill_tooldia'] = float(tool_dia)
+            tools_storage[tool] = {
+                'tooldia':          float(tool_dia),
+                'offset':           tool_has_offset,
+                'offset_value':     tool_offset_value,
+                'tool_type':        tool_type,
+                'data':             tool_data,
+                'solid_geometry':   new_solid_geo
+            }
+            if new_solid_geo:
+                used_tools.append(tool)
+                total_solid_geometry += new_solid_geo
 
         # clean the progressive plotted shapes if it was used
         if plot and prog_plot == 'progressive':
@@ -2465,61 +2744,24 @@ class ToolIsolation(Geometry, AppTool):
             except Exception as err:
                 self.app.log.debug("ToolIsolation.combined_normal(). Progressive plotting -> %s" % str(err))
 
-        # remove tools without geometry
-        for tool, tool_dict in list(tools_storage.items()):
-            if not tool_dict['solid_geometry']:
-                tools_storage.pop(tool, None)
+        if not used_tools:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Empty Geometry in"), iso_name))
+            return 'fail'
 
-        total_solid_geometry = flatten_shapely_geometry(total_solid_geometry)
-        if simp_en and boundary is None:
-            total_solid_geometry = [
-                g.simplify(tolerance=simp_tol) for g in total_solid_geometry if not g.is_empty]
+        # the diameter of the object: the one of its largest tool
+        obj_dia = max(float(tools_storage[uid]['tooldia']) for uid in used_tools)
 
         def iso_init(geo_obj, app_obj):
-            geo_obj.obj_options["tools_mill_tooldia"] = str(tool_dia)
+            geo_obj.obj_options["tools_mill_tooldia"] = str(obj_dia)
 
-            geo_obj.tools = dict(tools_storage)
+            geo_obj.tools = tools_for_object(tools_storage, used_tools)
             geo_obj.solid_geometry = total_solid_geometry
             # even if combine is checked, one pass is still single-geo
+            geo_obj.multigeo = True
 
-            if len(tools_storage) > 1:
-                geo_obj.multigeo = True
-            else:
-                # passes_no = 1
-                for __ in tools_storage.keys():
-                    # passes_no = float(tools_storage[ky]['data']['tools_iso_passes'])
-                    geo_obj.multigeo = True
-                    break
-                geo_obj.multigeo = True
-
-            # detect if solid_geometry is empty and this require list flattening which is "heavy"
-            # or just looking in the lists (they are one level depth) and if any is not empty
-            # proceed with object creation, if there are empty and the number of them is the length
-            # of the list then we have an empty solid_geometry which should raise a Custom Exception
-            empty_cnt = 0
-            if not isinstance(geo_obj.solid_geometry, list) and \
-                    not isinstance(geo_obj.solid_geometry, MultiPolygon):
-                geo_obj.solid_geometry = [geo_obj.solid_geometry]
-
-            # simplify geometry if enabled
-            if simp_en and boundary is None:
-                for t in geo_obj.tools:
-                    geo_obj.tools[t]['solid_geometry'] = [
-                        g.simplify(tolerance=simp_tol) for g in geo_obj.tools[t]['solid_geometry']]
-
-            for g in geo_obj.solid_geometry:
-                if g:
-                    break
-                else:
-                    empty_cnt += 1
-
-            if empty_cnt == len(geo_obj.solid_geometry):
-                app_obj.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Empty Geometry in"), geo_obj.obj_options["name"]))
-                return 'fail'
-            else:
-                if self.validation_status:
-                    msg = '[success] %s: %s' % (_("Isolation geometry created"), geo_obj.obj_options["name"])
-                    app_obj.inform.emit(msg)
+            if self.validation_status:
+                msg = '[success] %s: %s' % (_("Isolation geometry created"), geo_obj.obj_options["name"])
+                app_obj.inform.emit(msg)
 
         a_select = True if self.validation_status else False
         self.new_object("geometry", iso_name, iso_init, source=iso_obj, plot=plot, autoselected=a_select)
@@ -2535,7 +2777,9 @@ class ToolIsolation(Geometry, AppTool):
         if subtraction_geo:
             subtractor_geo = subtraction_geo
         else:
-            name = self.ui.exc_obj_combo.currentText()
+            name = getattr(self, '_exc_name', None)
+            if name is None:
+                name = self.ui.exc_obj_combo.currentText()
             subtractor_obj = self.app.collection.get_by_name(name)
             subtractor_geo = subtractor_obj.solid_geometry
         return IsolationGen.area_subtraction(geo, subtractor_geo)
@@ -2550,9 +2794,171 @@ class ToolIsolation(Geometry, AppTool):
         """
         return IsolationGen.area_intersection(geo, intersection_geo)
 
-    def on_poly_mouse_click_release(self, event):
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
+    # ------------------------------------------------------------------------------------------------------------
+    # Area / Polygon selection modes
+    # ------------------------------------------------------------------------------------------------------------
 
+    def _selected_tool_ids(self):
+        sel_rows = {t.row() for t in self.ui.tools_table.selectedItems()}
+        return [int(self.ui.tools_table.item(row, 3).text()) for row in sel_rows]
+
+    @classmethod
+    def _flat_polygons(cls, geo):
+        """The non empty Polygons of a Shapely geometry or of any nesting of lists / tuples of them."""
+        if geo is None:
+            return
+        if isinstance(geo, Polygon):
+            if not geo.is_empty:
+                yield geo
+        elif hasattr(geo, 'geoms'):
+            for sub in geo.geoms:
+                yield from cls._flat_polygons(sub)
+        elif isinstance(geo, Iterable):
+            for sub in geo:
+                yield from cls._flat_polygons(sub)
+
+    def _object_polygons(self):
+        """
+        The flat polygons of the source object and the STRtree over them. They are cached for as long as the object
+        and its solid_geometry stay the same.
+
+        :return: (list of Polygon, STRtree)
+        """
+        obj = self.grb_obj
+        geo = obj.solid_geometry
+        size = len(geo) if isinstance(geo, (list, tuple)) else -1
+        cache = self._sel_cache
+        if cache is not None and cache[0] is obj and cache[1] is geo and cache[2] == size:
+            return cache[3], cache[4]
+
+        polys = list(self._flat_polygons(geo))
+        tree = shapely.STRtree(polys)
+        self._sel_cache = (obj, geo, size, polys, tree)
+        return polys, tree
+
+    def polygon_at_point(self, point, ignore_interiors=False):
+        """
+        The polygon of the source object under a point.
+
+        :param point:               (x, y)
+        :param ignore_interiors:    if True the polygons are tested with their holes filled and the result is the hole
+                                    (as a Polygon) that contains the point, or None
+        :return:                    Polygon or None
+        """
+        polys, tree = self._object_polygons()
+        pt = Point(point)
+        for idx in sorted(tree.query(pt)):
+            poly = polys[idx]
+            if ignore_interiors:
+                if Polygon(poly.exterior).contains(pt):
+                    return self.get_selected_interior(poly, point=point)
+            elif poly.contains(pt):
+                return poly
+        return None
+
+    def _add_selected_polygons(self, polys):
+        """
+        Adds polygons to the selection and draws them with one batch. The ones already selected are skipped.
+
+        :return: the number of polygons added
+        """
+        if not polys:
+            return 0
+        color = self.app.options.get(
+            'global_sel_draw_color',
+            (getattr(self.app, "defaults", None) or AppDefaults.factory_defaults).get(
+                'global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF'
+
+        new_polys = []
+        new_wkb = []
+        for poly, wkb in zip(polys, shapely.to_wkb(np.asarray(polys, dtype=object))):
+            if wkb not in self._poly_keys:
+                self._poly_keys[wkb] = None     # a duplicate in the same batch
+                new_polys.append(poly)
+                new_wkb.append(wkb)
+
+        shape_ids = self.app.tool_shapes.add_batch(
+            [{'shape': p, 'color': color, 'face_color': color} for p in new_polys],
+            layer=0, tolerance=self.drawing_tolerance)
+        for poly, wkb, shape_id in zip(new_polys, new_wkb, shape_ids):
+            self._poly_keys[wkb] = shape_id
+            self.poly_dict[shape_id] = poly
+        return len(new_polys)
+
+    def _remove_selected_polygon(self, poly):
+        """Removes one polygon from the selection and from the canvas. Returns False if it was not selected."""
+        shape_id = self._poly_keys.pop(shapely.to_wkb(poly), None)
+        if shape_id is None:
+            return False
+        self.poly_dict.pop(shape_id, None)
+        self.app.tool_shapes.remove(shape_id)
+        return True
+
+    def end_selection_mode(self):
+        """
+        Ends the Area / Polygon selection mode: gives the canvas handlers back to the app, restores the grid snapping
+        and drops every part of the selection (shapes on the canvas, picked polygons, zones, corners, points).
+        Safe to call at any time, also when no mode is active.
+        """
+        plotcanvas = getattr(self.app, 'plotcanvas', None)
+        if plotcanvas is not None:
+            if self.area_sel_disconnect_flag is True:
+                plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+                plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+                plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+
+                plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+                plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+                plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+
+            if self.poly_sel_disconnect_flag is True:
+                plotcanvas.graph_event_disconnect('mouse_release', self.on_poly_mouse_click_release)
+                plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+
+                plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+        self.area_sel_disconnect_flag = False
+        self.poly_sel_disconnect_flag = False
+
+        # restore the Grid snapping only if this plugin switched it off, and by state, not by toggling blindly
+        if self._grid_disabled:
+            self._grid_disabled = False
+            if self.grid_status_memory is True and not self.app.ui.grid_snap_btn.isChecked():
+                self.app.ui.grid_snap_btn.trigger()
+
+        self.poly_dict.clear()
+        self._poly_keys.clear()
+        self._sel_cache = None
+        self.sel_rect = []
+        self.first_click = False
+        self.points = []
+        self.poly_drawn = False
+
+        if self.app.tool_shapes is not None:
+            self.app.tool_shapes.clear(update=True)
+        self.delete_moving_selection_shape()
+        self.delete_tool_selection_shape()
+
+    def isolate_in_worker(self, **kwargs):
+        """
+        Runs isolate(**kwargs) in the worker, with the progress indicator, so that the GUI does not hang. The tool check
+        of the Generate click (if any) runs first, in the same task: the isolation reads its result.
+        """
+        validation = self.pending_validation
+        self.pending_validation = None
+
+        def worker_task(iso_class):
+            with iso_class.app.proc_container.new('%s ...' % _("Isolating")):
+                try:
+                    iso_class.validation_status = True
+                    if validation is not None:
+                        iso_class.check_tools_validity(*validation)
+                    iso_class.isolate(**kwargs)
+                except grace:
+                    iso_class.app.inform.emit('[WARNING_NOTCL] %s' % _("Isolation aborted."))
+
+        self.app.worker_task.emit({'fcn': worker_task, 'params': [self]})
+
+    def on_poly_mouse_click_release(self, event):
         event_pos = event.pos
         right_button = 2
 
@@ -2570,92 +2976,55 @@ class ToolIsolation(Geometry, AppTool):
             curr_pos = (curr_pos[0], curr_pos[1])
 
         if event.button == 1:
-            if self.ui.poly_int_cb.get_value() is True:
-                clicked_poly = self.find_polygon_ignore_interiors(point=(curr_pos[0], curr_pos[1]),
-                                                                  geoset=self.grb_obj.solid_geometry)
-
-                clicked_poly = self.get_selected_interior(clicked_poly, point=(curr_pos[0], curr_pos[1]))
-
-            else:
-                clicked_poly = self.find_polygon(point=(curr_pos[0], curr_pos[1]), geoset=self.grb_obj.solid_geometry)
-
             if self.app.selection_type is not None:
                 self.selection_area_handler(self.app.mouse_pos, curr_pos, self.app.selection_type)
                 self.app.selection_type = None
-            elif clicked_poly:
-                if clicked_poly not in self.poly_dict.values():
-                    shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0, shape=clicked_poly,
-                                                        color=self.app.options.get(
-                                                            'global_sel_draw_color',
-                                                            app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                        face_color=self.app.options.get(
-                                                            'global_sel_draw_color',
-                                                            app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                        visible=True)
-                    self.poly_dict[shape_id] = clicked_poly
-                    self.app.inform.emit(
-                        '%s: %d. %s' % (_("Added polygon"), int(len(self.poly_dict)),
-                                        _("Click to add next polygon or right click to start."))
-                    )
-                else:
-                    try:
-                        for k, v in list(self.poly_dict.items()):
-                            if v == clicked_poly:
-                                self.app.tool_shapes.remove(k)
-                                self.poly_dict.pop(k)
-                                break
-                    except TypeError:
-                        return
-                    self.app.inform.emit(
-                        '%s. %s' % (_("Removed polygon"),
-                                    _("Click to add/remove next polygon or right click to start."))
-                    )
+                return
 
-                self.app.tool_shapes.redraw()
-            else:
+            clicked_poly = self.polygon_at_point((curr_pos[0], curr_pos[1]),
+                                                 ignore_interiors=self.ui.poly_int_cb.get_value() is True)
+            if clicked_poly is None:
                 self.app.inform.emit(_("No polygon detected under click position."))
+                return
+
+            if self._remove_selected_polygon(clicked_poly):
+                self.app.inform.emit(
+                    '%s. %s' % (_("Removed polygon"),
+                                _("Click to add/remove next polygon or right click to start."))
+                )
+            else:
+                self._add_selected_polygons([clicked_poly])
+                self.app.inform.emit(
+                    '%s: %d. %s' % (_("Added polygon"), int(len(self.poly_dict)),
+                                    _("Click to add next polygon or right click to start."))
+                )
+            self.app.tool_shapes.redraw()
         elif event.button == right_button and self.app.event_is_dragging is False:
-            # restore the Grid snapping if it was active before
-            if self.grid_status_memory is True:
-                self.app.ui.grid_snap_btn.trigger()
+            # the selection is taken first: ending the mode clears it
+            poly_list = list(self.poly_dict.values())
+            interiors = self.ui.poly_int_cb.get_value() is True
+            self.end_selection_mode()
 
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_poly_mouse_click_release)
-            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-
-            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
-
-            # disconnect flags
-            self.poly_sel_disconnect_flag = False
-
-            self.app.tool_shapes.clear(update=True)
-
-            sel_tools = []
-            table_items = self.ui.tools_table.selectedItems()
-            sel_rows = {t.row() for t in table_items}
-            for row in sel_rows:
-                tid = int(self.ui.tools_table.item(row, 3).text())
-                sel_tools.append(tid)
+            sel_tools = self._selected_tool_ids()
             if not sel_tools:
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
                 return 'fail'
 
-            if self.poly_dict:
-                poly_list = deepcopy(list(self.poly_dict.values()))
-                if self.ui.poly_int_cb.get_value() is True:
-                    # isolate the interior polygons with a negative tool
-                    self.isolate(isolated_obj=self.grb_obj, geometry=poly_list, negative_dia=True, sel_tools=sel_tools,
-                                 tools_storage=self.iso_tools)
-                else:
-                    self.isolate(isolated_obj=self.grb_obj, geometry=poly_list, sel_tools=sel_tools,
-                                 tools_storage=self.iso_tools)
-                self.poly_dict.clear()
-            else:
+            if not poly_list:
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _("List of single polygons is empty. Aborting."))
                 return "fail"
 
+            settings = self.run_settings()
+            if interiors:
+                # isolate the interior polygons with a negative tool
+                self.isolate_in_worker(isolated_obj=self.grb_obj, geometry=poly_list, negative_dia=True,
+                                       sel_tools=sel_tools, tools_storage=self.iso_tools, **settings)
+            else:
+                self.isolate_in_worker(isolated_obj=self.grb_obj, geometry=poly_list, sel_tools=sel_tools,
+                                       tools_storage=self.iso_tools, **settings)
+
     def on_select_all_polygons(self):
         self.app.log.debug("ToolIsolation.on_select_all_polygons()")
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
 
         self.obj_name = self.ui.object_combo.currentText()
 
@@ -2670,35 +3039,15 @@ class ToolIsolation(Geometry, AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(self.obj_name)))
             return
 
-        try:
-            for poly in self.grb_obj.solid_geometry:
-                shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0, shape=poly,
-                                                    color=self.app.options.get(
-                                                        'global_sel_draw_color',
-                                                        app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                    face_color=self.app.options.get(
-                                                        'global_sel_draw_color',
-                                                        app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                    visible=True)
-                self.poly_dict[shape_id] = poly
-        except TypeError:
-            poly = self.grb_obj.solid_geometry
-            shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0, shape=poly,
-                                                color=self.app.options.get(
-                                                    'global_sel_draw_color',
-                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                face_color=self.app.options.get(
-                                                    'global_sel_draw_color',
-                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                visible=True)
-            self.poly_dict[shape_id] = poly
-
+        polys, _tree = self._object_polygons()
+        self._add_selected_polygons(polys)
         self.app.tool_shapes.redraw()
 
     def on_deselect_all_polygons(self):
         self.app.log.debug("ToolIsolation.on_deselect_all_polygons()")
 
         self.poly_dict.clear()
+        self._poly_keys.clear()
         self.app.tool_shapes.clear(update=True)
 
     def selection_area_handler(self, start_pos, end_pos, sel_type):
@@ -2708,70 +3057,15 @@ class ToolIsolation(Geometry, AppTool):
         :param sel_type: if True it's a left to right selection (enclosure), if False it's a 'touch' selection
         :return:
         """
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        poly_selection = Polygon([start_pos, (end_pos[0], start_pos[1]), end_pos, (start_pos[0], end_pos[1])])
+        poly_selection = Polygon([start_pos,(end_pos[0], start_pos[1]), end_pos, (start_pos[0], end_pos[1])])
 
         # delete previous selection shape
         self.app.delete_selection_shape()
 
-        added_poly_count = 0
-        try:
-            for geo in self.solid_geometry:
-                if geo not in self.poly_dict.values():
-                    if sel_type is True:
-                        if geo.within(poly_selection):
-                            shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
-                                                                shape=geo,
-                                                                color=self.app.options.get(
-                                                                    'global_sel_draw_color',
-                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                                face_color=self.app.options.get(
-                                                                    'global_sel_draw_color',
-                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                                visible=True)
-                            self.poly_dict[shape_id] = geo
-                            added_poly_count += 1
-                    else:
-                        if poly_selection.intersects(geo):
-                            shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
-                                                                shape=geo,
-                                                                color=self.app.options.get(
-                                                                    'global_sel_draw_color',
-                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                                face_color=self.app.options.get(
-                                                                    'global_sel_draw_color',
-                                                                    app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                                visible=True)
-                            self.poly_dict[shape_id] = geo
-                            added_poly_count += 1
-        except TypeError:
-            if self.solid_geometry not in self.poly_dict.values():
-                if sel_type is True:
-                    if poly_selection.contains(self.solid_geometry):
-                        shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
-                                                            shape=self.solid_geometry,
-                                                            color=self.app.options.get(
-                                                                'global_sel_draw_color',
-                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                            face_color=self.app.options.get(
-                                                                'global_sel_draw_color',
-                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                            visible=True)
-                        self.poly_dict[shape_id] = self.solid_geometry
-                        added_poly_count += 1
-                else:
-                    if poly_selection.intersects(self.solid_geometry):
-                        shape_id = self.app.tool_shapes.add(tolerance=self.drawing_tolerance, layer=0,
-                                                            shape=self.solid_geometry,
-                                                            color=self.app.options.get(
-                                                                'global_sel_draw_color',
-                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                            face_color=self.app.options.get(
-                                                                'global_sel_draw_color',
-                                                                app_defaults.get('global_sel_draw_color', AppDefaults.factory_defaults.get('global_sel_draw_color'))) + 'AF',
-                                                            visible=True)
-                        self.poly_dict[shape_id] = self.solid_geometry
-                        added_poly_count += 1
+        # enclosure (left to right) takes the polygons fully inside the rectangle, 'touch' the ones it intersects
+        polys, tree = self._object_polygons()
+        hits = tree.query(poly_selection, predicate='contains' if sel_type is True else 'intersects')
+        added_poly_count = self._add_selected_polygons([polys[i] for i in sorted(hits)])
 
         if added_poly_count > 0:
             self.app.tool_shapes.redraw()
@@ -2805,9 +3099,8 @@ class ToolIsolation(Geometry, AppTool):
                     self.first_click = True
                     self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the end point of the paint area."))
 
-                    self.cursor_pos = self.app.plotcanvas.translate_coords(event_pos)
-                    if self.app.grid_status():
-                        self.cursor_pos = self.app.geo_editor.snap(event_pos[0], event_pos[1])
+                    # event_pos is already translated (and curr_pos snapped, if the grid snapping is on)
+                    self.cursor_pos = (curr_pos[0], curr_pos[1])
                 else:
                     self.app.inform.emit(_("Zone added. Click to start adding next zone or right click to finish."))
                     self.app.delete_selection_shape()
@@ -2867,36 +3160,21 @@ class ToolIsolation(Geometry, AppTool):
                     self.poly_drawn = False
                     return
 
-            self.delete_tool_selection_shape()
+            # the zones are taken first: ending the mode clears them (and the points, and the shapes)
+            sel_zones = list(self.sel_rect)
+            self.end_selection_mode()
 
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-
-            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-            self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
-            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
-
-            # disconnect flags
-            self.area_sel_disconnect_flag = False
-
-            if len(self.sel_rect) == 0:
+            if len(sel_zones) == 0:
                 return
 
-            sel_tools = []
-            table_items = self.ui.tools_table.selectedItems()
-            sel_rows = {t.row() for t in table_items}
-            for row in sel_rows:
-                tid = int(self.ui.tools_table.item(row, 3).text())
-                sel_tools.append(tid)
+            sel_tools = self._selected_tool_ids()
             if not sel_tools:
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
                 return 'fail'
 
-            self.sel_rect = unary_union(self.sel_rect)
-            self.isolate(isolated_obj=self.grb_obj, limited_area=self.sel_rect, sel_tools=sel_tools,
-                         tools_storage=self.iso_tools, plot=True)
-            self.sel_rect = []
+            self.isolate_in_worker(isolated_obj=self.grb_obj, limited_area=unary_union(sel_zones),
+                                   sel_tools=sel_tools, tools_storage=self.iso_tools, plot=True,
+                                   **self.run_settings())
 
     # called on mouse move
     def on_mouse_move(self, event):
@@ -2971,31 +3249,7 @@ class ToolIsolation(Geometry, AppTool):
 
         if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
 
-            if self.area_sel_disconnect_flag is True:
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-                self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-                self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-
-                self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
-                self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
-                self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
-                self.area_sel_disconnect_flag = False
-
-            if self.poly_sel_disconnect_flag is True:
-                # restore the Grid snapping if it was active before
-                if self.grid_status_memory is True:
-                    self.app.ui.grid_snap_btn.trigger()
-
-                self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_poly_mouse_click_release)
-                self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-
-                self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
-                self.poly_sel_disconnect_flag = False
-
-            self.points = []
-            self.poly_drawn = False
-            self.delete_moving_selection_shape()
-            self.delete_tool_selection_shape()
+            self.end_selection_mode()
 
     def on_iso_tool_add_from_db_executed(self, tool):
         """
@@ -3041,41 +3295,42 @@ class ToolIsolation(Geometry, AppTool):
         max_uid = 0 if not tool_uid_list else max(tool_uid_list)
         tooluid = max_uid + 1
 
-        tool_dias = []
-        for k, v in self.iso_tools.items():
-            for tool_v in v.keys():
-                if tool_v == 'tooldia':
-                    tool_dias.append(self.app.dec_format(v[tool_v], self.decimals))
-
+        # the Tools Database keeps one unit (the one of the application): the diameter and the data need no conversion
         truncated_tooldia = self.app.dec_format(tooldia, self.decimals)
-        # if truncated_tooldia in tool_dias:
-        #     self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
-        #     self.ui_connect()
-        #     return 'fail'
+        if self.tool_dia_in_table(truncated_tooldia):
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled. Tool already in Tool Table."))
+            self.ui_connect()
+            return 'fail'
+
+        # the DB data over the defaults: a key that the DB tool does not have is still there for the isolation
+        new_data = deepcopy(self.default_data)
+        for d in tool['data']:
+            if not d.startswith('tools_') or d.startswith(('tools_iso_', 'tools_mill_')):
+                new_data[d] = deepcopy(tool['data'][d])
+        new_data['name'] = '_iso'
+        new_data['tools_iso_tooldia'] = deepcopy(truncated_tooldia)
 
         self.iso_tools.update({
             tooluid: {
                 'tooldia':          truncated_tooldia,
-                'data':             deepcopy(tool['data']),
+                'data':             new_data,
                 'solid_geometry':   []
             }
         })
-
-        self.iso_tools[tooluid]['data']['name'] = '_iso'
+        self.tooluid = tooluid
 
         self.app.inform.emit('[success] %s' % _("New tool added to Tool Table."))
 
         self.build_ui()
 
-        # select the tool just added
+        # select the tool just added: the uid of a tool does not change when the table is sorted
         for row in range(self.ui.tools_table.rowCount()):
-            if int(self.ui.tools_table.item(row, 3).text()) == self.tooluid:
+            if int(self.ui.tools_table.item(row, 3).text()) == tooluid:
                 self.ui.tools_table.selectRow(row)
                 break
+        self.update_ui()
 
-        return True
-        # if self.ui.tools_table.rowCount() != 0:
-        #     self.param_frame.setDisabled(False)
+        return tooluid
 
     def on_tool_add_from_db_clicked(self):
         """
@@ -3203,7 +3458,8 @@ class ToolIsolation(Geometry, AppTool):
         if geoset is None:
             geoset = self.solid_geometry
 
-        return IsolationGen.find_polygon_ignore_interiors(point, geoset)
+        # a MultiPolygon is not iterable in Shapely 2: hand over its Polygons
+        return IsolationGen.find_polygon_ignore_interiors(point, list(self._flat_polygons(geoset)))
 
     def flatten_list(self, obj_list):
         yield from IsolationGen.flatten_list(obj_list)

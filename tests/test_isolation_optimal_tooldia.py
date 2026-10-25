@@ -1,4 +1,4 @@
-"""Isolation and NCC: safe tool recommendations must agree with Check validity.
+"""Isolation: safe tool recommendations must agree with Check validity.
 
 The distances between the copper polygons are rounded to the app decimals, so the smallest one can be up to half a unit
 of the last decimal larger than the real gap (0.15996 -> 0.16). The tests build the real plugins headless
@@ -24,7 +24,6 @@ from shapely import box  # noqa: E402
 from appMain import App  # noqa: E402
 from defaults import AppDefaults  # noqa: E402
 from appPlugins.ToolIsolation import ToolIsolation  # noqa: E402
-from appPlugins.ToolNCC.Ncc import ToolNcc  # noqa: E402
 from appPlugins.ToolOptimal import ToolOptimal  # noqa: E402
 from test_plugin_geometry_bases import make_tool_app  # noqa: E402
 
@@ -43,15 +42,15 @@ def qapp():
     return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 
-@pytest.fixture(params=[ToolIsolation, ToolNcc])
-def tool(qapp, request):
+@pytest.fixture
+def tool(qapp):
     app = make_tool_app()
     app.abort_flag = False
     app.dec_format = functools.partial(App.dec_format, app)
     # run the jobs in place of the worker thread and of the process pool
     app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
     app.pool.apply_async.side_effect = lambda fcn, args: MagicMock(get=lambda: fcn(*args))
-    t = request.param(app)
+    t = ToolIsolation(app)
     t.decimals = DEC
     app.collection = MagicMock()
     return t
@@ -77,9 +76,7 @@ def test_optimal_tool_fits_in_the_smallest_gap(tool, gap):
     assert dia < gap
     assert dia >= gap - 1.5 * UNIT - 1e-12
     assert dia == round(dia, DEC)
-    # Isolation wires the New Tool entry during construction; NCC wires it on run().
-    if isinstance(tool, ToolIsolation):
-        assert tool.ui.new_tooldia_entry.get_value() == dia
+    assert tool.ui.new_tooldia_entry.get_value() == dia
 
 
 def test_gap_rounded_up_gives_a_tool_below_the_gap(tool):
@@ -97,8 +94,7 @@ def test_optimal_tool_passes_the_check_validity(tool, gap, decimals, units):
     assert dia is not None
     assert 0 < dia < gap
     data = {k: deepcopy(v) for k, v in AppDefaults().defaults.items() if k.startswith('tools_')}
-    storage = 'iso_tools' if isinstance(tool, ToolIsolation) else 'ncc_tools'
-    setattr(tool, storage, {1: {'tooldia': dia, 'data': data, 'solid_geometry': []}})
+    setattr(tool, 'iso_tools', {1: {'tooldia': dia, 'data': data, 'solid_geometry': []}})
     tool.build_ui()
     tool.app.inform.emit.reset_mock()
     tool.validation_status = True
@@ -127,8 +123,7 @@ def test_validation_rejects_oversized_tool(tool):
     dia = find_optimal(tool, 0.15996)
     assert dia is not None
     data = {k: deepcopy(v) for k, v in AppDefaults().defaults.items() if k.startswith('tools_')}
-    storage = 'iso_tools' if isinstance(tool, ToolIsolation) else 'ncc_tools'
-    setattr(tool, storage, {1: {'tooldia': dia + UNIT, 'data': data, 'solid_geometry': []}})
+    setattr(tool, 'iso_tools', {1: {'tooldia': dia + UNIT, 'data': data, 'solid_geometry': []}})
     tool.build_ui()
     tool.app.inform.emit.reset_mock()
     tool.find_safe_tooldia_multiprocessing()
@@ -161,3 +156,41 @@ def test_standalone_optimal_reports_only_positive_safe_diameters(qapp, gap):
         assert any(m.startswith('[ERROR_NOTCL]') for m in messages(t))
         assert not any(m.startswith('[success]') for m in messages(t))
     app.proc_container.new.return_value.done.assert_called_once()
+
+
+def test_one_polygon_has_no_safe_tool_and_a_multipolygon_solid_is_measured():
+    from appPlugins.ToolIsolation import IsolationGen
+    from shapely import MultiPolygon
+
+    assert IsolationGen.safe_tooldia([box(0, 0, 1, 1)], DEC) <= 0
+    storage = {10: {'geometry': [{'solid': MultiPolygon([box(0, 0, 1, 1), box(1.2, 0, 2, 1)])}]}}
+    geo = IsolationGen.aperture_geometry(storage)
+    assert len(geo) == 2
+    assert round(IsolationGen.safe_tooldia(geo, DEC), DEC) == pytest.approx(0.2 - UNIT)
+
+
+def test_isolation_runs_after_the_check_even_if_tasks_are_reordered(qapp):
+    # the check and the isolation are one worker task: the isolation always reads the result of the check
+    from tests.helpers_objects import make_app, make_gerber
+    gerber = make_gerber(make_app(), name='g')
+    app = make_tool_app()
+    app.dec_format = functools.partial(App.dec_format, app)
+    tasks = []
+    app.worker_task.emit.side_effect = tasks.append
+    t = ToolIsolation(app)
+    t.decimals = DEC
+    app.collection = MagicMock()
+    app.collection.get_by_name.return_value = gerber
+    data = {k: deepcopy(v) for k, v in AppDefaults().defaults.items() if k.startswith('tools_')}
+    t.iso_tools = {1: {'tooldia': 5.0, 'data': data, 'solid_geometry': []}}
+    t.build_ui()
+    t.ui.tools_table.selectAll()
+    t.ui.valid_cb.set_value(True)
+
+    t.on_iso_button_click()
+    for task in reversed(tasks):
+        task['fcn'](*task['params'])
+
+    # a 5 mm tool does not fit between the copper features: the object is not selected
+    assert any(m.startswith('[WARNING]') for m in messages(t))
+    assert app.app_obj.new_object.call_args.kwargs['autoselected'] is False
