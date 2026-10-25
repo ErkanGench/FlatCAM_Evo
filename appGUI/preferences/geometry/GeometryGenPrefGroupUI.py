@@ -3,6 +3,7 @@ from PyQt6 import QtGui
 
 from appGUI.GUIElements import FCCheckBox, FCSpinner, FCColorEntry, RadioSet, FCLabel, GLay, FCFrame
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appGUI.preferences.CircleStepsRows import CircleStepsRows
 
 import platform
 
@@ -50,17 +51,11 @@ class GeometryGenPrefGroupUI(OptionsGroupUI):
         )
         plot_grid.addWidget(self.multicolored_cb, 0, 1)
 
-        # Number of circle steps for circular aperture linear approximation
-        self.circle_steps_label = FCLabel('%s:' % _("Circle Steps"))
-        self.circle_steps_label.setToolTip(
-            _("The number of circle steps for \n"
-              "linear approximation of circles.")
-        )
-        self.circle_steps_entry = FCSpinner()
-        self.circle_steps_entry.set_range(0, 999)
-
-        plot_grid.addWidget(self.circle_steps_label, 2, 0)
-        plot_grid.addWidget(self.circle_steps_entry, 2, 1)
+        # How the circles are made of segments: Adaptive (Max Deviation) or Fixed (Circle Steps)
+        self.circle_rows = CircleStepsRows(plot_grid, 2, _("buffers, offsets, arcs of the tool paths"), max_steps=999)
+        self.circle_mode_radio = self.circle_rows.mode_radio
+        self.circle_tol_entry = self.circle_rows.tol_entry
+        self.circle_steps_entry = self.circle_rows.steps_entry
 
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)

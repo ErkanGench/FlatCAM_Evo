@@ -93,10 +93,13 @@ def apply_matrix_to_object(obj, matrix):
             update_skew_metadata(obj)
         obj._after_transform()
     elif kind == 'excellon':
-        rigid = is_rigid(matrix)
-        # a rigid matrix maps the hole shapes too (as offset does); scale and skew keep the tool diameters
-        Excellon._transform_tools(obj, matrix, transform_solid=rigid)
-        if not rigid:
+        a, b, d, e = matrix[:4]
+        moved_only = abs(a - 1.0) <= 1e-12 and abs(e - 1.0) <= 1e-12 and abs(b) <= 1e-12 and abs(d) <= 1e-12
+        # a translation moves the hole shapes too (as offset does); every other matrix moves the centers and the
+        # holes are made again (as rotate, scale and skew do): the circle segments stay aligned to the axes and the
+        # tool diameters stay
+        Excellon._transform_tools(obj, matrix, transform_solid=moved_only)
+        if not moved_only:
             obj.create_geometry()
     elif kind == 'geometry':
         Geometry._affine_solid_geometry(obj, matrix, any_iterable=True)
@@ -870,6 +873,11 @@ class HistoryManager:
             self.app.app_obj.object_changed.emit(obj)
         except Exception as e:
             log.debug("HistoryManager.after_change() object_changed --> %s" % str(e))
+        if (matrix is not None and str(getattr(obj, 'kind', '')).lower() in ('gerber', 'excellon') and
+                getattr(self.app, 'f_handlers', None) is not None):
+            # the source text is not part of a matrix step: make it again for the geometry that is shown now
+            if obj.regenerate_source() is False:
+                raise HistoryError(_("Source regeneration failed"))
         if matrix is not None and hasattr(obj, 'plot_transformed'):
             obj.plot_transformed(matrix)
         else:

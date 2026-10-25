@@ -7,13 +7,14 @@
 # ########################################################## ##
 
 from camlib import (list_total_bounds, Geometry, grace, affine_geometry_many, affine_translate_matrix, affine_rotate_matrix,
-                    affine_scale_matrix, affine_skew_matrix, affine_mirror_matrix)
+                    affine_scale_matrix, affine_skew_matrix, affine_mirror_matrix, circle_quad_segs, object_circle_steps)
 
 import shapely
 import shapely.affinity as affinity
 from shapely import Point, LineString, LinearRing, MultiLineString, MultiPolygon
 import numpy as np
 
+import math
 import re
 import logging
 import traceback
@@ -28,6 +29,45 @@ if '_' not in builtins.__dict__:
     _ = gettext.gettext
 
 log = logging.getLogger('base')
+
+
+class _ParseState:
+    """The state of one Excellon.parse_lines() run."""
+
+    def __init__(self):
+        self.tool = None                # the selected tool
+        self.in_header = False
+        self.header_end_seen = False
+        self.allegro = False
+        self.name_tool = 0              # Allegro tool counter
+        self.line_units_found = False
+        self.line_units = ''
+        self.units_resolved = False     # the units of the numbers are known
+
+        # modal position, in the file units; the G93 origin
+        self.cx = None
+        self.cy = None
+        self.ox = 0.0
+        self.oy = 0.0
+        self.incremental = False        # G91 / ICI,ON
+
+        self.mode = 0                   # 0: drill (G05), 1: route (G00 .. G03)
+        self.gmode = 0                  # the modal route command: 0 rapid, 1 linear, 2 arc CW, 3 arc CCW
+
+        self.tool_map = {}              # tool number in the file -> tool key, for the tools redefined in the body
+        self.drills = {}                # tool -> [(x, y)]
+        self.slots = {}                 # tool -> [(x start, y start, x stop, y stop)]
+        self.stored = False
+
+        self.recording = None           # the events of the pattern (M25 .. M01) while it is recorded
+        self.pattern = []
+        self.pattern_origin = (0.0, 0.0)    # the position at M25: M70 / M80 / M90 swap or mirror about it
+
+        self.file_plated = None         # plated flag for the whole file
+        self.aper_plated = None         # plated flag for the tools defined next
+
+        self.ignored = 0                # lines that were not understood
+        self.dropped = 0                # holes that could not be made
 
 
 class Excellon(Geometry):
@@ -58,7 +98,7 @@ class Excellon(Geometry):
         "excellon_format_upper_in": '2',
         "excellon_format_lower_in": '4',
         "excellon_units": 'INCH',
-        "excellon_circle_steps": '16'
+        "excellon_circle_steps": '32'
     }
 
     def __init__(self, app, zeros=None, excellon_format_upper_mm=None, excellon_format_lower_mm=None,
@@ -77,23 +117,27 @@ class Excellon(Geometry):
 
         self.decimals = self.app.decimals
 
-        if excellon_circle_steps is None:
-            excellon_circle_steps = int(Excellon.defaults['excellon_circle_steps'])
-        self.excellon_circle_steps = int(excellon_circle_steps)
+        # The segments of each circle follow the preferences (see circle_steps()); excellon_circle_steps is a fixed
+        # count of segments for every circle, None for the preferences.
+        self._fixed_steps = None if excellon_circle_steps is None else int(excellon_circle_steps)
+        if self._fixed_steps is None:
+            self.excellon_circle_steps = int(self._app_option("excellon_circle_steps", 32))
+        else:
+            self.excellon_circle_steps = self._fixed_steps
 
-        Geometry.__init__(self, geo_steps_per_circle=int(excellon_circle_steps), app=app)
+        Geometry.__init__(self, geo_steps_per_circle=self.excellon_circle_steps, app=app)
 
         # dictionary to store tools, see above for description
         self.tools = {}
 
         self.source_file = ''
 
-        # it serves to flag if a start routing or a stop routing was encountered
-        # if a stop is encounter and this flag is still 0 (so there is no stop for a previous start) issue error
-        self.routing_flag = 1
+        # the FMAT and VER commands of the file
+        self.fmat = None
+        self.ver = None
 
-        self.match_routing_start = None
-        self.match_routing_stop = None
+        # True: after the parse the tools with the same diameter become one tool (see merge_equal_diameter_tools)
+        self.merge_equal_tools = False
 
         # ## IN|MM -> Units are inherited from Geometry
         self.units = self.app.app_units
@@ -132,79 +176,54 @@ class Excellon(Geometry):
         # ^ - beginning
         # $ - end
         # *: 0 or more, +: 1 or more, ?: 0 or 1
+        # The lines are upper case when these are applied (the comments excepted).
 
         # M48 - Beginning of Part Program Header
         self.hbegin_re = re.compile(r'^M48$')
 
         # ;HEADER - Beginning of Allegro Program Header
-        self.allegro_hbegin_re = re.compile(r'\;\s*(HEADER)')
+        self.allegro_hbegin_re = re.compile(r'^;\s*HEADER\s*:?\s*$')
 
         # M95 or % - End of Part Program Header
         # NOTE: % has different meaning in the body
         self.hend_re = re.compile(r'^(?:M95|%)$')
-
-        # FMAT Excellon format
-        # Ignored in the parser
-        # self.fmat_re = re.compile(r'^FMAT,([12])$')
 
         # Uunits and possible Excellon zeros and possible Excellon format
         # INCH uses 6 digits
         # METRIC uses 5/6
         self.units_re = re.compile(r'^(INCH|METRIC)(?:,([TL])Z)?,?(\d*\.\d+)?.*$')
 
-        # Tool definition/parameters (?= is look-ahead
-        # NOTE: This might be an overkill!
-        # self.toolset_re = re.compile(r'^T(0?\d|\d\d)(?=.*C(\d*\.?\d*))?' +
-        #                              r'(?=.*F(\d*\.?\d*))?(?=.*S(\d*\.?\d*))?' +
-        #                              r'(?=.*B(\d*\.?\d*))?(?=.*H(\d*\.?\d*))?' +
-        #                              r'(?=.*Z([-\+]?\d*\.?\d*))?[CFSBHT]')
-        self.toolset_re = re.compile(r'^T(\d+)(?=.*C,?(\d*\.?\d*))?' +
-                                     r'(?=.*F(\d*\.?\d*))?(?=.*S(\d*\.?\d*))?' +
-                                     r'(?=.*B(\d*\.?\d*))?(?=.*H(\d*\.?\d*))?' +
-                                     r'(?=.*Z([-\+]?\d*\.?\d*))?[CFSBHT]')
+        # Tool parameters, in any order: C diameter, F feed, S speed, B, H, Z
+        self.tool_param_re = re.compile(r'([CFSBHZ]),?([-+]?(?:\d+\.?\d*|\.\d+))')
 
         self.detect_gcode_re = re.compile(r'^G2([01])$')
 
         # Tool select
-        # Can have additional data after tool number but
-        # is ignored if present in the header.
-        # Warning: This will match toolset_re too.
-        # self.toolsel_re = re.compile(r'^T((?:\d\d)|(?:\d))')
+        # Can have additional data after tool number (the parameters)
         self.toolsel_re = re.compile(r'^T(\d+)')
-
-        # Headerless toolset
-        # self.toolset_hl_re = re.compile(r'^T(\d+)(?=.*C(\d*\.?\d*))')
-        self.toolset_hl_re = re.compile(r'^T(\d+)(?:.?C(\d+\.?\d*))?')
-
-        # Comment
-        self.comm_re = re.compile(r'^;(.*)$')
 
         # Absolute/Incremental G90/G91
         self.absinc_re = re.compile(r'^G9([01])$')
-
-        # Modes of operation
-        # 1-linear, 2-circCW, 3-cirCCW, 4-vardwell, 5-Drill
-        self.modes_re = re.compile(r'^G0([012345])')
 
         # Measuring mode
         # 1-metric, 2-inch
         self.meas_re = re.compile(r'^M7([12])$')
 
-        # Coordinates
-        # self.xcoord_re = re.compile(r'^X(\d*\.?\d*)(?:Y\d*\.?\d*)?$')
-        # self.ycoord_re = re.compile(r'^(?:X\d*\.?\d*)?Y(\d*\.?\d*)$')
-        coordsperiod_re_string = r'(?=.*X([-\+]?\d*\.\d*))?(?=.*Y([-\+]?\d*\.\d*))?[XY]'
-        self.coordsperiod_re = re.compile(coordsperiod_re_string)
+        # A plain drill hit: X1.0Y2.0 or X010000Y020000, one or both axes
+        self.drill_fast_re = re.compile(r'^(?:X([-+]?(?:\d+\.?\d*|\.\d+)))?(?:Y([-+]?(?:\d+\.?\d*|\.\d+)))?$')
 
-        coordsnoperiod_re_string = r'(?!.*\.)(?=.*X([-\+]?\d*))?(?=.*Y([-\+]?\d*))?[XY]'
-        self.coordsnoperiod_re = re.compile(coordsnoperiod_re_string)
+        # A line made only of letter + number tokens (G85, G02, M15, R3, X..Y..); the tokens
+        self.line_re = re.compile(r'^(?:[A-Z][-+]?(?:\d+\.?\d*|\.\d+)?)+$')
+        self.token_re = re.compile(r'([A-Z])([-+]?(?:\d+\.?\d*|\.\d+)?)')
 
-        # Slots parsing
-        slots_re_string = r'^([^G]+)G85(.*)$'
-        self.slots_re = re.compile(slots_re_string)
+        # VER, FMAT and ICI commands
+        self.command_re = re.compile(r'^(ICI|FMAT|VER),\s*(\w+)')
 
-        # R - Repeat hole (# times, X offset, Y offset)
-        self.rep_re = re.compile(r'^R(\d+)(?=.*[XY])+(?:X([-\+]?\d*\.?\d*))?(?:Y([-\+]?\d*\.?\d*))?$')
+        # M47 message, M97 / M98 canned text
+        self.canned_re = re.compile(r'^M(?:47|97|98),')
+
+        # Commands that do not draw anything and are not worth a warning
+        self.benign_re = re.compile(r'^(?:M\d+|G\d+|DETECT|BLKD|SG|TCST|OPTION|ATC|CSAB|NCSB|PCKB|ICI|FMAT|VER)')
 
         # Various stop/pause commands
         self.stop_re = re.compile(r'^((G04)|(M09)|(M06)|(M00)|(M30))')
@@ -216,11 +235,19 @@ class Excellon(Geometry):
         # it's a comment like this: ";FILE_FORMAT=2:5"
         self.altium_format = re.compile(r'^;\s*(?:FILE_FORMAT)?(?:Format)?[=|:]\s*(\d+)[:|.](\d+).*$')
 
-        # Parse coordinates
-        self.leadingzeros_re = re.compile(r'^[-\+]?(0*)(\d*)')
+        # KiCad: "; FORMAT={3:3/ absolute / metric / decimal}"
+        self.kicad_format_re = re.compile(r'^;\s*FORMAT\s*=\s*\{\s*(\d+)\s*:\s*(\d+)', re.IGNORECASE)
 
-        # Repeating command
-        self.repeat_re = re.compile(r'R(\d+)')
+        # Plated / non plated tags in comments:
+        # KiCad "; #@! TF.FileFunction,Plated,1,2,PTH", "; #@! TA.AperFunction,NonPlated,NPTH,..." and "; #@! TD"
+        self.attr_plated_re = re.compile(r'^;\s*#@!\s*T([FA])\.(?:FileFunction|AperFunction),\s*(Non)?Plated',
+                                         re.IGNORECASE)
+        self.attr_delete_re = re.compile(r'^;\s*#@!\s*TD\b', re.IGNORECASE)
+        # Altium ";TYPE=PLATED"
+        self.type_plated_re = re.compile(r'^;\s*TYPE\s*=\s*(NON[_ -]?)?PLATED', re.IGNORECASE)
+        # Allegro "...PLATED MILS" / "...NON_PLATED MILS"
+        self.nonplated_re = re.compile(r'NON[_ -]?PLATED', re.IGNORECASE)
+        self.plated_re = re.compile(r'\bPLATED\b', re.IGNORECASE)
 
         self._Excellon_inited = True
 
@@ -231,7 +258,7 @@ class Excellon(Geometry):
         :param filename:    The file to be read and parsed.
         :param file_obj:
         :type filename:     str
-        :return:            None
+        :return:            None, or "fail"
         """
         if file_obj:
             estr = file_obj
@@ -241,7 +268,8 @@ class Excellon(Geometry):
 
             estr = ""
             decoded = False
-            encodings_types = ('cp1252', 'cp850', 'utf-8', 'utf8')
+            # utf-8-sig first: it drops a BOM and a file that is not UTF-8 fails right away, then the code pages
+            encodings_types = ('utf-8-sig', 'cp1252', 'cp850')
             for enc in encodings_types:
                 try:
                     with open(filename, 'r', encoding=enc) as efile:
@@ -254,8 +282,10 @@ class Excellon(Geometry):
                 return 'fail'
 
         try:
-            self.parse_lines(estr)
+            if self.parse_lines(estr) == "fail":
+                return "fail"
         except Exception:
+            self.app.log.error("Excellon parse_file() failed:\n%s" % traceback.format_exc())
             return "fail"
 
     def parse_lines(self, elines):
@@ -267,736 +297,34 @@ class Excellon(Geometry):
         :return: None
         """
 
-        # State variables
-        current_tool = ""
-        in_header = False
-        headerless = False
-        current_x = None
-        current_y = None
-
-        slot_current_x = None
-        slot_current_y = None
-
-        name_tool = 0
-        allegro_warning = False
-        line_units_found = False
-
-        repeating_x = 0
-        repeating_y = 0
-        repeat = 0
-
-        line_units = ''
+        st = _ParseState()
 
         # ## Parsing starts here ## ##
         line_num = 0  # Line number
         eline = ""
+        src_parts = []
+        stopped = False
         try:
-            for eline in elines:
-                if self.app.abort_flag:
-                    # graceful abort requested by the user
-                    raise grace
-
-                line_num += 1
-                # self.app.log.debug("%3d %s" % (line_num, str(eline)))
-
-                self.source_file += eline
-
-                # Cleanup lines
-                eline = eline.strip(' \r\n')
-
-                # Excellon files and Gcode share some extensions therefore if we detect G20 or G21 it's GCODe
-                # and we need to exit from here
-                if self.detect_gcode_re.search(eline):
-                    self.app.log.warning("This is GCODE mark: %s" % eline)
-                    self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_('This is GCODE mark'), eline))
-                    return
-
-                # Header Begin (M48) #
-                if self.hbegin_re.search(eline):
-                    in_header = True
-                    headerless = False
-                    self.app.log.warning("Found start of the header: %s" % eline)
-                    continue
-
-                # Allegro Header Begin (;HEADER) #
-                if self.allegro_hbegin_re.search(eline):
-                    in_header = True
-                    allegro_warning = True
-                    self.app.log.warning("Found ALLEGRO start of the header: %s" % eline)
-                    continue
-
-                # Search for Header End #
-                # Since there might be comments in the header that include header end char (% or M95)
-                # we ignore the lines starting with ';' that contains such header end chars because it is not a
-                # real header end.
-                if self.comm_re.search(eline):
-                    match = self.tool_units_re.search(eline)
-                    if match:
-                        if line_units_found is False:
-                            line_units_found = True
-                            line_units = match.group(3)
-                            self.convert_units({"MILS": "IN", "MM": "MM"}[line_units])
-                            self.app.log.warning("Type of Allegro UNITS found inline in comments: %s" % line_units)
-
-                        if match.group(2):
-                            name_tool += 1
-
-                            # ----------  add a TOOL  ------------ #
-                            if name_tool not in self.tools:
-                                self.tools[name_tool] = {}
-                            if line_units == 'MILS':
-                                spec = {
-                                    'tooldia':  (float(match.group(2)) / 1000),
-                                    'solid_geometry': []
-                                }
-                                self.tools[name_tool]['tooldia'] = (float(match.group(2)) / 1000)
-                                self.app.log.debug("Tool definition: %d %s" % (name_tool, spec))
-                            else:
-                                spec = {
-                                    'tooldia': float(match.group(2)),
-                                    'solid_geometry': []
-                                }
-                                self.tools[name_tool]['tooldia'] = float(match.group(2))
-                                self.app.log.debug("Tool definition: %d %s" % (name_tool, spec))
-
-                            self.tools[name_tool]['solid_geometry'] = []
-                            continue
-                    # search for Altium Excellon Format / Sprint Layout who is included as a comment
-                    match = self.altium_format.search(eline)
-                    if match:
-                        self.excellon_format_upper_mm = match.group(1)
-                        self.excellon_format_lower_mm = match.group(2)
-
-                        self.excellon_format_upper_in = match.group(1)
-                        self.excellon_format_lower_in = match.group(2)
-                        aef_msg = "Excellon format preset found in comments: %s:%s" % (match.group(1), match.group(2))
-                        self.app.log.warning(aef_msg)
-                        continue
-                    else:
-                        self.app.log.warning("Line ignored, it's a comment: %s" % eline)
-                else:
-                    if self.hend_re.search(eline):
-                        if in_header is False or bool(self.tools) is False:
-                            self.app.log.warning("Found end of the header but there is no header: %s" % eline)
-                            self.app.log.warning("The only useful data in header are tools, units and format.")
-                            self.app.log.warning("Therefore we will create units and format based on defaults.")
-                            headerless = True
-                            try:
-                                self.convert_units({"INCH": "IN", "METRIC": "MM"}[self.excellon_units])
-                            except Exception as e:
-                                self.app.log.error("Units could not be converted: %s" % str(e))
-
-                        in_header = False
-                        # for Allegro type of Excellons we reset name_tool variable so we can reuse it for toolchange
-                        if allegro_warning is True:
-                            name_tool = 0
-                        self.app.log.warning("Found end of the header: %s" % eline)
-
-                        '''
-                        In case that the units were not found in the header, we have two choices:
-                        - one is to use the default value in the App Preferences
-                        - the other is to make an evaluation based on a threshold
-                        we process here the self.tools list and make a list with tools with diameter less or equal 
-                        with 0.1 and a list with tools with value greater than 0.1, 0.1 being the threshold value. 
-                        Most tools in Excellon are greater than 0.1mm therefore if most of the tools are under this 
-                        value it is safe to assume that the units are in INCH
-                        '''
-                        greater_tools = set()
-                        lower_tools = set()
-                        if not self.excellon_units_found and self.tools:
-                            for tool in self.tools:
-                                tool_dia = float(self.tools[tool]['tooldia'])
-                                lower_tools.add(tool_dia) if tool_dia <= 0.1 else greater_tools.add(tool_dia)
-
-                            assumed_units = "IN" if len(lower_tools) > len(greater_tools) else "MM"
-                            self.units = assumed_units
-                        continue
-
-                # ## Alternative units format M71/M72
-                # Supposed to be just in the body (yes, the body)
-                # but some put it in the header (PADS for example).
-                # Will detect anywhere. Occurrence will change the
-                # object's units.
-                match = self.meas_re.match(eline)
-                if match:
-                    self.units = {"1": "MM", "2": "IN"}[match.group(1)]
-
-                    # Modified for issue #80
-                    self.app.log.debug("ALternative M71/M72 units found, before conversion: %s" % self.units)
-                    self.convert_units(self.units)
-                    self.app.log.debug("ALternative M71/M72 units found, after conversion: %s" % self.units)
-                    if self.units == 'MM':
-                        self.app.log.warning("Excellon format preset is: %s:%s" %
-                                             (str(self.excellon_format_upper_mm), str(self.excellon_format_lower_mm)))
-                    else:
-                        self.app.log.warning("Excellon format preset is: %s:%s" %
-                                             (str(self.excellon_format_upper_in), str(self.excellon_format_lower_in)))
-                    continue
-
-                # ### Body ####
-                if not in_header:
-
-                    # ## Tool change ###
-                    match = self.toolsel_re.search(eline)
-                    if match:
-                        current_tool = int(match.group(1))
-                        self.app.log.debug("Tool change: %s" % current_tool)
-                        if bool(headerless):
-                            match = self.toolset_hl_re.search(eline)
-                            if match:
-                                name = int(match.group(1))
-                                try:
-                                    diam = float(match.group(2))
-                                except Exception:
-                                    # it's possible that tool definition has only tool number and no diameter info
-                                    # (those could be in another file like PCB Wizard do)
-                                    # then match.group(2) = None and float(None) will create the exception
-                                    # the below construction is so each tool will have a slightly different diameter
-                                    # starting with a default value, to allow Excellon editing after that
-                                    self.diameterless = True
-                                    self.app.inform.emit('[WARNING] %s%s %s' %
-                                                         (_("No tool diameter info's. See shell.\n"
-                                                            "A tool change event: T"),
-                                                          str(current_tool),
-                                                          _("was found but the Excellon file "
-                                                            "have no informations regarding the tool "
-                                                            "diameters therefore the application will try to load it "
-                                                            "by using some 'fake' diameters.\n"
-                                                            "The user needs to edit the resulting Excellon object and "
-                                                            "change the diameters to reflect the real diameters.")
-                                                          )
-                                                         )
-
-                                    if self.excellon_units == 'MM':
-                                        diam = self.toolless_diam + (int(current_tool) - 1) / 100
-                                    else:
-                                        diam = (self.toolless_diam + (int(current_tool) - 1) / 100) / 25.4
-
-                                # ----------  add a TOOL  ------------ #
-                                spec = {"tooldia": diam, 'solid_geometry': []}
-                                if name not in self.tools:
-                                    self.tools[name] = {}
-                                self.tools[name]['tooldia'] = diam
-                                self.tools[name]['solid_geometry'] = []
-
-                                self.app.log.debug("Tool definition out of header: %s %s" % (name, spec))
-
-                        continue
-
-                    # ## Allegro Type Tool change ###
-                    if allegro_warning is True:
-                        match = self.absinc_re.search(eline)
-                        match1 = self.stop_re.search(eline)
-                        if match or match1:
-                            name_tool += 1
-                            current_tool = name_tool
-                            self.app.log.debug("Tool change for Allegro type of Excellon: %d" % current_tool)
-                            continue
-
-                    # ## Slots parsing for drilled slots (contain G85)
-                    # a Excellon drilled slot line may look like this:
-                    # X01125Y0022244G85Y0027756
-                    match = self.slots_re.search(eline)
-                    if match:
-                        # signal that there are milling slots operations
-                        self.defaults['excellon_drills'] = False
-
-                        # the slot start coordinates group is to the left of G85 command (group(1) )
-                        # the slot stop coordinates group is to the right of G85 command (group(2) )
-                        start_coords_match = match.group(1)
-                        stop_coords_match = match.group(2)
-
-                        # Slot coordinates without period # ##
-                        # get the coordinates for slot start and for slot stop into variables
-                        start_coords_noperiod = self.coordsnoperiod_re.search(start_coords_match)
-                        stop_coords_noperiod = self.coordsnoperiod_re.search(stop_coords_match)
-                        if start_coords_noperiod:
-                            try:
-                                slot_start_x = self.parse_number(start_coords_noperiod.group(1))
-                                slot_current_x = slot_start_x
-                            except TypeError:
-                                slot_start_x = slot_current_x
-                            except Exception:
-                                return
-
-                            try:
-                                slot_start_y = self.parse_number(start_coords_noperiod.group(2))
-                                slot_current_y = slot_start_y
-                            except TypeError:
-                                slot_start_y = slot_current_y
-                            except Exception:
-                                return
-
-                            try:
-                                slot_stop_x = self.parse_number(stop_coords_noperiod.group(1))
-                                slot_current_x = slot_stop_x
-                            except TypeError:
-                                slot_stop_x = slot_current_x
-                            except Exception:
-                                return
-
-                            try:
-                                slot_stop_y = self.parse_number(stop_coords_noperiod.group(2))
-                                slot_current_y = slot_stop_y
-                            except TypeError:
-                                slot_stop_y = slot_current_y
-                            except Exception:
-                                return
-
-                            if (slot_start_x is None or slot_start_y is None or
-                                    slot_stop_x is None or slot_stop_y is None):
-                                self.app.log.error("Slots are missing some or all coordinates.")
-                                continue
-
-                            # we have a slot
-                            self.app.log.debug('Parsed a slot with coordinates: ' + str([slot_start_x,
-                                                                                         slot_start_y, slot_stop_x,
-                                                                                         slot_stop_y]))
-
-                            # store current tool diameter as slot diameter
-                            slot_dia = 0.05
-                            try:
-                                slot_dia = float(self.tools[current_tool]['tooldia'])
-                            except Exception:
-                                pass
-                            self.app.log.debug(
-                                'Milling/Drilling slot with tool %s, diam=%f' % (
-                                    current_tool,
-                                    slot_dia
-                                )
-                            )
-
-                            # ----------  add a slot  ------------ #
-                            slot = (
-                                Point(slot_start_x, slot_start_y),
-                                Point(slot_stop_x, slot_stop_y)
-                            )
-                            if current_tool not in self.tools:
-                                self.tools[current_tool] = {}
-                            if 'slots' in self.tools[current_tool]:
-                                self.tools[current_tool]['slots'].append(slot)
-                            else:
-                                self.tools[current_tool]['slots'] = [slot]
-                            continue
-
-                        # Slot coordinates with period: Use literally. ###
-                        # get the coordinates for slot start and for slot stop into variables
-                        start_coords_period = self.coordsperiod_re.search(start_coords_match)
-                        stop_coords_period = self.coordsperiod_re.search(stop_coords_match)
-                        if start_coords_period:
-
-                            try:
-                                slot_start_x = float(start_coords_period.group(1))
-                                slot_current_x = slot_start_x
-                            except TypeError:
-                                slot_start_x = slot_current_x
-                            except Exception:
-                                return
-
-                            try:
-                                slot_start_y = float(start_coords_period.group(2))
-                                slot_current_y = slot_start_y
-                            except TypeError:
-                                slot_start_y = slot_current_y
-                            except Exception:
-                                return
-
-                            try:
-                                slot_stop_x = float(stop_coords_period.group(1))
-                                slot_current_x = slot_stop_x
-                            except TypeError:
-                                slot_stop_x = slot_current_x
-                            except Exception:
-                                return
-
-                            try:
-                                slot_stop_y = float(stop_coords_period.group(2))
-                                slot_current_y = slot_stop_y
-                            except TypeError:
-                                slot_stop_y = slot_current_y
-                            except Exception:
-                                return
-
-                            if (slot_start_x is None or slot_start_y is None or
-                                    slot_stop_x is None or slot_stop_y is None):
-                                self.app.log.error("Slots are missing some or all coordinates.")
-                                continue
-
-                            # we have a slot
-                            self.app.log.debug('Parsed a slot with coordinates: ' + str([slot_start_x,
-                                                                                         slot_start_y, slot_stop_x,
-                                                                                         slot_stop_y]))
-
-                            # store current tool diameter as slot diameter
-                            slot_dia = 0.05
-                            try:
-                                slot_dia = float(self.tools[current_tool]['tooldia'])
-                            except Exception:
-                                pass
-                            self.app.log.debug(
-                                'Milling/Drilling slot with tool %s, diam=%f' % (
-                                    current_tool,
-                                    slot_dia
-                                )
-                            )
-
-                            # ----------  add a Slot  ------------ #
-                            slot = (
-                                Point(slot_start_x, slot_start_y),
-                                Point(slot_stop_x, slot_stop_y)
-                            )
-                            if current_tool not in self.tools:
-                                self.tools[current_tool] = {}
-                            if 'slots' in self.tools[current_tool]:
-                                self.tools[current_tool]['slots'].append(slot)
-                            else:
-                                self.tools[current_tool]['slots'] = [slot]
-                        continue
-
-                    # ## Coordinates without period # ##
-                    match = self.coordsnoperiod_re.search(eline)
-                    if match:
-                        matchr = self.repeat_re.search(eline)
-                        if matchr:  # if we have a repeat command
-                            repeat = int(matchr.group(1))
-
-                            if match.group(1):
-                                repeating_x = self.parse_number(match.group(1))
-                            else:
-                                repeating_x = 0
-
-                            if match.group(2):
-                                repeating_y = self.parse_number(match.group(2))
-                            else:
-                                repeating_y = 0
-
-                            coordx = current_x
-                            coordy = current_y
-
-                            while repeat > 0:
-                                if repeating_x:
-                                    coordx += repeating_x
-                                if repeating_y:
-                                    coordy += repeating_y
-
-                                # ----------  add a Drill  ------------ #
-                                if current_tool not in self.tools:
-                                    self.tools[current_tool] = {}
-                                if 'drills' in self.tools[current_tool]:
-                                    self.tools[current_tool]['drills'].append(Point((coordx, coordy)))
-                                else:
-                                    self.tools[current_tool]['drills'] = [Point((coordx, coordy))]
-
-                                repeat -= 1
-                            current_x = coordx
-                            current_y = coordy
-                            continue
-
-                        else:   # those are normal coordinates
-                            try:
-                                x = self.parse_number(match.group(1))
-                                current_x = x
-                            except TypeError:
-                                x = current_x
-                            except Exception:
-                                return
-
-                            try:
-                                y = self.parse_number(match.group(2))
-                                current_y = y
-                            except TypeError:
-                                y = current_y
-                            except Exception:
-                                return
-
-                            if x is None or y is None:
-                                self.app.log.error("Missing coordinates")
-                                continue
-
-                            # ## Excellon Routing parse
-                            if len(re.findall("G00", eline)) > 0:
-                                self.match_routing_start = 'G00'
-
-                                # signal that there are milling slots operations
-                                self.defaults['excellon_drills'] = False
-
-                                self.routing_flag = 0
-                                slot_start_x = x
-                                slot_start_y = y
-                                continue
-
-                            if self.routing_flag == 0:
-                                if len(re.findall("G01", eline)) > 0:
-                                    self.match_routing_stop = 'G01'
-
-                                    # signal that there are milling slots operations
-                                    self.defaults['excellon_drills'] = False
-
-                                    self.routing_flag = 1
-                                    slot_stop_x = x
-                                    slot_stop_y = y
-
-                                    # ----------  add a Slot  ------------ #
-                                    slot = (
-                                        Point(slot_start_x, slot_start_y),
-                                        Point(slot_stop_x, slot_stop_y)
-                                    )
-                                    if current_tool not in self.tools:
-                                        self.tools[current_tool] = {}
-                                    if 'slots' in self.tools[current_tool]:
-                                        self.tools[current_tool]['slots'].append(slot)
-                                    else:
-                                        self.tools[current_tool]['slots'] = [slot]
-                                    continue
-
-                            if self.match_routing_start is None and self.match_routing_stop is None:
-                                # signal that there are drill operations
-                                self.defaults['excellon_drills'] = True
-
-                                # ----------  add a Drill  ------------ #
-                                if current_tool not in self.tools:
-                                    self.tools[current_tool] = {}
-                                if 'drills' in self.tools[current_tool]:
-                                    self.tools[current_tool]['drills'].append(Point((x, y)))
-                                else:
-                                    self.tools[current_tool]['drills'] = [Point((x, y))]
-                                # self.app.log.debug("{:15} {:8} {:8}".format(eline, x, y))
-                                continue
-
-                    # ## Coordinates with period: Use literally. # ##
-                    match = self.coordsperiod_re.search(eline)
-                    if match:
-                        matchr = self.repeat_re.search(eline)
-                        if matchr:
-                            repeat = int(matchr.group(1))
-
-                    if match:
-                        # signal that there are drill operations
-                        self.defaults['excellon_drills'] = True
-                        try:
-                            x = float(match.group(1))
-                            repeating_x = current_x
-                            current_x = x
-                        except TypeError:
-                            x = current_x
-                            repeating_x = 0
-
-                        try:
-                            y = float(match.group(2))
-                            repeating_y = current_y
-                            current_y = y
-                        except TypeError:
-                            y = current_y
-                            repeating_y = 0
-
-                        if x is None or y is None:
-                            self.app.log.error("Missing coordinates")
-                            continue
-
-                        # ## Excellon Routing parse
-                        if len(re.findall("G00", eline)) > 0:
-                            self.match_routing_start = 'G00'
-
-                            # signal that there are milling slots operations
-                            self.defaults['excellon_drills'] = False
-
-                            self.routing_flag = 0
-                            slot_start_x = x
-                            slot_start_y = y
-                            continue
-
-                        if self.routing_flag == 0:
-                            if len(re.findall("G01", eline)) > 0:
-                                self.match_routing_stop = 'G01'
-
-                                # signal that there are milling slots operations
-                                self.defaults['excellon_drills'] = False
-
-                                self.routing_flag = 1
-                                slot_stop_x = x
-                                slot_stop_y = y
-
-                                # ----------  add a Slot  ------------ #
-                                slot = (
-                                    Point(slot_start_x, slot_start_y),
-                                    Point(slot_stop_x, slot_stop_y)
-                                )
-                                if current_tool not in self.tools:
-                                    self.tools[current_tool] = {}
-                                if 'slots' in self.tools[current_tool]:
-                                    self.tools[current_tool]['slots'].append(slot)
-                                else:
-                                    self.tools[current_tool]['slots'] = [slot]
-                                continue
-
-                        if self.match_routing_start is None and self.match_routing_stop is None:
-                            # signal that there are drill operations
-                            if repeat == 0:
-                                # signal that there are drill operations
-                                self.defaults['excellon_drills'] = True
-
-                                # ----------  add a Drill  ------------ #
-                                if current_tool not in self.tools:
-                                    self.tools[current_tool] = {}
-                                if 'drills' in self.tools[current_tool]:
-                                    self.tools[current_tool]['drills'].append(Point((x, y)))
-                                else:
-                                    self.tools[current_tool]['drills'] = [Point((x, y))]
-                            else:
-                                coordx = x
-                                coordy = y
-                                while repeat > 0:
-                                    if repeating_x:
-                                        coordx = (repeat * x) + repeating_x
-                                    if repeating_y:
-                                        coordy = (repeat * y) + repeating_y
-
-                                    # ----------  add a Drill  ------------ #
-                                    if current_tool not in self.tools:
-                                        self.tools[current_tool] = {}
-                                    if 'drills' in self.tools[current_tool]:
-                                        self.tools[current_tool]['drills'].append(Point((coordx, coordy)))
-                                    else:
-                                        self.tools[current_tool]['drills'] = [Point((coordx, coordy))]
-
-                                    repeat -= 1
-                            repeating_x = repeating_y = 0
-                            # self.app.log.debug("{:15} {:8} {:8}".format(eline, x, y))
-                            continue
-
-                # ### Header ####
-                if in_header:
-
-                    # ## Tool definitions # ##
-                    match = self.toolset_re.search(eline)
-                    if match:
-                        # ----------  add a TOOL  ------------ #
-                        name = int(match.group(1))
-                        spec = {"C": float(match.group(2)), 'solid_geometry': []}
-                        if name not in self.tools:
-                            self.tools[name] = {}
-                        self.tools[name]['tooldia'] = float(match.group(2))
-                        self.tools[name]['solid_geometry'] = []
-
-                        self.app.log.debug("Tool definition: %s %s" % (name, spec))
-                        continue
-
-                    # ## Units and number format # ##
-                    match = self.units_re.match(eline)
-                    if match:
-                        self.units = {"METRIC": "MM", "INCH": "IN"}[match.group(1)]
-                        self.excellon_units_found = self.units
-
-                        self.zeros = match.group(2)  # "T" or "L". Might be empty
-                        self.excellon_format = match.group(3)
-                        if self.excellon_format:
-                            upper = len(self.excellon_format.partition('.')[0])
-                            lower = len(self.excellon_format.partition('.')[2])
-                            if self.units == 'MM':
-                                self.excellon_format_upper_mm = upper
-                                self.excellon_format_lower_mm = lower
-                            else:
-                                self.excellon_format_upper_in = upper
-                                self.excellon_format_lower_in = lower
-
-                        # Modified for issue #80
-                        self.app.log.warning("UNITS found inline - Value before conversion: %s" % self.units)
-                        self.convert_units(self.units)
-                        self.app.log.warning("UNITS found inline - Value after conversion: %s" % self.units)
-
-                        if self.units == 'MM':
-                            b_msg = "Excellon format preset is: %s:%s" % \
-                                    (str(self.excellon_format_upper_mm), str(self.excellon_format_lower_mm))
-                            self.app.log.warning(b_msg)
-                        else:
-                            a_msg = "Excellon format preset is: %s:%s" % \
-                                    (str(self.excellon_format_upper_in), str(self.excellon_format_lower_in))
-                            self.app.log.warning(a_msg)
-                        self.app.log.warning("Type of ZEROS found inline, in header: %s" % self.zeros)
-                        continue
-
-                    # Search for units type again it might be alone on the line
-                    if "INCH" in eline:
-                        line_units = "IN"
-                        # Modified for issue #80
-                        f_msg = "Type of UNITS found inline, in header, before conversion: %s" % line_units
-                        self.app.log.warning(f_msg)
-                        self.convert_units(line_units)
-                        self.app.log.warning("Type of UNITS found inline, in header, after conversion: %s" % self.units)
-                        ff_msg = "Excellon format preset is: %s:%s" % \
-                                 (str(self.excellon_format_upper_in), str(self.excellon_format_lower_in))
-                        self.app.log.warning(ff_msg)
-                        self.excellon_units_found = "IN"
-                        continue
-                    elif "METRIC" in eline:
-                        line_units = "MM"
-                        # Modified for issue #80
-                        f_msg = "Type of UNITS found inline, in header, before conversion: %s" % line_units
-                        self.app.log.warning(f_msg)
-                        self.convert_units(line_units)
-                        self.app.log.warning("Type of UNITS found inline, in header, after conversion: %s" % self.units)
-                        ff_msg = "Excellon format preset is: %s:%s" % \
-                                 (str(self.excellon_format_upper_mm), str(self.excellon_format_lower_mm))
-                        self.app.log.warning(ff_msg)
-                        self.excellon_units_found = "MM"
-                        continue
-
-                    # Search for zeros type again because it might be alone on the line
-                    match = re.search(r'[LT]Z', eline)
-                    if match:
-                        self.zeros = match.group()
-                        self.app.log.warning("Type of ZEROS found: %s" % self.zeros)
-                        continue
-
-                # ## Units and number format outside header# ##
-                match = self.units_re.match(eline)
-                if match:
-                    self.units = {"METRIC": "MM", "INCH": "IN"}[match.group(1)]
-                    self.excellon_units_found = self.units
-
-                    self.zeros = match.group(2)  # "T" or "L". Might be empty
-                    self.excellon_format = match.group(3)
-                    if self.excellon_format:
-                        upper = len(self.excellon_format.partition('.')[0])
-                        lower = len(self.excellon_format.partition('.')[2])
-                        if self.units == 'MM':
-                            self.excellon_format_upper_mm = upper
-                            self.excellon_format_lower_mm = lower
-                        else:
-                            self.excellon_format_upper_in = upper
-                            self.excellon_format_lower_in = lower
-
-                    # Modified for issue #80
-                    c_msg = "Type of UNITS found outside header, inline before conversion: %s" % self.units
-                    self.app.log.warning(c_msg)
-                    self.convert_units(self.units)
-                    self.app.log.warning("Type of UNITS found outside header, inline after conversion: %s" % self.units)
-
-                    if self.units == 'MM':
-                        cc_msg = "Excellon format preset is: %s:%s" % \
-                                 (str(self.excellon_format_upper_mm), str(self.excellon_format_lower_mm))
-                        self.app.log.warning(cc_msg)
-                    else:
-                        cc_msg = "Excellon format preset is: %s:%s" % \
-                                 (str(self.excellon_format_upper_in), str(self.excellon_format_lower_in))
-                        self.app.log.warning(cc_msg)
-                    self.app.log.warning("Type of ZEROS found outside header, inline: %s" % self.zeros)
-                    continue
-
-                self.app.log.warning("Line ignored: %s" % eline)
-
-            # make sure that since we are in headerless mode, we convert the tools only after the file parsing
-            # is finished since the tools definitions are spread in the Excellon body. We use as units the value
-            # from self.defaults['excellon_units']
-
-            # the data structure of the Excellon object has to include bot the 'drills' and the 'slots' keys otherwise
-            # I will need to test for them everywhere.
-            # Even if there are not drills or slots I just add the storage there with an empty list
-            for tool in self.tools:
-                if 'drills' not in self.tools[tool]:
-                    self.tools[tool]['drills'] = []
-                if 'slots' not in self.tools[tool]:
-                    self.tools[tool]['slots'] = []
+            try:
+                for eline in elines:
+                    if self.app.abort_flag:
+                        # graceful abort requested by the user
+                        raise grace
+
+                    line_num += 1
+                    src_parts.append(eline)
+
+                    if self._parse_line(st, eline):
+                        stopped = True
+                        break
+
+                if not stopped:
+                    self._finish_parse(st)
+            finally:
+                # one join instead of a string concatenation per line
+                self.source_file += ''.join(src_parts)
+                if not st.stored:
+                    self._store_holes(st)
 
             self.app.log.info("Zeros: %s, Units %s." % (self.zeros, self.units))
         except Exception:
@@ -1012,6 +340,790 @@ class Excellon(Geometry):
 
             return "fail"
 
+    # ############################################################################################################
+    # ###################################### line dispatch #######################################################
+    # ############################################################################################################
+    def _parse_line(self, st, raw):
+        """
+        Parses one line of the file.
+
+        :param st:  the parse state
+        :param raw: the line, as read
+        :return:    True if the parsing has to stop (this is not an Excellon file)
+        """
+        eline = raw.strip(' \t\r\n﻿')
+        if not eline:
+            return False
+
+        c0 = eline[0]
+
+        # fast path: a plain drill hit in drill mode (the vast majority of the lines)
+        if (c0 == 'X' or c0 == 'Y') and st.mode == 0 and not st.in_header:
+            match = self.drill_fast_re.match(eline)
+            if match:
+                self._drill_line(st, match.group(1), match.group(2))
+                return False
+
+        if c0 == ';':
+            self._comment(st, eline)
+            return False
+
+        # the Excellon commands are upper case; only the comments keep their case
+        eline = eline.upper()
+
+        # Excellon files and Gcode share some extensions therefore if we detect G20 or G21 it's GCODe
+        # and we need to exit from here
+        if self.detect_gcode_re.search(eline):
+            self.app.log.warning("This is GCODE mark: %s" % eline)
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_('This is GCODE mark'), eline))
+            return True
+
+        # Header Begin (M48) #
+        if self.hbegin_re.search(eline):
+            st.in_header = True
+            st.header_end_seen = False
+            self.app.log.warning("Found start of the header: %s" % eline)
+            return False
+
+        # Header End (% or M95) #
+        if self.hend_re.search(eline):
+            self._header_end(st, eline)
+            return False
+
+        # ## Alternative units format M71/M72
+        # Supposed to be just in the body (yes, the body) but some put it in the header (PADS for example).
+        # Will detect anywhere. Occurrence will change the object's units.
+        match = self.meas_re.match(eline)
+        if match:
+            units = {"1": "MM", "2": "IN"}[match.group(1)]
+            self._set_file_units(st, units)
+            self.excellon_units_found = units
+            st.units_resolved = True
+            self.app.log.debug("Alternative M71/M72 units found: %s" % self.units)
+            return False
+
+        # canned text and messages: nothing to do with the geometry
+        if self.canned_re.match(eline):
+            return False
+
+        match = self.command_re.match(eline)
+        if match:
+            self._command(st, match)
+            return False
+
+        if st.in_header:
+            self._header_line(st, eline)
+        else:
+            self._body_line(st, eline)
+        return False
+
+    def _comment(self, st, eline):
+        """
+        A comment line. Some CAM programs hide information in them: Allegro tools and units, the Altium / KiCad
+        number format, the plated / non plated tags. The rest is ignored.
+        """
+        # Allegro header
+        if self.allegro_hbegin_re.match(eline):
+            st.in_header = True
+            st.allegro = True
+            self.app.log.warning("Found ALLEGRO start of the header: %s" % eline)
+            return
+
+        # Allegro tool and units
+        match = self.tool_units_re.search(eline)
+        if match:
+            if st.line_units_found is False:
+                st.line_units_found = True
+                st.line_units = match.group(3)
+                units = {"MILS": "IN", "MM": "MM"}[st.line_units]
+                self._set_file_units(st, units)
+                self.excellon_units_found = units
+                st.units_resolved = True
+                self.app.log.warning("Type of Allegro UNITS found inline in comments: %s" % st.line_units)
+
+            if match.group(2):
+                st.name_tool += 1
+                dia = float(match.group(2))
+                if st.line_units == 'MILS':
+                    dia /= 1000
+                self.tools[st.name_tool] = {'tooldia': dia, 'solid_geometry': []}
+                if self.nonplated_re.search(eline):
+                    self.tools[st.name_tool]['plated'] = False
+                elif self.plated_re.search(eline):
+                    self.tools[st.name_tool]['plated'] = True
+                return
+
+        # search for Altium Excellon Format / Sprint Layout who is included as a comment
+        match = self.altium_format.search(eline)
+        if match:
+            self.excellon_format_upper_mm = match.group(1)
+            self.excellon_format_lower_mm = match.group(2)
+
+            self.excellon_format_upper_in = match.group(1)
+            self.excellon_format_lower_in = match.group(2)
+            self.app.log.warning("Excellon format preset found in comments: %s:%s" % (match.group(1), match.group(2)))
+            return
+
+        # KiCad: ; FORMAT={3:3/ absolute / metric / decimal}
+        match = self.kicad_format_re.match(eline)
+        if match:
+            upper, lower = match.group(1), match.group(2)
+            text = eline.upper()
+            if 'METRIC' in text or 'INCH' not in text:
+                self.excellon_format_upper_mm = upper
+                self.excellon_format_lower_mm = lower
+            if 'INCH' in text or 'METRIC' not in text:
+                self.excellon_format_upper_in = upper
+                self.excellon_format_lower_in = lower
+            return
+
+        # plated / non plated tags
+        match = self.attr_plated_re.match(eline)
+        if match:
+            plated = match.group(2) is None
+            if match.group(1).upper() == 'F':
+                st.file_plated = plated
+            else:
+                st.aper_plated = plated
+            return
+        if self.attr_delete_re.match(eline):
+            st.aper_plated = None
+            return
+        match = self.type_plated_re.match(eline)
+        if match:
+            st.file_plated = match.group(1) is None
+            return
+
+        self.app.log.debug("Line ignored, it's a comment: %s" % eline)
+
+    def _header_end(self, st, eline):
+        """
+        End of the header (M95 or %). The % in the body (rewind and stop) is ignored.
+        """
+        if st.in_header is False and st.header_end_seen:
+            return
+
+        if st.in_header is False or bool(self.tools) is False:
+            self.app.log.warning("Found end of the header but there is no header: %s" % eline)
+            self.app.log.warning("The only useful data in header are tools, units and format.")
+            self.app.log.warning("Therefore we will create units and format based on defaults.")
+            # the units found in the file win over the units in the preferences
+            if self.excellon_units_found is None:
+                units = self._preference_units()
+                if units:
+                    self._set_file_units(st, units)
+
+        st.in_header = False
+        st.header_end_seen = True
+        st.units_resolved = True
+        # for Allegro type of Excellons we reset name_tool variable so we can reuse it for toolchange
+        if st.allegro is True:
+            st.name_tool = 0
+        self.app.log.warning("Found end of the header: %s" % eline)
+
+        # In case that the units were not found in the file, we make an evaluation based on a threshold.
+        # Most tools in Excellon are greater than 0.1mm therefore if most of the tools are under this
+        # value it is safe to assume that the units are in INCH
+        if self.excellon_units_found is None and self.tools:
+            self._vote_units()
+
+    def _preference_units(self):
+        """The units from the preferences as 'IN' / 'MM', None if they are not known."""
+        return {"INCH": "IN", "METRIC": "MM", "IN": "IN", "MM": "MM"}.get(str(self.excellon_units).upper())
+
+    def _vote_units(self):
+        """Assumes the units of the file from the tool diameters (no conversion, the numbers are the file's)."""
+        greater_tools = set()
+        lower_tools = set()
+        for tool in self.tools:
+            tool_dia = float(self.tools[tool]['tooldia'])
+            lower_tools.add(tool_dia) if tool_dia <= 0.1 else greater_tools.add(tool_dia)
+        self.units = "IN" if len(lower_tools) > len(greater_tools) else "MM"
+
+    def _resolve_units(self, st):
+        """The first hole came and the file did not say the units (no header end): preferences or tool diameters."""
+        st.units_resolved = True
+        if self.excellon_units_found is not None:
+            return
+        if self.tools:
+            self._vote_units()
+        else:
+            units = self._preference_units()
+            if units:
+                self._set_file_units(st, units)
+
+    def _set_file_units(self, st, units):
+        """
+        The numbers that come after this point are in `units`. What was already read is converted so that
+        everything stored has the same units (a file can switch with M71 / M72 or INCH / METRIC in the body).
+        """
+        if units == self.units:
+            return
+        if self.excellon_units_found is not None or st.drills or st.slots:
+            factor = 25.4 if units == 'MM' else 1 / 25.4
+            for tool in self.tools.values():
+                tool['tooldia'] *= factor
+            for tool, pts in st.drills.items():
+                st.drills[tool] = [(x * factor, y * factor) for x, y in pts]
+            for tool, segs in st.slots.items():
+                st.slots[tool] = [(a * factor, b * factor, c * factor, d * factor) for a, b, c, d in segs]
+            if st.cx is not None:
+                st.cx *= factor
+            if st.cy is not None:
+                st.cy *= factor
+            st.ox *= factor
+            st.oy *= factor
+        self.units = units
+
+    def _units_line(self, st, match):
+        """INCH / METRIC line, with the optional zeros and number format."""
+        units = {"METRIC": "MM", "INCH": "IN"}[match.group(1)]
+        self._set_file_units(st, units)
+        self.excellon_units_found = units
+        st.units_resolved = True
+
+        # a bare INCH / METRIC does not say anything about the zeros
+        if match.group(2):
+            self.zeros = match.group(2)  # "T" or "L"
+        self.excellon_format = match.group(3)
+        if self.excellon_format:
+            upper = len(self.excellon_format.partition('.')[0])
+            lower = len(self.excellon_format.partition('.')[2])
+            if self.units == 'MM':
+                self.excellon_format_upper_mm = upper
+                self.excellon_format_lower_mm = lower
+            else:
+                self.excellon_format_upper_in = upper
+                self.excellon_format_lower_in = lower
+
+        self.app.log.warning("UNITS found inline: %s, ZEROS: %s" % (self.units, self.zeros))
+        if self.units == 'MM':
+            self.app.log.warning("Excellon format preset is: %s:%s" %
+                                 (str(self.excellon_format_upper_mm), str(self.excellon_format_lower_mm)))
+        else:
+            self.app.log.warning("Excellon format preset is: %s:%s" %
+                                 (str(self.excellon_format_upper_in), str(self.excellon_format_lower_in)))
+
+    def _command(self, st, match):
+        """VER, FMAT and ICI commands (header or body)."""
+        name, value = match.group(1), match.group(2)
+        if name == 'ICI':
+            st.incremental = (value == 'ON')
+        elif name == 'FMAT':
+            self.fmat = int(value) if value.isdigit() else None
+        else:
+            self.ver = int(value) if value.isdigit() else None
+
+    def _header_line(self, st, eline):
+        """A line of the header: tool definitions, units, zeros. The rest is ignored."""
+        # ## Tool definitions # ##
+        match = self.toolsel_re.match(eline)
+        if match:
+            params = self._tool_params(eline[match.end():])
+            if 'C' in params:
+                self._define_tool(st, int(match.group(1)), params['C'])
+            elif params:
+                self.app.log.warning("Tool without diameter in the header, ignored: %s" % eline)
+            return
+
+        # ## Units and number format # ##
+        match = self.units_re.match(eline)
+        if match:
+            self._units_line(st, match)
+            return
+
+        # Search for units type again it might be alone on the line
+        if "INCH" in eline:
+            self._set_file_units(st, "IN")
+            self.excellon_units_found = "IN"
+            st.units_resolved = True
+            self.app.log.warning("Type of UNITS found inline, in header: IN. Excellon format preset is: %s:%s" %
+                                 (str(self.excellon_format_upper_in), str(self.excellon_format_lower_in)))
+            return
+        if "METRIC" in eline:
+            self._set_file_units(st, "MM")
+            self.excellon_units_found = "MM"
+            st.units_resolved = True
+            self.app.log.warning("Type of UNITS found inline, in header: MM. Excellon format preset is: %s:%s" %
+                                 (str(self.excellon_format_upper_mm), str(self.excellon_format_lower_mm)))
+            return
+
+        # Search for zeros type again because it might be alone on the line
+        match = re.search(r'[LT]Z', eline)
+        if match:
+            self.zeros = match.group()
+            self.app.log.warning("Type of ZEROS found: %s" % self.zeros)
+            return
+
+        self.app.log.debug("Line ignored: %s" % eline)
+
+    def _tool_params(self, text):
+        """The parameters of a tool line (C diameter, F feed, S speed, B, H, Z), in any order."""
+        params = {}
+        for key, value in self.tool_param_re.findall(text):
+            try:
+                params[key] = float(value)
+            except ValueError:
+                pass
+        return params
+
+    def _define_tool(self, st, number, dia, select=False):
+        """
+        A tool definition: in the header, or inline in the body (T1C0.8).
+        A tool that already drilled with another diameter is not changed: the new diameter gets a new tool.
+        """
+        key = st.tool_map.get(number, number)
+        tool = self.tools.get(key)
+        if tool is not None and abs(tool['tooldia'] - dia) > 1e-9 and (st.drills.get(key) or st.slots.get(key)):
+            new_key = max(max(self.tools), max(st.tool_map.values(), default=0)) + 1
+            st.tool_map[number] = new_key
+            key = new_key
+            tool = None
+        if tool is None:
+            tool = self.tools[key] = {'tooldia': dia, 'solid_geometry': []}
+            if st.aper_plated is not None:
+                tool['plated'] = st.aper_plated
+        else:
+            tool['tooldia'] = dia
+        self.app.log.debug("Tool definition: %s %s" % (key, dia))
+        if select:
+            st.tool = key
+
+    def _use_tool(self, st):
+        """The selected tool, created with a placeholder diameter if the file does not define it. None: no tool."""
+        tool = st.tool
+        if tool is None:
+            return None
+        if tool not in self.tools:
+            self._placeholder_tool(tool)
+        return tool
+
+    def _placeholder_tool(self, number):
+        # it's possible that the Excellon file has no tool diameters (those could be in another file like PCB Wizard
+        # does). Each tool will have a slightly different diameter starting with a default value, to allow Excellon
+        # editing after that
+        self.diameterless = True
+        if self.units == 'MM':
+            diam = self.toolless_diam + (int(number) - 1) / 100
+        else:
+            diam = (self.toolless_diam + (int(number) - 1) / 100) / 25.4
+        self.tools[number] = {'tooldia': diam, 'solid_geometry': []}
+        self.app.inform.emit('[WARNING] %s%s %s' %
+                             (_("No tool diameter info's. See shell.\n"
+                                "A tool change event: T"),
+                              str(number),
+                              _("was found but the Excellon file "
+                                "have no informations regarding the tool "
+                                "diameters therefore the application will try to load it "
+                                "by using some 'fake' diameters.\n"
+                                "The user needs to edit the resulting Excellon object and "
+                                "change the diameters to reflect the real diameters.")
+                              )
+                             )
+
+    # ############################################################################################################
+    # ########################################## body ############################################################
+    # ############################################################################################################
+    def _body_line(self, st, eline):
+        # ## Units and number format outside the header # ##
+        if eline.startswith(('INCH', 'METRIC')):
+            match = self.units_re.match(eline)
+            if match:
+                self._units_line(st, match)
+                return
+
+        # ## Tool change ###
+        match = self.toolsel_re.match(eline)
+        if match:
+            number = int(match.group(1))
+            params = self._tool_params(eline[match.end():])
+            if number == 0:
+                # T0: no tool
+                st.tool = None
+            elif 'C' in params:
+                # the tool is defined inline (headerless files, or a new diameter for the tool)
+                self._define_tool(st, number, params['C'], select=True)
+            else:
+                st.tool = st.tool_map.get(number, number)
+            self.app.log.debug("Tool change: %s" % st.tool)
+            return
+
+        # ## Allegro Type Tool change ###
+        if st.allegro is True:
+            if self.absinc_re.search(eline) or self.stop_re.search(eline):
+                st.name_tool += 1
+                st.tool = st.name_tool
+                self.app.log.debug("Tool change for Allegro type of Excellon: %d" % st.tool)
+                return
+
+        if not self.line_re.match(eline):
+            if not self.benign_re.match(eline):
+                st.ignored += 1
+            self.app.log.warning("Line ignored: %s" % eline)
+            return
+
+        # split the tokens: before the G85 (or all of them) and after it (the end of a drilled slot)
+        gcodes = []
+        mcodes = []
+        pre = {}
+        post = {}
+        target = pre
+        repeat = None
+        for letter, value in self.token_re.findall(eline):
+            if letter == 'G':
+                gcodes.append(int(value) if value.isdigit() else -1)
+                if gcodes[-1] == 85:
+                    target = post
+            elif letter == 'M':
+                mcodes.append(int(value) if value.isdigit() else -1)
+            elif letter == 'R':
+                repeat = value
+            else:
+                target[letter] = value
+
+        # ## M codes ##
+        for code in mcodes:
+            if code == 15:
+                pass    # tool down: the cut is done by the G01 / G02 / G03
+            elif code == 16 or code == 17:
+                # tool up: end of the route
+                st.mode = 0
+            elif code == 25:
+                st.recording = []
+                st.pattern_origin = (st.cx or 0.0, st.cy or 0.0)
+            elif code == 1:
+                if st.recording is not None:
+                    st.pattern = st.recording
+                    st.recording = None
+        if 2 in mcodes:
+            # M02 X..Y..: repeat the pattern with that offset; M70 / M80 / M90 on the same line swap or mirror the copy
+            orient = {code for code in mcodes if code in (70, 80, 90)}
+            if pre or orient:
+                self._pattern_repeat(st, pre, orient)
+            return
+
+        # ## G codes ##
+        slot = False
+        for code in gcodes:
+            if code == 5:
+                st.mode = 0
+            elif code == 90:
+                st.incremental = False
+            elif code == 91:
+                st.incremental = True
+            elif code == 0 or code == 1 or code == 2 or code == 3:
+                st.mode = 1
+                st.gmode = code
+            elif code == 85:
+                slot = True
+            elif code == 93:
+                # set the zero: the next coordinates are relative to this point
+                x = self._axis_value(pre.get('X'))
+                y = self._axis_value(pre.get('Y'))
+                if x is not None:
+                    st.ox = x
+                if y is not None:
+                    st.oy = y
+                return
+            else:
+                # dwell, cutter compensation and the others: nothing to drill
+                self.app.log.debug("Line ignored: %s" % eline)
+                return
+
+        if not (pre or post) and repeat is None:
+            return
+
+        if not st.units_resolved:
+            self._resolve_units(st)
+
+        # ## Repeat of the last hole: R3X1.0 ##
+        if repeat is not None:
+            self._repeat_hole(st, repeat, pre)
+            return
+
+        # ## drilled slot (G85) ##
+        if slot:
+            self._slot_line(st, pre, post)
+            return
+
+        if st.mode == 0:
+            self._drill_line(st, pre.get('X'), pre.get('Y'))
+        else:
+            self._route_line(st, pre)
+
+    def _axis_value(self, token):
+        """The value of a coordinate token: a number with a period is used literally, the others by the format."""
+        if not token:
+            return None
+        try:
+            if '.' in token:
+                return float(token)
+            return self.parse_number(token)
+        except ValueError:
+            return None
+
+    def _position(self, st, xt, yt):
+        """
+        The new position from the coordinate tokens (None: the axis keeps its modal value).
+        It is stored as the modal position.
+        """
+        x = self._axis_value(xt)
+        y = self._axis_value(yt)
+        if x is not None:
+            if st.incremental:
+                x += st.cx if st.cx is not None else st.ox
+            else:
+                x += st.ox
+            st.cx = x
+        if y is not None:
+            if st.incremental:
+                y += st.cy if st.cy is not None else st.oy
+            else:
+                y += st.oy
+            st.cy = y
+        return st.cx, st.cy
+
+    def _drill_line(self, st, xt, yt):
+        if not st.units_resolved:
+            self._resolve_units(st)
+        x, y = self._position(st, xt, yt)
+        if x is None or y is None:
+            st.dropped += 1
+            self.app.log.error("Missing coordinates")
+            return
+        self._emit_drill(st, x, y)
+
+    @staticmethod
+    def _orient(st, orient, x, y):
+        """A point of the pattern swapped (M70) or mirrored (M80: X, M90: Y) about the pattern origin."""
+        x0, y0 = st.pattern_origin
+        x, y = x - x0, y - y0
+        if 70 in orient:
+            x, y = y, x
+        if 80 in orient:
+            x = -x
+        if 90 in orient:
+            y = -y
+        return x + x0, y + y0
+
+    def _emit_drill(self, st, x, y):
+        tool = self._use_tool(st)
+        if tool is None:
+            st.dropped += 1
+            return
+        self._put_drill(st, tool, x, y)
+
+    def _put_drill(self, st, tool, x, y):
+        drills = st.drills.get(tool)
+        if drills is None:
+            st.drills[tool] = [(x, y)]
+        else:
+            drills.append((x, y))
+        if st.recording is not None:
+            st.recording.append((tool, x, y))
+
+    def _emit_slot(self, st, x0, y0, x1, y1):
+        tool = self._use_tool(st)
+        if tool is None:
+            st.dropped += 1
+            return
+        self._put_slot(st, tool, x0, y0, x1, y1)
+
+    def _put_slot(self, st, tool, x0, y0, x1, y1):
+        slots = st.slots.get(tool)
+        if slots is None:
+            st.slots[tool] = [(x0, y0, x1, y1)]
+        else:
+            slots.append((x0, y0, x1, y1))
+        if st.recording is not None:
+            st.recording.append((tool, x0, y0, x1, y1))
+
+    def _slot_line(self, st, pre, post):
+        """Drilled slot: X01125Y0022244G85Y0027756 (the start before the G85, the stop after it)."""
+        x0, y0 = self._position(st, pre.get('X'), pre.get('Y'))
+        x1, y1 = self._position(st, post.get('X'), post.get('Y'))
+        if x0 is None or y0 is None or x1 is None or y1 is None:
+            st.dropped += 1
+            self.app.log.error("Slots are missing some or all coordinates.")
+            return
+        self._emit_slot(st, x0, y0, x1, y1)
+
+    def _repeat_hole(self, st, count, pre):
+        """R3X1.0Y0.5: the last hole is repeated 3 times, each one at the offset from the previous."""
+        dx = self._axis_value(pre.get('X')) or 0
+        dy = self._axis_value(pre.get('Y')) or 0
+        if st.cx is None or st.cy is None:
+            st.dropped += 1
+            return
+        x, y = st.cx, st.cy
+        for _i in range(int(count)):
+            x += dx
+            y += dy
+            self._emit_drill(st, x, y)
+        st.cx, st.cy = x, y
+
+    def _pattern_repeat(self, st, pre, orient):
+        """
+        M02X..Y..: the recorded pattern (M25 .. M01) is repeated at the offset.
+        M70 / M80 / M90 on the same line swap or mirror the copy about the pattern origin.
+        """
+        dx = self._axis_value(pre.get('X')) or 0
+        dy = self._axis_value(pre.get('Y')) or 0
+        for event in list(st.pattern):
+            if len(event) == 3:
+                x, y = self._orient(st, orient, event[1], event[2]) if orient else (event[1], event[2])
+                self._put_drill(st, event[0], x + dx, y + dy)
+            else:
+                x0, y0 = self._orient(st, orient, event[1], event[2]) if orient else (event[1], event[2])
+                x1, y1 = self._orient(st, orient, event[3], event[4]) if orient else (event[3], event[4])
+                self._put_slot(st, event[0], x0 + dx, y0 + dy, x1 + dx, y1 + dy)
+
+    def _route_line(self, st, pre):
+        """
+        A routing move in route mode: G00 rapid, G01 linear, G02 / G03 arc (A radius, or I / J centre offsets).
+        Every cut is stored as a slot, the arcs as short segments.
+        """
+        x0, y0 = st.cx, st.cy
+        x1, y1 = self._position(st, pre.get('X'), pre.get('Y'))
+        if x1 is None or y1 is None:
+            st.dropped += 1
+            self.app.log.error("Missing coordinates")
+            return
+        if st.gmode == 0 or x0 is None or y0 is None:
+            return
+
+        if st.gmode == 1:
+            self._emit_slot(st, x0, y0, x1, y1)
+            return
+
+        cw = st.gmode == 2
+        di = self._axis_value(pre.get('I'))
+        dj = self._axis_value(pre.get('J'))
+        radius = self._axis_value(pre.get('A'))
+        if di is not None or dj is not None:
+            center = (x0 + (di or 0.0), y0 + (dj or 0.0))
+        elif radius:
+            center = self._arc_center(x0, y0, x1, y1, radius, cw)
+        else:
+            center = None
+        if center is None:
+            self._emit_slot(st, x0, y0, x1, y1)
+            return
+
+        px, py = x0, y0
+        for qx, qy in self._arc_points(x0, y0, x1, y1, center[0], center[1], cw):
+            self._emit_slot(st, px, py, qx, qy)
+            px, py = qx, qy
+
+    @staticmethod
+    def _arc_center(x0, y0, x1, y1, radius, cw):
+        """
+        The centre of the arc from (x0, y0) to (x1, y1) with the given radius. A positive radius is the arc of up
+        to 180 degrees, a negative radius the bigger one.
+        """
+        dx = x1 - x0
+        dy = y1 - y0
+        chord = math.hypot(dx, dy)
+        if chord == 0:
+            return None
+        r = max(abs(radius), chord / 2)
+        h = math.sqrt(r * r - (chord / 2) ** 2)
+        # the centre of the counterclockwise arc of up to 180 degrees is on the left of the chord
+        sign = -1 if cw else 1
+        if radius < 0:
+            sign = -sign
+        return (x0 + dx / 2 - sign * h * dy / chord,
+                y0 + dy / 2 + sign * h * dx / chord)
+
+    def circle_steps(self, radius):
+        """
+        The segments of a full circle of the given radius, in the units of this object: the fixed count that was given
+        to the constructor, or what the preferences set (adaptive to the radius, or fixed).
+        """
+        # an object made without Excellon.__init__ (a copy, a stub) has no fixed count: the preferences apply
+        fixed = getattr(self, '_fixed_steps', None)
+        if fixed is not None:
+            return fixed
+        return object_circle_steps(self.app.options, 'excellon', radius, self.units)
+
+    def _arc_points(self, x0, y0, x1, y1, cx, cy, cw):
+        """The points of the arc after the start point, the last one is the end point."""
+        r = math.hypot(x0 - cx, y0 - cy)
+        a0 = math.atan2(y0 - cy, x0 - cx)
+        a1 = math.atan2(y1 - cy, x1 - cx)
+        full = 2 * math.pi
+        if math.hypot(x1 - x0, y1 - y0) < 1e-12:
+            sweep = -full if cw else full
+        elif cw:
+            sweep = -((a0 - a1) % full)
+        else:
+            sweep = (a1 - a0) % full
+        steps = max(4, self.circle_steps(r))
+        n = max(1, math.ceil(abs(sweep) / full * steps))
+        points = [(cx + r * math.cos(a0 + sweep * k / n), cy + r * math.sin(a0 + sweep * k / n))
+                  for k in range(1, n)]
+        points.append((x1, y1))
+        return points
+
+    # ############################################################################################################
+    # ######################################### the end ##########################################################
+    # ############################################################################################################
+    def _finish_parse(self, st):
+        """The file is read: store the holes, the plated flags, merge the tools of the same diameter, warn."""
+        if not st.units_resolved and self.excellon_units_found is None and self.tools:
+            self._vote_units()
+
+        self._store_holes(st)
+
+        if st.file_plated is not None:
+            for tool in self.tools.values():
+                tool.setdefault('plated', st.file_plated)
+
+        if self.merge_equal_tools:
+            self.merge_equal_diameter_tools()
+
+        if st.ignored or st.dropped:
+            self.app.log.warning("Excellon: %d lines ignored, %d holes skipped." % (st.ignored, st.dropped))
+            self.app.inform.emit('[WARNING] %s' % (
+                _("Some lines of the Excellon file were not used: {ignored} lines were not understood, "
+                  "{dropped} holes were skipped (no tool selected or missing coordinates). See shell.").format(
+                    ignored=st.ignored, dropped=st.dropped)))
+
+    def _store_holes(self, st):
+        """
+        The drills and the slots were collected as numbers; here they become shapely Points, one call per tool.
+        The data structure of the Excellon object has to include both the 'drills' and the 'slots' keys otherwise
+        I will need to test for them everywhere. Even if there are not drills or slots there is an empty list.
+        """
+        st.stored = True
+        for tool, pts in st.drills.items():
+            self.tools[tool]['drills'] = list(shapely.points(np.asarray(pts, dtype=float)))
+        for tool, segs in st.slots.items():
+            arr = np.asarray(segs, dtype=float)
+            self.tools[tool]['slots'] = list(zip(shapely.points(arr[:, 0:2]), shapely.points(arr[:, 2:4])))
+        for tool in self.tools:
+            if 'drills' not in self.tools[tool]:
+                self.tools[tool]['drills'] = []
+            if 'slots' not in self.tools[tool]:
+                self.tools[tool]['slots'] = []
+
+    def merge_equal_diameter_tools(self):
+        """
+        Tools with the same diameter (and the same plated flag) become one tool: the one with the lowest number,
+        with the drills and the slots of all of them.
+        """
+        keepers = {}
+        for key in sorted(self.tools):
+            tool = self.tools[key]
+            signature = (round(tool['tooldia'], 6), tool.get('plated'))
+            keeper = keepers.get(signature)
+            if keeper is None:
+                keepers[signature] = key
+                continue
+            self.tools[keeper]['drills'].extend(tool['drills'])
+            self.tools[keeper]['slots'].extend(tool['slots'])
+            del self.tools[key]
+
     def parse_number(self, number_str):
         """
         Parses coordinate numbers without period.
@@ -1022,35 +1134,36 @@ class Excellon(Geometry):
         :rtype: float
         """
 
-        match = self.leadingzeros_re.search(number_str)
-        nr_length = len(match.group(1)) + len(match.group(2))
-        try:
-            if self.zeros == "L" or self.zeros == "LZ":  # Leading
-                # With leading zeros, when you type in a coordinate,
-                # the leading zeros must always be included.  Trailing zeros
-                # are unneeded and may be left off. The CNC-7 will automatically add them.
-                # r'^[-\+]?(0*)(\d*)'
-                # 6 digits are divided by 10^4
-                # If less than size digits, they are automatically added,
+        # the divisor depends only on the zeros / units / format (and on the number of digits for leading zeros)
+        key = (self.zeros, self.units, self.excellon_format_upper_in, self.excellon_format_upper_mm,
+               self.excellon_format_lower_in, self.excellon_format_lower_mm)
+        cache = self.__dict__.get('_number_cache')
+        if cache is None or cache[0] != key:
+            leading = self.zeros == "L" or self.zeros == "LZ"
+            inch = self.units.lower() == "in"
+            if leading:
+                # With leading zeros, when you type in a coordinate, the leading zeros must always be included.
+                # Trailing zeros are unneeded and may be left off. The CNC-7 will automatically add them.
+                # 6 digits are divided by 10^4. If less than size digits, they are automatically added,
                 # 5 digits then are divided by 10^3 and so on.
+                value = float(self.excellon_format_upper_in if inch else self.excellon_format_upper_mm)
+            else:
+                # You must show all zeros to the right of the number and can omit all zeros to the left of the
+                # number. The CNC-7 will count the number of digits you typed and automatically fill in the
+                # missing zeros. FlatCAM expects the number of digits entered into the defaults
+                value = 10 ** float(self.excellon_format_lower_in if inch else self.excellon_format_lower_mm)
+            cache = self._number_cache = (key, leading, value)
 
-                if self.units.lower() == "in":
-                    result = float(number_str) / (10 ** (float(nr_length) - float(self.excellon_format_upper_in)))
-                else:
-                    result = float(number_str) / (10 ** (float(nr_length) - float(self.excellon_format_upper_mm)))
-                return result
-            else:  # Trailing
-                # You must show all zeros to the right of the number and can omit
-                # all zeros to the left of the number. The CNC-7 will count the number
-                # of digits you typed and automatically fill in the missing zeros.
-                # ## flatCAM expects 6digits
-                # flatCAM expects the number of digits entered into the defaults
-
-                if self.units.lower() == "in":  # Inches is 00.0000
-                    result = float(number_str) / (10 ** (float(self.excellon_format_lower_in)))
-                else:  # Metric is 000.000
-                    result = float(number_str) / (10 ** (float(self.excellon_format_lower_mm)))
-                return result
+        _key, leading, value = cache
+        try:
+            # None raises TypeError here: the callers use it as "no value, keep the modal one"
+            sign = 1 if number_str[:1] in ('+', '-') else 0
+            if leading:
+                nr_length = len(number_str) - sign
+                return float(number_str) / (10 ** (float(nr_length) - value))
+            return float(number_str) / value
+        except TypeError:
+            raise
         except Exception as e:
             self.app.log.error("Aborted. Operation could not be completed due of %s" % str(e))
             return
@@ -1098,19 +1211,28 @@ class Excellon(Geometry):
         return tool_id
 
     @staticmethod
-    def _buffer_drills(drills, radius, steps):
-        """One vectorized shapely.buffer for all the drill points (same result as Point.buffer(radius, steps))."""
+    def _buffer_drills(drills, radius, quad_segs):
+        """
+        The circles of the drill points: the circle of one point is buffered once and moved to every centre with
+        numpy (same result as Point.buffer(radius, quad_segs)).
+        """
         if not drills:
             return []
         arr = np.empty(len(drills), dtype=object)
         arr[:] = drills
-        return list(shapely.buffer(arr, radius, quad_segs=steps))
+        if radius > 0 and not shapely.has_z(arr).any() and not shapely.is_empty(arr).any() and \
+                (shapely.get_type_id(arr) == 0).all():
+            template = shapely.get_coordinates(shapely.buffer(Point(0.0, 0.0), radius, quad_segs=quad_segs))
+            if len(template) >= 4:
+                centers = shapely.get_coordinates(arr)
+                return list(shapely.polygons(template[None, :, :] + centers[:, None, :]))
+        return list(shapely.buffer(arr, radius, quad_segs=quad_segs))
 
     @staticmethod
-    def _buffer_slots(slots, radius, steps):
+    def _buffer_slots(slots, radius, quad_segs):
         """
         One vectorized shapely.buffer for all the slots (same result as LineString([start, stop]).buffer(radius,
-        steps)). Slots with Z coordinates or that are not 2 plain Points go through the per-slot path.
+        quad_segs)). Slots with Z coordinates or that are not 2 plain Points go through the per-slot path.
         """
         if not slots:
             return []
@@ -1121,9 +1243,9 @@ class Excellon(Geometry):
             if shapely.has_z(ends).any() or shapely.is_empty(ends).any() or                     not (shapely.get_type_id(ends) == 0).all():
                 raise ValueError('not plain 2D points')
             lines = shapely.linestrings(shapely.get_coordinates(ends).reshape(len(slots), 2, 2))
-            return list(shapely.buffer(lines, radius, quad_segs=steps))
+            return list(shapely.buffer(lines, radius, quad_segs=quad_segs))
         except ValueError:
-            return [LineString([slot[0], slot[1]]).buffer(radius, steps) for slot in slots]
+            return [LineString([slot[0], slot[1]]).buffer(radius, quad_segs=quad_segs) for slot in slots]
 
     def create_geometry(self):
         """
@@ -1159,17 +1281,18 @@ class Excellon(Geometry):
                 if not self.tools[tool].get('data'):
                     self.tools[tool]['data'] = deepcopy(getattr(self, 'default_data', {}))
 
-                steps = int(self.excellon_circle_steps)
                 radius = tooldia / 2.0
+                # the drills and the slots of one tool have the same segments
+                quad_segs = circle_quad_segs(self.circle_steps(radius))
                 tool_geo = self.tools[tool]['solid_geometry']
 
                 if 'drills' in self.tools[tool]:
-                    polys = Excellon._buffer_drills(self.tools[tool]['drills'], radius, steps)
+                    polys = Excellon._buffer_drills(self.tools[tool]['drills'], radius, quad_segs)
                     tool_geo.extend(polys)
                     self.solid_geometry.extend(polys)
 
                 if 'slots' in self.tools[tool]:
-                    polys = Excellon._buffer_slots(self.tools[tool]['slots'], radius, steps)
+                    polys = Excellon._buffer_slots(self.tools[tool]['slots'], radius, quad_segs)
                     tool_geo.extend(polys)
                     self.solid_geometry.extend(polys)
 
@@ -1270,10 +1393,12 @@ class Excellon(Geometry):
         self.app.log.debug("appParsers.ParseExcellon.Excellon.convert_units() --> Factor: %s" % str(factor))
 
         self.units = obj_units
-        self.scale(factor, factor)
         self.file_units_factor = factor
 
-        # scale() moves the drills and slots only: the tool diameters change units here, 1 time
+        # the drills and the slots move, the tool diameters change units here, 1 time; the geometry is made once
+        if factor != 1.0:
+            Excellon._transform_tools(self, affine_scale_matrix(factor, factor, (0, 0)))
+            self.app.proc_container.new_text = ''
         for tool in self.tools:
             self.tools[tool]['tooldia'] *= factor
 
@@ -1461,19 +1586,95 @@ class Excellon(Geometry):
         :param factor:          truthy: multiplicative mode, distance is the multiplier; None or False: distance mode
         :param join:            The type of line joint used by the shapely buffer method: round, square, bevel
         :param only_exterior:   Bool. If True, the LineStrings are buffered only on the outside
-        :return:                None
+        :return:                None on success or a no-op; 'fail' when nothing was changed
         """
         self.app.log.debug("appParsers.ParseExcellon.Excellon.buffer()")
 
-        if distance == 0:
-            return
+        try:
+            finite_distance = bool(np.isfinite(distance))
+        except (TypeError, ValueError):
+            finite_distance = False
+
+        if factor:
+            # -100% gives a factor of 0 and no hole at all: the same rejection as a negative diameter
+            try:
+                valid_factor = finite_distance and distance > 0
+            except TypeError:
+                valid_factor = False
+            if not valid_factor:
+                if muted is False:
+                    self.app.inform.emit('[WARNING_NOTCL] %s: %s' %
+                                         (_("Excellon buffer by a factor was not done"),
+                                          _("The factor must be a positive number.")))
+                return 'fail'
+        else:
+            if not finite_distance:
+                if muted is False:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("The buffer distance is not a number."))
+                return 'fail'
+            if distance == 0:
+                return
 
         # create_geometry() below rebuilds every drill / slot polygon from the tool diameter, so only the diameters
-        # change here (buffering the old polygons first would be thrown away)
-        for tool in self.tools:
-            if not factor:
-                self.tools[tool]['tooldia'] += (distance * 2)
-            else:
-                self.tools[tool]['tooldia'] *= distance
+        # change here (buffering the old polygons first would be thrown away). Validate every candidate diameter
+        # before the first change: a diameter <= 0 exports C-0.2 and empty geometry.
+        old_diameters = {}
+        new_diameters = {}
+        try:
+            for tool in self.tools:
+                tooldia = self.tools[tool]['tooldia']
+                old_diameters[tool] = tooldia
+                new_diameters[tool] = tooldia + (distance * 2) if not factor else tooldia * distance
+            valid_diameters = all(np.isfinite(dia) and dia > 0 for dia in new_diameters.values())
+        except (TypeError, ValueError, KeyError):
+            valid_diameters = False
 
-        self.create_geometry()
+        if not valid_diameters:
+            if muted is False:
+                self.app.inform.emit('[WARNING_NOTCL] %s: %s' %
+                                     (_("Excellon buffer was not done"),
+                                      _("A tool diameter would become zero or negative.")))
+            return 'fail'
+
+        # factor 1 (or a distance that leaves every diameter as it is) changes nothing: no rebuild
+        if all(new_diameters[tool] == old_diameters[tool] for tool in new_diameters):
+            return
+
+        # The exact state that create_geometry() replaces. Restoring it is the rollback: rebuilding the old
+        # geometry would call the same failing routine again.
+        try:
+            old_geometry = list(self.solid_geometry)
+            old_tool_geometry = {tool: list(self.tools[tool].get('solid_geometry', [])) for tool in self.tools}
+            old_data = {tool: (self.tools[tool].get('data'), 'data' in self.tools[tool])
+                        for tool in self.tools}
+        except (TypeError, KeyError, AttributeError):
+            if muted is False:
+                self.app.inform.emit('[WARNING_NOTCL] %s: %s' %
+                                     (_("Excellon buffer was not done"),
+                                      _("The tool data is not valid.")))
+            return 'fail'
+
+        for tool in self.tools:
+            self.tools[tool]['tooldia'] = new_diameters[tool]
+
+        try:
+            failed = self.create_geometry() == 'fail'
+        except Exception as e:
+            self.app.log.error("appParsers.ParseExcellon.Excellon.buffer() -> create_geometry failed: %s" % str(e))
+            failed = True
+
+        if failed:
+            # atomic rollback: the exact previous diameters, tool data and geometry (no rebuild in a failing path)
+            for tool in self.tools:
+                self.tools[tool]['tooldia'] = old_diameters[tool]
+                self.tools[tool]['solid_geometry'] = old_tool_geometry[tool]
+                data, had_data = old_data[tool]
+                if had_data:
+                    self.tools[tool]['data'] = data
+                else:
+                    self.tools[tool].pop('data', None)
+            self.solid_geometry = old_geometry
+            if muted is False:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Excellon buffer failed."))
+            return 'fail'
+        self.app.proc_container.new_text = ''

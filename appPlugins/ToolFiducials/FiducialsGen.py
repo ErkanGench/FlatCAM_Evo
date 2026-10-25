@@ -6,7 +6,7 @@ from copy import deepcopy
 from shapely import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, gerber_quad_segs
 
 
 def make_square_poly(center_pt, side_size):
@@ -19,12 +19,12 @@ def make_square_poly(center_pt, side_size):
     return Polygon([pt1, pt2, pt3, pt4, pt1])
 
 
-def auto_points(bounds, margin, sec_position, steps, decimals):
+def auto_points(bounds, margin, sec_position, decimals):
     """
     The fiducial points of the automatic mode: bottom left and top right of the bounds grown by the margin, and
     the second position ('up': top left, 'down': bottom right, 'no': none).
     """
-    buf_bbox = box(*bounds).buffer(margin, max(1, steps // 4), join_style="mitre")
+    buf_bbox = box(*bounds).buffer(margin, join_style="mitre")
     x0, y0, x1, y1 = [round(v, decimals) for v in buf_bbox.bounds]
     points = [(x0, y0), (x1, y1)]
     if sec_position == 'up':
@@ -34,10 +34,10 @@ def auto_points(bounds, margin, sec_position, steps, decimals):
     return points
 
 
-def fiducial_shapes(pt, fid_size, fid_type, line_thickness, steps):
+def fiducial_shapes(pt, fid_size, fid_type, line_thickness, options, units='MM'):
     radius = fid_size / 2.0
     if fid_type == 0:
-        return [Point(pt).buffer(radius, max(1, steps // 4))]
+        return [Point(pt).buffer(radius, gerber_quad_segs(options, radius, units))]
     x, y = pt[0], pt[1]
     if fid_type == 1:
         return [LineString([(x - radius + line_thickness / 2.0, y),
@@ -48,16 +48,16 @@ def fiducial_shapes(pt, fid_size, fid_type, line_thickness, steps):
             make_square_poly((x + fid_size / 4, y - fid_size / 4), fid_size / 2)]
 
 
-def fiducial_geometry(points_list, tools, solid_geometry, fid_size, fid_type, line_thickness, steps, decimals):
+def fiducial_geometry(points_list, tools, solid_geometry, fid_size, fid_type, line_thickness, options, decimals,
+                      units='MM'):
     """
     :return:    the new apertures, the union of the old solid geometry and the fiducials, the flat list of the
                 fiducial geometries (the center lines for the cross type, the polygons for the others)
     """
     new_apertures = deepcopy(tools)
-    quad_segs = max(1, steps // 4)
     geo_list = []
     for pt in points_list:
-        geo_list += fiducial_shapes(pt, fid_size, fid_type, line_thickness, steps)
+        geo_list += fiducial_shapes(pt, fid_size, fid_type, line_thickness, options, units)
 
     ap_type = 'C' if fid_type in (0, 1) else 'R'
     if fid_type == 0:
@@ -90,7 +90,7 @@ def fiducial_geometry(points_list, tools, solid_geometry, fid_size, fid_type, li
     solids = []
     for geo in geo_list:
         if fid_type == 1:
-            solid, follow = geo.buffer(line_thickness / 2.0, quad_segs), geo
+            solid, follow = geo.buffer(line_thickness / 2.0, gerber_quad_segs(options, line_thickness / 2.0, units)), geo
         else:
             solid, follow = geo, geo.centroid
         solids.append(solid)

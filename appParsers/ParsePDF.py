@@ -16,6 +16,7 @@ from shapely.ops import polygonize, unary_union
 
 from copy import copy, deepcopy
 import numpy as np
+from camlib import circle_quad_segs, gerber_quad_segs
 import re
 import logging
 
@@ -54,20 +55,23 @@ class PdfParser:
     DETECT_STROKE_ONLY = 'stroke_only'  # Detect on stroke color change only
 
     def __init__(self, units: str, resolution: int, abort: bool,
-                 hole_detection_mode: str = 'both') -> None:
+                 hole_detection_mode: str = 'both', options: dict | None = None) -> None:
         """
         Initialize PDF Parser.
 
         Args:
             units: 'MM' or 'INCH'
-            resolution: Steps per circle for arc approximation
+            resolution: Steps per circle for arc approximation (the points of a curve; the round ends of the
+                        strokes when there are no options)
             abort: Abort flag for graceful termination
+            options: the application options: the round ends of the strokes follow the Gerber circle preference
             hole_detection_mode: How to detect excellon holes from PDF
                                  'both' (default) - detect on both stroke and fill color change
                                  'fill_only' - detect on fill color change only
                                  'stroke_only' - detect on stroke color change only
         """
         self.step_per_circles = resolution
+        self.options = options
         self.units = units
         self.abort_flag = abort
         self.hole_detection_mode = hole_detection_mode
@@ -107,6 +111,13 @@ class PdfParser:
         self.unsupported_features = set()
 
         self.point_to_unit_factor = 0.01388888888
+
+    def _quad_segs(self, radius: float) -> int:
+        """The Shapely quad_segs of a round stroke end of this radius (the Gerber circle preference)."""
+        if self.options is None:
+            return circle_quad_segs(self.step_per_circles)
+        units = 'IN' if str(self.units).upper().startswith('IN') else 'MM'
+        return gerber_quad_segs(self.options, radius, units)
 
     def _find_or_create_aperture(self, apertures_dict: dict, applied_size: float, aperture: int) -> Tuple[str, int]:
         """Find or create an aperture by size.
@@ -663,7 +674,7 @@ class PdfParser:
             if subpath.get('closed') and points[0] != points[-1]:
                 points.append(points[0])
             try:
-                geometry = LineString(points).buffer(half_width, quad_segs=self.step_per_circles)
+                geometry = LineString(points).buffer(half_width, quad_segs=self._quad_segs(half_width))
                 if geometry.is_empty:
                     continue
                 geometries.append(affine_transform(geometry, self._shapely_ctm(subpath['ctm'])))
@@ -1135,7 +1146,7 @@ class PdfParser:
                 try:
                     geo = LineString(geo).buffer(
                         (float(applied_size) / 2),
-                        quad_segs=self.step_per_circles
+                        quad_segs=self._quad_segs(float(applied_size) / 2)
                     )
                     path_geo.append(geo)
                 except ValueError:
@@ -1149,7 +1160,7 @@ class PdfParser:
                 try:
                     geo = LineString(geo).buffer(
                         (float(applied_size) / 2),
-                        quad_segs=self.step_per_circles
+                        quad_segs=self._quad_segs(float(applied_size) / 2)
                     )
                     path_geo.append(geo)
                 except ValueError:
@@ -1179,7 +1190,7 @@ class PdfParser:
                 try:
                     geo_el = Polygon(geo).buffer(
                         self.BUFFER_EPSILON,
-                        quad_segs=self.step_per_circles
+                        quad_segs=self._quad_segs(self.BUFFER_EPSILON)
                     )
                     path_geo.append(geo_el)
                 except ValueError:
@@ -1195,7 +1206,7 @@ class PdfParser:
                     try:
                         geo_el = Polygon(geo).buffer(
                             self.BUFFER_EPSILON,
-                            quad_segs=self.step_per_circles
+                            quad_segs=self._quad_segs(self.BUFFER_EPSILON)
                         )
                         path_geo.append(geo_el)
                     except ValueError:
@@ -1207,7 +1218,7 @@ class PdfParser:
                 try:
                     geo_el = Polygon(geo).buffer(
                         self.BUFFER_EPSILON,
-                        quad_segs=self.step_per_circles
+                        quad_segs=self._quad_segs(self.BUFFER_EPSILON)
                     )
                     path_geo.append(geo_el)
                 except ValueError:

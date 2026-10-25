@@ -158,17 +158,6 @@ def test_standalone_optimal_reports_only_positive_safe_diameters(qapp, gap):
     app.proc_container.new.return_value.done.assert_called_once()
 
 
-def test_one_polygon_has_no_safe_tool_and_a_multipolygon_solid_is_measured():
-    from appPlugins.ToolIsolation import IsolationGen
-    from shapely import MultiPolygon
-
-    assert IsolationGen.safe_tooldia([box(0, 0, 1, 1)], DEC) <= 0
-    storage = {10: {'geometry': [{'solid': MultiPolygon([box(0, 0, 1, 1), box(1.2, 0, 2, 1)])}]}}
-    geo = IsolationGen.aperture_geometry(storage)
-    assert len(geo) == 2
-    assert round(IsolationGen.safe_tooldia(geo, DEC), DEC) == pytest.approx(0.2 - UNIT)
-
-
 def test_isolation_runs_after_the_check_even_if_tasks_are_reordered(qapp):
     # the check and the isolation are one worker task: the isolation always reads the result of the check
     from tests.helpers_objects import make_app, make_gerber

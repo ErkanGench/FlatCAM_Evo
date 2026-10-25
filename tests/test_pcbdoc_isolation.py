@@ -13,7 +13,7 @@ class TestPcbDocIsolation(unittest.TestCase):
     def isolate(self, entries):
         solid = entries[0]['solid']
         envelope = solid.buffer(0.1).exterior
-        app = SimpleNamespace(options={'gerber_circle_steps': 64}, inform=Mock(), app_obj=Mock(),
+        app = SimpleNamespace(options={'gerber_circle_steps': 64}, app_units='MM', inform=Mock(), app_obj=Mock(),
                               abort_flag=False)
         tool = SimpleNamespace(app=app, decimals=4, validation_status=True,
                                generate_envelope=Mock(return_value=[envelope]))

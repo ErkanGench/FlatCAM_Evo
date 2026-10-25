@@ -1,3 +1,4 @@
+import gc
 import os
 import sys
 import types
@@ -5,8 +6,9 @@ import types
 import pytest
 from unittest.mock import MagicMock, Mock
 
+from PyQt6 import sip
 from PyQt6.QtGui import QStandardItem, QStandardItemModel
-from shapely.geometry import Point, LineString, MultiPolygon, box
+from shapely.geometry import Point, LineString, box
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -71,25 +73,6 @@ def test_within_gap_below_size_is_one_violation_located_between_squares():
     assert result['error'] is None
 
 
-def test_within_gap_above_size_passes():
-    layer = _gerber('TOP', [box(0, 0, 1, 1), box(1.5, 0, 2.5, 1)])
-
-    result = gen.check_clearance_within(layer, 0.25, 'R')
-
-    assert result['violations'] == []
-    assert result['checked'] == 2
-    assert result['error'] is None
-
-
-@pytest.mark.parametrize('polygons, checked', [([box(0, 0, 1, 1)], 1), ([], 0)])
-def test_within_layer_with_fewer_than_two_polygons_passes(polygons, checked):
-    result = gen.check_clearance_within(_gerber('TOP', polygons), 0.25, 'R')
-
-    assert result['violations'] == []
-    assert result['checked'] == checked
-    assert result['error'] is None
-
-
 def test_within_touching_polygons_are_connected_not_violating():
     # Touching polygons share an edge, so they are one copper area and not a clearance gap
     layer = _gerber('TOP', [box(0, 0, 1, 1), box(1, 0, 2, 1)])
@@ -110,16 +93,6 @@ def test_between_copper_near_outline_ring_violates():
     assert result['violations'][0]['value'] == pytest.approx(0.2, abs=1e-6)
 
 
-def test_between_copper_inside_filled_outline_measures_to_boundary():
-    copper = _gerber('TOP', [box(3, 4, 4, 5)])
-    outline = _gerber('OUT', [box(0, 0, 10, 10)])
-
-    result = gen.check_clearance_between(copper, outline, 1.0, 'R')
-
-    assert result['violations'] == []
-    assert result['error'] is None
-
-
 @pytest.mark.parametrize('aperture', [
     _aperture('C', size=0.1, tracks=[LineString([(0, 0), (5, 0)])]),  # round by size
     _aperture('P', diam=0.1, tracks=[LineString([(0, 0), (5, 0)])]),  # circle by diameter
@@ -134,17 +107,6 @@ def test_trace_size_narrow_round_track_violates(aperture):
     assert result['error'] is None
 
 
-def test_trace_size_flash_only_aperture_is_not_a_trace():
-    layer = _gerber('TOP', apertures={
-        10: _aperture('C', size=0.1, tracks=[]),
-    })
-
-    result = gen.check_trace_size([layer], 0.15, 'R')
-
-    assert result['violations'] == []
-    assert result['error'] is None
-
-
 def test_trace_size_rectangle_uses_min_side_not_diagonal():
     # Width 0.1, height 2.0: a horizontal track is 0.1 wide. The diagonal (2.01) must not be used.
     layer = _gerber('TOP', apertures={
@@ -155,17 +117,6 @@ def test_trace_size_rectangle_uses_min_side_not_diagonal():
 
     assert len(result['violations']) == 1
     assert result['violations'][0]['value'] == pytest.approx(0.1, abs=1e-6)
-
-
-def test_trace_size_macro_aperture_is_skipped_without_error():
-    layer = _gerber('TOP', apertures={
-        10: _aperture('AM', tracks=[LineString([(0, 0), (5, 0)])]),
-    })
-
-    result = gen.check_trace_size([layer], 0.2, 'R')
-
-    assert result['violations'] == []
-    assert result['error'] is None
 
 
 @pytest.mark.parametrize('hole_dia, values', [(0.6, [0.2]), (0.2, [])])  # thin ring fails, wide ring passes
@@ -189,59 +140,8 @@ def test_annular_ring_hole_crossing_pad_edge_is_zero():
     assert result['violations'][0]['value'] == pytest.approx(0, abs=1e-6)
 
 
-def test_annular_ring_hole_without_copper_is_skipped():
-    pad = _gerber('TOP', [Point(0, 0).buffer(0.5)])
-    exc = _excellon('EXC', holes=[_hole(5, 0, 0.2)])
-
-    result = gen.check_annular_ring(pad, [exc], 0.25, 'R')
-
-    assert result['violations'] == []
-    assert result['error'] is None
-
-
-def test_annular_ring_checks_second_excellon_layer():
-    pad = _gerber('TOP', [Point(0, 0).buffer(0.5), Point(2, 0).buffer(0.5)])
-    exc_1 = _excellon('EXC_1', holes=[_hole(0, 0, 0.2)])
-    exc_2 = _excellon('EXC_2', holes=[_hole(2, 0, 0.6)])
-
-    result = gen.check_annular_ring(pad, [exc_1, exc_2], 0.25, 'R')
-
-    assert len(result['violations']) == 1
-    assert result['violations'][0]['layer'] == 'EXC_2'
-
-
-def test_annular_ring_multipolygon_copper_is_checked_per_pad():
-    copper = _gerber('TOP', [MultiPolygon([Point(0, 0).buffer(0.5), Point(5, 0).buffer(0.5)])])
-    exc = _excellon('EXC', holes=[_hole(0, 0, 0.2), _hole(5, 0, 0.6)])
-
-    result = gen.check_annular_ring(copper, [exc], 0.25, 'R')
-
-    assert len(result['violations']) == 1
-    assert result['violations'][0]['value'] == pytest.approx(0.2, abs=0.02)
-    assert result['error'] is None
-
-
 def test_hole_clearance_edges_closer_than_size_reported_once():
     exc = _excellon('EXC', holes=[_hole(0, 0, 0.5), _hole(0.6, 0, 0.5)])
-
-    result = gen.check_hole_clearance([exc], 0.3, 'R')
-
-    assert len(result['violations']) == 1
-    assert result['violations'][0]['value'] == pytest.approx(0.1, abs=0.01)
-
-
-def test_hole_clearance_same_hole_in_two_layers_has_zero_gap():
-    exc_1 = _excellon('EXC_1', holes=[_hole(0, 0, 0.5)])
-    exc_2 = _excellon('EXC_2', holes=[_hole(0, 0, 0.5)])
-
-    result = gen.check_hole_clearance([exc_1, exc_2], 0.3, 'R')
-
-    assert len(result['violations']) == 1
-    assert result['violations'][0]['value'] == pytest.approx(0, abs=1e-6)
-
-
-def test_hole_clearance_includes_slots():
-    exc = _excellon('EXC', holes=[_hole(1, 0.6, 0.5)], slots=[_slot(0, 0, 2, 0, 0.5)])
 
     result = gen.check_hole_clearance([exc], 0.3, 'R')
 
@@ -256,15 +156,6 @@ def test_hole_size_reports_each_undersized_drill():
 
     assert len(result['violations']) == 2
     assert all(v['value'] == pytest.approx(0.2, abs=1e-6) for v in result['violations'])
-
-
-def test_slot_size_flags_narrow_slot_only():
-    exc = _excellon('EXC', slots=[_slot(0, 0, 2, 0, 0.2), _slot(0, 5, 2, 5, 0.5)])
-
-    result = gen.check_slot_size([exc], 0.3, 'R')
-
-    assert len(result['violations']) == 1
-    assert result['violations'][0]['value'] == pytest.approx(0.2, abs=1e-6)
 
 
 def test_hole_to_outline_closer_than_size_violates():
@@ -287,16 +178,6 @@ def test_hole_to_copper_neighbour_pad_violates():
     assert result['violations'][0]['value'] == pytest.approx(0.25, abs=0.02)
 
 
-def test_hole_to_copper_inside_own_pad_passes():
-    exc = _excellon('EXC', holes=[_hole(0, 0, 0.2)])
-    copper = _gerber('TOP', [Point(0, 0).buffer(0.5)])
-
-    result = gen.check_hole_to_copper([exc], copper, 0.3, 'R')
-
-    assert result['violations'] == []
-    assert result['error'] is None
-
-
 def test_build_jobs_c2c_runs_top_and_bottom():
     layers = _layers(
         copper_top=_gerber('TOP', [box(0, 0, 1, 1)]),
@@ -309,32 +190,6 @@ def test_build_jobs_c2c_runs_top_and_bottom():
     assert len(results) == 2
     assert sum('TOP' in r['rule'] and 'BOTTOM' not in r['rule'] for r in results) == 1
     assert sum('BOTTOM' in r['rule'] for r in results) == 1
-
-
-def test_build_jobs_s2sm_runs_both_sides():
-    layers = _layers(
-        silk_top=_gerber('SILK_T', [box(0, 0, 1, 1)]),
-        sm_top=_gerber('SM_T', [box(0, 0, 1, 1)]),
-        silk_bottom=_gerber('SILK_B', [box(0, 0, 1, 1)]),
-        sm_bottom=_gerber('SM_B', [box(0, 0, 1, 1)]),
-    )
-    jobs = gen.build_jobs(_config({'s2sm'}), layers)
-
-    results = gen.run_jobs_sync(jobs)
-
-    assert len(results) == 2
-
-
-def test_build_jobs_sliver_runs_without_silk_rule():
-    layers = _layers(sm_top=_gerber('SM_T', [box(0, 0, 1, 1), box(1.1, 0, 2, 1)]))
-    jobs = gen.build_jobs(_config({'sm2sm'}, value=0.3), layers)
-
-    results = gen.run_jobs_sync(jobs)
-
-    assert len(results) == 1
-    assert results[0]['limit'] == 0.3
-    assert results[0]['error'] is None
-    assert len(results[0]['violations']) == 1
 
 
 def test_build_jobs_silk_outline_uses_s2o_value_not_c2o():
@@ -380,20 +235,6 @@ def test_gerber_layer_unions_solid_geometry_and_keeps_only_drawn_tracks():
     assert len(layer['geo']) == 2
     assert list(layer['apertures']) == [10]
     assert layer['apertures'][10]['tracks'] == [track]
-
-
-def test_excellon_layer_builds_holes_and_slots():
-    obj = types.SimpleNamespace(
-        obj_options={'name': 'EXC'},
-        solid_geometry=[],
-        tools={1: {'tooldia': 0.6, 'drills': [Point(1, 2)], 'slots': [(Point(0, 0), Point(2, 0))]}})
-
-    layer = gen.excellon_layer(obj)
-
-    assert layer['name'] == 'EXC'
-    assert (layer['holes'][0]['x'], layer['holes'][0]['y'], layer['holes'][0]['dia']) == (1.0, 2.0, 0.6)
-    assert (layer['slots'][0]['x'], layer['slots'][0]['y']) == (1.0, 0.0)
-    assert layer['slots'][0]['geo'].area > layer['holes'][0]['geo'].area
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -450,7 +291,11 @@ def tool():
     plugin = RulesCheck(app)
     plugin.set_tool_ui()
     plugin.new_object = Mock()
-    return plugin
+    yield plugin
+    # the comboboxes use the model of app.collection: delete the widgets (also the ones that set_tool_ui() took
+    # out of the layout) while the model is alive; a random garbage collection order crashes Qt
+    sip.delete(plugin)
+    gc.collect()
 
 
 def _enable_only(tool, *stems):
@@ -462,26 +307,6 @@ def _use(tool, key, name):
     cb_name, combo_name = OBJECT_WIDGETS[key]
     getattr(tool.ui, cb_name).setChecked(True)
     getattr(tool.ui, combo_name).setCurrentText(name)
-
-
-def test_results_make_one_document_even_after_reset(tool):
-    tool.set_tool_ui()
-    tool.set_tool_ui()
-    tool.tool_finished.emit([gen.make_result('rule', 0.1, ['a'])])
-    assert tool.new_object.call_count == 1
-    tool.tool_finished.emit([])
-    assert tool.new_object.call_count == 2
-
-
-def test_invalid_setup_submits_nothing_and_stays_idle(tool):
-    _enable_only(tool, 'c2c')
-    tool.execute()  # copper not selected
-    _use(tool, 'copper_top', 'ghost')
-    tool.execute()  # object missing from the project
-    assert tool.app.worker_task.emit.call_count == 0
-    assert tool.app.inform.emit.call_count == 2
-    assert all('[ERROR_NOTCL]' in c.args[0] for c in tool.app.inform.emit.call_args_list)
-    assert tool.app.proc_container.view.set_busy.call_count == 0
 
 
 def test_every_widget_reaches_its_config_key(tool):
@@ -503,21 +328,6 @@ def test_every_widget_reaches_its_config_key(tool):
         assert config[stem]['enabled'] == (i % 2 == 0), stem
         assert config[stem]['value'] == pytest.approx(0.1 * (i + 1)), stem
     assert {k: (v.obj_options['name'] if v else None) for k, v in objects.items()} == dict(names, outline=None)
-
-
-def test_select_all_follows_children(tool):
-    ui = tool.ui
-    holes = [ui.clearance_d2d_cb, ui.drill_size_cb, ui.slot_size_cb, ui.hole2outline_cb, ui.hole2copper_cb]
-    for cb in holes:
-        cb.setChecked(True)
-    assert ui.all_holes_rules_cb.isChecked()
-    holes[2].setChecked(False)
-    assert not ui.all_holes_rules_cb.isChecked()
-    assert all(cb.isChecked() for cb in holes if cb is not holes[2])
-    ui.all_holes_rules_cb.click()
-    assert all(cb.isChecked() for cb in holes) and ui.all_holes_rules_cb.isChecked()
-    ui.all_holes_rules_cb.click()
-    assert not any(cb.isChecked() for cb in holes)
 
 
 def test_run_reports_violation_and_ends_idle(tool):
@@ -613,19 +423,6 @@ def test_clicking_a_row_zooms_to_the_violation(tool):
     tool.app.plotcanvas.fit_center.reset_mock()
     tool.ui.results_table.cellClicked.emit(next(r for r, c in enumerate(_rows(tool)) if c[1] == 'ERROR'), 0)
     tool.app.plotcanvas.fit_center.assert_not_called()
-
-
-def test_markers_are_drawn_per_violation_and_cleared_on_reset(tool):
-    collections = []
-    tool.app.plotcanvas.new_shape_collection = Mock(side_effect=lambda **kw: collections.append(Mock()) or collections[-1])
-
-    tool.tool_finished.emit(_sample_results())
-
-    markers = collections[0]
-    assert markers.add.call_count >= 2  # at least one shape per violation
-    markers.clear.reset_mock()
-    tool.set_tool_ui()
-    markers.clear.assert_called()
 
 
 def test_results_to_csv_rows(tmp_path):

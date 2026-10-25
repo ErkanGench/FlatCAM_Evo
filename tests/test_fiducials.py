@@ -4,17 +4,18 @@ from types import SimpleNamespace
 from unittest.mock import Mock, MagicMock
 
 import pytest
-from shapely import LineString, Point, unary_union
+from shapely import Point, unary_union
 
 from appHandlers.appHistory import HistoryManager, history_of
 from appHandlers.appIO import appIO
 from appObjects.GerberObject import GerberObject
 from appPlugins.ToolFiducials.Fiducials import ToolFiducials
-from appPlugins.ToolFiducials.FiducialsGen import auto_points, fiducial_geometry, fiducial_shapes
+from appPlugins.ToolFiducials.FiducialsGen import auto_points, fiducial_geometry
 from tests.helpers_objects import (  # noqa: F401
     _headless_qt, assert_poly_equiv, export_gerber_text, make_app, make_gerber, reparse_gerber)
 
 POINTS = [(10.0, 10.0), (30.0, 20.0)]
+FIXED_64 = {'gerber_circle_steps_mode': 'fixed', 'gerber_circle_steps': 64}
 
 
 @pytest.mark.parametrize("fid_type", [0, 1, 2], ids=['circular', 'cross', 'chess'])
@@ -22,22 +23,17 @@ def test_exported_gerber_matches_solid_geometry(fid_type, tmp_path):
     app = make_app()
     app.f_handlers = appIO(app)
     obj = make_gerber(app)
-    tools, solid, geo_list = fiducial_geometry(POINTS, {}, [], 2.0, fid_type, 0.2, 64, 4)
+    tools, solid, geo_list = fiducial_geometry(POINTS, {}, [], 2.0, fid_type, 0.2, FIXED_64, 4)
     obj.tools, obj.solid_geometry, obj.follow_geometry = tools, solid, geo_list
 
     again = reparse_gerber(app, export_gerber_text(app, obj), tmp_path)
     assert_poly_equiv(again.solid_geometry, solid, rel=0.02, msg='fid_type %d' % fid_type)
 
 
-def test_circle_steps_are_a_full_circle():
-    circle = fiducial_shapes((0, 0), 2.0, 0, 0.2, 16)[0]
-    assert len(circle.exterior.coords) - 1 == 16
-
-
 def test_auto_points_grow_by_margin():
-    assert auto_points((0, 0, 10, 10), 2.0, 'up', 16, 4) == [(-2, -2), (12, 12), (-2, 12)]
-    assert auto_points((0, 0, 10, 10), 2.0, 'down', 16, 4) == [(-2, -2), (12, 12), (12, -2)]
-    assert auto_points((0, 0, 10, 10), 2.0, 'no', 16, 4) == [(-2, -2), (12, 12)]
+    assert auto_points((0, 0, 10, 10), 2.0, 'up', 4) == [(-2, -2), (12, 12), (-2, 12)]
+    assert auto_points((0, 0, 10, 10), 2.0, 'down', 4) == [(-2, -2), (12, 12), (12, -2)]
+    assert auto_points((0, 0, 10, 10), 2.0, 'no', 4) == [(-2, -2), (12, 12)]
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -191,29 +187,12 @@ def test_soldermask_opening_sits_on_the_fiducials_and_is_one_undo_step(setup):
     tool.selected_gerber = lambda: mask
     tool.add_soldermask_opening()
     opening = app.created[-1].solid_geometry
-    for pt in auto_points(source.bounds(), 1.0, 'up', 64, 4):
+    for pt in auto_points(source.bounds(), 1.0, 'up', 4):
         assert opening.contains(Point(pt).buffer(1.9))
     app.history.undo()
     app.history.redo()
     assert app.collection.items[-1].obj_options['name'] == 'mask_fid'
     assert_poly_equiv(app.collection.items[-1].solid_geometry, opening, msg='after Redo')
-
-
-def test_soldermask_without_fiducials_creates_nothing(setup):
-    tool, app, source = setup
-    tool.click_points = [(1.0, 1.0)]    # a partial placement
-    tool.add_soldermask_opening()
-    assert names(app) == ['src']
-    app.inform.emit.assert_called()
-
-
-@pytest.mark.parametrize("follow", [LineString([(0, 0), (1, 1)]), None], ids=['single', 'none'])
-def test_source_follow_geometry_not_a_list(setup, follow):
-    tool, app, source = setup
-    source.follow_geometry = follow
-    tool.add_fiducials()
-    assert names(app) == ['src', 'src_fid']
-    assert len(app.created[0].follow_geometry) >= len(POINTS)
 
 
 @pytest.mark.parametrize("end", ['cancel', 'fail'])

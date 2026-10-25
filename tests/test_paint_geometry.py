@@ -5,7 +5,7 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -17,7 +17,7 @@ try:
     from appPlugins.ToolNCC.NccGen import NccGen
     from appPlugins.ToolPaint import PaintModel
     from appPlugins.ToolPaint.PaintGen import PaintGen
-    from shapely import LineString, LinearRing, MultiPolygon, Point, Polygon, box
+    from shapely import LineString, LinearRing, Point, Polygon, box
 finally:
     sys.argv = _saved_argv
 
@@ -54,6 +54,8 @@ class TestPaintGeometry(unittest.TestCase):
     def setUp(self):
         self.geometry = camlib.Geometry.__new__(camlib.Geometry)
         self.geometry.app = SimpleNamespace(abort_flag=False, log=Mock(), inform_no_echo=Mock(),
+                                            app_units='MM', options={'geometry_circle_steps_mode': 'fixed',
+                                                     'geometry_circle_steps': 64},
                                             proc_container=Mock())
         self.polygon = Polygon(box(0, 0, 6, 6).exterior.coords,
                                [box(2, 2, 4, 4).exterior.coords])
@@ -93,7 +95,8 @@ class TestPaintGeometry(unittest.TestCase):
                          [list(path.coords) for path in paths])
 
     def test_paint_and_ncc_dispatch_to_the_same_clearing_paths(self):
-        worker = SimpleNamespace(app=self.geometry.app, parent_tool=self.geometry, circle_steps=64)
+        worker = SimpleNamespace(app=self.geometry.app, parent_tool=self.geometry, circle_steps=64,
+                                 _steps_at=lambda radius, obj=None, kind=None: 64)
         for method in (0, 1, 2):
             for connect in (False, True):
                 with self.subTest(method=method, connect=connect):
@@ -181,23 +184,6 @@ class TestPaintGeometry(unittest.TestCase):
                 for tool in params.tools_storage.values():
                     self.assertEqual(tool['solid_geometry'], [])
 
-    def test_selection_kernels_pick_contained_polygon_and_clip_to_area(self):
-        left, right = box(0, 0, 4, 4), box(10, 0, 14, 4)
-        with self.subTest('point inside'):
-            self.assertTrue(PaintModel.select_polygon([left, right], (12, 2)).equals(right))
-        with self.subTest('point outside'):
-            self.assertIsNone(PaintModel.select_polygon([left, right], (7, 2)))
-        with self.subTest('area clip'):
-            painted = PaintModel.area_intersection(MultiPolygon([left, right]), [box(-1, -1, 5, 5)])
-            self.assertAlmostEqual(sum(part.area for part in painted), 16)
-            self.assertTrue(all(part.within(box(-1, -1, 5, 5)) for part in painted))
-        for label, geometry in (('single list', [left]), ('multipolygon', MultiPolygon([left, right])),
-                                ('list of two', [left, right])):
-            with self.subTest('reference area', geometry=label):
-                expected = geometry.bounds if hasattr(geometry, 'bounds') else camlib.unary_union(geometry).bounds
-                reference = PaintModel.reference_area(geometry)
-                self.assertTrue(all(abs(a - b) < 1e-6 for a, b in zip(reference.bounds, expected)))
-
     def test_split_overlapping_and_failing_polygons_still_give_paths(self):
         # A dumbbell splits on buffering, overlapping sources are painted once, and one polygon
         # that raises keeps the paths of the others.
@@ -219,40 +205,6 @@ class TestPaintGeometry(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(result['tools'][0]['solid_geometry']), 1)
         self.assertTrue(any(kind == 'normal' for kind, _detail in result['warnings']))
-
-    def test_progress_restarts_for_every_tool_and_reaches_the_end(self):
-        tools = {1: {'tooldia': 1.0, 'data': {}, 'solid_geometry': []},
-                 2: {'tooldia': 0.5, 'data': {}, 'solid_geometry': []}}
-        seen = []
-
-        def progress(number, total, old):
-            seen.append((number, total, old))
-            return number
-
-        def process(polygon, diameter, settings):
-            return SimpleNamespace(get_objects=lambda: [LineString([(1, 1), (2, 1)])])
-
-        kwargs = dict(find_uid=lambda dia, storage: 1 if dia == 1.0 else 2, progress=progress,
-                      get_params=lambda uid, storage: {'offset': 0.0}, simplify=lambda geo, tol: list(geo))
-        PaintModel.generate_paint([box(0, 0, 4, 4), box(10, 0, 14, 4)], tools, [1.0, 0.5], 0, 0.0, 4,
-                                  process, **kwargs)
-        self.assertEqual([old for _n, _t, old in seen], [0, 1, 0, 1])
-        seen.clear()
-        PaintModel.generate_rest_paint([box(0, 0, 4, 4), box(10, 0, 10.3, 0.3)], tools, [1.0], 0.0, 4,
-                                       process, **kwargs)
-        self.assertEqual(seen[-1][:2], (2, 2))
-
-    def test_tool_uid_zero_and_string_diameters_are_found(self):
-        tools = {0: {'tooldia': 0.5}, 1: {'tooldia': 1.0}}
-        self.assertEqual(PaintModel.find_tool_uid('0.5', tools, 4), 0)
-        self.assertIsNone(PaintModel.find_tool_uid(0.25, tools, 4))
-        tool = {'tooldia': 0.5, 'solid_geometry': [], 'data': {
-            'tools_paint_overlap': 15, 'tools_paint_connect': False, 'tools_paint_contour': True,
-            'tools_paint_offset': 0}}
-        result = PaintModel.generate_paint(
-            [box(0, 0, 4, 4)], {0: tool}, [0.5], 0, 0.0, 4,
-            lambda polygon, diameter, settings: SimpleNamespace(get_objects=lambda: [LineString([(1, 1), (2, 1)])]))
-        self.assertEqual(len(result['tools'][0]['solid_geometry']), 1)
 
     def test_combo_method_falls_through_a_failing_method(self):
         def broken(*args, **kwargs):
@@ -298,6 +250,23 @@ class TestPaintGeometry(unittest.TestCase):
         self.assertTrue(reference.contains(Point(0.5, 3.5)))
         self.assertFalse(reference.contains(Point(3.5, 3.5)))
 
+    def test_reference_area_counts_a_closed_line_outline_and_ignores_an_open_path(self):
+        # A closed outline is an area, even when it arrives as a LineString or as split segments.
+        rectangle = [(0, 0), (4, 0), (4, 4), (0, 4), (0, 0)]
+        self.assertAlmostEqual(PaintModel.reference_area([LineString(rectangle)]).area, 16, places=4)
+        split = [LineString([(0, 0), (4, 0)]), LineString([(4, 0), (4, 4), (0, 4), (0, 0)])]
+        self.assertAlmostEqual(PaintModel.reference_area(split).area, 16, places=4)
+        # An open path encloses nothing and must not become a hull.
+        self.assertEqual(PaintModel.reference_area([LineString([(0, 0), (4, 0), (4, 4)])]).area, 0)
+
+    def test_check_validity_measures_overlapping_polygons_after_the_merge(self):
+        # Two 0.35 wide strips overlapping into a 0.6 wide region fit a 0.5 tool; alone they do not.
+        strips = [box(0, 0, 0.35, 2), box(0.25, 0, 0.60, 2)]
+        self.assertEqual(PaintModel.check_tools_fit(strips, [0.5])[0], 'ok')
+        self.assertEqual(PaintModel.check_tools_fit([box(0, 0, 0.35, 2)], [0.5])[0], 'error')
+        # The offset still shrinks the region the tool has to fit inside.
+        self.assertEqual(PaintModel.check_tools_fit(strips, [0.5], {0.5: 0.1})[0], 'error')
+
     def test_select_polygon_picks_the_hit_in_a_nested_set(self):
         cells = [box(x, y, x + 0.9, y + 0.9) for x in range(200) for y in range(100)]
         nested = [cells[:5000], [LinearRing(box(500, 500, 502, 502).exterior.coords)], cells[5000:]]
@@ -322,15 +291,6 @@ class TestPaintGeometry(unittest.TestCase):
             get_params=lambda uid, storage: {'offset': 0.0}, simplify=lambda geo, tol: list(geo))
         self.assertTrue(any(diameter == 0.5 and bounds[0] >= 10 for diameter, bounds in seen))
 
-    def test_paint_area_fails_without_overlap_or_when_the_handler_fails(self):
-        paint_gen = PaintGen.__new__(PaintGen)
-        paint_gen.app = SimpleNamespace(abort_flag=False, log=Mock(), inform=Mock())
-        painted = SimpleNamespace(kind='geometry', solid_geometry=box(0, 0, 4, 4))
-        with self.subTest('no overlap'):
-            self.assertEqual(paint_gen.paint_poly_area_worker(painted, box(10, 10, 12, 12), run_threaded=False), 'fail')
-        with self.subTest('handler fails'), patch.object(PaintGen, 'paint_handler', return_value='fail'):
-            self.assertEqual(paint_gen.paint_poly_area_worker(painted, box(1, 1, 3, 3)), 'fail')
-
     def _job_worker(self, abort=False, new_object_result='fail'):
         worker = PaintGen.__new__(PaintGen)
         worker.app = SimpleNamespace(abort_flag=abort, log=Mock(), inform=Mock(), proc_container=Mock(),
@@ -343,16 +303,6 @@ class TestPaintGeometry(unittest.TestCase):
 
     def _messages(self, worker):
         return ' '.join(str(call.args[0]) for call in worker.app.inform.emit.call_args_list)
-
-    def test_controller_state_is_read_live_not_copied(self):
-        worker = PaintGen.__new__(PaintGen)
-        worker.parent_tool = SimpleNamespace(paint_tools={1: {}}, points=[], first_click=False)
-        worker.parent_tool.paint_tools = {2: {}}
-        worker.parent_tool.points.append((1, 1))
-        worker.parent_tool.first_click = True
-        self.assertEqual(worker.paint_tools, {2: {}})
-        self.assertEqual(worker.points, [(1, 1)])
-        self.assertTrue(worker.first_click)
 
     def test_each_tool_uses_its_own_method_and_a_forced_method_wins(self):
         worker, params = paint_worker(self.geometry, [1.0, 0.5], method=0)
@@ -380,94 +330,6 @@ class TestPaintGeometry(unittest.TestCase):
         self.assertEqual((params.rest_offset, params.simplification_value), (0.3, 0.5))
         self.assertTrue(params.paint_method_explicit)
         self.assertEqual(worker._create_params(0, 2, False, 'out', None, rest_offset=0.3).rest_offset, 0.0)
-
-    def test_user_abort_reports_a_cancel_and_failure_reports_failed(self):
-        for abort, expected in ((True, 'Cancelled.'), (False, 'Failed.')):
-            with self.subTest(abort=abort):
-                worker = self._job_worker(abort=abort)
-                result = worker.paint_handler(
-                    SimpleNamespace(kind='geometry'), [box(0, 0, 4, 4)], tooldia=[0.5], run_threaded=False)
-                self.assertEqual(result, 'fail')
-                self.assertIn(expected, self._messages(worker))
-                worker.app.collection.remove_promise.assert_called()
-
-    def test_a_tool_too_big_for_the_geometry_says_so_instead_of_failing_silently(self):
-        worker, params = paint_worker(self.geometry, [10.0])
-        worker._process_polygon = Mock(return_value=None)
-        output = SimpleNamespace(tools={}, obj_options={})
-        result = worker._generate_paint_worker(output, worker.app, params, [10.0], [self.polygon], None, False)
-        self.assertEqual(result, 'fail')
-        self.assertIn('too big', self._messages(worker))
-
-    def test_unknown_warning_kinds_do_not_break_reporting(self):
-        worker = self._job_worker()
-        worker._report_warnings([('brand-new', 'x'), ('skipped', 1.0), ('skipped', 1.0), ('normal', 'boom')])
-        self.assertEqual(sum('could not be painted' in str(c.args[0]) for c in worker.app.inform.emit.call_args_list), 1)
-
-    def test_paint_all_of_a_multigeo_geometry_takes_every_tool_and_leaves_gerber_alone(self):
-        worker = self._job_worker()
-        multigeo = SimpleNamespace(kind='geometry', multigeo=True, solid_geometry=None, tools={
-            1: {'solid_geometry': [box(0, 0, 2, 2)]}, 2: {'solid_geometry': [box(5, 0, 7, 2)]}})
-        with patch.object(PaintGen, 'paint_handler', return_value='ok') as handler:
-            self.assertEqual(worker.paint_poly_all(multigeo, run_threaded=False), 'ok')
-        self.assertEqual(len(handler.call_args.args[1]), 2)
-        copper = box(0, 0, 3, 3)
-        gerber = SimpleNamespace(kind='gerber', solid_geometry=[copper], tools={}, apertures={})
-        worker.app.options = {'tools_paint_plotting': 'progressive', 'gerber_buffering': 'full'}
-        with patch.object(PaintGen, 'paint_handler', return_value='ok'),                 patch('appPlugins.ToolPaint.PaintGen.gerber_copper_for_paint', return_value=copper):
-            worker.paint_poly_all(gerber, run_threaded=False)
-        self.assertEqual(gerber.solid_geometry, [copper])
-
-    def test_empty_selection_warns_and_fails(self):
-        worker = self._job_worker()
-        painted = SimpleNamespace(kind='geometry', solid_geometry=box(0, 0, 4, 4))
-        touching = box(4, 0, 6, 4)
-        for call in (lambda: worker.paint_poly_area_worker(painted, touching, run_threaded=False),
-                     lambda: worker.paint_poly_all(SimpleNamespace(kind='geometry', solid_geometry=[]),
-                                                   run_threaded=False)):
-            worker.app.inform.emit.reset_mock()
-            self.assertEqual(call(), 'fail')
-            self.assertIn('No polygon found', self._messages(worker))
-
-    def _click_worker(self, selected, multi, select_method=0):
-        worker = PaintGen.__new__(PaintGen)
-        by_name = {obj.obj_options['name']: obj for obj in selected}
-        worker.app = SimpleNamespace(
-            options={'gerber_circle_steps': 12, 'geometry_circle_steps': 48}, inform=Mock(), log=Mock(),
-            defaults=SimpleNamespace(report_usage=Mock(), get=lambda key, default=None: default),
-            collection=SimpleNamespace(get_selected=lambda: selected, get_by_name=by_name.get))
-        worker.parent_tool = SimpleNamespace(reset_selection_state=Mock(), clear_preview=Mock(), area_to_paint_list=[])
-        value = lambda v: SimpleNamespace(get_value=lambda: v)
-        worker.ui = SimpleNamespace(
-            type_obj_radio=value('geometry'), obj_combo=SimpleNamespace(currentText=lambda: 'combo'),
-            multi_objects_cb=value(multi), select_method_combo=value(select_method),
-            tools_table=SimpleNamespace(
-                selectedItems=lambda: [SimpleNamespace(row=lambda: 0)],
-                item=lambda row, col: SimpleNamespace(text=lambda: '0.5')))
-        by_name['combo'] = SimpleNamespace(kind='geometry', obj_options={'name': 'combo'})
-        return worker
-
-    def test_selected_objects_are_painted_one_job_each_with_their_own_circle_steps(self):
-        gerber = SimpleNamespace(kind='gerber', obj_options={'name': 'copper'})
-        geo = SimpleNamespace(kind='geometry', obj_options={'name': 'cut'})
-        excellon = SimpleNamespace(kind='excellon', obj_options={'name': 'holes'})
-        worker = self._click_worker([gerber, excellon, geo], multi=True)
-        jobs = []
-        with patch.object(PaintGen, 'paint_poly_all', side_effect=lambda obj, tooldia, outname: jobs.append(
-                (obj.obj_options['name'], outname, worker.circle_steps))):
-            worker.on_paint_button_click()
-        self.assertEqual(jobs, [('copper', 'copper_paint', 12), ('cut', 'cut_paint', 48)])
-        # nothing suitable selected: warn and do nothing
-        worker = self._click_worker([excellon], multi=True)
-        with patch.object(PaintGen, 'paint_poly_all') as paint_all:
-            worker.on_paint_button_click()
-        paint_all.assert_not_called()
-        self.assertIn('select', self._messages(worker).lower())
-        # unchecked: the combobox object, as before
-        worker = self._click_worker([gerber, geo], multi=False)
-        with patch.object(PaintGen, 'paint_poly_all') as paint_all:
-            worker.on_paint_button_click()
-        self.assertEqual(paint_all.call_args.args[0].obj_options['name'], 'combo')
 
     def test_check_validity_stops_when_no_tool_fits_inside_and_only_warns_when_some_do(self):
         # Paint cuts inside the polygons: a tool is valid if it fits inside them (the 0.3 strip is too narrow

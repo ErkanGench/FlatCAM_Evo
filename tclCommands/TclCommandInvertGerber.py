@@ -5,6 +5,7 @@ import appTranslation as fcTranslate
 import builtins
 from copy import deepcopy
 
+from camlib import object_circle_steps
 from tclCommands.TclCommand import TclCommand
 
 fcTranslate.apply_language('strings')
@@ -93,7 +94,8 @@ class TclCommandInvertGerber(TclCommand):
         if ref_mode not in Gen.REFERENCE_MODES:
             self.raise_tcl_error('%s: %s' % (_("Unknown reference area, use box or exact"), ref_mode))
 
-        steps = int(self._app_option('gerber_circle_steps', 16))
+        # the circles of a reference object (a Gerber or Geometry object has none to make: a 1 mm radius is assumed)
+        hole_steps = object_circle_steps(self.app.options, 'excellon', 1.0, getattr(self.app, 'app_units', 'MM'))
         outname = str(args.get('outname') or name + '_inverted')
         units = (source.obj_options or {}).get('units')
         # the margin is in app units, the geometry is in the units of the source
@@ -106,7 +108,7 @@ class TclCommandInvertGerber(TclCommand):
             if ref is None or getattr(ref, 'kind', None) not in ('gerber', 'geometry'):
                 self.raise_tcl_error('%s: %s' % (_("Expected a Gerber or Geometry reference object"), ref_name))
             try:
-                area = Gen.reference_area(ref, ref_mode, steps, target_units=units)
+                area = Gen.reference_area(ref, ref_mode, hole_steps, target_units=units)
             except Gen.InvertError:
                 self.raise_tcl_error(_(self.ERRORS['empty_reference']))
 
@@ -116,7 +118,7 @@ class TclCommandInvertGerber(TclCommand):
             bounds = None
 
         try:
-            polys = Gen.invert_geometry(source.solid_geometry, bounds, margin, steps, join, area=area)
+            polys = Gen.invert_geometry(source.solid_geometry, bounds, margin, self.app.options, join, area=area, units=units)
         except Gen.InvertError as err:
             text = self.ERRORS['no_bounds'] if 'bounds' in str(err) else self.ERRORS['empty_area']
             self.raise_tcl_error(_(text))

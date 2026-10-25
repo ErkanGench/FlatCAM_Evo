@@ -59,11 +59,6 @@ class ToolFiducials(AppTool):
         self.margin_val = None
         self.sec_position = None
 
-        self.grb_steps_per_circle = self.app.options.get(
-            "gerber_circle_steps",
-            self.app.defaults.get("gerber_circle_steps", self.app.defaults.factory_defaults.get("gerber_circle_steps"))
-        )
-
         # the points of the running manual placement
         self.click_points = []
         # the points of the last added fiducials; the soldermask openings go on them
@@ -284,7 +279,7 @@ class ToolFiducials(AppTool):
     def auto_fiducial_points(self, g_obj):
         """The points of the automatic mode for the bounds of g_obj. They are also shown in the Coordinates."""
         points = auto_points(g_obj.bounds(), self.ui.margin_entry.get_value(), self.ui.pos_radio.get_value(),
-                             self.grb_steps_per_circle, self.decimals)
+                             self.decimals)
         for point, entry in zip(points, (self.ui.bottom_left_coords_entry, self.ui.top_right_coords_entry,
                                          self.ui.sec_points_coords_entry)):
             entry.set_value('(%.*f, %.*f)' % (self.decimals, point[0], self.decimals, point[1]))
@@ -352,7 +347,7 @@ class ToolFiducials(AppTool):
 
         new_apertures, solid_geometry, geo_list = fiducial_geometry(
             points_list, g_obj.tools, g_obj.solid_geometry, fid_size, fid_type, line_thickness,
-            self.grb_steps_per_circle, self.decimals)
+            self.app.options, self.decimals, self.app.app_units)
 
         outname = '%s_%s' % (str(g_obj.obj_options['name']), 'fid')
 
@@ -501,7 +496,8 @@ class ToolFiducials(AppTool):
         line_thickness = self.ui.line_thickness_entry.get_value()
         fid_size = self.ui.fid_size_entry.get_value()
         pt = pos[0], pos[1]     # we ensure that this works in case the pt tuple is a return from Vispy (4 members)
-        geo_list = fiducial_shapes(pt, fid_size, fid_type, line_thickness, self.grb_steps_per_circle)
+        geo_list = fiducial_shapes(pt, fid_size, fid_type, line_thickness, self.app.options,
+                                   self.app.app_units)
 
         outline = '#0000FFAF'
         for util_geo in geo_list:

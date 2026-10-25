@@ -17,7 +17,7 @@ from appParsers.ParseGerber import Gerber, drop_placeholder_record_keys
 from appObjects.AppObjectTemplate import FlatCAMObj, OffsetUiMixin, PropertiesPanelMixin, ObjectDeleted, ValidationError
 
 from camlib import flatten_shapely_geometry, isolation_leftover_paths, clip_paths_to_area, area_outline_paths, \
-    boundary_passes_message, milling_orient, pass_covers_area
+    boundary_passes_message, milling_orient, pass_covers_area, gerber_quad_segs
 
 from shapely import MultiLineString, LinearRing, MultiPolygon, Polygon, LineString, Point
 from shapely.ops import unary_union
@@ -66,9 +66,11 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         self.app = app
         self.decimals = self.app.decimals
 
+        # the fixed number of the preference, for the code that needs one; the parser follows the preferences
+        # (Adaptive / Fixed) circle by circle
         self.circle_steps = int(self._app_option("gerber_circle_steps"))
 
-        Gerber.__init__(self, steps_per_circle=self.circle_steps, app=app)
+        Gerber.__init__(self, steps_per_circle=None, app=app)
         FlatCAMObj.__init__(self, name, app=app)
 
         self.kind = "gerber"
@@ -710,9 +712,17 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
             if not pads:
                 return []
             rings = IsolationGen.pad_passes(pads, envelopes, abs(tooldia), first_pass, pad_passes, overlap,
-                                            int(self.geo_steps_per_circle), negative_dia=tooldia < 0)
+                                            self.app.options, negative_dia=tooldia < 0, units=self.units)
             rings = flatten_shapely_geometry(rings)
             return clip_paths_to_area(rings, boundary) if boundary is not None else rings
+
+        # the outline of the boundary, traced once, out of the excluded area
+        trace_geo = []
+        if boundary is not None and trace_boundary:
+            trace_geo = area_outline_paths(boundary)
+            if except_geo is not None:
+                trace_geo = IsolationGen.area_subtraction(trace_geo, flatten_shapely_geometry(except_geo))
+                trace_geo = flatten_shapely_geometry(trace_geo)
 
         # ------------------------------------------------------------------------------------------ rest machining
         if rest:
@@ -732,8 +742,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                     solid_geo = clip_paths_to_area(solid_geo, boundary)
                 # the boundary is traced once, with the first tool that has paths inside it
                 solid_geo = finish(solid_geo)
-                if boundary is not None and trace_boundary and solid_geo and not traced:
-                    solid_geo += area_outline_paths(boundary)
+                if trace_geo and solid_geo and not traced:
+                    solid_geo += trace_geo
                     traced = True
                 if solid_geo:
                     tools.append((abs(tooldia), solid_geo))
@@ -755,7 +765,7 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
         use_leftovers = bool(clear_leftovers) and combine and iso_t == 2 and tooldia > 0
         iso_offsets = [tooldia * ((2 * nr + 1) / 2.0) - (nr * overlap * tooldia) for nr in range(passes)]
         # the passes are buffered ahead, in parallel threads
-        buffers = self.isolation_buffers(iso_offsets, geometry=work_geo)
+        buffers = IsolationGen.pass_buffers(self, iso_offsets, self.app, geometry=work_geo)
 
         pass_paths = []     # (pass number, its paths)
         envelopes = []
@@ -788,8 +798,8 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
 
             if use_leftovers:
                 if prev_geom is not None:
-                    leftover_geo += isolation_leftover_paths(prev_geom, envelope, tool_dia / 2.0,
-                                                             IsolationGen.quad_segs_of(self.geo_steps_per_circle),
+                    quad_segs = gerber_quad_segs(self.app.options, tool_dia / 2.0, self.units)
+                    leftover_geo += isolation_leftover_paths(prev_geom, envelope, tool_dia / 2.0, quad_segs,
                                                              invert=mill_dir)
                 prev_geom = envelope
 
@@ -799,7 +809,6 @@ class GerberObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Gerber):
                 return 'fail'
 
         pad_geo = pad_rings(envelopes, tooldia, passes_made)
-        trace_geo = area_outline_paths(boundary) if boundary is not None and trace_boundary else []
 
         if combine:
             name = iso_stem if outname is None else outname

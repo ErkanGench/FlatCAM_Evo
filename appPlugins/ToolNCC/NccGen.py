@@ -14,7 +14,7 @@ import gettext
 import appTranslation as fcTranslate
 import builtins
 
-from camlib import grace, flatten_shapely_geometry, residual_cleanup
+from camlib import grace, flatten_shapely_geometry, residual_cleanup, object_circle_steps
 from appParsers.feature_access import fused_solid
 from appCommon.SafeEval import safe_eval
 from appPlugins.ToolNCC import NccModel
@@ -95,9 +95,18 @@ class NccGen:
             value = self.app.defaults.factory_defaults.get(key, None)
         return fallback if value is None else value
 
-    def _circle_steps_for(self, kind):
-        key = 'gerber_circle_steps' if kind == 'gerber' else 'geometry_circle_steps'
-        return int(self._option(key, 64))
+    def _circle_steps_for(self, kind, radius=None):
+        """
+        The segments of a full circle, as the preferences "Circles" of the kind set them (Gerber or Geometry).
+
+        :param kind:    the kind of the cleared object
+        :param radius:  the radius of the circle; None for the shared steps of the job (the circles of a 1 mm
+                        radius), the tool paths take their own from the tool radius
+        """
+        self.circle_kind = 'gerber' if kind == 'gerber' else 'geometry'
+        if radius is None:
+            radius = 1.0 if str(self.app.app_units).upper() == 'MM' else 1.0 / 25.4
+        return object_circle_steps(self.app.options, self.circle_kind, radius, self.app.app_units)
 
     def _simplification(self):
         """The simplification tolerance in the units of the geometry (the preference is in millimetres)."""
@@ -397,7 +406,8 @@ class NccGen:
         area, generated, warning, messages = NccModel.prepare_area(
             geometry, clipping_region, isolation, tools_storage, name, self.decimals,
             has_offset, offset, margin, milling_type, lambda *args: self.generate_envelope(*args),
-            self._compute_area_to_clear_handler, lambda: NccGen._process_events_and_check_abort(self), exclusion)
+            self._compute_area_to_clear_handler, lambda: NccGen._process_events_and_check_abort(self), exclusion,
+            self.circle_steps)
         # NccModel translates its messages
         for message in messages:
             self.app.inform.emit('[WARNING_NOTCL] %s' % message)
@@ -461,7 +471,9 @@ class NccGen:
 
         # Resolve engines lazily: unbound callers may supply only the selected engine.
         paths, messages = NccModel.clear_polygon(
-            pol, tooldia, ncc_method, ncc_overlap, ncc_connect, ncc_contour, prog_plot, self.circle_steps,
+            pol, tooldia, ncc_method, ncc_overlap, ncc_connect, ncc_contour, prog_plot,
+            object_circle_steps(self.app.options, getattr(self, 'circle_kind', 'geometry'), tooldia / 2,
+                                self.app.app_units),
             lambda *args, **kwargs: self.parent_tool.clear_polygon_shrink(*args, **kwargs),
             lambda *args, **kwargs: self.parent_tool.clear_polygon_seed(*args, **kwargs),
             lambda *args, **kwargs: self.parent_tool.clear_polygon_lines(*args, **kwargs), simplify_tol)
@@ -849,7 +861,7 @@ class NccGen:
                 geometry, boundary, isolation, snapshot, name, self.decimals,
                 has_offset, offset if has_offset is True else 0.0, margin, milling_type,
                 self.generate_envelope, self._compute_area_to_clear_handler,
-                lambda: NccGen._process_events_and_check_abort(self), exclusion)
+                lambda: NccGen._process_events_and_check_abort(self), exclusion, self.circle_steps)
             for message in messages:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % message)
             if isinstance(area, str):

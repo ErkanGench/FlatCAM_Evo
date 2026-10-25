@@ -90,13 +90,10 @@ class ToolPaint(Geometry, AppTool):
     def __init__(self, app):
         self.app = app
         self.decimals = self.app.decimals
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        self.circle_steps = int(self.app.options.get(
-            "geometry_circle_steps",
-            app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get("geometry_circle_steps"))))
 
         AppTool.__init__(self, app)
-        Geometry.__init__(self, geo_steps_per_circle=self.circle_steps, app=app)
+        # no fixed steps: the circles follow the preferences "Circles" of Geometry (PaintGen._steps_at())
+        Geometry.__init__(self, app=app)
 
         # #############################################################################
         # ########################## VARIABLES ########################################
@@ -990,6 +987,9 @@ class ToolPaint(Geometry, AppTool):
                 "<b>%s: <font color='#0000FF'>%s</font></b>" % (_('Parameters for'), _("Multiple Tools"))
             )
 
+        # the table rebuild resets the selected tools and drop-down rows: the area to paint may have changed
+        self.clear_preview()
+
     def on_tool_add(self, custom_dia=None):
         filename = self.app.tools_database_path()
 
@@ -1588,22 +1588,22 @@ class ToolPaint(Geometry, AppTool):
         if not uids:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
             return
-        obj_name = self.ui.obj_combo.currentText()
-        try:
-            source = self.app.collection.get_by_name(obj_name)
-        except Exception:
-            source = None
-        if source is None:
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
-            return
-
         mode = self.ui.select_method_combo.get_value()
-        objects = [source]
         if self.ui.multi_objects_cb.get_value() and mode in (0, 2, 3):
             objects = [obj for obj in self.app.collection.get_selected() if obj.kind in ('geometry', 'gerber')]
             if not objects:
                 self.app.inform.emit('[WARNING_NOTCL] %s' % _("Select Geometry or Gerber objects in the Project tab."))
                 return
+        else:
+            obj_name = self.ui.obj_combo.currentText()
+            try:
+                source = self.app.collection.get_by_name(obj_name)
+            except Exception:
+                source = None
+            if source is None:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
+                return
+            objects = [source]
 
         reference = None
         if mode == 1 and not self.last_polygons:
@@ -1762,6 +1762,20 @@ class ToolPaint(Geometry, AppTool):
             elif isinstance(current_widget, FCComboBox):
                 current_widget.currentIndexChanged.connect(self.form_to_storage)
 
+        # any input that changes the area to paint drops the displayed and any pending preview
+        for signal in (
+                self.ui.offset_entry.returnPressed,
+                self.ui.rest_offset_entry.returnPressed,
+                self.ui.tools_table.itemSelectionChanged,
+                self.ui.rest_cb.stateChanged,
+                self.ui.reference_combo.currentIndexChanged,
+                self.ui.reference_type_combo.currentIndexChanged):
+            try:
+                signal.disconnect(self.clear_preview)
+            except (TypeError, RuntimeError):
+                pass
+            signal.connect(self.clear_preview)
+
         self.ui.rest_cb.stateChanged.connect(self.ui.on_rest_machining_check)
         self.ui.order_combo.currentIndexChanged.connect(self.on_order_changed)
 
@@ -1813,6 +1827,18 @@ class ToolPaint(Geometry, AppTool):
                     current_widget.currentIndexChanged.disconnect(self.form_to_storage)
                 except (TypeError, ValueError):
                     pass
+
+        for signal in (
+                self.ui.offset_entry.returnPressed,
+                self.ui.rest_offset_entry.returnPressed,
+                self.ui.tools_table.itemSelectionChanged,
+                self.ui.rest_cb.stateChanged,
+                self.ui.reference_combo.currentIndexChanged,
+                self.ui.reference_type_combo.currentIndexChanged):
+            try:
+                signal.disconnect(self.clear_preview)
+            except (TypeError, RuntimeError, AttributeError):
+                pass
 
         try:
             # if connected, disconnect the signal from the slot on item_changed as it creates issues

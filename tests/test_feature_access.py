@@ -95,7 +95,7 @@ class TestExcellonFeatures:
                 assert mine.equals_exact(parsed, 0.0), 'solid of tool %s differs from create_geometry' % t
 
     def test_solid_uses_the_circle_steps(self, excellon):
-        excellon.excellon_circle_steps = 4
+        excellon.app.options.update({'excellon_circle_steps_mode': 'fixed', 'excellon_circle_steps': 16})
         a = of_item(excellon, 1)[0].solid
         b = Point(5.0, 5.0).buffer(0.4, 4)
         assert a.equals_exact(b, 0.0) and len(a.exterior.coords) == 17

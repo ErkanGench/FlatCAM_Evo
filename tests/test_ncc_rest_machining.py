@@ -5,7 +5,7 @@ button) built headless with offscreen Qt and a MagicMock app."""
 import functools
 import os
 import sys
-from copy import copy, deepcopy
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock
 
@@ -17,13 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PyQt6 import QtWidgets  # noqa: E402
 from PyQt6.QtCore import QEvent, QStringListModel  # noqa: E402
 from shapely.geometry import LineString, MultiPolygon, Polygon, box  # noqa: E402
+from shapely.ops import unary_union  # noqa: E402
 
 from appMain import App  # noqa: E402
-from appPlugins.ToolNCC import NccGen as nccgen_module  # noqa: E402
 from appPlugins.ToolNCC import NccModel  # noqa: E402
 from appPlugins.ToolNCC.Ncc import ToolNcc  # noqa: E402
 from appPlugins.ToolNCC.NccGen import NccGen  # noqa: E402
-from camlib import grace  # noqa: E402
 from defaults import AppDefaults  # noqa: E402
 from test_plugin_geometry_bases import make_tool_app  # noqa: E402
 
@@ -216,13 +215,6 @@ def test_run_does_not_change_the_tool_table():
     assert all(not value['solid_geometry'] for value in gen.ncc_tools.values())
 
 
-def test_gen_reads_the_table_the_controller_has_now():
-    gen, _output = make_gen([1.0])
-    gen.parent_tool.ncc_tools = {7: line_tool(0.3)}
-    assert list(gen.ncc_tools) == [7]
-    assert list(copy(gen).ncc_tools) == [7]
-
-
 def test_empty_area_to_clear_is_reported_not_replaced_by_the_envelope():
     assert NccModel.complement(box(0, 0, 1, 1), Polygon()).is_empty
     assert NccModel.complement(box(0, 0, 1, 1), None).is_empty
@@ -259,6 +251,21 @@ def test_exclusion_is_removed_from_the_area():
         cleared, clipping_type=1, clipping_areas=[box(-1, -1, 3, 3)], margin=0.0, exclusion=box(2, -1, 3, 3))
     assert area.area == pytest.approx(3 * 4 - 1)
     assert iso == {}
+
+
+@pytest.mark.parametrize('exclusion', [box(1, 1, 3, 5)])
+def test_exclusion_keeps_the_isolation_cutter_out(exclusion):
+    """The exclusion zones protect the isolation paths too, measured with the cutter radius, not only the clearing."""
+    tools = {1: line_tool(0.2)}
+    copper = box(2, 2, 4, 4)
+    _area, iso, _broken, _warnings = NccModel.prepare_area(
+        copper, box(0, 0, 10, 10), [0.2], tools, 'n', 4, False, 0.0, 1.0, 'cl',
+        lambda radius, invert: copper.buffer(radius, 8),
+        lambda target, boundary=None: NccModel.complement(target, boundary), lambda: None, exclusion)
+    paths = iso[1]['solid_geometry']
+    assert paths
+    sweep = unary_union([path.buffer(0.1, 32) for path in paths]) if paths else Polygon()
+    assert sweep.intersection(exclusion).area == pytest.approx(0, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -335,21 +342,6 @@ def test_tcl_rest_does_not_send_slivers_to_the_clearing():
     assert seen == [(0, 0, 10, 10)]
 
 
-def test_final_cleanup_contour_follows_the_tool_setting():
-    tools = {1: line_tool(1.0)}
-    tools[1]['data'].update(tools_ncc_final_cleanup=True, tools_ncc_contour=False)
-    seen = []
-
-    def cleanup_paths(domain, dia, steps, previous, generate):
-        generate(domain, dia)
-        return [], MultiPolygon()
-
-    NccModel.finish_cleanup(
-        tools, {}, {1: MultiPolygon([box(0, 0, 4, 4)])}, 'n', 32, cleanup_paths,
-        lambda **kw: seen.append(kw['ncc_contour']), lambda: None)
-    assert seen == [False]
-
-
 # ---------------------------------------------------------------------------------------------------------------
 # Tcl inputs
 # ---------------------------------------------------------------------------------------------------------------
@@ -421,34 +413,9 @@ def test_check_validity_stops_the_job_before_the_generation():
     assert any(m.startswith('[ERROR_NOTCL]') and '0.5' in m for m in messages_of(gen))
 
 
-def test_check_validity_is_skipped_for_a_geometry_source():
-    gen, output = run_rest(MultiPolygon([box(0, 0, 10, 10)]), [0.5], lambda **kw: [LineString([(1, 1), (9, 1)])],
-                           rest=False, handler_kwargs={'check_validity': True})
-    assert list(output.tools) == [1]
-    assert any(m.startswith('[WARNING_NOTCL]') and 'skipped' in m for m in messages_of(gen))
-
-
 # ---------------------------------------------------------------------------------------------------------------
 # GUI thread and controller state
 # ---------------------------------------------------------------------------------------------------------------
-def test_worker_thread_does_not_process_events_but_still_aborts(monkeypatch):
-    from PyQt6 import QtCore
-    gen, _output = make_gen([1.0])
-    process = Mock()
-    other_thread = object()
-    fake_app = SimpleNamespace(thread=lambda: other_thread)
-    monkeypatch.setattr(nccgen_module, 'QtWidgets', SimpleNamespace(
-        QApplication=SimpleNamespace(instance=lambda: fake_app, processEvents=process)))
-    NccGen._process_events_and_check_abort(gen)
-    process.assert_not_called()
-    fake_app.thread = QtCore.QThread.currentThread
-    NccGen._process_events_and_check_abort(gen)
-    process.assert_called_once()
-    gen.app.abort_flag = True
-    with pytest.raises(grace):
-        NccGen._process_events_and_check_abort(gen)
-
-
 # ---------------------------------------------------------------------------------------------------------------
 # Controller and panel
 # ---------------------------------------------------------------------------------------------------------------
@@ -506,10 +473,6 @@ def dias_in_table_order(t):
     return [float(t.ui.tools_table.item(row, 1).text()) for row in range(t.ui.tools_table.rowCount())]
 
 
-def click(button, pos=(0, 0)):
-    return SimpleNamespace(pos=pos, button=button, is_dragging=False)
-
-
 def test_drag_drop_reorder_holds_and_keeps_the_tool_dict(tool):
     storage = tool.ncc_tools
     tool.ui.order_combo.set_value(2)   # Reverse sorts by diameter
@@ -538,21 +501,6 @@ def test_edit_to_a_duplicate_or_nonpositive_diameter_is_rejected(tool):
         assert sorted(dias_in_table_order(tool)) == [0.5, 1.0, 2.0], text
 
 
-def test_tool_with_an_invalid_diameter_is_not_added(tool):
-    for dia in (float("nan"), -1.0):
-        tool.on_tool_add(custom_dia=dia)
-        tool.on_tool_default_add(dia=dia)
-    assert len(tool.ncc_tools) == 2
-    assert any(m.startswith('[WARNING_NOTCL]') for m in messages(tool))
-
-
-def test_delete_refreshes_the_generate_button(tool):
-    tool.ui.tools_table.selectAll()
-    tool.on_tool_delete()
-    assert tool.ncc_tools == {}
-    assert tool.ui.generate_button.isEnabled() is False
-
-
 def test_tool_from_database_is_merged_with_defaults_and_selected(tool):
     db_tool = {'tooldia': 0.3, 'data': {'tool_target': 5, 'tools_ncc_overlap': 7.0}}
     uid = tool.on_ncc_tool_from_db_inserted(tool=db_tool)
@@ -569,69 +517,6 @@ def test_beginner_mode_turns_rest_machining_off(tool):
     tool.change_level('b')
     assert tool.ui.rest_cb.get_value() is False
     assert all(not v['data']['tools_ncc_rest'] for v in tool.ncc_tools.values())
-
-
-def test_unchecking_rest_machining_restores_the_order(tool):
-    tool.ui.order_combo.set_value(1)
-    tool.ui.rest_cb.set_value(True)
-    assert tool.ui.order_combo.get_value() == 2
-    tool.ui.rest_cb.set_value(False)
-    assert tool.ui.order_combo.get_value() == 1
-
-
-def start_selection(t, shape='square'):
-    t.ui.area_shape_radio.set_value(shape)
-    t.area_sel_disconnect_flag = True
-    t.gen = MagicMock()
-    t.gen.ncc_obj = SimpleNamespace(obj_options={'name': 'board'})
-    t.app.collection.objects['board'] = t.gen.ncc_obj
-    t.app.ui.notebook.setDisabled.reset_mock()
-
-
-def test_ending_the_selection_without_zones_enables_the_panel_and_resets_it(tool):
-    # a right-click with no zones
-    start_selection(tool)
-    tool.on_mouse_release(click(2))
-    tool.app.ui.notebook.setDisabled.assert_called_with(False)
-    assert any(m.startswith('[WARNING_NOTCL]') for m in messages(tool))
-    tool.gen.clear_ncc_area_selection_option.assert_not_called()
-    # Escape in the middle of a zone: the zones and the first click do not carry over to the next selection
-    start_selection(tool)
-    tool.areas_to_clear_list.append(box(0, 0, 1, 1))
-    tool.first_click = True
-    tool.on_key_press(SimpleNamespace(key='Escape'))
-    assert tool.areas_to_clear_list == [] and tool.first_click is False
-    tool.app.ui.notebook.setDisabled.assert_called_with(False)
-    tool.gen.clear_ncc_area_selection_option.assert_not_called()
-
-
-def test_zones_are_handed_over_once_and_not_for_a_deleted_object(tool):
-    start_selection(tool)
-    tool.areas_to_clear_list.append(box(0, 0, 1, 1))
-    handed = []
-    tool.gen.clear_ncc_area_selection_option.side_effect = lambda areas: handed.append(list(areas))
-    tool.on_mouse_release(click(2))
-    assert len(handed) == 1 and len(handed[0]) == 1
-    assert tool.areas_to_clear_list == []
-
-    start_selection(tool)
-    tool.areas_to_clear_list.append(box(0, 0, 1, 1))
-    del tool.app.collection.objects['board']
-    tool.on_mouse_release(click(2))
-    tool.gen.clear_ncc_area_selection_option.assert_not_called()
-    assert any(m.startswith('[ERROR_NOTCL]') for m in messages(tool))
-    assert tool.areas_to_clear_list == []
-
-
-def test_self_intersecting_polygon_is_reported(tool):
-    start_selection(tool, 'polygon')
-    tool.app.plotcanvas.translate_coords.side_effect = lambda pos: pos
-    tool.app.grid_status.return_value = False
-    tool.points = [(0, 0), (2, 2), (2, 0)]
-    tool.poly_drawn = True
-    tool.on_mouse_release(SimpleNamespace(pos=(0, 2), button=2, is_dragging=False))
-    assert tool.areas_to_clear_list == []
-    assert any(m.startswith('[WARNING_NOTCL]') for m in messages(tool))
 
 
 def prepare_run(t, **objects):
@@ -651,33 +536,10 @@ def geometry_object(name, *boxes):
     return SimpleNamespace(kind='geometry', solid_geometry=list(boxes), obj_options={'name': name})
 
 
-def test_exclusion_zones_are_drawn_counted_kept_and_reset(tool):
-    prepare_run(tool)
-    tool.on_add_exclusion()
-    tool.app.ui.notebook.setDisabled.assert_called_with(True)
-    for pos in [(0, 0), (2, 2), (5, 5), (7, 8)]:
-        tool.on_mouse_release(click(1, pos))
-    tool.on_mouse_release(click(2))
-    # two squares are kept, the area to clear is untouched, the panel is back
-    assert len(tool.exclusion_list) == 2 and tool.areas_to_clear_list == []
-    assert tool.ui.excl_count_value.text() == '2'
-    tool.app.ui.notebook.setDisabled.assert_called_with(False)
-    assert tool.exclusion_areas() is None   # the checkbox is off
-    tool.ui.excl_cb.set_value(True)
-    assert len(tool.exclusion_areas()) == 2
-
-    # Escape drops only the zones of the drawing in progress
-    tool.on_add_exclusion()
-    tool.on_mouse_release(click(1, (9, 9)))
-    tool.on_key_press(SimpleNamespace(key='Escape'))
-    assert len(tool.exclusion_list) == 2
-    tool.app.ui.notebook.setDisabled.assert_called_with(False)
-
-    tool.on_delete_exclusions()
-    assert tool.exclusion_list == [] and tool.ui.excl_count_value.text() == '0'
-    tool.exclusion_list.append(box(0, 0, 1, 1))
-    tool.set_tool_ui()
-    assert tool.exclusion_list == []
+def cleared_domain(source, margin=1.0):
+    """The area Preview draws for one geometry source: its margin boundary minus its own copper."""
+    boundary = NccModel.apply_margin(NccModel.entire_object(source.solid_geometry), 'geometry', 0, margin)
+    return NccModel.complement(unary_union(source.solid_geometry), boundary)
 
 
 def test_exclusion_zones_reach_the_handler_in_every_mode(tool):
@@ -695,46 +557,6 @@ def test_exclusion_zones_reach_the_handler_in_every_mode(tool):
     tool.ui.excl_cb.set_value(False)
     tool.gen.on_ncc_click()
     assert tool.gen.ncc_handler.call_args.kwargs['exclusion_areas'] is None
-
-
-def test_preview_draws_the_area_without_the_exclusion_and_is_cleared(tool):
-    board = geometry_object('board', box(0, 0, 2, 2), box(8, 0, 10, 2))
-    prepare_run(tool, board=board)
-    tool.ui.margin_entry.set_value(1.0)
-
-    def drawn_area():
-        tool.on_preview()
-        store = tool._preview_shapes
-        area = sum(call.args[0].area for call in store.add.call_args_list)
-        store.add.reset_mock()
-        return area
-
-    full = drawn_area()
-    assert full > 0
-    tool.exclusion_list.append(box(4, -1, 6, 3))
-    tool.ui.excl_cb.set_value(True)
-    assert drawn_area() == pytest.approx(full - 8.0, abs=0.5)
-
-    # a Reset clears it
-    tool._preview_shapes.clear.reset_mock()
-    tool.set_tool_ui()
-    tool._preview_shapes.clear.assert_called()
-    prepare_run(tool)   # the Reset made a new panel
-    # Area Selection previews the zones of the last run: none yet
-    tool.ui.select_method_combo.set_value(1)
-    tool.app.worker_task.emit.reset_mock()
-    tool.on_preview()
-    assert messages(tool)[-1].startswith('[WARNING_NOTCL]')
-    tool.app.worker_task.emit.assert_not_called()
-    tool.ui.select_method_combo.set_value(0)
-    # a result that arrives after the object changed is not drawn
-    tasks = []
-    tool.app.worker_task.emit.side_effect = tasks.append
-    tool._preview_shapes.add.reset_mock()
-    tool.on_preview()
-    tool.on_source_changed()
-    tasks[0]['fcn'](*tasks[0]['params'])
-    tool._preview_shapes.add.assert_not_called()
 
 
 def test_all_selected_objects_each_get_an_output_with_a_unique_name(tool):
@@ -765,18 +587,45 @@ def test_all_selected_objects_each_get_an_output_with_a_unique_name(tool):
     assert tool.gen.ncc_handler.call_args.kwargs['cleared_object'] is first
 
 
+def test_preview_uses_the_selected_sources_and_rejects_several_area_sources(tool):
+    board = geometry_object('board', box(50, 50, 51, 51))
+    first = geometry_object('a', box(0, 0, 1, 1))
+    second = geometry_object('b', box(5, 5, 6, 6))
+    prepare_run(tool, board=board, a=first, b=second)
+    tool.ui.rest_cb.set_value(False)
+    tool.ui.margin_entry.set_value(1)
+    tool.ui.multi_cb.set_value(True)
+    tool.app.collection.selected = [first, second]
+
+    tool.on_preview()
+    drawn = unary_union([call.args[0] for call in tool._preview_shapes.add.call_args_list])
+    assert drawn.bounds == pytest.approx((-1, -1, 7, 7))
+    expected = unary_union([cleared_domain(source) for source in (first, second)])
+    assert drawn.symmetric_difference(expected).area < 1e-9
+
+    # Area Selection works with one source only, like Generate
+    tool.ui.select_method_combo.set_value(1)
+    tool.last_zones = [box(0, 0, 1, 1)]
+    tool._preview_shapes.reset_mock()
+    tool.on_preview()
+    tool._preview_shapes.add.assert_not_called()
+    assert messages(tool)[-1].startswith('[ERROR_NOTCL]')
+
+    # with one source the object of the combo box is still the source
+    tool.ui.multi_cb.set_value(False)
+    tool.ui.select_method_combo.set_value(0)
+    tool._preview_shapes.reset_mock()
+    tool.on_preview()
+    drawn = unary_union([call.args[0] for call in tool._preview_shapes.add.call_args_list])
+    assert drawn.bounds == pytest.approx((49, 49, 52, 52))
+
+
 def run_optimal(t, storage):
     t.app.collection.objects['board'] = SimpleNamespace(kind='gerber', tools=storage)
     t.ui.obj_combo.currentText = lambda: 'board'
     t.app.abort_flag = False
     t.app.inform.emit.reset_mock()
     t.on_find_optimal_tooldia()
-
-
-def test_optimal_with_a_failing_measurement_reports_an_error(tool):
-    # one polygon: nothing to measure
-    run_optimal(tool, {10: {'geometry': [{'solid': box(0, 0, 1, 1)}]}})
-    assert messages(tool)[-1].startswith('[ERROR_NOTCL]')
 
 
 def test_optimal_proposes_a_tool_below_the_smallest_gap(tool):

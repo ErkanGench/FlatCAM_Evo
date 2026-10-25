@@ -90,6 +90,7 @@ def run_isolate(app, gerber, **kwargs):
 
 @pytest.mark.parametrize('combine', [True, False])
 def test_isolate_makes_the_same_paths_as_one_pass_at_a_time(app, three_threads, combine):
+    app.options['gerber_circle_steps_mode'] = 'fixed'     # the reference passes use the fixed steps of the object
     gerber = make_gerber(app, name='g')
     passes = 7
     expected = []
@@ -136,6 +137,7 @@ def plugin_one_pass_at_a_time(tool, gerber, passes, mill_dir, negative_dia=False
 
 @pytest.mark.parametrize('negative_dia', [False, True])
 def test_plugin_combined_passes_are_the_same_as_one_pass_at_a_time(app, three_threads, negative_dia):
+    app.options['gerber_circle_steps_mode'] = 'fixed'     # the reference passes use the fixed steps of the object
     gerber = make_gerber(app, name='g')
     tool = make_tool(app)
     tool.new_object = Mock()

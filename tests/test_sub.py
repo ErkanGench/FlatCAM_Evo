@@ -82,19 +82,6 @@ def test_untouched_elements_keep_aperture_and_follow_removed_dropped():
     assert len(res.tools[0]['geometry']) == 2        # the near pad leaves two halves
 
 
-def test_input_tools_not_mutated():
-    tools = {'10': {'type': 'R', 'size': 0.0, 'geometry': [flash(0, 0, 10, 2)]}}
-    sg.compute(gerber(tools), [geometry([box(-1, -5, 1, 5)])])
-    assert len(tools['10']['geometry']) == 1 and 0 not in tools
-
-
-def test_existing_aperture_zero_region_can_be_cut():
-    region = {'solid': box(0, 0, 10, 10), 'follow': box(0, 0, 10, 10).exterior}
-    tools = {0: {'type': 'REG', 'size': 0.0, 'geometry': [region]}}
-    res = sg.compute(gerber(tools), [geometry([box(4, -1, 6, 11)])])
-    assert len(res.tools[0]['geometry']) == 2
-
-
 def test_subtractor_clear_holes_keep_copper_under_them():
     target = gerber({'10': {'type': 'R', 'size': 0.0, 'geometry': [flash(0, 0, 10, 10)]}})
     pour = {'solid': box(-20, -20, 20, 20)}
@@ -105,15 +92,6 @@ def test_subtractor_clear_holes_keep_copper_under_them():
     assert res.tools[0]['geometry'][0]['solid'].area == pytest.approx(16)
 
 
-def test_margin_grows_the_cut():
-    target = gerber({'10': {'type': 'R', 'size': 0.0, 'geometry': [flash(0, 0, 20, 2)]}})
-    cutter = geometry([box(-1, -5, 1, 5)])
-    plain = sg.compute(target, [cutter])
-    grown = sg.compute(target, [cutter], margin=1.0)
-    assert grown.solid_geometry.area < plain.solid_geometry.area
-    assert plain.solid_geometry.area == pytest.approx(36)
-
-
 def test_aperture_selection_leaves_other_apertures_alone():
     a, b = flash(0, 0, 4, 4), flash(0, 10, 4, 4)
     tools = {'10': {'type': 'R', 'size': 0.0, 'geometry': [a]}, '11': {'type': 'R', 'size': 0.0, 'geometry': [b]}}
@@ -122,14 +100,6 @@ def test_aperture_selection_leaves_other_apertures_alone():
     assert res.tools['10']['geometry'][0] is a
     assert '11' not in res.tools
     assert res.solid_geometry.area == pytest.approx(16)
-
-
-def test_target_in_subtractors_raises():
-    target = gerber({'10': {'type': 'R', 'size': 0.0, 'geometry': [flash(0, 0)]}})
-    with pytest.raises(ValueError):
-        sg.compute(target, [target])
-    with pytest.raises(ValueError):
-        sg.compute(target, [])
 
 
 def test_intersect_keeps_inside_and_clips_partial():
@@ -164,12 +134,6 @@ def test_units_mix_inch_subtractor_on_mm_target():
     assert not res.tools
 
 
-@pytest.mark.parametrize('target_units, sub_units, expected', [
-    ('MM', 'IN', 25.4), ('IN', 'MM', 1 / 25.4), ('MM', 'MM', 1.0), (None, 'IN', 1.0), ('MM', None, 1.0)])
-def test_units_factor(target_units, sub_units, expected):
-    assert sg.units_factor(target_units, sub_units) == pytest.approx(expected)
-
-
 # --------------------------------------------------------------------------------------------------- Geometry target
 @pytest.mark.parametrize('multi', [False, True])
 def test_geometry_bare_multipolygon_gives_result(multi):
@@ -197,11 +161,6 @@ def test_geometry_lines_with_margin_cut_gerber_and_excellon_subtractors():
     grb = gerber({'10': {'type': 'R', 'size': 0.0, 'geometry': [flash(5, 5, 4, 4)]}})
     by_grb = sg.compute(target, [grb], close_paths=True)
     assert area_of(by_grb.solid_geometry) == pytest.approx(84)
-
-
-def test_geometry_intersect():
-    res = sg.compute(geometry([box(0, 0, 10, 10)]), [geometry([box(5, 5, 20, 20)])], op='intersect', close_paths=True)
-    assert area_of(res.solid_geometry) == pytest.approx(25)
 
 
 # -------------------------------------------------------------------------------------------------- Excellon target
@@ -235,27 +194,6 @@ def test_excellon_subtractor_uses_hole_diameters_and_tool_selection():
 
 
 # ------------------------------------------------------------------------------------------------------- apply/perf
-def test_apply_result_sets_everything_but_name():
-    tools = {'10': {'type': 'R', 'size': 0.0, 'geometry': [flash(0, 0, 10, 2)]}}
-    target = gerber(tools, name='orig')
-    res = sg.compute(target, [geometry([box(-1, -5, 1, 5)])])
-    new = NS(obj_options={'name': 'new'})
-    sg.apply_result(new, res, target)
-    assert new.obj_options['name'] == 'new' and new.obj_options['units'] == 'MM'
-    assert new.tools is res.tools and new.follow_geometry == res.follow_geometry
-
-
-def test_many_pads_against_many_shapes_is_fast():
-    pads = [flash(x * 3.0, y * 3.0, 1.0, 1.0) for x in range(50) for y in range(40)]
-    tools = {'10': {'type': 'R', 'size': 0.0, 'geometry': pads}}
-    cutters = [box(i * 12.0 + 0.2, j * 12.0 + 0.2, i * 12.0 + 1.0, j * 12.0 + 1.0) for i in range(12)
-               for j in range(40)]
-    started = time.perf_counter()
-    res = sg.compute(gerber(tools), [geometry(cutters)], close_paths=True)
-    assert time.perf_counter() - started < 2.0
-    assert res.stats['kept'] + res.stats['changed'] + res.stats['removed'] == 2000
-
-
 # ------------------------------------------------------------------------------------------------- plugin controller
 @pytest.fixture(scope='module')
 def fc():

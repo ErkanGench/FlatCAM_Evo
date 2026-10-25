@@ -4,7 +4,7 @@ import math
 from copy import deepcopy
 from shapely import LineString, Point, MultiPolygon
 from shapely.ops import unary_union
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, gerber_quad_segs
 
 
 def _flat(geometry):
@@ -82,7 +82,7 @@ def create_marker_geometry(points_storage, marker_type, line_thickness, line_len
     return geo_list
 
 
-def gerber_marker_data(tools, solid_geometry, follow_geometry, marker_geometry, line_thickness, circle_steps):
+def gerber_marker_data(tools, solid_geometry, follow_geometry, marker_geometry, line_thickness, options, units='MM'):
     new_apertures = deepcopy(tools)
     aperture_found = None
     for ap_id, ap_val in new_apertures.items():
@@ -90,7 +90,7 @@ def gerber_marker_data(tools, solid_geometry, follow_geometry, marker_geometry, 
             aperture_found = ap_id
             break
 
-    quad_segs = max(1, circle_steps // 4)
+    quad_segs = gerber_quad_segs(options, line_thickness / 2.0, units)
     geo_buff_list = []
     if aperture_found:
         for geo in marker_geometry:

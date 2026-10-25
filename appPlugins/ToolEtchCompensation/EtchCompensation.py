@@ -235,7 +235,7 @@ class ToolEtchCompensation(AppTool):
         return {
             'sources': sources, 'values': values, 'off_um': off_um,
             'units': self.app.app_units,
-            'steps': int(self._opt("gerber_circle_steps")),
+            'options': self.app.options,
             'suffix': str(self._opt("tools_etch_suffix") or ''),
         }
 
@@ -287,7 +287,7 @@ class ToolEtchCompensation(AppTool):
                     apertures = {} if mode == 'preview' else src.tools
                     res = compensate_gerber(
                         src.solid_geometry, apertures, values['thickness'], values['mode'], params['units'],
-                        params['steps'], factor=values['factor'], etchant=values['etchant'],
+                        params['options'], factor=values['factor'], etchant=values['etchant'],
                         offset_um=values['offset_um'])
                     results.append((src, res))
                 if mode == 'preview':

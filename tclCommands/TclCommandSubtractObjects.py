@@ -5,6 +5,7 @@ import gettext
 import appTranslation as fcTranslate
 import builtins
 
+from camlib import object_circle_steps
 from tclCommands.TclCommand import TclCommand
 
 fcTranslate.apply_language('strings')
@@ -13,8 +14,7 @@ if '_' not in builtins.__dict__:
 
 log = logging.getLogger('base')
 
-STEPS_KEYS = {'gerber': 'gerber_circle_steps', 'geometry': 'geometry_circle_steps',
-              'excellon': 'excellon_circle_steps'}
+KINDS = ('gerber', 'geometry', 'excellon')
 
 
 class TclCommandSubtractObjects(TclCommand):
@@ -105,7 +105,7 @@ class TclCommandSubtractObjects(TclCommand):
         if target is None:
             self.raise_tcl_error('%s: %s' % (_("Object not found"), target_name))
             return 'fail'
-        if getattr(target, 'kind', None) not in STEPS_KEYS:
+        if getattr(target, 'kind', None) not in KINDS:
             self.raise_tcl_error('%s: %s' % (_("Expected a Gerber, Geometry or Excellon object"), target_name))
             return 'fail'
 
@@ -118,7 +118,7 @@ class TclCommandSubtractObjects(TclCommand):
             if obj is None:
                 self.raise_tcl_error('%s: %s' % (_("Object not found"), name))
                 return 'fail'
-            if getattr(obj, 'kind', None) not in STEPS_KEYS:
+            if getattr(obj, 'kind', None) not in KINDS:
                 self.raise_tcl_error('%s: %s' % (_("Expected a Gerber, Geometry or Excellon object"), name))
                 return 'fail'
             if all(obj is not s for s in subtractors):
@@ -130,11 +130,16 @@ class TclCommandSubtractObjects(TclCommand):
             self.raise_tcl_error(_("The xor operation is not valid for an Excellon object."))
             return 'fail'
 
-        steps = args['steps'] if 'steps' in args else self._app_option(STEPS_KEYS[target.kind], 64)
-        try:
-            steps = int(steps)
-        except (TypeError, ValueError):
-            steps = 64
+        if 'steps' in args:
+            try:
+                steps = int(args['steps'])
+            except (TypeError, ValueError):
+                steps = 64
+        else:
+            # the circles of the margin and of the drills and slots: the largest radius sets the steps
+            radius = max([margin] + [float(tool.get('tooldia') or 0.0) / 2 for obj in [target] + subtractors
+                                     if obj.kind == 'excellon' for tool in (obj.tools or {}).values()])
+            steps = object_circle_steps(self.app.options, target.kind, radius, getattr(self.app, 'app_units', 'MM'))
         if steps < 4:
             self.raise_tcl_error(_("The circle steps must be at least 4."))
             return 'fail'

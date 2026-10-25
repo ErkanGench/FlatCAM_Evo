@@ -155,6 +155,8 @@ class PreferencesUIManager(QtCore.QObject):
             "gerber_multicolored": self.ui.gerber_pref_form.gerber_gen_group.multicolored_cb,
             "gerber_store_color_list": self.ui.gerber_pref_form.gerber_gen_group.store_colors_cb,
             "gerber_circle_steps": self.ui.gerber_pref_form.gerber_gen_group.circle_steps_entry,
+            "gerber_circle_steps_mode": self.ui.gerber_pref_form.gerber_gen_group.circle_mode_radio,
+            "gerber_circle_tolerance": self.ui.gerber_pref_form.gerber_gen_group.circle_tol_entry,
             "gerber_def_units": self.ui.gerber_pref_form.gerber_gen_group.gerber_units_radio,
             "gerber_def_zeros": self.ui.gerber_pref_form.gerber_gen_group.gerber_zeros_radio,
             "gerber_clean_apertures": self.ui.gerber_pref_form.gerber_gen_group.gerber_clean_cb,
@@ -207,6 +209,8 @@ class PreferencesUIManager(QtCore.QObject):
             # Excellon General
             "excellon_plot": self.ui.excellon_pref_form.excellon_gen_group.plot_cb,
             "excellon_circle_steps": self.ui.excellon_pref_form.excellon_gen_group.circle_steps_entry,
+            "excellon_circle_steps_mode": self.ui.excellon_pref_form.excellon_gen_group.circle_mode_radio,
+            "excellon_circle_tolerance": self.ui.excellon_pref_form.excellon_gen_group.circle_tol_entry,
             "excellon_solid": self.ui.excellon_pref_form.excellon_gen_group.solid_cb,
             "excellon_multicolored": self.ui.excellon_pref_form.excellon_gen_group.multicolored_cb,
             "excellon_merge_fuse_tools": self.ui.excellon_pref_form.excellon_gen_group.fuse_tools_cb,
@@ -276,6 +280,8 @@ class PreferencesUIManager(QtCore.QObject):
             "geometry_plot":                self.ui.geo_pref_form.geometry_gen_group.plot_cb,
             "geometry_multicolored":        self.ui.geo_pref_form.geometry_gen_group.multicolored_cb,
             "geometry_circle_steps":        self.ui.geo_pref_form.geometry_gen_group.circle_steps_entry,
+            "geometry_circle_steps_mode":   self.ui.geo_pref_form.geometry_gen_group.circle_mode_radio,
+            "geometry_circle_tolerance":    self.ui.geo_pref_form.geometry_gen_group.circle_tol_entry,
             "geometry_merge_fuse_tools":    self.ui.geo_pref_form.geometry_gen_group.fuse_tools_cb,
             "geometry_plot_line":           self.ui.geo_pref_form.geometry_gen_group.line_color_entry,
 
@@ -392,6 +398,7 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_mill_extracut": self.ui.plugin_pref_form.tools_mill_group.extracut_cb,
             "tools_mill_extracut_length": self.ui.plugin_pref_form.tools_mill_group.e_cut_entry,
             "tools_mill_z_p_depth": self.ui.plugin_pref_form.tools_mill_group.pdepth_entry,
+            "tools_mill_probe_plate": self.ui.plugin_pref_form.tools_mill_group.probe_plate_entry,
             "tools_mill_feedrate_probe": self.ui.plugin_pref_form.tools_mill_group.feedrate_probe_entry,
             "tools_mill_spindledir": self.ui.plugin_pref_form.tools_mill_group.spindledir_radio,
 
@@ -483,6 +490,7 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_drill_startz":           self.ui.plugin_pref_form.tools_drill_group.estartz_entry,
             "tools_drill_feedrate_rapid":   self.ui.plugin_pref_form.tools_drill_group.feedrate_rapid_entry,
             "tools_drill_z_p_depth":         self.ui.plugin_pref_form.tools_drill_group.pdepth_entry,
+            "tools_drill_probe_plate":      self.ui.plugin_pref_form.tools_drill_group.probe_plate_entry,
             "tools_drill_feedrate_probe":   self.ui.plugin_pref_form.tools_drill_group.feedrate_probe_entry,
             "tools_drill_spindledir":       self.ui.plugin_pref_form.tools_drill_group.spindledir_radio,
 

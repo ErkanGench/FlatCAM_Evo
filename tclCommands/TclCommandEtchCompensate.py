@@ -86,14 +86,9 @@ class TclCommandEtchCompensate(TclCommand):
             return 'fail'
 
         try:
-            steps = int(self._app_option('gerber_circle_steps', 64))
-        except (TypeError, ValueError):
-            steps = 64
-
-        try:
             result = Gen.compensate_gerber(
                 source.solid_geometry, source.tools, float(option('thickness', 'tools_etch_thickness', 18.0)),
-                mode, self.app.app_units, steps,
+                mode, self.app.app_units, self.app.options,
                 factor=float(option('factor', 'tools_etch_factor', 3.0)),
                 etchant=str(option('etchant', 'tools_etch_etchant', 'cucl2')).lower(),
                 offset_um=float(option('offset', 'tools_etch_offset', 0.0)))

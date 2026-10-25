@@ -17,7 +17,7 @@ from shapely import Point
 import gettext
 import appTranslation as fcTranslate
 import builtins
-from camlib import Geometry
+from camlib import Geometry, object_circle_steps
 from defaults import AppDefaults
 from appParsers.feature_access import iter_features
 
@@ -34,8 +34,8 @@ class ToolPunchGerber(Geometry, AppTool):
         AppTool.__init__(self, app)
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         Geometry.__init__(self, geo_steps_per_circle=self.app.options.get(
-            "geometry_circle_steps", app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get(
-                "geometry_circle_steps"))), app=app)
+            "excellon_circle_steps", app_defaults.get("excellon_circle_steps", AppDefaults.factory_defaults.get(
+                "excellon_circle_steps"))), app=app)
         self.app = app
         self.decimals = self.app.decimals
         self.units = self.app.app_units
@@ -370,9 +370,12 @@ class ToolPunchGerber(Geometry, AppTool):
         selected = [int(it.text()) for it in self.ui.apertures_table.selectedItems()]
         enabled = (self.ui.circular_cb.get_value(), self.ui.oblong_cb.get_value(), self.ui.square_cb.get_value(),
                    self.ui.rectangular_cb.get_value(), self.ui.other_cb.get_value())
-        steps = self.app.options.get(
-            "geometry_circle_steps", app_defaults.get("geometry_circle_steps", AppDefaults.factory_defaults.get(
-                "geometry_circle_steps")))
+        # the punched holes are drill holes: the segments follow the Excellon preferences, in the units of the object
+        units = (exc_obj if method == 'exc' and exc_obj is not None else grb_obj).units
+
+        def steps(radius):
+            return object_circle_steps(self.app.options, 'excellon', radius, units)
+
         new_options = {}
         for opt in grb_obj.obj_options:
             new_options[opt] = deepcopy(grb_obj.obj_options[opt])

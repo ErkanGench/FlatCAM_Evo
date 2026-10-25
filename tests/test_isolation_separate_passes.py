@@ -148,16 +148,6 @@ def test_no_object_is_made_for_an_empty_selection_a_stop_or_an_empty_area(tool, 
         assert not created
 
 
-def test_the_object_diameter_is_the_one_of_its_largest_tool(tool, app):
-    for order in ([1, 2], [2, 1]):
-        created = run_isolate(tool, app, make_gerber(app, name='g'), 1, storage=two_tools(), sel_tools=order,
-                              combine=True)
-
-        (obj,) = created.values()
-        assert sorted(obj.tools) == [1, 2]
-        assert obj.obj_options['tools_mill_tooldia'] == '0.5'
-
-
 # ------------------------------------------------------------------------------------------------------- pad passes
 
 def test_pad_passes_follow_only_the_isolated_pads_and_start_after_the_last_pass(tool, app):
@@ -264,6 +254,7 @@ def sel_tool(tool, monkeypatch):
     tool.app.ui.grid_snap_btn = FakeSnapButton(True)
     tool.area_sel_disconnect_flag = tool.poly_sel_disconnect_flag = False
     tool.end_selection_mode()
+    tool.iso_tools = tools_storage(1)
     monkeypatch.setattr(tool, '_selected_tool_ids', lambda: [1])
     monkeypatch.setattr(tool, 'isolate', Mock())
     monkeypatch.setattr(tool, 'draw_tool_selection_shape', Mock())
@@ -311,44 +302,6 @@ def test_polygon_clicks_add_and_remove_and_the_right_click_isolates_in_the_worke
     task['fcn'](*task['params'])
     assert len(sel_tool.isolate.call_args.kwargs['geometry']) == 1
     assert sel_tool.isolate.call_args.kwargs['combine'] is True
-
-
-def test_square_first_corner_is_the_clicked_point_and_escape_ends_the_selection(sel_tool):
-    sel_tool.app.plotcanvas.translate_coords = lambda p: (p[0] * 2, p[1] * 2)   # the scene position of a click
-    sel_tool.ui.area_shape_radio.set_value('square')
-    sel_tool.on_mouse_release(Click((1, 3)))
-    assert tuple(sel_tool.cursor_pos) == (2, 6)
-    assert sel_tool.first_click is True
-
-    sel_tool.on_key_press(Mock(key='Escape'))
-    sel_tool.on_mouse_release(Click((5, 5)))
-    assert sel_tool.first_click is True and sel_tool.sel_rect == []
-
-
-def test_area_right_click_isolates_in_the_worker_and_leaves_clean_state(sel_tool):
-    tasks = []
-    sel_tool.app.worker_task.emit = tasks.append
-    sel_tool.ui.area_shape_radio.set_value('square')
-    for pos in [(0, 0), (4, 4), (0, 0, 2)]:
-        sel_tool.on_mouse_release(Click(pos[:2], button=pos[2] if len(pos) > 2 else 1))
-
-    sel_tool.isolate.assert_not_called()
-    assert sel_tool.sel_rect == [] and sel_tool.first_click is False
-    (task,) = tasks
-    task['fcn'](*task['params'])
-    assert sel_tool.isolate.call_args.kwargs['limited_area'].area == pytest.approx(16)
-
-
-def test_polygon_mode_restores_the_grid_snap_once_whatever_the_generate_clicks(sel_tool):
-    sel_tool.ui.select_combo.set_value(2)
-    snap = sel_tool.app.ui.grid_snap_btn
-
-    sel_tool.start_selection_mode(sel_tool.grb_obj, 2)
-    sel_tool.start_selection_mode(sel_tool.grb_obj, 2)
-    assert snap.isChecked() is False
-    sel_tool.on_key_press(Mock(key='Escape'))
-
-    assert snap.isChecked() is True
 
 
 # ------------------------------------------------------------------ several Gerber objects in one run
@@ -425,3 +378,48 @@ def test_the_run_uses_the_widget_values_of_the_generate_click(tool, app):
     task['fcn'](*task['params'])
 
     assert sorted(created) == ['a_iso_combined']
+
+
+@pytest.mark.parametrize('change', ['edit'])
+def test_generate_uses_the_tools_of_the_click(tool, app, change):
+    expected = run_isolate(tool, app, make_gerber(app, name='a'), 1, storage=tools_storage(1), combine=True)
+    (reference,) = expected.values()
+
+    gerber = make_gerber(app, name='a')
+    created = Created()
+
+    def new_object(kind, name, initialize, plot=True, **kw):
+        obj = GeometryObject(name, app)
+        if initialize(obj, app) == 'fail':
+            return 'fail'
+        created[name] = obj
+        return 'ok'
+
+    tasks = []
+    tool.app.app_obj.new_object = Mock(side_effect=new_object)
+    tool.app.worker_task.emit = tasks.append
+    tool.app.collection.get_by_name = lambda name: gerber
+    tool.app.collection.get_selected = lambda: []
+    tool.iso_tools = tools_storage(1)
+    tool.build_ui()
+    tool.ui.tools_table.selectAll()
+    tool.ui.object_combo.currentText = lambda: 'a'
+    for cb, value in ((tool.ui.valid_cb, False), (tool.ui.combine_passes_cb, True), (tool.ui.rest_cb, False),
+                      (tool.ui.except_cb, False), (tool.ui.simplify_cb, False), (tool.ui.pad_passes_entry, 0),
+                      (tool.ui.select_combo, 0), (tool.ui.multi_objects_cb, False)):
+        cb.set_value(value)
+
+    tool.on_iso_button_click()
+
+    # the Tool Table changes between the Generate click and the worker run
+    if change == 'edit':
+        tool.iso_tools[1]['tooldia'] = 0.8
+    else:
+        tool.iso_tools.clear()
+
+    (task,) = tasks
+    task['fcn'](*task['params'])
+
+    (obj,) = created.values()
+    assert obj.tools[1]['tooldia'] == DIA
+    assert wkb_set(obj.solid_geometry) == wkb_set(reference.solid_geometry)

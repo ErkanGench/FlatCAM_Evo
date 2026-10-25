@@ -6,7 +6,7 @@ import math
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, gerber_quad_segs
 
 ETCHANTS = {   # etch factor F = depth etch / lateral undercut
     'cucl2': {'label': 'CuCl2', 'factor': 3.0},
@@ -44,11 +44,6 @@ def um_to_units(value_um, units):
     raise ValueError("Unknown units: %s" % units)
 
 
-def quad_segs(circle_steps):
-    """Shapely quadrant segments from the application's full-circle step count."""
-    return max(1, int(circle_steps) // 4)
-
-
 def _polygons(geometry):
     """The non-empty Polygons of a list, Polygon, MultiPolygon, GeometryCollection or None."""
     if geometry is None:
@@ -56,9 +51,14 @@ def _polygons(geometry):
     return [g for g in flatten_shapely_geometry(geometry) if isinstance(g, Polygon) and not g.is_empty]
 
 
-def compensate_geometry(geometry, apertures, offset, circle_steps):
-    """Return buffered copper (flat Polygon list) and copied, compensated aperture data."""
-    qs = quad_segs(circle_steps)
+def compensate_geometry(geometry, apertures, offset, options, units='MM'):
+    """
+    Return buffered copper (flat Polygon list) and copied, compensated aperture data.
+
+    :param options: the application options; the Gerber circle preferences set the segments of the rounded corners
+    :param units:   the units of the geometry and of the offset
+    """
+    qs = gerber_quad_segs(options, offset, units)
 
     polys = _polygons(geometry)
     new_solid_geometry = []
@@ -98,10 +98,10 @@ def compensate_geometry(geometry, apertures, offset, circle_steps):
     return new_solid_geometry, new_apertures
 
 
-def compensate_gerber(geometry, apertures, thickness_um, mode, units, circle_steps,
+def compensate_gerber(geometry, apertures, thickness_um, mode, units, options,
                       factor=None, etchant=None, offset_um=None):
     """Compute the offset for the mode and compensate the copper and apertures with it."""
     off_um = lateral_offset_um(thickness_um, mode, factor=factor, etchant=etchant, offset_um=offset_um)
     off = um_to_units(off_um, units)
-    solid, aps = compensate_geometry(geometry, apertures, off, circle_steps)
+    solid, aps = compensate_geometry(geometry, apertures, off, options, units)
     return {'offset_um': off_um, 'offset': off, 'solid_geometry': solid, 'apertures': aps}

@@ -30,6 +30,7 @@ from rasterio.features import shapes
 from appCommon.imagetrace import trace, PRESETS, PRESET_NAMES, CURVE_MODES
 from appParsers.SVG import svg_to_shapes, SvgImportError
 from defaults import AppDefaults
+from camlib import object_circle_steps
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -304,9 +305,9 @@ class ToolImage(AppTool):
 
     def import_image_as_trace_handler(self, svg_text, obj_type, flip=True, units='MM', dpi=96):
         """Parse traced SVG pixels, then scale to application units."""
-        app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        res = self.app.options.get(
-            'geometry_circle_steps', app_defaults.get('geometry_circle_steps', AppDefaults.factory_defaults.get('geometry_circle_steps')))
+        # the radius of the circles is not known before the tracing: a typical feature of 5 mm
+        res = object_circle_steps(self.app.options, 'geometry', 5.0 if str(units).upper() == 'MM' else 5.0 / 25.4,
+                                  units)
         try:
             geos = image_plugin.svg_to_shapes(svg_text, obj_type, units=units, resolution=res, flip=flip, app=self.app,
                                  user_units=True)

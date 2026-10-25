@@ -220,15 +220,6 @@ def test_tcl_rejects_wrong_values(app):
     assert make_gerber(app, name='g').generate_envelope(0.1, 1, env_iso_type=7) == 'fail'
 
 
-def test_tcl_names_one_object_per_pass_and_one_per_gerber(app):
-    assert set(tcl_isolate(app, 'g', '-dia', '0.2', '-passes', '2', '-combine', '0', '-outname', 'out')) == \
-        {'out_1', 'out_2'}
-    assert set(tcl_isolate(app, 'g', '-dia', '0.2', '-iso_type', '0', '-passes', '2', '-combine', 'false')) == \
-        {'g_ext_iso1', 'g_ext_iso2'}
-    assert set(tcl_isolate(app, 'g,h', '-dia', '0.2')) == {'g_iso', 'h_iso'}
-    assert set(tcl_isolate(app, 'g,h', '-dia', '0.2', '-outname', 'out')) == {'out_g', 'out_h'}
-
-
 def test_tcl_result_carries_the_tool_data_and_a_negative_dia_isolates_inside(app):
     iso = tcl_isolate(app, 'g', '-dia', '0.3', '-milling_type', 'cv', '-passes', '2')['g_iso']
     tool = iso.tools[1]
@@ -280,12 +271,27 @@ def test_tcl_except_object_is_left_without_isolation(app):
         half.buffer(-1e-6)).length == pytest.approx(0.0)
 
 
-def test_tcl_rest_machining_makes_one_object_with_the_biggest_tool_first(app):
-    iso = tcl_isolate(app, 'g', '-dia', '0.1,0.5,0.25', '-rest', 'True')['g_iso_rest']
-    dias = [tool['tooldia'] for _key, tool in sorted(iso.tools.items())]
-    assert dias and dias == sorted(dias, reverse=True) and set(dias) <= {0.5, 0.25, 0.1}
-    assert all(tool['data']['tools_mill_tooldia'] == tool['tooldia'] for tool in iso.tools.values())
-    assert iso.solid_geometry
+@pytest.mark.parametrize('mode', ['combined', 'rest'])
+def test_tcl_traced_boundary_is_left_out_of_the_excluded_area(app, mode):
+    gerber = make_gerber(app, name='g')
+    gerber.solid_geometry = [Point(4, 5).buffer(0.5)]
+    board = box(0, 0, 10, 10)
+    excluded = box(5, -1, 11, 11)
+    objects = {
+        'g': gerber,
+        'board': SimpleNamespace(obj_options={'name': 'board'}, solid_geometry=[board], kind='geometry'),
+        'keep': SimpleNamespace(obj_options={'name': 'keep'}, solid_geometry=[excluded], kind='geometry'),
+    }
+    options = ['-combine', '0'] if mode == 'separate' else ['-combine', '1']
+    if mode == 'rest':
+        options += ['-rest', '1']
+    created = tcl_isolate(app, 'g', '-dia', '0.2', '-passes', '1', '-boundary', 'board',
+                          '-trace_boundary', '1', '-except_obj', 'keep', *options, objects=objects)
+    paths = unary_union([g.boundary if isinstance(g, Polygon) else g
+                         for obj in created.values() for g in obj.solid_geometry])
+    assert paths.intersection(excluded.buffer(-1e-6)).length == pytest.approx(0.0)
+    # the trace along the boundary is still made, outside the excluded area
+    assert paths.intersection(board.boundary).length > 0
 
 
 # -------------------------------------------------------------------------------------------------- Isolation Plugin

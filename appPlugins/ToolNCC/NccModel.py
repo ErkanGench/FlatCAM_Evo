@@ -2,6 +2,7 @@
 
 import builtins
 import logging
+import math
 from copy import deepcopy
 
 import numpy as np
@@ -270,7 +271,7 @@ def tool_uid(tools, diameter, decimals):
 
 
 def prepare_area(geometry, boundary, iso_diameters, tools, name, decimals, has_offset, offset,
-                 margin, milling_type, envelope, area_complement, check_abort, exclusion=None):
+                 margin, milling_type, envelope, area_complement, check_abort, exclusion=None, circle_steps=64):
     """
     Prepare stock and isolation tool data without publishing into an output object.
     Returns (area, isolation tools, broken count, warnings). The area is 'fail' (no usable geometry) or 'empty'
@@ -291,7 +292,14 @@ def prepare_area(geometry, boundary, iso_diameters, tools, name, decimals, has_o
         envelopes.append(isolated)
         if margin < diameter:
             warnings.append(_('Isolation geometry is broken. Margin is less than isolation tool diameter.'))
-        paths, count = clip_isolation(isolated, boundary, check_abort)
+        # The isolation path is clipped by the boundary minus the cutter sweep of the excluded zones. The buffer
+        # polygon inscribes the circle, so grow its radius until it contains the sweep at the given circle steps.
+        path_boundary = boundary
+        if exclusion is not None and not exclusion.is_empty:
+            segments = quad_segs(circle_steps)
+            forbidden = exclusion.buffer((diameter / 2) / math.cos(math.pi / (4 * segments)), segments)
+            path_boundary = boundary.difference(forbidden)
+        paths, count = clip_isolation(isolated, path_boundary, check_abort)
         broken += count
         uid = tool_uid(tools, diameter, decimals)
         if uid is not None:

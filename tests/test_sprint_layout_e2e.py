@@ -50,6 +50,7 @@ class NativeExcellonObject(ExcellonObject):
         self.solid_geometry = []
         self.source_file = ''
         self.excellon_circle_steps = 64
+        self._fixed_steps = 64
         self.default_data = {}
 
 

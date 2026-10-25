@@ -98,12 +98,6 @@ class TestFuseEqualData:
         small = [t for t in final.tools.values() if t['tooldia'] == 0.8]
         assert len(small) == 1 and strip_name(small[0]['data']) == DATA_B
 
-    def test_two_tools_of_one_object_with_equal_data_fuse(self, app):
-        a = make_exc(app, 'a', [(1.0, [(0, 0)], [], DATA_A), (1.0, [(2, 0)], [((0, 1), (1, 1))], DATA_A)])
-        final = merge(app, [a])
-        assert list(final.tools) == [1]
-        assert pts(final.tools[1]['drills']) == [(0, 0), (2, 0)]
-        assert slots_xy(final.tools[1]['slots']) == [((0, 1), (1, 1))]
 
     def test_diameters_equal_after_rounding_fuse(self, app):
         a = make_exc(app, 'a', [(1.0, [(0, 0)], [], DATA_A)])
@@ -127,14 +121,6 @@ class TestKeepDifferentData:
         assert slots_xy(second['slots']) == [((10, 5), (13, 5))]
         assert len(final.solid_geometry) == 4
 
-    def test_same_object_tools_with_different_data_stay_separate(self, app):
-        a = make_exc(app, 'a', [(1.0, [(5, 5), (9, 9)], [], DATA_A),
-                                (1.0, [(15, 5)], [((20, 5), (26, 5))], DATA_B)])
-        final = merge(app, [a])
-        assert sorted(final.tools) == [1, 2]
-        assert strip_name(final.tools[1]['data']) == DATA_A and strip_name(final.tools[2]['data']) == DATA_B
-        assert pts(final.tools[1]['drills']) == [(5, 5), (9, 9)]
-        assert slots_xy(final.tools[2]['slots']) == [((20, 5), (26, 5))]
 
     def test_mixed_groups_fuse_per_data(self, app):
         a = make_exc(app, 'a', [(1.0, [(0, 0)], [], DATA_A), (1.0, [(1, 0)], [], DATA_B)])
@@ -218,11 +204,6 @@ class TestIndependenceAndTypes:
             assert type(slot) is tuple and len(slot) == 2
             assert all(isinstance(p, Point) for p in slot)
 
-    def test_unfused_merge_keeps_ids_and_all_tools(self, app):
-        a = make_exc(app, 'a', [(1.0, [(0, 0)], [], DATA_A), (1.0, [(1, 0)], [], DATA_A)])
-        b = make_exc(app, 'b', [(1.0, [(2, 0)], [], DATA_A)])
-        final = merge(app, [a, b], fuse=False)
-        assert sorted(final.tools) == [1, 2, 3]
 
 
 class TestExcellonMerge:

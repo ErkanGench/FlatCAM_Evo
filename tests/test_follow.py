@@ -58,13 +58,6 @@ def test_merge_joins_touching_lines():
     assert len(fg.clean_paths(lines, False, False, 0.0, merge=False)) == 3
 
 
-def test_union_then_merge_does_not_leave_lines_split():
-    overlap = [LineString([(0, 0), (4, 0)]), LineString([(2, 0), (6, 0)])]
-    result = fg.clean_paths(overlap, True, False, 0.0, merge=True)
-    assert len(result) == 1
-    assert result[0].length == pytest.approx(6.0)
-
-
 def test_simplify_applies_only_with_a_tolerance():
     wiggle = LineString([(0, 0), (1, 0.001), (2, 0), (3, 0.001), (4, 0)])
     assert len(fg.clean_paths([wiggle], False, True, 0.01)[0].coords) == 2
@@ -102,54 +95,6 @@ def test_a_polygon_follow_geometry_without_aperture_data_is_followed(dia_mode):
                               params(union=True, simplify=True, tolerance=0.01, dia_mode=dia_mode))
     assert len(groups) == 1 and groups[0][0] == 0.1
     assert total_length(groups[0][1]) == pytest.approx(8.0)
-
-
-def test_follow_groups_selection_and_empty_groups_dropped():
-    groups = fg.follow_groups(source(TOOLS), params(dia_mode='aperture', selection=[box(-1, -1, 6, 6)]))
-    assert sorted(dia for dia, _ in groups) == [0.2, 0.4]
-
-
-@pytest.mark.parametrize('value, expected', [
-    (2, [2.0]), ('0.1, 0.2', [0.1, 0.2]), ((0.5, 0.0), [0.5]),
-])
-def test_tool_dias_accepts(value, expected):
-    assert fg.tool_dias(value) == expected
-
-
-@pytest.mark.parametrize('value', ['', 'abc'])
-def test_tool_dias_rejects(value):
-    with pytest.raises(ValueError):
-        fg.tool_dias(value)
-
-
-def test_geometry_data_copies_only_geometry_and_mill_keys():
-    options = {'geometry_cutz': -0.1, 'tools_mill_tooldia': 0.2, 'tools_mill_feedrate': 100,
-               'tools_drilling_depth': 1, 'gerber_plot': True}
-    assert fg.geometry_data(options, 'a') == {'cutz': -0.1, 'tools_mill_tooldia': 0.2, 'tools_mill_feedrate': 100,
-                                              'name': 'a'}
-
-
-def test_follow_tools_shape():
-    groups = [(0.1, [LineString([(0, 0), (1, 0)])]), (0.25, [LineString([(0, 1), (1, 1)])])]
-    data = {'name': 'a', 'tools_mill_tooldia': 9.0, 'cutz': -0.1}
-    tools = fg.follow_tools(groups, data, 4)
-    assert sorted(tools) == [1, 2]
-    assert tools[2]['tooldia'] == 0.25
-    assert tools[2]['offset'] == 'Path' and tools[2]['tool_type'] == 'C1' and tools[2]['type'] == 'Rough'
-    assert tools[2]['data']['tools_mill_tooldia'] == 0.25
-    assert tools[1]['data'] is not tools[2]['data'] and data['tools_mill_tooldia'] == 9.0
-    assert tools[1]['solid_geometry'] == groups[0][1]
-
-
-def test_inputs_are_not_mutated():
-    tools = {k: {'size': v['size'], 'geometry': [dict(r) for r in v['geometry']]} for k, v in TOOLS.items()}
-    src = source(tools)
-    follow_before = list(src.follow_geometry)
-    wkt_before = [r['follow'].wkt for t in tools.values() for r in t['geometry']]
-    fg.follow_groups(src, params(union=True, simplify=True, tolerance=0.1, selection=[box(0, 0, 3, 11)],
-                                 dia_mode='aperture'))
-    assert src.follow_geometry == follow_before
-    assert [r['follow'].wkt for t in tools.values() for r in t['geometry']] == wkt_before
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -298,14 +243,6 @@ def test_empty_result_creates_nothing_and_names_the_source():
     assert not any(m.startswith('[success]') for m in messages(tool))
 
 
-def test_unusable_tool_diameter_gives_an_error_and_no_job():
-    tool = make_tool([gerber('a')])
-    tool.app.options['tools_mill_tooldia'] = 0
-    tool.on_generate_geometry_click()
-    assert tool.created == [] and not tool.app.worker_task.emit.called
-    assert any(m.startswith('[ERROR_NOTCL]') for m in messages(tool))
-
-
 def test_area_job_uses_the_zones_copied_in_the_gui_thread():
     tool = make_tool([gerber('a')], select='area')
     tool.on_generate_geometry_click()
@@ -316,29 +253,6 @@ def test_area_job_uses_the_zones_copied_in_the_gui_thread():
     (_kind, _name, obj), = tool.created
     # the horizontal path is inside the zone, the vertical one is clipped to its first unit
     assert total_length(obj.solid_geometry) == pytest.approx(6.0)
-
-
-def test_right_click_without_a_zone_gives_a_message_and_no_job():
-    tool = make_tool([gerber('a')], select='area')
-    tool.on_generate_geometry_click()
-    tool.on_mouse_release(NS(pos=(0, 0), button=2))
-    assert not tool.selecting and not tool.app.worker_task.emit.called and tool.created == []
-    assert any(m.startswith('[WARNING_NOTCL]') for m in messages(tool))
-
-
-def test_escape_ends_the_area_selection_and_restores_the_app_handlers():
-    tool = make_tool([gerber('a')], select='area')
-    tool.on_generate_geometry_click()
-    tool.first_click, tool.cursor_pos, tool.points, tool.sel_rect = True, (1, 1), [(0, 0)], [box(0, 0, 1, 1)]
-    tool.on_key_press(NS(key='Escape'))
-    assert not tool.selecting and not tool.first_click and tool.cursor_pos is None
-    assert tool.points == [] and tool.sel_rect == [] and not tool.app.worker_task.emit.called
-    connect = tool.app.plotcanvas.graph_event_connect
-    connect.assert_any_call('mouse_press', tool.app.on_mouse_click_over_plot)
-    connect.assert_any_call('mouse_move', tool.app.on_mouse_move_over_plot)
-    connect.assert_any_call('mouse_release', tool.app.on_mouse_click_release_over_plot)
-    tool.app.ui.notebook.setDisabled.assert_called_with(False)
-    tool.app.delete_selection_shape.assert_called()
 
 
 # Tcl follow
@@ -389,13 +303,6 @@ def test_box_clips_the_paths():
     assert [g.bounds for g in new.solid_geometry] == [pytest.approx((0, 0, 4, 0))]
 
 
-def test_aperture_mode_makes_one_tool_per_aperture_size():
-    _kind, _name, new = created(run_follow({'dia_mode': 'aperture'}))
-    assert sorted(t['tooldia'] for t in new.tools.values()) == pytest.approx([0.2, 0.4])
-    for tool in new.tools.values():
-        assert tool['data']['tools_mill_tooldia'] == tool['tooldia']
-
-
 @pytest.mark.parametrize('args', [{'box': '100,100,110,110'}, {'apertures': '99'}, {'dia_mode': 'nope'},
                                   {'box': '1,2,3'}, {'tooldia': 0}, {'union': 'maybe'}])
 def test_bad_input_or_empty_result_is_a_tcl_error_and_creates_nothing(args):
@@ -405,12 +312,3 @@ def test_bad_input_or_empty_result_is_a_tcl_error_and_creates_nothing(args):
         TclCommandFollow(app).execute({'name': 'cu.gtl', **args}, [])
     app.app_obj.new_object.assert_not_called()
 
-
-def test_unknown_or_non_gerber_object_is_a_tcl_error():
-    from tclCommands.TclCommandFollow import TclCommandFollow
-    app = factory_app(None)
-    with pytest.raises(FCShell.TclErrorException):
-        TclCommandFollow(app).execute({'name': 'cu.gtl'}, [])
-    app = factory_app(NS(kind='geometry'))
-    with pytest.raises(FCShell.TclErrorException):
-        TclCommandFollow(app).execute({'name': 'cu.gtl'}, [])

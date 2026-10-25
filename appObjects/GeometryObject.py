@@ -77,9 +77,8 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
         self.app = app
         self.decimals = self.app.decimals
 
-        self.circle_steps = int(self._app_option("geometry_circle_steps"))
-
-        Geometry.__init__(self, geo_steps_per_circle=self.circle_steps, app=app)
+        # no fixed steps: the circles follow the preferences "Circles" of Geometry (Geometry.circle_quad_segs_for())
+        Geometry.__init__(self, app=app)
         FlatCAMObj.__init__(self, name, app=app)
 
         self.kind = "geometry"
@@ -115,6 +114,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             "tools_mill_toolchangexy": "0.0, 0.0",
             "tools_mill_ppname_g": 'default',
             "tools_mill_z_p_depth": -0.02,
+            "tools_mill_probe_plate": 0.0,
             "tools_mill_feedrate_probe": 3.0,
         })
 
@@ -719,6 +719,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             job_obj.seg_y = seg_y if seg_y else float(self._app_option("geometry_seg_y"))
 
             job_obj.z_p_depth = float(self._app_option("tools_mill_z_p_depth"))
+            job_obj.probe_plate = float(self._app_option("tools_mill_probe_plate", 0.0))
             job_obj.feedrate_probe = float(self._app_option("tools_mill_feedrate_probe"))
 
             total_gcode = ''
@@ -863,6 +864,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             job_obj.seg_y = seg_y if seg_y else float(self._app_option("geometry_seg_y"))
 
             job_obj.z_p_depth = float(self._app_option("tools_mill_z_p_depth"))
+            job_obj.probe_plate = float(self._app_option("tools_mill_probe_plate", 0.0))
             job_obj.feedrate_probe = float(self._app_option("tools_mill_feedrate_probe"))
 
             # make sure that trying to make a CNCJob from an empty file is not creating an app crash
@@ -1127,6 +1129,7 @@ class GeometryObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Geometry):
             job_obj.seg_y = seg_y
 
             job_obj.z_p_depth = float(self.obj_options["tools_mill_z_p_depth"])
+            job_obj.probe_plate = float(self.obj_options.get("tools_mill_probe_plate", 0.0))
             job_obj.feedrate_probe = float(self.obj_options["tools_mill_feedrate_probe"])
 
             job_obj.obj_options['xmin'] = self.obj_options['xmin']

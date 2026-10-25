@@ -193,7 +193,8 @@ class ToolInvertGerber(AppTool):
             'ref_area': ui.ref_area_radio.get_value(),
             'margin': float(ui.margin_entry.get_value()),
             'join_style': join_style_name(ui.join_radio.get_value()),
-            'steps': int(self._opt("gerber_circle_steps")),
+            'options': self.app.options,
+            'hole_steps': int(self._opt("excellon_circle_steps")),    # the holes of an Excellon reference
             'app_units': str(getattr(self.app, 'app_units', None) or ''),
         }
 
@@ -227,9 +228,9 @@ class ToolInvertGerber(AppTool):
                     try:
                         area = None
                         if params['reference'] is not None:
-                            area = reference_area(params['reference'], params['ref_area'], params['steps'], units)
-                        polys = invert_geometry(source.solid_geometry, source.bounds(), margin, params['steps'],
-                                                params['join_style'], area=area, abort=self.check_abort)
+                            area = reference_area(params['reference'], params['ref_area'], params['hole_steps'], units)
+                        polys = invert_geometry(source.solid_geometry, source.bounds(), margin, params['options'],
+                                                params['join_style'], area=area, abort=self.check_abort, units=units)
                     except InvertError:
                         polys = None
                     results.append((source, polys))

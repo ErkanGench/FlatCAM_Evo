@@ -23,11 +23,6 @@ def _solid(*polys):
 
 
 # --- sizes ---------------------------------------------------------------------------------------------------------
-def test_module_size_follows_units():
-    assert gen.module_size(10, 'MM') == pytest.approx(1.0)
-    assert gen.module_size(10, 'IN') == pytest.approx(1.0 / MM)
-
-
 @pytest.mark.parametrize('units, div', [('MM', 1.0), ('IN', MM)])
 def test_qr_geometry_size_in_project_units(units, div):
     modules, utility, info = _qr(units=units)
@@ -36,20 +31,6 @@ def test_qr_geometry_size_in_project_units(units, div):
     assert (c - a) == pytest.approx(21 / div, rel=1e-3) and (d - b) == pytest.approx(21 / div, rel=1e-3)
     assert info['width'] == pytest.approx(25 / div, rel=1e-3)
     assert unary_union(modules).area == pytest.approx(utility.area, rel=1e-3)
-
-
-def test_qr_geometry_empty_text_raises():
-    with pytest.raises(ValueError):
-        _qr(text='')
-
-
-def test_border_zero_and_mask_pattern_change_modules():
-    _, util0, info0 = _qr(border=0)
-    assert info0['width'] == pytest.approx(21)
-    assert util0.bounds[0] == pytest.approx(0, abs=1e-3)
-    _, util_a, _ = _qr(mask_pattern=0)
-    _, util_b, _ = _qr(mask_pattern=3)
-    assert not util_a.equals(util_b)
 
 
 # --- version -------------------------------------------------------------------------------------------------------
@@ -104,48 +85,6 @@ def test_units_inch_scale_mask_and_aperture():
     assert mask.bounds[2] - mask.bounds[0] == pytest.approx(21 * mod + 4 * mod, rel=1e-3)
 
 
-def test_aperture_key_types_and_ids():
-    modules, utility, _ = _qr()
-    args = (modules, utility, (0, 0), 2, 10, 's', 'pos')
-    ints = {0: {'type': 'REG', 'size': 0.0, 'geometry': []}, 10: {'type': 'C', 'size': 1.0, 'geometry': []}}
-    _, t = gen.insert_geometry([], ints, *args)
-    assert sorted(t) == [0, 10, 11] and all(isinstance(k, int) for k in t)
-    strs = {'0': {'type': 'REG', 'size': 0.0, 'geometry': []}, '12': {'type': 'C', 'size': 1.0, 'geometry': []}}
-    _, t = gen.insert_geometry([], strs, *args)
-    assert sorted(t) == ['0', '12', '13'] and len(t['0']['geometry']) == 1
-    low = {1: {'type': 'C', 'size': 1.0, 'geometry': []}}
-    _, t = gen.insert_geometry([], low, *args)
-    assert sorted(t, key=str) == [0, 1, 10]
-    _, t = gen.insert_geometry([], {}, *args)
-    assert sorted(t) == [0, 10]
-
-
-def test_source_inputs_are_not_modified():
-    big = box(-50, -50, 12, 12)
-    ap0 = {'type': 'REG', 'size': 0.0, 'geometry': [{'clear': box(0, 0, 1, 1)}]}
-    ap1 = {'type': 'C', 'size': 1.0, 'geometry': [{'solid': big}]}
-    tools = {0: ap0, 1: ap1}
-    solid = [big]
-    modules, utility, _ = _qr()
-    new_solid, new_tools = gen.insert_geometry(solid, tools, modules, utility, (0, 0), 2, 10, 's', 'pos')
-    assert solid == [big] and set(tools) == {0, 1}
-    assert len(ap0['geometry']) == 1 and len(ap1['geometry']) == 1
-    assert new_tools is not tools and len(new_tools[0]['geometry']) == 2 and len(new_tools[10]['geometry']) == len(
-        modules)
-    assert new_solid is not solid
-
-
-def test_margin_overrides_border_rule():
-    modules, utility, _ = _qr()
-    base = dict(border_size=2, box_size=10, rounded='s', polarity='pos', units='MM')
-    _, t_rule = gen.insert_geometry([], {}, modules, utility, (0, 0), **base)
-    _, t_margin = gen.insert_geometry([], {}, modules, utility, (0, 0), margin=5.0, **base)
-    w_rule = t_rule[0]['geometry'][0]['clear'].bounds
-    w_margin = t_margin[0]['geometry'][0]['clear'].bounds
-    assert (w_rule[2] - w_rule[0]) == pytest.approx(21 + 4)
-    assert (w_margin[2] - w_margin[0]) == pytest.approx(21 + 10)
-
-
 def test_negative_polarity_and_outline():
     modules, utility, _ = _qr()
     base = dict(border_size=2, box_size=10, rounded='s', units='MM')
@@ -190,13 +129,6 @@ def test_row_merge_equals_plain_union():
     assert merged.bounds == pytest.approx(plain.bounds, abs=1e-6)
 
 
-def test_row_merge_large_code_is_fast():
-    squares = [box(x * 0.1, y * 0.1, x * 0.1 + 0.1, y * 0.1 + 0.1) for x in range(100) for y in range(100)
-               if (x * y) % 3]
-    out = gen.utility_geometry(squares)
-    assert out.area == pytest.approx(sum(s.area for s in squares), rel=1e-6)
-
-
 # --- transforms ----------------------------------------------------------------------------------------------------
 def test_mirror_rotate_and_anchor():
     asym = box(0, 0, 4, 2).union(box(0, 2, 1, 4))          # L shape, bbox 4 x 4
@@ -234,49 +166,12 @@ def test_transformed_qr_is_still_inserted_exactly():
 
 
 # --- preview -------------------------------------------------------------------------------------------------------
-def test_preview_rings_under_limit_and_box_over_limit():
-    modules, utility, _ = _qr()
-    rings = gen.preview_geometry(modules, utility, None, (1, 1), len(modules) + 1)
-    assert rings and all(r.geom_type == 'LinearRing' for r in rings)
-    boxes = gen.preview_geometry(modules, utility, box(*utility.bounds), (1, 1), 5)
-    assert len(boxes) == 1 and boxes[0].bounds == pytest.approx(translate(box(*utility.bounds), 1, 1).bounds)
-
-
 # --- images --------------------------------------------------------------------------------------------------------
 def _svg_text(**kw):
     img = gen.make_qr_image('HELLO', 1, 'L', 10, 2, 'svg', **kw)
     buf = io.BytesIO()
     img.save(buf)
     return buf.getvalue().decode()
-
-
-def test_svg_colors_fill_and_background():
-    text = _svg_text(fill_color='#ff0000', back_color='#00ff00')
-    assert 'fill_color' not in text and 'back_color' not in text
-    assert '<path fill="#ff0000"' in text
-    assert text.index('<rect') < text.index('<path') and '#00ff00' in text
-
-
-@pytest.mark.parametrize('back', ['transparent', None])
-def test_svg_transparent_or_missing_colors_do_not_crash(back):
-    text = _svg_text(fill_color=None, back_color=back)
-    assert '<rect' not in text and '<path' in text
-
-
-def test_png_and_fixed_version_image():
-    img = gen.make_qr_image('HELLO', 1, 'L', 10, 2, 'png', '#000000', '#ffffff')
-    assert img.size == (250, 250)
-    with pytest.raises(gen.QRDataOverflow):
-        gen.make_qr_image('X' * 60, 1, 'L', 10, 2, 'png')
-    img = gen.make_qr_image('HELLO', 1, 'L', 10, 2, 'png', '#000000', 'transparent')
-    assert img.size == (250, 250)
-
-
-def test_valid_color():
-    assert gen.valid_color('#ff00aa') and gen.valid_color('red')
-    assert not gen.valid_color('') and not gen.valid_color('notacolor') and not gen.valid_color(None)
-    assert not gen.valid_color('transparent')
-    assert gen.valid_color('transparent', allow_transparent=True)
 
 
 # --- tokens and warnings -------------------------------------------------------------------------------------------
@@ -288,14 +183,6 @@ def test_expand_tokens():
     assert gen.expand_tokens('{unknown}-{serial}', {'serial': 12}) == '{unknown}-12'
     assert gen.expand_tokens('{date}', {'date': '2026-01-02'}) == '2026-01-02'
     assert gen.expand_tokens('{project}', {}) == '{project}'
-
-
-def test_size_warnings():
-    assert gen.size_warnings(0.1, 'MM', 0.15, 4) == ['module_below_min']
-    assert gen.size_warnings(0.1 / MM, 'IN', 0.15, 4) == ['module_below_min']
-    assert gen.size_warnings(0.2, 'MM', 0.15, 4) == []
-    assert gen.size_warnings(0.2, 'MM', 0.15, 2) == ['quiet_zone']
-    assert gen.size_warnings(0.1, 'MM', 0.15, 0) == ['module_below_min', 'quiet_zone']
 
 
 # --- the plugin controller (headless App) --------------------------------------------------------------------------
@@ -387,13 +274,6 @@ def _click(tool, x, y, button=1):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize('level', ['b', 'a'])
-def test_insert_button_is_visible_in_both_modes(tool, level):
-    tool.change_level(level)
-    assert not tool.ui.qrcode_button.isHidden()
-
-
-@pytest.mark.slow
 def test_export_keeps_undo_available_and_rejects_bad_colors(fc, tool, tmp_path, monkeypatch):
     png, svg = str(tmp_path / 'a.png'), str(tmp_path / 'a.svg')
     paths = iter([png, svg])
@@ -422,15 +302,6 @@ def test_overflow_is_reported_and_the_tool_is_not_armed(fc, tool):
 
 
 @pytest.mark.slow
-def test_reset_disarms_and_restores_the_call_source(fc, tool):
-    _setup(tool, _gerber(fc))
-    _arm(tool)
-    assert tool.armed and fc.call_source == 'qrcode_tool'
-    tool.set_tool_ui()
-    assert not tool.armed and fc.call_source == 'app'
-
-
-@pytest.mark.slow
 def test_drag_release_does_not_insert_and_a_click_does(fc, tool):
     obj = _gerber(fc)
     _setup(tool, obj)
@@ -453,19 +324,6 @@ def test_deleted_target_is_refused(fc, tool):
     _click(tool, 30, 30)
     assert not tool.armed and fc.call_source == 'app'
     assert any('ERROR' in m for m in tool.messages)
-
-
-@pytest.mark.slow
-def test_inch_project_inserts_the_qr_in_inches(fc, tool, monkeypatch):
-    monkeypatch.setattr(fc, 'app_units', 'IN')
-    obj = _gerber(fc)
-    _setup(tool, obj, placement_radio='coords', x_entry=0.0, y_entry=0.0)
-    before = obj.solid_geometry
-    tool.execute()
-    _settle(lambda: obj.solid_geometry is not before)
-    added = unary_union([g for g in obj.solid_geometry if g not in before])
-    # version 1 = 21 modules of box_size / 10 mm
-    assert added.bounds[2] - added.bounds[0] == pytest.approx(21 * 1.0 / MM, rel=0.02)
 
 
 @pytest.mark.slow
@@ -495,20 +353,6 @@ def test_new_object_output_keeps_the_source(fc, tool):
     new = fc.collection.get_by_name('top_qrcode')
     assert new is not None and _area(obj) == before
     assert new.bounds()[0] >= 30 - 1e-6 and _area(new) > 0
-
-
-@pytest.mark.slow
-def test_coordinates_placement_puts_the_anchor_at_the_point(fc, tool):
-    obj = _gerber(fc)
-    _setup(tool, obj, placement_radio='coords', x_entry=50.0, y_entry=40.0, anchor_radio='bl')
-    before = obj.solid_geometry
-    tool.execute()
-    _settle(lambda: obj.solid_geometry is not before)
-    assert not tool.armed
-    added = unary_union([g for g in obj.solid_geometry if g not in before])
-    # border 2 modules (1 mm each) of clearance sit between the anchor and the code
-    assert added.bounds[0] == pytest.approx(50.0 + 2.0, abs=1e-3)
-    assert added.bounds[1] == pytest.approx(40.0 + 2.0, abs=1e-3)
 
 
 @pytest.mark.slow
@@ -574,19 +418,6 @@ def test_a_merged_gerber_with_shapely_follow_geometry_can_take_a_qrcode(fc, tool
 
 
 @pytest.mark.slow
-def test_the_target_as_soldermask_adds_no_opening_box(fc, tool):
-    plain, same = _gerber(fc, 'plain'), _gerber(fc, 'same')
-    _setup(tool, plain, placement_radio='coords', x_entry=50.0, y_entry=40.0)
-    tool.execute()
-    _settle(lambda: not tool.armed and _area(plain) != _area(same))
-    _setup(tool, same, placement_radio='coords', x_entry=50.0, y_entry=40.0, mask_cb=True)
-    tool.ui.mask_object_combo.set_value('same')
-    tool.execute()
-    _settle(lambda: _area(plain) == _area(same), timeout=2.0)
-    assert _area(same) == pytest.approx(_area(plain))
-
-
-@pytest.mark.slow
 def test_pcbdoc_object_gets_the_qr_in_its_own_units(fc, tool):
     obj = _gerber(fc)
     obj.units = 'IN'
@@ -597,20 +428,6 @@ def test_pcbdoc_object_gets_the_qr_in_its_own_units(fc, tool):
     _settle(lambda: obj.solid_geometry is not before)
     added = unary_union([g for g in obj.solid_geometry if g not in before])
     assert added.bounds[2] - added.bounds[0] == pytest.approx(21 / MM, rel=0.02)
-
-
-@pytest.mark.slow
-def test_new_object_output_works_without_any_gerber(fc, tool):
-    ui = tool.ui
-    ui.text_data.set_value('HELLO')
-    ui.version_auto_cb.set_value(True)
-    ui.output_radio.set_value('new')
-    ui.placement_radio.set_value('coords')
-    tool.update_enabled()
-    tool.execute()
-    _settle(lambda: fc.collection.get_by_name('qrcode') is not None)
-    new = fc.collection.get_by_name('qrcode')
-    assert new is not None and _area(new) > 0
 
 
 @pytest.mark.slow

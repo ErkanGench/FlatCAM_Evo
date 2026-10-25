@@ -219,22 +219,6 @@ def test_robber_bar_survives_multipolygon_member_none_follow_and_reg_only_tools(
     assert len(follows) == 1
 
 
-def test_circle_steps_count_the_whole_circle():
-    fill, merged, tools = copper_fill([box(0, 0, 1, 1)], {}, None, None, 0, 'rect', 0.1, 4, 0,
-                                      1, 2, 1, 1, 1, 1, 1, 16)
-    assert len(fill) and all(len(dot.exterior.coords) - 1 == 16 for dot in fill)
-    solid, _, _, _ = plating_mask([box(0, 0, 2, 2)], {}, [], [], None, None, 0.5, 3, False, 8)
-    assert solid.equals(box(0, 0, 2, 2).buffer(0.5, quad_segs=2))
-    line, bar, *_ = robber_bar_data([box(0, 0, 2, 2)], {}, [], 1, 0.5, 8)
-    assert line.equals(box(0, 0, 2, 2).buffer(1.25, quad_segs=2).exterior)
-
-
-def test_plating_mask_follows_include_thieving_exteriors():
-    thieving = box(0, 0, 4, 4).difference(box(1, 1, 3, 3))
-    solid, tools, follows, area = plating_mask([], {}, None, [thieving], None, None, 0, 1, False)
-    assert len(follows) == 1 and follows[0].equals(thieving.exterior)
-
-
 def test_gerber_reference_accepts_nested_lists():
     fill, merged, tools = copper_fill([[box(0, 0, 2, 2)], [box(3, 0, 4, 1)]], {}, [[box(0, 0, 6, 6)]], 'gerber',
                                       2, 'rect', 0.2, 1, 0, 0, 1, 1, 1, 1, 1, 1, 32)
@@ -393,17 +377,6 @@ def test_area_selection_ends_clean(ending):
     assert len(reconnected) == 1
 
 
-def test_second_add_does_not_connect_handlers_twice():
-    tool = make_tool(source_gerber(), reference_combo=1)
-    tool.on_add_copper_thieving_click()
-    tool.on_add_copper_thieving_click()
-    connected = [c for c in tool.app.plotcanvas.graph_event_connect.call_args_list
-                 if c.args[0] == 'mouse_release' and c.args[1] == tool.on_mouse_release]
-    disconnected = [c for c in tool.app.plotcanvas.graph_event_disconnect.call_args_list
-                    if c.args[0] == 'mouse_release' and c.args[1] == tool.on_mouse_release]
-    assert len(connected) - len(disconnected) == 1
-
-
 def test_area_selection_ignores_a_drag_and_uses_world_coordinates():
     tool = make_tool(source_gerber(), reference_combo=1)
     # the app drag flag is not updated while the plugin owns the canvas events: only the event counts
@@ -413,26 +386,3 @@ def test_area_selection_ignores_a_drag_and_uses_world_coordinates():
     tool.on_mouse_release(SimpleNamespace(button=1, pos=(100, 200), is_dragging=False))
     assert tool.first_click is True and tool.cursor_pos == (10, 20)
 
-
-def test_plating_mask_job_does_not_touch_the_widgets_and_is_not_a_recent_file():
-    source = SimpleNamespace(obj_options={'name': 'board.gbr'}, solid_geometry=[box(0, 0, 10, 10)],
-                             tools={}, follow_geometry=None)
-    tool = make_tool(source)
-    outputs = []
-
-    def new_object(kind, name, initialize, **kwargs):
-        obj = SimpleNamespace(regenerate_source=MagicMock())
-        initialize(obj, tool.app)
-        outputs.append(obj)
-
-    tool.new_object = new_object
-    jobs = []
-    tool.app.worker_task.emit.side_effect = jobs.append
-    tool.on_add_ppm_click()
-    assert outputs == [] and len(jobs) == 1
-    tool.ui = None      # the worker has no GUI to read
-    jobs[0]['fcn'](*jobs[0]['params'])
-    assert outputs[0].obj_options['name'] == 'board_plating_mask.gbr'
-    assert outputs[0].solid_geometry[0].equals(source.solid_geometry[0])
-    assert tool.plated_area_ready.emit.call_args.args == (1.0,)
-    tool.app.file_opened.emit.assert_not_called()

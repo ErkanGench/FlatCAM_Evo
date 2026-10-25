@@ -280,6 +280,9 @@ class TestPcbDocImport(unittest.TestCase):
             def create_geometry(obj):
                 return Excellon.create_geometry(obj)
 
+            def circle_steps(obj, radius):
+                return obj.excellon_circle_steps
+
             def export_excellon(obj, *args, **kwargs):
                 return ExcellonObject.export_excellon(obj, *args, **kwargs)
 

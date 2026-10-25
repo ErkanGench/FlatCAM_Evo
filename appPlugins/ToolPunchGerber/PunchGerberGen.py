@@ -39,10 +39,15 @@ def punch_geometry(solid_geometry, tools, selected_apertures, method, value, dec
 
     Raises ValueError with args[0] in 'empty' (no apertures), 'nothing' (no pad punched), 'size' (hole not smaller
     than the pad) or 'zero' (hole diameter is zero or negative).
+
+    steps: segments of a full circle, a count for every circle or a function of the radius of the circle.
     """
     if not tools:
         raise ValueError('empty')
-    quad_segs = max(1, int(steps) // 4)
+
+    def quad_segs_of(radius):
+        return max(1, int(steps(radius) if callable(steps) else steps) // 4)
+
     source = normalize_polygonal(solid_geometry)
     apertures = deepcopy(tools)
     new_apid = max(int(apid) for apid in apertures)
@@ -94,11 +99,11 @@ def punch_geometry(solid_geometry, tools, selected_apertures, method, value, dec
             dia = float(tool['tooldia'])
             # A clear record erases its full footprint in the export, so it needs the whole footprint inside the pads.
             for point in tool.get('drills', []):
-                if pad_union.contains(point.buffer(dia / 2, quad_segs=quad_segs)):
+                if pad_union.contains(point.buffer(dia / 2, quad_segs=quad_segs_of(dia / 2))):
                     add_clear(dia, point)
             for slot in tool.get('slots', []):
                 line = LineString([slot[0], slot[1]])
-                if pad_union.contains(line.buffer(dia / 2, quad_segs=quad_segs)):
+                if pad_union.contains(line.buffer(dia / 2, quad_segs=quad_segs_of(dia / 2))):
                     add_clear(dia, line)
         punched = source.difference(cutter)
         for apid, idx, _aperture, _record in pads:
@@ -119,7 +124,7 @@ def punch_geometry(solid_geometry, tools, selected_apertures, method, value, dec
                 raise ValueError('zero')
             if dia >= size:
                 raise ValueError('size')
-            cutter = record['follow'].buffer(dia / 2, quad_segs=quad_segs)
+            cutter = record['follow'].buffer(dia / 2, quad_segs=quad_segs_of(dia / 2))
             cutters.append(cutter)
             rec = apertures[apid]['geometry'][idx]
             rec['solid'] = rec['solid'].difference(cutter)

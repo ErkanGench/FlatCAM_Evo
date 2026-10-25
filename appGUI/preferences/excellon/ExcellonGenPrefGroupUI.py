@@ -6,6 +6,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from appGUI.GUIElements import FCCheckBox, FCSpinner, RadioSet, FCSliderWithSpinner, FCColorEntry, FCLabel, \
     GLay, FCFrame, FCButton
 from appGUI.preferences.OptionsGroupUI import OptionsGroupUI
+from appGUI.preferences.CircleStepsRows import CircleStepsRows
 from appDatabase import _database_option
 
 import gettext
@@ -60,17 +61,11 @@ class ExcellonGenPrefGroupUI(OptionsGroupUI):
         )
         plot_grid.addWidget(self.multicolored_cb, 0, 2)
 
-        # Number of circle steps for circular aperture linear approximation
-        self.circle_steps_label = FCLabel('%s:' % _("Circle Steps"))
-        self.circle_steps_label.setToolTip(
-            _("The number of circle steps for \n"
-              "linear approximation of circles.")
-        )
-        self.circle_steps_entry = FCSpinner()
-        self.circle_steps_entry.set_range(0, 9999)
-
-        plot_grid.addWidget(self.circle_steps_label, 2, 0)
-        plot_grid.addWidget(self.circle_steps_entry, 2, 1, 1, 2)
+        # How the circles are made of segments: Adaptive (Max Deviation) or Fixed (Circle Steps)
+        self.circle_rows = CircleStepsRows(plot_grid, 2, _("drill holes, slot ends"))
+        self.circle_mode_radio = self.circle_rows.mode_radio
+        self.circle_tol_entry = self.circle_rows.tol_entry
+        self.circle_steps_entry = self.circle_rows.steps_entry
 
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)

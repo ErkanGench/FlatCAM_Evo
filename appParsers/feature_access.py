@@ -38,7 +38,7 @@ Gerber mapping (parser: ``ParseGerber.py``, records appended in ``_add_track_to_
 * ``follow`` is the 'follow' geometry of the record, None if the record has none.
 
 Excellon mapping: drills first (feature_index 0..nd-1), then slots (nd..nd+ns-1). Drill: kind 'flash',
-follow = the drill Point, solid = ``drill.buffer(tooldia / 2.0, int(obj.excellon_circle_steps))``.
+follow = the drill Point, solid = ``drill.buffer(tooldia / 2.0, quad_segs)``, with the quad_segs of ``obj.circle_steps(tooldia / 2.0)``.
 Slot: kind 'route', follow = ``LineString([start, stop])``, solid = that line buffered the same way
 (identical to ``Excellon.create_geometry``, so the solids equal the parts of ``tools[t]['solid_geometry']``).
 polarity is always 'dark', size = tooldia.
@@ -51,7 +51,7 @@ from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, circle_quad_segs
 
 
 class FeatureRecord(NamedTuple):
@@ -106,8 +106,9 @@ def _iter_excellon_tool(obj, key, tool: dict) -> Iterator[FeatureRecord]:
     tooldia = tool.get('tooldia')
     if tooldia is None:
         return
-    steps = int(obj.excellon_circle_steps)
     radius = tooldia / 2.0
+    # the same segments as Excellon.create_geometry(): the preferences "Circles" for the radius of the hole
+    steps = circle_quad_segs(obj.circle_steps(radius))
     index = 0
     for drill in tool.get('drills') or ():
         yield FeatureRecord(key, index, 'flash', 'dark', drill.buffer(radius, steps), drill, tooldia)

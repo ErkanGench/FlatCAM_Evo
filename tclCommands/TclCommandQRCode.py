@@ -7,7 +7,7 @@ import appTranslation as fcTranslate
 import builtins
 
 from appHandlers.appHistory import history_of
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, object_circle_steps
 from tclCommands.TclCommand import TclCommand
 
 fcTranslate.apply_language('strings')
@@ -192,10 +192,9 @@ class TclCommandQRCode(TclCommand):
         else:
             self.raise_tcl_error('%s: %s' % (_("Mask pattern must be 0..7 or auto"), mask_text))
             return 'fail'
-        try:
-            circle_steps = int(options.get('geometry_circle_steps', 64))
-        except (TypeError, ValueError):
-            circle_steps = 64
+        # the round features of the code are not smaller than half of a module
+        circle_steps = object_circle_steps(options, 'geometry',
+                                           float(options.get('tools_qrcode_min_module', 0.15)) / 2, units)
 
         try:
             modules, utility, info = Gen.qr_geometry(text, version or None, error, box_size, border, units,

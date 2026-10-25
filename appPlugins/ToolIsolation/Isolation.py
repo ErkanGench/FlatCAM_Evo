@@ -161,9 +161,6 @@ class ToolIsolation(Geometry, AppTool):
 
         self.tool_type_item_options = []
 
-        self.grb_circle_steps = int(self.app.options.get(
-            "gerber_circle_steps",
-            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))))
 
         self.tooldia = None
         # store here the tool diameter that is guaranteed to isolate the object
@@ -1050,28 +1047,34 @@ class ToolIsolation(Geometry, AppTool):
                 'tools_mill_vtipangle': self.ui.tipangle_entry.get_value(),
                 'tools_mill_cutz':      self.ui.cutz_entry.get_value(),
             }
-            updated_uids = {tool_uid for __, tool_uid in tools}
+
+            # the edited values go to copies first: a rejected diameter must not leave the tool data changed
+            candidates = []
             for row, tool_uid in tools:
-                data = self.iso_tools[tool_uid]['data']
+                data = dict(self.iso_tools[tool_uid]['data'])
                 if edited_key is not None:
                     data[edited_key] = widget_values[edited_key]
                 elif row == current_row or len(tools) == 1:
                     data.update(widget_values)
+                candidates.append((row, tool_uid, data))
 
             # the tools outside of this change keep their diameter: a new diameter can not be one of them
+            updated_uids = {tool_uid for __, tool_uid in tools}
             other_dias = [
                 self.app.dec_format(v['tooldia'], self.decimals)
                 for uid, v in self.iso_tools.items() if 'tooldia' in v and uid not in updated_uids]
             warned = False
-            for row, tool_uid in tools:
+            for row, tool_uid, data in candidates:
                 tool = self.iso_tools[tool_uid]
-                new_tooldia = self.v_effective_diameter(tool['data'])
+                new_tooldia = self.v_effective_diameter(data)
                 if new_tooldia is None:
+                    tool['data'] = data
                     continue
                 f_new_tool_dia = self.app.dec_format(new_tooldia, self.decimals)
 
                 current_dia = tool.get('tooldia')
                 if current_dia is not None and f_new_tool_dia == self.app.dec_format(current_dia, self.decimals):
+                    tool['data'] = data
                     continue
 
                 if f_new_tool_dia in other_dias:
@@ -1081,6 +1084,7 @@ class ToolIsolation(Geometry, AppTool):
                         warned = True
                     continue
 
+                tool['data'] = data
                 tool['tooldia'] = deepcopy(f_new_tool_dia)
                 tool['data']['tools_iso_tooldia'] = deepcopy(f_new_tool_dia)
                 tool_dia_item = self.ui.tools_table.item(row, 1)
@@ -1201,11 +1205,18 @@ class ToolIsolation(Geometry, AppTool):
             # there is no tool in tool table so we can't save the GUI elements values to storage
             return
 
-        self.blockSignals(True)
-
         widget_changed = self.sender()
         wdg_objname = widget_changed.objectName()
         option_changed = self.name2option[wdg_objname]
+
+        # the V parameters decide the diameter of each V tool: on_update_tool_dia() writes them, and only when the
+        # new diameter is accepted
+        if option_changed in ('tools_mill_vtipdia', 'tools_mill_vtipangle', 'tools_mill_cutz') \
+                and self.ui.v_frame.isVisible():
+            self.on_update_tool_dia()
+            return
+
+        self.blockSignals(True)
 
         # row = self.ui.tools_table.currentRow()
         rows = sorted(set(index.row() for index in self.ui.tools_table.selectedIndexes()))
@@ -1954,6 +1965,10 @@ class ToolIsolation(Geometry, AppTool):
             self.start_selection_mode(self.grb_obj, selection)
             return
 
+        # the selected tools are copied here, in the GUI thread: a later edit of the Tool Table does not change
+        # the run that was submitted
+        run_tools = tools_for_run(self.iso_tools, sel_tools)
+
         ref_name = self.ui.reference_combo.get_value() if selection == 3 else None
         settings = self.run_settings()
         if settings['boundary'] == 'fail':
@@ -1968,7 +1983,8 @@ class ToolIsolation(Geometry, AppTool):
                         iso_class.validation_status = True
                         if validation is not None:
                             iso_class.check_tools_validity(isolated_obj, validation[1])
-                        iso_class.isolate_handler(isolated_obj, selection, sel_tools, settings, ref_name)
+                        iso_class.isolate_handler(isolated_obj, selection, sel_tools, settings, ref_name,
+                                                  tools_storage=run_tools)
                 except grace:
                     iso_class.app.inform.emit('[WARNING_NOTCL] %s' % _("Isolation aborted."))
 
@@ -1999,7 +2015,7 @@ class ToolIsolation(Geometry, AppTool):
             'exc_name': self.ui.exc_obj_combo.currentText(),
         }
 
-    def isolate_handler(self, isolated_obj, selection, sel_tools, settings, ref_name=None):
+    def isolate_handler(self, isolated_obj, selection, sel_tools, settings, ref_name=None, tools_storage=None):
         """
         Creates a geometry object with paths around the gerber features (selection 0: All, 3: Reference Object).
         It runs in the worker and it reads no widget: the values come from the GUI thread.
@@ -2010,10 +2026,15 @@ class ToolIsolation(Geometry, AppTool):
         :param sel_tools:       the uids of the selected tools
         :param settings:        run_settings()
         :param ref_name:        the name of the reference object (selection 3)
+        :param tools_storage:   the tools copied when the run was submitted (None: the plugin tools)
+        :type tools_storage:    dict
         :return: None
         """
+        if tools_storage is None:
+            tools_storage = self.iso_tools
+
         if selection == 0:  # ALL
-            self.isolate(isolated_obj=isolated_obj, sel_tools=sel_tools, tools_storage=self.iso_tools, **settings)
+            self.isolate(isolated_obj=isolated_obj, sel_tools=sel_tools, tools_storage=tools_storage, **settings)
         elif selection == 3:  # Reference Object
             ref_obj = self.app.collection.get_by_name(ref_name)
             if ref_obj is None:
@@ -2022,7 +2043,7 @@ class ToolIsolation(Geometry, AppTool):
             ref_geo = unary_union(ref_obj.solid_geometry)
             use_geo = unary_union(isolated_obj.solid_geometry).difference(ref_geo)
             self.isolate(isolated_obj=isolated_obj, geometry=use_geo, sel_tools=sel_tools,
-                         tools_storage=self.iso_tools, **settings)
+                         tools_storage=tools_storage, **settings)
 
     def start_selection_mode(self, isolated_obj, selection):
         """Starts the Area (1) or Polygon (2) selection mode: canvas handlers, so it runs in the GUI thread."""
@@ -2173,8 +2194,6 @@ class ToolIsolation(Geometry, AppTool):
                                             clear_leftovers=use_clear_leftovers, boundary=boundary,
                                             trace_boundary=trace_boundary)
 
-            circle_steps = self.app.options.get("gerber_circle_steps", app_defaults.get(
-                "gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps")))
             if geometry is None:
                 # we do isolation over all the geometry of the Gerber object
                 # because it is already fused together
@@ -2206,7 +2225,7 @@ class ToolIsolation(Geometry, AppTool):
                 iso_offsets = [IsolationGen.pass_offset(tool_dia, nr, overlap, negative_dia)
                                for nr in range(passes)]
                 # the passes are buffered ahead, in parallel threads
-                buffers = isolated_obj.isolation_buffers(iso_offsets, geometry=work_geo)
+                buffers = IsolationGen.pass_buffers(isolated_obj, iso_offsets, self.app, geometry=work_geo)
                 # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
                 mill_dir = 0 if milling_type == 'cl' else 1
 
@@ -2267,8 +2286,8 @@ class ToolIsolation(Geometry, AppTool):
                         pads = pad_solids(isolated_obj, geometry)
                     if pads:
                         pad_geo = flatten_shapely_geometry(IsolationGen.pad_passes(
-                            pads, envelopes, tool_dia, passes_made, use_extra_passes, overlap, circle_steps,
-                            negative_dia=negative_dia))
+                            pads, envelopes, tool_dia, passes_made, use_extra_passes, overlap, self.app.options,
+                            negative_dia=negative_dia, units=IsolationGen.object_units(isolated_obj, self.app)))
                         if boundary is not None:
                             pad_geo = clip_paths_to_area(pad_geo, boundary)
                         made[-1][2] = flatten_shapely_geometry(made[-1][2]) + pad_geo
@@ -2655,7 +2674,7 @@ class ToolIsolation(Geometry, AppTool):
             use_leftovers = clear_leftovers and iso_t == 2 and not negative_dia
             iso_offsets = [IsolationGen.pass_offset(tool_dia, nr, overlap, negative_dia) for nr in range(passes)]
             # the passes are buffered ahead, in parallel threads
-            buffers = iso_obj.isolation_buffers(iso_offsets, geometry=work_geo)
+            buffers = IsolationGen.pass_buffers(iso_obj, iso_offsets, self.app, geometry=work_geo)
             # climb milling (M3 spindle): the tool goes clockwise around the features; conventional reverses it
             mill_dir = 0 if milling_type == 'cl' else 1
 
@@ -2672,8 +2691,9 @@ class ToolIsolation(Geometry, AppTool):
 
             solid_geo, envelopes, leftover_geo, passes_made = IsolationGen.combined_passes(
                 pass_envelopes(), iso_offsets, tool_dia,
-                iso_obj.geo_steps_per_circle if use_leftovers else None, mill_dir,
-                clear_leftovers=use_leftovers, boundary=boundary)
+                self.app.options, mill_dir,
+                clear_leftovers=use_leftovers, boundary=boundary,
+                units=IsolationGen.object_units(iso_obj, self.app))
 
             if use_leftovers:
                 self.app.log.debug("ToolIsolation.combined_normal() -> %d paths clear the leftovers" %
@@ -2695,9 +2715,7 @@ class ToolIsolation(Geometry, AppTool):
                     solid_geo += IsolationGen.pad_passes(
                         pads, envelopes if boundary is not None else solid_geo,
                         tool_dia, passes_made, extra_passes, overlap,
-                        self.app.options.get("gerber_circle_steps", app_defaults.get(
-                            "gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
-                        negative_dia=negative_dia)
+                        self.app.options, negative_dia=negative_dia, units=IsolationGen.object_units(iso_obj, self.app))
 
             solid_geo += leftover_geo
 
@@ -3018,10 +3036,11 @@ class ToolIsolation(Geometry, AppTool):
             if interiors:
                 # isolate the interior polygons with a negative tool
                 self.isolate_in_worker(isolated_obj=self.grb_obj, geometry=poly_list, negative_dia=True,
-                                       sel_tools=sel_tools, tools_storage=self.iso_tools, **settings)
+                                       sel_tools=sel_tools, tools_storage=tools_for_run(self.iso_tools, sel_tools),
+                                       **settings)
             else:
                 self.isolate_in_worker(isolated_obj=self.grb_obj, geometry=poly_list, sel_tools=sel_tools,
-                                       tools_storage=self.iso_tools, **settings)
+                                       tools_storage=tools_for_run(self.iso_tools, sel_tools), **settings)
 
     def on_select_all_polygons(self):
         self.app.log.debug("ToolIsolation.on_select_all_polygons()")
@@ -3173,8 +3192,8 @@ class ToolIsolation(Geometry, AppTool):
                 return 'fail'
 
             self.isolate_in_worker(isolated_obj=self.grb_obj, limited_area=unary_union(sel_zones),
-                                   sel_tools=sel_tools, tools_storage=self.iso_tools, plot=True,
-                                   **self.run_settings())
+                                   sel_tools=sel_tools, tools_storage=tools_for_run(self.iso_tools, sel_tools),
+                                   plot=True, **self.run_settings())
 
     # called on mouse move
     def on_mouse_move(self, event):

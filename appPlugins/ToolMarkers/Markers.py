@@ -60,10 +60,6 @@ class ToolMarkers(AppTool):
         # Objects involved in Copper thieving
         self.grb_object = None
 
-        self.grb_steps_per_circle = self.app.options.get(
-            "gerber_circle_steps",
-            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps")))
-
         self.handlers_connected = False
 
         # storage for temporary shapes when adding manual markers
@@ -490,7 +486,7 @@ class ToolMarkers(AppTool):
 
         new_apertures, solid_geometry, follow_geometry = gerber_marker_data(
             new_grb_obj.tools, new_grb_obj.solid_geometry, new_grb_obj.follow_geometry,
-            marker_geometry, line_thickness, self.grb_steps_per_circle)
+            marker_geometry, line_thickness, self.app.options, self.app.app_units)
 
         def initialize(grb_obj, app_obj):
             grb_obj.obj_options = LoudDict()

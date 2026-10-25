@@ -9,7 +9,7 @@ from shapely import LineString, MultiLineString, Polygon, MultiPolygon, Point, L
 from shapely.ops import unary_union
 
 from camlib import flatten_shapely_geometry, milling_orient, polygon_gap_pairs, clip_paths_to_area, \
-    pass_covers_area, isolation_leftover_paths, circle_quad_segs
+    pass_covers_area, isolation_leftover_paths, gerber_quad_segs, PassBuffers, grace
 
 
 def pass_offset(tooldia, nr_pass, overlap, negative_dia=None, denominator=2.0000001):
@@ -18,9 +18,36 @@ def pass_offset(tooldia, nr_pass, overlap, negative_dia=None, denominator=2.0000
     return -offset if negative_dia else offset
 
 
-def quad_segs_of(circle_steps):
-    """Shapely quad_segs of a circle step count (the app counts the steps of the whole circle)."""
-    return circle_quad_segs(circle_steps)
+class AdaptivePassBuffers(PassBuffers):
+    """PassBuffers whose passes follow the Gerber circle preferences: each pass buffers with the quad_segs of its own
+    offset (the radius of its round corners and caps)."""
+
+    def __init__(self, geometry, offsets, options, units='MM', abort=None, workers=None):
+        super().__init__(geometry, offsets, 1, abort=abort, workers=workers)
+        self._options = options
+        self._units = units
+
+    def _buffer(self, nr_pass):
+        if self._abort is not None and self._abort():
+            raise grace
+        geoms = shapely.from_wkb(self._wkb)
+        offset = self._offsets[nr_pass]
+        if offset == 0:
+            return unary_union(geoms)
+        quad_segs = gerber_quad_segs(self._options, offset, self._units)
+        return unary_union(shapely.buffer(geoms, offset, quad_segs=quad_segs, join_style='round'))
+
+
+def object_units(obj, app):
+    """The units of the geometry of a Gerber object (the units of the application if the object has none)."""
+    return getattr(obj, 'units', None) or app.app_units
+
+
+def pass_buffers(obj, offsets, app, geometry=None):
+    """The passes of an isolation of a Gerber object, buffered ahead (see Geometry.isolation_buffers())."""
+    working_geo = geometry if geometry is not None else obj.solid_geometry
+    return AdaptivePassBuffers(working_geo, offsets, app.options, object_units(obj, app),
+                               abort=lambda: app.abort_flag)
 
 
 def v_effective_diameter(data):
@@ -68,7 +95,8 @@ def poly2rings(poly):
     return [poly.exterior] + [interior for interior in poly.interiors]
 
 
-def combined_passes(pass_envelopes, offsets, tooldia, circle_steps, invert, clear_leftovers=False, boundary=None):
+def combined_passes(pass_envelopes, offsets, tooldia, options, invert, clear_leftovers=False, boundary=None,
+                    units='MM'):
     """Collect lazy pass geometry, stopping at the boundary without requesting unused passes."""
     solid_geo = []
     envelopes = []
@@ -81,7 +109,8 @@ def combined_passes(pass_envelopes, offsets, tooldia, circle_steps, invert, clea
         if clear_leftovers:
             if prev_geo is not None:
                 leftover_geo += isolation_leftover_paths(prev_geo, iso_geo, tooldia / 2.0,
-                                                         quad_segs_of(circle_steps), invert=invert)
+                                                         gerber_quad_segs(options, tooldia / 2.0, units),
+                                                         invert=invert)
             prev_geo = iso_geo
 
         if boundary is not None:
@@ -100,15 +129,14 @@ def combined_passes(pass_envelopes, offsets, tooldia, circle_steps, invert, clea
     return solid_geo, envelopes, leftover_geo, passes_made
 
 
-def pad_passes(pads, envelope_geo, tooldia, first_pass, passes, overlap, circle_steps, negative_dia=None):
+def pad_passes(pads, envelope_geo, tooldia, first_pass, passes, overlap, options, negative_dia=None, units='MM'):
     solid_geo_union = unary_union(envelope_geo)
     pad_geo = []
     pad_array = np.empty(len(pads), dtype=object)
     pad_array[:] = list(pads)
-    quad_segs = quad_segs_of(circle_steps)
     for nr_pass in range(first_pass, passes + first_pass):
         iso_offset = pass_offset(tooldia, nr_pass, overlap, negative_dia)
-        pad_pass_geo = shapely.buffer(pad_array, iso_offset, quad_segs=quad_segs)
+        pad_pass_geo = shapely.buffer(pad_array, iso_offset, quad_segs=gerber_quad_segs(options, iso_offset, units))
         pad_geo.append(unary_union(pad_pass_geo).difference(solid_geo_union))
     return pad_geo
 

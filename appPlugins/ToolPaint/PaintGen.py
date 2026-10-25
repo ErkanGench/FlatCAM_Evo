@@ -25,6 +25,7 @@ from camlib import (
     grace,
     flatten_shapely_geometry,
     residual_cleanup,
+    object_circle_steps,
 )
 from defaults import AppDefaults
 from appParsers.feature_access import fused_solid
@@ -115,7 +116,6 @@ class PaintGen:
         self.multi_paint = False
 
         self.o_name = tool.o_name
-        self.circle_steps = tool.circle_steps
 
         self.overlap = tool.overlap
         self.connect = tool.connect
@@ -174,22 +174,37 @@ class PaintGen:
 
         self.parent_tool.area_to_paint_list = []
 
-        self.obj_name = self.ui.obj_combo.currentText()
+        self.select_method = self.ui.select_method_combo.get_value()
 
-        # Get source object.
-        try:
-            self.paint_obj = self.app.collection.get_by_name(str(self.obj_name))
-        except Exception as e:
-            self.app.log.error("ToolPaint.on_paint_button_click() --> %s" % str(e))
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), self.obj_name))
-            return
+        # the Geometry / Gerber objects selected in the Project tab, when asked; Polygon Selection keeps the combo
+        self.paint_objs = []
+        self.multi_paint = False
+        if self.ui.multi_objects_cb.get_value() and self.select_method in (0, 2, 3):
+            self.paint_objs = [obj for obj in self.app.collection.get_selected()
+                               if obj.kind in ('geometry', 'gerber')]
+            if not self.paint_objs:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Select Geometry or Gerber objects in the Project tab."))
+                return
+            self.multi_paint = True
+            self.paint_obj = self.paint_objs[0]
+            self.obj_name = self.paint_obj.obj_options['name']
+        else:
+            self.obj_name = self.ui.obj_combo.currentText()
 
-        if self.paint_obj is None:
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), self.obj_name))
-            return
+            # Get source object.
+            try:
+                self.paint_obj = self.app.collection.get_by_name(str(self.obj_name))
+            except Exception as e:
+                self.app.log.error("ToolPaint.on_paint_button_click() --> %s" % str(e))
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), self.obj_name))
+                return
+
+            if self.paint_obj is None:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), self.obj_name))
+                return
+            self.paint_objs = [self.paint_obj]
 
         self.o_name = '%s_mt_paint' % self.obj_name
-        self.circle_steps = self._circle_steps(self.paint_obj)
 
         # use the selected tools in the tool table; get diameters
         self.tooldia_list = []
@@ -211,19 +226,6 @@ class PaintGen:
             self.app.inform.emit('[ERROR_NOTCL] %s' % _("There are no tools selected in the Tool Table."))
             return
 
-        self.select_method = self.ui.select_method_combo.get_value()
-
-        # the Geometry / Gerber objects selected in the Project tab, when asked; Polygon Selection keeps the combo
-        self.paint_objs = [self.paint_obj]
-        self.multi_paint = False
-        if self.ui.multi_objects_cb.get_value() and self.select_method in (0, 2, 3):
-            self.paint_objs = [obj for obj in self.app.collection.get_selected()
-                               if obj.kind in ('geometry', 'gerber')]
-            if not self.paint_objs:
-                self.app.inform.emit('[WARNING_NOTCL] %s' % _("Select Geometry or Gerber objects in the Project tab."))
-                return
-            self.multi_paint = True
-
         if self.select_method == 0:  # _("All")
             self._for_each_source(lambda obj: self.paint_poly_all(obj, tooldia=self.tooldia_list, outname=self.o_name))
 
@@ -236,10 +238,19 @@ class PaintGen:
         elif self.select_method == 3:   # _("Reference Object")
             self._paint_poly_reference()
 
-    def _circle_steps(self, obj):
-        """The circle steps of the object's kind: Gerber objects use the Gerber ones, Geometry the Geometry ones."""
-        key = "gerber_circle_steps" if obj.kind == 'gerber' else "geometry_circle_steps"
-        return int(self._option(key))
+    def _steps_at(self, radius, obj=None, kind=None):
+        """
+        The segments of a full circle of this radius, as the preferences "Circles" of the object's kind set them:
+        Gerber objects use the Gerber ones, the other objects the Geometry ones.
+
+        :param radius:  the radius of the tool, in the units of the object
+        :param obj:     the painted object; the object being painted if None
+        :param kind:    'gerber' or 'geometry'; the kind of the object if None
+        """
+        obj = obj if obj is not None else getattr(self, 'paint_obj', None)
+        if kind is None:
+            kind = 'gerber' if getattr(obj, 'kind', None) == 'gerber' else 'geometry'
+        return object_circle_steps(self.app.options, kind, radius, getattr(obj, 'units', None) or self.units)
 
     def _for_each_source(self, paint):
         """Run paint(obj) for every source object, each one its own job with its name and circle steps."""
@@ -247,7 +258,6 @@ class PaintGen:
             self.paint_obj = obj
             self.obj_name = obj.obj_options['name']
             self.o_name = ('%s_paint' if getattr(self, 'multi_paint', False) else '%s_mt_paint') % self.obj_name
-            self.circle_steps = self._circle_steps(obj)
             paint(obj)
 
     def paint_area_selection_option(self, areas_to_paint_list: list[Polygon | MultiPolygon]):
@@ -278,11 +288,13 @@ class PaintGen:
             obj,
     ):
 
-        geometry_circle_steps = self.circle_steps
+        # the tool path arcs have the radius of the tool
+        circle_steps = self._steps_at(tool_diameter / 2, obj)
+        geometry_circle_steps = circle_steps
         apertures = None
         index = None
         if paint_method == 3:
-            geometry_circle_steps = self._option("geometry_circle_steps") or 64
+            geometry_circle_steps = self._steps_at(tool_diameter / 2, obj, 'geometry')
             apertures = getattr(obj, 'tools', None)
             # The aperture index is built once per job (a PaintGen copy lives for one job), not per polygon.
             cached = getattr(self, '_aperture_index_cache', None)
@@ -300,7 +312,7 @@ class PaintGen:
             self.app.inform.emit(messages[method])
 
         result = PaintModel.paint_polygon(
-            poly_g, tool_diameter, paint_method, over, conn, cont, prog_plot, self.circle_steps,
+            poly_g, tool_diameter, paint_method, over, conn, cont, prog_plot, circle_steps,
             getattr(self.parent_tool, 'clear_polygon_shrink', None),
             getattr(self.parent_tool, 'clear_polygon_seed', None),
             getattr(self.parent_tool, 'clear_polygon_lines', None),
@@ -732,7 +744,7 @@ class PaintGen:
                 settings['over'], settings['conn'], True, False, None)
 
         def cleanup(domain, diameter, previous, generate_paths, boundary_first):
-            return residual_cleanup(self.app, domain, diameter, self.circle_steps, previous,
+            return residual_cleanup(self.app, domain, diameter, self._steps_at(diameter / 2, painted_object), previous,
                                     generate_paths, physical=True, boundary_first=boundary_first)
 
         return PaintModel.final_cleanup(

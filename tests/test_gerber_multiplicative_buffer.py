@@ -13,9 +13,10 @@ import math
 
 import pytest
 import shapely
-from shapely.geometry import LineString, Point
+from shapely.geometry import LinearRing, LineString, Point
 
 from appParsers.ParseGerber import Gerber
+from camlib import gerber_quad_segs
 from tests.helpers_objects import (  # noqa: F401,E402
     app, export_gerber_text, FIXTURES, _headless_qt, make_gerber, MIXED_GBR, parts, polygon_union, reparse_gerber,
 )
@@ -84,6 +85,20 @@ X20000000Y5000000D03*
 M02*
 """
 
+# a single rectangular region: the distance buffer resolution is visible in the rounded corners
+REGION_ONLY = HEADER + """%ADD10C,1.0*%
+G01*
+%LPD*%
+G36*
+X0Y0D02*
+X10000000Y0D01*
+X10000000Y10000000D01*
+X0Y10000000D01*
+X0Y0D01*
+G37*
+M02*
+"""
+
 # a track drawn with an O aperture (the parser buffers it with the diagonal as its width)
 O_TRACK = HEADER + """%ADD12O,2.0X1.0*%
 G01*
@@ -136,6 +151,17 @@ def warned(app):
                for call in app.inform.emit.call_args_list if call.args)
 
 
+class AbortAfterOneRead:
+    """False on the first read, True on the next: the abort arrives while the batch runs."""
+
+    def __init__(self):
+        self.reads = 0
+
+    def __bool__(self):
+        self.reads += 1
+        return self.reads > 1
+
+
 def assert_composed_equal(actual, expected, msg, tol=2e-3):
     exp = polygon_union(expected)
     got = polygon_union(actual)
@@ -183,11 +209,11 @@ class TestTracksAndRegions:
         new_track = [rec for rec in obj.tools[10]['geometry'] if isinstance(rec['follow'], LineString)][0]
         assert obj.tools[10]['size'] == pytest.approx(1.5 * factor)
         assert new_track['follow'].equals(follow)
-        expected = follow.buffer(1.5 * factor / 1.999, int(obj.steps_per_circle))
+        expected = follow.buffer(1.5 * factor / 2, gerber_quad_segs(app.options, 1.5 * factor / 2, obj.units))
         assert new_track['solid'].symmetric_difference(expected).area <= 1e-9
         # the width of the track: twice the distance from the axis to the outline, in the middle of a segment
         mid = Point(15.0, 20.0)
-        assert shapely.distance(mid, new_track['solid'].exterior) == pytest.approx(1.5 * factor / 1.999, rel=1e-3)
+        assert shapely.distance(mid, new_track['solid'].exterior) == pytest.approx(1.5 * factor / 2, rel=1e-3)
         # file round trip: a C track and a C flash are native
         assert obj.export_as_regions is False and obj.needs_region_export() is False
         again = reparse_gerber(app, export_gerber_text(app, obj), tmp_path)
@@ -206,7 +232,7 @@ class TestTracksAndRegions:
             assert rec['follow'].equals_exact(old['follow'], 0)
         assert {k: v for k, v in obj.tools[0].items() if k != 'geometry'} == meta_before
         flash = obj.tools[10]['geometry'][0]['solid']
-        assert flash.area == pytest.approx(math.pi * 0.75 ** 2, rel=2e-3)
+        assert flash.area == pytest.approx(math.pi * 0.75 ** 2, rel=1e-2)   # a scaled flash keeps its segments
         assert obj.solid_geometry.contains(region_before[0]['solid'].buffer(-1e-6))
         assert obj.export_as_regions is False
         again = reparse_gerber(app, export_gerber_text(app, obj), tmp_path)
@@ -229,7 +255,7 @@ class TestTracksAndRegions:
                     assert rec['solid'].area == pytest.approx(solid.area * factor ** 2, rel=1e-9)
                     expected.append(rec['solid'])
                 else:
-                    expected.append(follow.buffer(0.5 * factor / 1.999, int(obj.steps_per_circle)))
+                    expected.append(follow.buffer(0.5 * factor / 2, gerber_quad_segs(app.options, 0.5 * factor / 2, obj.units)))
         assert_composed_equal(obj.solid_geometry, expected, 'composed')
         assert obj.tools[16]['size'] == pytest.approx(0.5 * factor)
         assert obj.export_as_regions is True          # the macro
@@ -276,14 +302,68 @@ def test_tcl_buffer_returns_fail_on_a_rejection(app):
     assert full_state(obj) == before
 
 
-class TestFactorMustBePositive:
-    def test_a_negative_factor_is_rejected_without_a_change(self, app):
+class TestInvalidInput:
+    @pytest.mark.parametrize('distance, factor', [
+        (-1.5, True),                 # a factor that is not positive
+        (float('inf'), None),         # a distance that is not finite
+        ([1.0, 2.0], True),           # a list instead of a number
+    ])
+    def test_it_is_rejected_without_a_change(self, app, distance, factor):
         obj = make_gerber(app, fx('circle'))
         before = full_state(obj)
         app.inform.emit.reset_mock()
-        assert multiply(obj, -1.5) == 'fail'
+        assert Gerber.buffer(obj, distance, 'mitre', factor) == 'fail'
         assert full_state(obj) == before
         assert warned(app)
+
+
+class TestAbort:
+    def test_cancelling_leaves_the_object_unchanged(self, app):
+        obj = make_gerber(app, fx('circle'))
+        before = full_state(obj)
+        for factor in (None, True):
+            for abort in (True, AbortAfterOneRead()):   # before the batch and while it runs
+                app.abort_flag = abort
+                assert Gerber.buffer(obj, 1.5 if factor else 0.1, 'mitre', factor) == 'fail'
+                assert full_state(obj) == before
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# distance buffer
+# ---------------------------------------------------------------------------------------------------------------
+
+class TestDistanceBuffer:
+    def test_it_uses_the_quarter_circle_resolution(self, app, tmp_path):
+        obj = make_gerber(app, write(tmp_path, 'region_only', REGION_ONLY))
+        before = obj.tools[0]['geometry'][0]['solid']
+        assert Gerber.buffer(obj, 0.5, 'round') is None
+        after = obj.tools[0]['geometry'][0]['solid']
+        expected = before.buffer(0.5, quad_segs=gerber_quad_segs(app.options, 0.5, obj.units), join_style="round")
+        assert len(after.exterior.coords) == len(expected.exterior.coords)
+        assert after.area == pytest.approx(expected.area)
+
+    def test_it_keeps_the_solid_follow_and_clear_records(self, app, tmp_path):
+        obj = make_gerber(app, MIXED_GBR)
+        clear = [rec for rec in obj.tools[10]['geometry'] if 'clear' in rec][0]
+        follow, clear_geometry = clear['follow'], clear['clear']
+        keys_before = [sorted(rec) for tool in obj.tools.values() for rec in tool.get('geometry', ())]
+        assert Gerber.buffer(obj, 0.3, 'mitre') is None
+        keys_after = [sorted(rec) for tool in obj.tools.values() for rec in tool.get('geometry', ())]
+        assert keys_after == keys_before
+        new_clear = [rec for rec in obj.tools[10]['geometry'] if 'clear' in rec][0]
+        assert new_clear['follow'].equals(follow)
+        assert new_clear['clear'].area > clear_geometry.area
+        assert obj.tools[10]['size'] == pytest.approx(1.6)
+        # the result round trips through the file
+        again = reparse_gerber(app, export_gerber_text(app, obj), tmp_path)
+        assert_composed_equal(again.solid_geometry, obj.solid_geometry, 'distance round trip')
+
+    def test_a_negative_buffer_of_a_closed_line_keeps_the_gerber_semantics(self, app):
+        obj = make_gerber(app, fx('circle'))
+        obj.solid_geometry = [LinearRing([(0, 0), (4, 0), (4, 4), (0, 4)])]
+        assert Gerber.buffer(obj, -0.1, 'mitre') is None
+        # Gerber keeps the plain line buffer (an empty polygon), not the Geometry closed-contour erosion
+        assert obj.solid_geometry == []
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -303,3 +383,15 @@ class TestAtomicity:
         assert multiply(obj, 1.5) == 'fail'
         assert full_state(obj) == before
 
+
+def test_gerber_circle_steps_follow_the_preference():
+    from camlib import gerber_circle_steps, gerber_quad_segs
+    fixed = {'gerber_circle_steps_mode': 'fixed', 'gerber_circle_steps': 48}
+    adaptive = {'gerber_circle_steps_mode': 'adaptive', 'gerber_circle_tolerance': 2.0}
+    for options, radius, units, expected in (
+            (fixed, 5.0, 'MM', 48),
+            (adaptive, 0.1, 'MM', 16),            # the minimum
+            (adaptive, 5.0, 'MM', 112),           # grows with the radius
+            (adaptive, 1.0 / 25.4, 'IN', 52)):    # the radius is read in the units of the object
+        assert gerber_circle_steps(options, radius, units) == expected
+        assert gerber_quad_segs(options, radius, units) == expected // 4

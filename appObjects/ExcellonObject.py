@@ -24,6 +24,8 @@ from copy import deepcopy
 import shapely
 from shapely import LineString
 
+from camlib import object_circle_steps
+
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -63,9 +65,8 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
         self.app = app
         self.decimals = self.app.decimals
 
-        self.circle_steps = int(self._app_option("excellon_circle_steps"))
-
-        Excellon.__init__(self, excellon_circle_steps=self.circle_steps, app=app)
+        # the circles of the holes follow the Excellon preferences (adaptive to the tool diameter, or fixed)
+        Excellon.__init__(self, app=app)
         FlatCAMObj.__init__(self, name, app)
 
         self.kind = "excellon"
@@ -898,6 +899,10 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
             return False, 'Failed to create milling geometry.'
         return True, ""
 
+    def _milling_steps(self, radius):
+        """The segments of a full circle of a milling path of this radius: the preferences "Circles" of Geometry."""
+        return object_circle_steps(self.app.options, 'geometry', radius, self.units)
+
     @staticmethod
     def _milling_multidepth(app_obj):
         return app_obj.options.get(
@@ -950,7 +955,7 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
             # the CNC job reads tools_mill_multidepth
             geo_obj.obj_options["tools_mill_multidepth"] = self._milling_multidepth(app_obj)
             geo_obj.solid_geometry = MillingGen.milling_drills_geometry(
-                self.tools, tools, tooldia, steps=self.geo_steps_per_circle, decimals=self.decimals)
+                self.tools, tools, tooldia, steps=self._milling_steps, decimals=self.decimals)
 
             if not geo_obj.solid_geometry:
                 return "fail"
@@ -1004,7 +1009,7 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
             geo_obj.obj_options["tools_mill_tooldia"] = str(tooldia)
             geo_obj.obj_options["tools_mill_multidepth"] = self._milling_multidepth(app_obj)
             geo_obj.solid_geometry = MillingGen.milling_slots_geometry(
-                self.tools, use_tools, tooldia, self.decimals, self.geo_steps_per_circle, line_string=LineString)
+                self.tools, use_tools, tooldia, self.decimals, self._milling_steps, line_string=LineString)
             if not geo_obj.solid_geometry:
                 self.app.log.debug("FAIL: No geometry generated.")
                 return "fail"

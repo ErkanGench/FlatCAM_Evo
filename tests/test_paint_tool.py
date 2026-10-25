@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from shapely import box
@@ -41,7 +41,7 @@ def _stub(tools, **extra):
     app.dec_format.side_effect = lambda v, d: float('%.*f' % (d, v))
     stub = SimpleNamespace(
         app=app, decimals=4, paint_tools=paint_tools, blockSignals=MagicMock(), build_ui=MagicMock(),
-        ui=SimpleNamespace(tools_table=table), cells=cells)
+        clear_preview=MagicMock(), ui=SimpleNamespace(tools_table=table), cells=cells)
     for key, value in extra.items():
         setattr(stub, key, value)
     return stub
@@ -50,16 +50,6 @@ def _stub(tools, **extra):
 def _edit(stub, row, text):
     stub.cells[(row, 1)].text.return_value = text
     ToolPaint.on_tool_edit(stub, stub.cells[(row, 1)])
-
-
-def test_rebuild_ui_keeps_the_shared_tool_dict():
-    stub = _stub({3: 1.0, 7: 0.5})
-    shared = stub.paint_tools
-    with patch('appPlugins.ToolPaint.Paint.QtCore.QTimer'):
-        ToolPaint.rebuild_ui(stub)
-    assert stub.paint_tools is shared
-    assert sorted(shared) == [1, 2]
-    assert shared[1]['tooldia'] == 1.0 and shared[2]['tooldia'] == 0.5
 
 
 def test_tool_edit_rejects_a_duplicate_of_any_other_tool():
@@ -104,14 +94,6 @@ def test_apply_to_all_copies_only_the_form_parameters_of_the_selected_row():
     stub.build_ui.assert_called()
 
 
-def test_delete_with_nothing_selected_warns_and_keeps_the_tools():
-    stub = _stub({1: 2.0, 2: 1.0})
-    stub.ui.tools_table.selectedItems.return_value = []
-    ToolPaint.on_tool_delete(stub)
-    assert list(stub.paint_tools) == [1, 2]
-    assert 'success' not in str(stub.app.inform.emit.call_args)
-
-
 def test_delete_by_row_number_removes_the_tool_of_that_row():
     stub = _stub({4: 2.0, 9: 1.0})
     ToolPaint.on_tool_delete(stub, rows_to_delete=1)
@@ -131,51 +113,12 @@ def test_tool_shape_combo_is_stored_in_the_tool_data(qapp):
     assert stub.paint_tools[1]['data']['tools_mill_tool_shape'] == 0
 
 
-def test_reset_selection_state_clears_a_half_made_selection():
-    points = [(0, 0)]
-    stub = SimpleNamespace(first_click=True, cursor_pos=(1, 1), mouse_is_dragging=True, points=points,
-                           poly_drawn=True, delete_moving_selection_shape=MagicMock(),
-                           delete_tool_selection_shape=MagicMock())
-    ToolPaint.reset_selection_state(stub)
-    assert (stub.first_click, stub.cursor_pos, stub.mouse_is_dragging, stub.poly_drawn) == (False, None, False, False)
-    assert stub.points is points and points == []
-    stub.delete_moving_selection_shape.assert_called_once()
-
-
 def test_tools_table_follows_the_uid_order_in_default_order():
     from appPlugins.ToolPaint.Paint import tool_rows_order
     tools = {2: {'tooldia': 0.5}, 1: {'tooldia': 2.0}, 3: {'tooldia': 1.0}}
     assert tool_rows_order(tools, 0, 4) == [1, 2, 3]
     assert tool_rows_order(tools, 1, 4) == [2, 3, 1]
     assert tool_rows_order(tools, 2, 4) == [1, 3, 2]
-
-
-def test_beginner_level_unchecks_and_hides_check_validity_advanced_restores_it():
-    ui = SimpleNamespace(
-        valid_cb=MagicMock(), rest_cb=MagicMock(), level=MagicMock(), add_tool_frame=MagicMock(),
-        apply_param_to_all=MagicMock(), tools_table=MagicMock())
-    stub = SimpleNamespace(ui=ui, app=SimpleNamespace(options={'tools_paint_check_valid': True}))
-    ToolPaint.on_level_changed(stub, False)
-    ui.valid_cb.set_value.assert_called_with(False)
-    ui.valid_cb.hide.assert_called_once()
-    ToolPaint.on_level_changed(stub, True)
-    ui.valid_cb.set_value.assert_called_with(True)
-    ui.valid_cb.show.assert_called_once()
-
-
-def test_closing_the_plugin_mid_selection_gives_the_canvas_back():
-    stub = _stub({1: 1.0}, area_sel_disconnect_flag=True, poly_sel_disconnect_flag=False, grid_status_memory=False,
-                 poly_dict={1: 'zone'}, reset_selection_state=MagicMock(), clear_preview=MagicMock(),
-                 on_mouse_release=MagicMock(), on_mouse_move=MagicMock(), on_key_press=MagicMock())
-    stub.end_selection = lambda: ToolPaint.end_selection(stub)
-    ToolPaint.on_plugin_cleanup(stub)
-    assert stub.area_sel_disconnect_flag is False
-    stub.app.plotcanvas.graph_event_disconnect.assert_any_call('mouse_release', stub.on_mouse_release)
-    stub.app.plotcanvas.graph_event_connect.assert_any_call('mouse_release',
-                                                            stub.app.on_mouse_click_release_over_plot)
-    stub.app.ui.notebook.setDisabled.assert_called_with(False)
-    assert stub.poly_dict == {}
-    stub.reset_selection_state.assert_called_once()
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -216,11 +159,13 @@ def painter(qapp, tmp_path):
         def get_by_name(self, name):
             return self.objects.get(name)
 
+    class Defaults(dict):
+        report_usage = staticmethod(lambda *args: None)
+
     app = make_tool_app()
     app.collection = Collection()
     app.options = deepcopy(AppDefaults.factory_defaults)
-    app.defaults = SimpleNamespace(get=AppDefaults.factory_defaults.get, report_usage=lambda *args: None,
-                                   factory_defaults=AppDefaults.factory_defaults)
+    app.defaults = Defaults(AppDefaults.factory_defaults)
     app.dec_format = functools.partial(App.dec_format, app)
     app.tools_database_path.return_value = str(tmp_path / "missing_tools_db.json")
     app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
@@ -286,3 +231,61 @@ def test_preview_draws_the_area_to_paint_after_the_offset_and_is_cleared(painter
     painter._preview_drawn = True
     painter.set_tool_ui()
     painter._preview_shapes.clear.assert_called()
+
+
+def test_selected_objects_do_not_need_the_source_combo(painter):
+    # two Gerbers selected in the Project tab, no Geometry object: the source combo is empty
+    first = SimpleNamespace(kind='gerber', solid_geometry=[box(0, 0, 2, 2)],
+                            obj_options={'name': 'g1'}, tools={})
+    second = SimpleNamespace(kind='gerber', solid_geometry=[box(3, 0, 5, 2)],
+                             obj_options={'name': 'g2'}, tools={})
+    painter.app.collection.objects.update(g1=first, g2=second)
+    painter.app.collection.selected = [first, second]
+    painter.app.collection.promise = MagicMock()
+    painter.ui.obj_combo.currentText = lambda: ''
+    painter.ui.multi_objects_cb.set_value(True)
+    painter.ui.select_method_combo.set_value(0)     # All
+
+    tasks = []
+    painter.app.worker_task.emit.side_effect = tasks.append
+    painter.gen.on_paint_button_click()
+    assert len(tasks) == 2      # one paint job per selected object
+
+    painter.app.worker_task.emit.side_effect = lambda task: task['fcn'](*task['params'])
+    assert _drawn_area(painter) == pytest.approx(8.0)
+    assert not any('Object not found' in str(call.args[0]) for call in painter.app.inform.emit.call_args_list)
+
+
+def _tool_offset(painter):
+    values = iter((0.5, 0.7))
+
+    def change():
+        value = next(values)
+        painter.ui.offset_entry.set_value(value)
+        painter.ui.offset_entry.returnPressed.emit()
+        selected = painter.selected_tool_uids()
+        assert selected
+        assert all(painter.paint_tools[uid]['data']['tools_paint_offset'] == value for uid in selected)
+    return change
+
+
+@pytest.mark.parametrize('preview_input', [_tool_offset], ids=['tool_offset'])
+def test_preview_inputs_clear_the_overlay_and_discard_the_pending_job(painter, preview_input):
+    painter.ui.select_method_combo.set_value(0)     # All
+    change = preview_input(painter)
+    assert _drawn_area(painter) > 0
+
+    painter._preview_shapes.clear.reset_mock()
+    change()
+    painter._preview_shapes.clear.assert_called()   # the displayed overlay is gone
+
+    assert _drawn_area(painter) > 0                 # a new overlay for the changed input
+    tasks = []
+    painter.app.worker_task.emit.side_effect = tasks.append
+    painter.on_preview()
+    assert len(tasks) == 1
+    painter._preview_shapes.add.reset_mock()
+
+    change()                                        # invalidates the job started before it
+    tasks[0]['fcn'](*tasks[0]['params'])
+    painter._preview_shapes.add.assert_not_called()

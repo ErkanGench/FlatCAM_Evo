@@ -20,7 +20,7 @@ import os
 from collections import namedtuple
 from copy import deepcopy
 from shapely import box
-from camlib import flatten_shapely_geometry
+from camlib import flatten_shapely_geometry, object_circle_steps
 import gettext
 import appTranslation as fcTranslate
 import builtins
@@ -253,7 +253,9 @@ class QRCode(AppTool):
             'mask_opening': bool(ui.mask_cb.get_value()),
             'mask_name': ui.mask_object_combo.get_value(),
             'units': self.units,
-            'circle_steps': self.app_option('geometry_circle_steps'),
+            # the round features of the code are not smaller than half of a module
+            'circle_steps': object_circle_steps(self.app.options, 'geometry',
+                                                float(self.app_option('tools_qrcode_min_module')) / 2, self.units),
             'min_module': float(self.app_option('tools_qrcode_min_module')),
         }
 

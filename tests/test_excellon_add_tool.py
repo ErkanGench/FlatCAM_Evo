@@ -94,6 +94,7 @@ class TestAddToolContract:
 def _tcl_app():
     app = make_app()
     app.dec_format = lambda value, digits=None: round(float(value), 4 if digits is None else digits)
+    app.options.update({'excellon_circle_steps_mode': 'fixed', 'excellon_circle_steps': 16})
     return app
 
 
@@ -120,9 +121,9 @@ def _run_tcl(cmd_cls, app, obj, *argv):
 
 
 def _geo(dia, drills=(), slots=(), steps=16):
-    out = [Point(p).buffer(dia / 2.0, steps).wkt for p in drills]
+    out = [Point(p).buffer(dia / 2.0, steps // 4).wkt for p in drills]
     from shapely.geometry import LineString
-    out += [LineString([a, b]).buffer(dia / 2.0, steps).wkt for a, b in slots]
+    out += [LineString([a, b]).buffer(dia / 2.0, steps // 4).wkt for a, b in slots]
     return out
 
 

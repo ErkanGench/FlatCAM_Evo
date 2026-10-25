@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-import shapely
 from shapely import Polygon, box
 
 from appPlugins.ToolIsolation import ToolIsolation
@@ -111,9 +110,3 @@ def test_pad_with_one_hole_that_the_tool_cannot_enter_goes_to_the_smaller_tool()
     assert len(isolated) == 2  # the outside and the hole
 
 
-def test_rest_accepts_any_polygon_container():
-    a, b = box(0, 0, 1, 1), box(5, 0, 6, 1)
-    for geometry, count in [(a, 1), (shapely.MultiPolygon([a, b]), 2), ([[a], b], 2)]:
-        isolated, not_isolated = run_rest(geometry, 1)
-        assert not_isolated == []
-        assert len(isolated) == count

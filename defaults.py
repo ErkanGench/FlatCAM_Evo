@@ -277,7 +277,11 @@ class AppDefaults:
         "gerber_color_list": [],
         "gerber_store_color_list": True,
 
-        "gerber_circle_steps": 16,
+        "gerber_circle_steps": 64,
+        # 'adaptive': the segments of each circle follow its radius and "gerber_circle_tolerance" (micrometers);
+        # 'fixed': every circle has "gerber_circle_steps" segments
+        "gerber_circle_steps_mode": 'adaptive',
+        "gerber_circle_tolerance": 2.0,
         "gerber_use_buffer_for_union": True,
         "gerber_clean_apertures": True,
         "gerber_extra_buffering": False,
@@ -351,7 +355,10 @@ class AppDefaults:
 
         # Excellon General
         "excellon_plot": True,
-        "excellon_circle_steps": 16,
+        "excellon_circle_steps": 32,
+        # 'adaptive' or 'fixed', as "gerber_circle_steps_mode"
+        "excellon_circle_steps_mode": 'adaptive',
+        "excellon_circle_tolerance": 5.0,
         "excellon_solid": True,
         "excellon_multicolored": False,
         "excellon_color": None,
@@ -416,6 +423,9 @@ class AppDefaults:
         "geometry_plot": True,
         "geometry_multicolored": False,
         "geometry_circle_steps": 32,
+        # 'adaptive' or 'fixed', as "gerber_circle_steps_mode"
+        "geometry_circle_steps_mode": 'adaptive',
+        "geometry_circle_tolerance": 5.0,
         "geometry_merge_fuse_tools": True,
         "geometry_plot_line": "#FF0000",
 
@@ -567,6 +577,7 @@ class AppDefaults:
         "tools_drill_startz": None,
         "tools_drill_feedrate_rapid": 1500,
         "tools_drill_z_p_depth": -0.02,
+        "tools_drill_probe_plate": 0.0,
         "tools_drill_feedrate_probe": 75,
         "tools_drill_spindledir": 'CW',
         "tools_drill_f_plunge": False,
@@ -615,6 +626,7 @@ class AppDefaults:
         "tools_mill_extracut": False,
         "tools_mill_extracut_length": 0.1,
         "tools_mill_z_p_depth": -0.02,
+        "tools_mill_probe_plate": 0.0,
         "tools_mill_feedrate_probe": 75,
         "tools_mill_f_plunge": False,
         "tools_mill_spindledir": 'CW',

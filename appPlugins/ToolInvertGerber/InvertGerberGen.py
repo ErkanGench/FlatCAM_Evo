@@ -6,6 +6,7 @@ from shapely import box, make_valid
 from shapely.affinity import scale as _scale
 from shapely.ops import polygonize, unary_union
 
+from camlib import gerber_quad_segs
 from appPlugins.ToolSub.SubGen import _flat, _obj_units, object_area, units_factor
 
 # value of the join style radio -> Shapely join style
@@ -39,11 +40,12 @@ def copper_union(geometry):
     return unary_union(polys) if polys else None
 
 
-def inversion_area(bounds, margin, circle_steps, join_style, area=None):
+def inversion_area(bounds, margin, options, join_style, area=None, units='MM'):
     """
     The area that the inverted copper fills: the reference area, or the box of bounds, grown by margin.
 
-    :param circle_steps:    steps of the whole circle; the buffer uses quad_segs = steps // 4
+    :param options: the application options; the Gerber circle preferences set the segments of the rounded corners
+    :param units:   the units of the margin
     """
     if area is None:
         if bounds is None or len(bounds) != 4 or not all(math.isfinite(v) for v in bounds) or \
@@ -51,19 +53,19 @@ def inversion_area(bounds, margin, circle_steps, join_style, area=None):
             raise InvertError("no bounds")
         area = box(*bounds)
     if margin > 0:
-        area = area.buffer(margin, quad_segs=max(1, int(circle_steps) // 4), join_style=join_style_name(join_style))
+        area = area.buffer(margin, quad_segs=gerber_quad_segs(options, margin, units), join_style=join_style_name(join_style))
     if area is None or area.is_empty or area.area <= 0:
         raise InvertError("empty area")
     return area
 
 
-def invert_geometry(geometry, bounds, margin, circle_steps, join_style, area=None, abort=None):
+def invert_geometry(geometry, bounds, margin, options, join_style, area=None, abort=None, units='MM'):
     """
     Subtract the source copper from its buffered bounding box (or from the given reference area).
 
     :return:    list of Polygons; empty when the copper covers the whole area
     """
-    region = inversion_area(bounds, margin, circle_steps, join_style, area)
+    region = inversion_area(bounds, margin, options, join_style, area, units)
     _check_abort(abort)
     copper = copper_union(geometry)
     _check_abort(abort)

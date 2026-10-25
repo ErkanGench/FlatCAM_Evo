@@ -123,8 +123,10 @@ class InvertUI:
         self.source_radio.activated_custom.connect(self.on_source_changed)
         self.reference_radio.activated_custom.connect(self.on_reference_changed)
         self.ref_type_combo.currentIndexChanged.connect(self.on_ref_type_changed)
-        self.on_source_changed(self.source_radio.get_value())
-        self.on_reference_changed(self.reference_radio.get_value())
+        # a RadioSet starts with no button checked; set_value() also runs the handlers above
+        self.source_radio.set_value('object')
+        self.reference_radio.set_value('itself')
+        self.ref_area_radio.set_value('box')
 
         self.param_label = FCLabel('%s' % _("Parameters"), color='blue', bold=True)
         self.param_label.setToolTip('%s.' % _("Parameters for this tool"))

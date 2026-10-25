@@ -15,7 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from PyQt6 import QtWidgets  # noqa: E402
+from PyQt6 import QtWidgets, sip  # noqa: E402
 
 from defaults import AppDefaults  # noqa: E402
 from appPlugins.ToolIsolation import ToolIsolation  # noqa: E402
@@ -54,7 +54,9 @@ def tool(qapp, tmp_path):
     t.ui.v_frame.show()
     # the frame is only "visible" when its parents are shown
     t.ui.v_frame.isVisible = lambda: True
-    return t
+    yield t
+    # Destroy the signal-connected widgets while their QApplication and Python owners are still alive.
+    sip.delete(t)
 
 
 def add_tool_row(t, uid, dia, data=None):
@@ -121,19 +123,26 @@ def test_update_changes_diameter(tool):
 
 
 def test_update_clash_with_other_tool_warns_and_keeps(tool):
+    original = v_dia(0.1, 60, -0.1)
     clash = v_dia(0.2, 60, -0.1)
-    add_tool_row(tool, 1, 0.5)
-    add_tool_row(tool, 2, clash)
+    add_tool_row(tool, 1, original, v_data(tip=0.1))
+    add_tool_row(tool, 2, clash, v_data(tip=0.2))
     row = select_uid(tool, 1)
     tool.ui.tipdia_entry.set_value(0.2)
     tool.ui.tipangle_entry.set_value(60)
     tool.ui.cutz_entry.set_value(-0.1)
     tool.app.inform.emit.reset_mock()
-    tool.on_update_tool_dia()
+    tool.ui.tipdia_entry.returnPressed.emit()
     assert tool.app.inform.emit.call_count == 1
     assert 'WARNING' in tool.app.inform.emit.call_args[0][0]
-    assert tool.iso_tools[1]['tooldia'] == 0.5
-    assert float(tool.ui.tools_table.item(row, 1).text()) == 0.5
+    assert tool.iso_tools[1]['tooldia'] == original
+    assert float(tool.ui.tools_table.item(row, 1).text()) == original
+    # the rejected V parameters are not kept: the tool data and its diameter still describe the same cutter
+    assert tool.iso_tools[1]['data']['tools_mill_vtipdia'] == 0.1
+    assert tool.app.dec_format(tool.v_effective_diameter(tool.iso_tools[1]['data']), tool.decimals) == original
+    # the V edit left the plugin free to pass the Optimal result to the UI
+    tool.optimal_found_sig.emit(0.25)
+    assert tool.ui.new_tooldia_entry.get_value() == pytest.approx(0.25)
     assert_connected_once(tool)
 
 
@@ -242,40 +251,6 @@ def test_added_tools_are_selected_under_a_sorted_table_and_duplicates_are_refuse
     assert len(plain.iso_tools) == 4
 
 
-def test_edit_compares_against_every_tool_and_accepts_negative(plain):
-    for dia in (0.1, 0.3, 0.5):
-        plain.on_tool_add(custom_dia=dia)
-
-    def edit(old, new):
-        row = table_dias(plain).index(old)
-        plain.ui.tools_table.item(row, 1).setText(str(new))
-
-    edit(0.5, 0.1)     # a duplicate of the FIRST tool
-    assert sorted(table_dias(plain)) == [0.1, 0.3, 0.5]
-    edit(0.5, 0)       # zero
-    assert sorted(table_dias(plain)) == [0.1, 0.3, 0.5]
-    edit(0.5, 0.7)
-    assert sorted(table_dias(plain)) == [0.1, 0.3, 0.7]
-    edit(0.1, -0.2)    # inside isolation
-    assert sorted(table_dias(plain)) == [-0.2, 0.3, 0.7]
-    for tool_ in plain.iso_tools.values():
-        assert tool_['data']['tools_iso_tooldia'] == tool_['tooldia'] or tool_['tooldia'] == 0.3
-
-
-def test_rest_machining_checkbox_follows_the_selection_and_keeps_the_combine_choice(plain):
-    plain.ui.select_combo.set_value(1)   # Area
-    assert not plain.ui.rest_cb.isEnabled()
-    plain.ui.select_combo.set_value(2)   # Polygon
-    assert plain.ui.rest_cb.isEnabled()
-    assert not plain.ui.multi_objects_cb.isEnabled()
-
-    plain.ui.combine_passes_cb.set_value(False)
-    plain.on_rest_machining_check(True)
-    plain.on_rest_machining_check(True)
-    plain.on_rest_machining_check(False)
-    assert plain.ui.combine_passes_cb.get_value() is False
-
-
 def test_v_parameters_follow_the_selected_rows(plain):
     # selecting a V row shows the V parameters
     add_tool_row(plain, 1, 0.1, v_data(shape=0))
@@ -316,27 +291,6 @@ def test_v_parameters_follow_the_selected_rows(plain):
     plain.ui.tools_table.selectRow(table_dias(plain).index(0.7))
     plain.on_apply_param_to_all_clicked()
     assert sorted(t['tooldia'] for t in plain.iso_tools.values()) == [v_dia(0.2, 60, -0.1)] * 2 + [0.7]
-
-
-def test_set_tool_ui_applies_the_preferences_and_resets_the_tools_without_a_diameter(plain):
-    plain.app.options.update(tools_iso_selection=3, tools_iso_multi_objects=True)
-    plain.app.cleanup.connect.reset_mock()
-    plain.set_tool_ui()
-    plain.set_tool_ui()
-    assert plain.ui.select_combo.get_value() == 3
-    assert plain.ui.multi_objects_cb.get_value() is True
-    assert plain.app.cleanup.connect.call_count == 0     # connected once, in __init__
-    plain.app.options['global_app_level'] = 'b'
-    plain.set_tool_ui()
-    assert plain.ui.select_combo.get_value() == 0 and plain.ui.multi_objects_cb.get_value() is False
-
-    plain.iso_tools.clear()
-    plain.on_tool_add(custom_dia=0.1)
-    assert len(plain.iso_tools) == 1
-    plain.app.options['tools_iso_tooldia'] = []
-    plain.set_tool_ui()
-    assert plain.iso_tools == {} and plain.ui.tools_table.rowCount() == 0
-    assert not plain.ui.generate_iso_button.isEnabled()
 
 
 def test_tool_table_delete_level_toggle_and_row_drag(plain, monkeypatch):

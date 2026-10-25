@@ -125,7 +125,7 @@ class ApertureMacro:
     am2_re = re.compile(r'(.*)%$')
     am_comm_re = re.compile(r'^0(.*)')
     am_prim_re = re.compile(r'^[1-9].*')
-    am_var_re = re.compile(r'^\$([0-9a-zA-z]+)=(.*)')
+    am_var_re = re.compile(r'^\$([0-9a-zA-Z]+)=(.*)')
 
     def __init__(self, name=None):
         self.name = name
@@ -185,6 +185,10 @@ class ApertureMacro:
             if match:
                 continue
 
+            # Blanks are not significant; 'x' (or 'X') is the multiplication
+            part = re.sub(r'\s+', '', part)
+            part = re.sub(r'[xX]', "*", part)
+
             # ## Variables
             # These are variables defined locally inside the macro. They can be
             # numerical constant or defined in terms of previously define
@@ -192,22 +196,8 @@ class ApertureMacro:
             # definition. All replacements occur here.
             match = ApertureMacro.am_var_re.search(part)
             if match:
-                var = match.group(1)
-                val = match.group(2)
-
-                # Replace variables in value
-                for v in self.loc_vars:
-                    # replaced the following line with the next to fix Mentor custom apertures not parsed OK
-                    # val = re.sub((r'\$'+str(v)+r'(?![0-9a-zA-Z])'), str(self.locvars[v]), val)
-                    val = val.replace('$' + str(v), str(self.loc_vars[v]))
-
-                # Make all others 0
-                val = re.sub(r'\$[0-9a-zA-Z](?![0-9a-zA-Z])', "0", val)
-                # Change x with *
-                val = re.sub(r'[xX]', "*", val)
-
                 # Eval() and store.
-                self.loc_vars[var] = safe_eval(val)
+                self.loc_vars[match.group(1)] = safe_eval(self.replace_variables(match.group(2)))
                 continue
 
             # ## Primitives
@@ -217,19 +207,23 @@ class ApertureMacro:
             # variables are defined in an aperture definition.
             match = ApertureMacro.am_prim_re.search(part)
             if match:
-                # ## Replace all variables
-                for v in self.loc_vars:
-                    part = re.sub(r'\$' + str(v) + r'(?![0-9a-zA-Z])', str(self.loc_vars[v]), part)
-                    # Sometimes the 'X' char is used instead of * for multiplication
-                    part = re.sub(r'[Xx]', "*", part)
-
-                # Make all others 0
-                part = re.sub(r'\$[0-9a-zA-Z](?![0-9a-zA-Z])', "0", part)
+                part = self.replace_variables(part)
                 self.primitives.append([safe_eval(x) for x in part.split(",")])
 
                 continue
 
-            log.warning("Unknown syntax of aperture macro part: %s" % str(part))
+            if part:
+                log.warning("Unknown syntax of aperture macro part: %s" % str(part))
+
+    def replace_variables(self, text):
+        """
+        Replaces every $n in the text by its value (in brackets, so a negative value or a division is safe).
+        A variable that was not defined is 0.
+
+        :param text:    Expression or list of expressions of a macro.
+        :return:        The text without variables.
+        """
+        return re.sub(r'\$([0-9a-zA-Z]+)', lambda m: '(%r)' % (self.loc_vars.get(m.group(1), 0),), text)
 
     def append(self, data):
         """
@@ -261,19 +255,21 @@ class ApertureMacro:
         return x
 
     @staticmethod
-    def make_circle(mods):
+    def make_circle(mods, quad_segs=16):
         """
 
-        :param mods: (Exposure 0/1, Diameter >=0, X-coord, Y-coord)
+        :param mods: (Exposure 0/1, Diameter >=0, X-coord, Y-coord, rotation angle around origin in degrees)
+        :param quad_segs: Segments per quarter of a circle
         :return:
         """
-        val = ApertureMacro.default2zero(4, mods)
+        val = ApertureMacro.default2zero(5, mods)
         pol = val[0]
         dia = val[1]
         x = val[2]
         y = val[3]
-        # pol, dia, x, y = ApertureMacro.default2zero(4, mods)
-        return {"pol": int(pol), "geometry": Point(x, y).buffer(dia / 2)}
+        angle = val[4]
+        circle = affinity.rotate(Point(x, y), angle, origin=(0, 0)).buffer(dia / 2, quad_segs=quad_segs)
+        return {"pol": int(pol), "geometry": circle}
 
     @staticmethod
     def make_vector_line(mods):
@@ -308,8 +304,7 @@ class ApertureMacro:
         :return:
         """
 
-        # pol, width, height, x, y, angle = ApertureMacro.default2zero(4, mods)
-        val = ApertureMacro.default2zero(4, mods)
+        val = ApertureMacro.default2zero(6, mods)
         pol = val[0]
         width = val[1]
         height = val[2]
@@ -355,20 +350,16 @@ class ApertureMacro:
 
         pol = mods[0]
 
-        # n = mods[1]
-        # points = [(0, 0)] * (n + 1)
-        #
-        # for i in range(n + 1):
-        #     points[i] = mods[2 * i + 2:2 * i + 4]
-        #
-        # angle = mods[2 * n + 4]
-
         # ---------------------------
         # added to fix the issue on Allegro 17.2 Gerber's which have fewer points than declared
-        # discard first 2 values (exposure and vertex points number) and last one (rotation)
-        vertex_list = mods[2:-1]
-        # rotation is the last value
-        angle = mods[-1]
+        # discard first 2 values (exposure and vertex points number); the rotation is the last value when the
+        # modifiers have an odd count (it is optional: the pairs of coordinates alone make an even count)
+        if len(mods) % 2 == 0:
+            vertex_list = mods[2:]
+            angle = 0.0
+        else:
+            vertex_list = mods[2:-1]
+            angle = mods[-1]
         # vertex points number is second value
         vtx_nr = mods[1]
         n = int(len(vertex_list) / 2)
@@ -410,6 +401,8 @@ class ApertureMacro:
         dia = val[4]
         angle = val[5]
 
+        # the number of vertices can be a float (it comes from a variable)
+        nverts = int(round(nverts))
         points = [(0, 0)] * nverts
 
         for i in range(nverts):
@@ -422,14 +415,15 @@ class ApertureMacro:
         return {"pol": int(pol), "geometry": poly_rotated}
 
     @staticmethod
-    def make_moire(mods):
+    def make_moire(mods, quad_segs=16):
         """
         Note: Specs indicate that rotation is only allowed if the center
         (x, y) == (0, 0). I will tolerate breaking this rule.
 
         :param mods: (x-center, y-center, outer_dia_outer_ring, ring thickness,
-            gap, max_rings, crosshair_thickness, crosshair_len, rotation
+            gap, max_rings, crosshair_thickness, crosshair_len (total length of each line), rotation
             angle around origin in degrees)
+        :param quad_segs: Segments per quarter of a circle
         :return:
         """
 
@@ -443,39 +437,46 @@ class ApertureMacro:
         nrings = val[5]
         cross_th = val[6]
         cross_len = val[7]
-        # angle = val[8]
+        angle = val[8]
 
         r = dia / 2 - thickness / 2
-        result = Point((x, y)).buffer(r).exterior.buffer(thickness / 2.0)
-        ring = Point((x, y)).buffer(r).exterior.buffer(thickness / 2.0)  # Need a copy!
+        if r <= 0:
+            # the ring is thicker than the circle: a disk
+            result = Point((x, y)).buffer(dia / 2.0, quad_segs=quad_segs)
+        else:
+            result = Point((x, y)).buffer(r, quad_segs=quad_segs).exterior.buffer(thickness / 2.0, quad_segs=quad_segs)
+            ring = result
 
-        i = 1  # Number of rings created so far
+            i = 1  # Number of rings created so far
 
-        # ## If the ring does not have an interior it means that it is
-        # ## a disk. Then stop.
-        while len(ring.interiors) > 0 and i < nrings:
-            r -= thickness + gap
-            if r <= 0:
-                break
-            ring = Point((x, y)).buffer(r).exterior.buffer(thickness / 2.0)
-            result = unary_union([result, ring])
-            i += 1
+            # ## If the ring does not have an interior it means that it is
+            # ## a disk. Then stop.
+            while len(ring.interiors) > 0 and i < nrings:
+                r -= thickness + gap
+                if r <= 0:
+                    break
+                ring = Point((x, y)).buffer(r, quad_segs=quad_segs).exterior.buffer(thickness / 2.0,
+                                                                                    quad_segs=quad_segs)
+                result = unary_union([result, ring])
+                i += 1
 
         # ## Crosshair
-        hor = LineString([(x - cross_len, y), (x + cross_len, y)]).buffer(cross_th / 2.0, cap_style="flat")
-        ver = LineString([(x, y - cross_len), (x, y + cross_len)]).buffer(cross_th / 2.0, cap_style="flat")
-        result = unary_union([result, hor, ver])
+        half = cross_len / 2.0
+        hor = LineString([(x - half, y), (x + half, y)]).buffer(cross_th / 2.0, cap_style="flat")
+        ver = LineString([(x, y - half), (x, y + half)]).buffer(cross_th / 2.0, cap_style="flat")
+        result = affinity.rotate(unary_union([result, hor, ver]), angle, origin=(0, 0))
 
         return {"pol": 1, "geometry": result}
 
     @staticmethod
-    def make_thermal(mods):
+    def make_thermal(mods, quad_segs=16):
         """
         Note: Specs indicate that rotation is only allowed if the center
         (x, y) == (0, 0). I will tolerate breaking this rule.
 
         :param mods: [x-center, y-center, diameter-outside, diameter-inside,
             gap-thickness, rotation angle around origin]
+        :param quad_segs: Segments per quarter of a circle
         :return:
         """
 
@@ -486,22 +487,39 @@ class ApertureMacro:
         dout = val[2]
         din = val[3]
         t = val[4]
-        # angle = val[5]
+        angle = val[5]
 
-        ring = Point((x, y)).buffer(dout / 2.0).difference(Point((x, y)).buffer(din / 2.0))
+        ring = Point((x, y)).buffer(dout / 2.0, quad_segs=quad_segs).difference(
+            Point((x, y)).buffer(din / 2.0, quad_segs=quad_segs))
         hline = LineString([(x - dout / 2.0, y), (x + dout / 2.0, y)]).buffer(t / 2.0, cap_style="square")
         vline = LineString([(x, y - dout / 2.0), (x, y + dout / 2.0)]).buffer(t / 2.0, cap_style="square")
-        thermal = ring.difference(hline.union(vline))
+        thermal = affinity.rotate(ring.difference(hline.union(vline)), angle, origin=(0, 0))
 
         return {"pol": 1, "geometry": thermal}
 
-    def make_geometry(self, modifiers: list):
+    @staticmethod
+    def polygonal(geo):
+        """
+        The polygons of a geometry: a union or difference with a primitive that has no area can be a
+        GeometryCollection that holds a line or a point as well.
+
+        :param geo: Shapely geometry
+        :return: Polygon or MultiPolygon (empty Polygon if there is no area)
+        """
+        if not isinstance(geo, GeometryCollection) or isinstance(geo, (Polygon, MultiPolygon)):
+            return geo
+        polygons = [g for g in shapely.get_parts(geo) if isinstance(g, (Polygon, MultiPolygon))]
+        return unary_union(polygons) if polygons else Polygon()
+
+    def make_geometry(self, modifiers: list, steps_per_circle=None):
         """
         Runs the macro for the given modifiers and generates
         the corresponding geometry.
 
         :param modifiers: Modifiers (parameters) for this macro
         :type modifiers: list
+        :param steps_per_circle: Segments of a whole circle; None for the default
+        :type steps_per_circle: int | None
         :return: Shapely geometry
         :rtype: shapely.geometry.polygon
         """
@@ -532,29 +550,35 @@ class ApertureMacro:
         self.parse_content()
 
         # ## Make the geometry
+        circle_args = {} if steps_per_circle is None else {"quad_segs": circle_quad_segs(steps_per_circle)}
         for primitive in self.primitives:
             # Make the primitive
-            prim_geo = makers[str(int(primitive[0]))](primitive[1:])
+            code = str(int(primitive[0]))
+            if code not in makers:
+                log.warning("Unknown primitive %s in the aperture macro %s." % (code, self.name))
+                continue
+            if code in ("1", "6", "7"):
+                prim_geo = makers[code](primitive[1:], **circle_args)
+            else:
+                prim_geo = makers[code](primitive[1:])
+
+            # A primitive without size (a width or height of 0) adds or cuts nothing
+            minx, miny, maxx, maxy = prim_geo['geometry'].bounds
+            if not (maxx > minx and maxy > miny):
+                continue
 
             # Add it (according to polarity)
-            # if self.geometry is None and prim_geo['pol'] == 1:
-            #     self.geometry = prim_geo['geometry']
-            #     continue
             if prim_geo['pol'] == 1:
                 if self.geometry.is_empty:
-                    self.geometry = prim_geo['geometry']
+                    self.geometry = self.polygonal(prim_geo['geometry'])
                     continue
-                ugeo = union(self.geometry, prim_geo['geometry'])
-                # The union function can produce a GeometryCollection when the two polygons share a vertex like this |><|
-                # See https://bitbucket.org/marius_stanciu/flatcam_beta/issues/59.
-                if isinstance(ugeo, GeometryCollection):
-                    log.debug("Translating geometry primitive %s to avoid GeometryCollection.", prim_geo["geometry"])
-                    prim_geo["geometry"] = affinity.translate(prim_geo["geometry"], xoff=0.0001)
-                    ugeo = union(self.geometry, prim_geo['geometry'])
-                self.geometry = ugeo
+                # The union function can produce a GeometryCollection when a primitive has no area (a line width or a
+                # size of 0), see https://bitbucket.org/marius_stanciu/flatcam_beta/issues/59. Only the polygons are
+                # kept: the other primitives are not moved.
+                self.geometry = self.polygonal(union(self.geometry, prim_geo['geometry']))
                 continue
             if prim_geo['pol'] == 0:
-                self.geometry = difference(self.geometry, prim_geo['geometry'])
+                self.geometry = self.polygonal(difference(self.geometry, prim_geo['geometry']))
                 continue
         return self.geometry
 
@@ -631,6 +655,20 @@ class Geometry(object):
     def _app_option(self, key, fallback=None):
         return app_option(self.app, key, fallback)
 
+    def circle_quad_segs_for(self, radius):
+        """
+        The Shapely buffer quad_segs of a circle of this radius. An object that was given a fixed
+        geo_steps_per_circle (a CNC job) keeps it; the other objects follow the preferences "Circles" of their kind.
+
+        :param radius:  the radius of the circle (for a buffer: the buffer distance), in the units of the object
+        :return:        the segments of a quarter circle
+        """
+        if self.geo_steps_per_circle is not None:
+            return circle_quad_segs(self.geo_steps_per_circle)
+        kind = getattr(self, 'kind', None)
+        return object_quad_segs(self.app.options, kind if kind in ('gerber', 'excellon') else 'geometry', radius,
+                                self.units)
+
     def plot_temp_shapes(self, element: BaseGeometry | list[BaseGeometry], color='red'):
 
         try:
@@ -666,7 +704,7 @@ class Geometry(object):
         if self.solid_geometry is None:
             self.solid_geometry = []
 
-        new_circle = Point(origin).buffer(radius, circle_quad_segs(self.geo_steps_per_circle))
+        new_circle = Point(origin).buffer(radius, self.circle_quad_segs_for(radius))
         if not new_circle.is_valid:
             return "fail"
 
@@ -1227,7 +1265,7 @@ class Geometry(object):
             working_geo_shp = flatten_shapely_geometry(working_geo)
             geo_len = len(working_geo_shp)
             # the steps count the whole circle
-            quad_segs = max(1, int(self.geo_steps_per_circle) // 4) if offset != 0 else 1
+            quad_segs = self.circle_quad_segs_for(offset) if offset != 0 else 1
 
             old_disp_number = 0
             pol_nr = 0
@@ -1297,7 +1335,9 @@ class Geometry(object):
         self.app.log.debug("camlib.Geometry.import_svg()")
 
         units = self.app.app_units if units is None else units
-        res = self._app_option('geometry_circle_steps')
+        # the radius of the circles is not known before the parsing: a typical feature of 5 mm
+        res = object_circle_steps(self.app.options, 'geometry', 5.0 if str(units).upper() == 'MM' else 5.0 / 25.4,
+                                  units)
 
         # Parse into a flat list of shapely objects (units conversion, flip and text are handled by the importer)
         try:
@@ -2773,60 +2813,86 @@ class Geometry(object):
 
         self.app.log.debug("camlib.Geometry.buffer()")
 
-        if distance == 0:
-            return
+        try:
+            finite = bool(np.isfinite(distance))
+        except (TypeError, ValueError, OverflowError):
+            finite = False
 
-        def buffer_geom(obj):
-            new_obj = []
+        if factor:
             try:
-                work_geo = obj.geoms if isinstance(obj, (MultiPolygon, MultiLineString)) else obj
-                for g in work_geo:
-                    new_obj += buffer_geom(g)
-            except TypeError:
-                try:
-                    if factor is None or factor is False or factor == 0:
-                        if distance >= 0:
-                            new_obj = obj.buffer(distance, quad_segs=circle_quad_segs(self.geo_steps_per_circle), join_style=join)
-                            if isinstance(obj, (LinearRing, LineString)) and only_exterior is True:
-                                new_obj = new_obj.exterior
-                        else:
-                            if isinstance(obj, LineString):
-                                if not obj.is_closed:
-                                    obj = Polygon(obj).exterior
+                valid_factor = finite and distance > 0
+            except (TypeError, ValueError):
+                valid_factor = False
+            if not valid_factor:
+                if muted is False:
+                    self.app.inform.emit('[WARNING_NOTCL] %s: %s' %
+                                         (_("Geometry buffer by a factor was not done"),
+                                          _("The factor must be a positive number.")))
+                return 'fail'
+        else:
+            if not finite:
+                if muted is False:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("The buffer distance is not a number."))
+                return 'fail'
+            if distance == 0:
+                return
 
-                            new_obj = obj.buffer(abs(distance*2), quad_segs=circle_quad_segs(self.geo_steps_per_circle),
-                                                 join_style=join)
-                            new_obj_ints = new_obj.interiors
-                            new_obj_union = unary_union(new_obj_ints)
-                            new_obj = new_obj_union.buffer(
-                                abs(distance), quad_segs=circle_quad_segs(self.geo_steps_per_circle),
-                                join_style=join).exterior
-
-                    else:
-                        new_obj = affinity.scale(obj, xfact=distance, yfact=distance, origin='center')
-                except Exception as err:
-                    self.app.log.error("camlib.Geometry.buffer.buffer_geom() -> %s" % str(err))
-                    new_obj = obj
-
-            return [new_obj]
+        quad_segs = self.circle_quad_segs_for(distance)
 
         try:
-            if self.multigeo is True:
-                for tool in self.tools:
-                    res = buffer_geom(self.tools[tool]['solid_geometry'])
-                    self.tools[tool]['solid_geometry'] = flatten_shapely_geometry(res)
-
-            buff_geo = flatten_shapely_geometry(buffer_geom(self.solid_geometry))
-            if buff_geo:
-                self.solid_geometry = buff_geo
-                if muted is False:
-                    self.app.inform.emit('[success] %s...' % _('Object was buffered'))
+            # build every result first: a failed or empty buffer leaves the object unchanged
+            keys = list(self.tools) if self.multigeo is True else []
+            new_tools = {}
+            if factor:
+                if self.app.abort_flag:
+                    if muted is False:
+                        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+                    return 'fail'
+                for tool in keys:
+                    new_tools[tool] = flatten_shapely_geometry(
+                        scale_geometries_by_center(self.tools[tool].get('solid_geometry', []), distance))
+                result = scale_geometries_by_center(self.solid_geometry, distance)
             else:
+                if self.app.abort_flag:
+                    if muted is False:
+                        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+                    return 'fail'
+                # the aggregate and every tool in one vectorized call
+                structures = [self.solid_geometry] + [
+                    self.tools[k].get('solid_geometry', []) for k in keys]
+                results = buffer_geometry_many(structures, distance, quad_segs, join,
+                                               only_exterior=only_exterior)
+                result = results[0]
+                new_tools = {k: flatten_shapely_geometry(r) for k, r in zip(keys, results[1:])}
+
+            if self.app.abort_flag:
+                if muted is False:
+                    self.app.inform.emit('[WARNING_NOTCL] %s' % _("Cancelled."))
+                return 'fail'
+            buff_geo = flatten_shapely_geometry(result)
+
+            if not buff_geo and not any(new_tools.values()):
                 if muted is False:
                     self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
                 self.app.log.error("camlib.Geometry.buffer() -> Failed.")
+                return 'fail'
+
+            if self.multigeo is True:
+                for tool in new_tools:
+                    self.tools[tool]['solid_geometry'] = new_tools[tool]
+            # a multigeo object may hold its geometry only in its tools; the absent aggregate stays absent
+            if buff_geo:
+                self.solid_geometry = buff_geo
+            if muted is False:
+                self.app.inform.emit('[success] %s...' % _('Object was buffered'))
         except AttributeError:
             self.app.inform.emit('[ERROR_NOTCL] %s %s' % (_("Failed."), _("No object is selected.")))
+            return 'fail'
+        except Exception as err:
+            self.app.log.error("camlib.Geometry.buffer() -> %s" % str(err))
+            if muted is False:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("Failed."))
+            return 'fail'
 
 
 class AttrDict(dict):
@@ -2845,6 +2911,10 @@ GCODE_LASER_M345_RE = re.compile(r"^(M0?[3-5])")
 GCODE_LASER_M10X_RE = re.compile(r"^(M10[6|7])")
 # 1 word (letter and number), matched at a position of the line
 GCODE_WORD_RE = re.compile(r'\s*([A-Z])\s*([+\-.\d\s]+)')
+# the same, in upper or lower case
+GCODE_WORD_ANYCASE_RE = re.compile(r'\s*([A-Za-z])\s*([+\-.\d\s]+)')
+# a (...) comment of a G-code line
+GCODE_PAREN_COMMENT_RE = re.compile(r'\([^)]*\)')
 
 
 def get_preprocessor(app, name):
@@ -2976,6 +3046,8 @@ class CNCjob(Geometry):
 
         # how much depth the probe can probe before error
         self.z_p_depth = z_p_depth if z_p_depth else None
+        # the thickness of the touch plate that lies on the material
+        self.probe_plate = 0.0
 
         # the feedrate(speed) with which the probe travel while probing
         self.feedrate_probe = feedrate_probe if feedrate_probe else None
@@ -3076,7 +3148,10 @@ class CNCjob(Geometry):
         """
         self.app.log.debug("camlib.CNCJob.convert_units()")
 
-        factor = Geometry.convert_units(self, units)
+        if getattr(self, 'gcode_imported', False):
+            factor = self.convert_units_imported(units)
+        else:
+            factor = Geometry.convert_units(self, units)
 
         self.z_cut = float(self.z_cut) * factor
         self.z_move *= factor
@@ -3088,6 +3163,35 @@ class CNCjob(Geometry):
         self.z_end *= factor
         self.z_depthpercut = float(self.z_depthpercut) * factor
 
+        return factor
+
+    def convert_units_imported(self, units):
+        """
+        Units change of a job made from an imported G-code file: the parsed geometry is scaled, the G-code text of the
+        file is never rewritten.
+
+        :param units:   "MM" or "IN"
+        :return:        the scaling factor
+        """
+        if units.upper() == self.units.upper():
+            return 1.0
+        factor = {"MM": 25.4, "IN": 1 / 25.4}.get(units.upper())
+        if factor is None:
+            self.app.log.error("Unsupported units: %s" % str(units))
+            return 1.0
+
+        self.units = units
+        # the same dict can be in the list of the job and in the list of a tool: scale it once
+        unique = {}
+        for parsed in [self.gcode_parsed] + [tool.get('gcode_parsed') or [] for tool in self.tools.values()]:
+            for item in parsed or ():
+                unique[id(item)] = item
+        self._affine_gcode_parsed(list(unique.values()), affine_scale_matrix(factor, factor, (0, 0)))
+        for tool in self.tools.values():
+            if tool.get('gcode_parsed'):
+                tool['solid_geometry'] = [item['geom'] for item in tool['gcode_parsed']]
+        self.create_geometry()
+        self.file_units_factor = factor
         return factor
 
     def count_depth_passes(self):
@@ -3152,8 +3256,9 @@ class CNCjob(Geometry):
         attributes.update(self.postdata)
         attributes.update(kwargs)
         line = self.doformat_attributes(fun, attributes)
-        # a preprocessor method with nothing to emit (e.g. dwell with a zero time) returns None: no line at all
-        return "" if line is None else line + "\n"
+        # a preprocessor method with nothing to emit (e.g. dwell with a zero time, the tool change of a laser) returns
+        # None or '': no line at all, not an empty line
+        return line + "\n" if line else ""
 
     def doformat2(self, fun, **kwargs):
         """
@@ -3190,10 +3295,20 @@ class CNCjob(Geometry):
         try:
             ret = fun(attributes)
             return ret
-        except Exception:
+        except Exception as err:
             self.app.log.error('Exception occurred within a preprocessor: ' + traceback.format_exc())
             if getattr(self, 'pp_solderpaste_name', None):
                 raise
+            # the G-code of this call is missing: tell the user once for each preprocessor method of the job
+            method = getattr(fun, '__qualname__', str(fun))
+            warned = self.__dict__.setdefault('pp_errors_warned', set())
+            if method not in warned:
+                warned.add(method)
+                try:
+                    self.app.inform.emit('[WARNING] %s: %s - %s' % (
+                        _("Preprocessor error, G-code is missing"), method, str(err)))
+                except Exception:
+                    pass
             return ''
 
     def parse_custom_toolchange_code(self, data):
@@ -3748,6 +3863,7 @@ class CNCjob(Geometry):
 
         # Probe parameters
         self.z_p_depth = tool_dict["tools_drill_z_p_depth"]
+        self.probe_plate = tool_dict.get("tools_drill_probe_plate", 0.0)
         self.feedrate_probe = tool_dict["tools_drill_feedrate_probe"]
         # #########################################################################################################
         # #########################################################################################################
@@ -4576,6 +4692,7 @@ class CNCjob(Geometry):
                        ('dwelltime', 'tools_drill_dwelltime'), ('spindledir', 'tools_drill_spindledir'),
                        ('laser_min_power', 'tools_drill_min_power'), ('laser_on_code', 'tools_drill_laser_on'),
                        ('z_p_depth', 'tools_drill_z_p_depth'), ('feedrate_probe', 'tools_drill_feedrate_probe'),
+                       ('probe_plate', 'tools_drill_probe_plate'),
                        ('peck', 'tools_drill_peck'), ('peck_depth', 'tools_drill_peck_depth'),
                        ('peck_retract', 'tools_drill_peck_retract'), ('dwell_bottom', 'tools_drill_dwell_bottom'))
 
@@ -6301,13 +6418,14 @@ class CNCjob(Geometry):
             # Note: linear2gcode() will use G00 to move to the first point in the path, but it should be already
             # at the first point if the tool is down (in the material).  So, an extra G00 should show up but
             # is inconsequential.
+            # the preprocessors get the depth as a float: a Decimal fails in float arithmetic (Roland, ISEL ICP)
             if isinstance(geometry, LineString) or isinstance(geometry, LinearRing):
                 if extracut is False or not geometry.is_ring:
-                    pass_parts.append(self.linear2gcode(geometry, cdia, tolerance=tolerance, z_cut=depth, up=False,
-                                                          z_move=z_move, old_point=old_point))
+                    pass_parts.append(self.linear2gcode(geometry, cdia, tolerance=tolerance, z_cut=float(depth),
+                                                          up=False, z_move=z_move, old_point=old_point))
                 else:
                     pass_parts.append(self.linear2gcode_extra(geometry, cdia, extracut_length, tolerance=tolerance,
-                                                                z_move=z_move, z_cut=depth, up=False,
+                                                                z_move=z_move, z_cut=float(depth), up=False,
                                                                 old_point=old_point))
 
             # Ignore multi-pass for points.
@@ -6414,12 +6532,45 @@ class CNCjob(Geometry):
                     command['X'] = float(match_paste.group(1).replace(" ", ""))
                     command['Y'] = float(match_paste.group(2).replace(" ", ""))
         else:
+            # the comments are not read and the words may be in lower case
+            if '(' in gline:
+                gline = GCODE_PAREN_COMMENT_RE.sub('', gline)
+            if ';' in gline:
+                gline = gline.split(';', 1)[0]
             # the words are matched one after the other, from the end of the previous one
-            match = GCODE_WORD_RE.match(gline)
+            g_words = []
+            match = GCODE_WORD_ANYCASE_RE.match(gline)
             while match:
-                command[match.group(1)] = float(match.group(2).replace(" ", ""))
-                match = GCODE_WORD_RE.match(gline, match.end())
+                letter = match.group(1)
+                if letter == 'e':
+                    break       # the exponent of a number (1e3), not a word
+                value = float(match.group(2).replace(" ", ""))
+                letter = letter.upper()
+                if letter == 'G':
+                    g_words.append(value)
+                command[letter] = value
+                match = GCODE_WORD_ANYCASE_RE.match(gline, match.end())
+            if len(g_words) > 1:
+                # 'G' keeps the last one; the other G words of the same line are in '_G' (in order)
+                command['_G'] = g_words
         return command
+
+    @staticmethod
+    def arc_centre_from_radius(x0, y0, x1, y1, radius, ccw):
+        """
+        The centre of an arc given by its radius (G2/G3 with R): R < 0 is the arc bigger than a half circle.
+
+        :return:    (I, J): the centre relative to the start point (0, 0 if the start is the end)
+        """
+        dx, dy = x1 - x0, y1 - y0
+        dist = float(np.hypot(dx, dy))
+        if dist == 0.0:
+            return 0.0, 0.0
+        height = float(np.sqrt(max(radius * radius - dist * dist / 4.0, 0.0)))
+        side = 1.0 if ccw else -1.0
+        if radius < 0:
+            side = -side
+        return dx / 2.0 + side * height * (-dy / dist), dy / 2.0 + side * height * (dx / dist)
 
     def gcode_parse(self, force_parsing=None, tool_data=None):
         """
@@ -6442,6 +6593,15 @@ class CNCjob(Geometry):
         :rtype:                 list
         """
 
+        if getattr(self, 'gcode_imported', False):
+            # the G-code of an imported file is any G-code: the import parser reads it
+            from appParsers.ParseGCode import parse_gcode
+            result = parse_gcode(self.gcode, steps_per_circle=int(self.steps_per_circle),
+                                 default_tooldia=self.tooldia or 0.4, target_units=self.units)
+            flat = [item for tool_data_parsed in result['tools'].values() for item in tool_data_parsed['gcode_parsed']]
+            self.gcode_parsed = flat
+            return flat
+
         kind = ["C", "F"]  # T=travel, C=cut, F=fast, S=slow
 
         # Results go here
@@ -6449,6 +6609,10 @@ class CNCjob(Geometry):
 
         # Last known instruction
         current = {'X': 0.0, 'Y': 0.0, 'Z': 0.0, 'G': 0}
+
+        # G90 / G91 (X, Y, Z) and G90.1 / G91.1 (arc centre)
+        incremental = False
+        arc_centre_absolute = False
 
         if tool_data is None:
             toolchange_xy_mill = self._app_option("tools_mill_toolchangexy")
@@ -6499,6 +6663,18 @@ class CNCjob(Geometry):
         gcode_lines_list = self.gcode.splitlines()
         self.app.inform.emit('%s: %d' % (_("Parsing GCode file. Number of lines"), len(gcode_lines_list)))
 
+        # Excellon: the drill diameter of every drill position (the first tool that has the position wins)
+        is_excellon = self.obj_options['type'].lower() == 'excellon'
+        drill_diameters = {}
+        if is_excellon:
+            for tool_dict in self.exc_tools.values():
+                if 'drills' in tool_dict and 'tooldia' in tool_dict:
+                    for drill_pt in tool_dict['drills']:
+                        drill_diameters.setdefault((
+                            float('%.*f' % (self.decimals, drill_pt.x)),
+                            float('%.*f' % (self.decimals, drill_pt.y))
+                        ), tool_dict['tooldia'])
+
         # Process every instruction
         for line in gcode_lines_list:
             if force_parsing is False or force_parsing is None:
@@ -6512,9 +6688,25 @@ class CNCjob(Geometry):
                                  'kind': ['C', 'S']})
                 continue
 
-            # ## Units
-            if 'G' in gobj and (gobj['G'] == 20.0 or gobj['G'] == 21.0):
-                self.units = {20.0: "IN", 21.0: "MM"}[gobj['G']]
+            # ## G words: units, distance mode, arc centre mode, motion mode (a line can have more than one)
+            motion = None
+            skip_motion = False
+            for g_word in (gobj['_G'] if '_G' in gobj else ((gobj['G'],) if 'G' in gobj else ())):
+                if g_word == 20.0 or g_word == 21.0:
+                    self.units = {20.0: "IN", 21.0: "MM"}[g_word]
+                elif g_word == 90.0:
+                    incremental = False
+                elif g_word == 91.0:
+                    incremental = True
+                elif g_word == 90.1:
+                    arc_centre_absolute = True
+                elif g_word == 91.1:
+                    arc_centre_absolute = False
+                elif g_word in (0.0, 1.0, 2.0, 3.0):
+                    motion = int(g_word)
+                elif g_word in (28.0, 30.0, 53.0):
+                    skip_motion = True
+            if skip_motion:
                 continue
 
             # TODO take into consideration the tools and update the travel line thickness
@@ -6523,20 +6715,21 @@ class CNCjob(Geometry):
 
             # ## Changing height
             if 'Z' in gobj:
+                new_z = current['Z'] + gobj['Z'] if incremental else gobj['Z']
                 if 'Roland' in self.pp_excellon_name or 'Roland' in self.pp_geometry_name:
                     pass
                 elif 'hpgl' in self.pp_excellon_name or 'hpgl' in self.pp_geometry_name:
                     pass
                 elif 'laser' in self.pp_excellon_name or 'laser' in self.pp_geometry_name:
                     pass
-                elif ('X' in gobj or 'Y' in gobj) and gobj['Z'] != current['Z']:
+                elif ('X' in gobj or 'Y' in gobj) and new_z != current['Z']:
                     if self.pp_geometry_name == 'Line_xyz' or self.pp_excellon_name == 'Line_xyz':
                         pass
                     else:
                         self.app.log.warning("Non-orthogonal motion: From %s" % str(current))
                         self.app.log.warning("  To: %s" % str(gobj))
 
-                current['Z'] = gobj['Z']
+                current['Z'] = new_z
                 # Store the path into geometry and reset path
                 if len(path) > 1:
                     geometry.append({"geom": LineString(path),
@@ -6544,48 +6737,36 @@ class CNCjob(Geometry):
                     path = [path[-1]]  # Start with the last point of last path.
 
                 # create the geometry for the holes created when drilling Excellon drills
-                if self.obj_options['type'].lower() == 'excellon':
-                    if current['Z'] < 0:
-                        current_drill_point_coords = (
-                            float('%.*f' % (self.decimals, current['X'])),
-                            float('%.*f' % (self.decimals, current['Y']))
+                if is_excellon and current['Z'] < 0:
+                    current_drill_point_coords = (
+                        float('%.*f' % (self.decimals, current['X'])),
+                        float('%.*f' % (self.decimals, current['Y']))
+                    )
+
+                    # the drill diameter knowing the drill coordinates
+                    dia = drill_diameters.get(current_drill_point_coords)
+                    if dia is not None:
+                        kind = ['C', 'F']
+                        geometry.append(
+                            {
+                                "geom": Point(current_drill_point_coords).buffer(dia / 2.0).exterior,
+                                "kind": kind
+                            }
                         )
 
-                        # find the drill diameter knowing the drill coordinates
-                        break_loop = False
-                        for tool, tool_dict in self.exc_tools.items():
-                            if 'drills' in tool_dict:
-                                for drill_pt in tool_dict['drills']:
-                                    point_in_dict_coords = (
-                                        float('%.*f' % (self.decimals, drill_pt.x)),
-                                        float('%.*f' % (self.decimals, drill_pt.y))
-                                    )
-                                    if point_in_dict_coords == current_drill_point_coords:
-                                        dia = self.exc_tools[tool]['tooldia']
-                                        kind = ['C', 'F']
-                                        geometry.append(
-                                            {
-                                                "geom": Point(current_drill_point_coords).buffer(dia / 2.0).exterior,
-                                                "kind": kind
-                                            }
-                                        )
-                                        break_loop = True
-                                        break
-                                if break_loop:
-                                    break
-
-            if 'G' in gobj:
-                current['G'] = int(gobj['G'])
+            # only G0 - G3 change the motion mode
+            if motion is not None:
+                current['G'] = motion
 
             if 'X' in gobj or 'Y' in gobj:
                 if 'X' in gobj:
-                    x = gobj['X']
+                    x = current['X'] + gobj['X'] if incremental else gobj['X']
                     # current['X'] = x
                 else:
                     x = current['X']
 
                 if 'Y' in gobj:
-                    y = gobj['Y']
+                    y = current['Y'] + gobj['Y'] if incremental else gobj['Y']
                 else:
                     y = current['Y']
 
@@ -6601,18 +6782,28 @@ class CNCjob(Geometry):
 
                 arcdir = [None, None, "cw", "ccw"]
                 if current['G'] in [2, 3]:  # arc
-                    center = [gobj['I'] + current['X'], gobj['J'] + current['Y']]
-                    radius = np.sqrt(gobj['I'] ** 2 + gobj['J'] ** 2)
-                    start = np.arctan2(-gobj['J'], -gobj['I'])
+                    # a missing I or J is 0; the centre can also come from the radius R
+                    arc_i = gobj.get('I', 0.0)
+                    arc_j = gobj.get('J', 0.0)
+                    if arc_centre_absolute and ('I' in gobj or 'J' in gobj):
+                        arc_i -= current['X']
+                        arc_j -= current['Y']
+                    if 'R' in gobj and 'I' not in gobj and 'J' not in gobj:
+                        arc_i, arc_j = self.arc_centre_from_radius(
+                            current['X'], current['Y'], x, y, gobj['R'], current['G'] == 3)
+                    center = [arc_i + current['X'], arc_j + current['Y']]
+                    radius = np.sqrt(arc_i ** 2 + arc_j ** 2)
+                    start = np.arctan2(-arc_j + 0.0, -arc_i)    # (+ 0.0: no -0.0, it would turn pi into -pi)
                     stop = np.arctan2(-center[1] + y, -center[0] + x)
                     path += arc(center, radius, start, stop, arcdir[current['G']], int(self.steps_per_circle))
 
                 current['X'] = x
                 current['Y'] = y
 
-            # Update current instruction
+            # Update current instruction (the position, the height and the motion mode are set above)
             for code in gobj:
-                current[code] = gobj[code]
+                if code not in ('X', 'Y', 'Z', 'G', '_G'):
+                    current[code] = gobj[code]
 
         self.app.inform.emit('%s...' % _("Creating Geometry from the parsed GCode file. "))
         # There might not be a change in height at the
@@ -6748,9 +6939,15 @@ class CNCjob(Geometry):
 
                 arcdir = [None, None, "cw", "ccw"]
                 if current['G'] in [2, 3]:  # arc
-                    center = [gobj['I'] + current['X'], gobj['J'] + current['Y']]
-                    radius = np.sqrt(gobj['I'] ** 2 + gobj['J'] ** 2)
-                    start = np.arctan2(-gobj['J'], -gobj['I'])
+                    # a missing I or J is 0; the centre can also come from the radius R
+                    arc_i = gobj.get('I', 0.0)
+                    arc_j = gobj.get('J', 0.0)
+                    if 'R' in gobj and 'I' not in gobj and 'J' not in gobj:
+                        arc_i, arc_j = self.arc_centre_from_radius(
+                            current['X'], current['Y'], x, y, gobj['R'], current['G'] == 3)
+                    center = [arc_i + current['X'], arc_j + current['Y']]
+                    radius = np.sqrt(arc_i ** 2 + arc_j ** 2)
+                    start = np.arctan2(-arc_j + 0.0, -arc_i)    # (+ 0.0: no -0.0, it would turn pi into -pi)
                     stop = np.arctan2(-center[1] + y, -center[0] + x)
                     path += arc(center, radius, start, stop, arcdir[current['G']], int(self.steps_per_circle))
 
@@ -7395,11 +7592,11 @@ class CNCjob(Geometry):
             # start cutting the extra line
             last_pt = extra_path[0]
             for pt in extra_path[1:]:
-                gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1])
+                gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1], z_cut=z_cut)
                 last_pt = pt
 
             # go back to the original point
-            gcode += self.doformat(p.linear_code, x=path[0][0], y=path[0][1])
+            gcode += self.doformat(p.linear_code, x=path[0][0], y=path[0][1], z_cut=z_cut)
             last_pt = path[0]
         else:
             # go to the point that is 5% in length before the end (therefore 95% length from start of the line),
@@ -7433,7 +7630,7 @@ class CNCjob(Geometry):
 
             # start cutting the extra line
             for pt in extra_path[1:]:
-                gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1])
+                gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1], z_cut=z_cut)
 
             # ---------------------------------------------
             # second half
@@ -7450,7 +7647,7 @@ class CNCjob(Geometry):
             # start cutting the extra line
             last_pt = extra_path[0]
             for pt in extra_path[1:]:
-                gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1])
+                gcode += self.doformat(p.linear_code, x=pt[0], y=pt[1], z_cut=z_cut)
                 last_pt = pt
 
         # Up to travelling height.
@@ -7734,6 +7931,136 @@ class CNCjob(Geometry):
         for d, geom in zip(dicts, results):
             d['geom'] = geom
 
+    def _units_factor_to_file(self):
+        """Factor from the job units to the units of the imported G-code file (1.0 when equal or unknown)."""
+        fu = str((getattr(self, 'obj_options', None) or {}).get('gcode_units') or '').upper()
+        ju = str(self.units or '').upper()
+        if fu in ('MM', 'IN') and ju in ('MM', 'IN') and fu != ju:
+            return 25.4 if fu == 'MM' else 1.0 / 25.4
+        return 1.0
+
+    def _transform_imported(self, matrix):
+        """
+        Applies the matrix (in job units) to the text of an imported G-code job and parses the new text again: the
+        text of every tool, the parsed geometry of every tool and of the job follow the text.
+        """
+        from appParsers.ParseGCode import transform_gcode, split_tool_blocks, parse_gcode
+
+        a, b, d, e, xoff, yoff = matrix
+        k = self._units_factor_to_file()
+        decimals = getattr(self, 'coords_decimals', None) or 4
+        new, warns = transform_gcode(self.gcode, (a, b, d, e, xoff * k, yoff * k), decimals, self.steps_per_circle)
+        for msg in warns:
+            self.app.log.warning("CNCjob transform: %s" % msg)
+        self.gcode = new
+
+        blocks = split_tool_blocks(new)
+        items = list(self.tools.items())
+        if len(blocks) == len(items):
+            mapping = list(range(len(blocks)))
+        else:
+            self.app.log.warning("CNCjob transform: the tool blocks of the new G-code differ from the tools of the "
+                                 "job, the tools are matched by their T number.")
+            used = set()
+            mapping = []
+            for _, tool in items:
+                found = next((i for i, blk in enumerate(blocks) if i not in used and blk['tool'] == tool.get('tool')),
+                             None)
+                if found is not None:
+                    used.add(found)
+                mapping.append(found)
+
+        dia = self.tooldia if self.tooldia else 0.4
+        res = parse_gcode(new, self.steps_per_circle, default_tooldia=dia, target_units=self.units)
+        total = []
+        for (_, tool), bi in zip(items, mapping):
+            if bi is None:
+                continue
+            parsed = res['tools'].get(bi + 1)
+            tool['gcode'] = blocks[bi]['gcode']
+            if parsed is not None:
+                tool['gcode_parsed'] = parsed['gcode_parsed']
+                tool['solid_geometry'] = parsed['solid_geometry']
+                if 'drills' in tool:
+                    tool['drills'] = [Point(x, y) for x, y in parsed['drills']]
+                total += parsed['gcode_parsed']
+        self.gcode_parsed = total
+        self.travel_distance = res['travel_distance']
+        if res['bounds']:
+            (self.obj_options['xmin'], self.obj_options['ymin'],
+             self.obj_options['xmax'], self.obj_options['ymax']) = res['bounds']
+
+    def _transform_native(self, matrix):
+        """Native job: the text of every tool (or of the job) and the geometry follow the matrix."""
+        from appParsers.ParseGCode import transform_gcode
+
+        pp_names = (str(getattr(self, 'pp_geometry_name', '')) + str(getattr(self, 'pp_excellon_name', ''))).lower()
+        if 'roland' in pp_names or 'hpgl' in pp_names:
+            # these preprocessors have no X/Y words: only the plot follows the matrix
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The machine code of the Roland/HPGL preprocessors is not "
+                                                          "transformed, only the plot is. Generate the job again."))
+        decimals = getattr(self, 'coords_decimals', None) or 4
+        if self.multitool:
+            texts = [v for v in self.tools.values() if isinstance(v.get('gcode'), str) and v['gcode']]
+            for v in texts:
+                v['gcode'], warns = transform_gcode(v['gcode'], matrix, decimals, self.steps_per_circle)
+                for msg in warns:
+                    self.app.log.warning("CNCjob transform: %s" % msg)
+        elif isinstance(self.gcode, str) and self.gcode:
+            self.gcode, warns = transform_gcode(self.gcode, matrix, decimals, self.steps_per_circle)
+            for msg in warns:
+                self.app.log.warning("CNCjob transform: %s" % msg)
+
+        # the same dict can be in the list of the job and in the list of a tool: transform it once
+        unique = {}
+        for parsed in [self.gcode_parsed] + [v.get('gcode_parsed') or [] for v in (self.tools or {}).values()]:
+            for item in parsed or ():
+                unique[id(item)] = item
+        CNCjob._affine_gcode_parsed(list(unique.values()), matrix)
+        for v in (self.tools or {}).values():
+            if v.get('gcode_parsed'):
+                v['solid_geometry'] = unary_union([geo['geom'] for geo in v['gcode_parsed']])
+
+    def gcode_flow_blocked(self, action):
+        """
+        A program with macro variables or subprograms can not be rewritten word by word: the same words run with other
+        values or more than once.
+
+        :param action:  'transform' or 'level': what can not be done
+        :return:        the error message for the user if the text of the imported job has macros or subprograms,
+                        else None
+        """
+        if not getattr(self, 'gcode_imported', False):
+            return None
+        from appParsers.ParseGCode import program_features
+
+        features = program_features(self.gcode or '')
+        if not (features['macros'] or features['subprograms']):
+            return None
+        if action == 'level':
+            msg = _("The G-code has macro variables or subprograms: it can not be levelled. "
+                    "Change the program in the software that made it.")
+        else:
+            msg = _("The G-code has macro variables or subprograms: it can not be moved or transformed. "
+                    "Change the program in the software that made it.")
+        name = (getattr(self, 'obj_options', None) or {}).get('name', '')
+        return '[ERROR_NOTCL] %s: %s' % (name, msg)
+
+    def _transform(self, matrix):
+        """G-code text and geometry of the job under the affine matrix (a, b, d, e, xoff, yoff)."""
+        if getattr(self, 'gcode_imported', False):
+            blocked = self.gcode_flow_blocked('transform')
+            if blocked:
+                # the text and the plot stay as they are, together
+                self.app.inform.emit(blocked)
+                self.app.proc_container.new_text = ''
+                return
+            self._transform_imported(matrix)
+        else:
+            self._transform_native(matrix)
+        self.create_geometry()
+        self.app.proc_container.new_text = ''
+
     def scale(self, xfactor, yfactor=None, point=None):
         """
         Scales all the geometry on the XY plane in the object by the
@@ -7757,6 +8084,10 @@ class CNCjob(Geometry):
             py = 0
         else:
             px, py = point
+
+        if getattr(self, 'gcode_imported', False):
+            self._transform(affine_scale_matrix(xfactor, yfactor, (px, py)))
+            return
 
         def scale_g(g):
             """
@@ -7900,6 +8231,10 @@ class CNCjob(Geometry):
 
         dx, dy = vect
 
+        if getattr(self, 'gcode_imported', False):
+            self._transform(affine_translate_matrix(dx, dy))
+            return
+
         def offset_g(g):
             """
 
@@ -8002,10 +8337,7 @@ class CNCjob(Geometry):
 
         px, py = point
 
-        CNCjob._affine_gcode_parsed(self.gcode_parsed, affine_mirror_matrix(axis, (px, py)))
-
-        self.create_geometry()
-        self.app.proc_container.new_text = ''
+        self._transform(affine_mirror_matrix(axis, (px, py)))
 
     def skew(self, angle_x, angle_y, point):
         """
@@ -8026,10 +8358,7 @@ class CNCjob(Geometry):
 
         px, py = point
 
-        CNCjob._affine_gcode_parsed(self.gcode_parsed, affine_skew_matrix(angle_x, angle_y, (px, py)))
-
-        self.create_geometry()
-        self.app.proc_container.new_text = ''
+        self._transform(affine_skew_matrix(angle_x, angle_y, (px, py)))
 
     def rotate(self, angle, point):
         """
@@ -8043,7 +8372,7 @@ class CNCjob(Geometry):
 
         px, py = point
 
-        CNCjob._affine_gcode_parsed(self.gcode_parsed, affine_rotate_matrix(angle, (px, py)))
+        self._transform(affine_rotate_matrix(angle, (px, py)))
 
 
 def list_total_bounds(obj, nested=True):
@@ -8377,6 +8706,118 @@ def flatten_shapely_geometry(
 
     flatten(geometry)
     return flat_list
+
+
+_GEOMETRY_LEAF = object()
+
+
+def _flatten_geometry_tree(obj, leaves):
+    """
+    Descriptor of a nested geometry structure for the buffer helpers: the leaves go to ``leaves`` and the descriptor
+    keeps the nested list shape. Multi-part geometries and GeometryCollections are flattened to their parts.
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, BaseMultipartGeometry):
+        return [_flatten_geometry_tree(g, leaves) for g in obj.geoms]
+    if isinstance(obj, BaseGeometry):
+        if obj.is_empty:
+            return None
+        leaves.append(obj)
+        return _GEOMETRY_LEAF
+    if isinstance(obj, Iterable) and not isinstance(obj, (str, bytes)):
+        return [_flatten_geometry_tree(g, leaves) for g in obj]
+    raise TypeError(f"No implementation for buffering {type(obj)}")
+
+
+def _rebuild_geometry_tree(descriptor, results):
+    if descriptor is None:
+        return []
+    if descriptor is _GEOMETRY_LEAF:
+        return next(results)
+    return [_rebuild_geometry_tree(d, results) for d in descriptor]
+
+
+def _polygon_boundaries(geometry):
+    """The exterior rings of the polygons of a buffer result (a closed contour can erode into several pieces)."""
+    if geometry is None or geometry.is_empty:
+        return []
+    if isinstance(geometry, Polygon):
+        return [geometry.exterior]
+    if isinstance(geometry, BaseMultipartGeometry):
+        boundaries = []
+        for part in geometry.geoms:
+            boundaries.extend(_polygon_boundaries(part))
+        return boundaries
+    return []
+
+
+def buffer_geometry_many(objs, distance, quad_segs, join, only_exterior=False, allow_empty=False):
+    """
+    Buffer nested geometry structures, in one vectorized Shapely call for the normal distance case.
+
+    With ``allow_empty`` false (the Geometry buffer), a negative distance on an open line, or a buffer that would
+    remove a non-empty geometry, raises ValueError: the caller leaves its object unchanged instead of losing that
+    part. A negative distance on a closed contour erodes the area it encloses and returns the exterior ring of every
+    remaining piece, so a split contour is not dropped. The Gerber buffer allows an empty result (an aperture that
+    disappears is exported as regions).
+
+    :param objs:            list of structures (geometry, nested lists, None, ...)
+    :param distance:        the buffer distance
+    :param quad_segs:       segments of a quarter circle, as given to buffer()
+    :param join:            Shapely join style name or code
+    :param only_exterior:   True: keep only the exterior of a buffered line
+    :param allow_empty:     True: an empty result is kept (it is dropped by the caller's flatten later)
+    :return:                list of the buffered structures, in the same order
+    """
+    objs = list(objs)
+    leaves = []
+    descriptors = [_flatten_geometry_tree(obj, leaves) for obj in objs]
+    if not leaves:
+        return [_rebuild_geometry_tree(d, iter(())) for d in descriptors]
+
+    results = [None] * len(leaves)
+    batch_indices = []
+    batch_leaves = []
+    for index, leaf in enumerate(leaves):
+        if distance < 0 and isinstance(leaf, (LinearRing, LineString)) and not allow_empty:
+            if not leaf.is_closed:
+                raise ValueError(_("An open line has no width to erode."))
+            eroded = Polygon(leaf).buffer(distance, quad_segs=quad_segs, join_style=join)
+            boundaries = _polygon_boundaries(eroded)
+            if not boundaries:
+                raise ValueError(_("The buffer removed a closed contour."))
+            results[index] = boundaries
+        else:
+            batch_indices.append(index)
+            batch_leaves.append(leaf)
+
+    if batch_leaves:
+        flattened = np.empty(len(batch_leaves), dtype=object)
+        flattened[:] = batch_leaves
+        buffered = shapely.buffer(flattened, distance, quad_segs=quad_segs, join_style=join)
+        for index, leaf, new_leaf in zip(batch_indices, batch_leaves, buffered):
+            if only_exterior is True and isinstance(leaf, (LinearRing, LineString)):
+                boundaries = _polygon_boundaries(new_leaf)
+                if len(boundaries) == 1:
+                    new_leaf = boundaries[0]
+                else:
+                    new_leaf = boundaries
+            empty = not new_leaf if isinstance(new_leaf, list) else getattr(new_leaf, 'is_empty', True)
+            if empty and not allow_empty:
+                raise ValueError(_("The buffer removed a geometry."))
+            results[index] = new_leaf
+
+    rebuilt = iter(results)
+    return [_rebuild_geometry_tree(d, rebuilt) for d in descriptors]
+
+
+def scale_geometries_by_center(obj, factor):
+    """Scale every leaf geometry by ``factor`` about its own center, keeping the nested list shape."""
+    leaves = []
+    descriptor = _flatten_geometry_tree(obj, leaves)
+    results = [affinity.scale(leaf, xfact=factor, yfact=factor, origin='center') for leaf in leaves]
+    return _rebuild_geometry_tree(descriptor, iter(results))
 
 
 class PassBuffers:
@@ -8918,6 +9359,71 @@ def circle_quad_segs(steps_per_circle) -> int:
     :return:                    the Shapely buffer quad_segs (segments of a quarter circle)
     """
     return max(1, math.ceil(int(steps_per_circle) / 4))
+
+
+ADAPTIVE_MIN_STEPS = 16
+ADAPTIVE_MAX_STEPS = 1024
+
+
+def adaptive_circle_steps(radius, tolerance, min_steps=ADAPTIVE_MIN_STEPS, max_steps=ADAPTIVE_MAX_STEPS) -> int:
+    """
+    The segments of a full circle that keep the chords within "tolerance" of the circle:
+    N = pi / acos(1 - tolerance / radius), rounded up to a multiple of 4.
+
+    :param radius:      the radius of the circle
+    :param tolerance:   the largest distance between a chord and the circle, in the units of the radius
+    :param min_steps:   the fewest segments of a circle
+    :param max_steps:   the most segments of a circle
+    :return:            the number of segments of the full circle
+    """
+    if radius <= 0 or tolerance <= 0:
+        return min_steps
+    if tolerance >= radius:
+        return min_steps
+    steps = math.pi / math.acos(1.0 - tolerance / radius)
+    steps = 4 * math.ceil(steps / 4.0)
+    return int(min(max(steps, min_steps), max_steps))
+
+
+def object_circle_steps(options, kind, radius, units='MM') -> int:
+    """
+    The segments of a full circle of an object kind, as the preferences of that kind set them:
+    - 'adaptive' mode: the steps that keep the circle within "<kind>_circle_tolerance" (micrometers),
+    - 'fixed' mode: "<kind>_circle_steps" for every circle.
+
+    :param options: the application options (app.options); a key that is missing takes its factory default
+    :param kind:    'gerber', 'excellon' or 'geometry'
+    :param radius:  the radius of the circle (for a buffer: the buffer distance), in "units"
+    :param units:   'MM' or 'IN', the units of the radius
+    :return:        the number of segments of the full circle
+    """
+    from defaults import AppDefaults
+
+    def option(key):
+        value = options.get(key) if options is not None else None
+        return AppDefaults.factory_defaults.get(key) if value is None else value
+
+    if option('%s_circle_steps_mode' % kind) != 'adaptive':
+        return int(option('%s_circle_steps' % kind))
+    tolerance = float(option('%s_circle_tolerance' % kind)) / 1000.0     # micrometers -> mm
+    if str(units).upper() == 'IN':
+        tolerance /= 25.4
+    return adaptive_circle_steps(abs(float(radius)), tolerance)
+
+
+def object_quad_segs(options, kind, radius, units='MM') -> int:
+    """The Shapely buffer quad_segs of a circle of an object kind (see object_circle_steps())."""
+    return circle_quad_segs(object_circle_steps(options, kind, radius, units))
+
+
+def gerber_circle_steps(options, radius, units='MM') -> int:
+    """The segments of a full circle of a Gerber geometry (see object_circle_steps())."""
+    return object_circle_steps(options, 'gerber', radius, units)
+
+
+def gerber_quad_segs(options, radius, units='MM') -> int:
+    """The Shapely buffer quad_segs of a Gerber circle (see object_circle_steps())."""
+    return object_quad_segs(options, 'gerber', radius, units)
 
 
 def seed_band_margin(margin, center):

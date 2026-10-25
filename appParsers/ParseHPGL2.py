@@ -6,7 +6,7 @@
 # MIT Licence                                                #
 # ############################################################
 
-from camlib import arc, three_point_circle, grace
+from camlib import arc, three_point_circle, grace, object_circle_steps, circle_quad_segs
 
 import numpy as np
 import re
@@ -43,6 +43,11 @@ class HPGL2:
             app_defaults.get(key, factory_defaults.get(key, fallback))
         )
 
+    def circle_steps(self, radius):
+        """How to approximate a circle with lines: the segments of a full circle of this radius (in the file units),
+        as the preferences "Circles" of Geometry set them."""
+        return object_circle_steps(self.app.options, 'geometry', radius, self.units)
+
     def __init__(self, app):
         """
         The constructor takes FlatCAMApp.App as parameter.
@@ -50,8 +55,6 @@ class HPGL2:
         """
         self.app = app
 
-        # How to approximate a circle with lines.
-        self.steps_per_circle = int(self._get_app_option("geometry_circle_steps"))
         self.decimals = self.app.decimals
 
         # store the file units here
@@ -339,7 +342,8 @@ class HPGL2:
 
                         if current_x is not None and current_y is not None:
                             radius = float(match.group(1))
-                            geo = Point((current_x, current_y)).buffer(radius, int(self.steps_per_circle))
+                            geo = Point((current_x, current_y)).buffer(
+                                radius, circle_quad_segs(self.circle_steps(radius)))
                             geo_line = geo.exterior
                             self.tools[current_tool]['solid_geometry'].append(geo_line)
                             geo_buffer.append(geo_line)
@@ -371,7 +375,8 @@ class HPGL2:
                             startangle = np.arctan2(p1[1] - center[1], p1[0] - center[0])
                             stopangle = startangle + angle
 
-                            geo = LineString(arc(center, radius, startangle, stopangle, arcdir, self.steps_per_circle))
+                            geo = LineString(arc(center, radius, startangle, stopangle, arcdir,
+                                                 self.circle_steps(radius)))
                             self.tools[current_tool]['solid_geometry'].append(geo)
                             geo_buffer.append(geo)
 
@@ -412,7 +417,7 @@ class HPGL2:
                             stopangle = np.arctan2(p3[1] - center[1], p3[0] - center[0])
 
                             geo = LineString(arc(center, radius, startangle, stopangle,
-                                                 direction, self.steps_per_circle))
+                                                 direction, self.circle_steps(radius)))
                             self.tools[current_tool]['solid_geometry'].append(geo)
                             geo_buffer.append(geo)
 

@@ -76,7 +76,8 @@ class ToolPDF(AppTool):
                                     )
                                 ),
                                 abort=self.app.abort_flag,
-                                hole_detection_mode='both')  # Default: detect on both stroke and fill
+                                hole_detection_mode='both',  # Default: detect on both stroke and fill
+                                options=self.app.options)
 
         # Initialize PDF stream parser based on defaults.py configuration
         # pdf_python_parser=True (default) -> pure-python parser

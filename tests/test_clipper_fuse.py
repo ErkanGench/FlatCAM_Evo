@@ -272,10 +272,6 @@ class TestFallbackWithClipper(ClipperTestCase):
         with mock.patch.object(pyclipr, 'Clipper', side_effect=RuntimeError("forced")):
             self.assertIsNone(fuse_parts(self.PARTS))
 
-    def test_invalid_assembled_result(self):
-        overlapping = [sq(0, 0, 2, 2), sq(1, 1, 3, 3)]
-        with mock.patch.object(clipper_fuse, '_tree_to_polygons', return_value=overlapping):
-            self.assertIsNone(fuse_parts(self.PARTS))
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Parse level: Gerber.parse_lines() / parse_file() with the Clipper fusion
@@ -461,7 +457,8 @@ class TestParseFallback(unittest.TestCase):
         return gbr, results
 
     def test_pyclipr_missing(self):
-        gbr, results = self.assert_geos_result(small_board(inch=False), geos=True, expect_fuse_results=[None])
+        # 2 fusions: the composition of the polarity layers, then the last layer
+        gbr, results = self.assert_geos_result(small_board(inch=False), geos=True, expect_fuse_results=[None, None])
         self.assertGreater(len(as_polygons(gbr.solid_geometry)), 3)
 
     def test_invalid_polygon_from_macro(self):

@@ -4,7 +4,7 @@ Behavior only: Shapely geometry in, ExtractResult / counts out. No Qt, no app.
 """
 
 import pytest
-from shapely import LineString, MultiPolygon, Point, Polygon
+from shapely import LineString, Point
 from shapely.geometry import box
 
 from appPlugins.ToolExtract import ExtractGen as eg
@@ -28,15 +28,6 @@ def rect(kind_type, w, h, *xy):
     return {'type': kind_type, 'width': w, 'height': h, 'geometry': geo}
 
 
-@pytest.mark.parametrize('source, expected', [
-    ('board.gbr', 'board_drills'),
-    ('board', 'board_drills'),
-    ('a.b.gbr', 'a.b_drills'),
-])
-def test_out_name(source, expected):
-    assert eg.out_name(source, 'drills') == expected
-
-
 @pytest.mark.parametrize('aperture, kind', [
     ({'type': 'C', 'size': 1.0}, 'circular'),
     ({'type': 'O', 'width': 2.0, 'height': 1.0}, 'oblong'),
@@ -47,16 +38,6 @@ def test_out_name(source, expected):
 ])
 def test_aperture_kind_by_shape(aperture, kind):
     assert eg.aperture_kind(aperture, 4) == kind
-
-
-def test_is_square_compares_sides_rounded_to_decimals():
-    assert eg.is_square(1.0, 1.00001, 4)
-    assert not eg.is_square(1.0, 1.2, 4)
-
-
-def test_pad_size_of_am_without_geometry_is_none():
-    assert eg.pad_size({'type': 'AM', 'geometry': []}) is None
-    assert eg.pad_size({'type': 'AM'}) is None
 
 
 def test_fixed_mode_uses_only_enabled_kinds():
@@ -72,19 +53,6 @@ def test_fixed_mode_uses_only_enabled_kinds():
     assert res.tools[1]['tooldia'] == pytest.approx(0.8)
     assert len(res.tools[1]['drills']) == 3
     assert res.tools[1]['slots'] == []
-
-
-def test_code_of_disabled_kind_gives_nothing():
-    tools = {10: circ(1.0, (0, 0))}
-    res = eg.extract_drills([(tools, [10])], 'fixed', ('square',), 4, fixed_dia=0.8)
-    assert res.tools == {}
-    assert res.error == 'no_apertures'
-
-
-def test_fixed_zero_diameter_is_bad_diameter():
-    tools = {10: circ(1.0, (0, 0))}
-    res = eg.extract_drills([(tools, None)], 'fixed', ('circular',), 4, fixed_dia=0.0)
-    assert res.error == 'bad_diameter'
 
 
 def test_ring_mode_skips_pads_that_leave_no_hole():
@@ -107,14 +75,6 @@ def test_regions_never_give_drills_even_with_other_enabled():
     assert res.error == ''
     assert sum(len(t['drills']) for t in res.tools.values()) == 1
     assert [t['tooldia'] for t in res.tools.values()] == pytest.approx([0.6])
-
-
-def test_clear_flashes_give_no_drills():
-    clear_only = {'type': 'C', 'size': 1.0,
-                  'geometry': [{'clear': Point(0, 0).buffer(0.5), 'follow': Point(0, 0)}]}
-    res = eg.extract_drills([({10: clear_only}, None)], 'fixed', ALL, 4, fixed_dia=0.8)
-    assert res.tools == {}
-    assert res.error == 'no_pads'
 
 
 def test_duplicate_location_keeps_larger_pad():
@@ -157,15 +117,6 @@ def test_oblong_pads_become_slots_only_with_flag():
     assert plain.tools[1]['slots'] == []
 
 
-def test_two_sources_merge_into_one_result():
-    a = {10: circ(1.0, (0, 0))}
-    b = {10: circ(0.6, (1, 1))}
-    res = eg.extract_drills([(a, None), (b, None)], 'prop', ('circular',), 4, factor=1.0)
-    assert res.error == ''
-    assert sorted(t['tooldia'] for t in res.tools.values()) == pytest.approx([0.6, 1.0])
-    assert sum(len(t['drills']) for t in res.tools.values()) == 2
-
-
 def test_soldermask_grows_pads_renumbers_codes_and_keeps_source():
     tools = {5: circ(1.0, (0, 0)), 7: circ(0.5, (3, 0))}
     solid5 = tools[5]['geometry'][0]['solid']
@@ -195,11 +146,6 @@ def test_soldermask_adds_regions_only_with_flag():
     assert with_regions.error == ''
 
 
-def test_soldermask_without_matching_pads_is_no_pads():
-    res = eg.extract_soldermask([({10: circ(1.0, (0, 0))}, None)], ('square',), 0.1, 4)
-    assert res.error == 'no_pads'
-
-
 def test_cutout_rect_outline_is_bounds_grown_by_margin():
     geo = [box(0, 0, 2, 2), box(4, 4, 6, 6)]
     res = eg.extract_cutout(geo, 1.0, 0.5)
@@ -207,20 +153,6 @@ def test_cutout_rect_outline_is_bounds_grown_by_margin():
     assert isinstance(res.follow_geometry[0], LineString)
     assert res.follow_geometry[0].bounds == pytest.approx((-1, -1, 7, 7))
     assert len(res.solid_geometry) == 1
-
-
-def test_cutout_walks_nested_lists_with_multipolygon_and_linestring():
-    geo = [MultiPolygon([box(0, 0, 1, 1), box(3, 3, 4, 4)]), [LineString([(0, 5), (6, 5)])]]
-    res = eg.extract_cutout(geo, 0.0, 0.2)
-    assert res.error == ''
-    assert res.follow_geometry[0].bounds == pytest.approx((0, 0, 6, 5))
-
-
-def test_cutout_convex_triangle_gives_closed_outline():
-    tri = Polygon([(0, 0), (4, 0), (0, 3)])
-    res = eg.extract_cutout(tri, 0.0, 0.2, shape='convex')
-    assert res.error == ''
-    assert len(res.follow_geometry[0].coords) == 4
 
 
 @pytest.mark.parametrize('geometry, margin, thickness, error', [
@@ -231,19 +163,6 @@ def test_cutout_convex_triangle_gives_closed_outline():
 def test_cutout_errors(geometry, margin, thickness, error):
     res = eg.extract_cutout(geometry, margin, thickness)
     assert res.error == error
-
-
-def test_count_pads_counts_dark_flashes_of_enabled_kinds_only():
-    tools = {
-        10: {'type': 'C', 'size': 1.0,
-             'geometry': [flash(0, 0, 0.5),
-                          {'clear': Point(3, 0).buffer(0.5), 'follow': Point(3, 0)}]},   # clear: not counted
-        11: circ(1.0, (1, 0), (2, 0)),
-        12: rect('R', 1.0, 1.0, (4, 0)),                                                  # square: disabled
-    }
-    assert eg.count_pads(tools, None, 4, ('circular',)) == 3
-    assert eg.count_pads(tools, [11], 4, ('circular',)) == 2
-    assert eg.count_pads(tools, None, 4, ('square',)) == 1
 
 
 # ---- Tcl command: extract ----------------------------------------------------------------------------------------

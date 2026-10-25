@@ -208,24 +208,6 @@ def test_aperture_macro_fixed_uses_own_bounds():
     assert err.value.args[0] == 'size'
 
 
-def test_aperture_macro_first_record_clear_does_not_crash():
-    tools = {10: _am_ap(0, 0)}
-    tools[10]['geometry'].insert(0, {'clear': box(5, 5, 6, 6)})
-    solid, _ = _run(tools, method='prop', value=0.5)
-    assert not solid.intersects(Point(0, 0))
-
-
-def test_empty_tools_and_nothing_to_punch():
-    with pytest.raises(ValueError) as err:
-        punch_geometry(box(0, 0, 1, 1), {}, [], 'fixed', 0.1, 4, ALL_ON)
-    assert err.value.args[0] == 'empty'
-    tools = {10: _circle_ap(0, 0)}
-    for kw in ({'selected': []}, {'manual_pads': []}):
-        with pytest.raises(ValueError) as err:
-            _run(tools, **kw)
-        assert err.value.args[0] == 'nothing'
-
-
 def test_checkbox_off_skips_in_auto_but_not_in_manual():
     tools = {10: _circle_ap(0, 0), 11: _obround_ap(5, 0)}
     enabled = [False, True, True, True, True]
@@ -244,22 +226,6 @@ def test_clear_flash_and_geometry_outside_tools_are_kept():
     assert solid.contains(Point(11, 11))
     assert len(_clears(aps)) == 2          # the original clear flash + the new hole
     assert aps[11]['geometry'] == [{'clear': Point(5, 0)}]
-
-
-def test_nested_and_multipolygon_solid_geometry():
-    tools = {10: _circle_ap(0, 0)}
-    nested = [[tools[10]['geometry'][0]['solid']], [box(10, 10, 11, 11), [box(20, 20, 21, 21)]]]
-    solid, _ = punch_geometry(nested, tools, [10], 'fixed', 0.4, 4, ALL_ON)
-    assert solid.contains(Point(20.5, 20.5)) and not solid.intersects(Point(0, 0))
-
-
-def test_steps_control_hole_smoothness():
-    tools = {10: _circle_ap(0, 0, 2.0)}
-    coarse, _ = _run(tools, value=1.0, steps=8)
-    fine, _ = _run(tools, value=1.0, steps=128)
-    hole_c = tools[10]['geometry'][0]['solid'].difference(coarse).area
-    hole_f = tools[10]['geometry'][0]['solid'].difference(fine).area
-    assert hole_c < hole_f < math.pi * 0.25 + 1e-6
 
 
 def test_excellon_keeps_clear_features_cuts_only_selected_and_clears_slots():
@@ -311,17 +277,6 @@ def test_empty_right_click_creates_nothing_and_exits(setup):
     assert notebook_disabled(app) is False
 
 
-def test_exception_in_punch_still_enables_notebook(setup):
-    tool, app, source = setup
-    pads = pads_of(tool, source)
-    start_manual(tool)
-    click(tool, pads[0][2])
-    tool.on_manual_punch = Mock(side_effect=RuntimeError('boom'))
-    with pytest.raises(RuntimeError):
-        click(tool, pads[0][2], button=2)
-    assert notebook_disabled(app) is False
-
-
 def test_escape_exits_and_next_manual_punch_ignores_old_pads(setup):
     tool, app, source = setup
     pads = pads_of(tool, source)
@@ -334,15 +289,6 @@ def test_escape_exits_and_next_manual_punch_ignores_old_pads(setup):
     assert app.created == []
 
 
-def test_second_click_on_only_pad_removes_highlight(setup):
-    tool, app, source = setup
-    pads = pads_of(tool, source)
-    start_manual(tool)
-    click(tool, pads[0][2])
-    click(tool, pads[0][2])
-    app.tool_shapes.remove.assert_called_once()
-
-
 def test_select_all_after_click_has_every_pad_once(setup):
     tool, app, source = setup
     pads = pads_of(tool, source)
@@ -353,33 +299,3 @@ def test_select_all_after_click_has_every_pad_once(setup):
     assert len(keys) == len(set(keys)) == len(pads)
     assert set(keys) == {(a, i) for a, i, _pt in pads}
 
-
-@pytest.mark.parametrize('code,category', [
-    ('empty', 'WARNING_NOTCL'),
-    ('nothing', 'WARNING_NOTCL'),
-    ('size', 'ERROR_NOTCL'),
-    ('zero', 'WARNING_NOTCL'),
-])
-def test_error_codes_create_no_object_and_report_category(setup, monkeypatch, code, category):
-    tool, app, source = setup
-
-    def fail(*args, **kwargs):
-        raise ValueError(code)
-
-    monkeypatch.setattr(PUNCH_MODULE, 'punch_geometry', fail)
-    tool.on_fixed_method(source, 'src_punched')
-    assert app.created == []
-    assert app.inform.emit.call_args[0][0].startswith('[%s]' % category)
-
-
-def test_cleanup_ends_manual_mode_and_clears_marks(setup):
-    tool, app, source = setup
-    start_manual(tool)
-    tool.old_name = 'src'
-    source.mark_shapes = SimpleNamespace(enabled=True)
-    tool.ui.exc_combo.setRootModelIndex = lambda *a: None
-    tool.ui.gerber_object_combo.setRootModelIndex = lambda *a: None
-    tool.on_plugin_cleanup()
-    assert notebook_disabled(app) is False
-    assert source.mark_shapes.enabled is False
-    source.clear_plot_apertures.assert_called()

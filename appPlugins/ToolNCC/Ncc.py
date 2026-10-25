@@ -35,7 +35,7 @@ import builtins
 from appPlugins.ToolNCC.NccGen import NccGen
 from appDatabase import load_tools_database, tools_database_error_message
 from defaults import AppDefaults
-from camlib import Geometry, grace, flatten_shapely_geometry
+from camlib import Geometry, grace, flatten_shapely_geometry, object_circle_steps
 from appCommon.SafeEval import safe_eval
 from appCommon.ToolDatabase import matching_tools
 from appPlugins.ToolNCC import NccModel
@@ -75,12 +75,8 @@ class ToolNcc(Geometry, AppTool):
 
         AppTool.__init__(self, app)
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
-        Geometry.__init__(
-            self,
-            geo_steps_per_circle=self.app.options.get(
-                "gerber_circle_steps",
-                app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))),
-            app=app)
+        # no fixed steps: the circles follow the preferences "Circles" of their kind (NccGen._circle_steps_for())
+        Geometry.__init__(self, app=app)
 
         # #############################################################################
         # ######################### Tool GUI ##########################################
@@ -157,9 +153,9 @@ class ToolNcc(Geometry, AppTool):
         self.select_method = None
         self.tool_type_item_options = []
 
-        self.circle_steps = int(self.app.options.get(
-            "gerber_circle_steps",
-            app_defaults.get("gerber_circle_steps", AppDefaults.factory_defaults.get("gerber_circle_steps"))))
+        # the steps of the job start from the Gerber circles of a 1 mm radius; NccGen sets them for the cleared object
+        self.circle_steps = object_circle_steps(self.app.options, 'gerber', 1.0 if self.app.app_units.upper() == 'MM'
+                                                else 1.0 / 25.4, self.app.app_units)
 
         self.tooldia = None
 
@@ -535,14 +531,19 @@ class ToolNcc(Geometry, AppTool):
             return
         obj_name = self.ui.obj_combo.currentText()
         try:
-            source = self.app.collection.get_by_name(obj_name)
+            gen.ncc_obj = self.app.collection.get_by_name(obj_name)
         except Exception:
-            source = None
-        if source is None:
+            gen.ncc_obj = None
+        if gen.ncc_obj is None:
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
             return
+        gen.obj_name = obj_name
 
         clipping_type = self.ui.select_method_combo.get_value()
+        gen.select_method = clipping_type
+        sources = gen.source_objects()
+        if sources is None:
+            return
         reference = None
         zones = None
         if clipping_type == 1:
@@ -581,7 +582,8 @@ class ToolNcc(Geometry, AppTool):
             offsets = {(False, 0.0)}
 
         params = dict(
-            source=source, clipping_type=clipping_type, reference=reference, zones=zones, margin=margin,
+            sources=[(source, gen._circle_steps_for(getattr(source, 'kind', None))) for source in sources],
+            clipping_type=clipping_type, reference=reference, zones=zones, margin=margin,
             iso=list(gen.iso_dia_list), offsets=sorted(offsets), tools=tools, exclusion=self.exclusion_areas(),
             milling_type=self.ui.milling_type_radio.get_value() if gen.iso_dia_list else None,
             token=self._preview_token)
@@ -589,25 +591,31 @@ class ToolNcc(Geometry, AppTool):
         self.app.worker_task.emit({'fcn': self.preview_job, 'params': [params]})
 
     def preview_job(self, params):
-        """Worker: the area to clear for each offset, merged. No toolpaths, no Qt widgets."""
+        """Worker: the area to clear for each source and offset, merged. No toolpaths, no Qt widgets."""
         area, error = None, ''
         try:
             with self.app.proc_container.new('%s...' % _("Preview")):
                 gen = copy(self.gen)
                 exclusion = unary_union(params['exclusion']) if params['exclusion'] else None
                 areas = []
-                for has_offset, offset in params['offsets']:
-                    # compute_clear_area changes its tools: every pass gets its own copy of the table
-                    result, _iso, _broken = gen.compute_clear_area(
-                        params['source'], clipping_type=params['clipping_type'], clipping_object=params['reference'],
-                        clipping_areas=params['zones'], margin=params['margin'], iso_tooldia=params['iso'],
-                        has_offset=has_offset, offset=offset, milling_type=params['milling_type'],
-                        tools_storage=NccModel.copy_tools(params['tools']), exclusion=exclusion)
-                    if isinstance(result, str):
-                        # the reason was reported by compute_clear_area
+                failed = False
+                for source, circle_steps in params['sources']:
+                    gen.circle_steps = circle_steps
+                    for has_offset, offset in params['offsets']:
+                        # compute_clear_area changes its tools: every pass gets its own copy of the table
+                        result, _iso, _broken = gen.compute_clear_area(
+                            source, clipping_type=params['clipping_type'], clipping_object=params['reference'],
+                            clipping_areas=params['zones'], margin=params['margin'], iso_tooldia=params['iso'],
+                            has_offset=has_offset, offset=offset, milling_type=params['milling_type'],
+                            tools_storage=NccModel.copy_tools(params['tools']), exclusion=exclusion)
+                        if isinstance(result, str):
+                            # the reason was reported by compute_clear_area
+                            failed = True
+                            break
+                        areas.append(unary_union(flatten_shapely_geometry(result)))
+                    if failed:
                         break
-                    areas.append(unary_union(flatten_shapely_geometry(result)))
-                else:
+                if not failed:
                     area = unary_union(areas)
         except grace:
             error = _("Aborted. The preview was not computed.")

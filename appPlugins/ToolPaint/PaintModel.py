@@ -323,7 +323,8 @@ def check_tools_fit(geometry, diameters, offsets=None):
     Returns (level, narrow, unused): level 'ok', 'warning' (the run goes on) or 'error' (no tool fits inside any
     polygon); narrow is the number of polygons that no tool fits inside; unused lists the tools that fit nowhere.
     """
-    parts = polygon_parts(geometry)
+    # Generation paints the merged geometry, so the check measures that same geometry.
+    parts = polygon_parts(merge_overlapping(geometry))
     if not parts or not diameters:
         return 'ok', 0, []
     offsets = offsets or {}
@@ -401,8 +402,23 @@ def _bounds_of(geometries):
 
 def reference_area(geometry):
     """Exact union of the reference polygons, grown by a hair so edge-touching shapes stay inside."""
-    polygons = [part for part in selection_geometry(geometry, expand_multi=True) or []
-                if isinstance(part, Polygon) and not part.is_empty]
+    polygons, rings = [], []
+    for part in selection_geometry(geometry, expand_multi=True) or []:
+        if isinstance(part, Polygon) and not part.is_empty:
+            polygons.append(part)
+        elif isinstance(part, (LinearRing, LineString)) and not part.is_empty:
+            rings.append(part)
+    if rings:
+        # A closed outline encloses an area; an open path does not, so it is never turned into a hull.
+        try:
+            merged = linemerge(rings)
+            for line in (merged.geoms if isinstance(merged, MultiLineString) else [merged]):
+                if line.is_closed and len(line.coords) >= 4:
+                    polygon = Polygon(line)
+                    if not polygon.is_empty and polygon.area > 0:
+                        polygons.append(polygon if polygon.is_valid else make_valid(polygon))
+        except Exception as err:
+            log.error('ToolPaint reference_area --> %s' % str(err))
     return unary_union(polygons).buffer(distance=0.0000001, join_style=base.JOIN_STYLE.mitre)
 
 
