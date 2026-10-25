@@ -519,6 +519,9 @@ class PreferencesUIManager(QtCore.QObject):
             "tools_ncc_newdia":          self.ui.plugin_eng_pref_form.tools_ncc_group.newdia_entry,
             "tools_ncc_plotting":       self.ui.plugin_eng_pref_form.tools_ncc_group.plotting_radio,
             "tools_ncc_check_valid":    self.ui.plugin_eng_pref_form.tools_ncc_group.valid_cb,
+            "tools_ncc_operation":      self.ui.plugin_eng_pref_form.tools_ncc_group.op_radio,
+            "tools_ncc_simplification": self.ui.plugin_eng_pref_form.tools_ncc_group.simplification_entry,
+            "tools_ncc_multi_objects":  self.ui.plugin_eng_pref_form.tools_ncc_group.multi_objects_cb,
 
             # CutOut Tool
             "tools_cutout_tooldia":          self.ui.plugin_pref_form.tools_cutout_group.cutout_tooldia_entry,

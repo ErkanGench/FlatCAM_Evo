@@ -152,6 +152,18 @@ class ToolsNCCPrefGroupUI(OptionsGroupUI):
         par_grid.addWidget(self.milling_type_label, 14, 0)
         par_grid.addWidget(self.milling_type_radio, 14, 1)
 
+        # Operation
+        self.op_label = FCLabel('%s:' % _('Operation'))
+        self.op_label.setToolTip(
+            _("Operation of the new tools:\n"
+              "- Clear: clear the copper-free area\n"
+              "- Isolation: isolate the copper features")
+        )
+        self.op_radio = RadioSet([{'label': _('Clear'), 'value': 'clear'},
+                                  {'label': _('Isolation'), 'value': 'iso'}], compact=True)
+        par_grid.addWidget(self.op_label, 16, 0)
+        par_grid.addWidget(self.op_radio, 16, 1)
+
         # #############################################################################################################
         # Tool Frame
         # #############################################################################################################
@@ -360,6 +372,25 @@ class ToolsNCCPrefGroupUI(OptionsGroupUI):
         self.valid_cb.setObjectName("n_check")
 
         gen_grid.addWidget(self.valid_cb, 10, 0, 1, 2)
+
+        simplification_label = FCLabel('%s:' % _("Simplification"))
+        simplification_label.setToolTip(
+            _("Maximum deviation allowed when simplifying the generated toolpaths,\n"
+              "in millimeters. Set to zero to disable simplification.")
+        )
+        self.simplification_entry = FCDoubleSpinner()
+        self.simplification_entry.set_precision(max(self.decimals, 6))
+        self.simplification_entry.set_range(0.0, 10000.0)
+        self.simplification_entry.setSingleStep(0.001)
+        self.simplification_entry.setToolTip(simplification_label.toolTip())
+        gen_grid.addWidget(simplification_label, 12, 0)
+        gen_grid.addWidget(self.simplification_entry, 12, 1)
+
+        self.multi_objects_cb = FCCheckBox(_("Selected objects"))
+        self.multi_objects_cb.setToolTip(
+            _("Process all the objects selected in the Project tab, each with the same tools.")
+        )
+        gen_grid.addWidget(self.multi_objects_cb, 14, 0, 1, 2)
 
         GLay.set_common_column_size([par_grid, tool_grid, gen_grid], 0)
 

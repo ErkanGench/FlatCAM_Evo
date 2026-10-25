@@ -19,13 +19,12 @@ from appGUI.GUIElements import (
 )
 
 import logging
-from copy import deepcopy
+import math
+from copy import copy, deepcopy
 import numpy as np
-import sys
 
 from shapely import (
     Polygon,
-    MultiPolygon,
 )
 from shapely.ops import unary_union
 
@@ -36,8 +35,10 @@ import builtins
 from appPlugins.ToolNCC.NccGen import NccGen
 from appDatabase import load_tools_database, tools_database_error_message
 from defaults import AppDefaults
-from camlib import Geometry, grace, flatten_shapely_geometry, polygon_gap_pairs
+from camlib import Geometry, grace, flatten_shapely_geometry
 from appCommon.SafeEval import safe_eval
+from appCommon.ToolDatabase import matching_tools
+from appPlugins.ToolNCC import NccModel
 
 fcTranslate.apply_language('strings')
 if '_' not in builtins.__dict__:
@@ -46,9 +47,27 @@ if '_' not in builtins.__dict__:
 log = logging.getLogger('base')
 
 
+def valid_tool_dia(value):
+    """The tool diameter as a float when it is a finite number above zero, else None."""
+    try:
+        dia = float(value)
+    except (TypeError, ValueError):
+        return None
+    return dia if math.isfinite(dia) and dia > 0 else None
+
+
+def merge_db_tool_data(base, db_data):
+    """Copy the NCC and milling parameters (and the non-tool ones) of a Tools Database record over base."""
+    for key, value in db_data.items():
+        if not key.startswith('tools_') or key.startswith(('tools_ncc_', 'tools_mill_')):
+            base[key] = deepcopy(value)
+
+
 class ToolNcc(Geometry, AppTool):
 
     optimal_found_sig = QtCore.pyqtSignal(float)
+    # (job token, result): the preview job hands the area to clear (or an error text) to the GUI thread
+    preview_done_sig = QtCore.pyqtSignal(int, object)
 
     def __init__(self, app):
         self.app = app
@@ -118,6 +137,19 @@ class ToolNcc(Geometry, AppTool):
 
         # disconnect flags
         self.area_sel_disconnect_flag = False
+
+        # True while the zones drawn on the canvas are exclusion zones and not the area to clear
+        self.exclusion_mode = False
+        # the exclusion zones, drawn in their own color for as long as the plugin is open
+        self.exclusion_list: list[Polygon] = []
+        # the zones of the last Area Selection run: the Preview of that mode uses them
+        self.last_zones: list[Polygon] = []
+        # the shape collections of the preview and of the exclusion zones, made on the first use
+        self._preview_shapes = None
+        self._exclusion_shapes = None
+        self._preview_drawn = False
+        # a preview result is drawn only if no clear_preview() happened since its job started
+        self._preview_token = 0
 
         # store here solid_geometry when there are tool with isolation job
         self.solid_geometry = []
@@ -246,7 +278,7 @@ class ToolNcc(Geometry, AppTool):
             _("Add"), self.on_tool_add_by_key, icon=QtGui.QIcon(self.app.resource_location + "/plus16.png")
         )
         self.ui.tools_table.addContextMenu(
-            _("Add from DB"), self.on_tool_add_by_key, icon=QtGui.QIcon(self.app.resource_location + "/plus16.png")
+            _("Add from DB"), self.on_ncc_tool_add_from_db_clicked, icon=QtGui.QIcon(self.app.resource_location + "/plus16.png")
         )
         self.ui.tools_table.addContextMenu(
             _("Delete"), lambda:
@@ -272,10 +304,10 @@ class ToolNcc(Geometry, AppTool):
 
         # Custom Signal
         try:
-            self.optimal_found_sig.disconnect(lambda val: self.ui.new_tooldia_entry.set_value(float(val)))
+            self.optimal_found_sig.disconnect(self.on_optimal_found)
         except (TypeError, RuntimeError, AttributeError):
             pass
-        self.optimal_found_sig.connect(lambda val: self.ui.new_tooldia_entry.set_value(float(val)))
+        self.optimal_found_sig.connect(self.on_optimal_found)
 
         try:
             self.ui.deltool_btn.clicked.disconnect(self.on_tool_delete)
@@ -356,6 +388,19 @@ class ToolNcc(Geometry, AppTool):
             pass
         self.ui.reset_button.clicked.connect(self.set_tool_ui)
 
+        for signal, slot in (
+                (self.ui.preview_button.clicked, self.on_preview),
+                (self.ui.excl_add_button.clicked, self.on_add_exclusion),
+                (self.ui.excl_delete_button.clicked, self.on_delete_exclusions),
+                (self.ui.obj_combo.currentIndexChanged, self.on_source_changed),
+                (self.ui.multi_cb.stateChanged, self.clear_preview),
+                (self.preview_done_sig, self.on_preview_done)):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError, AttributeError):
+                pass
+            signal.connect(slot)
+
         try:
             self.app.cleanup.disconnect(self.set_tool_ui)
         except (TypeError, RuntimeError, AttributeError):
@@ -363,7 +408,270 @@ class ToolNcc(Geometry, AppTool):
         # Cleanup on Graceful exit (CTRL+ALT+X combo key)
         self.app.cleanup.connect(self.set_tool_ui)
 
+    def on_optimal_found(self, val):
+        self.ui.new_tooldia_entry.set_value(float(val))
+
+    def end_area_selection(self):
+        """
+        Leave the area selection mode: give the canvas back to the app, enable the panel and forget the drawn zones.
+        """
+        if self.area_sel_disconnect_flag is True:
+            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
+            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
+            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
+
+            try:
+                # restore the Grid snapping if it was active before
+                if self.grid_status_memory is True:
+                    self.app.ui.grid_snap_btn.trigger()
+                self.app.tool_shapes.clear(update=True)
+            except Exception as e:
+                self.app.log.error("ToolNCC.end_area_selection() --> %s" % str(e))
+
+            self.app.plotcanvas.graph_event_connect('mouse_press', self.app.on_mouse_click_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_move', self.app.on_mouse_move_over_plot)
+            self.app.plotcanvas.graph_event_connect('mouse_release', self.app.on_mouse_click_release_over_plot)
+
+            self.app.ui.notebook.setDisabled(False)
+            self.area_sel_disconnect_flag = False
+
+        self.points = []
+        self.poly_drawn = False
+        self.first_click = False
+        self.cursor_pos = None
+        self.areas_to_clear_list.clear()
+        self.exclusion_mode = False
+
+        self.delete_moving_selection_shape()
+        self.delete_tool_selection_shape()
+
+    def start_area_selection(self, exclusion=False):
+        """
+        Let the user draw zones on the canvas with the area selection mouse handlers: the area to clear, or the
+        exclusion zones. The panel is disabled until the selection ends (right click or Escape).
+        """
+        self.app.inform.emit('[WARNING_NOTCL] %s' % _("Click the start point of the area."))
+
+        # a new selection starts empty; the mouse handlers of the controller own this state
+        self.areas_to_clear_list.clear()
+        self.exclusion_mode = exclusion
+        self.first_click = False
+        self.cursor_pos = None
+        self.mouse_is_dragging = False
+        self.points = []
+        self.poly_drawn = False
+
+        self.app.plotcanvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
+        self.app.plotcanvas.graph_event_disconnect('mouse_release', self.app.on_mouse_click_release_over_plot)
+
+        self.app.plotcanvas.graph_event_connect('mouse_release', self.on_mouse_release)
+        self.app.plotcanvas.graph_event_connect('mouse_move', self.on_mouse_move)
+        self.app.plotcanvas.graph_event_connect('key_press', self.on_key_press)
+
+        # disconnect flags
+        self.area_sel_disconnect_flag = True
+        # disable the "notebook UI" until finished
+        self.app.ui.notebook.setDisabled(True)
+
+    def shape_type(self):
+        """The shape of the zone being drawn: the exclusion shape in exclusion mode, else the area selection one."""
+        radio = self.ui.excl_shape_radio if self.exclusion_mode else self.ui.area_shape_radio
+        return radio.get_value()
+
+    # ------------------------------------------------------------------------------------------------------------
+    # exclusion zones
+    # ------------------------------------------------------------------------------------------------------------
+    def on_add_exclusion(self):
+        if self.area_sel_disconnect_flag is True:
+            return
+        self.clear_preview()
+        self.start_area_selection(exclusion=True)
+
+    def on_delete_exclusions(self):
+        self.exclusion_list.clear()
+        self.update_exclusions()
+
+    def exclusion_areas(self):
+        """The exclusion zones to remove from the area to clear, or None when they are off or there are none."""
+        try:
+            use = bool(self.ui.excl_cb.get_value())
+        except RuntimeError:
+            return None
+        return list(self.exclusion_list) if use and self.exclusion_list else None
+
+    def update_exclusions(self):
+        """Show the count of the zones and draw them in their own color."""
+        self.ui.excl_count_value.setText(str(len(self.exclusion_list)))
+        self.clear_preview()
+        store = self._shape_store('_exclusion_shapes')
+        if store is None:
+            return
+        store.clear(update=False)
+        for poly in self.exclusion_list:
+            store.add(poly, color='#CC0000FF', face_color='#CC000040', update=False, layer=0, tolerance=None)
+        store.redraw()
+
+    def _shape_store(self, attribute):
+        """The shape collection kept in the attribute, created on the first use (None without a canvas)."""
+        store = getattr(self, attribute)
+        if store is None:
+            try:
+                store = self.app.plotcanvas.new_shape_collection(layers=1)
+            except Exception as e:
+                self.app.log.error("ToolNCC._shape_store() --> %s" % str(e))
+                return None
+            setattr(self, attribute, store)
+        return store
+
+    # ------------------------------------------------------------------------------------------------------------
+    # the preview of the area to clear
+    # ------------------------------------------------------------------------------------------------------------
+    def on_preview(self):
+        """Compute the area that would be cleared (in the worker) and draw it on the canvas."""
+        gen = self.gen
+        self.clear_preview()
+        if not gen.read_selected_diameters():
+            return
+        obj_name = self.ui.obj_combo.currentText()
+        try:
+            source = self.app.collection.get_by_name(obj_name)
+        except Exception:
+            source = None
+        if source is None:
+            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
+            return
+
+        clipping_type = self.ui.select_method_combo.get_value()
+        reference = None
+        zones = None
+        if clipping_type == 1:
+            zones = list(self.last_zones)
+            if not zones:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _(
+                    "No area is drawn yet. Click Generate to draw the zones of the Area Selection, "
+                    "then use Preview."))
+                return
+        elif clipping_type == 2:
+            ref_name = self.ui.reference_combo.currentText()
+            try:
+                reference = self.app.collection.get_by_name(ref_name)
+            except Exception:
+                reference = None
+            if reference is None:
+                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(ref_name)))
+                return
+
+        rest = self.ui.rest_cb.get_value()
+        tools = NccModel.copy_tools(self.ncc_tools)
+        if rest:
+            offsets = {(bool(self.ui.rest_offset_choice_cb.get_value()), float(self.ui.rest_offset_entry.get_value()))}
+            margin = self.ui.rest_margin_entry.get_value()
+        else:
+            # every selected tool may have its own offset: the preview shows the union of the areas
+            offsets = set()
+            for diameter in gen.ncc_dia_list:
+                uid = NccModel.tool_uid(tools, diameter, self.decimals)
+                if uid is not None:
+                    data = tools[uid]['data']
+                    use_offset = bool(data['tools_ncc_offset_choice'])
+                    offsets.add((use_offset, float(data['tools_ncc_offset_value']) if use_offset else 0.0))
+            margin = self.ui.margin_entry.get_value()
+        if not offsets:
+            offsets = {(False, 0.0)}
+
+        params = dict(
+            source=source, clipping_type=clipping_type, reference=reference, zones=zones, margin=margin,
+            iso=list(gen.iso_dia_list), offsets=sorted(offsets), tools=tools, exclusion=self.exclusion_areas(),
+            milling_type=self.ui.milling_type_radio.get_value() if gen.iso_dia_list else None,
+            token=self._preview_token)
+        self.app.inform.emit(_("Computing the area to clear ..."))
+        self.app.worker_task.emit({'fcn': self.preview_job, 'params': [params]})
+
+    def preview_job(self, params):
+        """Worker: the area to clear for each offset, merged. No toolpaths, no Qt widgets."""
+        area, error = None, ''
+        try:
+            with self.app.proc_container.new('%s...' % _("Preview")):
+                gen = copy(self.gen)
+                exclusion = unary_union(params['exclusion']) if params['exclusion'] else None
+                areas = []
+                for has_offset, offset in params['offsets']:
+                    # compute_clear_area changes its tools: every pass gets its own copy of the table
+                    result, _iso, _broken = gen.compute_clear_area(
+                        params['source'], clipping_type=params['clipping_type'], clipping_object=params['reference'],
+                        clipping_areas=params['zones'], margin=params['margin'], iso_tooldia=params['iso'],
+                        has_offset=has_offset, offset=offset, milling_type=params['milling_type'],
+                        tools_storage=NccModel.copy_tools(params['tools']), exclusion=exclusion)
+                    if isinstance(result, str):
+                        # the reason was reported by compute_clear_area
+                        break
+                    areas.append(unary_union(flatten_shapely_geometry(result)))
+                else:
+                    area = unary_union(areas)
+        except grace:
+            error = _("Aborted. The preview was not computed.")
+        except Exception as e:
+            self.app.log.error("ToolNCC.preview_job() --> %s" % str(e))
+            error = _("The preview failed.")
+        self.preview_done_sig.emit(params['token'], (area, error))
+
+    def on_preview_done(self, token, result):
+        """GUI thread: draw the area, unless the preview was cleared while the job was running."""
+        if token != self._preview_token:
+            return
+        area, error = result
+        if error:
+            self.app.inform.emit('[ERROR_NOTCL] %s' % error)
+            return
+        if area is None:
+            return
+        polygons = [p for p in flatten_shapely_geometry(area) if not p.is_empty]
+        if not polygons:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The area to clear is empty."))
+            return
+        store = self._shape_store('_preview_shapes')
+        if store is None:
+            return
+        store.clear(update=False)
+        for poly in polygons:
+            store.add(poly, color='#00AA00FF', face_color='#00AA0055', update=False, layer=0, tolerance=None)
+        store.redraw()
+        self._preview_drawn = True
+        self.app.inform.emit('[success] %s' % _("Preview of the area to clear."))
+
+    def on_source_changed(self, *args):
+        """The object to clear changed: its preview and its Area Selection zones do not apply any more."""
+        self.last_zones = []
+        self.clear_preview()
+
+    def clear_preview(self, *args):
+        """Remove the preview from the canvas; a job still running will not draw its result."""
+        self._preview_token += 1
+        if self._preview_drawn and self._preview_shapes is not None:
+            self._preview_shapes.clear(update=True)
+        self._preview_drawn = False
+
+    def on_plugin_cleanup(self):
+        """The plugin is closing: leave the area selection, take the preview and the exclusion zones off the canvas."""
+        self.end_area_selection()
+        self.clear_preview()
+        self.last_zones = []
+        self.exclusion_list.clear()
+        if self._exclusion_shapes is not None:
+            self._exclusion_shapes.clear(update=True)
+
     def set_tool_ui(self):
+        # a Reset or an app cleanup must not leave the canvas handlers of an area selection connected
+        if self.area_sel_disconnect_flag is True:
+            self.end_area_selection()
+        # a Reset drops the preview and the exclusion zones
+        self.clear_preview()
+        self.last_zones = []
+        self.exclusion_list.clear()
+        if self._exclusion_shapes is not None:
+            self._exclusion_shapes.clear(update=True)
+
         self.units = self.app.app_units.upper()
         app_defaults = getattr(self.app, "defaults", None) or AppDefaults.factory_defaults
         self.old_tool_dia = self.app.options.get(
@@ -481,6 +789,10 @@ class ToolNcc(Geometry, AppTool):
         self.ui.area_shape_radio.set_value(self.app.options.get(
             "tools_ncc_area_shape",
             app_defaults.get("tools_ncc_area_shape", AppDefaults.factory_defaults.get("tools_ncc_area_shape"))))
+        self.ui.excl_shape_radio.set_value(self.ui.area_shape_radio.get_value())
+        # the preference tools_ncc_multi_objects is False until the preferences group has it
+        self.ui.multi_cb.set_value(bool(self.app.options.get(
+            "tools_ncc_multi_objects", app_defaults.get("tools_ncc_multi_objects", False))))
         self.ui.valid_cb.set_value(self.app.options.get(
             "tools_ncc_check_valid",
             app_defaults.get("tools_ncc_check_valid", AppDefaults.factory_defaults.get("tools_ncc_check_valid"))))
@@ -526,16 +838,17 @@ class ToolNcc(Geometry, AppTool):
 
         self.tooluid = 0
 
+        # the shape combo boxes of the table are filled from this
+        self.tool_type_item_options = ["C1", "C2", "C3", "C4", "B", "V", "L"]
+
         self.ncc_tools.clear()
-        for tool_dia in dias:
-            self.on_tool_add(custom_dia=tool_dia)
+        self.add_default_tools(dias)
 
         self.obj_name = ""
         self.ncc_obj = None
         self.bound_obj_name = ""
         self.bound_obj = None
 
-        self.tool_type_item_options = ["C1", "C2", "C3", "C4", "B", "V", "L"]
         self.units = self.app.app_units.upper()
 
         self.first_click = False
@@ -548,12 +861,55 @@ class ToolNcc(Geometry, AppTool):
         if prog_plot:
             self.temp_shapes.clear(update=True)
 
-        self.areas_to_clear_list = []
+        self.areas_to_clear_list.clear()
 
         self.ui.tools_table.drag_drop_sig.connect(self.rebuild_ui)
 
+        # the operation was set before the signals were connected, so the enabled state of the fields needs a refresh
+        self.ui.parameters_ui(val=self.ui.op_radio.get_value())
+
         self.gen = NccGen(self)
         self.connect_signals()
+
+    def add_default_tools(self, dias):
+        """
+        Fill the Tool Table with the default tools: one read of the Tools Database, one rebuild of the table.
+
+        :param dias:    the tools diameters
+        :return:
+        """
+        records = {}
+        try:
+            records = load_tools_database(self.app.tools_database_path(), self.app.options, target=5,
+                                          units=getattr(self.app, 'app_units', None))
+        except (OSError, TypeError, ValueError) as error:
+            self.app.log.error("Could not load tools DB file.")
+            self.app.log.error(str(error))
+            self.app.inform.emit('[ERROR] %s' % tools_database_error_message(error))
+
+        for dia in dias:
+            tool_dia = valid_tool_dia(dia)
+            if tool_dia is None:
+                continue
+            truncated_tooldia = self.app.dec_format(tool_dia, self.decimals)
+            new_tdia = truncated_tooldia
+            new_data = deepcopy(self.default_data)
+
+            matches = matching_tools(records, target=5, diameter=truncated_tooldia) if records else {}
+            if len(matches) == 1:
+                db_tool = next(iter(matches.values()))
+                new_tdia = self.app.dec_format(db_tool['tooldia'], self.decimals)
+                merge_db_tool_data(new_data, db_tool['data'])
+
+            if new_tdia in [self.app.dec_format(v['tooldia'], self.decimals) for v in self.ncc_tools.values()]:
+                continue
+            uid = max([int(k) for k in self.ncc_tools], default=0) + 1
+            self.ncc_tools[uid] = {'tooldia': new_tdia, 'data': new_data, 'solid_geometry': []}
+
+        self.build_ui()
+        if self.ui.tools_table.rowCount():
+            self.ui.tools_table.selectRow(self.ui.tools_table.rowCount() - 1)
+            self.update_ui()
 
     def change_level(self, level):
         """
@@ -602,6 +958,8 @@ class ToolNcc(Geometry, AppTool):
             self.ui.offset_choice_cb.hide()
             self.ui.offset_entry.hide()
 
+            # the control is hidden, so rest machining must not stay on without a visible way to turn it off
+            self.ui.rest_cb.set_value(False)
             self.ui.rest_cb.hide()
 
             # All param section
@@ -626,22 +984,12 @@ class ToolNcc(Geometry, AppTool):
                 for tool in self.ncc_tools:
                     tool_data = self.ncc_tools[tool]['data']
 
-                    tool_data['tools_ncc_operation'] = self.app.options.get(
-                        "tools_ncc_operation",
-                        app_defaults.get("tools_ncc_operation", AppDefaults.factory_defaults.get("tools_ncc_operation")))
-                    tool_data['tools_ncc_milling_type'] = self.app.options.get(
-                        "tools_ncc_milling_type",
-                        app_defaults.get("tools_ncc_milling_type", AppDefaults.factory_defaults.get("tools_ncc_milling_type")))
-
-                    tool_data['tools_ncc_offset_choice'] = self.app.options.get(
-                        "tools_ncc_offset_choice",
-                        app_defaults.get("tools_ncc_offset_choice", AppDefaults.factory_defaults.get("tools_ncc_offset_choice")))
-                    tool_data['tools_ncc_offset_value'] = self.app.options.get(
-                        "tools_ncc_offset_value",
-                        app_defaults.get("tools_ncc_offset_value", AppDefaults.factory_defaults.get("tools_ncc_offset_value")))
-                    tool_data['tools_ncc_rest'] = self.app.options.get(
-                        "tools_ncc_rest",
-                        app_defaults.get("tools_ncc_rest", AppDefaults.factory_defaults.get("tools_ncc_rest")))
+                    # only fill what is missing; the per-tool values the user edited stay
+                    for key in ("tools_ncc_operation", "tools_ncc_milling_type", "tools_ncc_offset_choice",
+                                "tools_ncc_offset_value", "tools_ncc_rest"):
+                        if key not in tool_data:
+                            tool_data[key] = self.app.options.get(
+                                key, app_defaults.get(key, AppDefaults.factory_defaults.get(key)))
 
             self.ui.op_label.show()
             self.ui.op_radio.show()
@@ -910,7 +1258,13 @@ class ToolNcc(Geometry, AppTool):
             new_tools[new_uid] = deepcopy(self.ncc_tools[current_uid])
             new_uid += 1
 
-        self.ncc_tools = new_tools
+        # keep the same dict: the generator and the tool state hold a reference to it
+        self.ncc_tools.clear()
+        self.ncc_tools.update(new_tools)
+
+        # build_ui() sorts by diameter when the order is Forward or Reverse, which would undo the drag & drop
+        if self.ui.order_combo.isEnabled() and self.ui.order_combo.get_value() != 0:
+            self.ui.order_combo.set_value(0)
 
         # the tools table changed therefore we need to rebuild it
         QtCore.QTimer.singleShot(20, self.build_ui)
@@ -921,18 +1275,14 @@ class ToolNcc(Geometry, AppTool):
         # updated units
         self.units = self.app.app_units.upper()
 
-        sorted_tools = []
-        for k, v in self.ncc_tools.items():
-            if self.units == "IN":
-                sorted_tools.append(float('%.*f' % (self.decimals, float(v['tooldia']))))
-            else:
-                sorted_tools.append(float('%.*f' % (self.decimals, float(v['tooldia']))))
+        # the rows are keyed by the tool uid: two tools can have the same diameter
+        sorted_tools = list(self.ncc_tools.items())
 
         order = self.ui.order_combo.get_value()
         if order == 1:  # "Forward"
-            sorted_tools.sort(reverse=False)
+            sorted_tools.sort(key=lambda item: round(float(item[1]['tooldia']), self.decimals), reverse=False)
         elif order == 2:    # "Reverse"
-            sorted_tools.sort(reverse=True)
+            sorted_tools.sort(key=lambda item: round(float(item[1]['tooldia']), self.decimals), reverse=True)
         else:
             pass
 
@@ -948,34 +1298,32 @@ class ToolNcc(Geometry, AppTool):
                 | QtCore.Qt.ItemFlag.ItemIsEnabled
         )
 
-        for tool_sorted in sorted_tools:
-            for tooluid_key, tooluid_value in self.ncc_tools.items():
-                if float('%.*f' % (self.decimals, tooluid_value['tooldia'])) == tool_sorted:
-                    tool_id += 1
+        for tooluid_key, tooluid_value in sorted_tools:
+            tool_id += 1
 
-                    # ------------------------ Tool ID ----------------------------------------------------------------
-                    id_ = QtWidgets.QTableWidgetItem('%d' % int(tool_id))
-                    id_.setFlags(selected_enabled_flag)
-                    row_no = tool_id - 1
-                    self.ui.tools_table.setItem(row_no, 0, id_)  # Tool name/id
+            # ------------------------ Tool ID ----------------------------------------------------------------
+            id_ = QtWidgets.QTableWidgetItem('%d' % int(tool_id))
+            id_.setFlags(selected_enabled_flag)
+            row_no = tool_id - 1
+            self.ui.tools_table.setItem(row_no, 0, id_)  # Tool name/id
 
-                    # ------------------------ Tool Diameter ----------------------------------------------------------
-                    # Make sure that the drill diameter when in MM is with no more than self.decimals decimals
-                    dia = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, tooluid_value['tooldia']))
-                    dia.setFlags(enabled_flag)
-                    self.ui.tools_table.setItem(row_no, 1, dia)  # Diameter
+            # ------------------------ Tool Diameter ----------------------------------------------------------
+            # Make sure that the drill diameter when in MM is with no more than self.decimals decimals
+            dia = QtWidgets.QTableWidgetItem('%.*f' % (self.decimals, tooluid_value['tooldia']))
+            dia.setFlags(enabled_flag)
+            self.ui.tools_table.setItem(row_no, 1, dia)  # Diameter
 
-                    # ------------------------ Tool Shape -------------------------------------------------------------
-                    tool_type_item = FCComboBox()
-                    tool_type_item.addItems(self.tool_type_item_options)
-                    idx = int(tooluid_value['data']['tools_mill_tool_shape'])
-                    tool_type_item.setCurrentIndex(idx)
-                    self.ui.tools_table.setCellWidget(row_no, 2, tool_type_item)
+            # ------------------------ Tool Shape -------------------------------------------------------------
+            tool_type_item = FCComboBox()
+            tool_type_item.addItems(self.tool_type_item_options)
+            idx = int(tooluid_value['data'].get('tools_mill_tool_shape', 0))
+            tool_type_item.setCurrentIndex(idx)
+            self.ui.tools_table.setCellWidget(row_no, 2, tool_type_item)
 
-                    # ------------------------ Tool UID - NOT Visible -------------------------------------------------
-                    tool_uid_item = QtWidgets.QTableWidgetItem(str(int(tooluid_key)))
-                    # ## REMEMBER: THIS COLUMN IS HIDDEN IN OBJECTUI.PY # ##
-                    self.ui.tools_table.setItem(row_no, 3, tool_uid_item)  # Tool unique ID
+            # ------------------------ Tool UID - NOT Visible -------------------------------------------------
+            tool_uid_item = QtWidgets.QTableWidgetItem(str(int(tooluid_key)))
+            # ## REMEMBER: THIS COLUMN IS HIDDEN IN OBJECTUI.PY # ##
+            self.ui.tools_table.setItem(row_no, 3, tool_uid_item)  # Tool unique ID
 
         # make the diameter column editable
         for row in range(tool_id):
@@ -1013,7 +1361,7 @@ class ToolNcc(Geometry, AppTool):
         self.ui.tools_table.itemChanged.connect(self.on_tool_edit)
 
         # rows selected
-        self.ui.tools_table.clicked.connect(self.on_row_selection_change)
+        self.ui.tools_table.selectionModel().selectionChanged.connect(self.on_row_selection_change)
         self.ui.tools_table.horizontalHeader().sectionClicked.connect(self.on_toggle_all_rows)
 
         for row in range(self.ui.tools_table.rowCount()):
@@ -1085,8 +1433,8 @@ class ToolNcc(Geometry, AppTool):
 
         # rows selected
         try:
-            self.ui.tools_table.clicked.disconnect()
-        except (TypeError, AttributeError):
+            self.ui.tools_table.selectionModel().selectionChanged.disconnect(self.on_row_selection_change)
+        except (TypeError, RuntimeError, AttributeError):
             pass
         try:
             self.ui.tools_table.horizontalHeader().sectionClicked.disconnect()
@@ -1108,9 +1456,12 @@ class ToolNcc(Geometry, AppTool):
         assert isinstance(cw, QtWidgets.QComboBox),\
             "Expected a QtWidgets.QComboBox, got %s" % isinstance(cw, QtWidgets.QComboBox)
 
-        cw_index = self.ui.tools_table.indexAt(cw.pos())
-        cw_row = cw_index.row()
-        cw_col = cw_index.column()
+        # the shape combo box is always in the column 2
+        cw_row = next((row for row in range(self.ui.tools_table.rowCount())
+                       if self.ui.tools_table.cellWidget(row, 2) is cw), -1)
+        cw_col = 2
+        if cw_row < 0:
+            return
 
         current_uid = int(self.ui.tools_table.item(cw_row, 3).text())
 
@@ -1123,132 +1474,11 @@ class ToolNcc(Geometry, AppTool):
                 'type': typ,
                 'tool_type': tt,
             })
+            # build_ui() shows the shape from here
+            self.ncc_tools[current_uid]['data']['tools_mill_tool_shape'] = cw.currentIndex()
 
     def on_find_optimal_tooldia(self):
         self.find_safe_tooldia_worker()
-
-    @staticmethod
-    def find_optim_mp(aperture_storage, decimals):
-        msg = 'ok'
-        total_geo = []
-
-        for ap in list(aperture_storage.keys()):
-            if 'geometry' in aperture_storage[ap]:
-                for geo_el in aperture_storage[ap]['geometry']:
-                    if 'solid' in geo_el and geo_el['solid'] is not None and geo_el['solid'].is_valid:
-                        total_geo.append(geo_el['solid'])
-
-        # Measure the same geometry as Optimal; a positive buffer changes the rounded gap.
-        total_geo = MultiPolygon(total_geo).buffer(0)
-        total_geo = flatten_shapely_geometry(total_geo)
-
-        if len(total_geo) <= 1:
-            msg = ('[ERROR_NOTCL] %s' % _("Too few polygons in the Gerber object to determine distances."))
-            return msg, np.inf
-
-        min_dist = min(polygon_gap_pairs(total_geo, decimals))
-        min_dist -= 10**-decimals  # make sure that this works for isolation case
-        min_dist = round(min_dist, decimals)
-        if min_dist <= 0:
-            return '[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."), np.inf
-
-        return msg, min_dist
-
-    # multiprocessing variant
-    def find_safe_tooldia_multiprocessing(self):
-        tools_available = self.ui.tools_table.rowCount()
-        if tools_available == 0:
-            self.app.inform.emit(f'[ERROR_NOTCL] {_("There are no tools in the Tool Table.")}')
-            return
-        if tools_available > 1:
-            sel_table_items = self.ui.tools_table.selectedItems()
-            if not sel_table_items:
-                self.app.inform.emit(f'[ERROR_NOTCL] {_("There are no tools selected in the Tool Table.")}')
-                return
-            sel_rows = {t.row() for t in sel_table_items}
-            if not sel_rows:
-                self.app.inform.emit(f'[ERROR_NOTCL] {_("There are no tools selected in the Tool Table.")}')
-                return
-        else:
-            sel_rows = {0}
-
-        self.units = self.app.app_units.upper()
-
-        # Get source object.
-        obj_name = self.ui.obj_combo.currentText()
-        try:
-            fcobj = self.app.collection.get_by_name(obj_name)
-            if fcobj is None:
-                self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
-                return
-        except Exception:
-            self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Could not retrieve object"), str(obj_name)))
-            return
-
-        self.app.inform.emit(_("Checking tools for validity."))
-
-        # find the selected tool ID's
-        sorted_tools = []
-        for row in sel_rows:
-            tid = int(self.ui.tools_table.item(row, 3).text())
-            sorted_tools.append(tid)
-
-        def job_thread(app_obj):
-            with self.app.proc_container.new(_("Checking ...")):
-
-                ap_storage = fcobj.tools
-                p = app_obj.pool.apply_async(self.find_optim_mp, args=(ap_storage, self.decimals))
-                res = p.get()
-
-                if res[0] != 'ok':
-                    self.safe_tooldia = None
-                    app_obj.inform.emit(res[0])
-                    return 'fail'
-
-                min_dist = res[1]
-
-                try:
-                    min_dist_truncated = self.app.dec_format(float(min_dist), self.decimals)
-                    self.safe_tooldia = min_dist_truncated
-
-                    if not sorted_tools:
-                        msg = _("There are no tools selected in the Tool Table.")
-                        self.app.inform.emit('[ERROR_NOTCL] %s' % msg)
-                        return 'fail'
-
-                    if not self.safe_tooldia:
-                        msg = _("Could not find a safe tool diameter.")
-                        self.app.log.error(msg)
-                        self.app.inform.emit(f'[ERROR_NOTCL] {_("Failed.")}')
-                        return 'fail'
-
-                    # check if the tools diameters are less than the safe tool diameter
-                    suitable_tools = []
-                    for tool in sorted_tools:
-                        tool_dia = float(self.ncc_tools[tool]['tooldia'])
-                        if tool_dia <= self.safe_tooldia:
-                            suitable_tools.append(tool_dia)
-
-                    if not suitable_tools:
-                        msg = _("Incomplete isolation. None of the selected tools could do a complete isolation.")
-                        self.app.inform.emit('[WARNING] %s' % msg)
-                        self.safe_tooldia = None
-                        return 'fail'
-                    else:
-                        msg = _("At least one of the selected tools can do a complete isolation.")
-                        self.app.inform.emit('[success] %s' % msg)
-
-                    # reset the value to prepare for another isolation
-                    self.safe_tooldia = None
-                except Exception as ee:
-                    self.app.log.error(str(ee))
-                    return "fail"
-
-                # reset the value to prepare for another isolation
-                self.safe_tooldia = None
-                self.app.inform.emit("Tool validation passed.")
-
-        self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
     def find_safe_tooldia_worker(self):
         self.safe_tooldia = None
@@ -1268,36 +1498,25 @@ class ToolNcc(Geometry, AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s: %s' % (_("Object not found"), str(obj_name)))
             return
 
+        if getattr(fcobj, 'kind', None) == 'geometry':
+            self.app.inform.emit('[ERROR_NOTCL] %s' % _("The optimal tool diameter can be found only for a Gerber object."))
+            return
+
         def job_thread(app_obj):
             with self.app.proc_container.new(_("Checking ...")):
                 try:
                     app_obj.proc_container.update_view_text(' %d%%' % 0)
-                    total_geo = []
 
-                    for ap in list(fcobj.tools.keys()):
-                        if 'geometry' in fcobj.tools[ap]:
-                            for geo_el in fcobj.tools[ap]['geometry']:
-                                if self.app.abort_flag:
-                                    # graceful abort requested by the user
-                                    raise grace
+                    def check_abort():
+                        if self.app.abort_flag:
+                            # graceful abort requested by the user
+                            raise grace
 
-                                if 'solid' in geo_el and geo_el['solid'] is not None and geo_el['solid'].is_valid:
-                                    total_geo.append(geo_el['solid'])
-
-                    total_geo = MultiPolygon(total_geo)
-                    total_geo = total_geo.buffer(0)
-                    total_geo = flatten_shapely_geometry(total_geo)
-
-                    geo_len = len(total_geo)
-                    if geo_len <= 1:
-                        app_obj.inform.emit(
-                            '[ERROR_NOTCL] %s' % _("The Gerber object has one Polygon as geometry.\n"
-                                                   "There are no distances between geometry elements to be found."))
+                    # the gap is kept below the real one, like the Check validity test does
+                    message, min_dist = NccModel.smallest_gerber_gap(fcobj.tools, self.decimals, check_abort)
+                    if message:
+                        app_obj.inform.emit('[ERROR_NOTCL] %s' % message)
                         return 'fail'
-
-                    min_dist = min(polygon_gap_pairs(total_geo, self.decimals))
-                    # Keep the recommendation below the real gap and consistent with Check validity.
-                    min_dist -= 10 ** -self.decimals
                     app_obj.proc_container.update_view_text(' %d%%' % 100)
 
                     min_dist_truncated = self.app.dec_format(float(min_dist), self.decimals)
@@ -1311,9 +1530,13 @@ class ToolNcc(Geometry, AppTool):
                     l_units = self.units.lower()
                     app_obj.inform.emit(
                         f'[success] {_("Optimal tool diameter found")}: {str(min_dist_truncated)} {l_units}')
+                except grace:
+                    app_obj.inform.emit('[WARNING_NOTCL] %s' % _("Aborted. The optimal tool diameter was not computed."))
+                    return 'fail'
                 except Exception as ee:
                     app_obj.log.error(str(ee))
-                    return
+                    app_obj.inform.emit('[ERROR_NOTCL] %s' % _("Could not find a safe tool diameter."))
+                    return 'fail'
 
         self.app.worker_task.emit({'fcn': job_thread, 'params': [self.app]})
 
@@ -1344,10 +1567,11 @@ class ToolNcc(Geometry, AppTool):
         else:
             tool_dia = custom_dia
 
-        if tool_dia is None or tool_dia == 0:
+        tool_dia = valid_tool_dia(tool_dia)
+        if tool_dia is None:
             self.build_ui()
             self.app.inform.emit(
-                '[WARNING_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, in Float format.")
+                '[WARNING_NOTCL] %s' % _("The tool diameter must be a number greater than zero.")
             )
             self.blockSignals(False)
             return
@@ -1380,9 +1604,7 @@ class ToolNcc(Geometry, AppTool):
         for db_tool, db_tool_val in tools_db_dict.items():
             db_tooldia = db_tool_val['tooldia']
             updated_tooldia = db_tooldia if db_tooldia != truncated_tooldia else None
-            for d in db_tool_val['data']:
-                if not d.startswith('tools_') or d.startswith(('tools_ncc_', 'tools_mill_')):
-                    new_tools_dict[d] = deepcopy(db_tool_val['data'][d])
+            merge_db_tool_data(new_tools_dict, db_tool_val['data'])
 
         # test we found a suitable tool in Tools Database or if multiple ones
         if tool_found == 0:
@@ -1433,15 +1655,16 @@ class ToolNcc(Geometry, AppTool):
         self.blockSignals(True)
         self.units = self.app.app_units.upper()
 
-        if dia:
+        if dia is not None:
             tool_dia = dia
         else:
             tool_dia = self.ui.new_tooldia_entry.get_value()
 
-        if tool_dia is None or tool_dia == 0:
+        tool_dia = valid_tool_dia(tool_dia)
+        if tool_dia is None:
             self.build_ui()
             self.app.inform.emit(
-                '[WARNING_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, in Float format.")
+                '[WARNING_NOTCL] %s' % _("The tool diameter must be a number greater than zero.")
             )
             self.blockSignals(False)
             return
@@ -1515,9 +1738,9 @@ class ToolNcc(Geometry, AppTool):
 
         val, ok = tool_add_popup.get_results()
         if ok:
-            if float(val) == 0:
+            if valid_tool_dia(val) is None:
                 self.app.inform.emit(
-                    '[WARNING_NOTCL] %s' % _("Please enter a tool diameter with non-zero value, in Float format.")
+                    '[WARNING_NOTCL] %s' % _("The tool diameter must be a number greater than zero.")
                 )
                 self.optimal_found_sig.disconnect(find_optimal)
                 return
@@ -1533,7 +1756,6 @@ class ToolNcc(Geometry, AppTool):
 
         edited_row = item.row()
         editeduid = int(self.ui.tools_table.item(edited_row, 3).text())
-        tool_dias = []
 
         try:
             new_tool_dia = float(self.ui.tools_table.item(edited_row, 1).text())
@@ -1548,15 +1770,23 @@ class ToolNcc(Geometry, AppTool):
                 self.blockSignals(False)
                 return
 
-        for v in self.ncc_tools.values():
-            tool_dias = [
-                float('%.*f' % (self.decimals, v[tool_v]))
-                for tool_v in v.keys() if tool_v == 'tooldia'
-            ]
+        if valid_tool_dia(new_tool_dia) is None:
+            self.app.inform.emit(
+                '[WARNING_NOTCL] %s' % _("The tool diameter must be a number greater than zero.")
+            )
+            self.blockSignals(False)
+            self.build_ui()
+            return
+
+        # the diameters of all the other tools, rounded like the new one
+        tool_dias = [
+            float('%.*f' % (self.decimals, v['tooldia'])) for uid, v in self.ncc_tools.items() if uid != editeduid
+        ]
+        new_tool_dia = float('%.*f' % (self.decimals, new_tool_dia))
 
         # identify the tool that was edited and get it's tooluid
         if new_tool_dia not in tool_dias:
-            self.ncc_tools[editeduid]['tooldia'] = deepcopy(float('%.*f' % (self.decimals, new_tool_dia)))
+            self.ncc_tools[editeduid]['tooldia'] = new_tool_dia
             self.app.inform.emit(
                 '[success] %s' % _("Tool from Tool Table was edited.")
             )
@@ -1594,6 +1824,7 @@ class ToolNcc(Geometry, AppTool):
             self.ncc_tools.clear()
             self.blockSignals(False)
             self.build_ui()
+            self.update_ui()
             return
 
         if rows_to_delete:
@@ -1610,19 +1841,18 @@ class ToolNcc(Geometry, AppTool):
 
             self.blockSignals(False)
             self.build_ui()
+            self.update_ui()
             return
 
         try:
-            if self.ui.tools_table.selectedItems():
-                for row_sel in self.ui.tools_table.selectedItems():
-                    row = row_sel.row()
-                    if row < 0:
-                        continue
-                    tooluid_del = int(self.ui.tools_table.item(row, 3).text())
-                    deleted_tools_list.append(tooluid_del)
+            for row in sorted({row_sel.row() for row_sel in self.ui.tools_table.selectedItems()}):
+                if row < 0:
+                    continue
+                tooluid_del = int(self.ui.tools_table.item(row, 3).text())
+                deleted_tools_list.append(tooluid_del)
 
-                for t in deleted_tools_list:
-                    self.ncc_tools.pop(t, None)
+            for t in deleted_tools_list:
+                self.ncc_tools.pop(t, None)
 
         except AttributeError:
             self.app.inform.emit('[WARNING_NOTCL] %s' % _("Delete failed. Select a tool to delete."))
@@ -1631,9 +1861,16 @@ class ToolNcc(Geometry, AppTool):
         except Exception as e:
             self.app.log.error(str(e))
 
+        if not deleted_tools_list:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("No tool selected."))
+            self.blockSignals(False)
+            return
+
         self.app.inform.emit('[success] %s' % _("Tools deleted from Tool Table."))
         self.blockSignals(False)
         self.build_ui()
+        # the selection is gone: refresh the parameters label and the Generate button
+        self.update_ui()
 
     # To be called after clicking on the plot.
     def on_mouse_release(self, event):
@@ -1649,7 +1886,7 @@ class ToolNcc(Geometry, AppTool):
 
         x1, y1 = curr_pos[0], curr_pos[1]
 
-        shape_type = self.ui.area_shape_radio.get_value()
+        shape_type = self.shape_type()
 
         # do clear area only for left mouse clicks
         if event.button == 1:
@@ -1692,7 +1929,7 @@ class ToolNcc(Geometry, AppTool):
                 return ""
         elif event.button == right_button and self.mouse_is_dragging is False:
 
-            shape_type = self.ui.area_shape_radio.get_value()
+            shape_type = self.shape_type()
 
             if shape_type == "square":
                 self.first_click = False
@@ -1718,43 +1955,47 @@ class ToolNcc(Geometry, AppTool):
                             self.app.inform.emit(
                                 _("Zone added. Click to start adding next zone or right click to finish.")
                             )
+                        else:
+                            self.app.inform.emit(
+                                '[WARNING_NOTCL] %s' % _("The polygon crosses itself. The zone was not added.")
+                            )
 
                     self.points = []
                     self.poly_drawn = False
                     return
 
-            self.delete_tool_selection_shape()
+            # the selection is over: hand the zones over and give the canvas and the panel back
+            areas_to_clear = list(self.areas_to_clear_list)
+            exclusion_mode = self.exclusion_mode
+            self.end_area_selection()
 
-            self.app.plotcanvas.graph_event_disconnect('mouse_release', self.on_mouse_release)
-            self.app.plotcanvas.graph_event_disconnect('mouse_move', self.on_mouse_move)
-            self.app.plotcanvas.graph_event_disconnect('key_press', self.on_key_press)
-
-            self.app.plotcanvas.graph_event_connect(
-                'mouse_press',
-                self.app.on_mouse_click_over_plot,
-            )
-            self.app.plotcanvas.graph_event_connect(
-                'mouse_move',
-                self.app.on_mouse_move_over_plot,
-            )
-            self.app.plotcanvas.graph_event_connect(
-                'mouse_release',
-                self.app.on_mouse_click_release_over_plot,
-            )
-
-            # disconnect flags
-            self.area_sel_disconnect_flag = False
-
-            if len(self.areas_to_clear_list) == 0:
+            if not areas_to_clear:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("No area selected."))
                 return
 
-            self.gen.clear_ncc_area_selection_option(self.areas_to_clear_list)
+            if exclusion_mode:
+                self.exclusion_list.extend(areas_to_clear)
+                self.update_exclusions()
+                self.app.inform.emit('[success] %s' % _("Exclusion zones added."))
+                return
+            # the Preview of this mode draws these zones
+            self.last_zones = areas_to_clear
 
-            self.app.ui.notebook.setDisabled(False)
+            # the source object may have been deleted while the zones were drawn
+            ncc_obj = self.gen.ncc_obj
+            try:
+                found = self.app.collection.get_by_name(ncc_obj.obj_options['name'])
+            except Exception:
+                found = None
+            if found is None or found is not ncc_obj:
+                self.app.inform.emit('[ERROR_NOTCL] %s' % _("The object to be processed is no longer available."))
+                return
+
+            self.gen.clear_ncc_area_selection_option(areas_to_clear)
 
     # called on mouse move
     def on_mouse_move(self, event):
-        shape_type = self.ui.area_shape_radio.get_value()
+        shape_type = self.shape_type()
 
         event_pos = event.pos
         event_is_dragging = event.is_dragging
@@ -1842,50 +2083,7 @@ class ToolNcc(Geometry, AppTool):
 
         if key == QtCore.Qt.Key.Key_Escape or key == 'Escape':
 
-            if self.area_sel_disconnect_flag is True:
-                self.app.plotcanvas.graph_event_disconnect(
-                    'mouse_release',
-                    self.on_mouse_release,
-                )
-                self.app.plotcanvas.graph_event_disconnect(
-                    'mouse_move',
-                    self.on_mouse_move,
-                )
-                self.app.plotcanvas.graph_event_disconnect(
-                    'key_press',
-                    self.on_key_press,
-                )
-
-                try:
-                    # restore the Grid snapping if it was active before
-                    if self.grid_status_memory is True:
-                        self.app.ui.grid_snap_btn.trigger()
-                    self.app.tool_shapes.clear(update=True)
-                except Exception as e:
-                    self.app.log.error("ToolNCC.on_key_press() _2 --> %s" % str(e))
-
-                self.app.plotcanvas.graph_event_connect(
-                    'mouse_press',
-                    self.app.on_mouse_click_over_plot,
-                )
-                self.app.plotcanvas.graph_event_connect(
-                    'mouse_move',
-                    self.app.on_mouse_move_over_plot,
-                )
-                self.app.plotcanvas.graph_event_connect(
-                    'mouse_release',
-                    self.app.on_mouse_click_release_over_plot,
-                )
-
-                self.app.ui.notebook.setDisabled(False)
-
-                self.area_sel_disconnect_flag = False
-
-            self.points = []
-            self.poly_drawn = False
-
-            self.delete_moving_selection_shape()
-            self.delete_tool_selection_shape()
+            self.end_area_selection()
 
     def on_ncc_tool_add_from_db_executed(self, tool):
         """
@@ -1916,13 +2114,17 @@ class ToolNcc(Geometry, AppTool):
         """
         Called from the Tools DB object through an App method when adding a tool from Tools Database
         :param tool: a dict with the tool data
-        :return: None
+        :return: the uid of the new tool, or 'fail'
         """
 
-        self.ui_disconnect()
         self.units = self.app.app_units.upper()
 
-        tooldia = float(tool['tooldia'])
+        tooldia = valid_tool_dia(tool['tooldia'])
+        if tooldia is None:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % _("The tool diameter must be a number greater than zero."))
+            return 'fail'
+
+        self.ui_disconnect()
 
         # construct a list of all 'tooluid' in the self.tools
         tool_uid_list = [int(tooluid_key) for tooluid_key in self.ncc_tools]
@@ -1943,14 +2145,17 @@ class ToolNcc(Geometry, AppTool):
             self.ui_connect()
             return 'fail'
 
+        # a Tools Database record may lack parameters of the plugin: start from the same defaults as a default tool
+        new_data = deepcopy(self.default_data)
+        new_data.update(deepcopy(tool['data']))
+        new_data['name'] = '_ncc'
         self.ncc_tools.update({
             tooluid: {
                 'tooldia':          truncated_tooldia,
-                'data':             deepcopy(tool['data']),
+                'data':             new_data,
                 'solid_geometry':   []
             }
         })
-        self.ncc_tools[tooluid]['data']['name'] = '_ncc'
 
         self.app.inform.emit('[success] %s' % _("New tool added to Tool Table."))
 
@@ -1959,9 +2164,11 @@ class ToolNcc(Geometry, AppTool):
 
         # select the tool just added
         for row in range(self.ui.tools_table.rowCount()):
-            if int(self.ui.tools_table.item(row, 3).text()) == self.tooluid:
+            if int(self.ui.tools_table.item(row, 3).text()) == tooluid:
                 self.ui.tools_table.selectRow(row)
                 break
+
+        return tooluid
 
     def on_ncc_tool_add_from_db_clicked(self):
         """

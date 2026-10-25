@@ -113,6 +113,16 @@ class NccUI:
 
         obj_grid.addWidget(self.obj_combo, 2, 0, 1, 2)
 
+        self.multi_cb = FCCheckBox(_("All selected objects"))
+        self.multi_cb.setObjectName("n_multi_objects")
+        self.multi_cb.setToolTip(
+            _("When checked, every Gerber or Geometry object selected in the Project tab\n"
+              "is cleared with the same tools and parameters, each into its own new object.\n"
+              "Area Selection works with one object only.\n"
+              "When unchecked, only the object chosen above is cleared.")
+        )
+        obj_grid.addWidget(self.multi_cb, 3, 0, 1, 2)
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
@@ -478,6 +488,9 @@ class NccUI:
         gen_grid = GLay(v_spacing=5, h_spacing=3)
         gp_frame.setLayout(gen_grid)
 
+        # the order that was set before Rest Machining forced "Reverse"
+        self.order_before_rest = None
+
         # Rest Machining
         self.rest_cb = FCCheckBox('%s' % _("Rest Machining"))
         self.rest_cb.setObjectName("n_rest_machining")
@@ -502,7 +515,7 @@ class NccUI:
         self.rest_margin_entry = FCDoubleSpinner(callback=self.confirmation_message)
         self.rest_margin_entry.set_precision(self.decimals)
         self.rest_margin_entry.set_range(-10000.0000, 10000.0000)
-        self.rest_margin_entry.setObjectName("n_margin")
+        self.rest_margin_entry.setObjectName("n_rest_margin")
 
         gen_grid.addWidget(self.rest_margin_label, 2, 0)
         gen_grid.addWidget(self.rest_margin_entry, 2, 1)
@@ -613,7 +626,62 @@ class NccUI:
 
         gen_grid.addWidget(self.valid_cb, 16, 0, 1, 2)
 
-        GLay.set_common_column_size([obj_grid, tool_grid, new_tool_grid, par_grid, gen_grid], 0)
+        # #############################################################################################################
+        # Exclusion areas Frame
+        # #############################################################################################################
+        self.excl_label = FCLabel('%s' % _("Exclusion areas"), color='red', bold=True)
+        self.excl_label.setToolTip(
+            _("Zones drawn on the canvas that are left out of the copper clearing.")
+        )
+        self.tools_box.addWidget(self.excl_label)
+
+        excl_frame = FCFrame()
+        self.tools_box.addWidget(excl_frame)
+
+        excl_grid = GLay(v_spacing=5, h_spacing=3)
+        excl_frame.setLayout(excl_grid)
+
+        self.excl_cb = FCCheckBox(_("Use exclusion areas"))
+        self.excl_cb.setObjectName("n_exclusion")
+        self.excl_cb.setToolTip(
+            _("When checked, the zones below are removed from the area to clear,\n"
+              "for the Generate and the Preview buttons.")
+        )
+        excl_grid.addWidget(self.excl_cb, 0, 0, 1, 2)
+
+        self.excl_shape_label = FCLabel('%s:' % _("Shape"))
+        self.excl_shape_label.setToolTip(_("The kind of shape used to draw an exclusion zone."))
+        self.excl_shape_radio = RadioSet([{'label': _("Square"), 'value': 'square'},
+                                          {'label': _("Polygon"), 'value': 'polygon'}], compact=True)
+        excl_grid.addWidget(self.excl_shape_label, 2, 0)
+        excl_grid.addWidget(self.excl_shape_radio, 2, 1)
+
+        self.excl_count_label = FCLabel('%s:' % _("Zones"))
+        self.excl_count_label.setToolTip(_("The number of exclusion zones drawn."))
+        self.excl_count_value = FCLabel('0')
+        excl_grid.addWidget(self.excl_count_label, 4, 0)
+        excl_grid.addWidget(self.excl_count_value, 4, 1)
+
+        self.excl_add_button = FCButton(_("Add area"))
+        self.excl_add_button.setToolTip(
+            _("Draw exclusion zones on the canvas.\n"
+              "Left click to draw, right click or Escape to finish.")
+        )
+        self.excl_delete_button = FCButton(_("Delete all"))
+        self.excl_delete_button.setToolTip(_("Remove all the exclusion zones."))
+        excl_grid.addWidget(self.excl_add_button, 6, 0)
+        excl_grid.addWidget(self.excl_delete_button, 6, 1)
+
+        GLay.set_common_column_size([obj_grid, tool_grid, new_tool_grid, par_grid, gen_grid, excl_grid], 0)
+
+        # #############################################################################################################
+        # Preview Button
+        self.preview_button = FCButton(_("Preview"), bold=True)
+        self.preview_button.setToolTip(
+            _("Draw the area that would be cleared on the canvas.\n"
+              "Nothing is created. For Area Selection the zones drawn by the last Generate are used.")
+        )
+        self.tools_box.addWidget(self.preview_button)
 
         # #############################################################################################################
         # Generate NCC Geometry Button
@@ -703,6 +771,9 @@ class NccUI:
 
     def on_rest_machining_check(self, state):
         if state:
+            # rest machining goes from the biggest tool down: remember the order to restore it when unchecked
+            if self.order_combo.isEnabled():
+                self.order_before_rest = self.order_combo.get_value()
             self.order_combo.set_value(2)   # "Reverse"
             self.order_label.setDisabled(True)
             self.order_combo.setDisabled(True)
@@ -724,6 +795,9 @@ class NccUI:
         else:
             self.order_label.setDisabled(False)
             self.order_combo.setDisabled(False)
+            if self.order_before_rest is not None:
+                self.order_combo.set_value(self.order_before_rest)
+                self.order_before_rest = None
 
             self.margin_label.show()
             self.margin_entry.show()
