@@ -112,7 +112,8 @@ def test_the_path_starts_at_the_hole_nearest_to_the_start_point(opt_type):
 
 
 def test_travel_after_a_toolchange_starts_at_the_toolchange_position():
-    app, job, result = gui_run([(50.0, 0.0)], toolchange=True, tools_drill_toolchangexy='50, 0', first_pt=(0.0, 0.0))
+    app, job, result = gui_run([(50.0, 0.0)], toolchange=True, tools_drill_toolchangexy='50, 0', first_pt=(0.0, 0.0),
+                               tools_drill_area_exclusion=True)
     assert app.travel_calls[0]['start_point'] == (50.0, 0.0)
     # the hole is where the machine is: nothing to travel
     assert job.measured_distance == pytest.approx(0.0)
@@ -129,7 +130,7 @@ def test_travel_over_an_exclusion_area_restores_the_travel_z():
         mid = (kw['end_point'][0] - 1, kw['end_point'][1])
         return [(7.5, mid), (None, kw['end_point'])]
 
-    __, __, result = gui_run([(5.0, 5.0)], travel_result=cross, tools_drill_travelz=2.0)
+    __, __, result = gui_run([(5.0, 5.0)], travel_result=cross, tools_drill_travelz=2.0, tools_drill_area_exclusion=True)
     lifts = [line for line in result[0].splitlines() if line.startswith('G00 Z')]
     assert 'G00 Z7.5000' in lifts
     # after the crossing the lift is to the travel Z of the tool again
@@ -406,7 +407,7 @@ def test_plugin_zero_feedrates_do_not_break_the_job(fc, plugin, monkeypatch):
 
 def test_plugin_refuses_drill_points_inside_a_drilling_exclusion_area(fc, plugin, monkeypatch):
     from shapely.geometry import box
-    open_plugin(fc, plugin, 'gen_h', selected=[1], tools_drill_toolchange=False)
+    open_plugin(fc, plugin, 'gen_h', selected=[1], tools_drill_toolchange=False, tools_drill_area_exclusion=True)
     fc.exc_areas.exclusion_areas_storage.append(
         {'obj_type': 'excellon', 'owner': 'drilling', 'shape': box(4, 4, 6, 6), 'strategy': 'around', 'overz': 1.0,
          'idx': 1})
@@ -586,6 +587,7 @@ def test_transform_points_mirror_axes_about_a_user_point():
 
 @pytest.mark.parametrize('data', [
     {'tools_drill_job_offset_xy': 'abc'}, {'tools_drill_job_offset_xy': '1'}, {'tools_drill_mirror': 'z'},
+    {'tools_drill_job_offset_xy': 5}, {'tools_drill_job_offset_xy': 2.5}, {'tools_drill_job_offset_xy': (True, False)},
     {'tools_drill_mirror_point': '1,2,3'}, {'tools_drill_array_columns': 0},
     {'tools_drill_array_columns': 2, 'tools_drill_array_pitch': None},
     {'tools_drill_array_rows': 2, 'tools_drill_array_pitch': '5,0'}])

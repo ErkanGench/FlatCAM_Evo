@@ -3687,6 +3687,8 @@ class CNCjob(Geometry):
         self.tooldia = tools[tool]["tooldia"]
         self.postdata['toolC'] = tools[tool]["tooldia"]
         self.toolchange = toolchange
+        # the travels go around the exclusion areas only if the tool uses them
+        self.area_exclusion = bool(tool_dict.get('tools_drill_area_exclusion', True))
 
         # Z_toolchange parameter
         self.z_toolchange = tool_dict['tools_drill_toolchangez']
@@ -3826,9 +3828,12 @@ class CNCjob(Geometry):
 
                 locx, locy = point
 
-                travels = self.app.exc_areas.travel_coordinates(start_point=(temp_locx, temp_locy),
-                                                                end_point=(locx, locy),
-                                                                tooldia=current_tooldia, owner=exclusion_owner)
+                if self.area_exclusion:
+                    travels = self.app.exc_areas.travel_coordinates(start_point=(temp_locx, temp_locy),
+                                                                    end_point=(locx, locy),
+                                                                    tooldia=current_tooldia, owner=exclusion_owner)
+                else:
+                    travels = [(None, (locx, locy))]
                 prev_z = None
                 for travel in travels:
                     locx = travel[1][0]

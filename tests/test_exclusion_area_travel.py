@@ -322,7 +322,7 @@ def test_drilling_job_ignores_a_milling_area_over_a_hole():
         job.obj_options = {'name': 'job', 'type': 'Excellon', 'xmin': 0, 'xmax': 30, 'ymin': 0, 'ymax': 20}
         job.coords_decimals = 4
         job.fr_decimals = 2
-        tools = {1: tool_dict(TOOLDIA, [hole])}
+        tools = {1: tool_dict(TOOLDIA, [hole], tools_drill_area_exclusion=True)}
         job.tools = {1: {'nr_drills': 1}}
         job.tool = 1
         return job.excellon_tool_gcode_gen(1, [Point(hole)], tools, (10.0, 10.0), is_first=True, is_last=True,

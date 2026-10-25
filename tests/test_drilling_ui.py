@@ -3,10 +3,11 @@
 import os
 import sys
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 from PyQt6 import QtWidgets, QtCore
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -194,6 +195,26 @@ def test_toggle_all_rows_clears_then_selects_all(fc):
     assert len(tool._selected_tool_rows()) == 3
 
 
+def test_rebuild_keeps_a_partial_tool_selection(fc):
+    _load(fc, 'e_ui_sel')
+    tool = _open(fc, 'e_ui_sel')
+    table = tool.ui.tools_table
+    table.clearSelection()
+    sel = table.selectionModel()
+    for row in (0, 1):
+        sel.select(table.model().index(row, 0), QtCore.QItemSelectionModel.SelectionFlag.Select |
+                   QtCore.QItemSelectionModel.SelectionFlag.Rows)
+    chosen = sorted(tool.get_selected_tools_uid())
+    assert len(chosen) == 2
+    # an exclusion area added rebuilds the table: the user's two tools stay selected, the third is not added
+    _add_areas(fc, tool, [_area('excellon', x=20)])
+    assert sorted(tool.get_selected_tools_uid()) == chosen
+    # an other object with the same tool ids starts with all its tools selected
+    _load(fc, 'e_ui_sel2')
+    tool = _open(fc, 'e_ui_sel2')
+    assert len(tool.get_selected_tools_uid()) == 3
+
+
 def test_keyboard_multi_selection_shows_multiple_tools_and_the_first_one(fc):
     exc = _load(fc, 'e_ui_multi')
     exc.tools[1]['data']['tools_drill_cutz'] = -1.1
@@ -255,6 +276,12 @@ def test_toolchange_xy_is_validated_only_when_toolchange_is_on(fc):
     tool = _open(fc, 'e_ui_txy')
     assert tool._validate_xy_fields([1, 2, 3])
     exc.tools[2]['data']['tools_drill_toolchange'] = True
+    # the shipped default is text, a blank or None means no XY move: all valid with toolchange on
+    for xy in ('0.0, 0.0', '', None, (1.5, -2)):
+        exc.tools[2]['data']['tools_drill_toolchangexy'] = xy
+        assert tool._validate_xy_fields([1, 2, 3]), xy
+    # a value that is not a pair of numbers is an error (only when the tool with toolchange is selected)
+    exc.tools[2]['data']['tools_drill_toolchangexy'] = '5'
     assert not tool._validate_xy_fields([1, 2, 3])
     assert tool._validate_xy_fields([1, 3])
 
@@ -476,3 +503,63 @@ def test_hole_areas_are_separate_from_the_exclusion_areas_and_cleared_on_object_
     tool.hole_areas.exclusion_areas_storage.append(_area())
     tool.on_plugin_cleanup()
     assert tool.hole_areas.exclusion_areas_storage == []
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Generate CNC Job: the job the user gets (the worker runs in place)
+# ---------------------------------------------------------------------------------------------------------------------
+
+def _generate(fc, monkeypatch, tool):
+    """Generate the CNC job of the open object. Returns the CNCJob, or None when no job was made."""
+    monkeypatch.setattr(fc, 'worker_task', SimpleNamespace(emit=lambda task: task['fcn'](*task['params'])))
+    tool.on_generate_cnc_job()
+    try:
+        job = fc.collection.get_by_name(tool.ui.object_combo.currentText() + '_cnc')
+    except Exception:
+        return None
+    return job if getattr(job, 'kind', None) == 'cncjob' else None
+
+
+def test_no_toolchange_job_counts_the_drills_of_every_selected_tool(fc, monkeypatch):
+    exc = _load(fc, 'e_job_cnt')
+    for tl in exc.tools.values():
+        tl['data']['tools_drill_toolchange'] = False
+    tool = _open(fc, 'e_job_cnt')
+    job = _generate(fc, monkeypatch, tool)
+    assert job is not None
+    assert len(job.tools) == 1                      # one tool entry for the whole job without toolchange
+    entry = next(iter(job.tools.values()))
+    total = sum(len(t['drills']) for t in exc.tools.values())
+    assert entry['nr_drills'] == total
+    assert len(entry['drills']) == entry['nr_drills']
+
+
+def test_exclusion_areas_steer_the_travels_only_when_the_tool_uses_them(fc, monkeypatch):
+    def two_holes(name, use_areas):
+        # one tool, two holes 20 apart: the travel between them crosses the area below
+        exc = _load(fc, name)
+        for uid in [u for u in exc.tools if u != 1]:
+            del exc.tools[uid]
+        exc.tools[1]['drills'] = [Point(-10, 0), Point(10, 0)]
+        exc.tools[1]['data'].update(tools_drill_area_exclusion=use_areas, tools_drill_toolchange=False)
+        return exc
+
+    area = dict(_area('excellon', x=0), shape=Polygon([(-6, -1), (-4, -1), (-4, 1), (-6, 1)]))
+    # the reference: no exclusion area at all
+    two_holes('e_job_plain', False)
+    tool = _open(fc, 'e_job_plain')
+    tool.change_level('b')
+    plain = _generate(fc, monkeypatch, tool).gcode
+
+    fc.exc_areas.exclusion_areas_storage.append(area)
+    # Beginner: the Exclusion areas option is hidden and off, even if the stored value is on
+    two_holes('e_job_off', True)
+    tool = _open(fc, 'e_job_off')
+    tool.change_level('b')
+    assert _generate(fc, monkeypatch, tool).gcode == plain
+
+    # Advanced with the option on: the travel goes around the area
+    two_holes('e_job_on', True)
+    tool = _open(fc, 'e_job_on')
+    tool.change_level('a')
+    assert _generate(fc, monkeypatch, tool).gcode != plain

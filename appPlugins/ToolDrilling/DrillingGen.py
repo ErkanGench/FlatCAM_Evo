@@ -215,7 +215,8 @@ def parse_xy(value, label):
     """
     A pair of numbers from a tuple, a list or a text like "1.5, -2" or "(1.5,-2)"; None for a blank value.
 
-    :raises ValueError: the value is not a pair of numbers (the message names `label`)
+    :raises ValueError: the value is not a pair of numbers (the message names `label`); a number, a bool or any
+        other value that is not a pair (not iterable, or a bool part) is not a pair of numbers
     """
     if value is None:
         return None
@@ -225,9 +226,12 @@ def parse_xy(value, label):
             return None
         parts = text.split(',')
     else:
-        parts = list(value)
+        try:
+            parts = list(value)
+        except TypeError:
+            parts = []
     try:
-        pair = tuple(float(part) for part in parts)
+        pair = () if any(isinstance(part, bool) for part in parts) else tuple(float(part) for part in parts)
     except (TypeError, ValueError):
         pair = ()
     if len(pair) != 2:

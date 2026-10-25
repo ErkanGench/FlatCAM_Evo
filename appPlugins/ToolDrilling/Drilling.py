@@ -752,10 +752,12 @@ class ToolDrilling(Geometry, AppTool):
         :return:    True if the job can use them
         """
         def is_xy(val):
+            # a blank (None or '') is no XY move: valid; a text "x, y" or a pair is read as in the job
             try:
-                return len(val) == 2 and all(isinstance(v, (int, float)) for v in val)
-            except TypeError:
+                DrillingGen.parse_xy(val, '')
+            except (TypeError, ValueError):
                 return False
+            return True
 
         ids = list(self.excellon_tools) if selected_ids is None else selected_ids
         for tool_id in ids:
@@ -763,8 +765,7 @@ class ToolDrilling(Geometry, AppTool):
             if data.get('tools_drill_toolchange') and not is_xy(data.get('tools_drill_toolchangexy')):
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _("Toolchange X-Y is not valid. Use two numbers: x, y."))
                 return False
-            endxy = data.get('tools_drill_endxy')
-            if endxy not in (None, '') and not is_xy(endxy):
+            if not is_xy(data.get('tools_drill_endxy')):
                 self.app.inform.emit('[ERROR_NOTCL] %s' % _("End move X,Y is not valid. Use two numbers: x, y."))
                 return False
         return True
@@ -925,6 +926,16 @@ class ToolDrilling(Geometry, AppTool):
         self.app.log.debug("ToolDrilling.build_tool_ui()")
         self.ui_disconnect()
 
+        # the tools selected before the table is rebuilt (the id is in column 3): a rebuild must not change the
+        # selection of the user. An other Excellon object starts with all its tools selected.
+        previous_uids = set()
+        if getattr(self, '_table_obj', None) is self.excellon_obj:
+            for row in self._selected_tool_rows():
+                item = self.ui.tools_table.item(row, 3)
+                if item is not None and item.text().isdigit():
+                    previous_uids.add(int(item.text()))
+        self._table_obj = self.excellon_obj
+
         # The Order combo sorts only the rows of the table (the tool ids stay, the tools are not touched); the job
         # generation sorts the same way with _tool_order().
         if self.excellon_obj and self.excellon_tools:
@@ -1067,8 +1078,22 @@ class ToolDrilling(Geometry, AppTool):
         self.ui.tools_table.setMinimumHeight(self.ui.tools_table.getHeight())
         self.ui.tools_table.setMaximumHeight(self.ui.tools_table.getHeight())
 
-        # all the tools are selected by default
-        self.ui.tools_table.selectAll()
+        # the first build (nothing selected before, or none of the remembered tools is there) selects all the tools;
+        # a rebuild keeps the selection of the user
+        self.ui.tools_table.clearSelection()
+        rows_to_select = [r for r in range(len(tools))
+                          if self.ui.tools_table.item(r, 3) is not None and
+                          self.ui.tools_table.item(r, 3).text().isdigit() and
+                          int(self.ui.tools_table.item(r, 3).text()) in previous_uids]
+        if rows_to_select:
+            # selectRow() would replace the selection: each row is added to the selection model
+            sel_model = self.ui.tools_table.selectionModel()
+            for r in rows_to_select:
+                sel_model.select(self.ui.tools_table.model().index(r, 0),
+                                 QtCore.QItemSelectionModel.SelectionFlag.Select |
+                                 QtCore.QItemSelectionModel.SelectionFlag.Rows)
+        else:
+            self.ui.tools_table.selectAll()
 
         # #############################################################################################################
         # ################################### Build Exclusion Areas section ###########################################
@@ -1097,11 +1122,7 @@ class ToolDrilling(Geometry, AppTool):
             strategy_item = FCComboBox2(policy=False)
             strategy_item.addItems([_("Around"), _("Over")])
             idx = 0 if area_dict["strategy"] == 'around' else 1
-            # protection against having this translated or loading a project with translated values
-            if idx == -1:
-                strategy_item.setCurrentIndex(0)
-            else:
-                strategy_item.setCurrentIndex(idx)
+            strategy_item.setCurrentIndex(idx)
             self.ui.exclusion_table.setCellWidget(area, 2, strategy_item)  # Strategy
 
             overz_item = QtWidgets.QTableWidgetItem('%s' % area_dict["overz"])
@@ -2103,6 +2124,7 @@ class ToolDrilling(Geometry, AppTool):
                 return True
             else:
                 return False
+        return True
 
     def get_selected_tools_uid(self):
         """
@@ -2257,8 +2279,9 @@ class ToolDrilling(Geometry, AppTool):
             self.app.inform.emit('[ERROR_NOTCL] %s' % str(e))
             return
 
-        # check if there are drill points in the exclusion areas (if any areas)
-        if self._drill_exclusion_areas() and self.check_intersection(points, gen_tools) is True:
+        # check if there are drill points in the exclusion areas (only if the tools use the areas)
+        use_areas = bool(gen_tools[gen_ids[0]]['data'].get('tools_drill_area_exclusion'))
+        if use_areas and self._drill_exclusion_areas() and self.check_intersection(points, gen_tools) is True:
             self.app.inform.emit("[ERROR_NOTCL] %s %s" % (_("Failed."), _("Drill points inside the exclusion zones.")))
             return 'fail'
 
@@ -2324,7 +2347,7 @@ class ToolDrilling(Geometry, AppTool):
             def tool_entry(tool_id, ids):
                 """The CNCJob tool of tool_id with the geometry of the drills (and slots) of the tools in ids."""
                 tool = gen_tools[tool_id]
-                entry = dict(tool, drills=list(tool.get('drills') or []), slots=list(tool.get('slots') or []))
+                entry = dict(tool, drills=[], slots=list(tool.get('slots') or []))
                 steps = cnc_job_obj.geo_steps_per_circle
                 geo = []
                 drill_nr = 0
@@ -2335,6 +2358,7 @@ class ToolDrilling(Geometry, AppTool):
                     pts = points.get(t_id) or []
                     if pts:
                         drill_nr += len(pts)
+                        entry['drills'] += pts
                         geo += list(shapely.buffer(np.array(pts, dtype=object), radius, quad_segs=steps))
                     slots = gen_tools[t_id].get('slots')
                     if slots and not gen_tools[t_id]['data'].get('tools_drill_drill_slots'):

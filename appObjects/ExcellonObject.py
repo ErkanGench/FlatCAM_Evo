@@ -334,8 +334,10 @@ class ExcellonObject(OffsetUiMixin, PropertiesPanelMixin, FlatCAMObj, Excellon):
                 # for old projects to be opened
                 dia_val = self.tools[tool_no]['C']
 
-            # add the data dictionary for each tool with the default values
-            self.tools[tool_no]['data'] = deepcopy(new_options)
+            # add the data dictionary for each tool with the default values; the existing per-tool values are kept
+            data = deepcopy(new_options)
+            data.update(self.tools[tool_no].get('data') or {})
+            self.tools[tool_no]['data'] = data
 
             # drill_cnt = 0  # variable to store the nr of drills per tool
             # slot_cnt = 0  # variable to store the nr of slots per tool

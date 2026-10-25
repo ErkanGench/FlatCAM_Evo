@@ -11,9 +11,10 @@ tests).
 """
 
 import copy
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
+from PyQt6 import QtWidgets
 from shapely.geometry import Point
 
 from appObjects.ExcellonObject import ExcellonObject
@@ -152,6 +153,30 @@ class TestKeepDifferentData:
         assert sorted(final.tools) == [1, 2]
         assert [final.tools[t]['tooldia'] for t in (1, 2)] == [1.0, 0.8]
         assert pts(final.tools[1]['drills']) == [(0, 0), (1, 0)]
+
+
+class TestBuildUiKeepsToolData:
+    def test_build_ui_keeps_per_tool_values_and_fills_missing_keys(self, app):
+        exc = make_exc(app, 'a', [(1.0, [(0, 0)], [], DATA_A),
+                                  (0.8, [(9, 9)], [], {k: v for k, v in DATA_B.items()
+                                                       if k != 'tools_drill_depthperpass'})])
+        exc.obj_options = {'tools_drill_cutz': -9.9, 'tools_drill_multidepth': False,
+                           'tools_drill_depthperpass': 0.2, 'tools_drill_ppname_e': 'object'}
+        class ToolsTable(QtWidgets.QTableWidget):
+            # the 2 methods the real table widget adds in ExcellonObjectUI
+            def getHeight(self):
+                return 100
+
+            def setupContextMenu(self):
+                pass
+
+        exc.ui = MagicMock()
+        exc.ui.tools_table = ToolsTable(0, 6)
+        exc.on_row_selection_change = Mock()    # the selection of the table row is not under test
+        exc.build_ui()
+        assert strip_name(exc.tools[1]['data']) == DATA_A
+        assert exc.tools[2]['data']['tools_drill_cutz'] == -2.4
+        assert exc.tools[2]['data']['tools_drill_depthperpass'] == 0.2
 
 
 class TestIndependenceAndTypes:
