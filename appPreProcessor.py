@@ -187,14 +187,15 @@ class AppPreProcTools(object, metaclass=ABCPreProcRegister):
 
 def builtin_preprocessors_path():
     """
-    The folder of the preprocessors that come with the application: next to this file, or next to the executable in a
-    frozen build (the modules are in lib/library.zip there). It does not depend on the current working directory.
+    The folder of the preprocessors that come with the application: next to this file, or in lib/ next to the
+    executable in a frozen build (make_freeze.py puts the modules in lib/library.zip and the data folders in lib/).
+    It does not depend on the current working directory.
 
     :return:    the path of the folder
     :rtype:     str
     """
     if getattr(sys, 'frozen', False):
-        app_dir = os.path.dirname(os.path.realpath(sys.executable))
+        app_dir = os.path.join(os.path.dirname(os.path.realpath(sys.executable)), 'lib')
     else:
         app_dir = os.path.dirname(os.path.realpath(__file__))
 
