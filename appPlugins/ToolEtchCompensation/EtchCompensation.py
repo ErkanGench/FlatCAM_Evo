@@ -148,6 +148,7 @@ class ToolEtchCompensation(AppTool):
             obj_name = obj.obj_options['name']
             self.ui.gerber_combo.set_value(obj_name)
         self.update_lateral_label()
+        self._set_busy(self._busy)
 
     def on_ratio_change(self, val):
         self.ui.on_ratio_change(val)
@@ -320,6 +321,16 @@ class ToolEtchCompensation(AppTool):
 
     def finish(self, params, results):
         """Create one Gerber per source, as ONE Undo step."""
+        kept = []
+        for src, res in results:
+            if not res['solid_geometry']:
+                self.app.inform.emit('[WARNING_NOTCL] %s' % _("The compensated copper is empty."))
+                continue
+            kept.append((src, res))
+        if not kept:
+            return
+        results = kept
+
         collection = self.app.collection
         history = history_of(self.app)
         created = []
@@ -334,6 +345,10 @@ class ToolEtchCompensation(AppTool):
                     new_obj.obj_options['name'] = outname
                     new_obj.fill_color = deepcopy(src.fill_color)
                     new_obj.outline_color = deepcopy(src.outline_color)
+                    new_obj.follow_geometry = deepcopy(getattr(src, 'follow_geometry', []))
+                    new_obj.aperture_macros = deepcopy(getattr(src, 'aperture_macros', {}))
+                    new_obj.export_as_regions = bool(getattr(src, 'export_as_regions', False))
+                    new_obj.multigeo = getattr(src, 'multigeo', False)
                     new_obj.tools = res['apertures']
                     new_obj.solid_geometry = res['solid_geometry']
                     new_obj.regenerate_source(name=outname)

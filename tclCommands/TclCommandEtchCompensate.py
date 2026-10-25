@@ -14,7 +14,7 @@ if '_' not in builtins.__dict__:
 
 log = logging.getLogger('base')
 
-MODES = {'factor': 'factor', 'etchant': 'etch_list', 'manual': 'manual'}
+MODES = {'factor': 'factor', 'etchant': 'etch_list', 'etch_list': 'etch_list', 'manual': 'manual'}
 
 
 class TclCommandEtchCompensate(TclCommand):

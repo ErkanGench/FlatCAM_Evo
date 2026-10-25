@@ -1,11 +1,16 @@
 """Etch compensation: offset maths and geometry/aperture compensation (Qt-free Gen module)."""
 
 from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import MagicMock, Mock
 
 import pytest
 from shapely.geometry import MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
 
+from appPlugins.ToolEtchCompensation import ToolEtchCompensation
+from test_tcl_audit_generation import factory_app
+from test_tcl_audit_regressions import FCShell
 from appPlugins.ToolEtchCompensation.EtchCompensationGen import (
     compensate_geometry, lateral_offset_um, quad_segs, um_to_units)
 
@@ -87,11 +92,17 @@ def test_large_negative_offset_drops_emptied_records_and_clamps_dimensions():
     assert aps['11']['size'] == pytest.approx(0.8)
 
 
-def test_positive_offset_empties_small_clear_key():
-    aps = {'1': {'type': 'C', 'size': 1.0, 'geometry': [{'solid': box(0, 0, 1, 1), 'clear': box(0, 0, 0.1, 0.1)}]}}
+def test_positive_offset_drops_record_whose_clear_is_gone():
+    follow = Point(0.5, 0.5)
+    aps = {'1': {'type': 'C', 'size': 1.0, 'geometry': [
+        {'solid': box(0, 0, 1, 1), 'follow': follow, 'clear': box(0, 0, 0.1, 0.1)}]}}
     _, new = compensate_geometry([], aps, 0.2, 16)
-    assert 'clear' not in new['1']['geometry'][0]
-    assert 'solid' in new['1']['geometry'][0]
+    assert not any(rec['follow'].equals(follow) for rec in new['1']['geometry'])
+
+
+def test_size_of_other_aperture_types_is_not_grown():
+    _, new = compensate_geometry([], {'1': {'type': 'REG', 'size': 1.0, 'geometry': []}}, 0.1, 16)
+    assert new['1']['size'] == 1.0
 
 
 def test_result_is_flat_polygon_list_matching_single_union_buffer():
@@ -106,11 +117,6 @@ def test_result_is_flat_polygon_list_matching_single_union_buffer():
 # ---------------------------------------------------------------------------------------------------------------
 # the controller, called unbound on a namespace so that no window is built; the worker job runs synchronously
 # ---------------------------------------------------------------------------------------------------------------
-
-from types import SimpleNamespace
-from unittest.mock import MagicMock
-
-from appPlugins.ToolEtchCompensation import ToolEtchCompensation
 
 _METHODS = ('collect', 'read_values', 'offset_of', '_opt', '_set_busy', '_start', 'on_compensate', 'worker_job',
             'on_job_done', 'finish', 'store_values', 'draw_preview', 'clear_preview')
@@ -193,6 +199,14 @@ def test_controller_creates_nothing_for_unusable_offset(ui_values, level):
     assert not any(m.startswith('[success]') for m in _messages(tool))
 
 
+def test_controller_creates_nothing_when_the_compensated_copper_is_empty():
+    # a -1.5 mm offset erodes the 2 mm square away
+    tool = _make_tool([_source('a')], ratio_radio='manual', offset_entry=-1500.0)
+    tool.on_compensate()
+    assert tool.created == []
+    assert not any(m.startswith('[success]') for m in _messages(tool))
+
+
 def test_controller_multi_select_makes_one_output_per_gerber():
     a, b = _source('a'), _source('b', 4.0)
     other = SimpleNamespace(kind='geometry', obj_options={'name': 'g'})
@@ -204,3 +218,47 @@ def test_controller_multi_select_makes_one_output_per_gerber():
     tool.app.collection.get_selected.return_value = [other]
     tool.on_compensate()
     assert tool.created == [] and any(m.startswith('[ERROR_NOTCL]') for m in _messages(tool))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# the Tcl command etch_compensate
+# ---------------------------------------------------------------------------------------------------------------
+
+def etch_source():
+    geo = box(0, 0, 10, 10)
+    return SimpleNamespace(kind='gerber', obj_options={'name': 'cu', 'units': 'MM'}, solid_geometry=[geo],
+                           tools={10: {'type': 'C', 'size': 1.0, 'geometry': [{'solid': geo, 'follow': geo.exterior}]}})
+
+
+def run_etch(args):
+    from tclCommands.TclCommandEtchCompensate import TclCommandEtchCompensate
+    source = etch_source()
+    app = factory_app(source)
+    TclCommandEtchCompensate(app).execute({'name': 'cu', **args}, [])
+    return app, source
+
+
+@pytest.mark.parametrize('args', [{'thickness': 30, 'mode': 'factor', 'factor': 3},
+                                  {'thickness': 30, 'mode': 'etchant', 'etchant': 'cucl2'},
+                                  {'thickness': 30, 'mode': 'etch_list', 'etchant': 'cucl2'}])
+def test_etch_compensate_creates_the_output_with_the_grown_copper(args):
+    app, source = run_etch(args)  # 10 um lateral in every mode
+    kind, name, init = app.app_obj.new_object.call_args[0]
+    assert (kind, name) == ('gerber', 'cu_comp') and app.app_obj.new_object.call_args[1]['plot'] is False
+    new = Mock()
+    new.obj_options = {}
+    init(new, app)
+    area = sum(p.area for p in new.solid_geometry)
+    assert 100 + 4 * 10 * 0.01 < area < 100 + 4 * 10 * 0.01 + 0.01
+    assert new.tools[10]['size'] == pytest.approx(1.02)
+    assert source.solid_geometry[0].area == 100
+
+
+@pytest.mark.parametrize('args', [{'mode': 'etchant', 'etchant': 'nope'}, {'mode': 'factor', 'factor': 0},
+                                  {'mode': 'manual', 'offset': 0}, {'mode': 'bad'}])
+def test_etch_compensate_bad_input_is_a_tcl_error_and_creates_nothing(args):
+    from tclCommands.TclCommandEtchCompensate import TclCommandEtchCompensate
+    app = factory_app(etch_source())
+    with pytest.raises(FCShell.TclErrorException):
+        TclCommandEtchCompensate(app).execute({'name': 'cu', **args}, [])
+    app.app_obj.new_object.assert_not_called()

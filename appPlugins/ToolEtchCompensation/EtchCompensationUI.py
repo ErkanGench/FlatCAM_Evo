@@ -58,14 +58,14 @@ class EtchUI:
         self.gerber_combo.setRootModelIndex(self.app.collection.index(0, 0, QtCore.QModelIndex()))
         self.gerber_combo.is_last = True
         self.gerber_combo.obj_type = "Gerber"
-        grid_s.addWidget(self.gerber_combo, 0, 0)
+        grid_s.addWidget(self.gerber_combo, 0, 0, 1, 2)
 
         self.multi_cb = FCCheckBox(_("Use all selected Gerber objects"))
         self.multi_cb.setToolTip(
             _("When checked, every selected Gerber object is compensated, each into its own new object.\n"
               "When unchecked, only the object chosen above is compensated.")
         )
-        grid_s.addWidget(self.multi_cb, 2, 0)
+        grid_s.addWidget(self.multi_cb, 2, 0, 1, 2)
 
         # Utilities
         self.util_label = FCLabel('%s' % _("Utilities"), color='red', bold=True)
