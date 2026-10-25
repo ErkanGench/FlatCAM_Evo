@@ -446,6 +446,40 @@ class TestEditorOperations(PickCase):
                 self.assertIn(imported, draw_app.storage_dict[destination]['geometry'])
 
 
+class RecordingShapes:
+    """The canvas collection: it keeps what is added. The real one draws only Polygon, LineString, LinearRing."""
+
+    def __init__(self):
+        self.added, self.last = {}, 0
+
+    def add(self, shape=None, **kwargs):
+        self.last += 1
+        self.added[self.last] = shape
+        return self.last
+
+    def remove(self, key):
+        self.added.pop(key, None)
+
+    def clear(self, update=False):
+        self.added.clear()
+
+    def redraw(self, *args, **kwargs):
+        pass
+
+
+def test_erased_region_is_drawn_whole():
+    # the Eraser cut a region in 2: the record holds a MultiPolygon, and both parts must be drawn
+    region = box(0, 0, 10, 10).difference(box(5, -1, 6, 11))
+    shape = DrawToolShape({'solid': region, 'follow': region.geoms[0].exterior})
+    editor = make_editor({0: {'type': 'REG', 'size': 0.0, 'geometry': [shape]}})
+    editor.app.options.update({'global_draw_color': '#FF0000', 'global_sel_draw_color': '#0000FF'})
+    editor.shapes = RecordingShapes()
+    AppGerberEditor.plot_all(editor)
+    drawn = list(editor.shapes.added.values())
+    assert all(isinstance(geo, Polygon) for geo in drawn)
+    assert sum(geo.area for geo in drawn) == pytest.approx(region.area)
+
+
 def test_canvas_selection_brings_the_aperture_row_into_view():
     # the panel scrolls (the table has its full height): the row of the picked shape must come into the viewport
     shapes = {10 + i: aperture([pad(i * 3, 0, 1)]) for i in range(40)}

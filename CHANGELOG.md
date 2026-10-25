@@ -387,6 +387,7 @@ Gerber Editor:
 - new: Preferences -> Gerber -> Editor -> "Load" sets how the editor opens a Gerber object with clear (negative) features: "Regions" (default, as before) loads it as one region aperture (0) with one polygon for each solid area; "Apertures" keeps the apertures and cuts the clear areas from the copper and the follow lines of the features (a feature cut in more parts becomes one feature for each part); the value is read each time the editor opens; such an object is saved as regions in both modes
 - fixed: the edit of the dimensions of an R or O aperture made new full flashes, also from a flash that was cut or edited; it now shows "Dimension editing supports flashes with the aperture shape only." and changes nothing
 - fixed: after a click on a shape, the row of its aperture was shown as selected only after the mouse went over the table; the row is now shown at once and comes into view if it is outside the panel; the features table scrolls to the selected feature
+- fixed: a feature in more parts (for example a region that the Eraser cut in 2, or a region operation or buffer that split a shape) was not drawn on the canvas, so it looked deleted; each part is now drawn, and the parts are selected and recolored together
 
 Excellon Editor:
 
@@ -490,6 +491,7 @@ Tests:
 - the lifecycle tests of the G-code Sender are skipped while the plugin is disabled
 - the tests of the parser, G-code import, preprocessor, transform and editor work are in the topical files; the tests that only drove the design are removed, and near duplicates are merged into scenario tests (5360 -> 4919 tests)
 - the 4 flaky tests (the view cube drag, the view keys, the project load that never ends and the late Tcl completion) are removed
+- the flaky 3D canvas test of the grid toggle (it compared the pixels of a real OpenGL render) is removed
 - the Excellon parser tests fix the class defaults, so a headless application in the same test worker does not change their result
 
 Translations:

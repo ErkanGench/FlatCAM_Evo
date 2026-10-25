@@ -7087,11 +7087,11 @@ class AppGerberEditor(QtCore.QObject):
                                 continue
 
                             if elem in selected:
-                                index = self.plot_shape(geometry=geometric_data, color=sel_draw_color, linewidth=2)
+                                indexes = self.plot_shape(geometry=geometric_data, color=sel_draw_color, linewidth=2)
                             else:
-                                index = self.plot_shape(geometry=geometric_data, color=draw_color)
-                            if index is not None:
-                                self._rendered_shapes.setdefault(elem, []).append(index)
+                                indexes = self.plot_shape(geometry=geometric_data, color=draw_color)
+                            if indexes:
+                                self._rendered_shapes.setdefault(elem, []).extend(indexes)
 
             if self.utility:
                 for elem in self.utility:
@@ -7153,11 +7153,11 @@ class AppGerberEditor(QtCore.QObject):
             if solid is None or solid.is_empty:
                 continue
             if shape in selected:
-                index = self.plot_shape(geometry=solid, color=sel_color, linewidth=2)
+                indexes = self.plot_shape(geometry=solid, color=sel_color, linewidth=2)
             else:
-                index = self.plot_shape(geometry=solid, color=draw_color)
-            if index is not None:
-                self._rendered_shapes.setdefault(shape, []).append(index)
+                indexes = self.plot_shape(geometry=solid, color=draw_color)
+            if indexes:
+                self._rendered_shapes.setdefault(shape, []).extend(indexes)
         self.shapes.redraw()
         if hasattr(self, '_rendered_geometry'):
             self._rendered_geometry.update((shape, shape.geo.get('solid')) for shape in shapes)
@@ -7166,26 +7166,28 @@ class AppGerberEditor(QtCore.QObject):
 
     def plot_shape(self, geometry=None, color='#000000FF', linewidth=1):
         """
-        Plots a geometric object without rendering and returns its collection index.
+        Plots a geometric object without rendering and returns its collection indexes.
+
+        The canvas draws only a Polygon, a LineString or a LinearRing: a multipart geometry (a region that the
+        Eraser cut in 2, for example) is drawn part by part.
 
         :param geometry:    Geometry to be plotted (Any "Shapely.geom" kind or list of such)
         :param color:       Shape color
         :param linewidth:   Width of lines in # of pixels.
-        :return:            Collection index, or None for a point.
+        :return:            List of collection indexes (empty for a point).
         """
 
         if geometry is None:
             geometry = self.active_tool.geometry
 
         try:
-            return self.shapes.add(shape=geometry.geo, color=color, face_color=color, layer=0, tolerance=self.tolerance)
+            return [self.shapes.add(shape=geometry.geo, color=color, face_color=color, layer=0,
+                                    tolerance=self.tolerance)]
         except AttributeError:
-            if isinstance(geometry, Point):
-                return
             if len(color) == 9:
                 color = color[:7] + 'AF'
-
-            return self.shapes.add(shape=geometry, color=color, face_color=color, layer=0, tolerance=self.tolerance)
+            return [self.shapes.add(shape=part, color=color, face_color=color, layer=0, tolerance=self.tolerance)
+                    for part in shapely.get_parts(geometry) if not isinstance(part, Point) and not part.is_empty]
 
     def on_shape_complete(self):
         pass

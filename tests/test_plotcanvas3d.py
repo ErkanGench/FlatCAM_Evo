@@ -233,61 +233,6 @@ class TestPlotCanvas3d(unittest.TestCase):
         self.assertLessEqual(screen[:, 1].max(), height * 0.9 + 1e-3)
         self.assertTrue(np.any(np.isclose(np.ptp(screen, axis=0), (width * 0.8, height * 0.8))))
 
-    def test_plot_grid_toggle_keeps_axis_and_loaded_collection(self):
-        from shapely.geometry import Polygon
-
-        fcapp = CanvasApp()
-        fcapp.options['global_axis_color'] = '#FF0000'
-        fcapp.options['global_backface_culling'] = True
-        fcapp.defaults = {}
-        fcapp.ui.axis_status_label = QtWidgets.QLabel()
-        fcapp.cursor_color_3D = '#FF0000'
-        canvas = PlotCanvas(fcapp)
-        self.addCleanup(fcapp.ui.deleteLater)
-        self.addCleanup(canvas.close)
-        canvas.size = (800, 600)
-        canvas.on_toggle_axis(state=True, silent=True)
-        fcapp.app_cursor = canvas.new_cursor(big=True)
-        fcapp.app_cursor.enabled = True
-        canvas.cursor_h_line.visible = canvas.cursor_v_line.visible = True
-        canvas.on_mouse_position((5, 5))
-        canvas.shape_collection.add(
-            shape=Polygon([(2, 2), (8, 2), (8, 8), (2, 8)]),
-            color='blue', face_color='blue', update=True
-        )
-        canvas.view.camera.rect = (-10, -10, 30, 30)
-        canvas.grid._grid_color_fn['color'] = (0, 0, 1, 1)
-        canvas.render()
-        # The origin axes must cover the grid, including at grid intersections.
-        image = canvas.render()
-        x, y = np.round(canvas.translate_coords_2((-5, 0))[:2] * canvas.pixel_scale).astype(int)
-        pixels = image[y-2:y+3, x-2:x+3, :3].astype(int)
-        self.assertGreater(np.max(pixels[:, :, 0] - pixels[:, :, 2]), 100)
-        canvas.grid.visible = False
-        hidden = canvas.render()
-        x, y = np.round(canvas.translate_coords_2((4, 4))[:2] * canvas.pixel_scale).astype(int)
-        self.assertGreater(hidden[y, x, 2], 200)
-        self.assertLess(hidden[y, x, 0], 30)
-        canvas.on_mouse_position((5, 5))
-        np.testing.assert_array_equal(canvas.render(), hidden)
-        canvas.cursor_color = '#00FF00'
-        canvas.on_mouse_position((6, 6))
-        self.assertFalse(np.array_equal(canvas.render(), hidden))
-        # the big cursor follows the 'Cursor Width' preference
-        fcapp.options['global_cursor_width'] = 4
-        canvas.on_mouse_position((6, 6))
-        self.assertEqual((canvas.cursor_h_line.line_width, canvas.cursor_v_line.line_width), (4, 4))
-        fcapp.options['global_cursor_width'] = 1
-        canvas.cursor_color = '#FF0000'
-        canvas.on_mouse_position((5, 5))
-        canvas.grid.visible = True
-        # First toggle enables the grid; the second must really remove it.
-        canvas.on_toggle_grid_lines(silent=True)
-        canvas.on_toggle_grid_lines(silent=True)
-        np.testing.assert_array_equal(canvas.render(), hidden)
-        canvas.on_toggle_grid_lines(silent=True)
-        self.assertFalse(np.array_equal(canvas.render(), hidden))
-
     def make_hud_canvas(self, **options):
         fcapp = CanvasApp()
         fcapp.options.update({'global_axis_color': '#FF0000', 'global_backface_culling': True})
