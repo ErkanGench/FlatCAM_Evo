@@ -34,6 +34,10 @@ Isolation:
 - the preference key tools_iso_tool_cutz is removed (it was not used)
 - Tcl isolate: new options -milling_type, -pad_passes, -tool_shape, -vtipdia, -vtipangle, -cutz, -simplify, -except_obj and -rest (with a list of diameters); several Gerber objects as a comma separated list; the values are checked; the tool data of the result has the real diameter and the isolation job type
 - Tcl isolate: the default name of an exterior or interior isolation is now <name>_ext_iso or <name>_int_iso; each separate pass has its own name
+- fixed: a diameter that was rejected (it is the same as the diameter of another tool) still changed the data of the tool; the data are now applied only when the diameter is accepted
+- fixed: a change of the V-tip diameter, the V-tip angle or the Cut Z updated the table before the new tool diameter was checked; it now goes through the check of the tool diameter
+- fixed: a run used the tools of the table at the time the job started in the worker; the tools are now copied when Generate is clicked, so an edit of the table during the run does not change the run
+- fixed: the traced outline of the isolation boundary went through the excluded area (Tcl -except_obj); the trace now leaves out the excluded area
 
 Non-Copper Clearing:
 
@@ -42,6 +46,8 @@ Non-Copper Clearing:
 - the tool check runs in the worker; the Tcl command uses the same code as the GUI
 - new: Preview button, an Exclusion areas section, "All selected objects", a simplification preference
 - Tcl ncc: new options -iso_tooldia, -milling_type, -final_cleanup, -simplification, -area, -exclude and -plot; the output names _ncc and _ncc_rm are fixed
+- fixed: with "All selected objects", the preview showed only the first object; it now shows the area of all the selected objects
+- fixed: the tool path near an exclusion area was clipped too close, so the tool cut into the exclusion area; the exclusion area is now grown by the tool radius, corrected for the number of circle segments
 
 Paint:
 
@@ -49,6 +55,10 @@ Paint:
 - the tool check tests that the tool fits inside the selected polygons
 - new: Preview button, "Selected objects" (one job for each selected Geometry or Gerber object), a rest offset and a check preference
 - Tcl paint: new options -rest, -rest_offset, -simplification, -final_cleanup, -ref and -area; a failure gives a Tcl error
+- fixed: the preview stayed on the screen after a change of the offset, the rest offset, the tool selection, the rest machining, the reference object or the reference type; it is now cleared
+- fixed: the check that the tools fit used the polygons before they were merged, but Generate paints the merged polygons; the check now uses the merged geometry
+- fixed: a Reference Object made of closed lines (not polygons) gave an empty area; the closed outlines are now used as polygons (open paths are not)
+- fixed: with "Selected objects", the object in the drop-down was checked first, and a missing object gave an error; the drop-down object is now used only without "Selected objects"
 
 Follow:
 
@@ -68,6 +78,7 @@ Invert Gerber:
 - the inversion is one union and one difference; the work runs in the worker with Stop and one Undo step
 - new: the source can be the object or a selection; the reference can be the object itself or an other object (Box or Exact); the margin is converted to the app units
 - new: Tcl command invert_gerber, and new preferences
+- fixed: the source, reference and area radio buttons had no checked button when the plugin opened; "Object", "Itself" and "Box" are now selected
 
 Etch Compensation:
 
@@ -81,12 +92,15 @@ Drilling:
 - fixed: a wrong number in the toolchange X,Y gave a crash; it now gives an error
 - fixed: the drill travels went around the exclusion areas also when the tool did not use them
 - the tool table keeps the selection when it is made again for the same object
+- new: "Probe plate thickness" in the plugin (shown for the preprocessors with probing, next to the probe depth) and in Preferences > Tools > Drilling (advanced, default 0.0); it is the thickness of the touch plate: after the probing the tool tip is set to this height, so Z = 0 stays the top of the material
+- new: Tcl drillcncjob option -pplate (the probe plate thickness; the default is the value of each tool)
 
 Milling:
 
 - fixed: the form values were applied in the wrong order of level and preprocessor; the tool label showed the wrong column; the Excellon totals were not reset
 - fixed: multi-depth was used for a laser preprocessor; a laser cuts at one height
 - a change in the form is one light Undo step
+- new: "Probe plate thickness" in the plugin and in Preferences > Tools > Milling (advanced, default 0.0), for Toolchange_Probe_MACH3, as in Drilling
 
 QR Code:
 
@@ -102,9 +116,359 @@ G-code Sender:
 
 - the plugin is now named G-code Sender (ToolGcodeSender); it does not open until it is finished
 
+Gerber Parser:
+
+- fixed: a track drawn with a rectangular (R) aperture became the bounding box of its first segment; a polyline or a diagonal track now has the true swept shape of the rectangle on each segment
+- fixed: a track drawn with an obround (O) or a polygon (P) aperture used the diagonal of the aperture as its width (O0.5x0.5 gave 0.707); the aperture shape is now swept along the track
+- fixed: a track drawn with a macro (AM) aperture made the whole file fail at a D02, at a polarity change (%LPC%) or at the end of the file; the macro shape is now swept along the track
+- fixed: a region with more contours separated by D02 kept only one contour when a rectangular aperture was selected before G36; a bare D02* in a region did not close the contour
+- fixed: a region that crosses itself lost one of its parts when it was repaired; the repair now keeps all the polygonal parts, and the aperture data keeps all the parts of a repaired region
+- fixed: incremental coordinates (%FSLI...% and G91) were read as absolute coordinates
+- fixed: with trailing zeros (%FST...), a "+" sign was counted as a digit (X+1 gave 1 in place of 10)
+- fixed: an arc in a file without G74/G75 was not drawn; the single quadrant mode is now the default
+- fixed: in G01 mode, a line with I/J values was read as an arc and was dropped
+- fixed: a single quadrant (G74) arc larger than 90 degrees was not drawn correctly
+- fixed: a D01 before any D02/D03 made the parse of the file fail
+- fixed: an OrCAD format line set the units of the file to "G74" or "G75"
+- fixed: a line with an attribute (%TO, %TA, %TD, %TF) was deleted whole, together with the flash or the draw on the same line
+- fixed: two extended commands on one line (%ADD10C,1*%%ADD11C,2*%), an aperture definition on more lines or a "*%" on the next line made the file fail or the command was ignored; the file is now split into commands, not into lines
+- fixed: lowercase commands were not understood
+- fixed: the tracks were 0.05% too wide (the width was divided by 1.999 in place of 2)
+- fixed: a flash of an aperture that can not be made is skipped with a warning in the log; before, the whole file failed
+- new: step and repeat (%SR...%), also with a polarity change inside the block
+- new: aperture blocks (%AB...%), also nested; a block is flashed like an aperture
+- new: load mirror, load rotation and load scale (%LM, %LR, %LS); they change the flashes and the tracks that come after them, not the regions (as the Gerber specification says); the order is mirror, then rotation, then scale
+- new: holes in the standard apertures (C, R, O and P, for example C,1X0.5)
+- new: the deprecated image commands OF (offset), SF (scale factor), MI (mirror image), IR (image rotation) and IPNEG (negative image); SF scales only the coordinates, not the aperture sizes; AS (axis select) is not supported and a warning is written in the log
+- new: IPNEG inverts the image inside its bounding box, and the user gets a warning that says this
+- new: the X2 attributes (TF, TA, TO and TD) are kept with the Gerber object and are saved in the project
+- new: coordinates with a decimal point (not allowed by the format) are read as absolute values, with a warning in the log
+- the file is parsed about 2 times faster: each flash shape is made once for each aperture and then moved, the tracks of an aperture are swept in one step, the clear (LPC) parts cut only the dark parts that they touch, and the joining of the polygons uses a faster closing step (a test file: 7.0 s -> 3.7 s)
+- the distance buffer of a Gerber object (Transform plugin) buffers the solid geometry and all the aperture records in one step; a distance that is not a number is refused, and a failure leaves the object unchanged
+
+Aperture Macros:
+
+- fixed: a macro that used "x" for a multiplication but had no modifiers, and a Vector Line, Center Line or Polygon primitive with fewer modifiers than declared (for example a Center Line without the rotation), made the whole file fail
+- fixed: a macro with variables used a wrong value for a negative number, a division, spaces, the variables $10 and up ($1 was replaced inside $10) or a variable that was not defined; every $n is now replaced by its value in brackets, and an undefined variable is 0
+- fixed: the Circle primitive ignored its rotation angle; the Moiré and the Thermal primitives ignored the rotation, and the crosshair length of a Moiré is now the total length of each line
+- fixed: a Polygon primitive with the number of vertices from a variable made the parse fail
+- fixed: a primitive with no size (a width or a height of 0) could make a geometry collection, and the code then moved the geometry by 0.0001; such a primitive is now skipped and no primitive is moved
+- fixed: an unknown primitive in a macro is skipped with a warning; a Moiré with a ring thicker than the circle made a crash, it is now a disk
+- the circles of the macro primitives use the circle steps of the Gerber object
+
+Excellon Parser:
+
+- fixed: after the first route (G00 + M15 ... M16), the drills of the next tools were not read; the parser now has a real drill mode and route mode (G05, M15, M16, M17)
+- fixed: a route with more segments or with a second G01 kept only one slot, and the arcs of a route (G02/G03 with A or I/J) made no geometry; now each segment of a route is a slot and an arc is made of short slots
+- fixed: a tool that was used but not defined made the import fail; it now gets a default diameter and a warning
+- fixed: a file without a header (no M48 and no %) ignored the diameter in "T1C0.8"; a G93 line without a tool was read as a drill
+- fixed: the units of the preferences overwrote the METRIC/INCH units of the header
+- fixed: after M71/M72 or the Allegro ";Holesize ... MILS" comments, the units were guessed again from the diameters (a PADS file with M72 was read in mm)
+- fixed: a bare INCH or METRIC line (without LZ/TZ) set the zeros to "trailing", and the coordinates were 10000 times too small
+- fixed: a change of the units (M71/M72) in the body did not convert the values that came after it
+- fixed: a comment in the header with the word INCH or METRIC converted the tools
+- fixed: a comment in the body cleared the modal coordinates, so the next drill was lost
+- fixed: the R repeat with decimal coordinates put all the copies in the same place
+- fixed: a tool with its parameters in a different order (T1F200S65, T01Z-0.1F200C0.8) made the parse fail or lost the tool
+- fixed: a coordinate with a decimal point next to one without (X10.5Y020000), and "X2.0G85X4.0", were not read
+- fixed: "M97,REV X1" made a drill; M02X..Y.. was read as a drill
+- fixed: lowercase files had no tools; tabs at the end of a line were kept
+- fixed: a tool defined again in the body (T1C1.2 after T1C0.8 in the header) kept the old diameter
+- fixed: a G85 slot did not set the modal X/Y of the next drill, and a slot could not start from the last drill
+- fixed: a ";HEADER" text inside any comment switched the parser to the Allegro mode
+- fixed: a file with a UTF-8 BOM lost its first header line; an error in the parse now writes the reason in the log
+- fixed: the parser wrote the state of the file into Excellon.defaults, a dictionary that all the objects share
+- new: incremental coordinates (G91 and ICI,ON) and the G93 zero set
+- new: pattern repeat (M25, M01, M02X..Y..) with M70 (swap X/Y), M80 (mirror X) and M90 (mirror Y); the mirror and the swap change only the copy of their own M02 line
+- new: the plated / non-plated flag of each tool, from the KiCad attributes (TF.FileFunction, TA.AperFunction), the Altium ";TYPE=PLATED" comment and the Allegro "PLATED / NON_PLATED" comments
+- new: the KiCad "; FORMAT={3:3/ ...}" comment gives the number format; FMAT and VER are read; the M97/M98 canned text and the M47 messages are ignored
+- new: Excellon.merge_equal_diameter_tools() can join the tools with the same diameter (it is not used by default, so the saved files keep their tools)
+- new: the user gets a warning when lines of the file were not understood or holes were dropped
+- a file with 100000 drills opens about 20 times faster (about 15 s -> 0.7 s): the source text is not copied for each line, a plain drill line has a fast path, the numbers use a cached divisor and the holes of a tool are made from one template circle
+- the conversion of the units after the import makes the geometry only once (before, 3 times)
+
+Circle Steps (Gerber, Excellon, Geometry):
+
+- new: Preferences > Gerber, Excellon and Geometry > "Circles": Adaptive (default) or Fixed; the label has a tooltip that explains the two modes
+- new: Adaptive gives each circle the number of segments that keeps it inside the "Max Deviation" (in µm) from the true circle; a small pad gets few segments and a large arc gets many (at least 16, at most 1024, a multiple of 4); the default deviation is 2 µm for Gerber and 5 µm for Excellon and Geometry
+- new: Fixed uses the "Circle Steps" value for every circle, as before; the field is shown only in the Fixed mode
+- all the code uses the same setting for its circles: the Gerber and Excellon parsers, the Gerber, Geometry and Excellon editors, Isolation, Non-Copper Clearing, Paint, Milling, Drilling, Etch Compensation, Invert Gerber, Fiducials, Markers, Punch Gerber, QR Code, Image, the PDF, HPGL2 and SVG import and the Tcl commands
+- the default circle steps are now 64 for Gerber, 32 for Excellon and Geometry and 16 for Copper Thieving
+- the PDF import uses the Gerber circle setting for the strokes and the round ends
+- Tcl subtract_objects: when -steps is not given, the steps come from the circle setting of the target kind and the largest radius (margin or drill)
+
+Open G-Code:
+
+- new: File > Open G-Code makes a CNC job like the jobs of Drilling and Milling, from any G-code: the tools, the toolpaths, the drill hits, the bounds, the travel distance and the routing time come from the text of the file (new parser appParsers/ParseGCode.py)
+- new: the job type (Geometry or Excellon) is read from the "TYPE: G-CODE FROM ..." header of a FlatCAM file; for other files, a file that has only drill hits (no cutting moves) is an Excellon job, and all the others are Geometry jobs
+- new: the preprocessor name is read from the FlatCAM header; when the name is not known, the "default" preprocessor is used
+- new: the file is split into tool blocks at each T word; the tool diameter is read from comments like "(Tool: 1 -> Dia: 0.8)", "(T1 D0.8)" or "(D0.8)", and the cut Z from "Tool: 1 -> Z_Cut: -1.7"
+- new: the text of the file stays as it is: the line endings, the comments and the spacing do not change; the file is read as UTF-8 (latin-1 if it is not UTF-8) and written back with the same encoding and the same line endings
+- new: the Source File of the job is the file; the job has no FlatCAM header, no start code and no footer, and the Prepend / Append snippets are added only when the snippets checkbox is checked
+- new: a file without a tool diameter gets the default diameter of the application (the first "Drill tooldia" of Excellon for drills, the first "tooldia" of Milling for the other jobs; 0.8 mm or 2.4 mm if the preference is empty)
+- new: Cut Z, Travel Z, Feedrate X-Y, Feedrate Z and Spindle speed that the file does not give come from the Drilling or Milling preferences; one warning tells the user which values and which tool diameters are the defaults
+- new: the warning also says when the file has no G20 / G21 (then the units of the application are used) and lists the unsupported parts of the file (the first 3, then the number of the others)
+- new: the units of the G-code (G20 / G21) are read and the job is converted to the units of the application; a change of the units inside the file is ignored with a warning (the first units are kept)
+- new: the parser reads G0, G1, G2 and G3, G90 / G91, G90.1 / G91.1 (the mode of the arc centre), G92 / G92.1 (offset) and G98 / G99, and skips the G28, G30 and G53 lines
+- new: arcs are read with I J K or with a radius R (a negative R is an arc over 180 degrees), also a full circle; the arcs are made with the circle steps setting
+- new: arcs in the G18 and G19 planes (and G17) are read, with a linear third axis (helix); when the start position of a G18 / G19 arc is not known, the arc is drawn as a straight line with a warning
+- new: the canned drill cycles G73, G81, G82, G83, G85, G86 and G89 give one drill hit for each XY position (with the R plane, the depth, the G98 / G99 retract and the incremental mode)
+- new: a plunge that never moves in XY is a drill hit, and one straight XY cut after a plunge is a slot; the hits and slots of an Excellon job are counted for each tool; the drill rings are drawn with the tool diameter
+- new: Fanuc subprograms (M98 / M99 with O numbers, G65 macro calls with the argument letters) and LinuxCNC subroutines (o<name> sub / call / endsub / return) are followed; a call of a missing subprogram is skipped with a warning; calls nested more than 16 levels deep are skipped
+- new: macro variables (#1, #<name>, global and local), expressions in [ ] (+ - * / MOD ** AND OR XOR, EQ NE GT GE LT LE, SIN COS TAN ASIN ACOS ATAN SQRT ABS ROUND FIX FUP LN EXP POW), GOTO, IF / THEN, WHILE / DO / END and the LinuxCNC o-word IF / ELSEIF / ELSE, WHILE, DO, REPEAT, BREAK and CONTINUE are run offline; the job shows the lines that the machine would run, each line in the tool block of its call
+- new: the expansion stops with a warning after 200000 lines, and one loop stops after 10000 turns; a value that is not known offline (a machine variable) skips the moves that use it, and a write to a machine variable is ignored, both with a warning
+- new: Move, Rotate, Scale, Mirror and Skew of an imported job change the X, Y, I and J words in the G-code text (the comments, the line order, the line endings and all the other words stay), with the decimals of the "CNC job coordinates decimals" setting, and the job is parsed again; the Source File and the saved file have the new coordinates
+- new: a transform that is not a rotation by 90 degrees, a scale or a mirror (for example a skew) replaces the arcs with short straight segments; a scale or a mirror keeps the arcs (I and J scale with them, and a mirror changes G2 to G3)
+- new: a transform replaces the arcs in the G18 / G19 planes with straight segments; the lines with G53, G28, G30 or G10 and X / Y are not transformed; relative (G91) moves are transformed as vectors; all with a warning in the log
+- new: a job that has macro variables or subprograms can not be moved, transformed or levelled; the plot and the text stay as they are, and the user gets the message "The G-code has macro variables or subprograms: it can not be moved or transformed" (or "... it can not be levelled") with the name of the object
+- new: a change of the units of an imported job scales the parsed geometry and the drill positions; the text of the file is never changed
+- new: the Project tab has an Open entry for the CNC Job category, which opens a G-code file
+- new: in the Tools tab of the job and in the tool table of the G-code Editor, a tool without a diameter or with older data does not crash; the Cut Z column of the Excellon table works for jobs that have no "offset" in the tool
+- fixed: a G-code file with comments in "( )" or ";", lowercase letters or more than one G word on a line (for example "G90 G21 G1") was read wrong; the parser now ignores the comments, reads the lowercase words and all the G words of the line, and does not take an exponent (1e3) for a word
+- fixed: Open G-Code gave the error "Probable not a GCode file" for any file that FlatCAM did not make; a file that holds no motion now gives "This is not GCODE", and the other errors are shown once (no second error message)
+- fixed: the old reader looked only for the text "Tool: n -> Dia: d" of a FlatCAM file; the job of an imported file now plots and has tools in the tool table and a real travel distance, routing time and bounds
+
+CNC Job:
+
+- new: an imported job has the attributes "gcode_imported" and "gcode_encoding", which are saved in the project; Save Source File writes the text as it is
+- new: after a Move, a Transform or a change of the origin, the Source File of a job is made again from the current G-code (before, the saved G-code kept the old coordinates, which is not safe); this reads no widget, so it can run in the worker
+- new: a transform of a job of the application changes the G-code text of each tool with the matrix; for the Roland and HPGL preprocessors only the plot follows, and the message "The machine code of the Roland/HPGL preprocessors is not transformed, only the plot is. Generate the job again." is shown
+- fixed: "Update Source File" of an imported job added a FlatCAM header, a start code and a footer to the original file; it now gives the original text, with the snippets only if the checkbox is checked
+- fixed: the default "tooldia" of a new CNC job was 0.03937 in all the units (0.4 mm in inches); it is now 0.4 for MM and 0.01575 for inches
+- fixed: an old project with a CNC job tool that has no diameter, "offset" or "gcode_parsed" gave an error when the tool table or the plot was made; a missing diameter is now the diameter of the job
+- fixed: the Cut Z of an Excellon CNC job tool was wrong or made a crash when the tool data had "offset_z" or no "tools_drill_cutz"
+- fixed: the plot parser of the jobs of the application read G91 (incremental) moves as absolute; X, Y and Z are now relative to the last position in G91
+- fixed: in the plot of a job, G2 / G3 arcs with R (radius) or with G90.1 (absolute centre) were drawn wrong or made a crash; a missing I or J is 0
+- fixed: in the plot of a job, a line with G53, G28 or G30 was drawn as a move, and a line with more than one G word (for example "G21 G90") lost its motion mode; only G0 to G3 change the motion mode now
+- fixed: the diameter of each hole of an Excellon job was found with a loop over all the drills for each Z move; it is now one table (faster for a job with many holes)
+
+Preprocessors:
+
+- fixed: the G-code was made with str.format(**p) on a text that already had the coordinates, so a "{ }" in a value could make a preprocessor error; all the 28 preprocessors now make the move lines without format(**p)
+- fixed: a preprocessor error gave a missing line in the G-code without a message; the user now gets the warning "Preprocessor error, G-code is missing: <method> - <error>" once for each preprocessor method of the job
+- fixed: a preprocessor method that has nothing to write (a dwell of 0, the tool change of a laser) gave an empty line in the G-code; it now gives no line
+- fixed: the Z of a deep pass (multi-depth) was given to the preprocessors as a Decimal, which made Roland and ISEL ICP fail; it is now a number
+- fixed: the extra-cut moves of a ring (Extra cut) did not give the cut Z to the preprocessor, so a preprocessor that writes the Z on the move line (Line_xyz) used a wrong Z
+- the move line (linear_code) is about 3 times faster: the preprocessors use one shared position code in the base class, and the line is joined, not formatted
+- fixed: the bed offset and the bed skew of the machine were not applied the same way in all the preprocessors (ISEL ICP used the X for the Y skew and offset; Roland and HPGL applied them after the conversion to machine units); all the preprocessors now add the offset and apply the skew to the job point, in the job units
+- fixed: the end moves (End Z and End X,Y) were missing or wrong in some preprocessors: Marlin_laser_FAN_pin, Marlin_laser_Spindle_pin, GRBL_laser, GRBL_laser_z, default_laser, Line_xyz, grbl_laser_eleks_drd, Paste_1, Paste_GRBL and Paste_Marlin now write the end coordinates with the "Coordinates decimals" of the job; NCCAD9 now always writes the End Z, also without an End X,Y; the X-Y end move is not made below the Travel Z
+- fixed: the Z of the end moves and of the Paste end moves was written with the feedrate decimals; it now uses the coordinate decimals
+- fixed: the dwell code of default, Default_no_M6, GRBL_11, GRBL_11_no_M6, Berta_CNC, Line_xyz, Toolchange_Manual and Toolchange_Probe_MACH3 wrote "None" when the dwell is 0; it now writes no line
+- fixed: the header of Berta_CNC, GRBL_11_no_M6, ISEL_CNC, Line_xyz, grbl_laser_eleks_drd and ISEL_ICP_CNC had the line "Steps per circle" 2 times; Berta_CNC also had the tool diameter and the feedrate lines 2 times
+- fixed: the base preprocessor class now has startz_code, z_feedrate_code, dwell_code, position_code and coord(), so a preprocessor file of the user that does not define them still works
+- default_laser, GRBL_laser, GRBL_laser_z: the laser min power can be empty (it made a crash); default_laser writes "S0" with the laser ON code when the min power is 0 (it wrote no S)
+- GRBL_laser_z, Marlin_laser_z: the tool header (feedrate, Z focus, laser power) works for an Excellon job: it takes the Milling keys, then the Drilling keys, and writes "-" when a tool has none (it was a KeyError); Marlin_laser_z also writes the rapid feedrate and the laser min power for both job types, and the line "X,Y Toolchange: None" had the wrong text "X,Y End"
+- Marlin_laser_z: the "Feedrate rapids" lines were written with "(" and not with ";" as a comment
+- Marlin: the first line of the header ends with a new line; the "Spindle Speed" comment has no extra ")"; the file now sets G90 (absolute) after G20 / G21
+- Marlin: the tool change has no M6 and no T (in Marlin, T selects an extruder): it is M5 (spindle stop), Z toolchange, X,Y toolchange, "M0 Change to tool T<n> dia <d>" (with "drills <n>" for Excellon), Z toolchange
+- Marlin and Repetier: the dwell is in seconds; they write "G4 S<seconds>" for whole seconds and "G4 P<milliseconds>" for the other values (before, G4 P got the seconds, so the dwell was 1000 times too short)
+- Marlin_laser_FAN_pin: the M106 power is an integer from 0 to 255 (before, a spindle speed like 1000 was written)
+- Repetier: the M106 (fan) power is limited to 0 - 255; the tool change now has M400 (wait for the moves) and M107 (fan off) and no M84 (it switched off the motors)
+- Repetier, NCCAD9: the Z move to zero uses the Z feedrate (it used the X-Y feedrate)
+- Default_no_M6: the tool change message has the tool number: "Change to Tool T<n> Dia = <d>"
+- Check_points, Toolchange_Manual, Line_xyz: the tool change line "G00 X.. Y.." has a space between X and Y; Check_points and Toolchange_Manual do not write spaces at the end of the lines
+- Toolchange_Manual: the Excellon message after the tool change says "Drilling with Tool Dia" (it said "Milling")
+- Line_xyz: the tool change moved to a Y equal to the X value; it now moves to the Y; the tool change of an Excellon job for the first tool (no old position) uses 0 and does not crash; the start Z, lift, down and up-to-zero moves have the bed offset and skew
+- NCCAD9: the "Tools Offset" header used the key exc_cnc_tools, which does not exist; it now uses the tools of the job; the file sets G90; a tool change X or Y of 0 is now used (before, it switched the X,Y move off)
+- ISEL_CNC: G70 for inches (it was always G71 for mm); the tool change goes to the Z toolchange (the Start Z for the first tool), to the X,Y toolchange, then T, M06 and M00 (a mandatory stop; M01 does not stop when the optional stop is off), then to the Z toolchange again
+- ISEL_ICP_CNC: the units are micrometres for MM and for inches (before, an inch job was 25.4 times too small); the VEL feedrate is in micrometres per second; the tool change goes to the Z toolchange and the X,Y toolchange, stops the spindle and then sends GETTOOL; End Z and End X,Y are written (before, the end always moved to the machine zero); the "Spindle Speed" comment has no extra ")"
+- grbl_laser_eleks_drd: the drill circles (0.1 mm and 0.2 mm radius) are in the job units (an inch job had a radius 25.4 times too large) and at the hole with the bed offset and skew; the end code uses the End X,Y (it used the toolchange X,Y); the spindle direction line does not crash when the value is not a text
+- Roland_MDX_20: X, Y and Z now use 40 units per mm (the RML-1 unit is 0.025 mm); before, X and Y used 100 units per mm, so the job was 2.5 times too large in X and Y; the coordinates are integers; an inch job is converted to mm first
+- Roland_MDX_540: the coordinates are integers in units of 0.01 mm (100 per mm) as before; the feedrate range is 0.1 to 125 mm/s (before, it had the 15 mm/s range of the MDX-20)
+- Roland_MDX_20, Roland_MDX_540: the feedrate V is limited to the range of the machine (a feedrate under 6 mm/min was set to 6 mm/s; now it is the lowest valid value, 0.1 mm/s), and the feedrate of an inch job is converted to mm/min first
+- Roland_MDX_20, Roland_MDX_540: the "up to zero" move made a crash (a text plus the number 0); the spindle ON line works without a spindle speed (it writes only "!MC1;"); the spindle speed can be a decimal
+- hpgl: this is an HP-GL plotter preprocessor, not a Roland one (the comment is changed); the coordinates are integers in plotter units of 0.025 mm (40 per mm), with the bed offset and skew in the job units and a limit of -32768 to 32767
+- Toolchange_Probe_MACH3: after the probing, the Z is set with "G92 Z<probe plate thickness>" (it was "G92 Z0"), and the height between the moves includes the plate; the message shows the plate thickness when it is not 0
+- Toolchange_Probe_MACH3: the tool change goes to the Z toolchange and the X,Y toolchange first, then T and M6 (before, T and M6 came before the move); the Start Z (G00 Z) is written before the probe warning when it is set
+- Paste_Marlin: the tool change message is "M0 Change to tool with nozzle dia <d>" (Marlin shows the text of M0; ";MSG" is a comment)
+
+Levelling:
+
+- new: an imported G-code job can be levelled (before, it needed a segmented G-code made by the application); the long G1 moves of the file are split into shorter pieces (the segment length of the plugin), so the height map also levels the cut between the ends; the message "Long moves split into shorter line moves: <n>" shows how many
+- new: the levelled job of an imported file is again an imported job; its tools, text and plot follow the levelled text
+- fixed: the height map (in the units of the application) was applied to a file in the other units with the wrong scale; the probe X, Y and Z are now converted to the units of the file text before they are written in it
+- a job with macro variables or subprograms can not be levelled (see Open G-Code)
+
+G-code Editor:
+
+- fixed: a click on a tool in the tool table selected the wrong text (the first column is the row number, not the tool); the row is now found by the hidden tool key, and the tool of an imported job selects its exact block in the editor, also when 2 tools have the same diameter
+- fixed: a click on the Header or the Start code row made a crash when the job has no such code
+- fixed: the Cut Z column of the Excellon table made a crash for tools without "offset" or "tools_drill_cutz"
+
+Transform:
+
+- new: the buttons "Skew X/Y", "Scale X/Y" and "Offset X/Y" do the action on both axes in one step (one Undo step); with Link checked, the X value is used for both axes
+- new: the Transform plugin works only on Gerber, Excellon and Geometry objects; a CNC job or other object in the selection is skipped with a warning that names it
+- fixed: the Rotate, Skew, Scale, Offset, Flip and Buffer buttons used the selection at the time the worker ran; the selection is now taken at the click
+- fixed: a second click while a transformation was still running started a second one at the same time; it now shows "Another transformation is still running. Please wait for it to finish."
+- fixed: an empty or wrong number in an entry, or a point that is not finite, gave a crash or a wrong result; it now shows "Invalid numeric value" or the message of the Point format, and nothing changes
+- fixed: Rotate by 360 degrees (or a multiple), Skew by 0 degrees, Scale by 1 and Buffer by 0 did a step that changed nothing; they now show "... would not change anything."
+- fixed: Skew by 90 degrees (and 90 + n x 180) collapsed the geometry; it is refused; Skew by 180 degrees is now allowed because it collapses nothing
+- fixed: a transformation that can not be undone (a matrix that collapses the geometry) changed the object; it is now refused before any object changes
+- fixed: when the transformation of one object failed, its Gerber or Excellon source text was left changed; the exact old text is now put back
+- fixed: after Rotate, Skew, Scale, Flip and Offset, the Gerber and Excellon source (in the project file and "Save source") did not follow the geometry; it is made again after each step
+- fixed: Buffer of an Excellon or Geometry object did not report a failure; a failed buffer is now an error and the object does not change
+- fixed: the Offset field of the Properties tab was filled from the worker thread; it is now filled in the GUI thread with the bounds that are already known
+- fixed: the plugin closed the wrong tab when the notebook tabs were in a different order, and a new tab could close at once; the plugin now closes only its own tab
+- fixed: the Point and Object fields of the reference stayed hidden or shown after the plugin was opened again; they follow the selected reference
+- fixed: a deleted or empty Reference object made a crash; it now shows "Reference object not found" or "Reference object has no geometry"
+- the entries of Scale, Offset X and Offset Y have a range of -1e6 to 1e6
+- the buttons "Flip on X" and "Flip on Y" are now "Flip X" and "Flip Y"; the tooltips say which coordinate is mirrored (Flip X mirrors X over the Y axis, Flip Y mirrors Y over the X axis), that Rotate, Skew, Scale and Flip use the reference point and that Offset does not use it
+
+Move:
+
+- fixed: a move offset that is not a number or is infinite made a crash; it now shows "Invalid move offset."
+- fixed: a second move that started while the first one was in the worker overlapped it; it now shows "A move is already in progress. Wait for it to finish, then retry."
+- fixed: a failure inside the move job left the plugin blocked; the plugin is always released when the job ends
+- fixed: the selection shape of a very thin object disappeared (it was shrunk by 0.1 mm / 0.00393 in); it is now made from the original shape
+
+Distance:
+
+- new: the fields "Segment" (the length of the preview segment, or of the last segment when the measurement is done) and "Points" (the number of the points that are set)
+- new: in the Multipoint mode, Backspace removes the last point (when the focus is not in a text entry), and a right click finishes the measurement and shows the final start, end, deltas, angle and total distance
+- fixed: with the big cursor, the cursor type was changed or not restored when the plugin started again or closed; the cursor type and color are saved at the start and restored at the end
+- fixed: the cursor did not go back to "small" when the big cursor option was cleared; the option now changes the cursor at once while the plugin runs
+- fixed: a drag of the mouse (pan) was counted as a click, and the right click after a drag finished the measurement; a drag is not a click now
+- fixed: when another tool took the mouse events, the Distance plugin stayed on and changed the call source and the command of the other tool; it now ends without a change to them
+- fixed: when the plugin tab was closed or replaced, the measurement stayed active; it now ends
+- fixed: the start, end, deltas and total distance did not show the value 0 (zero values were skipped)
+- fixed: a change of the Multipoint mode in the middle of a measurement kept the old points; the measurement starts again
+- fixed: "Snap center" switched off the grid snap also when the plugin was not active; it does this only while it measures
+- fixed: the cursor jumped to the snap point only on a click; the preview now shows the snap to the center of the pad or drill under the cursor, also at the border of the pad
+- the snap to the center of a pad or drill uses a spatial index of the visible Gerber and Excellon objects and of the pads or drills of the open editor; the index is made once and again when an object or the editor changes; for a pad inside a pad, the closest center is used
+- the snap to a Gerber pad does not use a clear (LPC) flash and needs copper under the point
+
+Film:
+
+- fixed: the PNG export scaled the geometry with the DPI of the screen; the PNG now uses only the "PNG DPI" value, and a value of 0 or less shows "Failed. Invalid PNG DPI value."
+- fixed: the position of the artwork on a page of a fixed size ignored the border; the artwork is now at the border distance from its original position
+- fixed: for the page size "Bounds", the artwork had to be in the first quadrant; the page is now the box plus a border on each side, and the artwork must only intersect it
+- fixed: the negative film checked the page with the bounds of the object; it now uses the bounds of the artwork and of the background together
+
+Geometry Editor:
+
+- new: Text tool: "Bitmap smoothing (px)" (0 to 2, default 0.5), for bitmap fonts only
+- fixed: Text tool: Bold together with Italic used the Regular face
+- fixed: Text tool: Apply with a font size of 0, a negative size or a size that is not a number showed no message or made a crash; it now shows "Enter a positive font size."
+- fixed: Text tool: a failed Apply kept the geometry of the earlier Apply, which could then be placed; the earlier result is now dropped, and a font error (for example a missing glyph) shows a message in the status bar
+- fixed: Copy as a circular array did not rotate the copies; each copy now rotates around the reference point by the array angle, in the selected direction (CW or CCW)
+- fixed: the copies of the Copy tool lost the data (for example the bounds) of their source shape; they now keep a copy of it
+- fixed: a transformation with a value that is not finite, a skew of 90 degrees, a buffer with a value that is not finite, a scale or matrix that collapses the geometry, or an empty or invalid result changed the shapes; it now shows an error and changes nothing
+- fixed: the transformation of the selected shapes shared the data dictionary with the source shape; it is a copy now
+- fixed: a failed Rotate, Mirror, Skew, Scale, Offset or Buffer in the Transformation plugin of the editor still showed a success message; a failure now stops the action
+- fixed: "Offset on Y axis" and "Skew on Y axis" of the Transformation plugin did the X action; they now do the Y action
+- fixed: the success message was shown also when the input box was cancelled; a cancel is now a warning
+- fixed: the Point field of the Transformation plugin stayed visible or hidden after the plugin was opened again; it follows the selected reference
+- fixed: the reference "Origin" was not used when it was given as the number 0
+- new: the Transformation plugin has the references "Lower Right", "Upper Right" and "Upper Left"; "Minimum" is the lower left corner of the selection
+- the buttons "Flip on X" and "Flip on Y" of the Transformation plugin are now "Reflect X (across Y)" and "Reflect Y (across X)"; the rotation label says "Angle (CW)", and the rotate dialog says "positive CW"
+- Buffer (Interior, Exterior, Full): the result is made from the contours of the polygons and lines, also for the parts of a multi-geometry; a distance that is not finite shows "Invalid distance." and the selection is kept; a failed add of the shapes stops the action; the distance is not shifted by 1e-10 any more
+
+Gerber Editor:
+
+- the Rectangle Region and the Text Regions controls are now in the Properties tab of the editor (they were in a dialog window); the "Cancel" button is now "Close"; Esc closes the panel and J jumps to a location; the panel ends when another tool is selected
+- new: Rectangle Region and Text Regions show a live preview on the canvas that follows the mouse; a click sets X and Y; Apply keeps the panel open, so more regions can be placed
+- new: Text Regions: "Bitmap smoothing (px)", as in the Geometry Editor; the text input shows the font, the size, Bold and Italic as they are set, and takes plain text only (one style for the whole text)
+- the text preview is cached, so it does not parse the font again at each mouse move; a font error of the preview is not shown at each move
+- new: the Transformation plugin has the references "Lower right", "Upper right" and "Upper left"; "Minimum" is now "Minimum (lower left)"
+- new: the Buffer plugin accepts a negative distance (range -10000 to 10000); only a negative distance can remove a shape
+- fixed: Scale, Buffer and the other Transformation actions run in the worker as one Undo step and show the success message ("Done.") only when the geometry really changed; the tool closes after the step is stored
+- fixed: Rotate, Skew, Scale and Offset with a value that is not finite, a skew of 90 degrees, a factor of 0 or a matrix that collapses the geometry showed no error; they now show "Transform values and reference must be finite and nonsingular." or "Transform matrix must be finite and nonsingular."
+- fixed: a transformation that made a coordinate that is not finite, an invalid geometry or an empty geometry changed some shapes before it failed; the whole result is now checked first and then assigned
+- fixed: Scale of a pad with an empty solid used the wrong center; the center now comes from the first geometry that is not empty
+- fixed: the status line said "Rotate done", "Offset on the X axis. Done." and so on after the dialog was cancelled or the action failed; the messages now come from the action itself
+- fixed: a shape with an explicit empty solid was made again as copper from its old follow geometry; only the clear geometry is kept
+- fixed: a Gerber object loaded as regions was not found when the solid was empty but the follow was not
+- fixed: the "Point" reference accepted a text like "inf,1" and gave a wrong result, and an empty selection made a crash with "Selection" or "Minimum"
+- fixed: the Resize circles plugin, the track bend and the history checks found a stored circle only with the steps of the current preference; they also try the other mode (Fixed / Adaptive) and the steps of the loaded object
+- the history combo of the editor takes the full width
+
+Excellon Editor:
+
+- fixed: the tool table found the tool by the diameter text of the table (rounded to the display decimals); the real diameter is now kept in the table item, so a diameter like 0.3000001 is not mixed with 0.3 when you add a drill, a slot or an array, or move, copy, resize or delete
+- fixed: an edit of a tool in the table used the selected row, not the edited cell; it now uses the edited cell and only the diameter column
+- fixed: the selection of the tool table after a click on a shape or after Select All had a toggle effect and used the tool number as the row; the rows are now found by the diameter
+- fixed: Copy as an array in the Linear/2D mode checked the limit only for the selected drills; it now counts the copies (rows x columns, or the array size) against the limit
+- fixed: Transform features (scale, rotate, mirror, skew, offset) now put only the selected features into the Undo step, which is faster for a large board
+- fixed: Mirror or Scale of the drills changed the order of the drill and slot lists, and the point counters could differ; the order of the features is kept
+- fixed: the drills that a plugin made (2-Sided) lost the mark of the plugin after a Move, Copy, Resize or Transform in the editor or after a save; the mark is kept
+- new: Transform features has the references "Minimum / lower left", "Lower right", "Upper right" and "Upper left"; the tooltip and the menu entry of Mirror X and Mirror Y say which coordinate is reversed
+- the editor counts the drills and the slots of a tool again only when the tool changed
+
+Undo / Redo:
+
+- fixed: Undo of a Rotate, Scale, Skew or Mirror of an Excellon object left the holes about 2 µm away from their first place; only a translation moves the hole shapes now, every other matrix makes the holes again from the restored centers
+- fixed: after Undo or Redo of a matrix step, the Gerber or Excellon source text was not made again; it now follows the geometry
+
+Text and Fonts:
+
+- new: font collections (.ttc, .otc) are read; each face of a collection is listed as its own font, and the right face is used
+- new: bitmap fonts (.bdf, .pcf, .fon, .fnt) are listed and can make text; a .fon file with more faces uses the size nearest to the font size; Windows bitmap fonts with a legacy code page (not Unicode) find their characters
+- new: bitmap fonts become smooth outlines: the pixel image is traced and simplified; strokes are not merged, a counter (hole) is not closed and a dot is not lost; with a smoothing of 0 the exact pixel edges are kept
+- new: text with ligatures, kerning, contextual forms, clusters, right-to-left text and mark positioning (GPOS) is set with the Qt text layout; simple text keeps the FreeType outlines
+- new: the font parser does not replace a font: if Qt would use another font, or the requested face is not available, the text fails with a message ("Font substitution is not allowed", "Font face is not available") and no wrong geometry is made
+- new: the glyph fill rule of the font (non-zero or even-odd) is used, so overlapping contours, holes and islands in a glyph are filled as the font draws them
+- new: text with more lines: a new line character starts a new line of text (before, it gave the "missing glyph" shape); a tab moves to the next column that is a multiple of 4
+- fixed: a text with a character that the font does not have gave a partial result; it now fails and lists the missing characters ("Font has no glyph for: ...")
+- fixed: Bold and Italic could not be used together (the style was always Bold or Italic); the Bold Italic face is now used
+- fixed: a family that has only a heavier or slanted face now serves the Regular style
+- the curves of the glyphs are flattened with a tolerance that follows the font size, so they stay smooth at all sizes (before, a fixed number of steps)
+- the font list finds the fonts in the Windows font folder of the user, in the Linux XDG data folder and the fonts that the user installed without admin rights; the family names that the Windows font menu shows (for example "Arial Narrow", "Segoe UI Light") are listed next to the legacy family name
+- SVG import: the width of a text run is measured with the same font engine that draws it (with the ligatures and the kerning); a font error is written to the log
+- Altium PcbDoc import: a text from a font collection used the first face of the file, it now uses the right face; the kerning used glyph indexes where the font binding needs characters, so the kerning could be wrong
+- Image tracing: an image that is already in memory can be traced (no file is needed); the trace of a file uses the same code
+
+Tcl Scripts:
+
+- fixed: a script ran line by line, and when a line failed, the next lines were added to it and it was tried again; a script now runs as one unit, and nothing is tried again
+- fixed: a script with an incomplete command (for example a missing brace) ran its first part; it now runs nothing and shows "Incomplete Tcl script; no commands were executed."
+- fixed: an error in a script did not tell where it happened; the error message now has the file name and the line number (for a Script object, the cursor goes to the line with the error)
+- fixed: the Tcl command puts wrote to the real standard output; puts (also puts stdout and puts stderr) now writes to the Tcl Shell, and to the console in the headless mode; puts to a file channel does not change
+- fixed: a script file with a BOM (UTF-8 signature) was read with the BOM characters in the first line; script files are read as UTF-8 with or without a BOM
+- fixed: a script file given on the command line (shellfile) stopped the application with exit code 2 when it could not be read or a command failed; the error is now shown and the application keeps running
+- fixed: a script given on the command line ran with the exec_command of the Tcl Shell; it now uses the same code as Run Script, so the errors have the file name and the line
+- new: a running script can be stopped: Abort stops the Tcl command that runs, also a loop in pure Tcl (Tcl 8.6 only; if the Tcl library can not be found, a warning is written to the log, and a pure Tcl loop can not be stopped)
+- a script that is stopped or that fails does not roll back the changes that it made; the message says this
+- a new script, a Tcl Shell command or a Reset is refused while a script runs ("A script is already running.", "Cannot reset Tcl while a script is running."); the same while work that timed out still runs ("Timed-out script work is still running; changes are not rolled back.")
+- Close, Restart, Open Project and the delete of objects are refused while a script runs ("Stop the running script before closing / restarting / deleting objects."); in the headless mode the close is not refused
+- headless mode: the Tcl errors of a shellfile or a command show the file name; when the input ends in the middle of a command, it reports "incomplete Tcl command at end of input" and the exit code is not 0
+
+Script Object:
+
+- fixed: Save of a Script object always asked for a file name; it now saves to the file that it was opened from or saved to, and the Save button has a menu with "Save As"
+- fixed: a Script object was saved with a text that was not the text of the editor; the save now uses the text of the editor and writes it in one step, so a failed save does not damage the old file (the error is shown)
+- fixed: the file name of a Script object was lost when the project was saved and opened again; it is now kept in the project
+- fixed: an edit of a Script object did not mark the project as changed, so the project closed without the question to save it
+- fixed: the delete of a Script object left its editor tab open; the tab is now closed with the object (also with Delete All)
+- fixed: Run of a Script object used the text from before the last edit; it now runs the text of the editor, and a Script object of another project does not run ("Activate the script's project before running it.")
+
+Text Editor:
+
+- fixed: the Find entry searched the whole text at each key press, and the editor was slow with a long text; the search now starts 150 ms after the last key press
+- fixed: the highlight of the Find text moved the text cursor and changed the view; it now leaves the cursor in place
+- fixed: Save of a text wrote the text line by line; it now writes it in one step
+
+Main Window:
+
+- fixed: the splash image and the main window opened on the primary screen of a computer with more than one screen; both now open on the screen of the mouse cursor, with the scale of that screen; a saved window position that is outside this screen is moved to the center of the screen (and the size is made to fit)
+- fixed: at quit, a redraw that was still waiting could run after the canvas was closed and printed the error "Gloo has no canvas"; the waiting redraws are now stopped before the canvas closes
+- the splash image is changed (light and dark theme)
+
+Cutout:
+
+- fixed: when the Freeform or Rectangular cutout failed or was stopped, the name of the new object stayed reserved, and the next run got a number added to the name; the names are now released
+- fixed: Manual Cutout with mouse bites: the row of drills of an inner contour (a hole in the board) was on the wrong side, outside the cutout line; the row is now always on the side of the board material
+
+2-Sided:
+
+- fixed: a second run with another output Excellon object left the alignment drills also in the object of the earlier run; the drills are now in one object only: they are removed from the earlier object, and an earlier output object that has only these drills is deleted (one Undo step restores it)
+
 Geometry:
 
 - the circle steps count the whole circle in all the geometry code: the circles, the buffers of the geometry, the drills and slots of an Excellon object and the CNC job buffers have the number of segments that the setting gives (before, 4 times more)
+- fixed: the buffer of a Geometry object changed the object also when it failed; the whole result is now made first, and an open line with a negative distance, a closed contour or a geometry that the buffer removes, a distance that is not a number, a factor of 0 or less, a stop by the user or any other error gives "Failed." and the object does not change
+- the buffer of a closed contour with a negative distance gives the exterior of every piece (a split contour is not dropped)
+- the buffer of a multi-geometry object buffers the aggregate and every tool in one call, and "Buffer by factor" scales each geometry around its own center
 
 Build:
 
@@ -114,10 +478,14 @@ Tests:
 
 - the tests that read source code or that only pinned the design are removed; the tests of the new work are in the topical files
 - the lifecycle tests of the G-code Sender are skipped while the plugin is disabled
+- the tests of the parser, G-code import, preprocessor, transform and editor work are in the topical files; the tests that only drove the design are removed, and near duplicates are merged into scenario tests (5360 -> 4919 tests)
+- the 4 flaky tests (the view cube drag, the view keys, the project load that never ends and the late Tcl completion) are removed
+- the Excellon parser tests fix the class defaults, so a headless application in the same test worker does not change their result
 
 Translations:
 
 - the new texts of Isolation, Non-Copper Clearing, Paint, Follow, Extract and the other plugins are translated in 9 languages
+- the new texts of the circle preferences, the parsers, Open G-Code, Transform, Move, Distance, the editors, the font parser and the Tcl scripts (140 texts) are translated in 9 languages, as short as possible, with common abbreviations
 
 24.10.2026
 
