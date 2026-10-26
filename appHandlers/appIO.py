@@ -105,6 +105,10 @@ class appIO(QtCore.QObject):
         self.worker_task = self.app.worker_task
         self.options = self.app.options
         self.pagesize = {}
+        self._proteus_import = None
+        self._proteus_timer = QtCore.QTimer(self)
+        self._proteus_timer.setInterval(50)
+        self._proteus_timer.timeout.connect(self._advance_proteus_import)
 
         self.app.new_project_signal.connect(self.on_new_project_house_keeping)
         self.pcbdoc_parsed.connect(self.on_pcbdoc_parsed, Qt.ConnectionType.QueuedConnection)
@@ -129,6 +133,9 @@ class appIO(QtCore.QObject):
     # name in the logs and whether the layer name goes before its id in the checkboxes and in the object names.
     # The dialog titles are in _pcb_title().
     PCB_FORMATS = {
+        'proteus': {
+            'ext': '.pdsprj', 'filter': 'Proteus Project (*.pdsprj *.PDSPRJ)',
+            'log': 'Proteus PCB', 'name_first': False},
         'pcbdoc': {
             'ext': '.pcbdoc', 'filter': 'Altium PCB (*.PcbDoc *.pcbdoc)',
             'log': 'Altium PCB', 'name_first': True},
@@ -149,6 +156,8 @@ class appIO(QtCore.QObject):
     @staticmethod
     def _pcb_title(kind):
         # literal _() strings so the translation tools find them
+        if kind == 'proteus':
+            return _('Import Proteus PCB')
         if kind == 'kicad_pcb':
             return _('Import KiCad PCB')
         if kind == 'sprint_lay6':
@@ -198,6 +207,75 @@ class appIO(QtCore.QObject):
 
     def on_file_import_pcbdoc(self, name=None):
         self._import_pcb_file('pcbdoc', name, self.parse_pcbdoc)
+
+    def on_file_import_proteus(self, name=None):
+        if self._proteus_import is not None or self.app.projects.is_busy():
+            self.app.projects.inform_busy()
+            return
+        self._import_pcb_file('proteus', name, self.parse_proteus)
+
+    def parse_proteus(self, filename):
+        def make_parser():
+            from appParsers.ParseProteus import ProteusParser
+            return ProteusParser(app=self.app)
+        return self._parse_pcb_file('proteus', filename, make_parser)
+
+    def _advance_proteus_import(self):
+        """Advance only on the GUI thread, after construction, insertion and plotting have drained."""
+        state = self._proteus_import
+        if state is None or state['selecting'] or not state['finished'] or self.app.projects.is_busy():
+            return
+        if self.app.abort_flag or state['failed'] or not state['boards']:
+            self._proteus_timer.stop()
+            self._proteus_import = None
+            if self.app.abort_flag or state['failed']:
+                self.inform.emit('[WARNING_NOTCL] %s' % _(
+                    'Proteus import stopped. Previously imported boards remain open; the import is incomplete.'))
+            elif state['imported']:
+                self.app.file_opened.emit('proteus', state['filename'])
+            return
+
+        board = state['boards'].pop(0)
+        state['selecting'] = True
+        try:
+            selection = self.on_pcbdoc_parsed(state['filename'], board)
+            if selection is None or self.app.abort_flag:
+                state['failed'] = True
+                return
+            layers, drills = selection
+            if not (layers or drills):
+                state['failed'] = True
+                return
+            ctx = self.app.projects.new()
+            if ctx is None:
+                state['failed'] = True
+                return
+            name = board.name or os.path.splitext(os.path.basename(board.member_name))[0]
+            # Use the manager's native unique-name policy for repeated board titles.
+            from appObjects.ProjectContext import unique_name
+            if not self.app.projects.rename(ctx, unique_name(name, self.app.projects.names())):
+                raise ValueError(_('Invalid Proteus board name: %s') % name)
+            self.app.should_we_save = True
+            ctx.should_we_save = True
+            from appObjects.AppObject import ObjectLoadBatch
+
+            def finished(failed):
+                state['failed'] = failed
+                state['finished'] = True
+                state['imported'] = state['imported'] or bool(ctx.collection.get_list())
+
+            batch = ObjectLoadBatch(self.app.app_obj, 1, finished, parent=self,
+                                    total=len(layers) + len(drills))
+            state['finished'] = False
+            self.worker_task.emit({'fcn': batch.run,
+                                   'params': [self.import_pcbdoc_objects,
+                                              [state['filename'], board, layers, drills]]})
+        except Exception as error:
+            self.log.error('Proteus import: %s', error)
+            self.inform.emit('[ERROR_NOTCL] %s: %s' % (_('Import failed.'), error))
+            state['failed'] = True
+        finally:
+            state['selecting'] = False
 
     def on_file_import_kicad_pcb(self, name=None):
         self._import_pcb_file('kicad_pcb', name, self.parse_kicad_pcb)
@@ -258,10 +336,22 @@ class appIO(QtCore.QObject):
         if self.app.abort_flag:
             return
         kind = self._pcb_source_kind(filename)
+        if kind == 'proteus' and hasattr(parsed, 'boards'):
+            if self._proteus_import is not None:
+                self.app.projects.inform_busy()
+                return
+            warnings = list(parsed.warnings)
+            self._proteus_import = {'filename': filename, 'boards': list(parsed.boards),
+                                    'warnings': list(dict.fromkeys(warnings)), 'selecting': False,
+                                    'finished': True, 'failed': not bool(parsed.boards), 'imported': False}
+            self._proteus_timer.start()
+            return
         pcb_format = self.PCB_FORMATS[kind]
         default_layers = getattr(parsed, 'default_layers', None)
         dialog = QtWidgets.QDialog(self.app.ui)
         dialog.setWindowTitle(self._pcb_title(kind))
+        if kind == 'proteus':
+            dialog.setWindowTitle('%s - %s' % (self._pcb_title(kind), parsed.name))
         layout = QtWidgets.QVBoxLayout(dialog)
         layout.addWidget(QtWidgets.QLabel(_('Select layers and drill groups to import:')))
         scroll = QtWidgets.QScrollArea(dialog)
@@ -289,9 +379,17 @@ class appIO(QtCore.QObject):
             drills[group] = checkbox
         scroll.setWidget(content)
         layout.addWidget(scroll)
-        if parsed.warnings:
-            warning = QtWidgets.QLabel('\n'.join(parsed.warnings))
-            warning.setWordWrap(True)
+        warnings = list(parsed.warnings)
+        if kind == 'proteus' and self._proteus_import is not None:
+            warnings = self._proteus_import['warnings'] + warnings
+        if warnings:
+            if kind == 'proteus':
+                warning = QtWidgets.QPlainTextEdit('\n'.join(dict.fromkeys(warnings)))
+                warning.setReadOnly(True)
+                warning.setMaximumHeight(160)
+            else:
+                warning = QtWidgets.QLabel('\n'.join(warnings))
+                warning.setWordWrap(True)
             layout.addWidget(warning)
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
@@ -303,6 +401,8 @@ class appIO(QtCore.QObject):
             return
         selected_layers = [key for key, checkbox in layers.items() if checkbox.isChecked()]
         selected_drills = [key for key, checkbox in drills.items() if checkbox.isChecked()]
+        if kind == 'proteus':
+            return selected_layers, selected_drills
         if selected_layers or selected_drills:
             self.worker_task.emit({'fcn': self.import_pcbdoc_objects,
                                    'params': [filename, parsed, selected_layers, selected_drills]})
@@ -313,6 +413,7 @@ class appIO(QtCore.QObject):
         units = self.app.app_units.upper()
         factor = 1 / 25.4 if units == 'IN' else 1
         pcb_format = self.PCB_FORMATS[self._pcb_source_kind(filename)]
+        proteus = self._pcb_source_kind(filename) == 'proteus'
 
         def converted(value):
             if isinstance(value, dict):
@@ -346,12 +447,26 @@ class appIO(QtCore.QObject):
                             continue
                         label = key if pcb_format['name_first'] else str(key).replace('.', '_')
                     name = '%s_%s' % (os.path.splitext(os.path.basename(filename))[0], label)
+                    source_extension = None
+                    if proteus:
+                        label = str(key)
+                        extension = label.rsplit('.', 1)[-1].upper()
+                        identified = kind == 'gerber' and (extension in (
+                            'GTL', 'GBL', 'GKO', 'GTS', 'GBS', 'GTP', 'GBP', 'GTO', 'GBO') or
+                            (extension.startswith('G') and extension[1:].isdigit()))
+                        name = '%s%s%s' % (parsed.name, '.' if identified else '_',
+                                          extension if identified else label)
+                        if identified:
+                            source_extension = '.' + extension
 
-                    def initialize(obj, app, object_kind=kind, source=data, object_name=name):
+                    def initialize(obj, app, object_kind=kind, source=data, object_name=name,
+                                   layer_extension=source_extension):
                         if app.abort_flag:
                             return 'fail'
                         obj.units = units
                         obj.obj_options['pcbdoc_import'] = True
+                        if layer_extension is not None:
+                            obj.obj_options['proteus_layer_extension'] = layer_extension
                         if object_kind == 'gerber':
                             obj.tools = converted(source['tools'])
                             obj.solid_geometry = converted(source['solid_geometry'])
@@ -367,7 +482,7 @@ class appIO(QtCore.QObject):
                         if not obj.source_file or obj.source_file == 'fail' or app.abort_flag:
                             return 'fail'
 
-                    result = self.app.app_obj.new_object(kind, name, initialize, plot=False, autoselected=False)
+                    result = self.app.app_obj.new_object(kind, name, initialize, plot=proteus, autoselected=False)
                     if result is None or result == 'fail':
                         failed = True
                         break
@@ -378,7 +493,7 @@ class appIO(QtCore.QObject):
             self.log.error('%s object import: %s', pcb_format['log'], error)
             failed = True
         finally:
-            if created:
+            if created and not proteus:
                 if not self.app.abort_flag:
                     self.pcbdoc_outputs_ready.emit(filename)
                 self.worker_task.emit({'fcn': self.app.plot_all, 'params': [True, False, True], 'priority': 'low'})
@@ -730,6 +845,9 @@ class appIO(QtCore.QObject):
         name = self.app.collection.get_active().obj_options["name"]
 
         _filter = "Gerber File (*.GBR);;Gerber File (*.GRB);;All Files (*.*)"
+        extension = obj.obj_options.get('proteus_layer_extension')
+        if extension:
+            _filter = 'Gerber File (*%s);;%s' % (extension, _filter)
         try:
             filename, _f = FCFileSaveDialog.get_saved_filename(
                 caption="Save Gerber source file",
@@ -943,6 +1061,9 @@ class appIO(QtCore.QObject):
         name = self.app.collection.get_active().obj_options["name"]
 
         _filter_ = self.app.options.get('gerber_save_filters', self.app.defaults.get('gerber_save_filters'))
+        extension = obj.obj_options.get('proteus_layer_extension')
+        if extension:
+            _filter_ = 'Gerber File (*%s);;%s' % (extension, _filter_)
         try:
             filename, _f = FCFileSaveDialog.get_saved_filename(
                 caption=_("Export Gerber"),

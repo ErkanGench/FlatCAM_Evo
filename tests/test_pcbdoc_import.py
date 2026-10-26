@@ -76,6 +76,236 @@ class TestPcbDocImport(unittest.TestCase):
         self.qapp.processEvents()
         self.app.file_opened.emit.assert_not_called()
 
+    def test_proteus_identified_extensions_and_unknown_artwork_names(self):
+        self.parsed.name = 'Power Board'
+        self.parsed.layers = {key: dict(self.parsed.layers[1], name=name) for key, name in
+                              (('Top Copper.GTL', 'Top Copper'), ('Inner 1.G1', 'Inner 1'),
+                               ('preview', 'Preview artwork'))}
+        self.io.import_pcbdoc_objects('design.pdsprj', self.parsed, list(self.parsed.layers), ['PTH'])
+        self.assertEqual([obj.obj_options['name'] for kind, obj in self.objects],
+                         ['Power Board.GTL', 'Power Board.G1', 'Power Board_preview', 'Power Board_PTH'])
+        self.assertTrue(all(obj.source_file for kind, obj in self.objects))
+
+    def test_proteus_source_save_and_export_keep_the_identified_layer_extension(self):
+        import appHandlers.appIO as io_module
+
+        self.parsed.name = 'Power Board'
+        self.parsed.layers = {'Top Copper.GTL': self.parsed.layers[1]}
+        self.io.import_pcbdoc_objects('design.pdsprj', self.parsed, ['Top Copper.GTL'], [])
+        obj = self.objects[0][1]
+        obj.update_filters = Mock()
+        self.app.collection = SimpleNamespace(get_active=lambda: obj)
+        self.app.defaults = {'gerber_save_filters': 'Gerber File (*.GBR)'}
+        self.app.options = {'global_open_style': True}
+        self.app.get_last_save_folder = lambda: 'C:/output'
+        self.app.file_saved = Mock()
+        self.io.save_source_file = Mock()
+
+        def save_dialog(**kwargs):
+            return kwargs['directory'], kwargs['filter'].split(';;')[0]
+
+        with patch.object(io_module, 'GerberObject', SimpleNamespace), \
+                patch.object(QtWidgets.QFileDialog, 'getSaveFileName', side_effect=save_dialog):
+            self.io.on_file_save_gerber()
+            self.io.save_source_file.assert_called_once_with('Power Board.GTL', 'C:/output/Power Board.GTL')
+            self.io.on_file_export_gerber()
+            self.assertEqual(self.io.export_gerber.call_args.args, ('Power Board.GTL', 'C:/output/Power Board.GTL'))
+
+    def test_proteus_boards_stay_in_separate_projects_until_insertion_and_plots_finish(self):
+        self._import_proteus_projects()
+
+    def test_proteus_export_failure_stops_remaining_boards_without_publishing_bad_source(self):
+        self._import_proteus_projects(stop='failure')
+
+    def test_proteus_abort_drains_pending_objects_without_switching_to_another_board(self):
+        self._import_proteus_projects(stop='abort')
+
+    def test_proteus_cancel_keeps_existing_projects_and_creates_no_board_project(self):
+        self._import_proteus_projects(stop='cancel')
+
+    def _import_proteus_projects(self, stop=None):
+        from test_projects_manager import make_manager, FakeCollection
+        from PyQt6.QtGui import QStandardItemModel
+
+        app, projects = make_manager()
+        app.projects = projects
+        original = projects.active
+        original.collection.objects.append('existing')
+        app.app_units = 'MM'
+        app.abort_flag = False
+        app.new_project_signal = Mock()
+        app.worker_task = Mock()
+        app.file_opened = Mock()
+        app.on_notebook_tab_changed = Mock()
+        app.on_zoom_fit = Mock()
+        app.regFK = Mock()
+        app.flush_recent_items = Mock()
+        app.ui = QtWidgets.QWidget()
+        app.ui.set_ui_title = Mock()
+        app.ui.notebook = QtWidgets.QTabWidget()
+        app.ui.properties_tab = QtWidgets.QWidget()
+        app.plotcanvas = Mock()
+
+        def collection():
+            result = FakeCollection()
+            result.view = QtWidgets.QTreeView()
+            result.view.setModel(QStandardItemModel(result.view))
+            return result
+
+        projects.collection_factory = collection
+        pending_plots, worker_jobs = [], []
+
+        class Owner(QtCore.QObject):
+            def __init__(owner):
+                super().__init__()
+                owner.app = app
+                owner.load_context = threading.local()
+                owner.load_batches = set()
+
+            def new_object(owner, kind, name, initialize, **kwargs):
+                obj = SimpleNamespace(obj_options={'name': name}, create_geometry=lambda: None, kind=kind)
+                if initialize(obj, app) == 'fail':
+                    return 'fail'
+                batch = owner.load_context.batch
+                batch.batch_event.emit('created', (obj, kwargs['plot'], False, None, []))
+                return obj
+
+            def on_object_created(owner, obj, plot, *args):
+                app.collection.objects.append(obj)
+                if plot:
+                    obj._load_batch.plots += 1
+                    pending_plots.append(obj._load_batch)
+
+        app.app_obj = Owner()
+        app.worker_task.emit.side_effect = worker_jobs.append
+        app.workers.pending_count.side_effect = lambda: len(worker_jobs)
+        io = appIO(app)
+        io.export_gerber = self.io.export_gerber
+        io.export_excellon = self.io.export_excellon
+        boards = [SimpleNamespace(**dict(vars(self.parsed), name=name, member_name=name + '.LYT'))
+                  for name in ('Main', 'Power')]
+        parsed = SimpleNamespace(boards=boards, warnings=['Proteus 9 native decoder', 'Incomplete fidelity'] * 2,
+                                 major_version=9)
+        warnings = []
+
+        def accept(dialog):
+            warnings.append('\n'.join(widget.toPlainText() for widget in
+                                      dialog.findChildren(QtWidgets.QPlainTextEdit)))
+            return (QtWidgets.QDialog.DialogCode.Rejected if stop == 'cancel' else
+                    QtWidgets.QDialog.DialogCode.Accepted)
+
+        with patch.object(QtWidgets.QDialog, 'exec', accept):
+            io.on_pcbdoc_parsed('design.pdsprj', parsed)
+            if stop == 'failure':
+                io.export_gerber.return_value = 'fail'
+            for index in range(2):
+                io._advance_proteus_import()
+                if stop == 'cancel':
+                    io._advance_proteus_import()
+                    self.assertEqual(projects.contexts, [original])
+                    break
+                self.assertEqual(len(projects.contexts), index + 2)
+                context = projects.active
+                self.assertEqual(context.name, boards[index].name)
+                job = worker_jobs.pop(0)
+                thread = threading.Thread(target=job['fcn'], args=job['params'])
+                thread.start()
+                thread.join()
+                io._advance_proteus_import()
+                self.assertIs(projects.active, context)
+                if stop == 'abort':
+                    app.abort_flag = True
+                self.qapp.processEvents()
+                self.qapp.processEvents()
+                io._advance_proteus_import()
+                self.assertIs(projects.active, context)
+                self.assertEqual(len(context.collection.objects), 0 if stop == 'failure' else 3)
+                for batch in pending_plots:
+                    batch.batch_event.emit('plotted', None)
+                pending_plots.clear()
+                self.qapp.processEvents()
+                # Batch completion alone isn't permission to switch while another task remains.
+                app.workers.pending_count.side_effect = None
+                app.workers.pending_count.return_value = 1
+                io._advance_proteus_import()
+                self.assertIs(projects.active, context)
+                app.workers.pending_count.side_effect = lambda: len(worker_jobs)
+                if stop:
+                    io._advance_proteus_import()
+                    self.assertEqual(len(projects.contexts), 2)
+                    break
+            io._advance_proteus_import()
+        self.assertEqual(original.collection.objects, ['existing'])
+        self.assertEqual([ctx.name for ctx in projects.contexts[1:]],
+                         [] if stop == 'cancel' else ['Main'] if stop else ['Main', 'Power'])
+        self.assertTrue(all(ctx.filename is None for ctx in projects.contexts[1:]))
+        self.assertTrue(all(obj.obj_options['name'].startswith(ctx.name) for ctx in projects.contexts[1:]
+                            for obj in ctx.collection.objects))
+        if stop:
+            app.file_opened.emit.assert_not_called()
+        else:
+            app.file_opened.emit.assert_called_once_with('proteus', 'design.pdsprj')
+        self.assertTrue(any('Proteus 9 native decoder' in text for text in warnings))
+        self.assertFalse(any('using the Proteus 8 decoder' in text for text in warnings))
+        self.assertTrue(any(text.count('Incomplete fidelity') == 1 for text in warnings))
+
+    def test_proteus_facade_result_is_queued_and_parse_failure_creates_no_projects(self):
+        self.app.ui = QtWidgets.QWidget()
+        self.app.projects = Mock()
+        self.app.projects.is_busy.return_value = False
+        parsed = SimpleNamespace(boards=[], warnings=[], major_version=8)
+        parser = Mock()
+        parser.return_value.parse_file.return_value = parsed
+        with patch.dict('sys.modules', {'appParsers.ParseProteus': SimpleNamespace(ProteusParser=parser)}):
+            self.io.on_file_import_proteus('design.pdsprj')
+            job = self.app.worker_task.emit.call_args.args[0]
+            thread = threading.Thread(target=job['fcn'], args=job['params'])
+            thread.start()
+            thread.join()
+            self.app.projects.new.assert_not_called()
+            self.qapp.processEvents()
+            self.io._advance_proteus_import()
+            self.app.projects.new.assert_not_called()
+            parser.return_value.parse_file.side_effect = ValueError('invalid container')
+            self.assertEqual(self.io.parse_proteus('bad.pdsprj'), 'fail')
+            self.qapp.processEvents()
+            self.app.projects.new.assert_not_called()
+            self.app.file_opened.emit.assert_not_called()
+
+    def test_proteus_menu_and_recent_action_use_the_container_importer(self):
+        import json
+        from appMain import App
+        from appHandlers.appSignalConnector import AppSignalConnector
+        from PyQt6.QtGui import QAction
+
+        app = QtCore.QObject()
+        app.ui = Mock()
+        app.ui.menufileimportproteus = QAction('Proteus', app)
+        app.ui.recent = QtWidgets.QMenu()
+        app.ui.recent_projects = QtWidgets.QMenu()
+        app.log = Mock()
+        app.f_handlers = Mock()
+        app.resource_location = ''
+        app.image_tool = Mock()
+        app.worker_task = Mock()
+        connector = AppSignalConnector(app)
+        connector.connect_filemenu_signals()
+        app.ui.menufileimportproteus.trigger()
+        app.f_handlers.on_file_import_proteus.assert_called_once_with()
+        app.f_handlers.on_file_import_proteus.reset_mock()
+        with tempfile.TemporaryDirectory() as folder:
+            app.data_path = folder
+            for name, content in (('recent.json', [{'kind': 'proteus', 'filename': 'design.pdsprj'}]),
+                                  ('recent_projects.json', [])):
+                with open(os.path.join(folder, name), 'w') as handle:
+                    json.dump(content, handle)
+            App.setup_recent_items(app)
+            action = app.ui.recent.actions()[0]
+            self.assertEqual(action.text(), 'design.pdsprj')
+            action.trigger()
+        app.f_handlers.on_file_import_proteus.assert_called_once_with('design.pdsprj')
+        app.worker_task.emit.assert_not_called()
+
     def test_region_export_reimport_preserves_negative_holes_and_islands(self):
         from appObjects.GerberObject import GerberObject
         from appParsers.ParseGerber import Gerber

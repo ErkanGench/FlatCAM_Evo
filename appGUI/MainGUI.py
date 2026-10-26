@@ -313,6 +313,10 @@ class MainGUI(QtWidgets.QMainWindow):
             QtGui.QIcon(self.app.resource_location + '/import.png'),
             '%s...' % _('Altium PCB (.PcbDoc)'), self)
         self.menufileimport.addAction(self.menufileimportpcbdoc)
+        self.menufileimportproteus = QtGui.QAction(
+            QtGui.QIcon(self.app.resource_location + '/import.png'),
+            '%s...' % _('Proteus PCB (.pdsprj)'), self)
+        self.menufileimport.addAction(self.menufileimportproteus)
         self.menufileimportkicad = QtGui.QAction(
             QtGui.QIcon(self.app.resource_location + '/import.png'),
             '%s...' % _('KiCad PCB (.kicad_pcb)'), self)

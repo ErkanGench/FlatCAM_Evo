@@ -4197,6 +4197,7 @@ class App(QtCore.QObject):
         icons = {
             "gerber": self.resource_location + "/flatcam_icon16.png",
             "pcbdoc": self.resource_location + "/flatcam_icon16.png",
+            "proteus": self.resource_location + "/flatcam_icon16.png",
             "kicad_pcb": self.resource_location + "/flatcam_icon16.png",
             "sprint_lay6": self.resource_location + "/flatcam_icon16.png",
             "eagle_brd": self.resource_location + "/flatcam_icon16.png",
@@ -4226,6 +4227,7 @@ class App(QtCore.QObject):
 
         openers = {
             'pcbdoc': self.f_handlers.on_file_import_pcbdoc,
+            'proteus': self.f_handlers.on_file_import_proteus,
             'kicad_pcb': self.f_handlers.on_file_import_kicad_pcb,
             'sprint_lay6': self.f_handlers.on_file_import_sprint_layout,
             'eagle_brd': self.f_handlers.on_file_import_eagle_brd,
