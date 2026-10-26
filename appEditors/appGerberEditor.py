@@ -29,7 +29,7 @@ from appEditors.grb_plugins.GrbVertices import (grip_geometry, grip_state, apply
 from appEditors.vertex_grips import VertexGrips
 from appEditors.cursor_text import show_cursor_text, hide_cursor_text
 from appEditors.editor_corner import corner_point, next_bend_mode, bend_mode_message
-from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingPanel
+from appEditors.grb_plugins.GrbDrawingPlugin import RegionDrawingPanel, copper_pour
 from appParsers.ParseGerber import Gerber
 
 # import inspect
@@ -1297,6 +1297,88 @@ class RegionEditorGrb(ShapeToolEditorGrb):
             pass
 
 
+class CopperPourEditorGrb(RegionEditorGrb):
+    """Region vertex interaction with a clearance-only Properties panel."""
+
+    def __init__(self, draw_app):
+        DrawTool.__init__(self, draw_app)
+        self.draw_app = draw_app
+        self.app = draw_app.app
+        self.name = 'copper_pour'
+        self.dont_execute = False
+        self.buf_val = 0.0000001
+        self.quad_segs = gerber_quad(self.app, self.buf_val)
+        self.temp_points = []
+        self.inter_point = None
+        self.click_sizes = []
+        self.cursor_data_control = True
+        self.session = draw_app.history.session
+        self.units = self.app.app_units
+        self.update_grid_info()
+        self.panel = QtWidgets.QWidget(draw_app.ui.grb_edit_widget)
+        layout = QtWidgets.QVBoxLayout(self.panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(FCLabel(_("Copper Pour"), bold=True, color='tomato'))
+        clearance_frame = FCFrame()
+        layout.addWidget(clearance_frame)
+        clearance_grid = GLay(v_spacing=5, h_spacing=3)
+        clearance_frame.setLayout(clearance_grid)
+        self.clearance_entry = FCDoubleSpinner()
+        self.clearance_entry.set_precision(self.app.decimals)
+        self.clearance_entry.set_range(0, 10000)
+        self.clearance_entry.set_value(0)
+        clearance_grid.addWidget(FCLabel(_("Clearance")), 0, 0)
+        clearance_grid.addWidget(self.clearance_entry, 0, 1)
+        # Region's coordinate controls support vertex keys but aren't exposed as pour properties.
+        self.ui = SimpleNamespace(x_entry=FCDoubleSpinner(), y_entry=FCDoubleSpinner())
+        for entry in (self.ui.x_entry, self.ui.y_entry):
+            entry.set_precision(self.app.decimals)
+            entry.set_range(-10000, 10000)
+        self.ui.x_entry.set_value(float(draw_app.snap_x))
+        self.ui.y_entry.set_value(float(draw_app.snap_y))
+        self.reg_tool = SimpleNamespace(length=draw_app.last_length)
+        draw_app.ui.custom_box.insertWidget(draw_app.ui.custom_box.indexOf(draw_app.ui.shape_frame), self.panel)
+        if self.app.ui.properties_scroll_area.widget() is not draw_app.ui.grb_edit_widget:
+            self.app.ui.properties_scroll_area.takeWidget()
+            self.app.ui.properties_scroll_area.setWidget(draw_app.ui.grb_edit_widget)
+        self.app.ui.notebook.setCurrentWidget(self.app.ui.properties_tab)
+        self.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
+        self.app.jump_signal.connect(lambda pos: draw_app.update_utility_geometry(data=pos))
+        self.start_msg = _("Click on 1st point ...")
+
+    def make(self):
+        try:
+            if self.session != self.draw_app.history.session or self.units != self.app.app_units:
+                raise ValueError(_("Editor session or units changed. Reopen Copper Pour."))
+            if len(self.points) < 3:
+                raise ValueError(_("A polygon needs at least three vertices."))
+            clearance = self.clearance_entry.get_value()
+            result = copper_pour(self.draw_app, Polygon(self.points), clearance,
+                                 gerber_quad(self.app, clearance))
+            if result.is_empty:
+                raise ValueError(_("No copper remains inside the outline."))
+            self.geometry = result
+            self.complete = True
+            self.draw_app.in_action = False
+        except Exception as error:
+            self.app.inform.emit('[WARNING_NOTCL] %s' % str(error))
+
+    def clean_up(self):
+        if self.panel is None:
+            return
+        self.draw_app.ui.custom_box.removeWidget(self.panel)
+        self.panel.hide()
+        self.panel.deleteLater()
+        self.panel = None
+        self.ui.x_entry.deleteLater()
+        self.ui.y_entry.deleteLater()
+        self.draw_app.in_action = False
+        self.draw_app.delete_utility_geometry()
+        self.app.plotcanvas.view.camera.zoom_callback = None
+        hide_cursor_text(self.app)
+        super().clean_up()
+
+
 class TrackEditorGrb(ShapeToolEditorGrb):
     """
     Resulting type: Polygon
@@ -1352,6 +1434,10 @@ class TrackEditorGrb(ShapeToolEditorGrb):
         # #############################################################################################################
         self.track_tool = GrbTrackEditorTool(self.app, self.draw_app, plugin_name=_("Track"))
         self.ui = self.track_tool.ui
+        previous_tool = self.draw_app.active_tool
+        continuing = isinstance(previous_tool, TrackEditorGrb)
+        self.ui.snap_to_pad_cb.setChecked(continuing and previous_tool.ui.snap_to_pad_cb.isChecked())
+        self.fine_grid = continuing and getattr(previous_tool, 'fine_grid', False)
         self.track_tool.run()
 
         self.draw_app.app.plotcanvas.view.camera.zoom_callback = self.draw_cursor_data
@@ -1390,6 +1476,9 @@ class TrackEditorGrb(ShapeToolEditorGrb):
 
     @gerber_operation(_('Draw track'))
     def click(self, point):
+        self.utility_geometry(data=point)
+        if not self.points:
+            self.temp_points = [point]
         self.draw_app.in_action = True
         self.current_point = point
 
@@ -1537,6 +1626,10 @@ class TrackEditorGrb(ShapeToolEditorGrb):
 
     @gerber_operation(_('Edit track'))
     def on_key(self, key):
+        if key == 'Space' or key == QtCore.Qt.Key.Key_Space:
+            self.set_fine_grid(True)
+            return
+
         if key == 'Backspace' or key == QtCore.Qt.Key.Key_Backspace:
             if len(self.points) > 0:
                 # remove the last point and the segment shape that its click added to the storage
@@ -1613,6 +1706,13 @@ class TrackEditorGrb(ShapeToolEditorGrb):
                 if first_pt != (new_x, new_y):
                     self.draw_app.app.on_jump_to(custom_location=(new_x, new_y), fit_center=False)
                     self.add_track(track_pos=(new_x, new_y))
+
+    def set_fine_grid(self, enabled):
+        self.fine_grid = enabled
+        if self.draw_app.x is not None and self.draw_app.y is not None:
+            self.draw_app.on_canvas_move(SimpleNamespace(
+                pos=self.draw_app.canvas.translate_coords_2((self.draw_app.x, self.draw_app.y)),
+                button=None, is_dragging=False))
 
     def add_track(self, track_pos):
         self.draw_app.last_length = self.track_tool.length
@@ -3651,6 +3751,7 @@ class AppGerberEditor(QtCore.QObject):
         # #############################################################################################################
         self.ui.apdim_lbl.setDisabled(True)
         self.ui.apdim_entry.setDisabled(True)
+        self.ui.apheight_entry.setDisabled(True)
 
         self.gerber_obj = None
         self.gerber_obj_options = {}
@@ -3769,6 +3870,8 @@ class AppGerberEditor(QtCore.QObject):
         self.connect_grb_toolbar_signals()
 
         self.app.ui.grb_add_arc_menuitem.triggered.connect(lambda checked=False: self.select_tool('arc'))
+        self.app.ui.grb_add_copper_pour_menuitem.triggered.connect(
+            lambda checked=False: self.select_tool('copper_pour'))
         for kind in ('rectangle', 'text'):
             getattr(self.app.ui, 'grb_add_%s_menuitem' % kind).triggered.connect(
                 lambda checked=False, tool=kind: self.on_region_drawing(tool))
@@ -3855,6 +3958,7 @@ class AppGerberEditor(QtCore.QObject):
             "array": {"button": self.app.ui.add_pad_ar_btn, "constructor": PadArrayEditorGrb},
             "track": {"button": self.app.ui.grb_add_track_btn, "constructor": TrackEditorGrb},
             "region": {"button": self.app.ui.grb_add_region_btn, "constructor": RegionEditorGrb},
+            "copper_pour": {"button": self.app.ui.grb_add_copper_pour_btn, "constructor": CopperPourEditorGrb},
             "poligonize": {"button": self.app.ui.grb_convert_poly_btn, "constructor": PoligonizeEditorGrb},
             "semidisc": {"button": self.app.ui.grb_add_semidisc_btn, "constructor": DiscSemiEditorGrb},
             "arc": {"button": self.app.ui.grb_add_arc_btn, "constructor": ArcEditorGrb},
@@ -4128,13 +4232,18 @@ class AppGerberEditor(QtCore.QObject):
                 self.app.defaults.factory_defaults.get("gerber_editor_newtype")
             )
         ))
-        self.ui.apdim_entry.set_value(self.app.options.get(
-            "gerber_editor_newdim",
-            self.app.defaults.get(
+        try:
+            width, height = safe_eval(str(self.app.options.get(
                 "gerber_editor_newdim",
-                self.app.defaults.factory_defaults.get("gerber_editor_newdim")
-            )
-        ))
+                self.app.defaults.get(
+                    "gerber_editor_newdim",
+                    self.app.defaults.factory_defaults.get("gerber_editor_newdim")
+                )
+            )))
+        except (TypeError, ValueError):
+            width, height = 0.0, 0.0
+        self.ui.apdim_entry.set_value(width)
+        self.ui.apheight_entry.set_value(height)
 
         # PAD Array
         self.last_parray_type = 'linear'
@@ -4376,8 +4485,9 @@ class AppGerberEditor(QtCore.QObject):
                 return
 
         size_val = float(self.ui.apsize_entry.get_value())
+        type_val = self.ui.aptype_cb.currentText()
 
-        if size_val == 0.0:
+        if size_val == 0.0 and type_val not in ('R', 'O'):
             ap_code = 0
 
         if ap_code == 0:
@@ -4397,10 +4507,11 @@ class AppGerberEditor(QtCore.QObject):
                 return
         else:
             if ap_code not in self.oldapcode_newapcode:
-                type_val = self.ui.aptype_cb.currentText()
-                if type_val == 'R' or type_val == 'REG':
+                if type_val in ('R', 'O', 'REG'):
                     try:
-                        dims = self.ui.apdim_entry.get_value()
+                        dims = self.ui.apdim_entry.get_value(), self.ui.apheight_entry.get_value()
+                        if not all(math.isfinite(value) and value > 0 for value in dims):
+                            raise ValueError(_("Dimensions must be finite and positive."))
                         size_val = np.sqrt((dims[0] ** 2) + (dims[1] ** 2))
 
                         self.storage_dict[ap_code] = {
@@ -4416,12 +4527,9 @@ class AppGerberEditor(QtCore.QObject):
                         # updated on values  each time an aperture code is edited or added
                         self.oldapcode_newapcode[ap_code] = ap_code
                     except Exception as e:
-                        self.app.log.error("AppGerberEditor.on_aperture_add() --> "
-                                           "the R or O aperture dims has to be in a "
-                                           "tuple format (x,y)\nError: %s" % str(e))
+                        self.app.log.error("AppGerberEditor.on_aperture_add() --> %s" % str(e))
                         self.app.inform.emit('[WARNING_NOTCL] %s' %
-                                             _("Aperture dimensions value is missing or wrong format. "
-                                               "Add it in format (width, height) and retry."))
+                                             _("Enter a positive width and height for the aperture and retry."))
                         return
                 else:
                     self.storage_dict[ap_code] = {
@@ -4762,7 +4870,6 @@ class AppGerberEditor(QtCore.QObject):
             selected = set(self.selected)
             self.sync_aperture_rows(apid for apid, shape in self._feature_refs if shape in selected)
         self.update_component_properties()
-        is_zoom_selected = zoom and self.ui.geo_zoom.get_value()
 
         if not self.selected:
             self.ui.geo_coords_entry.setText('')
@@ -4771,12 +4878,19 @@ class AppGerberEditor(QtCore.QObject):
             self.ui.is_valid_entry.setText(_("None"))
             return
 
+        if zoom:
+            self.zoom_selection()
+
+    def zoom_selection(self):
+        if not self.selected or not self.ui.geo_zoom.get_value():
+            return
+
         # update the GUI only with the last selected shape information's
         last_sel_geo = self.selected[-1].geo
         last_sel_geo_solid = last_sel_geo.get('solid')
 
         # zoom on selected
-        if is_zoom_selected and last_sel_geo_solid is not None and not last_sel_geo_solid.is_empty:
+        if last_sel_geo_solid is not None and not last_sel_geo_solid.is_empty:
             xmin, ymin, xmax, ymax = last_sel_geo_solid.bounds
             if xmin == xmax and ymin != ymax:
                 xmin = ymin
@@ -4858,10 +4972,12 @@ class AppGerberEditor(QtCore.QObject):
         if current_index == 1 or current_index == 2:    # 1 == 'R' and 2 == 'O'
             self.ui.apdim_lbl.setDisabled(False)
             self.ui.apdim_entry.setDisabled(False)
+            self.ui.apheight_entry.setDisabled(False)
             self.ui.apsize_entry.setDisabled(True)
         else:
             self.ui.apdim_lbl.setDisabled(True)
             self.ui.apdim_entry.setDisabled(True)
+            self.ui.apheight_entry.setDisabled(True)
             self.ui.apsize_entry.setDisabled(False)
 
     def activate_grb_editor(self):
@@ -4993,6 +5109,7 @@ class AppGerberEditor(QtCore.QObject):
         self.canvas.graph_event_connect('mouse_press', self.on_canvas_click)
         self.canvas.graph_event_connect('mouse_move', self.on_canvas_move)
         self.canvas.graph_event_connect('mouse_release', self.on_canvas_click_release)
+        self.canvas.graph_event_connect('key_release', self.on_canvas_key_release)
 
         self.canvas.graph_event_disconnect('mouse_press', self.app.on_mouse_click_over_plot)
         self.canvas.graph_event_disconnect('mouse_move', self.app.on_mouse_move_over_plot)
@@ -5039,6 +5156,7 @@ class AppGerberEditor(QtCore.QObject):
         self.canvas.graph_event_disconnect('mouse_press', self.on_canvas_click)
         self.canvas.graph_event_disconnect('mouse_move', self.on_canvas_move)
         self.canvas.graph_event_disconnect('mouse_release', self.on_canvas_click_release)
+        self.canvas.graph_event_disconnect('key_release', self.on_canvas_key_release)
 
         # Canvas context Mneu
         try:
@@ -5130,7 +5248,7 @@ class AppGerberEditor(QtCore.QObject):
         #     self.app.log.error("AppGerberEditor.clear() -> %s" % str(erp))
 
         self.close_region_drawing(return_to_select=False)
-        if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb)):
+        if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb, CopperPourEditorGrb)):
             self.active_tool.clean_up()
         self.vertex_grips.hide()
         self.vertex_grips.segment_drag.clear()
@@ -5801,10 +5919,10 @@ class AppGerberEditor(QtCore.QObject):
 
         if isinstance(self.active_tool, ScaleEditorGrb):
             self.active_tool.disconnect_scale()
-        if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb)):
+        if isinstance(self.active_tool, (ImportEditorGrb, TrackBendEditorGrb, ArcEditorGrb, CopperPourEditorGrb)):
             self.active_tool.clean_up()
 
-        if self.last_aperture_selected is None and current_tool not in ['select', 'disc', 'semidisc', 'region', 'bend', 'split']:
+        if self.last_aperture_selected is None and current_tool not in ['select', 'disc', 'semidisc', 'region', 'bend', 'split', 'copper_pour']:
             # self.draw_app.select_tool('select')
             self.complete = True
             current_tool = 'select'
@@ -5895,6 +6013,7 @@ class AppGerberEditor(QtCore.QObject):
 
         self.ui.area_entry.set_value(t_area)
 
+        self.zoom_selection()
         self.plot_selection()
 
     def on_table_selection(self):
@@ -5949,6 +6068,7 @@ class AppGerberEditor(QtCore.QObject):
 
             self.ui.area_entry.set_value(t_area)
 
+            self.zoom_selection()
             self.plot_selection()
             return True
         return False
@@ -5963,6 +6083,11 @@ class AppGerberEditor(QtCore.QObject):
         :return:
         """
         self.app.log.debug("on_grb_shape_complete()")
+
+        if isinstance(self.active_tool, CopperPourEditorGrb):
+            result = self.add_region_geometry(self.active_tool.geometry)
+            self.delete_utility_geometry()
+            return result
 
         if getattr(self.active_tool, 'name', None) in ('region', 'disc', 'semidisc'):
             self.storage_dict.setdefault(0, {'type': 'REG', 'size': 0.0, 'geometry': []})
@@ -6178,6 +6303,21 @@ class AppGerberEditor(QtCore.QObject):
 
     def snap(self, x, y):
         """Use the shared grid settings, but acquire only this editor's FOLLOW geometry."""
+        self.snap_acquisition = None
+        if isinstance(self.active_tool, TrackEditorGrb) and self.active_tool.ui.snap_to_pad_cb.isChecked():
+            point = Point(x, y)
+            tree, refs = self.get_pick_index()
+            pads = []
+            for idx in tree.query(point, predicate='intersects') if tree is not None else ():
+                shape = refs[int(idx)][2]
+                follow = shape.geo.get('follow')
+                if isinstance(follow, Point) and not follow.is_empty:
+                    pads.append((shape.geo['solid'].area, point.distance(follow), int(idx),
+                                 (follow.x, follow.y)))
+            if pads:
+                self.active_snap_type = 'pad'
+                self.ui.snap_type_label.setText('%s: %s' % (_("Snap"), _("Pad center")))
+                return min(pads)[3]
         if not self.app.grid_status():
             self.active_snap_type = None
             self.ui.snap_type_label.setText('%s: %s' % (_("Snap"), _("None")))
@@ -6230,6 +6370,9 @@ class AppGerberEditor(QtCore.QObject):
         if options.get('grid_snap', False):
             gx = float(options['global_gridx'])
             gy = gx if self.app.ui.grid_gap_link_cb.isChecked() else float(options['global_gridy'])
+            if isinstance(self.active_tool, TrackEditorGrb) and getattr(self.active_tool, 'fine_grid', False):
+                gx /= 10
+                gy /= 10
             coords = (round(x / gx) * gx if gx else x, round(y / gy) * gy if gy else y)
             best = min(best, (distance((x, y), coords), 3, coords, 'grid'))
         self.active_snap_type = best[3]
@@ -6527,7 +6670,10 @@ class AppGerberEditor(QtCore.QObject):
         self.pos = self.canvas.translate_coords(event_pos)
         self.press_pos_raw = (self.pos[0], self.pos[1])
         raw_pick = self._tool_wants_raw_pick()
-        if self.app.grid_status():
+        if isinstance(self.active_tool, TrackEditorGrb):
+            snapped_pos = self.snap(*self.press_pos_raw)
+            self.snap_x, self.snap_y = snapped_pos
+        elif self.app.grid_status():
             snapped_pos = self.app.geo_editor.snap(self.pos[0], self.pos[1])
         else:
             snapped_pos = (self.pos[0], self.pos[1])
@@ -6567,7 +6713,7 @@ class AppGerberEditor(QtCore.QObject):
                     return
 
                 # Dispatch event to active_tool
-                if raw_pick:
+                if raw_pick or isinstance(self.active_tool, TrackEditorGrb):
                     self.active_tool.click(self.pos)
                 else:
                     self.active_tool.click(self.app.geo_editor.snap(self.pos[0], self.pos[1]))
@@ -6798,6 +6944,13 @@ class AppGerberEditor(QtCore.QObject):
 
         self.plot_selection()
 
+    def on_canvas_key_release(self, event):
+        if isinstance(self.active_tool, TrackEditorGrb) and event.key in ('Space', QtCore.Qt.Key.Key_Space):
+            native = getattr(event, 'native', None)
+            if hasattr(native, 'isAutoRepeat') and native.isAutoRepeat():
+                return
+            self.active_tool.set_fine_grid(False)
+
     def on_canvas_move(self, event):
         """
         Called on 'mouse_move' event
@@ -6835,10 +6988,11 @@ class AppGerberEditor(QtCore.QObject):
             return
 
         # # ## Snap coordinates
-        if not self.app.grid_status():
+        track = isinstance(self.active_tool, TrackEditorGrb)
+        if not self.app.grid_status() and not track:
             self.snap(x, y)
-        if self.app.grid_status():
-            snap_x, snap_y = self.app.geo_editor.snap(x, y)
+        if self.app.grid_status() or track:
+            snap_x, snap_y = self.snap(x, y) if track else self.app.geo_editor.snap(x, y)
             # the rubber band of a pick tool uses the same raw position as the release
             if not self._tool_wants_raw_pick():
                 x, y = snap_x, snap_y
@@ -7841,14 +7995,24 @@ class AppGerberEditorUI:
         # Aperture Dimensions
         self.apdim_lbl = FCLabel('%s:' % _('Dims'))
         self.apdim_lbl.setToolTip(
-            _("Dimensions for the new aperture.\n"
-              "The format is (width, height)")
+            _("Dimensions for the new aperture: width, then height.")
         )
 
-        self.apdim_entry = EvalEntry2()
+        self.apdim_entry = FCDoubleSpinner()
+        self.apheight_entry = FCDoubleSpinner()
+        for entry, text in ((self.apdim_entry, _("Width")), (self.apheight_entry, _("Height"))):
+            entry.set_precision(self.decimals)
+            entry.set_range(0.0, 10000.0000)
+            entry.setToolTip(text)
+
+        dims_layout = QtWidgets.QHBoxLayout()
+        dims_layout.setContentsMargins(0, 0, 0, 0)
+        dims_layout.setSpacing(3)
+        dims_layout.addWidget(self.apdim_entry)
+        dims_layout.addWidget(self.apheight_entry)
 
         grid1.addWidget(self.apdim_lbl, 4, 0)
-        grid1.addWidget(self.apdim_entry, 4, 1)
+        grid1.addLayout(dims_layout, 4, 1)
 
         # Aperture Buttons
         vlay_buttons = QtWidgets.QVBoxLayout()

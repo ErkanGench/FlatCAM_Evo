@@ -6,7 +6,7 @@ import math
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 from shapely.affinity import rotate, translate
-from shapely.geometry import box
+from shapely.geometry import box, Polygon, MultiPolygon
 
 from appEditors.geo_plugins.GeoRectanglePlugin import RectangleEditorUI
 from appEditors.geo_plugins.GeoTextPlugin import TextEditorUI
@@ -54,6 +54,35 @@ def text_region(parser, text, family, style, size, units, x, y, angle, bitmap_sm
     if isinstance(polygon, str) or polygon is None or polygon.is_empty:
         raise ValueError(_("No geometry generated from text input."))
     return translate(rotate(polygon, angle, origin=(0, 0)), xoff=x, yoff=y)
+
+
+def copper_pour(editor, outline, clearance, quad_segs):
+    """Subtract source material sequentially, buffering only spatial candidates."""
+    if not math.isfinite(clearance) or clearance < 0 or not isinstance(outline, Polygon) or \
+            outline.is_empty or not outline.is_valid or not all(math.isfinite(v) for v in outline.bounds):
+        raise ValueError(_("Enter a valid polygon and finite nonnegative clearance."))
+    tree, refs = editor.get_pick_index()
+    if tree is None:
+        return outline
+    xmin, ymin, xmax, ymax = outline.bounds
+    bounds = (xmin - clearance, ymin - clearance, xmax + clearance, ymax + clearance)
+    if not all(math.isfinite(v) for v in bounds):
+        raise ValueError(_("Clearance exceeds the coordinate range."))
+    result = outline
+    for index in sorted(tree.query(box(*bounds))):
+        solid = refs[index][2].geo['solid']
+        parts = solid.geoms if isinstance(solid, MultiPolygon) else [solid]
+        for polygon in parts:
+            if not isinstance(polygon, Polygon):
+                continue
+            if not polygon.is_valid:
+                raise ValueError(_("Source contains invalid polygon material."))
+            obstacle = polygon.buffer(clearance, quad_segs=quad_segs) if clearance else polygon
+            if result.intersects(obstacle):
+                result = result.difference(obstacle)
+                if result.is_empty:
+                    return result
+    return result
 
 
 class RegionDrawingPanel(QtWidgets.QWidget):

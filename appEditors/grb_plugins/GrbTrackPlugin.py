@@ -2,7 +2,7 @@
 from PyQt6 import QtWidgets, QtGui
 from appTool import AppToolEditor
 from appGUI.GUIElements import VerticalScrollArea, FCLabel, FCButton, FCFrame, GLay, NumericalEvalEntry, \
-    FCDoubleSpinner
+    FCDoubleSpinner, FCCheckBox
 
 import gettext
 import appTranslation as fcTranslate
@@ -194,6 +194,20 @@ class GrbTrackEditorUI:
         self.clear_btn = QtWidgets.QToolButton()
         self.clear_btn.setIcon(QtGui.QIcon(self.ed_class.app.resource_location + '/trash32.png'))
         pro_grid.addWidget(self.clear_btn, 0, 2)
+
+        # Parameters
+        self.parameters_lbl = FCLabel(_("Parameters"), bold=True, color='blue')
+        self.editor_vbox.addWidget(self.parameters_lbl)
+        parameters_frame = FCFrame()
+        self.editor_vbox.addWidget(parameters_frame)
+        parameters_grid = GLay(v_spacing=5, h_spacing=3)
+        parameters_frame.setLayout(parameters_grid)
+
+        self.snap_to_pad_cb = FCCheckBox(_("Snap to pad"))
+        self.snap_to_pad_cb.setToolTip(
+            _("Snap to the center of the pad under the mouse, even when its center is off-grid.")
+        )
+        parameters_grid.addWidget(self.snap_to_pad_cb, 0, 0, 1, 2)
 
         self.add_btn = FCButton(_("Add"))
         self.add_btn.setIcon(QtGui.QIcon(self.ed_class.app.resource_location + '/plus32.png'))

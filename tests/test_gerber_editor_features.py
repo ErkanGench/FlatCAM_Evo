@@ -1,18 +1,23 @@
 """Gerber-local snapping, feature selection and range deletion controls."""
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from PyQt6 import QtCore, QtWidgets
 from shapely.geometry import LineString, MultiLineString, Point, box
 from shapely.ops import unary_union
+from vispy.geometry.rect import Rect
+from vispy.util.event import EventEmitter
 
 from appEditors.appGeoEditor import AppGeoEditor
 from appEditors.appGerberEditor import AppGerberEditor
 from appEditors.grb_plugins.GrbCommon import DrawToolShape
+from appEditors.grb_plugins.GrbTrackPlugin import GrbTrackEditorUI
+from appGUI.MainGUI import MainGUI
 from appParsers.ParseGerber import Gerber
 from test_editor_save_modes import gerber_stand_in
 from test_gerber_editor_pick import aperture, make_editor
+from test_editor_corner import track_tool_with_storage
 from tests.helpers_objects import app, _headless_qt, make_gerber, NATIVE_GBR  # noqa: F401,E402
 
 
@@ -46,6 +51,146 @@ def test_follow_corners_flash_centers_multipart_and_grid_competition():
     assert editor.snap(0.14, 0.14) == pytest.approx((0.1, 0.1))
 
 
+@pytest.mark.parametrize('grid', [True, False])
+def test_track_pad_snap_preview_click_and_return_to_global_grid(grid):
+    center = (0.23, 0.37)
+    pad = DrawToolShape({'solid': Point(center).buffer(0.8), 'follow': Point(center)})
+    destination = (7.23, 3.37)
+    other_pad = DrawToolShape({'solid': Point(destination).buffer(0.8), 'follow': Point(destination)})
+    track = DrawToolShape({'solid': box(3, 0, 5, 1), 'follow': LineString([(3, 0.5), (5, 0.5)])})
+    editor = snap_editor([pad, other_pad, track])
+    editor.app.grid_on = grid
+    editor.app.geo_editor.editor_options['grid_snap'] = True
+    tool, _ = track_tool_with_storage(1)
+    tool.name = 'track'
+    tool.complete = False
+    tool.draw_app = editor
+    tool.app = editor.app
+    panel = QtWidgets.QWidget()
+    tool.ui = GrbTrackEditorUI(QtWidgets.QVBoxLayout(panel),
+                              SimpleNamespace(app=editor.app), 'Track')
+    editor.active_tool = tool
+    editor.last_aperture_selected = 10
+    editor.app.ui.grid_gap_x_entry.get_value.return_value = 1.0
+    editor.app.ui.grid_gap_y_entry.get_value.return_value = 1.0
+    tool.ui.snap_to_pad_cb.setChecked(True)
+    # The mouse is over the pad, but much nearer a grid point than its center.
+    raw = (0.01, 0.01)
+    event = SimpleNamespace(pos=tuple(v * 100 for v in raw), button=1, is_dragging=False)
+    editor.on_canvas_move(event)
+    assert (editor.snap_x, editor.snap_y) == center
+    editor.on_canvas_click(event)
+    assert tool.points == [center]
+    assert editor.storage_dict[10]['geometry'][-1].geo['follow'].equals(Point(center))
+    # A click without an intervening mouse move must commit the new endpoint, not stale preview geometry.
+    event.pos = (460, 220)
+    editor.on_canvas_click(event)
+    endpoint = (5.0, 2.0) if grid else (4.6, 2.2)
+    assert tool.points[-1] == endpoint
+    follow = editor.storage_dict[10]['geometry'][-1].geo['follow']
+    assert tuple(follow.coords[0]) == center
+    assert tuple(follow.coords[-1]) == endpoint
+    assert editor.snap(3.1, 0.1) == ((3.0, 0.0) if grid else (3.1, 0.1))
+    event.pos = (701, 301)
+    editor.on_canvas_move(event)
+    assert (editor.snap_x, editor.snap_y) == destination
+    editor.on_canvas_click(event)
+    assert tuple(editor.storage_dict[10]['geometry'][-1].geo['follow'].coords[-1]) == destination
+    tool.ui.snap_to_pad_cb.setChecked(False)
+    assert editor.snap(*raw) == ((0.0, 0.0) if grid else raw)
+    assert editor.app.geo_editor.editor_options['global_gridx'] == 1.0
+    panel.deleteLater()
+
+
+def test_track_pad_snap_survives_completed_routes_until_tool_is_closed():
+    pad = DrawToolShape({'solid': Point(0.23, 0.37).buffer(0.8), 'follow': Point(0.23, 0.37)})
+    editor = snap_editor([pad])
+    editor.last_aperture_selected = 10
+    editor.select_tool = AppGerberEditor.select_tool.__get__(editor)
+    with patch('appEditors.appGerberEditor.GrbTrackEditorTool.run'):
+        editor.select_tool('track')
+        editor.active_tool.ui.snap_to_pad_cb.setChecked(True)
+        editor.active_tool.click((2, 2))
+        editor.active_tool.click((4, 2))
+        editor.app.ui.popMenu.mouse_is_panning = False
+        editor.on_canvas_click_release(SimpleNamespace(pos=(400, 200), button=2, is_dragging=False))
+        assert editor.active_tool.ui.snap_to_pad_cb.isChecked()
+        assert editor.snap(0.01, 0.01) == (0.23, 0.37)
+        editor.select_tool('select')
+        editor.select_tool('track')
+        assert not editor.active_tool.ui.snap_to_pad_cb.isChecked()
+
+
+@pytest.mark.parametrize('linked', [False, True])
+def test_holding_space_refines_live_track_preview_and_committed_endpoint(linked):
+    pad = DrawToolShape({'solid': Point(10.23, 10.37).buffer(0.8), 'follow': Point(10.23, 10.37)})
+    editor = snap_editor([pad])
+    options = editor.app.geo_editor.editor_options
+    options.update(grid_snap=True, global_gridx=1.0, global_gridy=2.0)
+    editor.app.ui.grid_gap_link_cb.isChecked.return_value = linked
+    editor.last_aperture_selected = 10
+    editor.select_tool = AppGerberEditor.select_tool.__get__(editor)
+    key_release = EventEmitter(type='key_release')
+    editor.canvas.graph_event_connect = lambda name, callback: key_release.connect(callback) \
+        if name == 'key_release' else None
+    editor.canvas.graph_event_disconnect = lambda name, callback: key_release.disconnect(callback) \
+        if name == 'key_release' else None
+    editor.connect_canvas_event_handlers()
+    with patch('appEditors.appGerberEditor.GrbTrackEditorTool.run'):
+        editor.select_tool('track')
+        editor.active_tool.ui.snap_to_pad_cb.setChecked(True)
+        editor.active_tool.click((0, 0))
+        editor.active_tool.cursor_data_control = False
+        move = SimpleNamespace(pos=(126, 226), button=None, is_dragging=False)
+        editor.on_canvas_move(move)
+        normal = (1.0, 2.0)
+        fine = (1.3, 2.3 if linked else 2.2)
+        assert (editor.snap_x, editor.snap_y) == normal
+        gui = SimpleNamespace(app=editor.app, grb_select_btn=SimpleNamespace(isChecked=lambda: False))
+        MainGUI.keyPressEvent(gui, SimpleNamespace(key='Space', native=SimpleNamespace()))
+        assert (editor.snap_x, editor.snap_y) == pytest.approx(fine)
+        assert editor.active_tool.temp_points[-1] == pytest.approx(fine)
+        assert editor.snap(10.01, 10.01) == (10.23, 10.37)
+        editor.on_canvas_click(SimpleNamespace(pos=move.pos, button=1, is_dragging=False))
+        follow = editor.storage_dict[10]['geometry'][-1].geo['follow']
+        assert tuple(follow.coords[-1]) == pytest.approx(fine)
+        # Auto-repeat releases mustn't restore the coarse grid while Space remains held.
+        key_release(key='Space', native=SimpleNamespace(isAutoRepeat=lambda: True))
+        assert editor.snap(1.26, 2.26) == pytest.approx(fine)
+        key_release(key='Space', native=SimpleNamespace(isAutoRepeat=lambda: False))
+        assert (editor.snap_x, editor.snap_y) == normal
+        assert editor.active_tool.temp_points[-1] == normal
+        MainGUI.keyPressEvent(gui, int(QtCore.Qt.Key.Key_Space))
+        editor.app.ui.popMenu.mouse_is_panning = False
+        editor.on_canvas_click_release(SimpleNamespace(pos=move.pos, button=2, is_dragging=False))
+        assert editor.snap(1.26, 2.26) == pytest.approx(fine)
+        key_release(key=QtCore.Qt.Key.Key_Space, native=SimpleNamespace(isAutoRepeat=lambda: False))
+        assert editor.snap(1.26, 2.26) == normal
+        assert options['global_gridx'] == 1.0
+        assert options['global_gridy'] == 2.0
+    editor.disconnect_canvas_event_handlers()
+
+
+@pytest.mark.parametrize('kind', ['R', 'O'])
+def test_aperture_creation_uses_separate_width_and_height(kind):
+    editor = make_editor()
+    editor.ui.aptype_cb.set_value(kind)
+    editor.ui.apdim_entry.set_value(0.6)
+    editor.ui.apheight_entry.set_value(0.8)
+    assert editor.ui.apdim_entry.isEnabled()
+    assert editor.ui.apheight_entry.isEnabled()
+    # Size is disabled for these types; dimensions must work even when its old value is zero.
+    editor.ui.apsize_entry.set_value(0)
+    editor.on_aperture_add(12)
+    aperture = editor.storage_dict[12]
+    assert aperture['type'] == kind
+    assert (aperture['width'], aperture['height']) == (0.6, 0.8)
+    assert aperture['size'] == pytest.approx(1.0)
+    editor.ui.aptype_cb.set_value('C')
+    assert not editor.ui.apdim_entry.isEnabled()
+    assert not editor.ui.apheight_entry.isEnabled()
+
+
 def test_feature_rows_select_individual_records_and_sync_without_aperture_signal_loops():
     first = DrawToolShape({'solid': box(0, 0, 2, 3), 'follow': Point(1, 1)})
     second = DrawToolShape({'solid': box(5, 0, 9, 3), 'follow': LineString([(5, 0), (9, 0)])})
@@ -61,6 +206,36 @@ def test_feature_rows_select_individual_records_and_sync_without_aperture_signal
     editor.update_ui()
     assert {idx.row() for idx in table.selectionModel().selectedRows()} == {0, 2}
     assert len(editor.ui.apertures_table.selectionModel().selectedRows()) == 2
+
+
+@pytest.mark.parametrize('selection', ['aperture', 'all', 'feature'])
+def test_table_selection_respects_zoom_checkbox(selection):
+    first = DrawToolShape({'solid': box(0, 0, 2, 3), 'follow': Point(1, 1)})
+    second = DrawToolShape({'solid': box(5, 10, 9, 13), 'follow': Point(7, 11)})
+    editor = make_editor({10: aperture([first]), 11: aperture([second])})
+    editor.refresh_features()
+    camera = editor.app.plotcanvas.view.camera
+    original_rect = Rect(100, 100, 20, 20)
+    for enabled in (False, True):
+        editor.ui.geo_zoom.set_value(enabled)
+        camera.rect = original_rect
+        if selection == 'aperture':
+            editor.ui.apertures_table.cellPressed.emit(1, 1)
+        elif selection == 'all':
+            editor.ui.apertures_table.clearSelection()
+            editor.ui.apertures_table.selectAll()
+        else:
+            editor.ui.features_table.clearSelection()
+            editor.ui.features_table.selectRow(1)
+        assert second in editor.selected
+        if enabled:
+            assert (camera.rect.left, camera.rect.bottom, camera.rect.right, camera.rect.top) == pytest.approx(
+                (4.92, 9.94, 9.08, 13.06))
+        else:
+            assert camera.rect == original_rect
+    camera.rect = original_rect
+    editor.update_ui(zoom=False)
+    assert camera.rect == original_rect
 
 
 def range_editor():

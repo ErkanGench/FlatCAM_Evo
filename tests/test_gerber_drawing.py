@@ -98,6 +98,80 @@ def skip_without_fonts():
         pytest.skip('no fonts in the Qt font database (offscreen platform)')
 
 
+def test_copper_pour_clearance_parts_and_history():
+    from appEditors.grb_plugins.GrbDrawingPlugin import copper_pour
+    from appEditors.grb_plugins.GrbCommon import DrawToolShape
+    obstacles = [box(4, -1, 5, 11), box(1, 1, 2, 2), box(-1, 3, -0.1, 4), box(50, 50, 51, 51)]
+    shapes = [DrawToolShape({'solid': p}) for p in obstacles]
+    editor = make_editor({10: aperture(shapes)})
+    outline = box(0, 0, 10, 10)
+    expected = outline
+    for obstacle in obstacles:
+        expected = expected.difference(obstacle.buffer(0.3, quad_segs=16))
+    result = copper_pour(editor, outline, 0.3, 16)
+    assert result.equals(expected)
+    assert isinstance(result, MultiPolygon)
+    assert sum(len(p.interiors) for p in result.geoms) == 1
+    editor.add_region_geometry(result)
+    assert editor.storage_dict[10]['geometry'] == shapes
+    assert len(editor.history.undo_stack) == 1
+    assert editor.undo()
+    assert list(editor.storage_dict) == [10]
+    assert editor.redo()
+    assert unary_union([s.geo['solid'] for s in editor.selected]).equals(expected)
+
+
+def test_copper_pour_invalid_and_empty_do_not_change_source():
+    from appEditors.grb_plugins.GrbDrawingPlugin import copper_pour
+    from shapely.geometry import Polygon
+    editor = make_editor({10: aperture([pad(0, 0, 20)])})
+    for outline, clearance in [(box(0, 0, 1, 1), -1), (box(0, 0, 1, 1), float('nan')),
+                               (Polygon([(0, 0), (2, 2), (0, 2), (2, 0)]), 0)]:
+        with pytest.raises(ValueError):
+            copper_pour(editor, outline, clearance, 16)
+    assert copper_pour(editor, box(0, 0, 1, 1), 0, 16).is_empty
+    assert editor.history.undo_stack == []
+
+
+def test_copper_pour_vertex_completion_and_cancel():
+    from appEditors.appGerberEditor import CopperPourEditorGrb
+    editor = make_editor()
+    editor.snap_x = editor.snap_y = 0
+    editor.bend_mode = 5
+    tool = CopperPourEditorGrb(editor)
+    editor.active_tool = tool
+    for point in [(0, 0), (5, 0), (5, 5), (0, 5)]:
+        tool.click(point)
+    tool.on_key('Backspace')
+    tool.click((0, 5))
+    assert tool.utility_geometry((0, 0)) is not None
+    tool.make()
+    assert tool.complete
+    editor.on_grb_shape_complete()
+    assert unary_union([s.geo['solid'] for s in editor.selected]).equals(box(0, 0, 5, 5))
+    assert len(editor.history.undo_stack) == 1
+    tool.clean_up()
+    tool = CopperPourEditorGrb(editor)
+    tool.click((10, 10))
+    tool.clean_up()
+    assert len(editor.history.undo_stack) == 1
+    assert not editor.in_action
+
+
+def test_copper_pour_native_export_reparse(app, tmp_path):
+    from appEditors.grb_plugins.GrbDrawingPlugin import copper_pour
+    editor = make_editor({10: aperture([pad(2, 2, 1)])})
+    result = copper_pour(editor, box(0, 0, 5, 5), 0.2, 16)
+    editor.add_region_geometry(result)
+    tools = {key: {**value, 'geometry': [shape.geo for shape in value['geometry']]}
+             for key, value in editor.storage_dict.items()}
+    expected = unary_union([shape.geo['solid'] for value in editor.storage_dict.values()
+                            for shape in value['geometry']])
+    edited = editor_save(app, make_gerber(app, NATIVE_GBR), tools, loaded_as_regions=True)
+    again = reparse_gerber(app, edited.source_file, tmp_path)
+    assert_poly_equiv(again.solid_geometry, expected, abs_tol=1e-4)
+
+
 def test_text_and_rectangle_native_export_reparse(app, tmp_path):
     editor = make_editor()
     parser, family = font_parser(editor)

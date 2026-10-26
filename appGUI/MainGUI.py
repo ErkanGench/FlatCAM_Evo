@@ -906,6 +906,8 @@ class MainGUI(QtWidgets.QMainWindow):
 
         self.grb_add_rectangle_menuitem = self.grb_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rect. Reg"))
+        self.grb_add_copper_pour_menuitem = self.grb_editor_menu.addAction(
+            QtGui.QIcon(self.app.resource_location + '/copper_pour.png'), _("Copper Pour"))
         self.grb_add_text_menuitem = self.grb_editor_menu.addAction(
             QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Reg"))
         self.grb_add_arc_menuitem = self.grb_editor_menu.addAction(
@@ -1470,6 +1472,9 @@ class MainGUI(QtWidgets.QMainWindow):
         self.grb_add_rectangle_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rect. Reg"))
         self.grb_add_rectangle_btn.setToolTip(_("Rectangular Region"))
+
+        self.grb_add_copper_pour_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/copper_pour.png'), _("Copper Pour"))
 
         self.grb_add_text_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Reg"))
@@ -2903,6 +2908,9 @@ class MainGUI(QtWidgets.QMainWindow):
         self.grb_add_rectangle_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/rectangle32.png'), _("Rect. Reg"))
         self.grb_add_rectangle_btn.setToolTip(_("Rectangular Region"))
+
+        self.grb_add_copper_pour_btn = self.grb_edit_toolbar.addAction(
+            QtGui.QIcon(self.app.resource_location + '/copper_pour.png'), _("Copper Pour"))
 
         self.grb_add_text_btn = self.grb_edit_toolbar.addAction(
             QtGui.QIcon(self.app.resource_location + '/text32.png'), _("Text Reg"))
