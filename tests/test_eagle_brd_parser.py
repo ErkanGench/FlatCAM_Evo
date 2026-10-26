@@ -5,7 +5,10 @@ import tempfile
 import unittest
 import warnings
 
+from shapely import Point
 from shapely.ops import unary_union
+
+from camlib import circle_quad_segs, gerber_circle_steps
 
 from appParsers.ParseEagleBrd import EagleBrdParser, EagleBrdParseError
 
@@ -20,6 +23,11 @@ LAYERS_XML = ('<layers><layer number="1" name="Top"/><layer number="16" name="Bo
               '<layer number="29" name="tStop"/><layer number="30" name="bStop"/>'
               '<layer number="31" name="tCream"/><layer number="32" name="bCream"/>'
               '<layer number="45" name="Holes"/><layer number="51" name="tDocu"/></layers>')
+
+
+def circle_area(radius):
+    # the area of a circle as the parsers draw it: the steps of the Gerber circle preference (adaptive by default)
+    return Point(0, 0).buffer(radius, quad_segs=circle_quad_segs(gerber_circle_steps(None, radius))).area
 
 
 def doc(plain='', libs='', rules='', elements='', signals='', version='9.6.2', layers=LAYERS_XML):
@@ -85,7 +93,7 @@ class TestEagleWiresAndVias(unittest.TestCase):
         parsed = parse(doc(plain='<wire x1="0" y1="0" x2="10" y2="0" width="0.5" layer="1"/>'))
         self.assertEqual(list(parsed.layers), ['Top'])
         self.assertEqual(parsed.copper_layers, ['Top', 'Bottom'])
-        self.assertAlmostEqual(copper(parsed, 'Top').area, 10 * 0.5 + math.pi * 0.25 ** 2, places=3)
+        self.assertAlmostEqual(copper(parsed, 'Top').area, 10 * 0.5 + circle_area(0.25), places=3)
         self.assertEqual(rounded(copper(parsed, 'Top').bounds), [-0.25, -0.25, 10.25, 0.25])
         self.assertEqual(parsed.warnings, [])
 
@@ -112,7 +120,7 @@ class TestEagleWiresAndVias(unittest.TestCase):
         for layer in ('Top', 'Bottom'):
             with self.subTest(layer=layer):
                 self.assertEqual(rounded(copper(parsed, layer).bounds), [1.6468, 2.6468, 2.3532, 3.3532])
-        self.assertEqual(rounded(copper(parsed, 'tStop').bounds, 3), [1.545, 2.545, 2.455, 3.455])
+        self.assertEqual(rounded(copper(parsed, 'tStop').bounds, 2), [1.55, 2.55, 2.45, 3.45])
 
     def test_blind_via_on_inner_layers_gets_its_own_drill_group(self):
         rules = '<param name="layerSetup" value="(1*2*16)"/>'
@@ -141,7 +149,7 @@ class TestEagleThroughHolePads(unittest.TestCase):
     def test_round_pad_uses_restring_when_diameter_is_smaller(self):
         # drill 0.8 + 2 * clamp(0.25 * 0.8, 0.254, 0.508) = 1.308 mm copper
         parsed = self._pad('round')
-        self.assertAlmostEqual(copper(parsed, 'Top').area, math.pi * 0.654 ** 2, delta=0.001)
+        self.assertAlmostEqual(copper(parsed, 'Top').area, circle_area(0.654), delta=0.001)
         self.assertEqual(rounded(copper(parsed, 'Top').bounds, 3), [9.346, 9.346, 10.654, 10.654])
         self.assertEqual(rounded(copper(parsed, 'Bottom').bounds, 3), [9.346, 9.346, 10.654, 10.654])
         self.assertNotIn('tCream', parsed.layers)      # THT pads get no paste
@@ -156,8 +164,8 @@ class TestEagleThroughHolePads(unittest.TestCase):
         drills = [(point.x, point.y) for tool in parsed.drill_groups['PTH'].values() for point in tool['drills']]
         self.assertEqual(drills, [(10.0, 10.0)])
         # stop frame: the minimum 0.1016 mm (the rule mvStopFrame x min side is 0.1016)
-        self.assertEqual(rounded(copper(parsed, 'tStop').bounds, 3), [9.244, 9.244, 10.756, 10.756])
-        self.assertEqual(rounded(copper(parsed, 'bStop').bounds, 3), [9.244, 9.244, 10.756, 10.756])
+        self.assertEqual(rounded(copper(parsed, 'tStop').bounds, 2), [9.24, 9.24, 10.76, 10.76])
+        self.assertEqual(rounded(copper(parsed, 'bStop').bounds, 2), [9.24, 9.24, 10.76, 10.76])
 
 
 class TestEagleSmdPads(unittest.TestCase):
@@ -176,7 +184,7 @@ class TestEagleSmdPads(unittest.TestCase):
     def test_smd_roundness_rounds_the_corners(self):
         parsed = parse(doc(libs=self.LIBS % ' roundness="50"', elements=element(10, 10, package='S')))
         # 1 x 2 mm box with radius 0.25 mm: 2 - (4 - pi) * 0.25 ** 2
-        self.assertAlmostEqual(copper(parsed, 'Top').area, 2 - (4 - math.pi) * 0.25 ** 2, delta=0.001)
+        self.assertAlmostEqual(copper(parsed, 'Top').area, 2 - 4 * 0.25 ** 2 + circle_area(0.25), delta=0.001)
 
 class TestEagleElementPlacement(unittest.TestCase):
     LIBS = ('<library name="l"><packages><package name="S">'

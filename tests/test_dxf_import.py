@@ -181,6 +181,21 @@ class DxfImportTest(unittest.TestCase):
             self.assertLess(boxes[1][3] - boxes[1][1], 12)
             self.assertTrue(dxf_to_shapes(doc, mode))
         self.assertEqual(dxf_to_shapes(doc, 'none'), [])
+    def test_circles_and_points_follow_the_circle_preferences(self):
+        doc, msp = new_doc()
+        doc.header['$INSUNITS'] = 4
+        msp.add_point((0, 0))
+        msp.add_circle((10, 0), 0.5)
+        msp.add_circle((50, 0), 20)
+        fixed = {'geometry_circle_steps_mode': 'fixed', 'geometry_circle_steps': 64}
+        point, small, big = dxf_to_shapes(doc, options=fixed)
+        self.assertEqual([len(g.exterior.coords) - 1 for g in (point, small)], [64, 64])
+        self.assertGreaterEqual(len(big.exterior.coords) - 1, 64)  # the flattening tolerance may add more
+        point, small, big = dxf_to_shapes(doc)
+        self.assertLess(len(point.exterior.coords), len(big.exterior.coords))
+        self.assertAlmostEqual(big.area, math.pi * 400, delta=0.5)
+        self.assertAlmostEqual(point.area, math.pi * 0.01 ** 2, places=4)
+
 
 if __name__ == '__main__':
     unittest.main()

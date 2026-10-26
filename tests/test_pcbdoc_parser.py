@@ -280,7 +280,7 @@ class TestPcbDocParser(unittest.TestCase):
             'SCOPE1EXPRESSION': "IsPad AND (IsSMDPad OR InNet('GND'))", 'EXPANSION': '0.2mm'})
         parser = self.parser({'Pads6': bytes(record), 'Rules6': rules})
         opening = unary_union(parser.layers[37]['solid_geometry'])
-        self.assertAlmostEqual(opening.bounds[0], 3.3, delta=0.0001)
+        self.assertAlmostEqual(opening.bounds[0], 3.3, delta=0.002)   # the circle tolerance (2 um)
         record[offset + 4 + 1] |= 0x20
         parser = self.parser({'Pads6': bytes(record), 'Rules6': rules})
         self.assertNotIn(37, parser.layers)

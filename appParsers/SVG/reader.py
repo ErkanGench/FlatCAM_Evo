@@ -1,6 +1,7 @@
 """Entry point: loads the document, walks the tree once and collects Shapely geometries."""
 import io
 import logging
+import math
 import os
 import re
 
@@ -105,8 +106,15 @@ class _Importer:
         self.root = root
         self.gerber = object_type == 'gerber'
         self.units = units
-        # the app's circle steps count the whole circle; the internal code works per quarter circle
-        self.resolution = max(int(resolution) // 4, 2)
+        # circle steps count the whole circle, the internal code works per quarter circle: `resolution` is a fixed
+        # number of steps or a function radius -> steps (radius in the output units of the import)
+        if callable(resolution):
+            self._steps = resolution
+        else:
+            fixed = int(resolution)
+            self._steps = lambda radius: fixed
+        # the curve tolerance follows the segments of a typical feature of 5 mm
+        self.resolution = self.quad(5.0 if str(units).upper() == 'MM' else 5.0 / 25.4)
         self.flip = flip
         self.include_text = include_text
         self.app = app
@@ -120,6 +128,13 @@ class _Importer:
         self.engine = None
         self.base_scale = 1.0
         self.tol_out = 0.01
+
+    def quad(self, radius):
+        """
+        :param radius:  radius in output units
+        :return:        segments per quarter circle for that radius (at least 2)
+        """
+        return max(math.ceil(int(self._steps(abs(radius))) / 4), 2)
 
     def run(self):
         sheet = StyleSheet(self._css_texts())
@@ -297,15 +312,17 @@ class _Importer:
         fs = style['font-size']
         flags = self._style_flags(style, ctx.vp, fs)
         tol = self.tol_out / scale
+        # radii inside the element are in user units, the steps are chosen for the radius in output units
+        segs = lambda radius: self.quad(radius * scale)
         if local == 'path':
             d = el.get('d')
             subs = parse_path(d) if d else []
             if is_batchable(subs) and paint.batchable(self.gerber, subs[0][2], flags[1], flags[2], flags[3]):
                 self.out.append(self.batch.add_path(subs[0], tol, m, flags[4]))
                 return
-            polylines = polylines_of(subs, tol, self.resolution)
+            polylines = polylines_of(subs, tol, segs)
         else:
-            polylines = shape_polylines(local, Geo(el, own, ctx.vp, fs), self.resolution, tol)
+            polylines = shape_polylines(local, Geo(el, own, ctx.vp, fs), segs, tol)
         if not polylines:
             return
         ring = paint.single_ring(polylines, self.gerber, flags[1], flags[2], flags[3])
@@ -313,7 +330,7 @@ class _Importer:
             self.out.append(self.batch.add(ring, m, flags[4]))
         else:
             self.out.extend(paint.element_geometries(polylines, style, own, m, self.gerber, ctx.vp, fs,
-                                                     self.resolution, self.base_scale))
+                                                     self.quad, self.base_scale))
 
     def _text(self, el, own, ctx, style, frame, m):
         if style['visibility'] in ('hidden', 'collapse') or mean_scale(m) <= 0:
@@ -326,7 +343,7 @@ class _Importer:
             if st['visibility'] in ('hidden', 'collapse'):
                 continue
             self.out.extend(paint.area_geometries(geom, st, own, m, self.gerber, ctx.vp, st['font-size'],
-                                                  self.resolution, self.base_scale))
+                                                  self.quad, self.base_scale))
 
 
 def svg_to_shapes(source, object_type='geometry', units='MM', resolution=64, flip=True,
@@ -337,8 +354,10 @@ def svg_to_shapes(source, object_type='geometry', units='MM', resolution=64, fli
     :param source: file path, SVG text or bytes, stream, lxml/ElementTree Element or ElementTree
     :param object_type: 'gerber' gives only Polygons; anything else gives Polygons and LineStrings
     :param units: output units 'MM' or 'IN' (ignored with user_units)
-    :param resolution: circle steps of the app: segments per full circle (Shapely quad_segs = resolution // 4);
-                       also drives the curve tolerance
+    :param resolution: circle steps: segments per full circle for every circle (an int), or a function
+                       radius -> segments per full circle with the radius in output units (arcs, circles, ellipses,
+                       rounded corners and strokes then get the steps of their own radius);
+                       a 5 mm feature also sets the curve tolerance
     :param flip: Y points up with the origin at the bottom-left of the viewport
     :param include_text: render text elements
     :param app: optional application (ParseFont, log)

@@ -6,6 +6,15 @@ import numpy as np
 MAX_STEPS = 1000
 
 
+def quad_segs(resolution, radius):
+    """
+    :param resolution: segments per quarter circle (int), or a function radius -> segments per quarter circle
+    :param radius:     the radius of the circle or arc, in the units that function expects
+    :return:           segments per quarter circle
+    """
+    return resolution(radius) if callable(resolution) else resolution
+
+
 def cubic_counts(b, tol):
     """
     :param b: (K, 4, 2) control points
@@ -38,11 +47,13 @@ def eval_cubics(b, n):
 def eval_arc(arc, resolution):
     """
     :param arc: (cx, cy, rx, ry, phi, theta1, dtheta, x_end, y_end)
-    :param resolution: segments per quarter circle (Shapely quad_segs), a full circle has 4 * resolution
+    :param resolution: segments per quarter circle (int) or a function radius -> segments per quarter circle;
+                       the radius of an ellipse arc is its larger semi-axis
     :return: (n, 2) points after the arc start
     """
     cx, cy, rx, ry, phi, th1, dth, ex, ey = arc
-    n = int(max(1, min(MAX_STEPS, math.ceil(abs(dth) / (0.5 * math.pi / max(resolution, 1))))))
+    q = quad_segs(resolution, max(abs(rx), abs(ry)))
+    n = int(max(1, min(MAX_STEPS, math.ceil(abs(dth) / (0.5 * math.pi / max(q, 1))))))
     th = th1 + dth * (np.arange(1, n + 1) / n)
     ct, st = np.cos(th), np.sin(th)
     cp, sp = math.cos(phi), math.sin(phi)

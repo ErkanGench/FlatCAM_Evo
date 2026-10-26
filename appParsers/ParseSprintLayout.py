@@ -52,6 +52,8 @@ import struct
 from shapely import LineString, Point, Polygon, box, set_precision
 from shapely.ops import polygonize, unary_union
 
+from camlib import circle_quad_segs, gerber_circle_steps
+
 
 class SprintLayoutParseError(ValueError):
     """Malformed data or copper geometry that cannot be represented safely."""
@@ -115,10 +117,12 @@ class SprintLayoutParser:
              'S2': 'Silkscreen Bottom', 'O': 'Board Outline'}
     DEFAULT = ('C1', 'C2', 'I1', 'I2', 'M1', 'M2', 'S1', 'S2', 'O')
 
-    def __init__(self, app=None, circle_steps=128):
-        if not isinstance(circle_steps, int) or circle_steps < 16:
+    def __init__(self, app=None, circle_steps=None):
+        # circle_steps: a fixed number of segments for every circle; None: the Gerber "Circle Steps" preference
+        if circle_steps is not None and (not isinstance(circle_steps, int) or circle_steps < 16):
             raise ValueError('circle_steps must be an integer of at least 16')
         self.app = app
+        self._options = getattr(app, 'options', None)
         self.circle_steps = circle_steps
         self._reset()
 
@@ -139,9 +143,14 @@ class SprintLayoutParser:
         self._follows = {}
         self._skipped = {}
 
-    @property
-    def _quad(self):
-        return self.circle_steps // 4
+    def _steps(self, radius):
+        # Segments of a whole circle of this radius (millimetres): the fixed override or the Gerber preference.
+        if self.circle_steps is not None:
+            return self.circle_steps
+        return gerber_circle_steps(self._options, radius, 'MM')
+
+    def _segs(self, radius):
+        return circle_quad_segs(self._steps(radius))
 
     def _warn(self, key, message):
         if key not in self._warned:
@@ -302,8 +311,8 @@ class SprintLayoutParser:
         if width <= 0:
             return Polygon()
         if all(point == points[0] for point in points):
-            return Point(points[0]).buffer(width / 2, quad_segs=self._quad)
-        return LineString(points).buffer(width / 2, quad_segs=self._quad)
+            return Point(points[0]).buffer(width / 2, quad_segs=self._segs(width / 2))
+        return LineString(points).buffer(width / 2, quad_segs=self._segs(width / 2))
 
     def _width(self, item):
         if item.width > self.MAX_WIDTH:
@@ -337,7 +346,7 @@ class SprintLayoutParser:
         if item.shape == 1:
             if item.rout <= 0:
                 raise SprintLayoutParseError('Round pad with non-positive size')
-            return Point(center).buffer(item.rout * self.UNIT, quad_segs=self._quad)
+            return Point(center).buffer(item.rout * self.UNIT, quad_segs=self._segs(item.rout * self.UNIT))
         if item.shape in (2, 3, 4, 5, 6, 7, 8, 9) and len(item.pts) >= 3:
             return self._polygon([self._mm(x, y) for x, y in item.pts])
         raise SprintLayoutParseError('Unsupported pad shape %d (%d outline points)' % (item.shape, len(item.pts)))
@@ -356,11 +365,11 @@ class SprintLayoutParser:
             if not shape.is_empty:
                 self._dark[key].append(shape)
                 if item.gdist:
-                    self._clears[key].append(shape.buffer(self._clearance(item), quad_segs=self._quad))
+                    self._clears[key].append(shape.buffer(self._clearance(item), quad_segs=self._segs(self._clearance(item))))
             self._follows.setdefault(key, []).extend(follow)
         if not shape.is_empty:
             for key in mask_keys:
-                self._mask[key].append(shape.buffer(self.MASK_EXPANSION, quad_segs=self._quad, join_style=2))
+                self._mask[key].append(shape.buffer(self.MASK_EXPANSION, quad_segs=self._segs(self.MASK_EXPANSION), join_style=2))
 
     def _place(self, key, shape, follow, item, mask=False):
         """Put a finished shape on the layer an object belongs to."""
@@ -371,7 +380,7 @@ class SprintLayoutParser:
             if not shape.is_empty:
                 self._o_dark.append(shape)
                 if item.gdist:
-                    self._o_clear.append(shape.buffer(self._clearance(item), quad_segs=self._quad))
+                    self._o_clear.append(shape.buffer(self._clearance(item), quad_segs=self._segs(self._clearance(item))))
         elif not shape.is_empty:
             self._silk[key].append((shape, list(follow)))
 
@@ -503,9 +512,9 @@ class SprintLayoutParser:
             self._skip('arc', 'Silkscreen arcs and zero-width circles were skipped')
             return
         center = self._mm(item.x, item.y)
-        shape = Point(center).buffer(item.rout * self.UNIT, quad_segs=self._quad)
+        shape = Point(center).buffer(item.rout * self.UNIT, quad_segs=self._segs(item.rout * self.UNIT))
         if item.rin > 0:
-            shape = shape.difference(Point(center).buffer(item.rin * self.UNIT, quad_segs=self._quad))
+            shape = shape.difference(Point(center).buffer(item.rin * self.UNIT, quad_segs=self._segs(item.rin * self.UNIT)))
         if key not in self.COPPER and key != 'O':
             self._approx.add('circles')
         self._place(key, shape, [], item, bool(item.mask))

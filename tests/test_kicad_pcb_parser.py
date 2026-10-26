@@ -4,6 +4,7 @@ from shapely import Point
 from shapely.ops import unary_union
 
 from appParsers.ParseKiCadPcb import KiCadPcbParser, KiCadPcbParseError
+from camlib import circle_quad_segs, gerber_circle_steps
 
 
 # Two copper layers: F.Cu, B.Cu. Tenting front, so only the back via mask is generated.
@@ -16,6 +17,11 @@ HEAD = '''(kicad_pcb (version 20240108) (generator "test")
 # Four copper layers: F.Cu, In1.Cu, In2.Cu, B.Cu.
 HEAD_INNER = HEAD.replace('(31 "B.Cu" signal)',
                           '(1 "In1.Cu" signal) (2 "In2.Cu" signal) (31 "B.Cu" signal)')
+
+
+def circle_area(radius):
+    # the area of a circle as the parsers draw it: the steps of the Gerber circle preference (adaptive by default)
+    return Point(0, 0).buffer(radius, quad_segs=circle_quad_segs(gerber_circle_steps(None, radius))).area
 
 
 def parse(body, head=HEAD):
@@ -101,7 +107,7 @@ class TestKiCadPcbVias(unittest.TestCase):
 class TestKiCadPcbPads(unittest.TestCase):
     def test_pad_shapes_have_expected_outlines(self):
         cases = {
-            'circle': ('(size 2 2)', 3.14159265),
+            'circle': ('(size 2 2)', circle_area(1)),
             'rect': ('(size 2 1)', 2.0),
             'oval': ('(size 2 1)', 1 + 3.14159265 / 4),
             'roundrect': ('(size 2 1) (roundrect_rratio 0.5)', 1 + 3.14159265 / 4),

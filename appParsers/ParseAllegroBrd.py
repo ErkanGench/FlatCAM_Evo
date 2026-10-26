@@ -43,6 +43,7 @@ from shapely import LineString, MultiLineString, Point, Polygon, box
 from shapely.affinity import affine_transform
 from shapely.ops import polygonize, unary_union
 
+from camlib import circle_quad_segs, gerber_circle_steps
 from appParsers.ParseKiCadPcb import KiCadPcbParser
 
 
@@ -133,12 +134,14 @@ class AllegroBrdParser:
     # Allegro's vector font is proprietary: glyph shapes come from the KiCad reader's stroke font.
     CAP_TO_HEIGHT = 1.0             # cap height / Allegro character height
 
-    def __init__(self, app=None, circle_steps=128):
-        if not isinstance(circle_steps, int) or circle_steps < 16:
+    def __init__(self, app=None, circle_steps=None):
+        # circle_steps: a fixed number of segments for every circle; None: the Gerber "Circle Steps" preference
+        if circle_steps is not None and (not isinstance(circle_steps, int) or circle_steps < 16):
             raise ValueError('circle_steps must be an integer of at least 16')
         self.app = app
+        self._options = getattr(app, 'options', None)
         self.circle_steps = circle_steps
-        self._text_engine = KiCadPcbParser(circle_steps=circle_steps)
+        self._text_engine = KiCadPcbParser(app=app, circle_steps=circle_steps)
         self._reset()
 
     # ------------------------------------------------------------------ state
@@ -173,9 +176,14 @@ class AllegroBrdParser:
             self._warned.add(key)
             self.warnings.append(message)
 
-    @property
-    def _quad(self):
-        return self.circle_steps // 4
+    def _steps(self, radius):
+        # Segments of a whole circle of this radius (millimetres): the fixed override or the Gerber preference.
+        if self.circle_steps is not None:
+            return self.circle_steps
+        return gerber_circle_steps(self._options, radius, 'MM')
+
+    def _segs(self, radius):
+        return circle_quad_segs(self._steps(radius))
 
     # ------------------------------------------------------------------ entry points
 
@@ -501,14 +509,14 @@ class AllegroBrdParser:
     # ------------------------------------------------------------------ geometry helpers
 
     def _disc(self, radius, centre=(0.0, 0.0)):
-        return Point(centre).buffer(radius, quad_segs=self._quad)
+        return Point(centre).buffer(radius, quad_segs=self._segs(radius))
 
     def _stroke(self, points, width, flat=False):
         if width <= 0:
             return Polygon()
         if all(p == points[0] for p in points):
-            return Point(points[0]).buffer(width / 2, quad_segs=self._quad)
-        return LineString(points).buffer(width / 2, quad_segs=self._quad, cap_style='flat' if flat else 'round')
+            return Point(points[0]).buffer(width / 2, quad_segs=self._segs(width / 2))
+        return LineString(points).buffer(width / 2, quad_segs=self._segs(width / 2), cap_style='flat' if flat else 'round')
 
     @staticmethod
     def _polygons_of(geo):
@@ -538,7 +546,7 @@ class AllegroBrdParser:
             else:
                 while sweep <= 0:
                     sweep += 2 * math.pi
-        steps = max(2, math.ceil(self.circle_steps * abs(sweep) / (2 * math.pi)))
+        steps = max(2, math.ceil(self._steps(radius) * abs(sweep) / (2 * math.pi)))
         points = [start]
         for i in range(1, steps):
             angle = first + sweep * i / steps
@@ -687,9 +695,9 @@ class AllegroBrdParser:
         elif t in (SH_OBLONG_X, SH_OBLONG_Y):
             # the round ends sit on the short sides, whichever of the two oblong codes is stored
             if w >= h:
-                shape = LineString([(-(w - h) / 2, 0), ((w - h) / 2, 0)]).buffer(h / 2, quad_segs=self._quad)
+                shape = LineString([(-(w - h) / 2, 0), ((w - h) / 2, 0)]).buffer(h / 2, quad_segs=self._segs(h / 2))
             else:
-                shape = LineString([(0, -(h - w) / 2), (0, (h - w) / 2)]).buffer(w / 2, quad_segs=self._quad)
+                shape = LineString([(0, -(h - w) / 2), (0, (h - w) / 2)]).buffer(w / 2, quad_segs=self._segs(w / 2))
         elif t == SH_OCTAGON:
             shape = self._chamfered(w, h, (1 - 1 / math.sqrt(2)) * min(w, h))
         elif t == SH_ROUND_RECT:
@@ -698,9 +706,9 @@ class AllegroBrdParser:
             radius = comp['z1'] if comp['z1'] > 0 else 0.25 * min(w, h)
             radius = min(radius, min(w, h) / 2)
             shape = box(-w / 2 + radius, -h / 2 + radius, w / 2 - radius, h / 2 - radius).buffer(
-                radius, quad_segs=self._quad) if radius * 2 < min(w, h) - 1e-12 else \
-                (LineString([(-(w - h) / 2, 0), ((w - h) / 2, 0)]).buffer(h / 2, quad_segs=self._quad) if w >= h
-                 else LineString([(0, -(h - w) / 2), (0, (h - w) / 2)]).buffer(w / 2, quad_segs=self._quad))
+                radius, quad_segs=self._segs(radius)) if radius * 2 < min(w, h) - 1e-12 else \
+                (LineString([(-(w - h) / 2, 0), ((w - h) / 2, 0)]).buffer(h / 2, quad_segs=self._segs(h / 2)) if w >= h
+                 else LineString([(0, -(h - w) / 2), (0, (h - w) / 2)]).buffer(w / 2, quad_segs=self._segs(w / 2)))
         elif t == SH_CHAMFER_RECT:
             self._warn('shape:%x' % t, 'Chamfered rectangle pads are drawn with the chamfer from the padstack '
                                        '(not checked against a reference file)')
@@ -1085,7 +1093,7 @@ class AllegroBrdParser:
         if not follows:
             return Polygon(), []
         # 1 buffer of all strokes gives the same shape as a union of 1 buffer per stroke, 2x faster
-        solid = MultiLineString(follows).buffer(stroke / 2, quad_segs=self._quad)
+        solid = MultiLineString(follows).buffer(stroke / 2, quad_segs=self._segs(stroke / 2))
         return solid, follows
 
     def _build_text(self):

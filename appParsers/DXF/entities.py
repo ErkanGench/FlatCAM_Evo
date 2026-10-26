@@ -3,6 +3,7 @@ Per-entity converters: ezdxf entity -> list of Shapely geometries (WCS, 2D).
 Every converter takes the entity and an ImportContext (text mode, flattening tolerance).
 """
 import logging
+import math
 
 from ezdxf import path as ezpath
 from shapely.geometry import LineString, Point, Polygon
@@ -10,7 +11,7 @@ from shapely.validation import make_valid
 
 from . import text
 from .context import is_circle_ellipse
-from .curves import path_to_rings, rings_to_polygons, CIRCLE_SEGMENTS_PER_PIECE
+from .curves import path_to_rings, rings_to_polygons
 
 log = logging.getLogger('base')
 
@@ -35,7 +36,7 @@ def convert_point(entity, ctx):
     :return:            small filled disk
     """
     loc = entity.dxf.location
-    return [Point(loc.x, loc.y).buffer(POINT_RADIUS, 16)]
+    return [Point(loc.x, loc.y).buffer(POINT_RADIUS, max(1, math.ceil(ctx.circle_steps(POINT_RADIUS) / 4)))]
 
 
 def convert_line(entity, ctx):
@@ -56,7 +57,13 @@ def convert_circle(entity, ctx):
     :param ctx:         ImportContext
     :return:            filled disk, honouring OCS
     """
-    rings = path_to_rings(ezpath.make_path(entity), CIRCLE_SEGMENTS_PER_PIECE, ctx.tolerance)
+    if entity.dxftype() == 'CIRCLE':
+        radius = entity.dxf.radius
+    else:
+        radius = entity.dxf.major_axis.magnitude
+    # a circle is 4 Bezier pieces
+    pieces = max(1, math.ceil(ctx.circle_steps(radius) / 4))
+    rings = path_to_rings(ezpath.make_path(entity), pieces, ctx.tolerance)
     return _valid_polygons(rings[0]) if rings and len(rings[0]) >= 4 else []
 
 

@@ -1335,9 +1335,9 @@ class Geometry(object):
         self.app.log.debug("camlib.Geometry.import_svg()")
 
         units = self.app.app_units if units is None else units
-        # the radius of the circles is not known before the parsing: a typical feature of 5 mm
-        res = object_circle_steps(self.app.options, 'geometry', 5.0 if str(units).upper() == 'MM' else 5.0 / 25.4,
-                                  units)
+        # every circle gets the steps of its own radius (in the output units)
+        options = getattr(self.app, 'options', None)
+        res = lambda radius: object_circle_steps(options, 'geometry', radius, units)
 
         # Parse into a flat list of shapely objects (units conversion, flip and text are handled by the importer)
         try:
@@ -1429,7 +1429,7 @@ class Geometry(object):
         except (KeyError, Exception) as e:
             self.app.log.warning("Standard DXF read failed (%s), trying recovery mode..." % str(e))
             dxf, auditor = recover.readfile(filename)
-        geos = dxf_to_shapes(dxf, text_mode=text_mode)
+        geos = dxf_to_shapes(dxf, text_mode=text_mode, options=getattr(self.app, 'options', None), kind='geometry')
 
         # trying to optimize the resulting geometry by merging contiguous lines
         geos = list(self.flatten_list(geos))

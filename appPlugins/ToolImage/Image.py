@@ -305,9 +305,9 @@ class ToolImage(AppTool):
 
     def import_image_as_trace_handler(self, svg_text, obj_type, flip=True, units='MM', dpi=96):
         """Parse traced SVG pixels, then scale to application units."""
-        # the radius of the circles is not known before the tracing: a typical feature of 5 mm
-        res = object_circle_steps(self.app.options, 'geometry', 5.0 if str(units).upper() == 'MM' else 5.0 / 25.4,
-                                  units)
+        # every circle gets the steps of its own radius (in the output units)
+        options = self.app.options
+        res = lambda radius: object_circle_steps(options, 'geometry', radius, units)
         try:
             geos = image_plugin.svg_to_shapes(svg_text, obj_type, units=units, resolution=res, flip=flip, app=self.app,
                                  user_units=True)

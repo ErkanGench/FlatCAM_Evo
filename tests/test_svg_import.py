@@ -261,5 +261,17 @@ def bench_doc():
     return svg(''.join(parts), 'width="1000mm" height="1000mm" viewBox="0 0 1000 1000"')
 
 
+    def test_steps_function_follows_the_radius(self):
+        from camlib import object_circle_steps
+        steps = lambda r: object_circle_steps(None, 'geometry', r, 'MM')
+        small, big = run('<circle cx="20" cy="20" r="0.5"/><circle cx="100" cy="50" r="20"/>', resolution=steps)
+        # viewBox 200 wide on 100 mm: 1 user unit = 0.5 mm
+        self.assertEqual(len(small.exterior.coords) - 1, steps(0.25))
+        self.assertEqual(len(big.exterior.coords) - 1, steps(10.0))
+        self.assertLess(len(small.exterior.coords), len(big.exterior.coords))
+        fixed, = run('<circle cx="20" cy="20" r="0.5"/>', resolution=64)
+        self.assertEqual(len(fixed.exterior.coords) - 1, 64)
+
+
 if __name__ == '__main__':
     unittest.main()

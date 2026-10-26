@@ -36,11 +36,13 @@ class ImportContext:
     Settings of one dxf_to_shapes() call; passed down to every converter (no global state).
     """
 
-    def __init__(self, doc=None, text_mode='stroke', tolerance=None):
+    def __init__(self, doc=None, text_mode='stroke', tolerance=None, options=None, kind='geometry'):
         """
         :param doc:         ezdxf Document, used for the layer table and the units
         :param text_mode:   'stroke', 'outline' or 'none'; anything else falls back to 'stroke'
         :param tolerance:   flattening tolerance in drawing units; None = derived from $INSUNITS
+        :param options:     the application options for the circle steps; None = the factory defaults
+        :param kind:        'gerber' or 'geometry': whose circle preferences set the steps of the circles
         """
         if text_mode not in TEXT_MODES:
             log.warning("DXF import: unknown text mode %r, using 'stroke'." % (text_mode,))
@@ -48,6 +50,18 @@ class ImportContext:
         self.doc = doc
         self.text_mode = text_mode
         self.tolerance = unit_tolerance(doc) if tolerance is None else tolerance
+        self.options = options
+        self.kind = kind
+
+    def circle_steps(self, radius):
+        """
+        :param radius:  radius of a circle in drawing units
+        :return:        segments of the full circle by the circle preferences of the object kind; the drawing units
+                        come from the flattening tolerance (0.01 mm in drawing units)
+        """
+        from camlib import object_circle_steps
+        mm_per_unit = TOLERANCE_MM / self.tolerance if self.tolerance > 0 else 1.0
+        return object_circle_steps(self.options, self.kind, abs(radius) * mm_per_unit, 'MM')
 
     def layer_of(self, entity):
         """

@@ -9,7 +9,9 @@ from shapely.affinity import affine_transform
 from shapely.geometry import LineString, MultiLineString, Polygon
 
 from .document import parse_length
+from .flatten import quad_segs
 from .style import fill_active, is_zero, stroke_paint_active
+from .transform import mean_scale
 
 log = logging.getLogger('base')
 
@@ -162,13 +164,13 @@ def _lines(polylines, a=None, t=None):
     return lines
 
 
-def _buffer(lines, half, style, resolution):
+def _buffer(lines, half, style, quad):
     geom = lines[0] if len(lines) == 1 else MultiLineString(lines)
     try:
         limit = max(1.0, float(style['stroke-miterlimit']))
     except ValueError:
         limit = 4.0
-    return geom.buffer(half, quad_segs=max(1, int(resolution)),
+    return geom.buffer(half, quad_segs=max(1, int(quad)),
                        cap_style=_CAP.get(style['stroke-linecap'], 'flat'),
                        join_style=_JOIN.get(style['stroke-linejoin'], 'mitre'), mitre_limit=limit)
 
@@ -259,7 +261,7 @@ def element_geometries(polylines, style, own, m, gerber, vp, font_size, resoluti
     :param gerber: True for polygon-only output
     :param vp: viewport size
     :param font_size: current font size
-    :param resolution: segments per quarter circle
+    :param resolution: segments per quarter circle (int), or a function: radius in output units -> segments
     :param ns_scale: user -> output scale used for non-scaling strokes
     :return: list of Shapely geometries in output space
     """
@@ -291,11 +293,13 @@ def _stroke(polylines, width, style, own, m, resolution, ns_scale):
     a, t = m[:2, :2], m[:2, 2]
     if own.get('vector-effect') == 'non-scaling-stroke':
         lines = _lines(polylines, a, t)
-        return _buffer(lines, width * ns_scale / 2.0, style, resolution) if lines else None
+        half = width * ns_scale / 2.0
+        return _buffer(lines, half, style, quad_segs(resolution, half)) if lines else None
     lines = _lines(polylines)
     if not lines:
         return None
-    return affine_transform(_buffer(lines, width / 2.0, style, resolution), _affine_list(m))
+    half = width / 2.0
+    return affine_transform(_buffer(lines, half, style, quad_segs(resolution, half * mean_scale(m))), _affine_list(m))
 
 
 def area_geometries(geom, style, own, m, gerber, vp, font_size, resolution, ns_scale=1.0):
@@ -311,9 +315,10 @@ def area_geometries(geom, style, own, m, gerber, vp, font_size, resolution, ns_s
     elif gerber and stroke_width(style, vp, font_size) > 0:
         lines = [shapely.linestrings(np.asarray(r.coords)) for p in shapely.get_parts(geom)
                  for r in [p.exterior, *p.interiors]]
+        half = stroke_width(style, vp, font_size) / 2.0
         if lines:
             parts.append(affine_transform(
-                _buffer(lines, stroke_width(style, vp, font_size) / 2.0, style, resolution), _affine_list(m)))
+                _buffer(lines, half, style, quad_segs(resolution, half * mean_scale(m))), _affine_list(m)))
     elif not gerber and stroke_paint_active(style):
         parts.append(affine_transform(geom, _affine_list(m)))
     return finish(parts, gerber)

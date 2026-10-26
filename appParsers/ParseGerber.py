@@ -2250,7 +2250,9 @@ class Gerber(Geometry):
         self.app.log.debug("appParsers.ParseGerber.Gerber.import_svg()")
 
         units = self.app.app_units if units is None else units
-        res = self._app_option("gerber_circle_steps", 64)
+        # every circle gets the steps of its own radius (in the output units)
+        options = getattr(self.app, 'options', None)
+        res = lambda radius: gerber_circle_steps(options, radius, units)
 
         # Parse into a flat list of shapely Polygons (units conversion, flip and text are handled by the importer)
         try:
@@ -2323,7 +2325,7 @@ class Gerber(Geometry):
         except (KeyError, Exception) as e:
             self.app.log.warning("Standard DXF read failed (%s), trying recovery mode..." % str(e))
             dxf, auditor = recover.readfile(filename)
-        geos = dxf_to_shapes(dxf, text_mode=text_mode)
+        geos = dxf_to_shapes(dxf, text_mode=text_mode, options=getattr(self.app, 'options', None), kind='gerber')
 
         # trying to optimize the resulting geometry by merging contiguous lines
         geos = list(self.flatten_list(geos))

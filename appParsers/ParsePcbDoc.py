@@ -22,6 +22,8 @@ from shapely import LineString, MultiLineString, Point, Polygon, box
 from shapely.affinity import rotate, scale, translate
 from shapely.ops import unary_union
 
+from camlib import circle_quad_segs, gerber_circle_steps
+
 
 class PcbDocParseError(ValueError):
     """Malformed data or material geometry that cannot be represented safely."""
@@ -128,10 +130,12 @@ class PcbDocParser:
         ']': (((0, 6), (2, 6), (2, 0), (0, 0)),)
     }
 
-    def __init__(self, app=None, circle_steps=128):
-        if not isinstance(circle_steps, int) or circle_steps < 16:
+    def __init__(self, app=None, circle_steps=None):
+        # circle_steps: a fixed number of segments for every circle; None: the Gerber "Circle Steps" preference
+        if circle_steps is not None and (not isinstance(circle_steps, int) or circle_steps < 16):
             raise ValueError('circle_steps must be an integer of at least 16')
         self.app = app
+        self._options = getattr(app, 'options', None)
         self.circle_steps = circle_steps
         self._reset()
 
@@ -432,13 +436,22 @@ class PcbDocParser:
                              float(props['SA' + suffix]), float(props['EA' + suffix]))
         return [position]
 
+    def _steps(self, radius):
+        # Segments of a whole circle of this radius (millimetres): the fixed override or the Gerber preference.
+        if self.circle_steps is not None:
+            return self.circle_steps
+        return gerber_circle_steps(self._options, radius, 'MM')
+
+    def _segs(self, radius):
+        return circle_quad_segs(self._steps(radius))
+
     def _arc(self, center, radius, start, end):
         if radius <= 0 or not all(math.isfinite(v) for v in (*center, radius, start, end)):
             raise PcbDocParseError('Invalid arc geometry')
         sweep = (end - start) % 360
         if abs(sweep) < 1e-10:
             sweep = 360
-        count = max(1, math.ceil(self.circle_steps * sweep / 360))
+        count = max(1, math.ceil(self._steps(radius) * sweep / 360))
         return [(center[0] + radius * math.cos(math.radians(start + sweep * i / count)),
                  center[1] + radius * math.sin(math.radians(start + sweep * i / count)))
                 for i in range(count + 1)]
@@ -538,7 +551,7 @@ class PcbDocParser:
             width = self._at(data, 'i', 29) * self.UNIT
             if width <= 0:
                 raise PcbDocParseError('Non-positive track width')
-            geo = follow.buffer(width / 2, quad_segs=self.circle_steps // 4)
+            geo = follow.buffer(width / 2, quad_segs=self._segs(width / 2))
         elif name == 'Arcs6':
             center = self._xy(*self._at(data, 'ii', 13))
             radius = self._at(data, 'i', 21) * self.UNIT
@@ -547,7 +560,7 @@ class PcbDocParser:
             width = self._at(data, 'i', 41) * self.UNIT
             if width <= 0:
                 raise PcbDocParseError('Non-positive arc width')
-            geo = follow.buffer(width / 2, quad_segs=self.circle_steps // 4)
+            geo = follow.buffer(width / 2, quad_segs=self._segs(width / 2))
         else:
             first = self._xy(*self._at(data, 'ii', 13))
             last = self._xy(*self._at(data, 'ii', 21))
@@ -571,7 +584,7 @@ class PcbDocParser:
                 mode, manual = self._mask_override(override, prefix, 0, 0)
                 expansion = self._expansion(mode, manual, rule, context)
                 if expansion is not None:
-                    self._add(target, geo.buffer(expansion, quad_segs=self.circle_steps // 4))
+                    self._add(target, geo.buffer(expansion, quad_segs=self._segs(expansion)))
 
     def _shape(self, width, height, shape, alt=0, corner=0):
         if width < 0 or height < 0:
@@ -591,12 +604,12 @@ class PcbDocParser:
             if core.area == 0:
                 core = LineString([(-width / 2 + radius, -height / 2 + radius),
                                    (width / 2 - radius, height / 2 - radius)])
-            return core.buffer(radius, quad_segs=self.circle_steps // 4)
+            return core.buffer(radius, quad_segs=self._segs(radius))
         if shape == 1:
             radius = min(width, height) / 2
             ends = [(-max(0, width - height) / 2, -max(0, height - width) / 2),
                     (max(0, width - height) / 2, max(0, height - width) / 2)]
-            return LineString(ends).buffer(radius, quad_segs=self.circle_steps // 4)
+            return LineString(ends).buffer(radius, quad_segs=self._segs(radius))
         if shape == 2:
             return box(-width / 2, -height / 2, width / 2, height / 2)
         if shape == 3:
@@ -636,9 +649,9 @@ class PcbDocParser:
             first = Point(position[0] - dx, position[1] - dy)
             last = Point(position[0] + dx, position[1] + dy)
             tool['slots'].append((first, last))
-            return LineString([first, last]).buffer(diameter / 2, quad_segs=self.circle_steps // 4)
+            return LineString([first, last]).buffer(diameter / 2, quad_segs=self._segs(diameter / 2))
         tool['drills'].append(Point(position))
-        return Point(position).buffer(diameter / 2, quad_segs=self.circle_steps // 4)
+        return Point(position).buffer(diameter / 2, quad_segs=self._segs(diameter / 2))
 
     def _pad(self, parts, index):
         if not parts[0] or parts[0][0] + 1 != len(parts[0]):
@@ -715,7 +728,7 @@ class PcbDocParser:
                                                        data[mode_offset], self._at(data, 'i', expansion_offset) * self.UNIT)
                 expansion = self._expansion(mask_mode, manual, rule, dict(context, layer=copper))
                 if expansion is not None:
-                    self._add(target, shapes[copper].buffer(expansion, quad_segs=self.circle_steps // 4))
+                    self._add(target, shapes[copper].buffer(expansion, quad_segs=self._segs(expansion)))
 
     def _context(self, data, kind):
         net = self._at(data, 'H', 3)
@@ -854,7 +867,7 @@ class PcbDocParser:
                     hole + 2 * expansion <= shapes[layer].bounds[2] - shapes[layer].bounds[0]:
                 continue
             base = drill if from_hole else shapes[layer]
-            self._add(target, base.buffer(expansion, quad_segs=self.circle_steps // 4))
+            self._add(target, base.buffer(expansion, quad_segs=self._segs(expansion)))
 
     def _read_wide_strings(self, data):
         reader = _Reader(data, 'WideStrings6')
@@ -983,7 +996,7 @@ class PcbDocParser:
             self.warnings[:] = [value for value in self.warnings if not value.startswith(prefix)]
             self.warnings.append(warning)
         # 1 buffer of all strokes gives the same shape as a union of 1 buffer per stroke, 2x faster
-        solid = MultiLineString(follows).buffer(width / 2, quad_segs=self.circle_steps // 4)
+        solid = MultiLineString(follows).buffer(width / 2, quad_segs=self._segs(width / 2))
         return solid, follows
 
     def _dimension(self, props):
@@ -1007,7 +1020,7 @@ class PcbDocParser:
         if width <= 0 or abs(positions[0] - positions[1]) <= self.UNIT:
             raise PcbDocParseError('Invalid linear dimension geometry')
         follow = LineString(ends)
-        self._add(layer, follow.buffer(width / 2, quad_segs=self.circle_steps // 4), follow)
+        self._add(layer, follow.buffer(width / 2, quad_segs=self._segs(width / 2)), follow)
         gap = self._unit(props.get('EXTENSIONPICKGAP', '10mil'))
         extra = self._unit(props.get('EXTENSIONOFFSET', '10mil'))
         extension_width = self._unit(props.get('EXTENSIONLINEWIDTH', props.get('LINEWIDTH', '10mil')))
@@ -1021,7 +1034,7 @@ class PcbDocParser:
                 direction = tuple((end[i] - reference[i]) / distance for i in range(2))
                 extension = LineString([(reference[0] + gap * direction[0], reference[1] + gap * direction[1]),
                                         (end[0] + extra * direction[0], end[1] + extra * direction[1])])
-                self._add(layer, extension.buffer(extension_width / 2, quad_segs=self.circle_steps // 4), extension)
+                self._add(layer, extension.buffer(extension_width / 2, quad_segs=self._segs(extension_width / 2)), extension)
             sign = 1 if positions[1 - index] > positions[index] else -1
             if props.get('ARROWPOSITION', 'Inside') == 'Outside':
                 sign *= -1
@@ -1029,7 +1042,7 @@ class PcbDocParser:
                 tip = (end[0] + sign * arrow_length * axis[0] + side * arrow_size / 2 * normal[0],
                        end[1] + sign * arrow_length * axis[1] + side * arrow_size / 2 * normal[1])
                 arrow = LineString([end, tip])
-                self._add(layer, arrow.buffer(width / 2, quad_segs=self.circle_steps // 4), arrow)
+                self._add(layer, arrow.buffer(width / 2, quad_segs=self._segs(width / 2)), arrow)
         units = props.get('TEXTDIMENSIONUNIT', 'Millimeters')
         factors = {'Millimeters': 1, 'Centimeters': 10, 'Inches': 25.4, 'Mils': 0.0254}
         if units not in factors:
@@ -1114,7 +1127,7 @@ class PcbDocParser:
                 if any(tag & 2 for tag in tags):
                     raise PcbDocParseError('Cubic font outlines require saved geometry')
                 vertices = ParseFont._interpolate_contour(outline.points[start:end + 1], tags,
-                                                          segments=max(8, self.circle_steps // 8))
+                                                          segments=max(8, self._steps(height / 2) // 8))
                 contours.append(self._polygon(vertices))
                 start = end + 1
             result = Polygon()
@@ -1150,7 +1163,7 @@ class PcbDocParser:
                 if context['net'] and 'LAYER%dNETNAME' % layer not in self._board:
                     raise PcbDocParseError('Unavailable plane %d net assignment for connected pad/via' % layer)
                 if not plane_name or context['net'] != plane_name:
-                    copper = copper.difference(shape.union(hole).buffer(clearance, quad_segs=self.circle_steps // 4))
+                    copper = copper.difference(shape.union(hole).buffer(clearance, quad_segs=self._segs(clearance)))
                     continue
                 connect = self._rule('PlaneConnect', context)
                 if connect is None:
@@ -1159,14 +1172,14 @@ class PcbDocParser:
                 if style == 'Direct':
                     continue
                 if style == 'NoConnect':
-                    copper = copper.difference(shape.union(hole).buffer(clearance, quad_segs=self.circle_steps // 4))
+                    copper = copper.difference(shape.union(hole).buffer(clearance, quad_segs=self._segs(clearance)))
                 elif style == 'Relief':
                     gap = self._unit(connect.get('AIRGAPWIDTH', '10mil'))
                     width = self._unit(connect.get('RELIEFCONDUCTORWIDTH', '10mil'))
                     entries = int(connect.get('RELIEFENTRIES', 4))
                     if entries not in (2, 4) or width <= 0 or gap <= 0:
                         raise PcbDocParseError('Unsupported plane thermal relief')
-                    clearance_geo = shape.buffer(gap, quad_segs=self.circle_steps // 4)
+                    clearance_geo = shape.buffer(gap, quad_segs=self._segs(gap))
                     center = hole.centroid if not hole.is_empty else shape.centroid
                     radius = max(clearance_geo.bounds[2] - clearance_geo.bounds[0],
                                  clearance_geo.bounds[3] - clearance_geo.bounds[1])

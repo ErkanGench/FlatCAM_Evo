@@ -22,6 +22,7 @@ from shapely import LineString, Point, Polygon, box, set_precision
 from shapely.affinity import affine_transform
 from shapely.ops import polygonize, unary_union
 
+from camlib import circle_quad_segs, gerber_circle_steps
 from appParsers.ParseKiCadPcb import KiCadPcbParser
 
 
@@ -83,12 +84,14 @@ class EagleBrdParser:
     PAD_SHAPES = ('square', 'round', 'octagon', 'long', 'offset')
     RULE_SHAPES = {0: 'square', 1: 'round', 2: 'octagon'}
 
-    def __init__(self, app=None, circle_steps=128):
-        if not isinstance(circle_steps, int) or circle_steps < 16:
+    def __init__(self, app=None, circle_steps=None):
+        # circle_steps: a fixed number of segments for every circle; None: the Gerber "Circle Steps" preference
+        if circle_steps is not None and (not isinstance(circle_steps, int) or circle_steps < 16):
             raise ValueError('circle_steps must be an integer of at least 16')
         self.app = app
+        self._options = getattr(app, 'options', None)
         self.circle_steps = circle_steps
-        self._text_engine = KiCadPcbParser(circle_steps=circle_steps)
+        self._text_engine = KiCadPcbParser(app=app, circle_steps=circle_steps)
         self._reset()
 
     # ------------------------------------------------------------------ state
@@ -212,9 +215,14 @@ class EagleBrdParser:
             raise EagleBrdParseError('Invalid rotation %r' % spec)
         return bool(match.group(1)), bool(match.group(2)), float(match.group(3))
 
-    @property
-    def _quad(self):
-        return self.circle_steps // 4
+    def _steps(self, radius):
+        # Segments of a whole circle of this radius (millimetres): the fixed override or the Gerber preference.
+        if self.circle_steps is not None:
+            return self.circle_steps
+        return gerber_circle_steps(self._options, radius, 'MM')
+
+    def _segs(self, radius):
+        return circle_quad_segs(self._steps(radius))
 
     # ------------------------------------------------------------------ transforms
 
@@ -257,8 +265,8 @@ class EagleBrdParser:
             return Polygon()
         points = list(points)
         if all(point == points[0] for point in points):
-            return Point(points[0]).buffer(width / 2, quad_segs=self._quad)
-        return LineString(points).buffer(width / 2, quad_segs=self._quad,
+            return Point(points[0]).buffer(width / 2, quad_segs=self._segs(width / 2))
+        return LineString(points).buffer(width / 2, quad_segs=self._segs(width / 2),
                                          cap_style='flat' if flat else 'round')
 
     def _arc_points(self, p1, p2, curve):
@@ -279,7 +287,7 @@ class EagleBrdParser:
         cx = (p1[0] + p2[0]) / 2 - dy / chord * offset
         cy = (p1[1] + p2[1]) / 2 + dx / chord * offset
         start = math.atan2(p1[1] - cy, p1[0] - cx)
-        count = max(2, math.ceil(self.circle_steps * theta / (2 * math.pi)))
+        count = max(2, math.ceil(self._steps(radius) * theta / (2 * math.pi)))
         points = [p1]
         for i in range(1, count):
             angle = start + theta * i / count
@@ -300,7 +308,7 @@ class EagleBrdParser:
         raise EagleBrdParseError('Non-polygon material geometry: %s' % geo.geom_type)
 
     def _disc(self, radius, centre=(0.0, 0.0)):
-        return Point(centre).buffer(radius, quad_segs=self._quad)
+        return Point(centre).buffer(radius, quad_segs=self._segs(radius))
 
     def _octagon(self, flats):
         """Regular octagon with flat sides on the axes; `flats` is the distance between opposite flats."""
@@ -309,7 +317,7 @@ class EagleBrdParser:
                          radius * math.sin(math.pi / 8 + k * math.pi / 4)) for k in range(8)])
 
     def _stadium(self, start, end, diameter):
-        return LineString([start, end]).buffer(diameter / 2, quad_segs=self._quad)
+        return LineString([start, end]).buffer(diameter / 2, quad_segs=self._segs(diameter / 2))
 
     def _rounded_box(self, width, height, radius):
         if width <= 0 or height <= 0:
@@ -322,7 +330,7 @@ class EagleBrdParser:
                 return self._stadium((-(width - height) / 2, 0), ((width - height) / 2, 0), height)
             return self._stadium((0, -(height - width) / 2), (0, (height - width) / 2), width)
         return box(-width / 2 + radius, -height / 2 + radius,
-                   width / 2 - radius, height / 2 - radius).buffer(radius, quad_segs=self._quad)
+                   width / 2 - radius, height / 2 - radius).buffer(radius, quad_segs=self._segs(radius))
 
     # ------------------------------------------------------------------ layers and storage
 
@@ -560,7 +568,7 @@ class EagleBrdParser:
                 minor = min(*self._extent_of(outline))
                 frame = self._frame('Stop', minor, minor)
                 join = self._join(self._effective_shape(shape, kind, first))
-                opening = outline.buffer(frame, quad_segs=self._quad, join_style=join)
+                opening = outline.buffer(frame, quad_segs=self._segs(frame), join_style=join)
                 self._add(side, self._apply(opening, place))
 
     def _effective_shape(self, shape, kind, first):
@@ -615,7 +623,7 @@ class EagleBrdParser:
             side = 29 if number == self.copper_layers[0] else (30 if number == self.copper_layers[-1] else None)
             if side and not (limit > 0 and drill < limit):
                 frame = self._frame('Stop', size, size)
-                self._add(side, outline.buffer(frame, quad_segs=self._quad, join_style=self._join(shape)))
+                self._add(side, outline.buffer(frame, quad_segs=self._segs(frame), join_style=self._join(shape)))
 
     def _smd(self, node, xf, mirror):
         x, y = self._attr(node, 'x'), self._attr(node, 'y')
@@ -650,11 +658,11 @@ class EagleBrdParser:
         top = number == self.copper_layers[0]
         if node.get('stop', 'yes') != 'no':
             frame = self._frame('Stop', dx, dy)
-            opening = outline.buffer(frame, quad_segs=self._quad, join_style=join)
+            opening = outline.buffer(frame, quad_segs=self._segs(frame), join_style=join)
             self._add(29 if top else 30, self._apply(opening, place))
         if node.get('cream', 'yes') != 'no':
             frame = self._frame('Cream', dx, dy)
-            paste = outline.buffer(-frame, quad_segs=self._quad, join_style=join) if frame else outline
+            paste = outline.buffer(-frame, quad_segs=self._segs(-frame), join_style=join) if frame else outline
             if not paste.is_empty:
                 self._add(31 if top else 32, self._apply(paste, place))
 

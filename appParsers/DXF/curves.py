@@ -20,9 +20,6 @@ FLATTEN_TOLERANCE = 0.01
 RELATIVE_TOLERANCE = 1e-7
 # Minimum flattened segments per Bezier piece (4 pieces per full circle).
 MIN_SEGMENTS_PER_PIECE = 4
-# Segments per Bezier piece for a filled circle: 4 * 25 = 100 per circle.
-CIRCLE_SEGMENTS_PER_PIECE = 25
-
 
 def path_to_rings(path, segments=MIN_SEGMENTS_PER_PIECE, tolerance=FLATTEN_TOLERANCE):
     """

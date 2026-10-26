@@ -20,6 +20,7 @@ from shapely import LineString, MultiLineString, Point, Polygon, box, set_precis
 from shapely.affinity import rotate, scale, translate
 from shapely.ops import polygonize, unary_union
 
+from camlib import circle_quad_segs, gerber_circle_steps
 from appParsers.ParsePcbDoc import PcbDocParser
 
 
@@ -158,10 +159,12 @@ class KiCadPcbParser:
     SPACE_CELLS = 4
     LINE_SPACING = 1.5
 
-    def __init__(self, app=None, circle_steps=128):
-        if not isinstance(circle_steps, int) or circle_steps < 16:
+    def __init__(self, app=None, circle_steps=None):
+        # circle_steps: a fixed number of segments for every circle; None: the Gerber "Circle Steps" preference
+        if circle_steps is not None and (not isinstance(circle_steps, int) or circle_steps < 16):
             raise ValueError('circle_steps must be an integer of at least 16')
         self.app = app
+        self._options = getattr(app, 'options', None)
         self.circle_steps = circle_steps
         self._glyphs = dict(PcbDocParser.STROKE_GLYPHS)
         self._glyphs.update(self._LOWER_GLYPHS)
@@ -272,9 +275,14 @@ class KiCadPcbParser:
 
     # ------------------------------------------------------------------ geometry helpers
 
-    @property
-    def _quad(self):
-        return self.circle_steps // 4
+    def _steps(self, radius):
+        # Segments of a whole circle of this radius (millimetres): the fixed override or the Gerber preference.
+        if self.circle_steps is not None:
+            return self.circle_steps
+        return gerber_circle_steps(self._options, radius, 'MM')
+
+    def _segs(self, radius):
+        return circle_quad_segs(self._steps(radius))
 
     def _stroke(self, points, width):
         """Round-capped stroke along a polyline."""
@@ -282,8 +290,8 @@ class KiCadPcbParser:
             return Polygon()
         points = list(points)
         if all(point == points[0] for point in points):
-            return Point(points[0]).buffer(width / 2, quad_segs=self._quad)
-        return LineString(points).buffer(width / 2, quad_segs=self._quad)
+            return Point(points[0]).buffer(width / 2, quad_segs=self._segs(width / 2))
+        return LineString(points).buffer(width / 2, quad_segs=self._segs(width / 2))
 
     def _arc_points(self, start, mid, end):
         """Points along the circular arc start -> mid -> end (exact ends)."""
@@ -301,7 +309,7 @@ class KiCadPcbParser:
             sweep = (a3 - a1) % full
         else:
             sweep = -((a1 - a3) % full)
-        count = max(2, math.ceil(self.circle_steps * abs(sweep) / full))
+        count = max(2, math.ceil(self._steps(radius) * abs(sweep) / full))
         points = [start]
         for i in range(1, count):
             angle = a1 + sweep * i / count
@@ -310,7 +318,9 @@ class KiCadPcbParser:
         return points
 
     def _bezier_points(self, p0, p1, p2, p3):
-        count = max(8, self.circle_steps // 4)
+        # the curve is sized by its control polygon
+        size = max(math.hypot(q[0] - p0[0], q[1] - p0[1]) for q in (p1, p2, p3))
+        count = max(8, self._steps(size / 2) // 4)
         points = []
         for i in range(count + 1):
             t = i / count
@@ -549,7 +559,7 @@ class KiCadPcbParser:
                 raise KiCadPcbParseError('%s via without two layers' % kind)
             span = self._span(names[1], names[2])
         outer_front, outer_back = self.copper_layers[0], self.copper_layers[-1]
-        pad = Point(x, y).buffer(size / 2, quad_segs=self._quad)
+        pad = Point(x, y).buffer(size / 2, quad_segs=self._segs(size / 2))
         net = self._net(node)
         prune = self._flag(node, 'remove_unused_layers')
         keep_end = self._flag(node, 'keep_end_layers')
@@ -563,7 +573,7 @@ class KiCadPcbParser:
         tenting = self._sides(self._child(node, 'tenting'), self._tenting)
         for side, layer, mask in (('front', outer_front, 'F.Mask'), ('back', outer_back, 'B.Mask')):
             if layer in span and not tenting[side]:
-                self._add(mask, Point(x, y).buffer(size / 2 + self._mask_margin, quad_segs=self._quad))
+                self._add(mask, Point(x, y).buffer(size / 2 + self._mask_margin, quad_segs=self._segs(size / 2 + self._mask_margin)))
 
     def _span(self, first, last):
         try:
@@ -591,9 +601,9 @@ class KiCadPcbParser:
             first = Point(position[0] - dx, position[1] - dy)
             last = Point(position[0] + dx, position[1] + dy)
             tool['slots'].append((first, last))
-            return LineString([first, last]).buffer(diameter / 2, quad_segs=self._quad)
+            return LineString([first, last]).buffer(diameter / 2, quad_segs=self._segs(diameter / 2))
         tool['drills'].append(Point(position))
-        return Point(position).buffer(diameter / 2, quad_segs=self._quad)
+        return Point(position).buffer(diameter / 2, quad_segs=self._segs(diameter / 2))
 
     def _resolve_pending(self):
         """Annular rings marked remove_unused_layers: keep those that touch same-net copper on that layer."""
@@ -690,15 +700,15 @@ class KiCadPcbParser:
             if radius <= 0:
                 self._warn('zero-circle', 'Zero-radius circles were skipped')
                 return Polygon(), []
-            disc = Point(center).buffer(radius, quad_segs=self._quad)
-            ring = Point(center).buffer(radius, quad_segs=self._quad).exterior
+            disc = Point(center).buffer(radius, quad_segs=self._segs(radius))
+            ring = Point(center).buffer(radius, quad_segs=self._segs(radius)).exterior
             follows = [LineString(ring.coords)]
             if filled:
-                return (disc.buffer(width / 2, quad_segs=self._quad) if width > 0 else disc), follows
+                return (disc.buffer(width / 2, quad_segs=self._segs(width / 2)) if width > 0 else disc), follows
             if width <= 0:
                 return Polygon(), follows
-            outer = Point(center).buffer(radius + width / 2, quad_segs=self._quad)
-            inner = Point(center).buffer(max(radius - width / 2, 0), quad_segs=self._quad)
+            outer = Point(center).buffer(radius + width / 2, quad_segs=self._segs(radius + width / 2))
+            inner = Point(center).buffer(max(radius - width / 2, 0), quad_segs=self._segs(max(radius - width / 2, 0)))
             return outer.difference(inner), follows
         if kind == 'rect':
             a = self._xy_node(node, 'start')
@@ -726,7 +736,7 @@ class KiCadPcbParser:
         solid, follows = self._shape(node)
         if layer[1] == 'Edge.Cuts' and solid.is_empty and follows:
             self._warn('edge-zero', 'Zero-width Edge.Cuts lines were drawn with 0.05 mm width')
-            solid = unary_union([line.buffer(0.025, quad_segs=self._quad) for line in follows])
+            solid = unary_union([line.buffer(0.025, quad_segs=self._segs(0.025)) for line in follows])
         if solid.is_empty and not follows:
             return
         self._add(layer[1], self._place(solid, at), [self._place(line, at) for line in follows])
@@ -819,7 +829,7 @@ class KiCadPcbParser:
         if not follows_all:
             return Polygon(), []
         # 1 buffer of all strokes gives the same shape as a union of 1 buffer per stroke, 2x faster
-        solid = MultiLineString(follows_all).buffer(thickness / 2, quad_segs=self._quad)
+        solid = MultiLineString(follows_all).buffer(thickness / 2, quad_segs=self._segs(thickness / 2))
         return solid, follows_all
 
     def _text(self, layer, text, position, angle, effects, fields=None, at=None):
@@ -971,7 +981,7 @@ class KiCadPcbParser:
             elif radius > 0 and name not in square:
                 centre = (cx + sx * radius, cy + sy * radius)
                 start_angle = {'top_left': 180, 'top_right': 90, 'bottom_right': 0, 'bottom_left': 270}[name]
-                steps = max(2, self.circle_steps // 4)
+                steps = max(2, self._steps(radius) // 4)
                 for i in range(steps + 1):
                     angle = math.radians(start_angle - 90 * i / steps)
                     points.append((centre[0] + radius * math.cos(angle), centre[1] + radius * math.sin(angle)))
@@ -1039,10 +1049,9 @@ class KiCadPcbParser:
     def _pad_shape(self, spec, grow=0.0, node=None):
         """Pad outline at the origin, unrotated, Y up; grow expands (mask/paste margin) or shrinks."""
         shape, w, h = spec['shape'], spec['w'], spec['h']
-        quad = self._quad
         if shape == 'circle':
             radius = w / 2 + grow
-            return Point(0, 0).buffer(radius, quad_segs=quad) if radius > 0 else Polygon()
+            return Point(0, 0).buffer(radius, quad_segs=self._segs(radius)) if radius > 0 else Polygon()
         if shape == 'oval':
             gw, gh = w + 2 * grow, h + 2 * grow
             if gw <= 0 or gh <= 0:
@@ -1051,8 +1060,8 @@ class KiCadPcbParser:
             half = abs(gw - gh) / 2
             ends = [(-half, 0), (half, 0)] if gw >= gh else [(0, -half), (0, half)]
             if half == 0:
-                return Point(0, 0).buffer(radius, quad_segs=quad)
-            return LineString(ends).buffer(radius, quad_segs=quad)
+                return Point(0, 0).buffer(radius, quad_segs=self._segs(radius))
+            return LineString(ends).buffer(radius, quad_segs=self._segs(radius))
         if shape in ('rect', 'roundrect'):
             small = min(w, h)
             radius = spec['rratio'] * small + grow if shape == 'roundrect' else 0.0
@@ -1070,13 +1079,13 @@ class KiCadPcbParser:
                 raise KiCadPcbParseError('Pad "%s": invalid trapezoid delta' % spec['number'])
             return poly if grow == 0 else poly.buffer(grow, join_style='mitre')
         # custom
-        anchor = Point(0, 0).buffer(w / 2, quad_segs=quad) if spec['anchor'] == 'circle' \
+        anchor = Point(0, 0).buffer(w / 2, quad_segs=self._segs(w / 2)) if spec['anchor'] == 'circle' \
             else box(-w / 2, -h / 2, w / 2, h / 2)
         if spec['anchor'] not in ('circle', 'rect'):
             raise KiCadPcbParseError('Pad "%s": unsupported custom anchor %s' % (spec['number'], spec['anchor']))
         poly = unary_union([anchor, spec['custom']])
         if grow:
-            poly = (poly.convex_hull if spec['convexhull'] else poly).buffer(grow, quad_segs=quad)
+            poly = (poly.convex_hull if spec['convexhull'] else poly).buffer(grow, quad_segs=self._segs(grow))
         return poly
 
     def _drill_spec(self, node, number):

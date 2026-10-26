@@ -9,10 +9,11 @@ import warnings
 from pathlib import Path
 
 import pytest
-from shapely.geometry import Polygon
+from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from appParsers.ParseAllegroBrd import AllegroBrdParser, AllegroBrdParseError
+from camlib import circle_quad_segs, gerber_circle_steps
 
 
 # Synthetic Allegro 17.2 boards, built byte by byte from the layout in the ParseAllegroBrd docstring and the
@@ -20,6 +21,11 @@ from appParsers.ParseAllegroBrd import AllegroBrdParser, AllegroBrdParseError
 
 MM = 1000 / 0.0254
 FIXTURE = Path(__file__).parent / 'fixtures' / 'orcad_17.2' / 'proiectCAD.brd'
+
+
+def circle_area(radius):
+    # the area of a circle as the parsers draw it: the steps of the Gerber circle preference (adaptive by default)
+    return Point(0, 0).buffer(radius, quad_segs=circle_quad_segs(gerber_circle_steps(None, radius))).area
 
 
 @functools.lru_cache(maxsize=None)
@@ -326,11 +332,11 @@ class TestAllegroGeometry(unittest.TestCase):
         parsed = parse(builder)
         self.assertEqual(list(parsed.layers), ['TOP', 'BOTTOM', 'SOLDERMASK_TOP', 'SOLDERMASK_BOTTOM'])
         layers = layers_of(parsed)
-        disc = math.pi * 0.762 ** 2
+        disc = circle_area(0.762)
         self.assertAlmostEqual(layers['BOTTOM'].area, 2 * disc, delta=0.01)
         # the track between the pad centres adds its part outside the two pads
         self.assertAlmostEqual(layers['TOP'].area, 2 * disc + 0.3 * (2.54 - 1.524), delta=0.02)
-        self.assertAlmostEqual(layers['SOLDERMASK_TOP'].area, 2 * math.pi * 0.9525 ** 2, delta=0.01)
+        self.assertAlmostEqual(layers['SOLDERMASK_TOP'].area, 2 * circle_area(0.9525), delta=0.01)
         self.assertEqual(parsed.default_layers, list(parsed.layers))
         self.assertEqual({g: [(round(t['tooldia'], 3), len(t['drills'])) for t in tools.values()]
                           for g, tools in parsed.drill_groups.items()}, {'PTH': [(0.914, 2)]})

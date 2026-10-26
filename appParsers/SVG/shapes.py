@@ -5,6 +5,7 @@ import re
 import numpy as np
 
 from .document import parse_length
+from .flatten import quad_segs
 from .pathdata import path_polylines
 
 _NUM = re.compile(r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?')
@@ -54,7 +55,7 @@ def _unit_circle(n):
 
 def ellipse_points(cx, cy, rx, ry, steps):
     """
-    :param steps: segments per quarter circle
+    :param steps: segments per quarter circle (int)
     :return: (4 * steps, 2) points on the ellipse
     """
     c, s = _unit_circle(4 * max(int(steps), 2))
@@ -78,7 +79,7 @@ def _rect(g, res):
     rx, ry = min(rx, w / 2.0), min(ry, h / 2.0)
     if rx <= 0 or ry <= 0:
         return [(np.array([(x, y), (x + w, y), (x + w, y + h), (x, y + h)]), True)]
-    q = max(1, int(res))
+    q = max(1, int(quad_segs(res, max(rx, ry))))
     parts = []
     for ccx, ccy, a0 in ((x + w - rx, y + ry, -math.pi / 2), (x + w - rx, y + h - ry, 0.0),
                          (x + rx, y + h - ry, math.pi / 2), (x + rx, y + ry, math.pi)):
@@ -91,7 +92,7 @@ def _circle(g, res):
     r = g.length('r', 'r')
     if r <= 0:
         return []
-    return [(ellipse_points(g.length('cx', 'x'), g.length('cy', 'y'), r, r, res), True)]
+    return [(ellipse_points(g.length('cx', 'x'), g.length('cy', 'y'), r, r, quad_segs(res, r)), True)]
 
 
 def _ellipse(g, res):
@@ -104,7 +105,7 @@ def _ellipse(g, res):
         ry = rx
     if rx <= 0 or ry <= 0:
         return []
-    return [(ellipse_points(g.length('cx', 'x'), g.length('cy', 'y'), rx, ry, res), True)]
+    return [(ellipse_points(g.length('cx', 'x'), g.length('cy', 'y'), rx, ry, quad_segs(res, max(rx, ry))), True)]
 
 
 def _line(g, res):
