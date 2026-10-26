@@ -6,6 +6,45 @@ Based on FlatCAM:
 
 CHANGELOG for FlatCAM Evo
 
+26.10.2026
+
+Proteus PCB import:
+
+- new: File -> Import -> Proteus PCB (.pdsprj); native Proteus 8 and 9 projects are read without Proteus or a prior Gerber export
+- each embedded board has its own layer and drill selection and is imported into a separate, named project; the next board waits for object creation, insertion and plotting to finish
+- native pads, vias, routes, board cutouts, saved copper pours, holes, islands, component graphics and supported reference text keep their board coordinates and layer identities
+- identified manufacturing layers are selected by default and use their Gerber extensions in object names, source saves and exports; unknown artwork is kept separate and is not selected by default
+- malformed projects fail without publishing partially decoded boards; unsupported records and uncertain layer data produce warnings; Cancel, Stop and export failures stop the remaining boards while keeping projects already imported
+
+PDF import:
+
+- the pure-Python parser reads compressed object streams (PDF 1.5+); both PDF backends expand nested Form XObjects with their transforms and resources and use line widths from ExtGState
+- new: embedded TrueType and supported Type0/CID text is converted to glyph outlines; unsupported fonts are reported instead of silently losing text
+- repeated colors return to their original layer instead of creating duplicate layers; white clears and later islands keep their paint order across the color layers
+- repeated equal solids are removed unless an intervening clear requires the later copy to restore material; empty Gerber layers and empty drill groups no longer create objects
+- fixed: stray delimiters could leave the tokenizer in an endless loop; text-heavy fill processing reads ring coordinates once and skips rings that cannot affect the winding number
+
+Gerber editor:
+
+- new: Copper Pour in the editor menu and toolbar, with a polygon outline and clearance from existing copper; supports vertex editing, cancellation, Undo / Redo and native Gerber export without changing the source features
+- Track: new "Snap to pad" option snaps to the center of the pad under the mouse, also with grid snap off or an off-grid pad center; the preview and the committed endpoint use the same snap, and the option survives successive routes
+- Track: hold Space for a grid ten times finer while routing; releasing Space restores the normal grid and refreshes the live preview
+- rectangular and obround apertures now have separate Width and Height fields; both dimensions must be finite and positive
+- fixed: aperture, feature and Select All table selections now respect the Zoom checkbox
+
+Canvas and Jump:
+
+- fixed: clicking after Jump could use the nearest screen pixel's coordinates instead of the requested point; a subpixel view adjustment now aligns the actual canvas position with the mouse pointer, including subsequent wheel zoom
+- Jump keeps the current zoom level and centers the requested point instead of resetting the view to a 40 x 40 area; Locate also aligns its target with the cursor pixel
+- opening, closing or resizing the left notebook keeps the grid and geometry at the same screen positions and scale; only the visible viewport changes, including the nested Plot Area tab layout
+
+Tests:
+
+- added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
+
+25.10.2026
+RELEASE FlatCAM Evo 1.0
+
 25.10.2026
 
 Isolation:
