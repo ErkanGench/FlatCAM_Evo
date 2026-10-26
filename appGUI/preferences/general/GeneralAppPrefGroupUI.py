@@ -82,6 +82,12 @@ class GeneralAppPrefGroupUI(OptionsGroupUI):
 
         grid1.addWidget(self.ge_comp_cb, 1, 0, 1, 2)
 
+        self.project_caching_cb = FCCheckBox(_("Project Caching"))
+        self.project_caching_cb.setToolTip(_(
+            "Keep prepared plot shapes in memory when switching projects for faster switching.\n"
+            "Uses more RAM. Closing a project releases its cached shapes."))
+        grid1.addWidget(self.project_caching_cb, 3, 0, 1, 2)
+
         # separator_line = QtWidgets.QFrame()
         # separator_line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         # separator_line.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)

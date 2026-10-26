@@ -138,6 +138,15 @@ class DblSidedTool(AppTool):
     def install(self, icon=None, separator=None, **kwargs):
         AppTool.install(self, icon, separator, shortcut='Alt+U', **kwargs)
 
+    def set_project_collection(self, old_collection, collection):
+        if old_collection is collection:
+            return
+        super().set_project_collection(old_collection, collection)
+        for name in ('rowsInserted', 'rowsRemoved', 'modelReset', 'dataChanged'):
+            getattr(old_collection, name).disconnect(self.refresh_basic_sources)
+            getattr(collection, name).connect(self.refresh_basic_sources)
+        self.refresh_basic_sources()
+
     def run(self, toggle=True):
         self.app.defaults.report_usage("Tool2Sided()")
 

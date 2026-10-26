@@ -423,5 +423,144 @@ class TestExitWithProjects(unittest.TestCase):
         app.trayIcon.hide.assert_not_called()
 
 
+class TestProjectRendering(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def test_cached_switch_moves_plugin_selectors_to_the_live_project(self):
+        from PyQt6 import QtCore, QtGui
+        from appTool import AppTool
+        from appGUI.GUIElements import FCComboBox
+        from appHandlers.appProjects import ProjectManager
+
+        app, manager = make_manager()
+        app.decimals = 4
+        app.defaults['global_project_caching'] = True
+        app.setup_default_properties_tab = Mock()
+        app.preferencesUiManager = SimpleNamespace(defaults_write_form=Mock())
+        app.init_tools = Mock()
+        models = []
+        for name in ('Old board', 'New board'):
+            model = QtGui.QStandardItemModel()
+            for kind in ('Gerber', 'Excellon', 'Geometry', 'CNC Job'):
+                model.appendRow(QtGui.QStandardItem(kind))
+            model.item(2).appendRow(QtGui.QStandardItem(name))
+            model.get_list = lambda: []
+            models.append(model)
+        manager.displayed = SimpleNamespace(collection=models[0])
+        app.collection = models[1]
+        plugin = AppTool(app)
+        combo = FCComboBox(plugin)
+        plugin.layout.addWidget(combo)
+        combo.setModel(models[0])
+        combo.setRootModelIndex(models[0].index(2, 0))
+        combo.obj_type = 'Geometry'
+        combo.is_last = True
+        combo.setCurrentIndex(0)
+        app.app_plugins = [plugin]
+        app.ui.notebook = QtWidgets.QTabWidget()
+        app.ui.plugin_tab = QtWidgets.QWidget()
+        app.ui.notebook.addTab(app.ui.plugin_tab, 'Plugin')
+        app.ui.plugin_scroll_area = QtWidgets.QScrollArea(app.ui.plugin_tab)
+        app.ui.plugin_scroll_area.setWidget(plugin)
+
+        ProjectManager.activate(manager, SimpleNamespace(collection=models[1], view_rect=None))
+
+        self.assertEqual(combo.count(), 1)
+        self.assertEqual(combo.itemText(0), 'New board')
+        self.assertEqual(combo.currentText(), '')
+        self.assertIsNone(app.ui.plugin_scroll_area.widget())
+        self.assertEqual(app.ui.notebook.indexOf(app.ui.plugin_tab), -1)
+        models[1].item(2).appendRow(QtGui.QStandardItem('Added board'))
+        self.assertEqual(combo.currentText(), 'Added board')
+        models[0].item(2).appendRow(QtGui.QStandardItem('Inactive board'))
+        self.assertEqual(combo.currentText(), 'Added board')
+        # Closing the old project cannot destroy the plugin's live model.
+        models[0].deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        self.assertEqual(combo.itemText(0), 'New board')
+
+    def test_switch_retains_prepared_shapes_and_close_releases_them(self):
+        from appHandlers.appProjects import ProjectManager
+        from appHandlers.appPlotManager import AppPlotManager
+        from appObjects.AppObjectTemplate import FlatCAMObj
+        from appGUI.VisPyVisuals import ShapeCollectionVisual, ShapeGroup
+        from shapely.geometry import Polygon
+        from vispy.gloo.context import FakeCanvas
+        from contextlib import nullcontext
+        from unittest.mock import MagicMock
+
+        canvas = FakeCanvas()
+        for caching, disable in ((False, False), (True, False), (True, True)):
+            with self.subTest(caching=caching, disable=disable):
+                app, manager = make_manager()
+                app.defaults['global_project_caching'] = caching
+                app.setup_default_properties_tab = Mock()
+                app.preferencesUiManager = SimpleNamespace(defaults_write_form=Mock())
+                app.init_tools = Mock()
+                app.plotcanvas = SimpleNamespace(redraw=Mock())
+                app.proc_container.new = lambda *args: nullcontext()
+                app.clear_pool = Mock()
+                app.inform = MagicMock()
+                app.worker_task = SimpleNamespace(emit=lambda task: task['fcn'](*task['params']))
+                app.plot_manager = AppPlotManager(app)
+                app.plot_all = app.plot_manager.plot_all
+                manager.deactivate = ProjectManager.deactivate.__get__(manager)
+                manager.activate = ProjectManager.activate.__get__(manager)
+                shapes = ShapeCollectionVisual(pool=None, fcoptions={'global_graphic_engine_3d_no_mp': True})
+                objects = []
+                for visible in (True, False):
+                    obj = SimpleNamespace(kind='geometry', obj_options={'plot': visible},
+                                          shapes=ShapeGroup(shapes), _full_plot_sig=None)
+                    for name in ('_shapes_signature', '_has_full_plot', 'mark_full_plot', 'show_plotted_shapes'):
+                        setattr(obj, name, getattr(FlatCAMObj, name).__get__(obj))
+                    obj.clear = lambda update=False, obj=obj: obj.shapes.clear(update=update)
+                    def plot(obj=obj):
+                        obj.clear()
+                        obj.shapes.add(shape=Polygon([(0, 0), (1, 0), (0, 1)]), color='red',
+                                       face_color='red', visible=obj.obj_options['plot'])
+                        obj.mark_full_plot()
+                    obj.plot = plot
+                    obj.plot()
+                    objects.append(obj)
+                first = manager.active
+                first.collection.objects = objects
+                keys = list(objects[0].shapes._indexes)
+                vertices = shapes.data[keys[0]]['mesh_vertices']
+                second = manager.add_context('Other')
+                self.assertTrue(manager.switch(second))
+                app.defaults['global_stats'] = {'switch_project': 1}
+                if caching:
+                    self.assertIs(shapes.data[keys[0]]['mesh_vertices'], vertices)
+                    self.assertFalse(shapes.data[keys[0]]['visible'])
+                else:
+                    self.assertFalse(shapes.data)
+                self.assertTrue(manager.switch(first))
+                if caching:
+                    self.assertEqual(objects[0].shapes._indexes, keys)
+                    self.assertIs(shapes.data[keys[0]]['mesh_vertices'], vertices)
+                self.assertTrue(all(shapes.data[k]['visible'] for k in objects[0].shapes._indexes))
+                self.assertTrue(all(not shapes.data[k]['visible'] for k in objects[1].shapes._indexes))
+                if caching:
+                    manager.switch(second)
+                    app.defaults['geometry_plot_line'] = '#123456FF'
+                    manager.switch(first)
+                    self.assertNotEqual(objects[0].shapes._indexes, keys)
+                    # A geometry edit/partial plot clears or replaces the old full plot's shapes.
+                    manager.switch(second)
+                    objects[0].clear()
+                    manager.switch(first)
+                    self.assertTrue(objects[0].shapes._indexes)
+                    manager.switch(second)
+                if disable:
+                    app.defaults['global_project_caching'] = False
+                    third = manager.add_context('Third')
+                    manager.switch(third)
+                    self.assertFalse(shapes.data)
+                self.assertTrue(manager.close(first, force=True))
+                self.assertFalse(shapes.data)
+
+
 if __name__ == '__main__':
     unittest.main()

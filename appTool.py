@@ -43,6 +43,27 @@ class AppTool(QtWidgets.QWidget):
 
         self.menuAction = None
 
+    def set_project_collection(self, old_collection, collection):
+        """Move project selectors without rebuilding the plugin. run() resets the tool's form when opened."""
+        if old_collection is collection:
+            return
+        for combo in self.findChildren(QtWidgets.QComboBox):
+            if combo.model() is not old_collection:
+                continue
+            row = combo.rootModelIndex().row()
+            blocker = QtCore.QSignalBlocker(combo)
+            follows_insertions = getattr(combo, 'is_last', False)
+            if follows_insertions:
+                old_collection.rowsInserted.disconnect(combo.on_model_changed)
+            combo.setModel(collection)
+            if row >= 0:
+                combo.setRootModelIndex(collection.index(row, 0, QtCore.QModelIndex()))
+            # Never carry a selection (or an object-change callback) from the previous project.
+            combo.setCurrentIndex(-1)
+            if follows_insertions:
+                collection.rowsInserted.connect(combo.on_model_changed)
+            del blocker
+
     def add_object_creation_controls(self, has_source=True):
         """Initialize plugin-local creation options from the application preferences."""
         label = getattr(self.ui, 'gen_param_label', None)

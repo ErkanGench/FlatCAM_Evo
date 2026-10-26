@@ -173,6 +173,7 @@ class AppDefaults:
         "global_systray_icon": True,
         "global_shell_at_startup": False,  # Show the shell at startup.
         "global_project_at_startup": False,
+        "global_project_caching": False,
         "global_version_check": True,
         "global_update_url": DEFAULT_UPDATE_URL,
         "global_update_provider": "github",  # "github" or "digi" (legacy)

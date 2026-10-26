@@ -57,6 +57,7 @@ class PreferencesUIManager(QtCore.QObject):
             # General App
             "units_precision": self.ui.general_pref_form.general_app_group.precision_metric_entry,
             "global_graphic_engine_3d_no_mp": self.ui.general_pref_form.general_app_group.ge_comp_cb,
+            "global_project_caching": self.ui.general_pref_form.general_app_group.project_caching_cb,
             "global_app_level": self.ui.general_pref_form.general_app_group.app_level_radio,
             "global_log_verbose": self.ui.general_pref_form.general_app_group.verbose_combo,
             "global_portable": self.ui.general_pref_form.general_app_group.portability_cb,

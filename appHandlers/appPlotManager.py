@@ -302,13 +302,14 @@ class AppPlotManager(QtCore.QObject):
         if invocation['remaining'] == 0 and invocation['fit']:
             self.app_obj.object_plotted.emit(obj)
 
-    def plot_all(self, fit_view=True, muted=False, use_thread=True):
+    def plot_all(self, fit_view=True, muted=False, use_thread=True, reuse_shapes=False):
         """
         Re-generates all plots from all objects.
 
         :param fit_view:    if True will plot the objects and will adjust the zoom to fit all plotted objects into view
         :param muted:       if True don't print messages
         :param use_thread:  if True will use threading for plotting the objects
+        :param reuse_shapes: if True restore valid full plots instead of preparing their shapes again
         :return:            None
         """
         self.log.debug("Plot_all()")
@@ -326,12 +327,17 @@ class AppPlotManager(QtCore.QObject):
             try:
                 with self.proc_container.new("Plotting"):
                     if obj.kind == 'cncjob':
+                        kind = self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind"))
+                        if reuse_shapes and obj.show_plotted_shapes(True, kind=kind):
+                            return
                         try:
                             dia = obj.ui.tooldia_entry.get_value()
                         except AttributeError:
                             dia = self.options.get("cncjob_tooldia", self.defaults.get("cncjob_tooldia"))
-                        obj.plot(kind=self.options.get("cncjob_plot_kind", self.defaults.get("cncjob_plot_kind")), dia=dia)
+                        obj.plot(kind=kind, dia=dia)
                     else:
+                        if reuse_shapes and obj.show_plotted_shapes(True):
+                            return
                         obj.plot()
             finally:
                 self.plot_finished.emit(invocation, obj)

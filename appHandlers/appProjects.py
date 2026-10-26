@@ -398,18 +398,32 @@ class ProjectManager(QtCore.QObject):
 
         app.delete_selection_shape()
 
+    def _plot_options(self):
+        # Only rendering inputs: usage statistics and other application bookkeeping must not discard plots.
+        return {key: value for key, value in self.app.options.items()
+                if key.startswith(('gerber_', 'excellon_', 'geometry_', 'cncjob_')) or
+                key in ('units', 'units_precision', 'global_tolerance')}
+
     def deactivate(self, ctx):
         """
-        Release the plot shapes of the objects of a project. The geometry and the Properties UI stay.
+        Hide or release the plot shapes of a project. The geometry and the Properties UI stay.
         """
         # the Properties tab can show the UI of an object of this project; replace it first
         self.app.setup_default_properties_tab()
 
+        caching = self.app.options.get('global_project_caching', False)
+        # Settings can change while a project is inactive. The existing full-plot signature checks the shapes;
+        # this snapshot also rejects them when the application or object appearance settings have changed.
+        ctx.plot_options = deepcopy(self._plot_options()) if caching else None
         for obj in ctx.collection.get_list():
             if obj.kind in self.NO_SHAPES_KINDS:
                 continue
             try:
-                obj.clear(update=False)
+                if caching:
+                    obj.shapes.visible = False
+                    obj._project_plot_options = deepcopy(dict(obj.obj_options))
+                else:
+                    obj.clear(update=False)
             except Exception as err:
                 self.app.log.error("ProjectManager.deactivate() --> %s" % str(err))
             # the Gerber marks and the CNCJob annotations are in their own collections; plotcanvas.redraw() does not
@@ -433,13 +447,14 @@ class ProjectManager(QtCore.QObject):
             except AttributeError:
                 pass
             # forces a full plot when the project is active again
-            obj._full_plot_sig = None
+            if not caching:
+                obj._full_plot_sig = None
 
         self.app.plotcanvas.redraw()
 
     def activate(self, ctx):
         """
-        Re-create the plugins for the new collection and plot. The Properties UI of the objects is not built again:
+        Bind the plugins to the new collection and plot. The Properties UI of the objects is not built again:
         set_ui() changes the data of a CNCJob and connects the object signals again.
         """
         app = self.app
@@ -448,11 +463,39 @@ class ProjectManager(QtCore.QObject):
         # show the project keys of this project in the Preferences form
         app.preferencesUiManager.defaults_write_form()
 
-        # the plugin comboboxes hold the model of the old collection; File -> New Project also does this
-        app.init_tools(init_tcl=False)
+        # Reinstalling every plugin dominates warm switches, even when no geometry is plotted. Keep their
+        # widgets with caching enabled; their normal run() methods reset the forms when opened again.
+        if app.options.get('global_project_caching', False) and self.displayed is not None and \
+                getattr(app, 'app_plugins', None) is not None:
+            for plugin in app.app_plugins:
+                plugin.set_project_collection(self.displayed.collection, ctx.collection)
+            widget = app.ui.plugin_scroll_area.takeWidget()
+            if widget is not None:
+                widget.hide()
+            index = app.ui.notebook.indexOf(app.ui.plugin_tab)
+            if index >= 0:
+                app.ui.notebook.removeTab(index)
+        else:
+            app.init_tools(init_tcl=False)
+
+        if not app.options.get('global_project_caching', False):
+            # Turning caching off releases previously retained projects on the next visual switch, including
+            # hidden objects of the target project that plot_all() deliberately skips.
+            for other in self.contexts:
+                if getattr(other, 'plot_options', None) is not None:
+                    self.deactivate(other)
 
         if ctx.collection.get_list():
-            app.plot_all(fit_view=False)
+            if app.options.get('global_project_caching', False):
+                options_match = getattr(ctx, 'plot_options', None) == self._plot_options()
+                for obj in ctx.collection.get_list():
+                    if obj.kind in self.NO_SHAPES_KINDS:
+                        continue
+                    if not options_match or getattr(obj, '_project_plot_options', None) != dict(obj.obj_options):
+                        obj._full_plot_sig = None
+                app.plot_manager.plot_all(fit_view=False, reuse_shapes=True)
+            else:
+                app.plot_all(fit_view=False)
         self._set_view_rect(ctx.view_rect)
 
     def _get_view_rect(self):

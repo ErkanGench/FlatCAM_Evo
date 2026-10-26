@@ -477,6 +477,15 @@ class ToolGCodeSender(LevellingCoreMixin, GrblClientMixin, CNCjob, AppTool):
         self.show_console_if_wanted()
         self._schedule_3d_preview()
 
+    def set_project_collection(self, old_collection, collection):
+        if old_collection is collection:
+            return
+        super().set_project_collection(old_collection, collection)
+        for name in ('rowsInserted', 'rowsRemoved', 'modelReset'):
+            getattr(old_collection, name).disconnect(self._select_available_excellon)
+            getattr(collection, name).connect(self._select_available_excellon)
+        self._select_available_excellon()
+
     def connect_signals_at_init(self):
         # the signals of the tool and of the app live as long as the tool;
         # set_tool_ui() calls this method again for each new LevelUI, so
