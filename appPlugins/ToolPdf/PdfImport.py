@@ -197,11 +197,14 @@ class ToolPDF(AppTool):
     def layer_rendering_as_excellon(self, filename, ap_dict, layer_nr):
         outname = filename.split('/')[-1].split('\\')[-1] + "_%s" % str(layer_nr)
         ap_dict = _normalize_ap_dict(ap_dict)
+        points = drill_points(ap_dict, getattr(self.app, 'app_units', 'MM'))
+        if not points:
+            # white paint without round holes: no drill object
+            self.app.log.debug("ToolPDF --> layer %s has no drills; no object." % str(layer_nr))
+            return
 
         def obj_init(new_obj, app_obj):
             new_obj.tools = {}
-            units = getattr(self.app, 'app_units', 'MM')
-            points = drill_points(ap_dict, units)
             sorted_dia = sorted(points.keys())
 
             name_tool = 0
@@ -239,11 +242,15 @@ class ToolPDF(AppTool):
     def layer_rendering_as_gerber(self, filename, ap_dict, layer_nr):
         outname = filename.split('/')[-1].split('\\')[-1] + "_%s" % str(layer_nr)
         ap_dict = _normalize_ap_dict(ap_dict)
+        poly_buff, follow_buf = _replay_paint_order(ap_dict)
+        if poly_buff.is_empty:
+            # later white paint erased the whole layer: no object
+            self.app.log.debug("ToolPDF --> layer %s is empty after the paint order; no object." %
+                               str(layer_nr))
+            return
 
         def obj_init(grb_obj, app_obj):
-
-            poly_buff, follow_buf = _replay_paint_order(ap_dict)
-
+            nonlocal poly_buff
             try:
                 poly_buff = poly_buff.buffer(0.0000001)
             except ValueError:

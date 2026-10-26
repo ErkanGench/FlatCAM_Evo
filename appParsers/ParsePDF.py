@@ -33,6 +33,8 @@ class ParsingContext:
     # Color of the layer that is currently being built. Layers are routed at paint time,
     # not when a color operator is seen, so a color change without paint creates no layer.
     layer_color: Optional[Tuple[float, float, float]] = None
+    # The layer number of each color, so a color painted again goes back to its layer
+    color_layers: Dict[Tuple[float, float, float], int] = field(default_factory=dict)
     # Fill and stroke paint colors have independent polarity. A white fill is a clear fill while
     # the active stroke may still be black (and the other way around).
     stroke_clear: bool = False
@@ -195,16 +197,23 @@ class PdfParser:
                    for element in aperture.get('geometry', []))
 
     def _route_dark_paint(self, ctx: ParsingContext, color) -> None:
-        """Start a new color layer only when a dark paint actually needs it."""
+        """Route a dark paint to the layer of its color; start a new layer for a new color.
+
+        A color painted again goes back to its first layer, so alternating colors do not
+        make duplicate layers. The painter order stays correct: the clears are stored in
+        every layer at paint time, and each element keeps its global 'order'.
+        """
         color = tuple(color)
         if ctx.apertures_dict and ctx.layer_color is not None and ctx.layer_color != color:
-            ctx.object_dict[ctx.layer_nr] = deepcopy(ctx.apertures_dict)
-            ctx.apertures_dict = {}
-            ctx.layer_nr += 1
-            ctx.object_dict[ctx.layer_nr] = {}
+            # the layer dict itself goes in object_dict, so that later paint of this
+            # color and later clears go to the same object
+            ctx.object_dict[ctx.layer_nr] = ctx.apertures_dict
+            ctx.layer_nr = ctx.color_layers.get(color, max(ctx.object_dict) + 1)
+            ctx.apertures_dict = ctx.object_dict.setdefault(ctx.layer_nr, {})
             ctx.layer_color = None
         if ctx.layer_color is None:
             ctx.layer_color = color
+            ctx.color_layers.setdefault(color, ctx.layer_nr)
 
     def _route_clear_paint(self, ctx: ParsingContext, geometries: list) -> None:
         """Apply white paint to the colored layers that exist below it, at paint time.
@@ -418,6 +427,12 @@ class PdfParser:
                 if 'XObject' not in self.unsupported_features:
                     log.warning("parse_pdf() --> Form/Image XObject (Do) is not supported; content is skipped.")
                 self.unsupported_features.add('XObject')
+            elif op == 'BT':
+                # The stream parsers convert text to glyph outlines; a text object that is
+                # left is text in a font they could not read (not embedded, Type1, CFF).
+                if 'text' not in self.unsupported_features:
+                    log.warning("parse_pdf() --> text in a font that is not embedded or not TrueType is skipped.")
+                self.unsupported_features.add('text')
             elif op == 'BI':
                 if 'inline image' not in self.unsupported_features:
                     log.warning("parse_pdf() --> inline image (BI) is not supported; content is skipped.")
@@ -468,7 +483,8 @@ class PdfParser:
                 index = self._skip_array(content, index)
                 continue
 
-            if char in ']}>':
+            if char in ']{}>)':
+                # a stray delimiter; an empty token below would never advance the index
                 index += 1
                 continue
 
@@ -649,12 +665,19 @@ class PdfParser:
                 result = result.symmetric_difference(polygon) if even_odd else result.union(polygon)
             return result
 
+        # Read the ring coordinates once: shapely coordinate access point by point was
+        # most of the parse time of text-heavy pages (one glyph path = many faces x rings).
+        ring_data = [(ring.bounds, list(ring.coords)) for ring in rings]
         selected = []
         for face in faces:
             point = face.representative_point()
+            x, y = point.x, point.y
             winding = 0
-            for ring in rings:
-                winding += self._winding_number((point.x, point.y), ring.coords)
+            for (min_x, min_y, max_x, max_y), coords in ring_data:
+                # a ring above, below or left of the point has no crossing to its right
+                if y < min_y or y > max_y or x > max_x:
+                    continue
+                winding += self._winding_number((x, y), coords)
             if (winding % 2 != 0) if even_odd else (winding != 0):
                 selected.append(face)
 
@@ -1274,6 +1297,35 @@ class PdfParser:
 
         return aperture
 
+    @staticmethod
+    def _drop_repeated_solids(layer: dict) -> None:
+        """Drop the solids that repeat an earlier equal solid of the same aperture.
+
+        Some CAD programs draw the same item more than once (one pass for each
+        layer set). A copy is kept if a clear between the 2 copies touches it:
+        then the copy restores an island.
+        """
+        elements = sorted(((aperture_id, element) for aperture_id, aperture in layer.items()
+                           for element in aperture['geometry']),
+                          key=lambda item: item[1].get('order', 0))
+        seen = {}
+        clears = []
+        repeated = set()
+        for aperture_id, element in elements:
+            if 'solid' not in element:
+                clears.append(element['clear'])
+                continue
+            key = (aperture_id, element['solid'].wkb)
+            if key in seen and not any(clear.intersects(element['solid'])
+                                       for clear in clears[seen[key]:]):
+                repeated.add(id(element))
+                continue
+            seen[key] = len(clears)
+        if repeated:
+            for aperture in layer.values():
+                aperture['geometry'] = [element for element in aperture['geometry']
+                                        if id(element) not in repeated]
+
     def _finalize_object_dict(self, object_dict: dict, apertures_dict: dict,
                                clear_apertures_dict: dict, layer_nr: int,
                                abort_flag: bool) -> dict:
@@ -1294,6 +1346,10 @@ class PdfParser:
 
         if clear_apertures_dict[0]['geometry']:
             object_dict[0] = deepcopy(clear_apertures_dict)
+
+        for layer_nr, layer in object_dict.items():
+            if layer_nr != 0:
+                self._drop_repeated_solids(layer)
 
         empty_layers = [layer for layer in object_dict if not object_dict[layer]]
         for x in empty_layers:

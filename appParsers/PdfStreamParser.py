@@ -37,6 +37,8 @@ import logging
 import re
 import zlib
 
+from appParsers.PdfText import PdfFont, cid_widths, parse_array, text_to_paths
+
 log = logging.getLogger('base')
 
 
@@ -93,16 +95,21 @@ class PurePythonPdfParser(PdfStreamParserBase):
     PDF parser using only Python standard library.
 
     Resolves the first page object's /Contents references and decodes those streams
-    only. Supports FlateDecode, ASCIIHexDecode and ASCII85Decode.
+    only. Supports FlateDecode, ASCIIHexDecode and ASCII85Decode. Objects stored in
+    compressed object streams (PDF 1.5+) are unpacked, Form XObjects drawn with ``Do``
+    go inline into the page content and ExtGState line widths become ``w`` operators.
 
     This is the DEFAULT parser - no external dependencies required.
 
     Limitations:
     - Does not support encrypted PDFs
     - Does not support LZW or other compression filters
-    - Does not support object streams
+    - Does not support stream predictors (/DecodeParms)
     - May fail on complex PDF structures
     """
+
+    # Limit for Form XObjects that draw other Form XObjects (also stops reference loops)
+    MAX_FORM_DEPTH = 8
     
     # Regex to find PDF streams
     # Pattern: <<dictionary>> stream <compressed_data> endstream
@@ -173,12 +180,10 @@ class PurePythonPdfParser(PdfStreamParserBase):
                 "Encrypted PDFs are not supported by the pure-python parser"
             )
 
+        self._expand_object_streams(objects)
+
         page_ref = self._first_page_ref(objects)
         if page_ref is None:
-            if any(re.search(rb'/Type\s*/ObjStm\b', obj['dict']) for obj in objects.values()):
-                raise PdfParserError(
-                    "PDF object streams are not supported by the pure-python parser"
-                )
             raise PdfParserError("Could not locate the first page")
 
         content_refs = self._resolve_content_refs(
@@ -194,10 +199,249 @@ class PurePythonPdfParser(PdfStreamParserBase):
                 raise PdfParserError(
                     f"Missing content stream object {ref[0]} {ref[1]} R"
                 )
-            data = self._decode_stream(content_obj['dict'], content_obj['stream'])
-            parts.append(data.decode('utf-8', errors='replace'))
+            parts.append(self._decode_stream(content_obj['dict'], content_obj['stream']))
 
-        return '\n'.join(parts)
+        content =self._expand_forms(objects, b'\n'.join(parts),
+                                     self._page_resources(objects, page_ref))
+        return content.decode('utf-8', errors='replace')
+
+    def _expand_object_streams(self, objects: dict) -> bool:
+        """Add the objects stored in compressed object streams (/Type /ObjStm).
+
+        An object that is also stored directly in the file keeps the direct version.
+        Returns True if the file has object streams.
+        """
+        found = False
+        for ref, obj in list(objects.items()):
+            if obj['stream'] is None or not re.search(rb'/Type\s*/ObjStm\b', obj['dict']):
+                continue
+            count = re.search(rb'/N\s+(\d+)', obj['dict'])
+            first = re.search(rb'/First\s+(\d+)', obj['dict'])
+            if not count or not first:
+                raise PdfParserError(f"Malformed object stream {ref[0]} {ref[1]} R")
+
+            found = True
+            data =self._decode_stream(obj['dict'], obj['stream'])
+            first = int(first.group(1))
+            numbers = [int(value) for value in re.findall(rb'\d+', data[:first])]
+            numbers = numbers[:2 * int(count.group(1))]
+            entries = list(zip(numbers[0::2], numbers[1::2]))
+            for index, (number, offset) in enumerate(entries):
+                end = first + entries[index + 1][1] if index + 1 < len(entries) else len(data)
+                objects.setdefault((number, 0),
+                                   {'dict': data[first + offset:end].strip(), 'stream': None})
+        return found
+
+    @staticmethod
+    def _dict_entry(dictionary: bytes, key: bytes) -> Optional[bytes]:
+        """Return the raw value of a top-level key of a PDF dictionary, or None."""
+        token = b'/' + key
+        depth = 0
+        i = 0
+        while i < len(dictionary):
+            if dictionary.startswith(b'<<', i):
+                depth += 1
+                i += 2
+            elif dictionary.startswith(b'>>', i):
+                depth -= 1
+                i += 2
+            elif dictionary[i:i + 1] == b'(':
+                # skip a literal string; it can hold any bytes
+                nesting = 0
+                while i < len(dictionary):
+                    char = dictionary[i:i + 1]
+                    if char == b'\\':
+                        i += 1
+                    elif char == b'(':
+                        nesting += 1
+                    elif char == b')':
+                        nesting -= 1
+                        if nesting == 0:
+                            break
+                    i += 1
+                i += 1
+            elif depth == 1 and dictionary.startswith(token, i) and \
+                    not re.match(rb'[^\s/\[\]<>()%]', dictionary[i + len(token):i + len(token) + 1]):
+                return PurePythonPdfParser._value_at(dictionary, i + len(token))
+            else:
+                i += 1
+        return None
+
+    @staticmethod
+    def _value_at(data: bytes, start: int) -> bytes:
+        """Return the raw PDF value (dictionary, array, reference or token) at start."""
+        start = re.compile(rb'\s*').match(data, start).end()
+        for opener, closer in ((b'<<', b'>>'), (b'[', b']')):
+            if data.startswith(opener, start):
+                depth = 0
+                i = start
+                while i < len(data):
+                    if data.startswith(opener, i):
+                        depth += 1
+                        i += len(opener)
+                    elif data.startswith(closer, i):
+                        depth -= 1
+                        i += len(closer)
+                        if depth == 0:
+                            return data[start:i]
+                    else:
+                        i += 1
+                return data[start:]
+        match = re.compile(rb'\d+\s+\d+\s+R\b|[^\s/\[\]<>()%]*').match(data, start)
+        if not match.group(0) and data[start:start + 1] == b'/':
+            match = re.compile(rb'/[^\s/\[\]<>()%]*').match(data, start)
+        return match.group(0)
+
+    @staticmethod
+    def _resolve(objects: dict, value: Optional[bytes]) -> Optional[bytes]:
+        """Return the dictionary of an indirect reference, or the direct value."""
+        if value is None:
+            return None
+        ref = re.fullmatch(rb'(\d+)\s+(\d+)\s+R', value)
+        if ref:
+            obj = objects.get((int(ref.group(1)), int(ref.group(2))))
+            return obj['dict'] if obj is not None else None
+        return value
+
+    @classmethod
+    def _page_resources(cls, objects: dict, page_ref: tuple) -> Optional[bytes]:
+        """Return the /Resources dictionary of a page, inherited from the page tree if needed."""
+        ref, seen = page_ref, set()
+        while ref in objects and ref not in seen:
+            seen.add(ref)
+            dictionary = objects[ref]['dict']
+            resources = cls._resolve(objects, cls._dict_entry(dictionary, b'Resources'))
+            if resources is not None:
+                return resources
+            parent = re.fullmatch(rb'(\d+)\s+(\d+)\s+R',
+                                  cls._dict_entry(dictionary, b'Parent') or b'')
+            if not parent:
+                break
+            ref = (int(parent.group(1)), int(parent.group(2)))
+        return None
+
+    def _stream_bytes(self, objects: dict, value: Optional[bytes]) -> Optional[bytes]:
+        """Return the decoded data of the stream that an indirect reference points to."""
+        ref = re.fullmatch(rb'(\d+)\s+(\d+)\s+R', value or b'')
+        obj = objects.get((int(ref.group(1)), int(ref.group(2)))) if ref else None
+        if obj is None or obj['stream'] is None:
+            return None
+        return self._decode_stream(obj['dict'], obj['stream'])
+
+    def _font_getter(self, objects: dict, resources: bytes):
+        """Return get_font(name) for the /Font resources, for PdfText.text_to_paths."""
+        fonts = self._resolve(objects, self._dict_entry(resources, b'Font'))
+        cache = {}
+
+        def get_font(name: bytes):
+            if name not in cache:
+                font_dict = self._resolve(objects, self._dict_entry(fonts, name)) if fonts else None
+                try:
+                    cache[name] = self._load_font(objects, font_dict) if font_dict else None
+                except Exception as e:
+                    log.warning(f"PDF text: font /{name.decode('latin-1')} cannot be read: {e}")
+                    cache[name] = None
+            return cache[name]
+        return get_font
+
+    def _font_program(self, objects: dict, descriptor: Optional[bytes]) -> Optional[bytes]:
+        """Return the embedded TrueType/OpenType program of a font descriptor."""
+        if not descriptor:
+            return None
+        program = self._dict_entry(descriptor, b'FontFile2')
+        if program is not None:
+            return self._stream_bytes(objects, program)
+        program = self._dict_entry(descriptor, b'FontFile3')
+        program_ref = re.fullmatch(rb'(\d+)\s+(\d+)\s+R', program or b'')
+        if program_ref:
+            obj = objects.get((int(program_ref.group(1)), int(program_ref.group(2))))
+            if obj is not None and self._dict_entry(obj['dict'], b'Subtype') == b'/OpenType':
+                return self._stream_bytes(objects, program)
+        return None
+
+    def _load_font(self, objects: dict, font_dict: bytes):
+        """Build a PdfFont from a Type0 (Identity) or a simple TrueType font dictionary."""
+        subtype = self._dict_entry(font_dict, b'Subtype')
+        if subtype == b'/Type0':
+            if self._dict_entry(font_dict, b'Encoding') not in (b'/Identity-H', b'/Identity-V'):
+                return None
+            # the first element of the array: a direct dictionary or a reference
+            descendants = self._resolve(objects, self._dict_entry(font_dict, b'DescendantFonts')) or b''
+            first = re.match(rb'\s*\[\s*(<<|\d+\s+\d+\s+R)', descendants)
+            if not first:
+                return None
+            cid_font = self._value_at(descendants, first.start(1)) if first.group(1) == b'<<' \
+                else self._resolve(objects, re.sub(rb'\s+', b' ', first.group(1)))
+            if not cid_font:
+                return None
+            program = self._font_program(
+                objects, self._resolve(objects, self._dict_entry(cid_font, b'FontDescriptor')))
+            if program is None:
+                return None
+            widths = cid_widths(parse_array(
+                self._resolve(objects, self._dict_entry(cid_font, b'W')) or b''))
+            default_width = self._dict_entry(cid_font, b'DW')
+            return PdfFont(program, True, widths,
+                           float(default_width) if default_width else 1000.0,
+                           self._stream_bytes(objects, self._dict_entry(cid_font, b'CIDToGIDMap')))
+        if subtype == b'/TrueType':
+            program = self._font_program(
+                objects, self._resolve(objects, self._dict_entry(font_dict, b'FontDescriptor')))
+            if program is None:
+                return None
+            first = self._dict_entry(font_dict, b'FirstChar')
+            first = int(float(first)) if first else 0
+            widths = parse_array(self._resolve(objects, self._dict_entry(font_dict, b'Widths')) or b'')
+            return PdfFont(program, False, {first + index: float(width)
+                                            for index, width in enumerate(widths)
+                                            if not isinstance(width, list)},
+                           simple_encoding=True)
+        return None
+
+    def _expand_forms(self, objects: dict, content: bytes, resources: Optional[bytes],
+                      depth: int = 0) -> bytes:
+        """Resolve the resource operators that ParsePDF cannot read from the resources.
+
+        - 'Do' of a Form XObject: the form content goes inline, wrapped in
+          'q <Matrix> cm ... Q'. Image XObjects stay as 'Do', so ParsePDF still
+          reports them as unsupported.
+        - 'gs' of an ExtGState with /LW: a '<LW> w' follows it, because some PDFs set
+          the line width only in the ExtGState. Without it, all strokes have width 0.
+        """
+        if not resources:
+            return content
+        content = text_to_paths(content, self._font_getter(objects, resources))
+        xobject_dict = self._resolve(objects, self._dict_entry(resources, b'XObject'))
+        ext_gstate_dict = self._resolve(objects, self._dict_entry(resources, b'ExtGState'))
+        if not xobject_dict and not ext_gstate_dict:
+            return content
+        xobjects = {name: (int(number), int(generation))
+                    for name, number, generation in re.findall(
+                        rb'/([^\s/\[\]<>()%]+)\s+(\d+)\s+(\d+)\s+R', xobject_dict or b'')}
+
+        def line_width(match):
+            state = self._resolve(objects, self._dict_entry(ext_gstate_dict, match.group(1))) \
+                if ext_gstate_dict else None
+            width = self._dict_entry(state, b'LW') if state else None
+            if width is None or not re.fullmatch(rb'[+-]?(\d+\.?\d*|\.\d+)', width):
+                return match.group(0)
+            return match.group(0) + b' ' + width + b' w'
+
+        def inline_form(match):
+            if match.group(2) == b'gs':
+                return line_width(match)
+            obj = objects.get(xobjects.get(match.group(1)))
+            if obj is None or obj['stream'] is None or depth >= self.MAX_FORM_DEPTH or \
+                    self._dict_entry(obj['dict'], b'Subtype') != b'/Form':
+                return match.group(0)
+            form = self._decode_stream(obj['dict'], obj['stream'])
+            form_resources = self._resolve(objects, self._dict_entry(obj['dict'], b'Resources'))
+            form = self._expand_forms(objects, form, form_resources or resources, depth + 1)
+            matrix = self._dict_entry(obj['dict'], b'Matrix')
+            transform = matrix.strip(b'[]').strip() + b' cm\n' if matrix else b''
+            return b'q ' + transform + form + b'\nQ'
+
+        return re.sub(rb'/([^\s/\[\]<>()%]+)\s+(Do|gs)\b', inline_form, content)
 
     @classmethod
     def _resolve_content_refs(cls, objects: dict, refs: list) -> list:
@@ -527,6 +771,9 @@ class PikePdfParser(PdfStreamParserBase):
             self._pikepdf = {
                 'Pdf': Pdf,
                 'parse_content_stream': parse_content_stream,
+                'Operator': pikepdf.Operator,
+                # pikepdf versions without it fall back to unparse() of each operand
+                'unparse_content_stream': getattr(pikepdf, 'unparse_content_stream', None),
             }
             self._available = True
             log.debug("pikepdf imported successfully (lazy import)")
@@ -573,27 +820,13 @@ class PikePdfParser(PdfStreamParserBase):
             
             with open(filename, "rb") as f:
                 pdf = Pdf.open(f)
-                
+
                 # Extract FIRST PAGE ONLY (existing FlatCAM behavior)
                 page = pdf.pages[0]
-                decomp_file = ''
-                
-                for operands, command in parse_content_stream(page):
-                    if str(command) == 'Do':
-                        self.unsupported_features.add('XObject')
-                    elif str(command) in ('W', 'W*'):
-                        self.unsupported_features.add('clipping')
+                decomp_file = self._content_lines(
+                    page, parse_content_stream, self._page_resources(page), 0
+                )
 
-                    line = ''
-                    for op in operands:
-                        try:
-                            line += str(op) + ' '
-                        except Exception:
-                            # Skip operands that can't be converted to string
-                            pass
-                    line += str(command)
-                    decomp_file += line + '\n'
-                
                 if not decomp_file.strip():
                     raise PdfParserError("Empty content stream or parsing error")
                 
@@ -601,6 +834,155 @@ class PikePdfParser(PdfStreamParserBase):
                 
         except Exception as e:
             raise PdfParserError(f"pikepdf parsing failed: {str(e)}")
+
+    @staticmethod
+    def _page_resources(page):
+        """Return the /Resources of a page, inherited from the page tree if needed."""
+        resources = getattr(page, 'resources', None)
+        if resources is not None:
+            return resources
+        node = page.obj if hasattr(page, 'obj') else page
+        for _ in range(64):
+            if node is None:
+                break
+            if '/Resources' in node:
+                return node['/Resources']
+            node = node.get('/Parent')
+        return None
+
+    def _content_lines(self, owner, parse_content_stream, resources, depth: int) -> str:
+        """Write the content of a page or Form XObject as text, one operator for each line.
+
+        Form XObjects drawn with 'Do' go inline, wrapped in 'q <Matrix> cm ... Q'.
+        After 'gs' of an ExtGState with /LW, a '<LW> w' follows, because ParsePDF
+        reads the line width only from 'w'.
+        """
+        text = ''
+        for operands, command in parse_content_stream(owner):
+            command = str(command)
+            if command == 'Do' and operands:
+                form = self._resource(resources, '/XObject', operands[0])
+                if form is not None and str(form.get('/Subtype')) == '/Form' and \
+                        depth < PurePythonPdfParser.MAX_FORM_DEPTH:
+                    matrix = form.get('/Matrix')
+                    text += 'q\n'
+                    if matrix is not None:
+                        text += ' '.join(str(float(value)) for value in matrix) + ' cm\n'
+                    text += self._content_lines(form, parse_content_stream,
+                                                form.get('/Resources', resources), depth + 1)
+                    text += 'Q\n'
+                    continue
+                self.unsupported_features.add('XObject')
+            elif command in ('W', 'W*'):
+                self.unsupported_features.add('clipping')
+
+            text += self._unparse(operands, command) + '\n'
+
+            if command == 'gs' and operands:
+                state = self._resource(resources, '/ExtGState', operands[0])
+                width = state.get('/LW') if state is not None else None
+                if width is not None:
+                    try:
+                        text += f'{float(width)} w\n'
+                    except (TypeError, ValueError):
+                        pass
+        # the forms inlined above are already converted; they hold no text objects
+        return text_to_paths(text.encode('latin-1'),
+                             self._font_getter(resources)).decode('latin-1')
+
+    def _font_getter(self, resources):
+        """Return get_font(name) for the /Font resources, for PdfText.text_to_paths."""
+        cache = {}
+
+        def get_font(name: bytes):
+            if name not in cache:
+                font = self._resource(resources, '/Font', '/' + name.decode('latin-1'))
+                try:
+                    cache[name] = self._load_font(font) if font is not None else None
+                except Exception as e:
+                    log.warning(f"PDF text: font /{name.decode('latin-1')} cannot be read: {e}")
+                    cache[name] = None
+            return cache[name]
+        return get_font
+
+    @staticmethod
+    def _plain_list(array) -> list:
+        """Convert a pikepdf array of numbers and nested arrays into Python lists."""
+        result = []
+        for item in array:
+            try:
+                result.append(float(item))
+            except (TypeError, ValueError):
+                result.append(PikePdfParser._plain_list(item))
+        return result
+
+    @staticmethod
+    def _font_program(descriptor):
+        if descriptor is None:
+            return None
+        if '/FontFile2' in descriptor:
+            return descriptor['/FontFile2'].read_bytes()
+        program = descriptor.get('/FontFile3')
+        if program is not None and str(program.get('/Subtype')) == '/OpenType':
+            return program.read_bytes()
+        return None
+
+    def _load_font(self, font):
+        """Build a PdfFont from a Type0 (Identity) or a simple TrueType font dictionary."""
+        subtype = str(font.get('/Subtype'))
+        if subtype == '/Type0':
+            if str(font.get('/Encoding')) not in ('/Identity-H', '/Identity-V'):
+                return None
+            cid_font = font['/DescendantFonts'][0]
+            program = self._font_program(cid_font.get('/FontDescriptor'))
+            if program is None:
+                return None
+            # /CIDToGIDMap is a stream, or the name /Identity (no map)
+            cid_to_gid = cid_font.get('/CIDToGIDMap')
+            try:
+                cid_to_gid = cid_to_gid.read_bytes() if cid_to_gid is not None else None
+            except Exception:
+                cid_to_gid = None
+            return PdfFont(program, True, cid_widths(self._plain_list(cid_font.get('/W', []))),
+                           float(cid_font.get('/DW', 1000)), cid_to_gid)
+        if subtype == '/TrueType':
+            program = self._font_program(font.get('/FontDescriptor'))
+            if program is None:
+                return None
+            first = int(font.get('/FirstChar', 0))
+            widths = self._plain_list(font.get('/Widths', []))
+            return PdfFont(program, False, {first + index: width for index, width in enumerate(widths)},
+                           simple_encoding=True)
+        return None
+
+    def _unparse(self, operands, command: str) -> str:
+        """Write one instruction in PDF syntax.
+
+        str() of a pikepdf operand is not PDF syntax: a dictionary becomes
+        'pikepdf.Dictionary({...})' and a string becomes its raw characters.
+        """
+        unparse = self._pikepdf.get('unparse_content_stream')
+        if unparse is not None:
+            try:
+                return unparse([(operands, self._pikepdf['Operator'](command))]).decode('latin-1')
+            except Exception:
+                pass
+        line = ''
+        for op in operands:
+            try:
+                line += (op.unparse().decode('latin-1') if hasattr(op, 'unparse') else str(op)) + ' '
+            except Exception:
+                # Skip operands that can't be converted to string
+                pass
+        return line + command
+
+    @staticmethod
+    def _resource(resources, category: str, name):
+        """Return the named resource of a category (/XObject, /ExtGState), or None."""
+        try:
+            return resources[category][str(name)]
+        except Exception:
+            return None
 
 
 def get_pdf_parser(app_defaults: Optional[Dict[str, Any]] = None) -> PdfStreamParserBase:
