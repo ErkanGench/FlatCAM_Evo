@@ -649,6 +649,21 @@ class ProjectManager(QtCore.QObject):
                 return False
         return self.close(ctx, force=True)
 
+    def request_close_all(self):
+        """
+        Close all the projects from the GUI. Each project with unsaved changes asks the user first. A Cancel or a
+        failed save stops the close of the remaining projects. The close of the last project adds 1 empty project.
+
+        :return:    True if all the projects are removed
+        """
+        if self.is_busy():
+            self.inform_busy()
+            return False
+        for ctx in list(self.contexts):
+            if not self.request_close(ctx):
+                return False
+        return True
+
     def save_context(self, ctx, visuals=True):
         """
         Save a project now, in this thread. If the project is not active, it becomes active first.

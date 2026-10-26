@@ -22,6 +22,7 @@ class FakeManager(QtCore.QObject):
         self.new = Mock()
         self.rename = Mock(return_value=True)
         self.request_close = Mock()
+        self.request_close_all = Mock()
 
     def _switch(self, ctx):
         self.active = ctx
@@ -62,15 +63,55 @@ class TestProjectSelector(unittest.TestCase):
     def test_menu_actions_call_the_manager(self):
         manager, selector = self.make()
         menu = selector.build_menu()
-        actions = menu.actions()
-        actions[0].trigger()
+        actions = {a.text(): a for a in menu.actions() if not a.isSeparator()}
+        texts = [a.text() if not a.isSeparator() else '-' for a in menu.actions()]
+        self.assertEqual(texts, ['New Project', 'Open Project...', 'Import...', 'Save Project',
+                                 'Rename Project...', '-', 'Close Project', 'Close All Projects'])
+        actions['New Project'].trigger()
         manager.new.assert_called_once_with()
-        actions[1].trigger()
+        actions['Open Project...'].trigger()
         manager.app.f_handlers.on_file_open_project.assert_called_once_with()
-        actions[2].trigger()
+        actions['Save Project'].trigger()
         manager.app.f_handlers.on_file_save_project.assert_called_once_with()
-        actions[4].trigger()
+        actions['Close Project'].trigger()
         manager.request_close.assert_called_once_with(manager.active)
+        actions['Close All Projects'].trigger()
+        manager.request_close_all.assert_called_once_with()
+        with patch.object(selector, 'on_import') as on_import:
+            actions['Import...'].trigger()
+        on_import.assert_called_once_with()
+
+    def test_import_dialog_lists_the_board_imports_and_runs_the_choice(self):
+        from appGUI.ImportDialog import ImportDialog
+        handlers = SimpleNamespace(on_file_import_kicad_pcb=Mock())
+        app = SimpleNamespace(f_handlers=handlers, resource_location='assets/resources', pdf_tool=None,
+                              image_tool=None)
+        dialog = ImportDialog(app)
+        keys = dialog.keys()
+        for key in ('svg_geometry', 'dxf_gerber', 'hpgl2', 'pcbdoc', 'proteus', 'kicad_pcb', 'sprint_layout',
+                    'eagle_brd', 'allegro_brd'):
+            self.assertIn(key, keys)
+        # a plugin that is not installed has no entry
+        self.assertNotIn('pdf', keys)
+        self.assertNotIn('image', keys)
+
+        dialog.select('kicad_pcb')
+        self.assertEqual(dialog.ext_label.text(), '.kicad_pcb')
+        dialog.accept()
+        dialog.run_selected()
+        handlers.on_file_import_kicad_pcb.assert_called_once_with()
+
+    def test_import_dialog_filter_hides_the_other_entries(self):
+        from appGUI.ImportDialog import ImportDialog
+        app = SimpleNamespace(f_handlers=SimpleNamespace(), resource_location='assets/resources', pdf_tool=None,
+                              image_tool=None)
+        dialog = ImportDialog(app)
+        dialog.filter_entry.setText('eagle')
+        self.assertEqual(dialog.visible_keys(), ['eagle_brd'])
+        self.assertEqual(dialog.selected_key(), 'eagle_brd')
+        dialog.filter_entry.setText('nothing matches')
+        self.assertIsNone(dialog.selected_key())
+        self.assertFalse(dialog.import_button.isEnabled())
 
     def test_rename_uses_the_input_dialog(self):
         manager, selector = self.make()

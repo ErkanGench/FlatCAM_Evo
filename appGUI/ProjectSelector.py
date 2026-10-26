@@ -34,6 +34,8 @@ class ProjectSelector(QtWidgets.QWidget):
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
+        # the Import dialog opens on the import that the user ran last
+        self.last_import_key = None
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -69,16 +71,21 @@ class ProjectSelector(QtWidgets.QWidget):
         res = self.manager.app.resource_location
         new_action = menu.addAction(QtGui.QIcon(res + '/file16.png'), _("New Project"))
         open_action = menu.addAction(QtGui.QIcon(res + '/folder16.png'), _("Open Project..."))
+        import_action = menu.addAction(QtGui.QIcon(res + '/import.png'), _("Import..."))
         save_action = menu.addAction(QtGui.QIcon(res + '/floppy16.png'), _("Save Project"))
         rename_action = menu.addAction(QtGui.QIcon(res + '/edit_file16.png'), _("Rename Project..."))
+        menu.addSeparator()
         close_action = menu.addAction(QtGui.QIcon(res + '/delete_file16.png'), _("Close Project"))
+        close_all_action = menu.addAction(QtGui.QIcon(res + '/delete_file16.png'), _("Close All Projects"))
 
         new_action.triggered.connect(lambda: self.manager.new())
         open_action.triggered.connect(lambda: self.manager.app.f_handlers.on_file_open_project())
+        import_action.triggered.connect(lambda: self.on_import())
         # File -> Save of the active project: a project without a file opens Save As
         save_action.triggered.connect(lambda: self.manager.app.f_handlers.on_file_save_project())
         rename_action.triggered.connect(self.on_rename)
         close_action.triggered.connect(lambda: self.manager.request_close(self.manager.active))
+        close_all_action.triggered.connect(lambda: self.manager.request_close_all())
         return menu
 
     def on_menu_request(self, pos):
@@ -87,6 +94,16 @@ class ProjectSelector(QtWidgets.QWidget):
             return
         menu = self.build_menu()
         menu.exec(self.combo.mapToGlobal(pos))
+
+    def on_import(self):
+        from appGUI.ImportDialog import ImportDialog
+
+        dialog = ImportDialog(self.manager.app, parent=self.manager.app.ui, last_key=self.last_import_key)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        self.last_import_key = dialog.selected_key()
+        # the file dialog of the import opens after this dialog is closed
+        dialog.run_selected()
 
     def on_rename(self):
         ctx = self.manager.active

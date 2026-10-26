@@ -258,6 +258,25 @@ class TestProjectManagerDialogs(unittest.TestCase):
         self.assertTrue(manager.request_close(first))
         manager.save_context.assert_called_once_with(first)
 
+    def test_request_close_all_leaves_one_empty_project(self):
+        app, manager = make_manager()
+        first = manager.active
+        second = manager.new()
+        self.assertTrue(manager.request_close_all())
+        self.assertEqual(len(manager.contexts), 1)
+        self.assertNotIn(first, manager.contexts)
+        self.assertNotIn(second, manager.contexts)
+        self.assertEqual(manager.active.collection.get_list(), [])
+
+    def test_request_close_all_stops_on_cancel(self):
+        app, manager = make_manager(make_app(FakeCollection([object()])))
+        first = manager.active
+        app.should_we_save = True
+        second = manager.new()
+        manager.ask_save = Mock(return_value='cancel')
+        self.assertFalse(manager.request_close_all())
+        self.assertEqual(manager.contexts, [first, second])
+
     def test_save_context_writes_the_target_file(self):
         app, manager = make_manager(make_app(FakeCollection([object()])))
         app.project_filename = self.path('Project_1.FlatPrj')
