@@ -38,6 +38,24 @@ Canvas and Jump:
 - Jump keeps the current zoom level and centers the requested point instead of resetting the view to a 40 x 40 area; Locate also aligns its target with the cursor pixel
 - opening, closing or resizing the left notebook keeps the grid and geometry at the same screen positions and scale; only the visible viewport changes, including the nested Plot Area tab layout
 
+Projects:
+
+- new: Import... in the project context menu (right-click on the project combobox) opens an Import dialog; the left side lists all the imports in groups (vector files, raster images, PCB boards) with a search box, the right side shows the file type, the created objects and a description; Import... runs the selected import with its own file dialog
+- new: Close All Projects in the project context menu, after a separator below Close Project; each project with unsaved changes asks first, a Cancel or a failed save stops the remaining closes, and 1 empty project stays at the end
+- new: Preferences -> General -> "Project Caching" (off by default); a switch hides the plot shapes of the inactive project instead of releasing them and keeps the plugin widgets, so a switch back does not plot again; a change of the object or the plot options plots the objects again, and closing a project or turning the option off releases the kept shapes
+
+Proteus PCB import:
+
+- new: the firmware source files of a project (embedded, or listed in FIRMWARE.XML and found beside the project file) open as Document objects with the first imported board; files outside the project folder and files larger than 4 MB are not read
+- monochrome bitmap artwork is drawn from its set pixels; other bitmaps produce a warning
+- unidentified native layers are imported as Mechanical N (GMN) and are not selected by default; only the PTH and NPTH drill groups are selected by default
+- a board without a valid name gets the name of its file member; the system fonts are read once per session instead of once per board
+
+Circle resolution:
+
+- the native board imports (Altium, KiCad, Eagle, OrCAD/Allegro, Sprint Layout, Proteus) use the Gerber "Circle Steps" preference for the radius of each circle instead of a fixed 128 steps
+- the SVG, DXF and Image (trace) imports (also the DXF POINT disks and filled circles) give each circle, arc and stroke the steps of its own radius instead of the steps of a typical 5 mm feature; the DXF import uses the preferences of the target object (Gerber or Geometry)
+
 Tests:
 
 - added Proteus 8 / 9 projects and CAM reference fixtures, PDF samples and regression checks for imports, copper pours, track snapping, aperture dimensions, Jump precision, zoom preservation and notebook resizing
